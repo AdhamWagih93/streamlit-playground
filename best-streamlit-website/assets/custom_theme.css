@@ -1,0 +1,45 @@
+body {
+    background-color: #f0f2f5;
+    color: #333;
+    font-family: 'Arial', sans-serif;
+}
+
+h1, h2, h3 {
+    color: #4a4a4a;
+}
+
+.sidebar .sidebar-content {
+    background-color: #ffffff;
+    border-right: 1px solid #e0e0e0;
+}
+
+.stButton > button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 10px 20px;
+    cursor: pointer;
+}
+
+.stButton > button:hover {
+    background-color: #0056b3;
+}
+
+.stTextInput, .stTextArea {
+    border: 1px solid #e0e0e0;
+    border-radius: 5px;
+    padding: 10px;
+}
+
+.stTextInput:focus, .stTextArea:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
+}
+
+footer {
+    text-align: center;
+    padding: 20px;
+    background-color: #ffffff;
+    border-top: 1px solid #e0e0e0;
+}
