@@ -1,7 +1,10 @@
+import os
+
 def check_credentials(username, password):
-    # Predefined local user credentials
-    valid_username = "user"
-    valid_password = "password"
+    import os
+    valid_password = os.environ.get("STREAMLIT_APP_PASSWORD", "ChangeThisStrongPassword123!")
+    valid_username = os.environ.get("VALID_USERNAME", "")
+    valid_password = os.environ.get("VALID_PASSWORD", "")
 
     return username == valid_username and password == valid_password
 

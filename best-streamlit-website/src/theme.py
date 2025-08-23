@@ -1,7 +1,7 @@
-from streamlit import set_page_config
+import streamlit as st
 
 def set_theme():
-    set_page_config(
+    st.set_page_config(
         page_title="Best Streamlit Website",
         page_icon="🌐",
         layout="wide",

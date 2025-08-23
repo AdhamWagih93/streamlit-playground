@@ -12,7 +12,7 @@ if not check_login():
 st.title("Dashboard")
 
 # Load data for the dashboard
-data = load_data()
+data = load_data("path/to/your/datafile.csv")  # Replace with the actual path to your data file
 
 # Display data in a table
 st.subheader("Data Overview")

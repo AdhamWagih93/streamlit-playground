@@ -1,3 +1,5 @@
+import uuid
+
 def load_data(file_path):
     import pandas as pd
     return pd.read_csv(file_path)
@@ -10,5 +12,4 @@ def format_date(date):
     return date.strftime("%Y-%m-%d")
 
 def generate_unique_id():
-    import uuid
     return str(uuid.uuid4())
