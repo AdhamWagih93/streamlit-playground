@@ -1,32 +1,29 @@
 import streamlit as st
 import pandas as pd
-from src.auth import check_login
-from src.utils import load_data
 
-# Check if the user is logged in
-if not check_login():
-    st.warning("Please log in to access the dashboard.")
-    st.stop()
-
-# Set the title of the dashboard
 st.title("Dashboard")
+st.image(
+    "https://images.unsplash.com/photo-1465101178521-c1a9136a3b41?auto=format&fit=crop&w=800&q=80",
+    caption="Dashboard Overview",
+    use_container_width=True
+)
 
-# Load data for the dashboard
-data = load_data("path/to/your/datafile.csv")  # Replace with the actual path to your data file
+# Example data for demonstration
+data = pd.DataFrame({
+    'Category': ['A', 'B', 'C', 'D'],
+    'Value': [10, 23, 7, 15]
+})
 
-# Display data in a table
 st.subheader("Data Overview")
 st.dataframe(data)
 
-# Create interactive visualizations
 st.subheader("Visualizations")
-if st.checkbox("Show Histogram"):
-    st.bar_chart(data['column_name'])  # Replace 'column_name' with the actual column name
+if st.checkbox("Show Bar Chart"):
+    st.bar_chart(data.set_index('Category'))
 
 if st.checkbox("Show Line Chart"):
-    st.line_chart(data['column_name'])  # Replace 'column_name' with the actual column name
+    st.line_chart(data.set_index('Category'))
 
-# Add any additional dashboard components here
 st.sidebar.header("Dashboard Options")
 option = st.sidebar.selectbox("Select an option", ["Option 1", "Option 2"])
 
