@@ -42,6 +42,7 @@ class Task(Base):
     comments = Column(Text, default="[]")  # JSON list of dicts
     history = Column(Text, default="[]")  # JSON list of dicts
     checklist = Column(Text, default="[]")  # JSON list of {id,text,done,created_at}
+    done_at = Column(String(64), nullable=True)  # timestamp when first marked Done
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -98,6 +99,8 @@ def init_db():
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN reporter TEXT")
                 if 'reviewer' not in cols:
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN reviewer TEXT")
+                if 'done_at' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN done_at TEXT")
             else:
                 # generic check for non-sqlite
                 res = conn.exec_driver_sql("SELECT column_name FROM information_schema.columns WHERE table_name='tasks'")
@@ -108,6 +111,8 @@ def init_db():
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN reporter TEXT")
                 if 'reviewer' not in cols:
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN reviewer TEXT")
+                if 'done_at' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN done_at TEXT")
         except Exception:
             pass
 
@@ -149,6 +154,7 @@ def create_task(task_dict: Dict[str, Any]) -> Dict[str, Any]:
             comments=json.dumps(task_dict.get("comments", [])),
             history=json.dumps(task_dict.get("history", [])),
             checklist=json.dumps(task_dict.get("checklist", [])),
+            done_at=task_dict.get("done_at"),
         )
         s.add(t)
         s.commit()
@@ -168,7 +174,10 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         t.reviewer = task_dict.get("reviewer", t.reviewer)
         # Standard attributes
         t.priority = task_dict.get("priority", t.priority)
-        t.status = task_dict.get("status", t.status)
+        new_status = task_dict.get("status", t.status)
+        if new_status != t.status and new_status == 'Done' and not t.done_at:
+            t.done_at = datetime.utcnow().isoformat()
+        t.status = new_status
         t.due_date = task_dict.get("due_date", t.due_date)
         t.estimates_hours = task_dict.get("estimates_hours", t.estimates_hours)
         if "tags" in task_dict:
@@ -199,7 +208,11 @@ def update_task_status(task_id: str, new_status: str, by: str = "user"):
         t = s.get(Task, task_id)
         if not t:
             return
-        t.status = new_status
+        if new_status != t.status:
+            if new_status == 'Done' and not t.done_at:
+                t.done_at = datetime.utcnow().isoformat()
+            # If status moves away from Done before closure, keep original done_at
+            t.status = new_status
         history = json.loads(t.history or "[]")
         history.append({"when": datetime.utcnow().isoformat(), "what": f"status->{new_status}", "by": by})
         t.history = json.dumps(history)
