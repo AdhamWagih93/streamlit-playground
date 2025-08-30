@@ -43,6 +43,46 @@
         "when": "2025-08-24T10:13:43.561114",
         "what": "moved_next",
         "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:10:58.472074",
+        "what": "moved_prev",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:11:00.260728",
+        "what": "moved_next",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:14:03.135883",
+        "what": "moved_prev",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:14:04.326734",
+        "what": "moved_next",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:29:12.584716",
+        "what": "moved_prev",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:29:13.727750",
+        "what": "moved_next",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:30:44.119614",
+        "what": "moved_prev",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:30:45.217984",
+        "what": "moved_next",
+        "by": "user"
       }
     ]
   },
@@ -109,7 +149,7 @@
     "description": "Intermittent login failures in auth module",
     "assignee": "Carol",
     "priority": "Critical",
-    "status": "Review",
+    "status": "Done",
     "created_at": "2025-08-24T09:47:29.557306",
     "due_date": "2025-08-24",
     "estimates_hours": 6,
@@ -135,6 +175,31 @@
       },
       {
         "when": "2025-08-24T09:55:12.000102",
+        "what": "moved_next",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:11:01.800859",
+        "what": "moved_next",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:11:03.396263",
+        "what": "moved_prev",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:11:05.099876",
+        "what": "moved_next",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:14:05.734734",
+        "what": "moved_prev",
+        "by": "user"
+      },
+      {
+        "when": "2025-08-24T11:14:07.595733",
         "what": "moved_next",
         "by": "user"
       }

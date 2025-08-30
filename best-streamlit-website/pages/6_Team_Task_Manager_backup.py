@@ -57,11 +57,7 @@ st.markdown(
     .ttm-inline-btn-row button { flex:1; }
     .ttm-move-prev { background:linear-gradient(135deg,#6c5ce7,#0b63d6) !important; }
     .ttm-move-next { background:linear-gradient(135deg,#00b894,#0b63d6) !important; }
-    .ttm-edit-btn { background:linear-gradient(135deg,#ffdd59,#ffa801) !important; color:#222 !important; }
-    .ttm-board-col { backdrop-filter: blur(4px); }
-    .stButton>button, .stDownloadButton>button { border:1px solid rgba(255,255,255,0.15) !important; }
-    .stButton>button:hover { filter:brightness(1.08); box-shadow:0 0 0 2px rgba(255,255,255,0.15) inset; }
-    .ttm-status-badge { background:#1e272e; color:#fff; }
+    .ttm-edit-btn { background:linear-gradient(135deg,#fdcb6e,#e17055) !important; color:#222 !important; }
     .ttm-del-btn { background:linear-gradient(135deg,#d63031,#b71c1c) !important; }
     .ttm-add-pop-btn { background:linear-gradient(135deg,#0b63d6,#6c5ce7,#00b894); background-size:200% 100%; padding:.45rem .9rem; font-size:.68rem; border-radius:8px; font-weight:700; letter-spacing:.7px; }
     .ttm-add-pop-btn:hover { background-position:100% 0; }
@@ -419,7 +415,7 @@ with board_tab:
                 st.markdown(f'<div class="ttm-status-header {status_class}">{status}</div>', unsafe_allow_html=True)
             with header_cols[1]:
                 # Add Task popover (index for quick access)
-                with st.popover(f"➕", use_container_width=True):
+                with st.popover(f"➕ {idx+1}", use_container_width=True):
                     st.markdown(f"#### New Task in {status}")
                     nt_title = st.text_input("Title", key=f"nt-title-{status}")
                     nt_desc = st.text_area("Description", key=f"nt-desc-{status}")
@@ -466,49 +462,101 @@ with board_tab:
                         st.session_state.tasks_cache = load_tasks()
                         st.rerun()
                 with btn_cols[2]:
-                    # Popover edit replaces previous toggle mechanism
-                    with st.popover("✏️ Edit", key=f"edit-pop-{tid}"):
-                        task_live = tasks_repo.get_task(tid) or t
-                        st.markdown(f"### Edit Task")
-                        ntitle = st.text_input("Title", value=task_live.get('title',''), key=f"pop-title-{tid}")
-                        ndesc = st.text_area("Description", value=task_live.get('description',''), key=f"pop-desc-{tid}")
-                        nassignee = st.selectbox("Assignee", ["(none)"]+st.session_state.users, index=0 if not task_live.get('assignee') else (st.session_state.users.index(task_live.get('assignee'))+1 if task_live.get('assignee') in st.session_state.users else 0), key=f"pop-assignee-{tid}")
-                        npriority = st.selectbox("Priority", PRIORITIES, index=PRIORITIES.index(task_live.get('priority')) if task_live.get('priority') in PRIORITIES else 1, key=f"pop-priority-{tid}")
-                        ndue = st.date_input("Due", value=pd.to_datetime(task_live.get('due_date')).date() if task_live.get('due_date') else date.today(), key=f"pop-due-{tid}")
-                        nest = st.number_input("Est. hours", min_value=0.0, step=0.5, value=float(task_live.get('estimates_hours') or 0.0), key=f"pop-est-{tid}")
-                        ntags = st.text_input("Tags (comma)", value=", ".join(task_live.get('tags') or []), key=f"pop-tags-{tid}")
-                        nstatus = st.selectbox("Status", STATUS_ORDER, index=STATUS_ORDER.index(task_live.get('status')) if task_live.get('status') in STATUS_ORDER else 0, key=f"pop-status-{tid}")
-                        reviewer_choices = ["(none)"] + st.session_state.users
-                        reviewer_current = task_live.get('reviewer') or "(none)"
-                        reviewer_sel = st.selectbox("Reviewer", reviewer_choices, index=reviewer_choices.index(reviewer_current) if reviewer_current in reviewer_choices else 0, key=f"pop-rev-{tid}")
-                        st.caption(f"Reporter: {task_live.get('reporter') or '(unknown)'}")
-                        if st.button("💾 Save", key=f"pop-save-{tid}"):
-                            history = (tasks_repo.get_task(tid) or {}).get('history', [])
-                            history.append({"when": datetime.utcnow().isoformat(), "what": "edited", "by": st.session_state.username})
-                            reviewer_final = None if reviewer_sel == "(none)" else reviewer_sel
-                            tasks_repo.update_task({
-                                'id': tid,
-                                'title': ntitle,
-                                'description': ndesc,
-                                'assignee': None if nassignee == "(none)" else nassignee,
-                                'priority': npriority,
-                                'due_date': ndue.isoformat(),
-                                'estimates_hours': nest,
-                                'tags': [x.strip() for x in ntags.split(',') if x.strip()],
-                                'status': nstatus,
-                                'history': history,
-                                'reporter': task_live.get('reporter'),
-                                'reviewer': reviewer_final,
-                            })
-                            st.session_state.tasks_cache = load_tasks()
-                            st.success("Saved")
-                            st.rerun()
+                    if st.button("✏️ Edit", key=f"edit-inline-{tid}"):
+                        st.session_state[f"inline_edit_{tid}"] = not st.session_state.get(f"inline_edit_{tid}")
+                        st.rerun()
                 with btn_cols[3]:
-                    if st.button("�️", key=f"delete-{tid}"):
+                    if st.button("🗑️", key=f"delete-{tid}"):
                         tasks_repo.delete_task(tid)
                         st.session_state.tasks_cache = load_tasks()
                         st.rerun()
-                # Legacy inline edit removed (popover now handles editing)
+                if st.session_state.get(f"inline_edit_{tid}"):
+                    with st.container():
+                        st.markdown("<hr style='margin:0.4rem 0 0.6rem 0;'>", unsafe_allow_html=True)
+                        task_live = tasks_repo.get_task(tid) or t
+                        et1, et2 = st.columns([2,1])
+                        with et1:
+                            ntitle = st.text_input("Title", value=task_live.get('title',''), key=f"it-title-{tid}")
+                        with et2:
+                            npriority = st.selectbox("Priority", PRIORITIES, index=PRIORITIES.index(task_live.get('priority','Medium')) if task_live.get('priority') in PRIORITIES else 1, key=f"it-prio-{tid}")
+                        ndesc = st.text_area("Description", value=task_live.get('description',''), key=f"it-desc-{tid}")
+                        col_meta = st.columns(4)
+                        with col_meta[0]:
+                            nassignee = st.selectbox("Assignee", ["(none)"]+st.session_state.users, index=0 if not task_live.get('assignee') else (st.session_state.users.index(task_live.get('assignee'))+1 if task_live.get('assignee') in st.session_state.users else 0), key=f"it-assignee-{tid}")
+                        with col_meta[1]:
+                            ndue = st.date_input("Due", value=pd.to_datetime(task_live.get('due_date')).date() if task_live.get('due_date') else date.today(), key=f"it-due-{tid}")
+                        with col_meta[2]:
+                            nest = st.number_input("Est (h)", min_value=0.0, value=float(task_live.get('estimates_hours') or 1.0), step=0.5, key=f"it-est-{tid}")
+                        with col_meta[3]:
+                            nstatus = st.selectbox("Status", STATUS_ORDER, index=STATUS_ORDER.index(task_live.get('status','Backlog')), key=f"it-status-{tid}")
+                        ntags = st.text_input("Tags (comma)", value=", ".join(task_live.get('tags') or []), key=f"it-tags-{tid}")
+                        st.markdown("**Checklist**")
+                        if task_live.get('checklist'):
+                            for ci in task_live.get('checklist'):
+                                cid = ci.get('id')
+                                ccols = st.columns([0.07,0.78,0.15])
+                                with ccols[0]:
+                                    chk = st.checkbox("", value=ci.get('done', False), key=f"it-cl-{cid}")
+                                with ccols[1]:
+                                    st.markdown(("~~"+ci.get('text','')+"~~") if chk else ci.get('text',''))
+                                with ccols[2]:
+                                    if st.button("🗑", key=f"it-delcl-{cid}"):
+                                        tasks_repo.delete_check_item(tid, cid)
+                                        st.session_state.tasks_cache = load_tasks()
+                                        st.rerun()
+                                if chk != ci.get('done'):
+                                    tasks_repo.toggle_check_item(tid, cid, chk)
+                                    st.session_state.tasks_cache = load_tasks()
+                                    st.rerun()
+                        new_inline_ci = st.text_input("Add checklist item", key=f"it-new-ci-{tid}")
+                        if st.button("Add Item", key=f"it-add-ci-{tid}") and new_inline_ci.strip():
+                            tasks_repo.add_check_item(tid, new_inline_ci.strip())
+                            st.session_state.tasks_cache = load_tasks()
+                            st.rerun()
+                        # Reviewer selection during inline edit
+                        reviewer_value = task_live.get('reviewer') or ''
+                        reviewer_choices = ["(none)"] + st.session_state.users
+                        reviewer_sel = st.selectbox("Reviewer", reviewer_choices, index=reviewer_choices.index(reviewer_value) if reviewer_value in reviewer_choices else 0, key=f"it-rev-{tid}")
+                        ab1, ab2, ab3 = st.columns([1,1,1])
+                        with ab1:
+                            if st.button("💾 Save", key=f"it-save-{tid}"):
+                                history = (tasks_repo.get_task(tid) or {}).get('history', [])
+                                history.append({"when": datetime.utcnow().isoformat(), "what": "edited", "by": st.session_state.username})
+                                reviewer_final = None if reviewer_sel == "(none)" else reviewer_sel
+                                tasks_repo.update_task({
+                                    'id': tid,
+                                    'title': ntitle,
+                                    'description': ndesc,
+                                    'assignee': None if nassignee == "(none)" else nassignee,
+                                    'priority': npriority,
+                                    'due_date': ndue.isoformat(),
+                                    'estimates_hours': nest,
+                                    'tags': [x.strip() for x in ntags.split(',') if x.strip()],
+                                    'status': nstatus,
+                                    'history': history,
+                                    'reporter': task_live.get('reporter'),
+                                    'reviewer': reviewer_final,
+                                })
+                                st.session_state.tasks_cache = load_tasks()
+                                st.session_state[f"inline_edit_{tid}"] = False
+                                st.success("Saved")
+                                st.rerun()
+                        with ab2:
+                            if st.button("❌ Cancel", key=f"it-cancel-{tid}"):
+                                st.session_state[f"inline_edit_{tid}"] = False
+                                st.rerun()
+                        with ab3:
+                            if st.button("💬 Comment", key=f"it-comment-open-{tid}"):
+                                st.session_state[f"show_comments_{tid}"] = not st.session_state.get(f"show_comments_{tid}")
+                        if st.session_state.get(f"show_comments_{tid}"):
+                            st.markdown("**Comments**")
+                            for c in (task_live.get('comments') or [])[-15:]:
+                                st.write(f"- {c.get('when')}: {c.get('by')}: {c.get('text')}")
+                            new_c = st.text_input("New comment", key=f"it-new-comment-{tid}")
+                            if st.button("Post", key=f"it-post-comment-{tid}") and new_c.strip():
+                                tasks_repo.add_comment(tid, new_c.strip(), by=st.session_state.username)
+                                st.session_state.tasks_cache = load_tasks()
+                                st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
 with analytics_tab:
