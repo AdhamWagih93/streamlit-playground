@@ -166,6 +166,19 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         t = s.get(Task, task_dict["id"])
         if not t:
             return None
+        # Capture original values for change detection
+        orig = {
+            'title': t.title,
+            'description': t.description,
+            'assignee': t.assignee,
+            'reporter': t.reporter,
+            'reviewer': t.reviewer,
+            'priority': t.priority,
+            'status': t.status,
+            'due_date': t.due_date,
+            'estimates_hours': t.estimates_hours,
+            'tags': json.loads(t.tags or '[]'),
+        }
         t.title = task_dict.get("title", t.title)
         t.description = task_dict.get("description", t.description)
         t.assignee = task_dict.get("assignee", t.assignee)
@@ -188,6 +201,55 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             t.history = json.dumps(task_dict.get("history") or [])
         if "checklist" in task_dict:
             t.checklist = json.dumps(task_dict.get("checklist") or [])
+        # Auto history augmentation (granular change log)
+        provided_hist = json.loads(t.history or "[]") if "history" not in task_dict else task_dict.get('history') or []
+        # Ensure list form
+        if isinstance(provided_hist, str):
+            try:
+                provided_hist = json.loads(provided_hist)
+            except Exception:
+                provided_hist = []
+        existing_markers = {h.get('what') for h in provided_hist}
+        def add_event(marker: str):
+            provided_hist.append({"when": datetime.utcnow().isoformat(), "what": marker, "by": task_dict.get('by','system')})
+        # Detect changes
+        new_tags = json.loads(t.tags or '[]')
+        changes = {
+            'title': t.title != orig['title'],
+            'description': t.description != orig['description'],
+            'assignee': t.assignee != orig['assignee'],
+            'reporter': t.reporter != orig['reporter'],
+            'reviewer': t.reviewer != orig['reviewer'],
+            'priority': t.priority != orig['priority'],
+            'status': t.status != orig['status'],
+            'due_date': t.due_date != orig['due_date'],
+            'estimates_hours': float(t.estimates_hours or 0) != float(orig['estimates_hours'] or 0),
+            'tags': new_tags != orig['tags'],
+        }
+        for field, changed in changes.items():
+            if not changed:
+                continue
+            # Skip if already a more specific event exists (priority/status handled elsewhere)
+            if field == 'priority' and any(ev.startswith('priority->') for ev in existing_markers):
+                continue
+            if field == 'status' and any(ev.startswith('status->') for ev in existing_markers):
+                continue
+            marker = None
+            if field == 'description':
+                marker = 'description_updated'
+            elif field == 'tags':
+                marker = 'tags_updated'
+            elif field == 'due_date':
+                marker = f"due->{t.due_date}" if t.due_date else 'due_cleared'
+            elif field == 'estimates_hours':
+                marker = f"estimate->{t.estimates_hours}"
+            else:
+                # Generic field->value marker
+                marker = f"{field}->{getattr(t, field) if field not in ('tags',) else ','.join(new_tags)}"
+            if marker and marker not in existing_markers:
+                add_event(marker)
+        # Persist merged history if we augmented it
+        t.history = json.dumps(provided_hist)
         s.commit()
         return t.to_dict()
 
@@ -211,7 +273,6 @@ def update_task_status(task_id: str, new_status: str, by: str = "user"):
         if new_status != t.status:
             if new_status == 'Done' and not t.done_at:
                 t.done_at = datetime.utcnow().isoformat()
-            # If status moves away from Done before closure, keep original done_at
             t.status = new_status
         history = json.loads(t.history or "[]")
         history.append({"when": datetime.utcnow().isoformat(), "what": f"status->{new_status}", "by": by})
