@@ -137,6 +137,16 @@ DEFERRED_STATUS = "Deferred"
 STATUS_ORDER = FLOW_STATUSES + [DEFERRED_STATUS]
 PRIORITIES = ["Low", "Medium", "High", "Critical"]
 
+# Time window presets (days) for last-updated filtering
+TIME_WINDOWS = {
+    "1D": 1,
+    "1W": 7,
+    "1M": 30,
+    "3M": 90,
+    "1Y": 365,
+    "All": None,
+}
+
 
 def load_tasks():
     return tasks_repo.get_all_tasks()
@@ -216,6 +226,13 @@ if 'current_user' not in st.session_state:
     st.session_state.current_user = st.session_state.users[0] if st.session_state.users else 'Me'
 if 'username' not in st.session_state:
     st.session_state.username = st.session_state.current_user
+if 'time_window_choice' not in st.session_state:
+    st.session_state.time_window_choice = '1W'
+# Ensure board visibility toggles exist early so global filtering can respect them
+if 'show_deferred' not in st.session_state:
+    st.session_state.show_deferred = False
+if 'show_closed' not in st.session_state:
+    st.session_state.show_closed = False
 vmc1, vmc2 = st.columns([0.5,1.5])
 with vmc1:
     # Avoid passing an explicit value when session_state pre-initializes the key to prevent Streamlit warning
@@ -237,6 +254,83 @@ with fc4:
     if refresh_clicked:
         st.session_state.tasks_cache = load_tasks()
         st.toast("Tasks refreshed", icon="✅")
+
+# Time filter (last updated)
+tf_css = """
+<style>
+/* Time window pill group */
+.ttm-time-filter {display:flex;flex-wrap:wrap;gap:6px;margin:6px 4px 4px 4px;}
+.ttm-time-pill {cursor:pointer;padding:4px 12px;font-size:0.68rem;font-weight:700;letter-spacing:.5px;border:1px solid #cdd9e5;color:#35506b;border-radius:22px;background:linear-gradient(145deg,#ffffff,#f2f7fb);box-shadow:0 2px 6px -2px rgba(11,99,214,0.25);user-select:none;transition:all .25s;}
+.ttm-time-pill:hover {background:linear-gradient(145deg,#eef4fa,#ffffff);}
+.ttm-time-pill.active {background:linear-gradient(120deg,#0b63d6,#6c5ce7,#00b894);color:#fff;border:1px solid #0b63d6;box-shadow:0 4px 14px -4px rgba(11,99,214,0.5);}
+</style>
+"""
+st.markdown(tf_css, unsafe_allow_html=True)
+tw_container = st.container()
+with tw_container:
+    st.markdown("<div class='ttm-filter-label'>Last Updated</div>", unsafe_allow_html=True)
+    # Seamless (no query params) interactive pills using buttons
+    pill_labels = list(TIME_WINDOWS.keys())
+    pill_cols = st.columns(len(pill_labels))
+    for i, label in enumerate(pill_labels):
+        with pill_cols[i]:
+            active = (label == st.session_state.time_window_choice)
+            btn_label = label if not active else f"✓ {label}"
+            if st.button(btn_label, key=f"tw-pill-{label}"):
+                # Update session state and immediately rerun so the active styling & downstream filters
+                # reflect the change without requiring a second click.
+                if st.session_state.time_window_choice != label:
+                    st.session_state.time_window_choice = label
+                st.rerun()
+    # Extra CSS to style these specific buttons as pills & indicate active
+    st.markdown(
+        """
+        <style>
+        /* Time window pill buttons (beautified) */
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"] {
+            position:relative;
+            cursor:pointer;
+            padding:6px 16px 6px 16px;
+            font-size:0.70rem;
+            font-weight:600;
+            letter-spacing:.55px;
+            border:1px solid rgba(11,99,214,0.18) !important;
+            color:#21405e;
+            border-radius:28px;
+            background:linear-gradient(160deg,#ffffff 0%,#f4f8fc 55%,#eef4fa 100%);
+            box-shadow:0 2px 6px -2px rgba(11,99,214,0.25),0 0 0 0 rgba(11,99,214,0.25);
+            transition:all .28s cubic-bezier(.4,.14,.3,1);
+            backdrop-filter:blur(3px);
+            -webkit-backdrop-filter:blur(3px);
+            min-width:60px;
+        }
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"]:hover {
+            box-shadow:0 4px 14px -4px rgba(11,99,214,0.32);
+            transform:translateY(-1px);
+            background:linear-gradient(155deg,#ffffff 0%,#f0f6fb 55%,#e9f2fa 100%);
+        }
+        /* Active (detected via leading checkmark) */
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"] p {margin:0;}
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"]:has(p:contains("✓")) {
+            background:linear-gradient(120deg,#0b63d6,#6c5ce7,#00b894) !important;
+            color:#fff !important;
+            border:1px solid #0b63d6 !important;
+            box-shadow:0 6px 18px -4px rgba(11,99,214,0.55),0 0 0 1px rgba(255,255,255,0.15) inset;
+        }
+        /* Subtle glow ring on active */
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"]:has(p:contains("✓"))::after {
+            content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:linear-gradient(120deg,#0b63d6,#6c5ce7,#00b894);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.55;
+        }
+        /* Remove default focus outline & replace */
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"]:focus-visible {outline:none;box-shadow:0 0 0 3px rgba(11,99,214,0.45);}        
+        /* Compact text container click pass-through */
+        div[data-testid="column"] .stButton>button[id^="tw-pill-"] span {pointer-events:none;}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# (Removed query param handling for time window; selection now purely session-based)
 st.markdown('</div>', unsafe_allow_html=True)
 
 ### Inline creation integrated into the board (old global creator removed) ###
@@ -321,6 +415,43 @@ if st.session_state.get('my_view'):
 else:
     scope_tasks = st.session_state.tasks_cache
 
+# Apply last-updated window filter BEFORE other field filters
+def _parse_iso(ts: str):
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        try:
+            return pd.to_datetime(ts, errors='coerce').to_pydatetime()
+        except Exception:
+            return None
+
+def _last_updated(task: dict):
+    latest = _parse_iso(task.get('created_at') or '')
+    for ev in (task.get('history') or []):
+        ts = _parse_iso(ev.get('when') or '')
+        if ts and (not latest or ts > latest):
+            latest = ts
+    # Optionally include comment times (they are also in history as comment_added, so skip)
+    return latest
+
+tw_choice = st.session_state.time_window_choice
+days = TIME_WINDOWS.get(tw_choice)
+if days is not None:
+    cutoff_dt = datetime.utcnow() - pd.Timedelta(days=days)
+    filtered_scope = []
+    for t in scope_tasks:
+        lu = _last_updated(t)
+        if lu and lu >= cutoff_dt:
+            t['last_updated'] = lu.isoformat()
+            filtered_scope.append(t)
+    scope_tasks = filtered_scope
+else:
+    for t in scope_tasks:
+        if 'last_updated' not in t:
+            lu = _last_updated(t)
+            if lu:
+                t['last_updated'] = lu.isoformat()
+
 # Filter tasks (start from scoped set)
 filtered = scope_tasks
 if search:
@@ -331,9 +462,39 @@ if assignee_filter and assignee_filter != "All":
 if priority_filter and priority_filter != "All":
     filtered = [t for t in filtered if t.get("priority") == priority_filter]
 
+# Exclude statuses whose columns are hidden (global consistency for counts/analytics/reports)
+if not st.session_state.show_deferred:
+    filtered = [t for t in filtered if t.get('status') != 'Deferred']
+if not st.session_state.show_closed:
+    filtered = [t for t in filtered if t.get('status') != 'Closed']
+
 # Convert to DataFrame for visualizations
 # DataFrame AFTER filters for downstream tabs
 df = tasks_to_df(filtered)
+
+# --- Global Selected Tasks Summary (professional styled bar) ---
+try:
+    total_selected = len(filtered)
+except Exception:
+    total_selected = 0
+summary_css = """
+<style>
+.ttm-filter-summary {margin:6px 0 16px 0;display:flex;align-items:center;gap:14px;padding:12px 20px;border:1px solid #d4e1ed;border-radius:20px;background:linear-gradient(140deg,#ffffff,#f5f9fc);box-shadow:0 4px 16px -6px rgba(11,99,214,0.18);} 
+.ttm-filter-summary-label {font-size:.68rem;font-weight:700;letter-spacing:.6px;color:#51658a;text-transform:uppercase;}
+.ttm-filter-summary-value {font-size:1.55rem;font-weight:700;line-height:1;background:linear-gradient(120deg,#0b63d6,#6c5ce7,#00b894);-webkit-background-clip:text;color:transparent;}
+@media (max-width: 640px){.ttm-filter-summary {padding:10px 16px;}}
+</style>
+"""
+st.markdown(summary_css, unsafe_allow_html=True)
+st.markdown(
+    f"""
+    <div class='ttm-filter-summary'>
+        <div class='ttm-filter-summary-label'>Selected Tasks</div>
+        <div class='ttm-filter-summary-value'>{total_selected}</div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 ## Reduced extra dividers for a cleaner top section
 
@@ -496,7 +657,8 @@ def report_fragment(report_df, show_closed: bool, include_deferred: bool, assign
     total_tasks = len(report_df)
     open_tasks_num = len([t for t in report_df.to_dict('records') if t.get('status') not in ('Done','Closed')])
     overdue = len([t for t in report_df.to_dict('records') if t.get('due_date') and pd.to_datetime(t.get('due_date')) < pd.Timestamp(date.today()) and t.get('status') not in ('Done','Closed')])
-    done_count = len([t for t in report_df.to_dict('records') if t.get('status') == 'Done'])
+    # Treat both Done and Closed as completed for percentage
+    done_count = len([t for t in report_df.to_dict('records') if t.get('status') in ('Done','Closed')])
     completion_pct = round(done_count/total_tasks*100,1) if total_tasks else 0
     critical_open = len([t for t in report_df.to_dict('records') if t.get('priority')=='Critical' and t.get('status') not in ('Done','Closed')])
     report_actor = None
@@ -941,7 +1103,13 @@ with board_tab:
             status_class = f"ttm-status-{status.replace(' ', '-') }"
             header_cols = st.columns([5,1])
             with header_cols[0]:
-                st.markdown(f'<div class="ttm-status-header {status_class}">{status}</div>', unsafe_allow_html=True)
+                count = len(kanban_data.get(status, []))
+                st.markdown(
+                    f'<div class="ttm-status-header {status_class}">{status} '
+                    f'<span style="background:rgba(255,255,255,0.18);padding:2px 8px;border-radius:14px;font-size:.65rem;letter-spacing:.5px;">{count}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
             with header_cols[1]:
                 # Add Task popover (index for quick access)
                 with st.popover(f"➕", use_container_width=True):
@@ -979,8 +1147,8 @@ with board_tab:
                 tid = t['id']
                 card_html = make_card_html(t)
                 st.markdown(card_html[:-6], unsafe_allow_html=True)
-                # Button bar: Prev | Raise Prio | Edit | History | Lower Prio | Next
-                btn_cols = st.columns([1,1,1,1,1,1])
+                # Button bar: Prev | Raise Prio | Edit | Defer | History | Lower Prio | Next
+                btn_cols = st.columns([1,1,1,1,1,1,1])
                 # Prev button (move left) --------------------------------------------------
                 with btn_cols[0]:
                     if idx > 0:
@@ -1014,13 +1182,10 @@ with board_tab:
                         ntitle = st.text_input("Title", value=task_live.get('title',''), key=f"pop-title-{tid}")
                         ndesc = st.text_area("Description", value=task_live.get('description',''), key=f"pop-desc-{tid}")
                         nassignee = st.selectbox("Assignee", ["(none)"]+st.session_state.users, index=0 if not task_live.get('assignee') else (st.session_state.users.index(task_live.get('assignee'))+1 if task_live.get('assignee') in st.session_state.users else 0), key=f"pop-assignee-{tid}")
-                        # Priority edited via board arrow buttons (read-only display here)
-                        st.text_input("Priority", value=task_live.get('priority'), disabled=True, key=f"pop-priority-ro-{tid}")
                         ndue = st.date_input("Due", value=pd.to_datetime(task_live.get('due_date')).date() if task_live.get('due_date') else date.today(), key=f"pop-due-{tid}")
                         nest = st.number_input("Est. hours", min_value=0.0, step=0.5, value=float(task_live.get('estimates_hours') or 0.0), key=f"pop-est-{tid}")
                         ntags = st.text_input("Tags (comma)", value=", ".join(task_live.get('tags') or []), key=f"pop-tags-{tid}")
-                        # Status editing disabled in popover (read-only display)
-                        st.text_input("Status", value=task_live.get('status'), key=f"pop-status-ro-{tid}", disabled=True)
+                        # Priority & Status intentionally omitted (managed via board arrows & movement buttons)
                         nreviewer = st.selectbox("Reviewer", ["(none)"]+st.session_state.users, index=0 if not task_live.get('reviewer') else (st.session_state.users.index(task_live.get('reviewer'))+1 if task_live.get('reviewer') in st.session_state.users else 0), key=f"pop-rev-{tid}")
                         st.caption(f"Reporter: {task_live.get('reporter') or '(unknown)'}")
                         # Simple comments + checklist inside popover
@@ -1073,8 +1238,30 @@ with board_tab:
                             st.session_state.tasks_cache = load_tasks()
                             st.success("Saved")
                             st.rerun()
-                # History (new) -----------------------------------------------------------
+                # Defer (trash) -----------------------------------------------------------
                 with btn_cols[3]:
+                    if t.get('status') != 'Deferred':
+                        with st.popover("🗑", use_container_width=False):
+                            st.markdown(f"**Defer Task?**")
+                            st.caption("Moves this task to the Deferred lane (excluded from KPIs).")
+                            if st.button("Confirm Defer", key=f"confirm-defer-{tid}"):
+                                live = tasks_repo.get_task(tid) or t
+                                hist = live.get('history', [])
+                                hist.append({"when": datetime.utcnow().isoformat(), "what": "status->Deferred", "by": st.session_state.username})
+                                tasks_repo.update_task({
+                                    'id': tid,
+                                    'status': 'Deferred',
+                                    'history': hist,
+                                })
+                                # Ensure Deferred column becomes visible so user sees the moved card
+                                if 'show_deferred' not in st.session_state or not st.session_state.show_deferred:
+                                    st.session_state.show_deferred = True
+                                st.session_state.tasks_cache = load_tasks()
+                                st.rerun()
+                    else:
+                        st.markdown("<div style='text-align:center;opacity:.4;'>—</div>", unsafe_allow_html=True)
+                # History (new) -----------------------------------------------------------
+                with btn_cols[4]:
                     with st.popover("🕒"):
                         task_live_hist = tasks_repo.get_task(tid) or t
                         st.markdown(f"### History — {task_live_hist.get('title')}")
@@ -1089,7 +1276,7 @@ with board_tab:
                             st.markdown(f"- **{c.get('by','?')}**: {c.get('text')} <span style='color:#51658a;font-size:0.6rem;'>({c.get('when')})</span>", unsafe_allow_html=True)
                         st.caption("Latest 150 events / 40 comments shown.")
                 # Priority lower -----------------------------------------------------------
-                with btn_cols[4]:
+                with btn_cols[5]:
                     cur_p = t.get('priority')
                     if cur_p in PRIORITIES:
                         pi = PRIORITIES.index(cur_p)
@@ -1105,7 +1292,7 @@ with board_tab:
                         else:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # Next button --------------------------------------------------------------
-                with btn_cols[5]:
+                with btn_cols[6]:
                     can_show_next = idx < len(statuses)-1
                     if t.get('status') == 'In Progress':
                         cl = t.get('checklist') or []
