@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import json
@@ -11,9 +10,12 @@ import random
 import plotly.express as px
 import plotly.graph_objects as go
 from src import tasks_repo
+from src.theme import set_theme
 
 
-# --- Custom CSS for modern, professional look ---
+set_theme(page_title="Team Task Manager", page_icon="📋")
+
+# --- Custom CSS for modern, professional look (base definitions) ---
 st.markdown(
     """
     <style>
@@ -114,8 +116,37 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Page config
-st.set_page_config(page_title="Team Task Manager", page_icon="📋", layout="wide")
+# --- Override / enhanced background + darker card & column surfaces ---
+st.markdown(
+    """
+    <style>
+    body {
+        background: linear-gradient(135deg,var(--app-bg-start,#b9cee3) 0%, var(--app-bg-mid,#c7d8e9) 40%, var(--app-bg-end,#e4edf5) 100%) !important;
+    }
+    .ttm-kanban-col {
+        background: linear-gradient(155deg,var(--card-bg-accent,#eef3f9), #d6e1ec) !important;
+        border:1px solid #c5d1dc !important;
+        box-shadow:0 4px 20px -4px rgba(11,99,214,0.14),0 2px 7px -1px rgba(0,0,0,0.07) !important;
+    }
+    .ttm-task-card {
+        background: var(--card-bg,#f5f8fc) !important;
+        border:1px solid #c7d3df !important;
+        box-shadow:0 5px 16px -4px rgba(11,99,214,0.22),0 2px 6px -2px rgba(0,0,0,0.10) !important;
+    }
+    .ttm-task-card:hover {
+        box-shadow:0 10px 30px -8px rgba(11,99,214,0.35),0 4px 14px -4px rgba(0,0,0,0.15) !important;
+    }
+    .ttm-kpi-box, .ttm-filters-bar, .ttm-section, .ttm-detail {
+        background: linear-gradient(145deg,var(--card-bg,#f5f8fc),#e7eef5) !important;
+        border:1px solid #c9d5e0 !important;
+    }
+    .ttm-backlog-strip {background:linear-gradient(145deg,var(--card-bg,#f5f8fc),#e5edf4) !important;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Page config handled by set_theme() above (safe even if called once elsewhere)
 
 # --- Fragment fallback (Streamlit >= 1.38 provides st.fragment; create no-op decorator if absent) ---
 if not hasattr(st, "fragment"):
@@ -610,6 +641,130 @@ def analytics_fragment(df, show_closed: bool, show_deferred: bool):
     with c3: st.plotly_chart(fig_heat_email, use_container_width=True)
 
 @st.fragment
+def timeline_fragment(tasks_list, show_closed: bool, show_deferred: bool):
+    """Professional timeline (Gantt-style) view of tasks spanning creation to due/completion dates."""
+    if not tasks_list:
+        st.info("No tasks to display for timeline (after filters).")
+        return
+    def _p(ts):
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(ts)
+        except Exception:
+            try:
+                return pd.to_datetime(ts, errors='coerce').to_pydatetime()
+            except Exception:
+                return None
+    def _done_at(task):
+        dt = _p(task.get('done_at'))
+        if dt:
+            return dt
+        for h in task.get('history') or []:
+            w = h.get('what','')
+            if w.startswith('status->Done'):
+                cand = _p(h.get('when'))
+                if cand:
+                    return cand
+        return None
+    rows = []
+    today_dt = datetime.utcnow().date()
+    for t in tasks_list:
+        status = t.get('status')
+        if status == 'Deferred' and not show_deferred:
+            continue
+        if status == 'Closed' and not show_closed:
+            continue
+        created = _p(t.get('created_at')) or datetime.utcnow()
+        due = _p(t.get('due_date'))
+        done = _done_at(t)
+        if done and due and done < due:
+            end = done
+        elif done:
+            end = done
+        elif due:
+            end = due
+        else:
+            end = created + pd.Timedelta(days=1)
+        if end < created:
+            end = created + pd.Timedelta(hours=1)
+        rows.append({
+            'Task': t.get('title')[:80],
+            'Status': status,
+            'Priority': t.get('priority'),
+            'Assignee': t.get('assignee') or 'Unassigned',
+            'Start': created,
+            'End': end,
+            'Due': due.date() if due else None,
+            'Completed': done.date() if done else None,
+            'Overdue': bool(due and due.date() < today_dt and status not in ('Done','Closed')),
+        })
+    if not rows:
+        st.info("Nothing to show in timeline after column visibility constraints.")
+        return
+    tl_df = pd.DataFrame(rows)
+    min_start = tl_df['Start'].min().date()
+    max_end = tl_df['End'].max().date()
+    col_f1, col_f2, col_f3, col_f4 = st.columns([1,1,1,1])
+    with col_f1:
+        range_start = st.date_input('Range start', value=min_start, key='tl-start')
+    with col_f2:
+        range_end = st.date_input('Range end', value=max_end, key='tl-end')
+    if range_end < range_start:
+        st.warning("End before start – adjusting.")
+        range_end = range_start
+    with col_f3:
+        view_mode = st.selectbox('View Mode', ['Task Rows','Group: Assignee','Group: Status'], key='tl-view')
+    with col_f4:
+        show_overdue_only = st.checkbox('Overdue only', key='tl-overdue-only')
+    mask = (tl_df['Start'].dt.date <= range_end) & (tl_df['End'].dt.date >= range_start)
+    if show_overdue_only:
+        mask = mask & (tl_df['Overdue'])
+    view_df = tl_df[mask].copy()
+    if view_df.empty:
+        st.info("No tasks in selected window / filters.")
+        return
+    kcol1, kcol2, kcol3, kcol4, kcol5 = st.columns(5)
+    with kcol1: st.metric("Tasks", len(view_df))
+    with kcol2: st.metric("With Due", int(view_df['Due'].notna().sum()))
+    with kcol3: st.metric("Completed", int(view_df['Completed'].notna().sum()))
+    with kcol4: st.metric("Overdue Open", int(view_df['Overdue'].sum()))
+    span_days = (max_end - min_start).days + 1
+    with kcol5: st.metric("Span (d)", span_days)
+    if view_mode == 'Task Rows':
+        y_field = 'Task'
+        y_title = 'Task'
+    elif view_mode == 'Group: Assignee':
+        y_field = 'Assignee'
+        y_title = 'Assignee'
+    else:
+        y_field = 'Status'
+        y_title = 'Status'
+    status_colors = {"Backlog": "#636e72","To Do": "#0984e3","In Progress": "#fdcb6e","Review": "#6c5ce7","Done": "#00b894","Closed":"#b2bec3","Deferred":"#485460"}
+    fig_tl = px.timeline(view_df.sort_values('Start'), x_start='Start', x_end='End', y=y_field, color='Status',
+                         hover_data={'Task': True, 'Priority': True, 'Due': True, 'Completed': True, 'Start': True, 'End': True},
+                         color_discrete_map=status_colors)
+    fig_tl.update_yaxes(autorange='reversed', title=y_title)
+    fig_tl.update_layout(height=480, margin=dict(l=10,r=10,t=40,b=40), template='plotly_white',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
+    shapes = []
+    for _, r in view_df.iterrows():
+        if r['Overdue']:
+            shapes.append(dict(type='rect',xref='x',yref='y', x0=r['Start'],x1=r['End'],y0=r[y_field],y1=r[y_field],
+                               line=dict(width=0), fillcolor='rgba(214,48,49,0.20)',layer='below'))
+    if shapes:
+        fig_tl.update_layout(shapes=shapes)
+    st.plotly_chart(fig_tl, use_container_width=True)
+    due_df = view_df[view_df['Due'].notna()].copy()
+    if not due_df.empty:
+        due_counts = due_df.groupby('Due').size().reset_index(name='count')
+        fig_due = px.bar(due_counts, x='Due', y='count', title='Tasks Due per Day', text='count')
+        fig_due.update_traces(marker_color='#0b63d6', textposition='outside')
+        fig_due.update_layout(height=260, margin=dict(l=10,r=10,t=50,b=20), template='plotly_white')
+        st.plotly_chart(fig_due, use_container_width=True)
+    st.caption("Timeline bars span creation to due/completion. Red tinted bars indicate overdue (open) tasks.")
+
+@st.fragment
 def report_fragment(report_df, show_closed: bool, include_deferred: bool, assignee_filter: str, my_view: bool, current_user: str):
     """Generate and render the heavy email report only when invoked; isolated to prevent recomputation."""
     import base64
@@ -1036,7 +1191,7 @@ if active_ticket_id:
     st.stop()
 
 
-board_tab, analytics_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs(["🗂 Board", "📊 Analytics", "📨 Report", "📁 Import / Export", "� History", "�📖 Documentation"])
+board_tab, analytics_tab, tags_tab, timeline_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs(["🗂 Board", "📊 Analytics", "🏷 Tags", "🗓 Timeline", "📨 Report", "📁 Import / Export", "� History", "�📖 Documentation"])
 
 with board_tab:
     st.markdown('<div class="ttm-section-gap"></div>', unsafe_allow_html=True)
@@ -1147,8 +1302,8 @@ with board_tab:
                 tid = t['id']
                 card_html = make_card_html(t)
                 st.markdown(card_html[:-6], unsafe_allow_html=True)
-                # Button bar: Prev | Raise Prio | Edit | Defer | History | Lower Prio | Next
-                btn_cols = st.columns([1,1,1,1,1,1,1])
+                # Button bar: Prev | Raise Prio | Checklist | Comments | Defer | History | Lower Prio | Next
+                btn_cols = st.columns([1,1,1,1,1,1,1,1])
                 # Prev button (move left) --------------------------------------------------
                 with btn_cols[0]:
                     if idx > 0:
@@ -1174,72 +1329,53 @@ with board_tab:
                                 st.rerun()
                         else:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
-                # Edit (center) ------------------------------------------------------------
+                # Checklist popover -------------------------------------------------------
                 with btn_cols[2]:
-                    with st.popover("✏️"):
+                    with st.popover("☑"):
                         task_live = tasks_repo.get_task(tid) or t
-                        st.markdown(f"### Edit Task")
-                        ntitle = st.text_input("Title", value=task_live.get('title',''), key=f"pop-title-{tid}")
-                        ndesc = st.text_area("Description", value=task_live.get('description',''), key=f"pop-desc-{tid}")
-                        nassignee = st.selectbox("Assignee", ["(none)"]+st.session_state.users, index=0 if not task_live.get('assignee') else (st.session_state.users.index(task_live.get('assignee'))+1 if task_live.get('assignee') in st.session_state.users else 0), key=f"pop-assignee-{tid}")
-                        ndue = st.date_input("Due", value=pd.to_datetime(task_live.get('due_date')).date() if task_live.get('due_date') else date.today(), key=f"pop-due-{tid}")
-                        nest = st.number_input("Est. hours", min_value=0.0, step=0.5, value=float(task_live.get('estimates_hours') or 0.0), key=f"pop-est-{tid}")
-                        ntags = st.text_input("Tags (comma)", value=", ".join(task_live.get('tags') or []), key=f"pop-tags-{tid}")
-                        # Priority & Status intentionally omitted (managed via board arrows & movement buttons)
-                        nreviewer = st.selectbox("Reviewer", ["(none)"]+st.session_state.users, index=0 if not task_live.get('reviewer') else (st.session_state.users.index(task_live.get('reviewer'))+1 if task_live.get('reviewer') in st.session_state.users else 0), key=f"pop-rev-{tid}")
-                        st.caption(f"Reporter: {task_live.get('reporter') or '(unknown)'}")
-                        # Simple comments + checklist inside popover
-                        st.markdown("**Checklist**")
-                        cl_items = (task_live.get('checklist') or [])[-8:]
+                        st.markdown("### Checklist")
+                        cl_items = task_live.get('checklist') or []
+                        if not cl_items:
+                            st.info("No checklist items yet.")
                         for ci in cl_items:
                             cid = ci.get('id')
                             cols_ci = st.columns([0.1,0.75,0.15])
                             with cols_ci[0]:
-                                chk = st.checkbox("", value=ci.get('done', False), key=f"pop-cl-{cid}")
+                                chk = st.checkbox("", value=ci.get('done', False), key=f"pop2-cl-{cid}")
                             with cols_ci[1]:
                                 st.caption(("~~"+ci.get('text','')+"~~") if chk else ci.get('text',''))
                             with cols_ci[2]:
-                                if st.button("🗑", key=f"pop-delcl-{cid}"):
-                                    tasks_repo.delete_check_item(tid, cid, by=st.session_state.username)
+                                if st.button("🗑", key=f"pop2-delcl-{cid}"):
+                                    tasks_repo.delete_check_item(tid, cid)
                                     st.session_state.tasks_cache = load_tasks()
                                     st.rerun()
                             if chk != ci.get('done'):
                                 tasks_repo.toggle_check_item(tid, cid, chk, by=st.session_state.username)
                                 st.session_state.tasks_cache = load_tasks()
                                 st.rerun()
-                        new_ci = st.text_input("Add checklist item", key=f"pop-new-ci-{tid}")
-                        if st.button("Add Item", key=f"pop-add-ci-{tid}") and new_ci.strip():
+                        new_ci = st.text_input("Add item", key=f"pop2-new-ci-{tid}")
+                        if st.button("Add", key=f"pop2-add-ci-{tid}") and new_ci.strip():
                             tasks_repo.add_check_item(tid, new_ci.strip(), by=st.session_state.username)
                             st.session_state.tasks_cache = load_tasks()
                             st.rerun()
-                        st.markdown("**Quick Comment**")
-                        new_cc = st.text_input("Comment", key=f"pop-new-comment-{tid}")
-                        if st.button("Post", key=f"pop-post-comment-{tid}") and new_cc.strip():
-                            tasks_repo.add_comment(tid, new_cc.strip(), by=st.session_state.username)
+                # Comments popover --------------------------------------------------------
+                with btn_cols[3]:
+                    with st.popover("💬"):
+                        task_live = tasks_repo.get_task(tid) or t
+                        st.markdown("### Comments")
+                        comments_live = task_live.get('comments') or []
+                        if not comments_live:
+                            st.info("No comments yet.")
+                        else:
+                            for c in comments_live[::-1][:40]:
+                                st.markdown(f"- **{c.get('by','?')}**: {c.get('text')} <span style='color:#51658a;font-size:0.55rem;'>({c.get('when')})</span>", unsafe_allow_html=True)
+                        new_comment = st.text_input("New comment", key=f"pop2-new-comment-{tid}")
+                        if st.button("Post", key=f"pop2-post-comment-{tid}") and new_comment.strip():
+                            tasks_repo.add_comment(tid, new_comment.strip(), by=st.session_state.username)
                             st.session_state.tasks_cache = load_tasks()
-                            st.rerun()
-                        if st.button("💾 Save", key=f"pop-save-{tid}"):
-                            history = (tasks_repo.get_task(tid) or {}).get('history', [])
-                            history.append({"when": datetime.utcnow().isoformat(), "what": "edited", "by": st.session_state.username})
-                            tasks_repo.update_task({
-                                'id': tid,
-                                'title': ntitle,
-                                'description': ndesc,
-                                'assignee': None if nassignee == "(none)" else nassignee,
-                                'priority': task_live.get('priority'),
-                                'due_date': ndue.isoformat(),
-                                'estimates_hours': nest,
-                                'tags': [x.strip() for x in ntags.split(',') if x.strip()],
-                                'status': task_live.get('status'),
-                                'history': history,
-                                'reporter': task_live.get('reporter'),
-                                'reviewer': None if nreviewer == '(none)' else nreviewer,
-                            })
-                            st.session_state.tasks_cache = load_tasks()
-                            st.success("Saved")
                             st.rerun()
                 # Defer (trash) -----------------------------------------------------------
-                with btn_cols[3]:
+                with btn_cols[4]:
                     if t.get('status') != 'Deferred':
                         with st.popover("🗑", use_container_width=False):
                             st.markdown(f"**Defer Task?**")
@@ -1261,7 +1397,7 @@ with board_tab:
                     else:
                         st.markdown("<div style='text-align:center;opacity:.4;'>—</div>", unsafe_allow_html=True)
                 # History (new) -----------------------------------------------------------
-                with btn_cols[4]:
+                with btn_cols[5]:
                     with st.popover("🕒"):
                         task_live_hist = tasks_repo.get_task(tid) or t
                         st.markdown(f"### History — {task_live_hist.get('title')}")
@@ -1271,12 +1407,9 @@ with board_tab:
                         else:
                             for ev in events:
                                 st.markdown(f"- `{ev.get('what')}` <span style='color:#51658a;font-size:0.6rem;'>· {ev.get('when')} · {ev.get('by','?')}</span>", unsafe_allow_html=True)
-                        st.markdown("#### Comments")
-                        for c in (task_live_hist.get('comments') or [])[:40]:
-                            st.markdown(f"- **{c.get('by','?')}**: {c.get('text')} <span style='color:#51658a;font-size:0.6rem;'>({c.get('when')})</span>", unsafe_allow_html=True)
-                        st.caption("Latest 150 events / 40 comments shown.")
+                        st.caption("Latest 150 events shown.")
                 # Priority lower -----------------------------------------------------------
-                with btn_cols[5]:
+                with btn_cols[6]:
                     cur_p = t.get('priority')
                     if cur_p in PRIORITIES:
                         pi = PRIORITIES.index(cur_p)
@@ -1292,7 +1425,7 @@ with board_tab:
                         else:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # Next button --------------------------------------------------------------
-                with btn_cols[6]:
+                with btn_cols[7]:
                     can_show_next = idx < len(statuses)-1
                     if t.get('status') == 'In Progress':
                         cl = t.get('checklist') or []
@@ -1311,6 +1444,434 @@ with board_tab:
 with analytics_tab:
     st.subheader("Analytics (Filtered View) ✨")
     analytics_fragment(df, st.session_state.get('show_closed'), st.session_state.get('show_deferred'))
+
+with tags_tab:
+    st.subheader("Tag Intelligence & Management 🏷")
+    # Use current filtered task set for context (respecting user filters). Provide toggle to optionally use all tasks.
+    use_all = st.toggle("Analyze ALL tasks (ignore current filters)", value=False, key="tags-use-all")
+    source_tasks = st.session_state.tasks_cache if use_all else filtered
+    if not source_tasks:
+        st.info("No tasks available to analyze.")
+    else:
+        # Build tag records
+        tag_rows = []
+        def _p(ts):
+            try:
+                return datetime.fromisoformat(ts) if ts else None
+            except Exception:
+                try:
+                    return pd.to_datetime(ts, errors='coerce').to_pydatetime()
+                except Exception:
+                    return None
+        for task in source_tasks:
+            tags_list = task.get('tags') or []
+            if not tags_list:
+                continue
+            created_dt = _p(task.get('created_at'))
+            done_dt = _p(task.get('done_at'))
+            if not done_dt:
+                for h in (task.get('history') or []):
+                    if h.get('what','').startswith('status->Done'):
+                        cand = _p(h.get('when'))
+                        if cand:
+                            done_dt = cand
+                            break
+            for tg in tags_list:
+                tag_rows.append({
+                    'tag': tg,
+                    'status': task.get('status'),
+                    'assignee': task.get('assignee') or 'Unassigned',
+                    'priority': task.get('priority'),
+                    'created_at': created_dt,
+                    'done_at': done_dt,
+                    'due_date': task.get('due_date'),
+                    'overdue': (task.get('due_date') and pd.to_datetime(task.get('due_date'), errors='coerce') is not None and pd.to_datetime(task.get('due_date')) < pd.Timestamp(date.today()) and task.get('status') not in ('Done','Closed')),
+                    'task_id': task.get('id')
+                })
+        if not tag_rows:
+            st.info("No tags present in the selected task set.")
+        else:
+            tag_df = pd.DataFrame(tag_rows)
+            # Basic aggregations
+            tag_counts = tag_df.groupby('tag')['task_id'].nunique().sort_values(ascending=False)
+            top_n = st.slider("Top N tags for detailed charts", min_value=3, max_value=min(30, len(tag_counts)), value=min(10, len(tag_counts)), key="tags-top-n")
+            top_tags = tag_counts.head(top_n).index.tolist()
+            # KPI metrics
+            total_tags = tag_counts.shape[0]
+            total_tag_refs = len(tag_df)
+            open_per_tag = tag_df[~tag_df['status'].isin(['Done','Closed'])].groupby('tag')['task_id'].nunique()
+            overdue_per_tag = tag_df[tag_df['overdue']].groupby('tag')['task_id'].nunique()
+            done_cycle = []
+            for tg, grp in tag_df.groupby('tag'):
+                dgrp = grp.dropna(subset=['done_at'])
+                if not dgrp.empty:
+                    durations = [(r.done_at - r.created_at).total_seconds()/3600 for r in dgrp.itertuples() if r.created_at and r.done_at]
+                    if durations:
+                        done_cycle.append({'tag': tg, 'median_hours': float(pd.Series(durations).median())})
+            cycle_df = pd.DataFrame(done_cycle)
+            k1,k2,k3,k4,k5 = st.columns(5)
+            with k1: st.metric("Tags", total_tags)
+            with k2: st.metric("Tag Uses", total_tag_refs)
+            with k3: st.metric("Top Tag Uses", int(tag_counts.head(1).iloc[0]))
+            with k4: st.metric("Tags w/ Overdue", int(overdue_per_tag.shape[0]))
+            with k5: st.metric("Tags w/ Done Cycle", cycle_df.shape[0])
+            st.markdown("---")
+            # Frequency bar (Top N)
+            freq_df = tag_counts.head(top_n).reset_index().rename(columns={'task_id':'count'})
+            freq_df.columns = ['tag','count']
+            fig_freq = px.bar(freq_df, x='tag', y='count', title='Task Count per Tag (Top N)', text='count', color='count', color_continuous_scale='Blues')
+            fig_freq.update_layout(height=320, margin=dict(l=10,r=10,t=50,b=40))
+            # Status heatmap (Top N tags × statuses)
+            status_pivot_src = tag_df[tag_df['tag'].isin(top_tags)].groupby(['tag','status']).size().reset_index(name='count')
+            statuses_sorted = sorted(status_pivot_src['status'].unique(), key=lambda s: FLOW_STATUSES.index(s) if s in FLOW_STATUSES else 99)
+            # Build matrix
+            heat_matrix = []
+            for tg in top_tags:
+                row = []
+                for stt in statuses_sorted:
+                    val = status_pivot_src[(status_pivot_src.tag==tg) & (status_pivot_src.status==stt)]['count']
+                    row.append(int(val.iloc[0]) if not val.empty else 0)
+                heat_matrix.append(row)
+            fig_heat = go.Figure(data=go.Heatmap(z=heat_matrix, x=statuses_sorted, y=top_tags, colorscale='Viridis'))
+            fig_heat.update_layout(title='Status Distribution per Tag (Top N)', height=320, margin=dict(l=10,r=10,t=50,b=40))
+            # Assignee stacked (limit top tags)
+            asg_src = tag_df[tag_df['tag'].isin(top_tags)].groupby(['tag','assignee']).size().reset_index(name='count')
+            fig_asg = px.bar(asg_src, x='tag', y='count', color='assignee', title='Assignee Distribution per Tag (Top N)', barmode='stack')
+            fig_asg.update_layout(height=360, margin=dict(l=10,r=10,t=50,b=40), legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
+            # Cycle time chart (if available)
+            if not cycle_df.empty:
+                cycle_top = cycle_df[cycle_df['tag'].isin(top_tags)].sort_values('median_hours')
+                fig_cycle = px.bar(cycle_top, x='tag', y='median_hours', title='Median Cycle Time (hrs) per Tag', text='median_hours', color='median_hours', color_continuous_scale='Turbo')
+                fig_cycle.update_layout(height=320, margin=dict(l=10,r=10,t=50,b=40))
+            # Activity over time (created)
+            if not tag_df['created_at'].isna().all():
+                tag_df['created_day'] = tag_df['created_at'].dt.date
+                time_src = tag_df[tag_df['tag'].isin(top_tags)].groupby(['created_day','tag']).size().reset_index(name='count')
+                fig_time = px.line(time_src, x='created_day', y='count', color='tag', markers=True, title='Tag Activity Over Time (Creations)')
+                fig_time.update_layout(height=320, margin=dict(l=10,r=10,t=50,b=40))
+            # Layout charts
+            cA, cB = st.columns([1,1])
+            with cA:
+                st.plotly_chart(fig_freq, use_container_width=True)
+            with cB:
+                st.plotly_chart(fig_asg, use_container_width=True)
+            cC, cD = st.columns([1,1])
+            with cC:
+                st.plotly_chart(fig_heat, use_container_width=True)
+            with cD:
+                if 'fig_cycle' in locals():
+                    st.plotly_chart(fig_cycle, use_container_width=True)
+                elif 'fig_time' in locals():
+                    st.plotly_chart(fig_time, use_container_width=True)
+            if 'fig_cycle' in locals() and 'fig_time' in locals():
+                st.plotly_chart(fig_time, use_container_width=True)
+            st.markdown("---")
+            st.markdown("### Tag Management")
+            mcol1, mcol2 = st.columns([1,1])
+            with mcol1:
+                st.markdown("**Add New Tag to Selected Tasks**")
+                new_tag = st.text_input("New tag name", key="tag-new-name")
+                # Build choices (show title + status for clarity)
+                task_choices = {f"{tsk.get('title')} ({tsk.get('status')})": tsk['id'] for tsk in source_tasks}
+                selected_tasks = st.multiselect("Choose tasks", options=list(task_choices.keys()), key="tag-add-select")
+                if st.button("Apply Tag", key="tag-apply-btn"):
+                    if new_tag.strip() and selected_tasks:
+                        applied = 0
+                        for label in selected_tasks:
+                            tid = task_choices[label]
+                            live = tasks_repo.get_task(tid) or {}
+                            tags_list = live.get('tags') or []
+                            if new_tag.strip() not in tags_list:
+                                tags_list.append(new_tag.strip())
+                                hist = live.get('history', [])
+                                hist.append({'when': datetime.utcnow().isoformat(), 'what': f'tag_added:{new_tag.strip()}', 'by': st.session_state.username})
+                                tasks_repo.update_task({'id': tid, 'tags': tags_list, 'history': hist})
+                                applied += 1
+                        if applied:
+                            st.success(f"Tag applied to {applied} task(s)")
+                            st.session_state.tasks_cache = load_tasks()
+                            st.rerun()
+                    else:
+                        st.warning("Provide a tag name and select at least one task.")
+            with mcol2:
+                st.markdown("**Rename Tag (bulk)**")
+                existing_tags = sorted(tag_counts.index.tolist())
+                if existing_tags:
+                    old_tag = st.selectbox("Existing tag", options=existing_tags, key="tag-rename-old")
+                    new_name = st.text_input("New name", key="tag-rename-new")
+                    if st.button("Rename Tag", key="tag-rename-btn"):
+                        if new_name.strip() and old_tag != new_name.strip():
+                            changed = 0
+                            for task in st.session_state.tasks_cache:
+                                tags_list = task.get('tags') or []
+                                if old_tag in tags_list:
+                                    tags_list = [new_name.strip() if x==old_tag else x for x in tags_list]
+                                    hist = task.get('history', [])
+                                    hist.append({'when': datetime.utcnow().isoformat(), 'what': f'tag_renamed:{old_tag}->{new_name.strip()}', 'by': st.session_state.username})
+                                    tasks_repo.update_task({'id': task['id'], 'tags': tags_list, 'history': hist})
+                                    changed += 1
+                            if changed:
+                                st.success(f"Renamed tag in {changed} task(s)")
+                                st.session_state.tasks_cache = load_tasks()
+                                st.rerun()
+                            else:
+                                st.info("No tasks updated.")
+                        else:
+                            st.warning("Enter a different new name.")
+                else:
+                    st.info("No tags to rename yet.")
+            st.caption("All tag operations append history events (tag_added / tag_renamed).")
+
+with timeline_tab:
+    st.subheader("Timeline & Calendar")
+    # View mode selection
+    cal_mode = st.radio("View Mode", ["Calendar (Week)", "Calendar (Month)", "Legacy Timeline"], horizontal=True, key="cal-mode")
+
+    # --- Shared helpers ---
+    PRIORITY_RANK = {"Critical":0, "High":1, "Medium":2, "Low":3}
+    STATUS_COLOR = {"Backlog": "#636e72","To Do": "#0984e3","In Progress": "#fdcb6e","Review": "#6c5ce7","Done": "#00b894","Closed":"#b2bec3","Deferred":"#485460"}
+
+    def _parse_dt(ts):
+        if not ts: return None
+        try: return datetime.fromisoformat(ts)
+        except Exception:
+            try: return pd.to_datetime(ts, errors='coerce').to_pydatetime()
+            except Exception: return None
+
+    def task_active_span(t):
+        start = _parse_dt(t.get('created_at')) or datetime.utcnow()
+        # choose end preference: completion(done_at) else due_date else today
+        done = _parse_dt(t.get('done_at'))
+        if not done:
+            for h in (t.get('history') or []):
+                if (h.get('what','').startswith('status->Done')):
+                    cand = _parse_dt(h.get('when'))
+                    if cand: done = cand; break
+        due = _parse_dt(t.get('due_date'))
+        end = done or due or datetime.utcnow()
+        return start, end
+
+    # Filtered tasks list already respects UI filters; clone to avoid mutation
+    cal_tasks = [dict(t) for t in filtered]
+
+    calendar_css = """
+    <style>
+    .ttm-cal-wrap {background:linear-gradient(145deg,#ffffff,#f5f9fc);border:1px solid #dde6f0;border-radius:18px;padding:16px 18px;margin-top:10px;box-shadow:0 6px 24px -6px rgba(11,99,214,.12);}
+    .ttm-week-grid {display:grid;grid-template-columns:repeat(5,1fr);gap:10px;}
+    .ttm-week-day {background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:10px 10px 8px 10px;position:relative;min-height:170px;display:flex;flex-direction:column;}
+    .ttm-week-day h4 {margin:0 0 6px 0;font-size:0.75rem;letter-spacing:.5px;font-weight:700;color:#0b2140;display:flex;justify-content:space-between;align-items:center;}
+    .ttm-task-pill {display:flex;align-items:center;gap:4px;font-size:0.60rem;font-weight:600;padding:3px 6px;border-radius:10px;margin:2px 0;line-height:1.05;border:1px solid #dbe4ec;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:linear-gradient(120deg,#f7fafd,#eef4fa);}    
+    .ttm-task-pill span.badge {display:inline-block;width:8px;height:8px;border-radius:50%;}
+    .ttm-task-pill.critical {border-color:#b71c1c;background:linear-gradient(120deg,#ffe5e5,#ffecec);}    
+    .ttm-task-pill.overdue {box-shadow:0 0 0 1px #d63031,0 0 6px -1px rgba(214,48,49,0.6);}
+    .ttm-cal-legend {display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 4px 0;}
+    .ttm-cal-legend div {font-size:0.55rem;background:#fff;border:1px solid #e2e8f0;padding:4px 8px;border-radius:20px;letter-spacing:.5px;font-weight:600;display:flex;align-items:center;gap:6px;}
+    .ttm-month-grid {display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:6px;}
+    .ttm-month-cell {background:#fff;border:1px solid #e2e8f0;border-radius:12px;min-height:120px;padding:6px 6px 4px 6px;position:relative;display:flex;flex-direction:column;}
+    .ttm-month-cell .date-label {font-size:0.65rem;font-weight:700;color:#0b2140;margin-bottom:4px;}
+    .ttm-month-cell.inactive {background:#f4f7fa;color:#94a3b8;}
+    .ttm-month-cell.weekend {background:linear-gradient(145deg,#f7f7f9,#eef2f6);}    
+    .ttm-more-link {font-size:0.55rem;color:#0b63d6;margin-top:2px;cursor:pointer;}
+    .ttm-pill-mini {font-size:0.48rem;padding:2px 5px;border-radius:8px;margin:1px 0;display:flex;align-items:center;gap:4px;background:linear-gradient(120deg,#f7fafd,#eef4fa);border:1px solid #e3eaf2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ttm-pill-mini.critical {border-color:#b71c1c;background:linear-gradient(120deg,#ffe5e5,#ffecec);}    
+    .ttm-pill-mini.overdue {box-shadow:0 0 0 1px #d63031;}
+    .ttm-hour-grid {display:grid;grid-template-columns:60px repeat(5,1fr);margin-top:14px;border:1px solid #d0dce8;border-radius:14px;overflow:hidden;font-size:0.55rem;background:#fff;}
+    .ttm-hour-row {display:contents;}
+    .ttm-hour-cell {border-bottom:1px solid #edf2f7;padding:4px 6px;min-height:26px;position:relative;}
+    .ttm-hour-cell.time {background:#f5f8fb;font-weight:600;color:#35506b;border-right:1px solid #e2e8f0;}
+    .ttm-block {position:absolute;left:4px;right:4px;border-radius:6px;padding:2px 4px;font-size:0.55rem;font-weight:600;line-height:1.05;color:#0b2140;overflow:hidden;display:flex;align-items:center;gap:4px;box-shadow:0 2px 6px -2px rgba(11,99,214,.25);}    
+    .ttm-block.critical {background:linear-gradient(120deg,#ffb3b3,#ffcccc);border:1px solid #b71c1c;color:#5a0f0f;}
+    .ttm-block.normal {background:linear-gradient(120deg,#eef4fa,#ffffff);border:1px solid #d0dce8;}
+    .ttm-block.done {background:linear-gradient(120deg,#d1fae5,#b2f5ea);border:1px solid #34d399;color:#065f46;}
+    .ttm-block.overdue {border:1px solid #d63031;}
+    </style>
+    """
+    st.markdown(calendar_css, unsafe_allow_html=True)
+
+    if cal_mode.startswith("Calendar"):
+        # Legend
+        st.markdown("<div class='ttm-cal-legend'>" +
+                    "".join([f"<div><span style='width:10px;height:10px;border-radius:50%;background:{c};display:inline-block;'></span>{s}</div>" for s,c in STATUS_COLOR.items() if s in FLOW_STATUSES+['Closed','Deferred']])+
+                    "</div>", unsafe_allow_html=True)
+
+    if cal_mode == "Calendar (Week)":
+        # Week anchor
+        if 'cal_week_anchor' not in st.session_state:
+            st.session_state.cal_week_anchor = date.today()
+        wcol1, wcol2, wcol3, wcol4 = st.columns([0.8,0.8,0.8,4])
+        with wcol1:
+            if st.button("◀ Prev Week", key="wk-prev"):
+                st.session_state.cal_week_anchor -= pd.Timedelta(days=7)
+                st.rerun()
+        with wcol2:
+            if st.button("This Week", key="wk-today"):
+                st.session_state.cal_week_anchor = date.today()
+                st.rerun()
+        with wcol3:
+            if st.button("Next Week ▶", key="wk-next"):
+                st.session_state.cal_week_anchor += pd.Timedelta(days=7)
+                st.rerun()
+        anchor = st.session_state.cal_week_anchor
+        # compute Sunday start
+        # weekday(): Monday=0 ... Sunday=6
+        start_of_week = anchor - pd.Timedelta(days=(anchor.weekday()+1)%7)
+        days = [start_of_week + pd.Timedelta(days=i) for i in range(7)]
+        # Work week: Sunday(6) to Thursday(3) by numeric? We'll filter to columns Sunday-Thursday
+        work_days = [d for d in days if d.weekday() in (6,0,1,2,3)]  # Sun,Mon,Tue,Wed,Thu
+        # Build active tasks per day
+        day_tasks = {d: [] for d in work_days}
+        for t in cal_tasks:
+            start, end = task_active_span(t)
+            # normalize to dates
+            if not start or not end: continue
+            sd = start.date(); ed = end.date()
+            for d in work_days:
+                if sd <= d <= ed:
+                    # classify overdue if due_date < d and not complete
+                    due_d = _parse_dt(t.get('due_date')).date() if t.get('due_date') else None
+                    done_flag = (t.get('status') in ('Done','Closed'))
+                    overdue = False
+                    if due_d and d > due_d and not done_flag:
+                        overdue = True
+                    day_tasks[d].append({
+                        'title': t.get('title'),
+                        'status': t.get('status'),
+                        'priority': t.get('priority'),
+                        'overdue': overdue,
+                        'assignee': t.get('assignee') or 'Unassigned'
+                    })
+        # Sort tasks in each day
+        for d, lst in day_tasks.items():
+            lst.sort(key=lambda x: (PRIORITY_RANK.get(x['priority'],9), x['status'], x['title']))
+        st.markdown("<div class='ttm-cal-wrap'>", unsafe_allow_html=True)
+        st.markdown("<h4 style='margin:2px 0 10px 0;font-size:0.8rem;color:#0b2140;'>Week of " + start_of_week.strftime('%Y-%m-%d') + "</h4>", unsafe_allow_html=True)
+        # Summary KPIs
+        tot = sum(len(v) for v in day_tasks.values())
+        k1,k2,k3,k4,k5 = st.columns(5)
+        with k1: st.metric("Active Slots", tot)
+        with k2: st.metric("Unique Tasks", len({t['title'] for lst in day_tasks.values() for t in lst}))
+        with k3: st.metric("Overdue", sum(1 for lst in day_tasks.values() for t in lst if t['overdue']))
+        with k4: st.metric("Critical", sum(1 for lst in day_tasks.values() for t in lst if t['priority']=='Critical'))
+        with k5: st.metric("Done", sum(1 for lst in day_tasks.values() for t in lst if t['status']=='Done'))
+        # Render grid
+        st.markdown("<div class='ttm-week-grid'>", unsafe_allow_html=True)
+        for d in work_days:
+            cell = [f"<div class='ttm-week-day'><h4>{d.strftime('%a %d %b')}<span style='font-weight:400;color:#64748b;'>{len(day_tasks[d])}</span></h4>"]
+            shown = 0
+            for item in day_tasks[d]:
+                cls = 'ttm-task-pill'
+                if item['priority']=='Critical': cls += ' critical'
+                if item['overdue']: cls += ' overdue'
+                badge_color = STATUS_COLOR.get(item['status'],'#888')
+                cell.append(f"<div class='{cls}' title='{item['status']} • {item['priority']} • {item['assignee']}'><span class='badge' style='background:{badge_color};'></span>{item['title']}</div>")
+                shown += 1
+                if shown >= 10 and len(day_tasks[d])>shown:
+                    remaining = len(day_tasks[d]) - shown
+                    cell.append(f"<div class='ttm-more-link'>+{remaining} more</div>")
+                    break
+            cell.append("</div>")
+            st.markdown("".join(cell), unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+
+        # Optional hour grid (compact) toggle
+        if st.toggle("Show Hour Grid (08:00-18:00)", key="show-hour-grid"):
+            hours = list(range(8,18))
+            # For simplicity place blocks at middle hour for display; advanced scheduling could use due vs start
+            st.markdown("<div class='ttm-cal-wrap'><h4 style='margin:0 0 8px 0;font-size:0.75rem;'>Working Hours (Sunday-Thursday)</h4>", unsafe_allow_html=True)
+            st.markdown("<div class='ttm-hour-grid'>", unsafe_allow_html=True)
+            for hr in hours:
+                # Time label row
+                # Build row across 5 work days
+                for col_idx, d in enumerate(['TIME'] + work_days):
+                    if col_idx==0:
+                        st.markdown(f"<div class='ttm-hour-cell time'>{hr}:00</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<div class='ttm-hour-cell'></div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    elif cal_mode == "Calendar (Month)":
+        if 'cal_month_anchor' not in st.session_state:
+            st.session_state.cal_month_anchor = date.today().replace(day=1)
+        mcol1, mcol2, mcol3, mcol4 = st.columns([0.8,0.8,0.8,4])
+        with mcol1:
+            if st.button("◀ Prev Month", key="mo-prev"):
+                first = st.session_state.cal_month_anchor
+                prev_month = (first - pd.Timedelta(days=1)).replace(day=1)
+                st.session_state.cal_month_anchor = prev_month
+                st.rerun()
+        with mcol2:
+            if st.button("This Month", key="mo-today"):
+                st.session_state.cal_month_anchor = date.today().replace(day=1)
+                st.rerun()
+        with mcol3:
+            if st.button("Next Month ▶", key="mo-next"):
+                first = st.session_state.cal_month_anchor
+                # add 32 days then reset to first
+                next_month = (first + pd.Timedelta(days=32)).replace(day=1)
+                st.session_state.cal_month_anchor = next_month
+                st.rerun()
+        first_day = st.session_state.cal_month_anchor
+        # Build month matrix starting Sunday
+        import calendar as pycal
+        pycal.setfirstweekday(pycal.SUNDAY)
+        month_days = pycal.monthcalendar(first_day.year, first_day.month)
+        # Precompute tasks due/active per day
+        day_map = {}
+        for t in cal_tasks:
+            start, end = task_active_span(t)
+            if not start or not end: continue
+            cur = start.date()
+            while cur <= end.date():
+                if cur.month == first_day.month:
+                    day_map.setdefault(cur, []).append(t)
+                cur += pd.Timedelta(days=1)
+        st.markdown(f"<div class='ttm-cal-wrap'><h4 style='margin:2px 0 10px 0;font-size:0.8rem;color:#0b2140;'>{first_day.strftime('%B %Y')}</h4>", unsafe_allow_html=True)
+        # KPI row
+        visible_tasks = {tid for lst in day_map.values() for tid in [x['id'] for x in lst]}
+        mk1,mk2,mk3,mk4,mk5 = st.columns(5)
+        with mk1: st.metric("Tasks", len(visible_tasks))
+        with mk2: st.metric("Days w/ Activity", len(day_map))
+        with mk3: st.metric("Critical", sum(1 for lst in day_map.values() for t in lst if t.get('priority')=='Critical'))
+        with mk4: st.metric("Done", sum(1 for lst in day_map.values() for t in lst if t.get('status')=='Done'))
+        with mk5: st.metric("Overdue", sum(1 for lst in day_map.values() for t in lst if (t.get('due_date') and pd.to_datetime(t.get('due_date')).date() < date.today() and t.get('status') not in ('Done','Closed'))))
+        # Headers
+        st.markdown("<div class='ttm-month-grid'>" +
+                    "".join([f"<div style='text-align:center;font-size:0.6rem;font-weight:700;color:#35506b;padding:2px 0;'>{d}</div>" for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']]) +
+                    "</div>", unsafe_allow_html=True)
+        # Cells
+        html_cells = ["<div class='ttm-month-grid'>"]
+        for week in month_days:
+            for day_num in week:
+                if day_num == 0:
+                    html_cells.append("<div class='ttm-month-cell inactive'></div>")
+                    continue
+                cur_date = date(first_day.year, first_day.month, day_num)
+                weekend = (cur_date.weekday() in (4,5))  # Fri/Sat
+                classes = 'ttm-month-cell' + (' weekend' if weekend else '')
+                tasks_for_day = day_map.get(cur_date, [])
+                tasks_sorted = sorted(tasks_for_day, key=lambda t: (PRIORITY_RANK.get(t.get('priority'),9), t.get('status'), t.get('title')))
+                cell_parts = [f"<div class='{classes}'><div class='date-label'>{day_num}</div>"]
+                shown = 0
+                for t in tasks_sorted:
+                    overdue = (t.get('due_date') and pd.to_datetime(t.get('due_date')).date() < cur_date and t.get('status') not in ('Done','Closed'))
+                    pill_cls = 'ttm-pill-mini'
+                    if t.get('priority')=='Critical': pill_cls += ' critical'
+                    if overdue: pill_cls += ' overdue'
+                    status_color = STATUS_COLOR.get(t.get('status'),'#999')
+                    cell_parts.append(f"<div class='{pill_cls}' title='{t.get('status')} • {t.get('priority')} • {t.get('assignee') or 'Unassigned'}'><span style='display:inline-block;width:6px;height:6px;border-radius:50%;background:{status_color};'></span>{t.get('title')[:38]}</div>")
+                    shown += 1
+                    if shown >= 5 and len(tasks_sorted) > shown:
+                        cell_parts.append(f"<div class='ttm-more-link'>+{len(tasks_sorted)-shown} more</div>")
+                        break
+                cell_parts.append("</div>")
+                html_cells.append("".join(cell_parts))
+        html_cells.append("</div>")
+        st.markdown("".join(html_cells), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    else:  # Legacy
+        timeline_fragment(filtered, st.session_state.get('show_closed'), st.session_state.get('show_deferred'))
 
 with report_tab:
     st.subheader("Email / Report Preview")
