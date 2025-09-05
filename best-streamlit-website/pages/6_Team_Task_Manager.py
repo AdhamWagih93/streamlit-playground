@@ -226,7 +226,7 @@ if "tasks_cache" not in st.session_state:
 
 if "users" not in st.session_state:
     # initial sample users; user can edit
-    st.session_state.users = ["Alice", "Bob", "Carol", "Dave"]
+    st.session_state.users = ["Adham", "Dahlia"]
 
 # Add a small sample dataset if empty
 if not st.session_state.tasks_cache:
@@ -1516,11 +1516,29 @@ with tags_tab:
             with k4: st.metric("Tags w/ Overdue", int(overdue_per_tag.shape[0]))
             with k5: st.metric("Tags w/ Done Cycle", cycle_df.shape[0])
             st.markdown("---")
-            # Frequency bar (Top N)
-            freq_df = tag_counts.head(top_n).reset_index().rename(columns={'task_id':'count'})
-            freq_df.columns = ['tag','count']
-            fig_freq = px.bar(freq_df, x='tag', y='count', title='Task Count per Tag (Top N)', text='count', color='count', color_continuous_scale='Blues')
-            fig_freq.update_layout(height=320, margin=dict(l=10,r=10,t=50,b=40))
+            # Frequency stacked bar by status (Top N)
+            freq_src = tag_df[tag_df['tag'].isin(top_tags)].groupby(['tag','status'])['task_id'].nunique().reset_index(name='count')
+            # Ensure zero rows for missing status per tag (optional fill)
+            statuses_all = sorted(tag_df['status'].dropna().unique(), key=lambda s: FLOW_STATUSES.index(s) if s in FLOW_STATUSES else 99)
+            complete_rows = []
+            existing_keys = {(r.tag, r.status) for r in freq_src.itertuples()}
+            for tg in top_tags:
+                for stt in statuses_all:
+                    if (tg, stt) not in existing_keys:
+                        complete_rows.append({'tag': tg, 'status': stt, 'count': 0})
+            if complete_rows:
+                freq_src = pd.concat([freq_src, pd.DataFrame(complete_rows)], ignore_index=True)
+            freq_src.sort_values(['tag', 'status'], inplace=True)
+            fig_freq = px.bar(
+                freq_src,
+                x='tag',
+                y='count',
+                color='status',
+                title='Task Count per Tag by Status (Top N)',
+                text='count',
+                category_orders={'tag': top_tags, 'status': statuses_all},
+            )
+            fig_freq.update_layout(height=320, barmode='stack', margin=dict(l=10,r=10,t=50,b=40), legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
             # Status heatmap (Top N tags × statuses)
             status_pivot_src = tag_df[tag_df['tag'].isin(top_tags)].groupby(['tag','status']).size().reset_index(name='count')
             statuses_sorted = sorted(status_pivot_src['status'].unique(), key=lambda s: FLOW_STATUSES.index(s) if s in FLOW_STATUSES else 99)
