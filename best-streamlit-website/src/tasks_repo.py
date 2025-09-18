@@ -43,6 +43,8 @@ class Task(Base):
     history = Column(Text, default="[]")  # JSON list of dicts
     checklist = Column(Text, default="[]")  # JSON list of {id,text,done,created_at}
     done_at = Column(String(64), nullable=True)  # timestamp when first marked Done
+    start_date = Column(String(64), nullable=True)  # optional scheduled start
+    team = Column(String(128), nullable=True, index=True)  # owning team / group
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -61,11 +63,16 @@ class Task(Base):
             "comments": json.loads(self.comments or "[]"),
             "history": json.loads(self.history or "[]"),
             "checklist": json.loads(self.checklist or "[]"),
+            "start_date": self.start_date,
+            "team": self.team,
         }
 
 
 _engine = None
 SessionLocal = None
+
+# Default team constant (used for backfilling legacy rows)
+DEFAULT_TEAM = "Team1"
 
 
 def get_engine():
@@ -101,6 +108,10 @@ def init_db():
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN reviewer TEXT")
                 if 'done_at' not in cols:
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN done_at TEXT")
+                if 'start_date' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN start_date TEXT")
+                if 'team' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN team TEXT")
             else:
                 # generic check for non-sqlite
                 res = conn.exec_driver_sql("SELECT column_name FROM information_schema.columns WHERE table_name='tasks'")
@@ -113,6 +124,24 @@ def init_db():
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN reviewer TEXT")
                 if 'done_at' not in cols:
                     conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN done_at TEXT")
+                if 'start_date' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN start_date TEXT")
+                if 'team' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN team TEXT")
+        except Exception:
+            pass
+    # After migration, backfill any NULL/empty team values to DEFAULT_TEAM
+    ensure_default_team()
+
+def ensure_default_team():
+    """Backfill tasks with NULL/empty team to DEFAULT_TEAM (idempotent)."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        try:
+            if engine.url.get_backend_name().startswith('sqlite'):
+                conn.exec_driver_sql("UPDATE tasks SET team = :team WHERE team IS NULL OR team = ''", {"team": DEFAULT_TEAM})
+            else:
+                conn.exec_driver_sql("UPDATE tasks SET team = :team WHERE team IS NULL OR team = ''", {"team": DEFAULT_TEAM})
         except Exception:
             pass
 
@@ -124,6 +153,8 @@ def _session():
 
 
 def get_all_tasks() -> List[Dict[str, Any]]:
+    # Periodic safeguard backfill
+    ensure_default_team()
     with _session() as s:
         tasks = s.execute(select(Task)).scalars().all()
         return [t.to_dict() for t in tasks]
@@ -138,6 +169,8 @@ def get_task(task_id: str) -> Optional[Dict[str, Any]]:
 def create_task(task_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Insert task_dict (expects already formed id & history)."""
     with _session() as s:
+        if not task_dict.get("team"):
+            task_dict["team"] = DEFAULT_TEAM
         t = Task(
             id=task_dict["id"],
             title=task_dict.get("title", "Untitled"),
@@ -155,6 +188,8 @@ def create_task(task_dict: Dict[str, Any]) -> Dict[str, Any]:
             history=json.dumps(task_dict.get("history", [])),
             checklist=json.dumps(task_dict.get("checklist", [])),
             done_at=task_dict.get("done_at"),
+            start_date=task_dict.get("start_date"),
+            team=task_dict.get("team"),
         )
         s.add(t)
         s.commit()
@@ -166,6 +201,8 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         t = s.get(Task, task_dict["id"])
         if not t:
             return None
+        if not task_dict.get("team"):
+            task_dict["team"] = t.team or DEFAULT_TEAM
         # Capture original values for change detection
         orig = {
             'title': t.title,
@@ -178,6 +215,8 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             'due_date': t.due_date,
             'estimates_hours': t.estimates_hours,
             'tags': json.loads(t.tags or '[]'),
+            'start_date': t.start_date,
+            'team': t.team,
         }
         t.title = task_dict.get("title", t.title)
         t.description = task_dict.get("description", t.description)
@@ -192,7 +231,9 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             t.done_at = datetime.utcnow().isoformat()
         t.status = new_status
         t.due_date = task_dict.get("due_date", t.due_date)
+        t.start_date = task_dict.get("start_date", t.start_date)
         t.estimates_hours = task_dict.get("estimates_hours", t.estimates_hours)
+        t.team = task_dict.get("team", t.team)
         if "tags" in task_dict:
             t.tags = json.dumps(task_dict.get("tags") or [])
         if "comments" in task_dict:
@@ -225,6 +266,8 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             'due_date': t.due_date != orig['due_date'],
             'estimates_hours': float(t.estimates_hours or 0) != float(orig['estimates_hours'] or 0),
             'tags': new_tags != orig['tags'],
+            'start_date': t.start_date != orig['start_date'],
+            'team': t.team != orig['team'],
         }
         for field, changed in changes.items():
             if not changed:
@@ -243,6 +286,8 @@ def update_task(task_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 marker = f"due->{t.due_date}" if t.due_date else 'due_cleared'
             elif field == 'estimates_hours':
                 marker = f"estimate->{t.estimates_hours}"
+            elif field == 'start_date':
+                marker = f"start->{t.start_date}" if t.start_date else 'start_cleared'
             else:
                 # Generic field->value marker
                 marker = f"{field}->{getattr(t, field) if field not in ('tags',) else ','.join(new_tags)}"

@@ -51,6 +51,81 @@ st.markdown(
     .ttm-priority-High { background:linear-gradient(120deg,#fdcb6e,#e17055,#fdcb6e); color:#222; }
     .ttm-priority-Critical { background:linear-gradient(120deg,#d63031,#ff5f56,#b71c1c); color:#fff; border:2px solid #b71c1c; box-shadow:0 0 0 2px #fff,0 0 10px 2px #d63031; }
     .ttm-btn-row { display:flex; gap:.5rem; margin-top:.3rem; }
+    /* Improved quick action buttons */
+    .ttm-btn-row .stButton>button {
+        background:linear-gradient(135deg,#44546a,#2d3a48);
+        border:1px solid #2e3e50;
+        color:#f2f7fb !important;
+        padding:4px 6px !important;
+        font-size:.62rem !important;
+        font-weight:600;
+        letter-spacing:.4px;
+        border-radius:8px !important;
+        min-width:34px;
+        box-shadow:0 2px 4px rgba(0,0,0,0.25),0 0 0 1px rgba(255,255,255,0.05) inset;
+        transition:all .18s ease;
+        position:relative;
+        overflow:hidden;
+    }
+    .ttm-btn-row .stButton>button:before {content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(255,255,255,0.12),rgba(255,255,255,0));opacity:0;transition:opacity .25s;}
+    .ttm-btn-row .stButton>button:hover:before {opacity:1;}
+    .ttm-btn-row .stButton>button:hover {transform:translateY(-2px);box-shadow:0 6px 14px -4px rgba(0,0,0,0.45),0 0 0 1px rgba(255,255,255,0.15) inset;}
+    .ttm-btn-row .stButton>button:active {transform:translateY(0);filter:brightness(.92);}    
+    /* Semantic color accents per slot */
+    /* Explicit variant classes (wrapped around each st.button) */
+    .ttm-act button {width:34px;height:34px;display:flex;align-items:center;justify-content:center;padding:0 !important;font-size:.9rem !important;}
+    .ttm-act-prev button {background:linear-gradient(135deg,#505d74,#303b4d) !important;}
+    .ttm-act-next button {background:linear-gradient(135deg,#1f6a55,#0f3d30) !important;}
+    .ttm-act-raise button {background:linear-gradient(135deg,#22507a,#142f46) !important;}
+    .ttm-act-lower button {background:linear-gradient(135deg,#7a3325,#4a1f15) !important;}
+    .ttm-act-checklist button {background:linear-gradient(135deg,#2f6b3a,#1f4025) !important;}
+    .ttm-act-comments button {background:linear-gradient(135deg,#684271,#3d2744) !important;}
+    .ttm-act-pickup button {background:linear-gradient(135deg,#2e5d82,#1d3a50) !important;}
+    .ttm-act-defer button {background:linear-gradient(135deg,#7a5a23,#4a3613) !important;}
+    .ttm-act-history button {background:linear-gradient(135deg,#394356,#222a33) !important;}
+    .ttm-act button:hover {filter:brightness(1.12);}
+    .ttm-act button:active {filter:brightness(.92);}
+    .ttm-act-disabled {opacity:.35 !important;}
+    /* Themed action buttons (Priority vs Utility) */
+    .ttm-prio-btn button {background:linear-gradient(135deg,#6c5ce7,#0b63d6,#00b894);background-size:220% 100%;color:#fff !important;border:1px solid rgba(255,255,255,0.25);font-weight:700;font-size:.70rem !important;letter-spacing:.6px;border-radius:11px !important;box-shadow:0 4px 14px -5px rgba(11,99,214,0.55),0 0 0 1px rgba(255,255,255,0.18) inset;padding:4px 8px !important;min-width:38px;transition:background .45s,transform .18s,box-shadow .28s;}
+    .ttm-prio-btn button:hover {background-position:100% 0;transform:translateY(-2px);}
+    .ttm-prio-btn button:active {transform:translateY(0);filter:brightness(.92);}
+    .ttm-util-btn button {background:linear-gradient(135deg,#44546a,#2d3a48);color:#f2f7fb !important;border:1px solid #2e3e50;font-size:.66rem !important;font-weight:600;letter-spacing:.4px;border-radius:11px !important;min-width:34px;padding:4px 6px !important;box-shadow:0 2px 6px rgba(0,0,0,0.35),0 0 0 1px rgba(255,255,255,0.07) inset;transition:transform .18s,box-shadow .25s,filter .25s;}
+    .ttm-util-btn button:hover {transform:translateY(-2px);box-shadow:0 6px 18px -6px rgba(0,0,0,0.55);}
+    .ttm-util-btn button:active {transform:translateY(0);filter:brightness(.9);}    
+    /* Two-theme quick action buttons: priority group & utility group */
+    .ttm-btn-row .prio-group .stButton>button {
+        background:linear-gradient(135deg,#6c5ce7,#0b63d6,#00b894);
+        background-size:200% 100%;
+        color:#fff !important;
+        border:1px solid rgba(255,255,255,0.25);
+        font-weight:700;
+        font-size:.65rem !important;
+        letter-spacing:.6px;
+        border-radius:10px !important;
+        box-shadow:0 4px 14px -4px rgba(11,99,214,0.55),0 0 0 1px rgba(255,255,255,0.15) inset;
+        transition:background .4s, transform .18s, box-shadow .25s;
+        padding:4px 6px !important;
+        min-width:34px;
+    }
+    .ttm-btn-row .prio-group .stButton>button:hover {background-position:100% 0; transform:translateY(-2px);}
+    .ttm-btn-row .prio-group .stButton>button:active {transform:translateY(0); filter:brightness(.92);}
+    .ttm-btn-row .utility-group .stButton>button {
+        background:linear-gradient(135deg,#44546a,#2d3a48);
+        color:#f2f7fb !important;
+        border:1px solid #2e3e50;
+        font-size:.62rem !important;
+        font-weight:600;
+        letter-spacing:.4px;
+        border-radius:10px !important;
+        min-width:30px;
+        padding:4px 6px !important;
+        box-shadow:0 2px 6px rgba(0,0,0,0.25),0 0 0 1px rgba(255,255,255,0.08) inset;
+        transition:transform .18s, box-shadow .25s, filter .25s;
+    }
+    .ttm-btn-row .utility-group .stButton>button:hover {transform:translateY(-2px); box-shadow:0 6px 16px -4px rgba(0,0,0,0.45);}    
+    .ttm-btn-row .utility-group .stButton>button:active {transform:translateY(0); filter:brightness(.9);}   
+    .ttm-btn-row .utility-group .stButton>button:disabled {opacity:.4;}
     .ttm-checkline { font-size:0.7rem; margin-top:.35rem; display:flex; align-items:center; gap:6px; color:#35506b; }
     .ttm-checkbar { flex:1; background:#e6edf5; border-radius:4px; height:6px; position:relative; overflow:hidden; }
     .ttm-checkbar-fill { position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg,#00b894,#0b63d6); }
@@ -188,24 +263,27 @@ def save_tasks(_tasks):
     pass
 
 
-def new_task_dict(title, description, assignee, priority, due_date, estimates, tags, reporter, reviewer=None):
+def new_task_dict(title, description, assignee, priority, due_date, estimates, tags, reporter, start_date=None, team=None):
     return {
         "id": str(uuid.uuid4()),
         "title": title.strip(),
         "description": description.strip(),
         "assignee": assignee or "Unassigned",
         "reporter": reporter,
-        "reviewer": reviewer,
+        # Auto-managed reviewer (set when moving Review -> Done)
+        "reviewer": None,
         "priority": priority,
         "status": "Backlog",
         "created_at": datetime.utcnow().isoformat(),
         "due_date": due_date.isoformat() if isinstance(due_date, (date, datetime)) else None,
+    "start_date": start_date.isoformat() if isinstance(start_date, (date, datetime)) else None,
         "estimates_hours": estimates,
         "tags": tags,
         "comments": [],
         "history": [
             {"when": datetime.utcnow().isoformat(), "what": "created", "by": reporter or "system"}
         ],
+    "team": team,
     }
 
 
@@ -213,10 +291,12 @@ def new_task_dict(title, description, assignee, priority, due_date, estimates, t
 
 def tasks_to_df(tasks):
     if not tasks:
-        return pd.DataFrame(columns=["id", "title", "assignee", "priority", "status", "due_date", "estimates_hours", "tags"])
+        return pd.DataFrame(columns=["id", "title", "assignee", "priority", "status", "start_date", "due_date", "estimates_hours", "tags"])
     df = pd.json_normalize(tasks)
     if "due_date" in df.columns:
         df["due_date"] = pd.to_datetime(df["due_date"], errors="coerce").dt.date
+    if "start_date" in df.columns:
+        df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce").dt.date
     return df
 
 
@@ -228,12 +308,19 @@ if "users" not in st.session_state:
     # initial sample users; user can edit
     st.session_state.users = ["Adham", "Dahlia"]
 
+# --- Teams (for dynamic page title) ---
+if "teams" not in st.session_state:
+    # Seed with two sample teams; user can later extend via custom UI if desired
+    st.session_state.teams = ["Team1", "Team2"]
+if "selected_team" not in st.session_state:
+    st.session_state.selected_team = st.session_state.teams[0]
+
 # Add a small sample dataset if empty
 if not st.session_state.tasks_cache:
     sample = [
-        new_task_dict("Onboard new hire", "Prepare environment and docs", "Alice", "High", date.today(), 4, ["onboarding"], reporter="System"),
-        new_task_dict("Q3 Roadmap", "Finalize objectives", "Bob", "Medium", date.today(), 8, ["planning"], reporter="System"),
-        new_task_dict("Bug #432: login error", "Intermittent login failures in auth module", "Carol", "Critical", date.today(), 6, ["bug"], reporter="System"),
+    new_task_dict("Onboard new hire", "Prepare environment and docs", "Alice", "High", date.today(), 4, ["onboarding"], reporter="System", start_date=date.today(), team=st.session_state.selected_team),
+    new_task_dict("Q3 Roadmap", "Finalize objectives", "Bob", "Medium", date.today(), 8, ["planning"], reporter="System", team=st.session_state.selected_team),
+    new_task_dict("Bug #432: login error", "Intermittent login failures in auth module", "Carol", "Critical", date.today(), 6, ["bug"], reporter="System", team=st.session_state.selected_team),
     ]
     for t in sample:
         tasks_repo.create_task(t)
@@ -244,7 +331,14 @@ if not st.session_state.tasks_cache:
 
 # --- Main container ---
 st.markdown('<div class="ttm-container">', unsafe_allow_html=True)
-st.title("Team Task Manager")
+title_cols = st.columns([0.65,0.35])
+with title_cols[0]:
+    st.title(f"{st.session_state.selected_team} Tasks")
+with title_cols[1]:
+    if len(st.session_state.teams) > 1:
+        st.selectbox("Team", options=st.session_state.teams, key="selected_team")
+    else:
+        st.markdown(f"<div style='text-align:right;font-size:0.85rem;color:#51658a;margin-top:1.2rem;'>Team: {st.session_state.selected_team}</div>", unsafe_allow_html=True)
 #st.markdown("<span style='color:#51658a;font-size:1.1rem;'>Professional task management built into your Streamlit site.</span>", unsafe_allow_html=True)
 
 # Top-level controls (compact bar)
@@ -252,7 +346,7 @@ st.markdown('<div class="ttm-filters-bar">', unsafe_allow_html=True)
 # View mode (My vs Team) row
 # Initialize state defaults before creating widgets to avoid post-instantiation assignment errors
 if 'my_view' not in st.session_state:
-    st.session_state.my_view = True
+    st.session_state.my_view = False
 if 'current_user' not in st.session_state:
     st.session_state.current_user = st.session_state.users[0] if st.session_state.users else 'Me'
 if 'username' not in st.session_state:
@@ -267,7 +361,7 @@ if 'show_closed' not in st.session_state:
 vmc1, vmc2 = st.columns([0.5,1.5])
 with vmc1:
     # Avoid passing an explicit value when session_state pre-initializes the key to prevent Streamlit warning
-    st.toggle("My View", key='my_view')
+    st.toggle("My View", key='my_view', value=False)
 with vmc2:
     # Use key-only pattern; default already set in session_state if missing
     st.text_input("Impersonate User", key='current_user')
@@ -414,7 +508,7 @@ with st.sidebar.expander("Team & Settings", expanded=False):
             due = date.today() + pd.Timedelta(days=random.randint(-5, 30))
             est = round(random.uniform(1, 16), 1)
             tags = random.sample(tag_pool, k=random.randint(1, min(3, len(tag_pool))))
-            base = new_task_dict(title, f"Autogenerated sample task {i+1}", assignee, prio, due, est, tags, reporter=st.session_state.username)
+            base = new_task_dict(title, f"Autogenerated sample task {i+1}", assignee, prio, due, est, tags, reporter=st.session_state.username, team=st.session_state.selected_team)
             # Random status advancement (excluding optional Deferred/Closed during seeding)
             target_status = random.choice(["Backlog","To Do","In Progress","Review","Done"])
             if target_status != base['status']:
@@ -445,6 +539,11 @@ if st.session_state.get('my_view'):
     scope_tasks = [t for t in st.session_state.tasks_cache if t.get('assignee') == st.session_state.get('current_user')]
 else:
     scope_tasks = st.session_state.tasks_cache
+
+# Team scoping (include unassigned-to-team legacy tasks so they surface until edited)
+selected_team = st.session_state.get('selected_team')
+if selected_team:
+    scope_tasks = [t for t in scope_tasks if t.get('team') == selected_team]
 
 # Apply last-updated window filter BEFORE other field filters
 def _parse_iso(ts: str):
@@ -527,67 +626,220 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-## Reduced extra dividers for a cleaner top section
+# --- Overall completion progress (selected scope) ---
+try:
+    completed_selected = sum(1 for t in filtered if t.get('status') in ('Done','Closed'))
+except Exception:
+    completed_selected = 0
+pct_completed = int(round((completed_selected / total_selected) * 100)) if total_selected else 0
+overall_progress_css = """
+<style>
+.ttm-complete-wrap {margin:-4px 0 18px 0;padding:10px 18px 14px 18px;border:1px solid #d4e1ed;border-radius:18px;background:linear-gradient(145deg,#ffffff,#f3f8fc);box-shadow:0 3px 14px -4px rgba(11,99,214,0.18);}
+.ttm-complete-label {font-size:.60rem;font-weight:700;letter-spacing:.55px;color:#51658a;text-transform:uppercase;margin:0 0 6px 2px;display:flex;justify-content:space-between;align-items:center;}
+.ttm-complete-bar {position:relative;height:14px;border-radius:10px;background:linear-gradient(120deg,#e0e9f2,#d4e2ee);overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.6);} 
+.ttm-complete-fill {position:absolute;inset:0;width:0;display:flex;align-items:center;justify-content:flex-end;font-size:.55rem;font-weight:600;color:#0b2140;padding-right:6px;letter-spacing:.5px;white-space:nowrap;background:linear-gradient(90deg,#0b63d6,#6c5ce7,#00b894);background-size:200% 100%;animation:ttmCompleteGlow 8s linear infinite;} 
+@keyframes ttmCompleteGlow {0%{background-position:0 0;}100%{background-position:200% 0;}} 
+.ttm-complete-badge {background:#0b63d6;color:#fff;font-size:.55rem;font-weight:700;padding:4px 9px;border-radius:14px;letter-spacing:.5px;box-shadow:0 2px 6px -2px rgba(11,99,214,0.35);} 
+.ttm-complete-wrap.low .ttm-complete-fill {background:linear-gradient(90deg,#b2bec3,#636e72);} 
+.ttm-complete-wrap.mid .ttm-complete-fill {background:linear-gradient(90deg,#0984e3,#6c5ce7);} 
+.ttm-complete-wrap.high .ttm-complete-fill {background:linear-gradient(90deg,#00b894,#0b63d6);} 
+.ttm-complete-wrap.full .ttm-complete-fill {background:linear-gradient(90deg,#00b894,#00d8a1,#00b894);filter:brightness(1.05);} 
+</style>
+"""
+st.markdown(overall_progress_css, unsafe_allow_html=True)
+_class_level = 'low'
+if pct_completed >= 75:
+    _class_level = 'high'
+elif pct_completed >= 40:
+    _class_level = 'mid'
+if pct_completed == 100:
+    _class_level = 'full'
+st.markdown(
+    f"""
+    <div class='ttm-complete-wrap {_class_level}'>
+        <div class='ttm-complete-label'>
+            <span>Completion (Done / Selected)</span>
+            <span class='ttm-complete-badge'>{completed_selected}/{total_selected if total_selected else 0}</span>
+        </div>
+        <div class='ttm-complete-bar'>
+            <div class='ttm-complete-fill' style='width:{pct_completed}%;'>{pct_completed}%</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-# Prepare card HTML for each task (preserving all highlights and theme)
 def make_card_html(t):
-    priority = t.get("priority", "Medium")
-    # Determine overdue (due date before today and not Done)
+    # Always append (idempotent) CSS to keep ordering after other dynamic CSS blocks
+    st.markdown(
+        """
+        <style>
+        .ttm-card-boost {position:relative;overflow:hidden;}
+        .ttm-card-boost:before {content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:linear-gradient(130deg,rgba(11,99,214,.35),rgba(108,92,231,.35),rgba(0,184,148,.35));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.45;pointer-events:none;transition:opacity .4s, filter .5s;}
+        .ttm-card-boost:after {content:"";position:absolute;inset:0;background:radial-gradient(circle at 18% 20%,rgba(255,255,255,.65),rgba(255,255,255,0));mix-blend-mode:overlay;pointer-events:none;opacity:.35;transition:opacity .5s;}
+        .ttm-card-boost:hover:before {opacity:.9;filter:brightness(1.08);}            
+        .ttm-card-boost:hover:after {opacity:.55;} 
+        .ttm-card-boost .ttm-title-row {display:flex;align-items:flex-start;gap:6px;margin:0 0 .45rem 0;}
+        .ttm-card-boost .ttm-title-text {flex:1;font-size:1.05rem;font-weight:750;line-height:1.12;background:linear-gradient(92deg,#0b63d6,#6c5ce7,#00b894);-webkit-background-clip:text;color:transparent;letter-spacing:.3px;}
+        .ttm-card-boost .ttm-title-text a {text-decoration:none;background:inherit;-webkit-background-clip:text;color:transparent;}
+        .ttm-card-boost .ttm-status-pill {font-size:.55rem;font-weight:700;padding:4px 8px;border-radius:20px;letter-spacing:.55px;line-height:1;background:linear-gradient(120deg,#0b63d6,#6c5ce7);color:#fff;box-shadow:0 2px 4px rgba(0,0,0,.15);} 
+        .ttm-card-boost .ttm-tags-wrap {display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 4px 0;}
+        .ttm-card-boost .ttm-tag-chip {font-size:.50rem;font-weight:600;padding:4px 7px;letter-spacing:.5px;border-radius:14px;background:linear-gradient(145deg,#ffffff,#eef4fa);border:1px solid #d3dfe9;color:#35506b;position:relative;overflow:hidden;}
+        .ttm-card-boost .ttm-tag-chip:before {content:"";position:absolute;inset:0;background:linear-gradient(120deg,rgba(11,99,214,.25),rgba(108,92,231,0));opacity:0;transition:opacity .35s;}
+        .ttm-card-boost .ttm-tag-chip:hover:before {opacity:1;}
+        .ttm-card-boost .ttm-meta-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;font-size:.56rem;margin:2px 0 .45rem 0;line-height:1.15;}
+        .ttm-card-boost .ttm-meta-grid div {white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;gap:4px;}
+        .ttm-card-boost .ttm-meta-grid div strong {font-weight:700;font-size:.50rem;padding:2px 6px;border-radius:10px;letter-spacing:.6px;text-transform:uppercase;background:linear-gradient(120deg,#eef4fa,#ffffff);color:#416489;border:1px solid #d2dee8;}
+        .ttm-card-boost .ttm-meta-grid div span.val {font-weight:600;color:#172b4d;}
+        .ttm-card-boost .ttm-meta-grid div span.val.assignee-unassigned {color:#8c99a8;font-style:italic;}
+        .ttm-card-boost .ttm-progress {display:flex;align-items:center;gap:5px;font-size:.55rem;font-weight:600;margin-top:2px;color:#35506b;letter-spacing:.3px;}
+        .ttm-card-boost .ttm-progress-bar {flex:1;height:6px;background:#dbe5ef;border-radius:4px;position:relative;overflow:hidden;}
+        .ttm-card-boost .ttm-progress-fill {position:absolute;inset:0;width:0;background:linear-gradient(90deg,#00b894,#0b63d6,#6c5ce7);background-size:180% 100%;animation:ttmStripe 6s linear infinite;}
+        @keyframes ttmStripe {0%{background-position:0 0;}100%{background-position:200% 0;}}
+        .ttm-card-boost.ttm-overdue .ttm-progress-fill {filter:brightness(1.05) saturate(1.25);} 
+        .ttm-card-boost .ttm-priority-badge {transform:translateY(-1px);margin-left:0 !important;}
+        .ttm-mini-sep {height:1px;background:linear-gradient(90deg,rgba(11,99,214,.35),rgba(108,92,231,.15),rgba(0,184,148,.35));margin:2px 0 4px 0;border-radius:2px;}
+        /* Embedded checklist styling */
+        .ttm-card-boost .ttm-cl-wrap {margin:4px 0 2px 0;padding:6px 8px 4px 8px;border:1px solid rgba(0,0,0,0.04);border-radius:12px;background:linear-gradient(145deg,rgba(255,255,255,.92),rgba(240,246,252,.92));box-shadow:inset 0 0 0 1px rgba(255,255,255,0.4);}        
+        .ttm-card-boost .ttm-cl-head {display:flex;align-items:center;justify-content:space-between;margin:0 0 4px 0;font-size:.53rem;font-weight:700;letter-spacing:.6px;color:#456184;text-transform:uppercase;}
+        .ttm-card-boost .ttm-cl-head span.badge {background:linear-gradient(120deg,#0b63d6,#6c5ce7);color:#fff;padding:3px 8px;border-radius:14px;font-size:.52rem;font-weight:700;letter-spacing:.5px;}
+        .ttm-card-boost ul.ttm-cl-list {list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:hidden;}
+        .ttm-card-boost ul.ttm-cl-list li {position:relative;font-size:.53rem;font-weight:600;padding:4px 6px 4px 22px;border-radius:10px;line-height:1.05;background:linear-gradient(120deg,#eef4fa,#ffffff);border:1px solid #dbe4ec;color:#1d3557;display:flex;align-items:center;gap:4px;}
+        .ttm-card-boost ul.ttm-cl-list li:before {content:"";position:absolute;left:6px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:4px;border:1px solid #0b63d6;background:linear-gradient(120deg,#fff,#f2f8ff);box-shadow:0 0 0 2px rgba(11,99,214,0.08);}        
+        .ttm-card-boost ul.ttm-cl-list li.done {background:linear-gradient(120deg,#dff9ec,#c8f7dc);border-color:#b2eec9;color:#1b5240;}
+        .ttm-card-boost ul.ttm-cl-list li.done:before {background:linear-gradient(120deg,#00b894,#0b63d6);border-color:#00b894;box-shadow:0 0 0 2px rgba(0,184,148,0.18);}        
+        .ttm-card-boost ul.ttm-cl-list li.done span.txt {text-decoration:line-through;opacity:.8;}
+        .ttm-card-boost ul.ttm-cl-list li span.idx {font-size:.48rem;font-weight:700;letter-spacing:.5px;padding:2px 5px;background:rgba(255,255,255,.55);border:1px solid rgba(0,0,0,.05);border-radius:20px;}
+        .ttm-card-boost ul.ttm-cl-list li.more {background:linear-gradient(120deg,#ffffff,#f2f6fa);color:#51658a;font-style:italic;}
+    /* Comments preview */
+    .ttm-card-boost .ttm-comments-wrap {margin:6px 0 2px 0;padding:6px 8px 6px 8px;border:1px solid rgba(0,0,0,0.04);border-radius:12px;background:linear-gradient(145deg,rgba(255,255,255,.94),rgba(245,248,252,.94));}
+    .ttm-card-boost .ttm-comments-head {display:flex;align-items:center;justify-content:space-between;margin:0 0 4px 0;font-size:.53rem;font-weight:700;letter-spacing:.6px;color:#425c79;text-transform:uppercase;}
+    .ttm-card-boost .ttm-comments-head span.badge {background:linear-gradient(120deg,#6c5ce7,#0b63d6);color:#fff;padding:3px 8px;border-radius:14px;font-size:.52rem;font-weight:700;letter-spacing:.5px;}
+    .ttm-card-boost ul.ttm-comments-list {list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;}
+    .ttm-card-boost ul.ttm-comments-list li {font-size:.50rem;line-height:1.1;font-weight:600;padding:4px 6px;border-radius:10px;position:relative;background:linear-gradient(120deg,#eef4fa,#ffffff);border:1px solid #d8e3ec;color:#20374f;display:flex;flex-direction:column;gap:2px;}
+    .ttm-card-boost ul.ttm-comments-list li:before {content:"\201C";position:absolute;left:4px;top:2px;font-size:.8rem;color:rgba(11,99,214,.35);}
+    .ttm-card-boost ul.ttm-comments-list li span.meta {font-size:.44rem;font-weight:600;letter-spacing:.5px;color:#5c7490;display:flex;gap:4px;}
+    .ttm-card-boost ul.ttm-comments-list li span.meta span.by {color:#0b63d6;}
+    .ttm-card-boost ul.ttm-comments-list li.more {text-align:center;font-style:italic;background:linear-gradient(120deg,#ffffff,#f2f6fa);color:#51658a;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    priority = t.get("priority", "Medium") or "Medium"
+    status = t.get('status') or 'Backlog'
+    # Overdue detection
     overdue = False
-    due_raw = t.get("due_date")
-    if due_raw and t.get('status') != 'Done':
+    due_raw = t.get('due_date')
+    if due_raw and status not in ('Done','Closed'):
         try:
-            due_dt = pd.to_datetime(due_raw).date()
-            if due_dt < date.today():
+            if pd.to_datetime(due_raw).date() < date.today():
                 overdue = True
         except Exception:
             pass
-    badge_html = f'<span class="ttm-priority-badge ttm-priority-{priority}">{priority}</span>'
-    overdue_cls = ' ttm-overdue' if overdue else ''
-    overdue_badge = '<div class="ttm-overdue-badge">OVERDUE</div>' if overdue else ''
-    # Build card
-    # Title with deep-dive link (?ticket=<id>)
-    link_href = f"?ticket={t.get('id')}"
-    card_html = f'<div class="ttm-task-card{overdue_cls}">{overdue_badge}<div class="ttm-task-title"><a href="{link_href}" style="text-decoration:none;color:inherit;">{t.get("title")}</a> {badge_html}</div>'
-    # Meta compact grid: reporter, assignee, created, due, reviewer (icons compact)
     created_raw = t.get('created_at')
-    created_disp = ''
+    start_raw = t.get('start_date')
     try:
-        if created_raw:
-            created_disp = pd.to_datetime(created_raw).date().isoformat()
+        created_disp = pd.to_datetime(created_raw).date().isoformat() if created_raw else ''
     except Exception:
         created_disp = ''
-    due_fragment = t.get("due_date") or "—"
-    if overdue and due_fragment != "—":
-        due_fragment = f'<span class="ttm-overdue-date">{due_fragment}</span>'
+    try:
+        start_disp = pd.to_datetime(start_raw).date().isoformat() if start_raw else ''
+    except Exception:
+        start_disp = ''
     reporter = t.get('reporter') or '—'
     assignee = t.get('assignee') or 'Unassigned'
     reviewer = t.get('reviewer') or '—'
     est = t.get('estimates_hours')
-    est_html = f' • ⏱️ {est}h' if est else ''
-    card_html += (
-        f'<div class="ttm-task-meta" style="font-size:.66rem;line-height:1.15em;">'
-        f'📝 {reporter} • 👤 {assignee}<br>'
-        f'🕒 {created_disp or ""} • 📅 {due_fragment} • 👀 {reviewer}{est_html}'
-        f'</div>'
+    est_html = f'{est}h' if est else '—'
+    # Checklist summary
+    checklist = t.get('checklist') or []
+    done_ct = sum(1 for c in checklist if c.get('done'))
+    total_ct = len(checklist)
+    open_ct = total_ct - done_ct
+    pct = int(done_ct/total_ct*100) if total_ct else 0
+    # Tag chips
+    tag_html = ''
+    if t.get('tags'):
+        tag_html = '<div class="ttm-tags-wrap">' + ''.join([f"<div class='ttm-tag-chip'>{tg}</div>" for tg in t.get('tags')]) + '</div>'
+    # Priority badge uses existing global css + shimmer
+    priority_badge = f'<span class="ttm-priority-badge ttm-priority-{priority}">{priority}</span>'
+    status_pill = f"<span class='ttm-status-pill status-{status.replace(' ','-')}'>{status}</span>"
+    overdue_badge = '<div class="ttm-overdue-badge">OVERDUE</div>' if overdue else ''
+    # Compose classes
+    priority_bg_inline = {
+        'Low': "background:linear-gradient(150deg,#f2fff9,#e3fbf2 45%,#d4f6eb);",
+        'Medium': "background:linear-gradient(150deg,#f1f7ff,#e2f1ff 45%,#d7eaff);",
+        'High': "background:linear-gradient(150deg,#fff9ef,#fff1dc 45%,#ffe6c4);",
+        'Critical': "background:linear-gradient(150deg,#fff2f2,#ffe1e1 45%,#ffd2d2);",
+    }.get(priority, "background:linear-gradient(150deg,#f1f7ff,#e2f1ff 45%,#d7eaff);")
+    base_cls = f"ttm-task-card ttm-card-boost"
+    if overdue: base_cls += ' ttm-overdue'
+    if status == 'Deferred': base_cls += ' ttm-deferred-card'
+    link_href = f"?ticket={t.get('id')}"
+    # Build meta mini-grid (2 columns)
+    meta_rows = [
+        ("Reporter", reporter),
+        ("Assignee", assignee),
+        ("Created", created_disp or '—'),
+        ("Start", start_disp or '—'),
+        ("Due", t.get('due_date') or '—'),
+        ("Reviewer", reviewer),
+        ("Estimate", est_html),
+    ]
+    meta_html = "<div class='ttm-meta-grid'>" + ''.join([f"<div><strong>{k}</strong> <span class='val {'assignee-unassigned' if (k=='Assignee' and v=='Unassigned') else ''}'>{v}</span></div>" for k,v in meta_rows]) + "</div>"
+    # Progress block
+    progress_html = (
+        f"<div class='ttm-progress'><span>☑ {done_ct}/{total_ct} ({open_ct if total_ct else 0} open)</span>"
+        f"<div class='ttm-progress-bar'><div class='ttm-progress-fill' style='width:{pct}%;'></div></div></div>"
     )
-    if t.get("tags"):
-        card_html += f'<div class="ttm-task-tags">🏷️ {", ".join(t.get("tags"))}</div>'
-    # Checklist progress (always render to keep uniform height)
-    cl = t.get('checklist') or []
-    done = sum(1 for c in cl if c.get('done'))
-    total = len(cl)
-    remaining = total - done
-    pct = int((done/total)*100) if total else 0
-    card_html += (
-        f"<div class='ttm-checkline'>"
-        f"<span>☑ {done}/{total} ({remaining if total else 0} open)</span>"
-        f"<div class='ttm-checkbar'><div class='ttm-checkbar-fill' style='width:{pct}%;'></div></div>"
+    # Checklist embedded preview (non-interactive inside pure HTML; interactive checkboxes rendered separately beneath card)
+    checklist_html = ''
+    if total_ct:
+        # Compact summary line; full details available via ☑️ popover buttons already present below the card
+        pct_disp = f"{pct}%" if total_ct else ''
+        checklist_html = (
+            "<div class='ttm-cl-wrap' style='padding:6px 8px 6px 8px;'>"
+            f"<div class='ttm-cl-head' style='margin:0;display:flex;align-items:center;justify-content:space-between;'>"
+            f"<span>Checklist</span><span class='badge'>{done_ct}/{total_ct} {pct_disp}</span>"
+            "</div>"
+            f"<div class='ttm-progress' style='margin-top:4px;'><div class='ttm-progress-bar'><div class='ttm-progress-fill' style='width:{pct}%;'></div></div></div>"
+            "<div style='font-size:.48rem;color:#51658a;margin-top:4px;'>Open via ☑️ icon for details</div>"
+            "</div>"
+        )
+    # Comments preview (last 4 newest)
+    comments_html = ''
+    comments = (t.get('comments') or [])
+    if comments:
+        total_comments = len(comments)
+        latest = comments[0] if comments else None
+        latest_by = (latest or {}).get('by','?')
+        latest_when = (latest or {}).get('when','')
+        if 'T' in latest_when:
+            try:
+                latest_when_short = latest_when.split('T')[0]
+            except Exception:
+                latest_when_short = latest_when
+        else:
+            latest_when_short = latest_when[:10]
+        comments_html = (
+            "<div class='ttm-comments-wrap' style='padding:6px 8px 6px 8px;'>"
+            f"<div class='ttm-comments-head' style='margin:0;display:flex;align-items:center;justify-content:space-between;'>"
+            f"<span>Comments</span><span class='badge'>{total_comments}</span></div>"
+            f"<div style='font-size:.50rem;margin-top:4px;color:#20374f;'>Latest: <strong>{latest_by}</strong> <span style='color:#5c7490;'>@ {latest_when_short}</span></div>"
+            "<div style='font-size:.48rem;color:#51658a;margin-top:4px;'>Open via 💬 icon for details</div>"
+            "</div>"
+        )
+    # Final HTML (MUST end with single closing </div> for board slicing logic)
+    card_html = (
+        f"<div class='{base_cls}' style='{priority_bg_inline}'>"
+        f"{overdue_badge}<div class='ttm-title-row'>"
+        f"<div class='ttm-title-text'><a href='{link_href}' style='text-decoration:none;color:inherit;'>{t.get('title')}</a></div>"
+        f"{priority_badge}{status_pill}</div>"
+        f"<div class='ttm-mini-sep'></div>"
+        f"{tag_html}{meta_html}{checklist_html}{comments_html}"
         f"</div>"
     )
-    if t.get('status') == 'Deferred':
-        card_html = card_html.replace('ttm-task-card', 'ttm-task-card ttm-deferred-card')
-    card_html += '</div>'
     return card_html
 
 # ------------------ PERFORMANCE FRAGMENTS ------------------
@@ -1065,7 +1317,7 @@ def ticket_detail_fragment(task: dict):
         ("Priority", task.get('priority')),
         ("Assignee", task.get('assignee') or 'Unassigned'),
         ("Reporter", task.get('reporter') or '—'),
-        ("Reviewer", task.get('reviewer') or '—'),
+        ("Reviewer", (tasks_repo.get_task(task['id']) or task).get('reviewer') or '—'),
         ("Created", task.get('created_at') or '—'),
         ("Due", task.get('due_date') or '—'),
         ("Estimate (h)", task.get('estimates_hours') or '—'),
@@ -1087,14 +1339,19 @@ def ticket_detail_fragment(task: dict):
         st.markdown('<h3>Edit</h3>', unsafe_allow_html=True)
         colE1, colE2, colE3 = st.columns(3)
         with colE1:
-            new_status = st.selectbox('Move Status', FLOW_STATUSES + (["Closed"] if task.get('status')=='Done' else []), index=FLOW_STATUSES.index(task.get('status')) if task.get('status') in FLOW_STATUSES else 0)
+            st.markdown("<div style='font-size:0.7rem;font-weight:600;color:#51658a;letter-spacing:.5px;'>Status</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size:0.9rem;font-weight:700;margin-top:2px;'>{task.get('status')}</div>", unsafe_allow_html=True)
             new_priority = st.selectbox('Priority', PRIORITIES, index=PRIORITIES.index(task.get('priority')) if task.get('priority') in PRIORITIES else 1)
         with colE2:
             new_assignee = st.selectbox('Assignee', ['(none)']+st.session_state.users, index=(st.session_state.users.index(task.get('assignee'))+1 if task.get('assignee') in st.session_state.users else 0))
-            new_reviewer = st.selectbox('Reviewer', ['(none)']+st.session_state.users, index=(st.session_state.users.index(task.get('reviewer'))+1 if task.get('reviewer') in st.session_state.users else 0))
+            st.markdown("<div style='font-size:0.7rem;font-weight:600;color:#51658a;letter-spacing:.5px;margin-top:6px;'>Reviewer (auto)</div>", unsafe_allow_html=True)
+            _rev = (tasks_repo.get_task(task['id']) or task).get('reviewer') or '—'
+            st.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#0b2140;padding:4px 8px;border:1px solid #d6e2ec;border-radius:8px;background:#f5f9fc;display:inline-block;'>{_rev}</div>", unsafe_allow_html=True)
         with colE3:
+            new_start = st.date_input('Start Date', value=pd.to_datetime(task.get('start_date')).date() if task.get('start_date') else date.today())
             new_due = st.date_input('Due Date', value=pd.to_datetime(task.get('due_date')).date() if task.get('due_date') else date.today())
             new_est = st.number_input('Estimate (h)', min_value=0.0, value=float(task.get('estimates_hours') or 0.0), step=0.5)
+        new_title = st.text_input('Title', value=task.get('title') or '')
         new_desc = st.text_area('Description', value=task.get('description') or '', height=140)
         new_tags_raw = st.text_input('Tags (comma)', value=", ".join(task.get('tags') or []))
         if st.button('💾 Save Changes', key='detail-save'):
@@ -1103,15 +1360,15 @@ def ticket_detail_fragment(task: dict):
             history.append({"when": datetime.utcnow().isoformat(), "what": "edited(detail)", "by": st.session_state.username})
             tasks_repo.update_task({
                 'id': task['id'],
-                'title': live.get('title'),
+                'title': new_title.strip() or live.get('title'),
                 'description': new_desc,
                 'assignee': None if new_assignee == '(none)' else new_assignee,
-                'reviewer': None if new_reviewer == '(none)' else new_reviewer,
                 'priority': new_priority,
+                'start_date': new_start.isoformat() if new_start else None,
                 'due_date': new_due.isoformat() if new_due else None,
                 'estimates_hours': new_est,
                 'tags': [x.strip() for x in new_tags_raw.split(',') if x.strip()],
-                'status': new_status,
+                'status': live.get('status'),
                 'history': history,
                 'reporter': live.get('reporter'),
             })
@@ -1141,6 +1398,13 @@ def ticket_detail_fragment(task: dict):
                 st.session_state.tasks_cache = load_tasks()
                 st.rerun()
         new_ci = st.text_input('Add item', key='detail-add-ci')
+        # Enter-to-submit for checklist add (detail view)
+        if new_ci.strip() and st.session_state.get('_detail_add_ci_last') != new_ci:
+            # If user pressed enter, Streamlit updates the value; capture and submit automatically
+            st.session_state['_detail_add_ci_last'] = new_ci
+            tasks_repo.add_check_item(task['id'], new_ci.strip(), by=st.session_state.username)
+            st.session_state.tasks_cache = load_tasks()
+            st.rerun()
         if st.button('Add Checklist Item', key='detail-add-ci-btn') and new_ci.strip():
             tasks_repo.add_check_item(task['id'], new_ci.strip(), by=st.session_state.username)
             st.session_state.tasks_cache = load_tasks()
@@ -1153,6 +1417,12 @@ def ticket_detail_fragment(task: dict):
         for c in comments_live[::-1][:80]:
             st.markdown(f"- **{c.get('by','?')}**: {c.get('text')} <span style='color:#51658a;font-size:0.6rem;'>({c.get('when')})</span>", unsafe_allow_html=True)
         new_comment = st.text_input('New comment', key='detail-new-comment')
+        # Enter-to-submit for comment (detail view)
+        if new_comment.strip() and st.session_state.get('_detail_new_comment_last') != new_comment:
+            st.session_state['_detail_new_comment_last'] = new_comment
+            tasks_repo.add_comment(task['id'], new_comment.strip(), by=st.session_state.username)
+            st.session_state.tasks_cache = load_tasks()
+            st.rerun()
         if st.button('Post Comment', key='detail-post-comment') and new_comment.strip():
             tasks_repo.add_comment(task['id'], new_comment.strip(), by=st.session_state.username)
             st.session_state.tasks_cache = load_tasks()
@@ -1191,7 +1461,18 @@ if active_ticket_id:
     st.stop()
 
 
-board_tab, analytics_tab, tags_tab, timeline_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs(["🗂 Board", "📊 Analytics", "🏷 Tags", "🗓 Timeline", "📨 Report", "📁 Import / Export", "� History", "�📖 Documentation"])
+board_tab, queue_tab, gantt_tab, analytics_tab, tags_tab, timeline_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs([
+    "🗂 Board",
+    "⚡ Queue",
+    "📅 Gantt Chart",
+    "📊 Analytics",
+    "🏷 Tags",
+    "🗓 Timeline",
+    "📨 Report",
+    "📁 Import / Export",
+    "� History",
+    "�📖 Documentation"
+])
 
 with board_tab:
     st.markdown('<div class="ttm-section-gap"></div>', unsafe_allow_html=True)
@@ -1273,10 +1554,12 @@ with board_tab:
                     nt_desc = st.text_area("Description", key=f"nt-desc-{status}")
                     nt_assignee = st.selectbox("Assignee", ["(none)"]+st.session_state.users, index=0, key=f"nt-assignee-{status}")
                     nt_priority = st.selectbox("Priority", PRIORITIES, index=1, key=f"nt-priority-{status}")
+                    nt_has_start = st.checkbox("Has start date", value=False, key=f"nt-has-start-{status}")
+                    nt_start = st.date_input("Start", value=date.today(), key=f"nt-start-{status}") if nt_has_start else None
                     nt_due = st.date_input("Due", value=date.today(), key=f"nt-due-{status}")
                     nt_est = st.number_input("Estimate (h)", min_value=0.0, value=1.0, step=0.5, key=f"nt-est-{status}")
                     nt_tags_raw = st.text_input("Tags (comma, optional)", key=f"nt-tags-{status}")
-                    nt_reviewer = st.selectbox("Reviewer (optional)", ["(none)"]+st.session_state.users, index=0, key=f"nt-reviewer-{status}")
+                    st.caption("Reviewer will be auto-set when moving from Review → Done.")
                     if st.button("Create", key=f"nt-create-{status}"):
                         if nt_title.strip():
                             tags_list = [tg.strip() for tg in nt_tags_raw.split(',') if tg.strip()]
@@ -1289,7 +1572,8 @@ with board_tab:
                                 nt_est,
                                 tags_list,
                                 reporter=st.session_state.username,
-                                reviewer=None if nt_reviewer=="(none)" else nt_reviewer,
+                                start_date=nt_start,
+                                team=st.session_state.selected_team,
                             )
                             if base['status'] != status:
                                 base['status'] = status
@@ -1301,9 +1585,10 @@ with board_tab:
             for t in kanban_data[status]:
                 tid = t['id']
                 card_html = make_card_html(t)
-                st.markdown(card_html[:-6], unsafe_allow_html=True)
-                # Button bar: Prev | Raise Prio | Checklist | Comments | Defer | History | Lower Prio | Next
-                btn_cols = st.columns([1,1,1,1,1,1,1,1])
+                st.markdown(card_html, unsafe_allow_html=True)
+                # Button bar: wrap in container for styling
+                #st.markdown('<div class="ttm-btn-row">', unsafe_allow_html=True)
+                btn_cols = st.columns([1,1,1,1,1,1,1,1,1])
                 # Prev button (move left) --------------------------------------------------
                 with btn_cols[0]:
                     if idx > 0:
@@ -1331,7 +1616,7 @@ with board_tab:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # Checklist popover -------------------------------------------------------
                 with btn_cols[2]:
-                    with st.popover("☑"):
+                    with st.popover("", icon="☑️", width="stretch"):
                         task_live = tasks_repo.get_task(tid) or t
                         st.markdown("### Checklist")
                         cl_items = task_live.get('checklist') or []
@@ -1354,13 +1639,21 @@ with board_tab:
                                 st.session_state.tasks_cache = load_tasks()
                                 st.rerun()
                         new_ci = st.text_input("Add item", key=f"pop2-new-ci-{tid}")
+                        # Enter-to-submit (board checklist popover)
+                        if new_ci.strip():
+                            sentinel_key = f"_pop_add_ci_last_{tid}"
+                            if st.session_state.get(sentinel_key) != new_ci:
+                                st.session_state[sentinel_key] = new_ci
+                                tasks_repo.add_check_item(tid, new_ci.strip(), by=st.session_state.username)
+                                st.session_state.tasks_cache = load_tasks()
+                                st.rerun()
                         if st.button("Add", key=f"pop2-add-ci-{tid}") and new_ci.strip():
                             tasks_repo.add_check_item(tid, new_ci.strip(), by=st.session_state.username)
                             st.session_state.tasks_cache = load_tasks()
                             st.rerun()
                 # Comments popover --------------------------------------------------------
                 with btn_cols[3]:
-                    with st.popover("💬"):
+                    with st.popover("", icon="💬"):
                         task_live = tasks_repo.get_task(tid) or t
                         st.markdown("### Comments")
                         comments_live = task_live.get('comments') or []
@@ -1370,14 +1663,47 @@ with board_tab:
                             for c in comments_live[::-1][:40]:
                                 st.markdown(f"- **{c.get('by','?')}**: {c.get('text')} <span style='color:#51658a;font-size:0.55rem;'>({c.get('when')})</span>", unsafe_allow_html=True)
                         new_comment = st.text_input("New comment", key=f"pop2-new-comment-{tid}")
+                        # Enter-to-submit (board comments popover)
+                        if new_comment.strip():
+                            sentinel_key = f"_pop_new_comment_last_{tid}"
+                            if st.session_state.get(sentinel_key) != new_comment:
+                                st.session_state[sentinel_key] = new_comment
+                                tasks_repo.add_comment(tid, new_comment.strip(), by=st.session_state.username)
+                                st.session_state.tasks_cache = load_tasks()
+                                st.rerun()
                         if st.button("Post", key=f"pop2-post-comment-{tid}") and new_comment.strip():
                             tasks_repo.add_comment(tid, new_comment.strip(), by=st.session_state.username)
                             st.session_state.tasks_cache = load_tasks()
                             st.rerun()
-                # Defer (trash) -----------------------------------------------------------
+                # Pick Up (assign to me if unassigned) -----------------------------------
                 with btn_cols[4]:
+                    current_user = st.session_state.get('username') or st.session_state.get('current_user')
+                    if (t.get('assignee') in (None, '', 'Unassigned')) and current_user:
+                        if st.button("🎯", help="Pick up (assign to me)", key=f"pickup-{tid}"):
+                            live = tasks_repo.get_task(tid) or t
+                            hist = live.get('history', [])
+                            hist.append({"when": datetime.utcnow().isoformat(), "what": f"assignee->{current_user}", "by": current_user})
+                            tasks_repo.update_task({'id': tid, 'assignee': current_user, 'history': hist})
+                            st.session_state.tasks_cache = load_tasks()
+                            st.rerun()
+                    else:
+                        st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
+                # History (new) -----------------------------------------------------------
+                with btn_cols[5]:
+                    with st.popover("", icon="🕓"):
+                        task_live_hist = tasks_repo.get_task(tid) or t
+                        st.markdown(f"### History — {task_live_hist.get('title')}")
+                        events = (task_live_hist.get('history') or [])[-150:][::-1]
+                        if not events:
+                            st.info("No history events recorded yet.")
+                        else:
+                            for ev in events:
+                                st.markdown(f"- `{ev.get('what')}` <span style='color:#51658a;font-size:0.6rem;'>· {ev.get('when')} · {ev.get('by','?')}</span>", unsafe_allow_html=True)
+                        st.caption("Latest 150 events shown.")
+                # Defer (trash) -----------------------------------------------------------
+                with btn_cols[6]:
                     if t.get('status') != 'Deferred':
-                        with st.popover("🗑", use_container_width=False):
+                        with st.popover("", icon="❌", use_container_width=False):
                             st.markdown(f"**Defer Task?**")
                             st.caption("Moves this task to the Deferred lane (excluded from KPIs).")
                             if st.button("Confirm Defer", key=f"confirm-defer-{tid}"):
@@ -1389,27 +1715,15 @@ with board_tab:
                                     'status': 'Deferred',
                                     'history': hist,
                                 })
-                                # Ensure Deferred column becomes visible so user sees the moved card
                                 if 'show_deferred' not in st.session_state or not st.session_state.show_deferred:
                                     st.session_state.show_deferred = True
                                 st.session_state.tasks_cache = load_tasks()
                                 st.rerun()
                     else:
                         st.markdown("<div style='text-align:center;opacity:.4;'>—</div>", unsafe_allow_html=True)
-                # History (new) -----------------------------------------------------------
-                with btn_cols[5]:
-                    with st.popover("🕒"):
-                        task_live_hist = tasks_repo.get_task(tid) or t
-                        st.markdown(f"### History — {task_live_hist.get('title')}")
-                        events = (task_live_hist.get('history') or [])[-150:][::-1]
-                        if not events:
-                            st.info("No history events recorded yet.")
-                        else:
-                            for ev in events:
-                                st.markdown(f"- `{ev.get('what')}` <span style='color:#51658a;font-size:0.6rem;'>· {ev.get('when')} · {ev.get('by','?')}</span>", unsafe_allow_html=True)
-                        st.caption("Latest 150 events shown.")
+
                 # Priority lower -----------------------------------------------------------
-                with btn_cols[6]:
+                with btn_cols[7]:
                     cur_p = t.get('priority')
                     if cur_p in PRIORITIES:
                         pi = PRIORITIES.index(cur_p)
@@ -1425,7 +1739,7 @@ with board_tab:
                         else:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # Next button --------------------------------------------------------------
-                with btn_cols[7]:
+                with btn_cols[8]:
                     can_show_next = idx < len(statuses)-1
                     if t.get('status') == 'In Progress':
                         cl = t.get('checklist') or []
@@ -1435,11 +1749,222 @@ with board_tab:
                         next_status = statuses[idx+1]
                         if next_status not in ('Deferred','Closed'):
                             if st.button("→", key=f"next-{tid}"):
-                                tasks_repo.update_task_status(tid, next_status, by=st.session_state.username)
+                                # Auto-assign reviewer when transitioning Review -> Done
+                                current_user = st.session_state.username
+                                if t.get('status') == 'Review' and next_status == 'Done':
+                                    live = tasks_repo.get_task(tid) or t
+                                    hist = live.get('history', [])
+                                    # Add status transition event
+                                    from datetime import datetime as _dt
+                                    ts = _dt.utcnow().isoformat()
+                                    hist.append({"when": ts, "what": f"status->{next_status}", "by": current_user})
+                                    # Only append reviewer change if different or not set
+                                    if live.get('reviewer') != current_user:
+                                        hist.append({"when": _dt.utcnow().isoformat(), "what": f"reviewer->{current_user}", "by": current_user})
+                                    tasks_repo.update_task({
+                                        'id': tid,
+                                        'status': next_status,
+                                        'reviewer': current_user,
+                                        'history': hist,
+                                        'by': current_user,
+                                    })
+                                else:
+                                    tasks_repo.update_task_status(tid, next_status, by=current_user)
                                 st.session_state.tasks_cache = load_tasks()
                                 st.rerun()
-                # Legacy inline edit removed (popover now handles editing); deletion disabled
+                # Legacy inline edit removed; wrapper closed inside make_card_html
             st.markdown('</div>', unsafe_allow_html=True)
+
+with queue_tab:
+    st.subheader("What Should I Do Now? ⚡")
+    # Use already filtered tasks (respects global filters & my_view)
+    queue_source = list(filtered)
+    if not queue_source:
+        st.info("No tasks match the current filters.")
+    else:
+        # Scoring weights
+        PRIORITY_WEIGHT = {"Critical": 400, "High": 300, "Medium": 200, "Low": 100}
+        STATUS_WEIGHT = {"In Progress": 150, "Review": 140, "To Do": 120, "Backlog": 100, "Done": -200, "Closed": -300, "Deferred": -400}
+        def last_activity(tsk: dict):
+            """Return UTC-aware pandas Timestamp of most recent activity.
+            Some imported tasks may have timezone-aware ISO timestamps while
+            others are naive; we coerce everything to UTC-aware to avoid
+            TypeError: cannot subtract tz-naive and tz-aware datetimes."""
+            latest = tsk.get('created_at')
+            for h in (tsk.get('history') or [])[::-1]:
+                w = h.get('when')
+                if w:
+                    latest = w
+                    break
+            try:
+                return pd.to_datetime(latest, utc=True)
+            except Exception:
+                return pd.Timestamp.now(tz='UTC')
+        now = pd.Timestamp.now(tz='UTC')
+        rows = []
+        for t in queue_source:
+            status = t.get('status') or 'Backlog'
+            if status in ('Done','Closed'):  # push to bottom or skip
+                continue
+            pr = t.get('priority') or 'Medium'
+            score = PRIORITY_WEIGHT.get(pr,150) + STATUS_WEIGHT.get(status,0)
+            # Due date urgency
+            due = t.get('due_date')
+            if due:
+                try:
+                    due_dt = pd.to_datetime(due)
+                    delta = (due_dt.date() - date.today()).days
+                    if delta < 0:
+                        score += 120  # overdue
+                    elif delta == 0:
+                        score += 80
+                    elif delta <= 3:
+                        score += 40
+                    elif delta <= 7:
+                        score += 10
+                except Exception:
+                    pass
+            # Checklist pressure: unfinished adds a bit; empty adds none
+            cl = t.get('checklist') or []
+            if cl:
+                done_ct = sum(1 for c in cl if c.get('done'))
+                if done_ct < len(cl):
+                    # more remaining -> higher urgency
+                    remaining = len(cl) - done_ct
+                    score += min(remaining * 6, 40)
+            # Staleness: older last activity => bump to surface stale WIP
+            la = last_activity(t)
+            # now & la are guaranteed UTC-aware
+            stale_days = (now - la).days
+            if stale_days >= 7:
+                score += 55
+            elif stale_days >= 3:
+                score += 30
+            elif stale_days >= 1:
+                score += 10
+            # Small bonus if In Progress but no recent activity (nudge to finish)
+            if status == 'In Progress' and stale_days >= 2:
+                score += 25
+            # Penalty if backlog and not due soon (no due date or > 7 days away)
+            not_due_soon = True
+            if due:
+                try:
+                    ddt = pd.to_datetime(due, utc=True, errors='coerce')
+                    if pd.notnull(ddt):
+                        days_out = (ddt.date() - date.today()).days
+                        not_due_soon = days_out > 7
+                except Exception:
+                    # If parsing fails, treat as not due soon
+                    not_due_soon = True
+            if status == 'Backlog' and not_due_soon:
+                score -= 20
+            rows.append({
+                'id': t.get('id'),
+                'title': t.get('title'),
+                'priority': pr,
+                'status': status,
+                'assignee': t.get('assignee') or 'Unassigned',
+                'due_date': t.get('due_date'),
+                'score': score,
+                'raw': t
+            })
+        if not rows:
+            st.info("No actionable tasks (remaining tasks are done/closed).")
+        else:
+            # Sort descending by score then earlier due date then title
+            rows.sort(key=lambda r: (-r['score'], r['due_date'] or '9999-12-31', r['title'] or ''))
+            top = rows[0]
+            # Highlight recommendation
+            st.markdown(
+                f"""
+                <div style='border:2px solid #0b63d6;border-radius:18px;padding:18px 20px;margin:4px 0 18px 0;background:linear-gradient(145deg,#ffffff,#eef4fa);box-shadow:0 6px 22px -6px rgba(11,99,214,0.35);'>
+                    <div style='font-size:.7rem;font-weight:700;letter-spacing:.6px;color:#51658a;text-transform:uppercase;margin-bottom:6px;'>Recommended Focus</div>
+                    <div style='font-size:1.15rem;font-weight:750;color:#0b2140;margin-bottom:4px;'>{top['title']}</div>
+                    <div style='display:flex;flex-wrap:wrap;gap:8px;font-size:.6rem;font-weight:600;color:#35506b;'>
+                        <span style='background:#0b63d6;color:#fff;padding:4px 8px;border-radius:14px;'>Score {top['score']}</span>
+                        <span style='background:#eef4fa;padding:4px 8px;border-radius:14px;'>Priority {top['priority']}</span>
+                        <span style='background:#eef4fa;padding:4px 8px;border-radius:14px;'>Status {top['status']}</span>
+                        <span style='background:#eef4fa;padding:4px 8px;border-radius:14px;'>Due {top['due_date'] or '—'}</span>
+                        <span style='background:#eef4fa;padding:4px 8px;border-radius:14px;'>Assignee {top['assignee']}</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            # Detailed table / list
+            exp = st.expander("Priority Queue (Detailed)", expanded=True)
+            with exp:
+                # Build rich HTML list for better styling than dataframe
+                list_items = []
+                for i, r in enumerate(rows, start=1):
+                    due_html = r['due_date'] or '—'
+                    if r['due_date']:
+                        try:
+                            ddt = pd.to_datetime(r['due_date']).date()
+                            diff = (ddt - date.today()).days
+                            if diff < 0:
+                                due_html = f"<span style='color:#b31919;font-weight:700;'>{r['due_date']} (OVERDUE)</span>"
+                            elif diff == 0:
+                                due_html = f"<span style='color:#c05621;font-weight:700;'>{r['due_date']} (today)</span>"
+                            elif diff <= 3:
+                                due_html = f"<span style='color:#c05621;font-weight:600;'>{r['due_date']} (+{diff}d)</span>"
+                        except Exception:
+                            pass
+                    list_items.append(
+                        f"<div style='display:grid;grid-template-columns:40px 1fr 85px 85px 120px 70px;gap:10px;align-items:center;padding:8px 12px;border:1px solid #d6e2ec;border-radius:14px;background:linear-gradient(145deg,#ffffff,#f4f8fb);margin-bottom:8px;font-size:.62rem;font-weight:600;color:#1d3557;'>"+
+                        f"<div style='font-size:.7rem;font-weight:700;color:#0b63d6;'>{i}</div>"+
+                        f"<div style='font-size:.72rem;font-weight:650;color:#0b2140;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'><a href='?ticket={r['id']}' style='color:#0b2140;text-decoration:none;'>{r['title']}</a></div>"+
+                        f"<div>{r['priority']}</div>"+
+                        f"<div>{r['status']}</div>"+
+                        f"<div>{due_html}</div>"+
+                        f"<div style='text-align:right;color:#0b63d6;'>{r['score']}</div>"+
+                        "</div>"
+                    )
+                st.markdown(
+                    """
+                    <div style='display:grid;grid-template-columns:40px 1fr 85px 85px 120px 70px;gap:10px;font-size:.55rem;font-weight:700;letter-spacing:.6px;color:#51658a;margin:4px 0 6px 0;text-transform:uppercase;'>
+                        <div>#</div><div>Task</div><div>Priority</div><div>Status</div><div>Due</div><div style='text-align:right;'>Score</div>
+                    </div>
+                    """ + ''.join(list_items), unsafe_allow_html=True
+                )
+            st.caption("Queue respects current filters and view mode. Scores are heuristic (priority, urgency, progress, staleness).")
+
+with gantt_tab:
+    st.subheader("Gantt Chart 📅")
+    if not filtered:
+        st.info("No tasks match the current filters.")
+    else:
+        rows = []
+        for t in filtered:
+            title = t.get('title') or f"Task {str(t.get('id') or '')[:6]}"
+            start = t.get('start_date') or t.get('created_at')
+            finish = t.get('due_date')
+            s_dt = pd.to_datetime(start, errors='coerce', utc=True)
+            f_dt = pd.to_datetime(finish, errors='coerce', utc=True)
+            if pd.isna(s_dt):
+                s_dt = pd.Timestamp.now(tz='UTC')
+            if pd.isna(f_dt):
+                est_h = float(t.get('estimates_hours') or 0)
+                days = max(1, int(round(est_h / 6)))
+                f_dt = s_dt + pd.Timedelta(days=days)
+            rows.append({
+                'Task': title,
+                'Start': s_dt.tz_convert(None),
+                'Finish': f_dt.tz_convert(None),
+                'Assignee': t.get('assignee') or 'Unassigned',
+                'Priority': t.get('priority') or 'Medium',
+                'Status': t.get('status') or 'Backlog',
+            })
+        if not rows:
+            st.info("No tasks to display.")
+        else:
+            gdf = pd.DataFrame(rows)
+            fig = px.timeline(gdf, x_start='Start', x_end='Finish', y='Task', color='Status', hover_data=['Assignee','Priority'])
+            fig.update_yaxes(autorange='reversed')
+            fig.update_layout(height=min(700, 120 + 28*len(rows)), margin=dict(l=10,r=10,t=30,b=30), plot_bgcolor='#fff', paper_bgcolor='#fff')
+            today = pd.Timestamp.now().normalize()
+            fig.add_vline(x=today, line_width=2, line_dash='dash', line_color='#0b63d6')
+            st.plotly_chart(fig, use_container_width=True, key=f"gantt-fig-", config={"displayModeBar": False})
 
 with analytics_tab:
     st.subheader("Analytics (Filtered View) ✨")
@@ -1967,11 +2492,13 @@ if '_inspect' in st.session_state:
             st.markdown('<div class="ttm-detail-label">Assignee</div>', unsafe_allow_html=True)
             new_assignee = st.selectbox("Assignee", options=["(none)"]+st.session_state.users, index=0 if task.get('assignee') is None else (st.session_state.users.index(task.get('assignee'))+1 if task.get('assignee') in st.session_state.users else 0), key=f"assignee-{tid}")
             st.markdown('<div class="ttm-detail-label">Reviewer (auto)</div>', unsafe_allow_html=True)
-            new_reviewer = st.selectbox("Reviewer", ["(none)"]+st.session_state.users, index=0 if not task.get('reviewer') else (st.session_state.users.index(task.get('reviewer'))+1 if task.get('reviewer') in st.session_state.users else 0), key=f"reviewer-{tid}")
+            st.text_input("Reviewer", value=task.get('reviewer') or '—', key=f"reviewer-ro-{tid}", disabled=True)
             st.markdown(f"<div class='ttm-detail-label'>Reporter</div>", unsafe_allow_html=True)
             st.markdown(f"<div class='ttm-detail-value'>{task.get('reporter') or '(unknown)'}</div>", unsafe_allow_html=True)
             st.markdown('<div class="ttm-detail-label">Priority</div>', unsafe_allow_html=True)
             new_priority = st.selectbox("Priority", PRIORITIES, index=PRIORITIES.index(task.get('priority')) if task.get('priority') in PRIORITIES else 1, key=f"priority-{tid}")
+            st.markdown('<div class="ttm-detail-label">Start date</div>', unsafe_allow_html=True)
+            new_start = st.date_input("Start date", value=pd.to_datetime(task.get('start_date')).date() if task.get('start_date') else date.today(), key=f"edit-start-date-{tid}")
             st.markdown('<div class="ttm-detail-label">Due date</div>', unsafe_allow_html=True)
             new_due = st.date_input("Due date", value=pd.to_datetime(task.get('due_date')).date() if task.get('due_date') else date.today(), key=f"edit-due-date-{tid}")
             if st.button("💾 Save changes", key=f"save-{tid}"):
@@ -1984,10 +2511,11 @@ if '_inspect' in st.session_state:
                     'status': task.get('status'),
                     'assignee': None if new_assignee == "(none)" else new_assignee,
                     'priority': new_priority,
+                    'start_date': new_start.isoformat(),
                     'due_date': new_due.isoformat(),
                     'history': history,
                     'reporter': current.get('reporter'),
-                    'reviewer': None if new_reviewer == '(none)' else new_reviewer,
+                    # reviewer auto-managed (set when moving Review -> Done)
                 })
                 st.session_state.tasks_cache = load_tasks()
                 st.success("Saved")
