@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import uuid
 import io
 import random
@@ -254,6 +254,26 @@ TIME_WINDOWS = {
 }
 
 
+# Working days helper (Sun–Thu work week)
+def add_workdays_sun_thu(start: date, days: int, include_today: bool = True) -> date:
+    """Add N working days where working days are Sun–Thu (Fri/Sat excluded).
+    Python weekday(): Mon=0..Sun=6. Working set = {6,0,1,2,3}.
+    If include_today is True and start is a working day, today counts as day 1.
+    """
+    if days <= 0:
+        return start
+    working = {6, 0, 1, 2, 3}
+    d = start
+    counted = 0
+    if include_today and d.weekday() in working:
+        counted = 1
+    while counted < days:
+        d = d + timedelta(days=1)
+        if d.weekday() in working:
+            counted += 1
+    return d
+
+
 def load_tasks():
     return tasks_repo.get_all_tasks()
 
@@ -264,6 +284,13 @@ def save_tasks(_tasks):
 
 
 def new_task_dict(title, description, assignee, priority, due_date, estimates, tags, reporter, start_date=None, team=None):
+    # Compute default due date if not provided: 5 working days from today (Sun–Thu)
+    if isinstance(due_date, datetime):
+        due_dt_obj = due_date.date()
+    elif isinstance(due_date, date):
+        due_dt_obj = due_date
+    else:
+        due_dt_obj = add_workdays_sun_thu(date.today(), 5, include_today=True)
     return {
         "id": str(uuid.uuid4()),
         "title": title.strip(),
@@ -275,15 +302,15 @@ def new_task_dict(title, description, assignee, priority, due_date, estimates, t
         "priority": priority,
         "status": "Backlog",
         "created_at": datetime.utcnow().isoformat(),
-        "due_date": due_date.isoformat() if isinstance(due_date, (date, datetime)) else None,
-    "start_date": start_date.isoformat() if isinstance(start_date, (date, datetime)) else None,
+        "due_date": due_dt_obj.isoformat(),
+        "start_date": start_date.isoformat() if isinstance(start_date, (date, datetime)) else None,
         "estimates_hours": estimates,
         "tags": tags,
         "comments": [],
         "history": [
             {"when": datetime.utcnow().isoformat(), "what": "created", "by": reporter or "system"}
         ],
-    "team": team,
+        "team": team,
     }
 
 
@@ -318,9 +345,10 @@ if "selected_team" not in st.session_state:
 # Add a small sample dataset if empty
 if not st.session_state.tasks_cache:
     sample = [
-    new_task_dict("Onboard new hire", "Prepare environment and docs", "Alice", "High", date.today(), 4, ["onboarding"], reporter="System", start_date=date.today(), team=st.session_state.selected_team),
-    new_task_dict("Q3 Roadmap", "Finalize objectives", "Bob", "Medium", date.today(), 8, ["planning"], reporter="System", team=st.session_state.selected_team),
-    new_task_dict("Bug #432: login error", "Intermittent login failures in auth module", "Carol", "Critical", date.today(), 6, ["bug"], reporter="System", team=st.session_state.selected_team),
+        # Pass None for due_date to use 5 working days default
+        new_task_dict("Onboard new hire", "Prepare environment and docs", "Alice", "High", None, 4, ["onboarding"], reporter="System", start_date=date.today(), team=st.session_state.selected_team),
+        new_task_dict("Q3 Roadmap", "Finalize objectives", "Bob", "Medium", None, 8, ["planning"], reporter="System", team=st.session_state.selected_team),
+        new_task_dict("Bug #432: login error", "Intermittent login failures in auth module", "Carol", "Critical", None, 6, ["bug"], reporter="System", team=st.session_state.selected_team),
     ]
     for t in sample:
         tasks_repo.create_task(t)
@@ -1556,7 +1584,14 @@ with board_tab:
                     nt_priority = st.selectbox("Priority", PRIORITIES, index=1, key=f"nt-priority-{status}")
                     nt_has_start = st.checkbox("Has start date", value=False, key=f"nt-has-start-{status}")
                     nt_start = st.date_input("Start", value=date.today(), key=f"nt-start-{status}") if nt_has_start else None
-                    nt_due = st.date_input("Due", value=date.today(), key=f"nt-due-{status}")
+                    due_key = f"nt-due-{status}"
+                    # One-time upgrade to new default logic across reruns
+                    if st.session_state.get('nt_defaults_ver', 0) < 1:
+                        st.session_state[due_key] = add_workdays_sun_thu(date.today(), 5, include_today=True)
+                        st.session_state['nt_defaults_ver'] = 1
+                    elif due_key not in st.session_state:
+                        st.session_state[due_key] = add_workdays_sun_thu(date.today(), 5, include_today=True)
+                    nt_due = st.date_input("Due", key=due_key)
                     nt_est = st.number_input("Estimate (h)", min_value=0.0, value=1.0, step=0.5, key=f"nt-est-{status}")
                     nt_tags_raw = st.text_input("Tags (comma, optional)", key=f"nt-tags-{status}")
                     st.caption("Reviewer will be auto-set when moving from Review → Done.")

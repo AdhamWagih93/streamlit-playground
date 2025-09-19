@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import uuid
 import io
 import random
@@ -254,6 +254,26 @@ TIME_WINDOWS = {
 }
 
 
+# Working days helper (Sun–Thu work week)
+def add_workdays_sun_thu(start: date, days: int, include_today: bool = True) -> date:
+    """Add N working days where working days are Sun–Thu (Fri/Sat excluded).
+    Python weekday(): Mon=0..Sun=6. Working set = {6,0,1,2,3}.
+    If include_today is True and start is a working day, today counts as day 1.
+    """
+    if days <= 0:
+        return start
+    working = {6, 0, 1, 2, 3}
+    d = start
+    counted = 0
+    if include_today and d.weekday() in working:
+        counted = 1
+    while counted < days:
+        d = d + timedelta(days=1)
+        if d.weekday() in working:
+            counted += 1
+    return d
+
+
 def load_tasks():
     return tasks_repo.get_all_tasks()
 
@@ -264,6 +284,13 @@ def save_tasks(_tasks):
 
 
 def new_task_dict(title, description, assignee, priority, due_date, estimates, tags, reporter, start_date=None, team=None):
+    # Compute default due date if not provided: 5 working days from today (Sun–Thu)
+    if isinstance(due_date, datetime):
+        due_dt_obj = due_date.date()
+    elif isinstance(due_date, date):
+        due_dt_obj = due_date
+    else:
+        due_dt_obj = add_workdays_sun_thu(date.today(), 5, include_today=True)
     return {
         "id": str(uuid.uuid4()),
         "title": title.strip(),
@@ -275,15 +302,15 @@ def new_task_dict(title, description, assignee, priority, due_date, estimates, t
         "priority": priority,
         "status": "Backlog",
         "created_at": datetime.utcnow().isoformat(),
-        "due_date": due_date.isoformat() if isinstance(due_date, (date, datetime)) else None,
-    "start_date": start_date.isoformat() if isinstance(start_date, (date, datetime)) else None,
+        "due_date": due_dt_obj.isoformat(),
+        "start_date": start_date.isoformat() if isinstance(start_date, (date, datetime)) else None,
         "estimates_hours": estimates,
         "tags": tags,
         "comments": [],
         "history": [
             {"when": datetime.utcnow().isoformat(), "what": "created", "by": reporter or "system"}
         ],
-    "team": team,
+        "team": team,
     }
 
 
@@ -318,9 +345,10 @@ if "selected_team" not in st.session_state:
 # Add a small sample dataset if empty
 if not st.session_state.tasks_cache:
     sample = [
-    new_task_dict("Onboard new hire", "Prepare environment and docs", "Alice", "High", date.today(), 4, ["onboarding"], reporter="System", start_date=date.today(), team=st.session_state.selected_team),
-    new_task_dict("Q3 Roadmap", "Finalize objectives", "Bob", "Medium", date.today(), 8, ["planning"], reporter="System", team=st.session_state.selected_team),
-    new_task_dict("Bug #432: login error", "Intermittent login failures in auth module", "Carol", "Critical", date.today(), 6, ["bug"], reporter="System", team=st.session_state.selected_team),
+        # Pass None for due_date to use 5 working days default
+        new_task_dict("Onboard new hire", "Prepare environment and docs", "Alice", "High", None, 4, ["onboarding"], reporter="System", start_date=date.today(), team=st.session_state.selected_team),
+        new_task_dict("Q3 Roadmap", "Finalize objectives", "Bob", "Medium", None, 8, ["planning"], reporter="System", team=st.session_state.selected_team),
+        new_task_dict("Bug #432: login error", "Intermittent login failures in auth module", "Carol", "Critical", None, 6, ["bug"], reporter="System", team=st.session_state.selected_team),
     ]
     for t in sample:
         tasks_repo.create_task(t)
@@ -776,7 +804,7 @@ def make_card_html(t):
     base_cls = f"ttm-task-card ttm-card-boost"
     if overdue: base_cls += ' ttm-overdue'
     if status == 'Deferred': base_cls += ' ttm-deferred-card'
-    link_href = f"?ticket={t.get('id')}"
+    # Title no longer navigates via URL; deep dive opens via a dedicated button below the card
     # Build meta mini-grid (2 columns)
     meta_rows = [
         ("Reporter", reporter),
@@ -834,7 +862,7 @@ def make_card_html(t):
     card_html = (
         f"<div class='{base_cls}' style='{priority_bg_inline}'>"
         f"{overdue_badge}<div class='ttm-title-row'>"
-        f"<div class='ttm-title-text'><a href='{link_href}' style='text-decoration:none;color:inherit;'>{t.get('title')}</a></div>"
+        f"<div class='ttm-title-text'>{t.get('title')}</div>"
         f"{priority_badge}{status_pill}</div>"
         f"<div class='ttm-mini-sep'></div>"
         f"{tag_html}{meta_html}{checklist_html}{comments_html}"
@@ -1457,8 +1485,16 @@ elif 'active_ticket' in st.session_state:
 
 if active_ticket_id:
     task_obj = next((t for t in st.session_state.get('tasks_cache', []) if t.get('id') == active_ticket_id), None)
-    ticket_detail_fragment(task_obj)
-    st.stop()
+    # Prefer in-page modal/dialog overlay when available
+    if hasattr(st, "dialog"):
+        @st.dialog("Task Details", width="large")
+        def _ticket_dialog():
+            ticket_detail_fragment(task_obj)
+        _ticket_dialog()
+    else:
+        # Fallback: render full detail and stop page (no URL change)
+        ticket_detail_fragment(task_obj)
+        st.stop()
 
 
 board_tab, queue_tab, gantt_tab, analytics_tab, tags_tab, timeline_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs([
@@ -1556,7 +1592,14 @@ with board_tab:
                     nt_priority = st.selectbox("Priority", PRIORITIES, index=1, key=f"nt-priority-{status}")
                     nt_has_start = st.checkbox("Has start date", value=False, key=f"nt-has-start-{status}")
                     nt_start = st.date_input("Start", value=date.today(), key=f"nt-start-{status}") if nt_has_start else None
-                    nt_due = st.date_input("Due", value=date.today(), key=f"nt-due-{status}")
+                    due_key = f"nt-due-{status}"
+                    # One-time upgrade to new default logic across reruns
+                    if st.session_state.get('nt_defaults_ver', 0) < 1:
+                        st.session_state[due_key] = add_workdays_sun_thu(date.today(), 5, include_today=True)
+                        st.session_state['nt_defaults_ver'] = 1
+                    elif due_key not in st.session_state:
+                        st.session_state[due_key] = add_workdays_sun_thu(date.today(), 5, include_today=True)
+                    nt_due = st.date_input("Due", key=due_key)
                     nt_est = st.number_input("Estimate (h)", min_value=0.0, value=1.0, step=0.5, key=f"nt-est-{status}")
                     nt_tags_raw = st.text_input("Tags (comma, optional)", key=f"nt-tags-{status}")
                     st.caption("Reviewer will be auto-set when moving from Review → Done.")
@@ -1588,9 +1631,14 @@ with board_tab:
                 st.markdown(card_html, unsafe_allow_html=True)
                 # Button bar: wrap in container for styling
                 #st.markdown('<div class="ttm-btn-row">', unsafe_allow_html=True)
-                btn_cols = st.columns([1,1,1,1,1,1,1,1,1])
-                # Prev button (move left) --------------------------------------------------
+                btn_cols = st.columns([1,1,1,1,1,1,1,1,1,1])
+                # Open details (deep dive) ----------------------------------------------
                 with btn_cols[0]:
+                    if st.button("🔎", help="Open details", key=f"open-detail-{tid}"):
+                        st.session_state.active_ticket = tid
+                        st.rerun()
+                # Prev button (move left) --------------------------------------------------
+                with btn_cols[1]:
                     if idx > 0:
                         prev_status = statuses[idx-1]
                         if prev_status not in ('Deferred','Closed'):  # do not move into optional columns via Prev
@@ -1599,7 +1647,7 @@ with board_tab:
                                 st.session_state.tasks_cache = load_tasks()
                                 st.rerun()
                 # Priority raise -----------------------------------------------------------
-                with btn_cols[1]:
+                with btn_cols[2]:
                     cur_p = t.get('priority')
                     if cur_p in PRIORITIES:
                         pi = PRIORITIES.index(cur_p)
@@ -1615,7 +1663,7 @@ with board_tab:
                         else:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # Checklist popover -------------------------------------------------------
-                with btn_cols[2]:
+                with btn_cols[3]:
                     with st.popover("", icon="☑️", width="stretch"):
                         task_live = tasks_repo.get_task(tid) or t
                         st.markdown("### Checklist")
@@ -1652,7 +1700,7 @@ with board_tab:
                             st.session_state.tasks_cache = load_tasks()
                             st.rerun()
                 # Comments popover --------------------------------------------------------
-                with btn_cols[3]:
+                with btn_cols[4]:
                     with st.popover("", icon="💬"):
                         task_live = tasks_repo.get_task(tid) or t
                         st.markdown("### Comments")
@@ -1676,7 +1724,7 @@ with board_tab:
                             st.session_state.tasks_cache = load_tasks()
                             st.rerun()
                 # Pick Up (assign to me if unassigned) -----------------------------------
-                with btn_cols[4]:
+                with btn_cols[5]:
                     current_user = st.session_state.get('username') or st.session_state.get('current_user')
                     if (t.get('assignee') in (None, '', 'Unassigned')) and current_user:
                         if st.button("🎯", help="Pick up (assign to me)", key=f"pickup-{tid}"):
@@ -1689,7 +1737,7 @@ with board_tab:
                     else:
                         st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # History (new) -----------------------------------------------------------
-                with btn_cols[5]:
+                with btn_cols[6]:
                     with st.popover("", icon="🕓"):
                         task_live_hist = tasks_repo.get_task(tid) or t
                         st.markdown(f"### History — {task_live_hist.get('title')}")
@@ -1701,7 +1749,7 @@ with board_tab:
                                 st.markdown(f"- `{ev.get('what')}` <span style='color:#51658a;font-size:0.6rem;'>· {ev.get('when')} · {ev.get('by','?')}</span>", unsafe_allow_html=True)
                         st.caption("Latest 150 events shown.")
                 # Defer (trash) -----------------------------------------------------------
-                with btn_cols[6]:
+                with btn_cols[7]:
                     if t.get('status') != 'Deferred':
                         with st.popover("", icon="❌", use_container_width=False):
                             st.markdown(f"**Defer Task?**")
@@ -1723,7 +1771,7 @@ with board_tab:
                         st.markdown("<div style='text-align:center;opacity:.4;'>—</div>", unsafe_allow_html=True)
 
                 # Priority lower -----------------------------------------------------------
-                with btn_cols[7]:
+                with btn_cols[8]:
                     cur_p = t.get('priority')
                     if cur_p in PRIORITIES:
                         pi = PRIORITIES.index(cur_p)
@@ -1739,7 +1787,7 @@ with board_tab:
                         else:
                             st.markdown("<div style='text-align:center;opacity:.35;'>—</div>", unsafe_allow_html=True)
                 # Next button --------------------------------------------------------------
-                with btn_cols[8]:
+                with btn_cols[9]:
                     can_show_next = idx < len(statuses)-1
                     if t.get('status') == 'In Progress':
                         cl = t.get('checklist') or []
@@ -1891,6 +1939,10 @@ with queue_tab:
                 """,
                 unsafe_allow_html=True
             )
+            # Quick open button for the top recommendation (deep dive)
+            if st.button("Open Top Task Details", key="queue-open-top"):
+                st.session_state.active_ticket = top['id']
+                st.rerun()
             # Detailed table / list
             exp = st.expander("Priority Queue (Detailed)", expanded=True)
             with exp:
@@ -1913,7 +1965,7 @@ with queue_tab:
                     list_items.append(
                         f"<div style='display:grid;grid-template-columns:40px 1fr 85px 85px 120px 70px;gap:10px;align-items:center;padding:8px 12px;border:1px solid #d6e2ec;border-radius:14px;background:linear-gradient(145deg,#ffffff,#f4f8fb);margin-bottom:8px;font-size:.62rem;font-weight:600;color:#1d3557;'>"+
                         f"<div style='font-size:.7rem;font-weight:700;color:#0b63d6;'>{i}</div>"+
-                        f"<div style='font-size:.72rem;font-weight:650;color:#0b2140;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'><a href='?ticket={r['id']}' style='color:#0b2140;text-decoration:none;'>{r['title']}</a></div>"+
+                        f"<div style='font-size:.72rem;font-weight:650;color:#0b2140;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>{r['title']}</div>"+
                         f"<div>{r['priority']}</div>"+
                         f"<div>{r['status']}</div>"+
                         f"<div>{due_html}</div>"+
@@ -1927,6 +1979,13 @@ with queue_tab:
                     </div>
                     """ + ''.join(list_items), unsafe_allow_html=True
                 )
+                # Open any task from the queue via a selector (no URL change)
+                id_to_title = {r['id']: r['title'] for r in rows}
+                if id_to_title:
+                    sel_id = st.selectbox("Open details for", options=list(id_to_title.keys()), format_func=lambda k: id_to_title.get(k, str(k)), key="queue-open-sel")
+                    if st.button("Open Details", key="queue-open-btn"):
+                        st.session_state.active_ticket = sel_id
+                        st.rerun()
             st.caption("Queue respects current filters and view mode. Scores are heuristic (priority, urgency, progress, staleness).")
 
 with gantt_tab:
