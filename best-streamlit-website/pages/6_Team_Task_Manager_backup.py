@@ -796,19 +796,15 @@ def make_card_html(t):
     # Checklist embedded preview (non-interactive inside pure HTML; interactive checkboxes rendered separately beneath card)
     checklist_html = ''
     if total_ct:
-        max_show = 6
-        items_html_parts = []
-        for i, ci in enumerate(checklist[:max_show], start=1):
-            txt = (ci.get('text') or '').strip()
-            done_flag = ci.get('done', False)
-            cls = 'done' if done_flag else ''
-            items_html_parts.append(f"<li class='{cls}'><span class='idx'>{i}</span><span class='txt'>{txt}</span></li>")
-        if total_ct > max_show:
-            items_html_parts.append(f"<li class='more'><span class='txt'>+{total_ct-max_show} more…</span></li>")
+        # Compact summary line; full details available via ☑️ popover buttons already present below the card
+        pct_disp = f"{pct}%" if total_ct else ''
         checklist_html = (
-            "<div class='ttm-cl-wrap'>"
-            f"<div class='ttm-cl-head'><span>Checklist</span><span class='badge'>{done_ct}/{total_ct}</span></div>"
-            f"<ul class='ttm-cl-list'>{''.join(items_html_parts)}</ul>"
+            "<div class='ttm-cl-wrap' style='padding:6px 8px 6px 8px;'>"
+            f"<div class='ttm-cl-head' style='margin:0;display:flex;align-items:center;justify-content:space-between;'>"
+            f"<span>Checklist</span><span class='badge'>{done_ct}/{total_ct} {pct_disp}</span>"
+            "</div>"
+            f"<div class='ttm-progress' style='margin-top:4px;'><div class='ttm-progress-bar'><div class='ttm-progress-fill' style='width:{pct}%;'></div></div></div>"
+            "<div style='font-size:.48rem;color:#51658a;margin-top:4px;'>Open via ☑️ icon for details</div>"
             "</div>"
         )
     # Comments preview (last 4 newest)
@@ -816,30 +812,22 @@ def make_card_html(t):
     comments = (t.get('comments') or [])
     if comments:
         total_comments = len(comments)
-        # newest first
-        newest = comments[::-1][:4]
-        c_items = []
-        for c in newest:
-            text = (c.get('text') or '').strip()
-            if len(text) > 85:
-                text = text[:82].rstrip() + '…'
-            by = c.get('by','?')
-            when = c.get('when','')
-            # compact date (YYYY-MM-DD from iso) if iso-like
-            if 'T' in when:
-                try:
-                    when_short = when.split('T')[0]
-                except Exception:
-                    when_short = when
-            else:
-                when_short = when[:10]
-            c_items.append(f"<li><div>{text}</div><span class='meta'><span class='by'>{by}</span><span>{when_short}</span></span></li>")
-        if total_comments > 4:
-            c_items.append(f"<li class='more'>+{total_comments-4} more…</li>")
+        latest = comments[0] if comments else None
+        latest_by = (latest or {}).get('by','?')
+        latest_when = (latest or {}).get('when','')
+        if 'T' in latest_when:
+            try:
+                latest_when_short = latest_when.split('T')[0]
+            except Exception:
+                latest_when_short = latest_when
+        else:
+            latest_when_short = latest_when[:10]
         comments_html = (
-            "<div class='ttm-comments-wrap'>"
-            f"<div class='ttm-comments-head'><span>Comments</span><span class='badge'>{total_comments}</span></div>"
-            f"<ul class='ttm-comments-list'>{''.join(c_items)}</ul>"
+            "<div class='ttm-comments-wrap' style='padding:6px 8px 6px 8px;'>"
+            f"<div class='ttm-comments-head' style='margin:0;display:flex;align-items:center;justify-content:space-between;'>"
+            f"<span>Comments</span><span class='badge'>{total_comments}</span></div>"
+            f"<div style='font-size:.50rem;margin-top:4px;color:#20374f;'>Latest: <strong>{latest_by}</strong> <span style='color:#5c7490;'>@ {latest_when_short}</span></div>"
+            "<div style='font-size:.48rem;color:#51658a;margin-top:4px;'>Open via 💬 icon for details</div>"
             "</div>"
         )
     # Final HTML (MUST end with single closing </div> for board slicing logic)
@@ -849,7 +837,7 @@ def make_card_html(t):
         f"<div class='ttm-title-text'><a href='{link_href}' style='text-decoration:none;color:inherit;'>{t.get('title')}</a></div>"
         f"{priority_badge}{status_pill}</div>"
         f"<div class='ttm-mini-sep'></div>"
-        f"{tag_html}{meta_html}{progress_html}{checklist_html}{comments_html}"
+        f"{tag_html}{meta_html}{checklist_html}{comments_html}"
         f"</div>"
     )
     return card_html
