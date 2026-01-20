@@ -3,9 +3,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import sys
+
 import os
 
 import plotly.express as px
+import pandas as pd
 import streamlit as st
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -13,6 +16,132 @@ from src.theme import set_theme
 
 
 PAGE_TITLE = "Kubernetes"
+
+
+_PLOTLY_TEMPLATE = "plotly_white"
+
+
+def _style_fig(fig, *, height: int = 320):
+    fig.update_layout(
+        template=_PLOTLY_TEMPLATE,
+        height=height,
+        margin=dict(l=10, r=10, t=55, b=10),
+        font=dict(family="Inter, Segoe UI, Arial, sans-serif", size=13, color="#0f172a"),
+        title=dict(x=0.02, xanchor="left", font=dict(size=16, family="Inter, Segoe UI, Arial, sans-serif")),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+
+    # A pleasant default palette (matches the page gradient vibes).
+    try:
+        fig.update_layout(colorway=px.colors.qualitative.Set2)
+    except Exception:  # noqa: BLE001
+        pass
+
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(15,23,42,0.08)", zeroline=False)
+    return fig
+
+
+def _kpi_card(label: str, value: Any, *, tone: str = "neutral", help_text: str = "") -> None:
+    """Render a colorful KPI card.
+
+    tone: ok|warn|bad|info|neutral
+    """
+
+    tone_map = {
+        "ok": {"bg": "rgba(34,197,94,0.12)", "border": "rgba(34,197,94,0.35)", "accent": "#16a34a"},
+        "warn": {"bg": "rgba(245,158,11,0.14)", "border": "rgba(245,158,11,0.38)", "accent": "#d97706"},
+        "bad": {"bg": "rgba(239,68,68,0.12)", "border": "rgba(239,68,68,0.35)", "accent": "#dc2626"},
+        "info": {"bg": "rgba(14,165,233,0.12)", "border": "rgba(14,165,233,0.35)", "accent": "#0284c7"},
+        "neutral": {"bg": "rgba(148,163,184,0.10)", "border": "rgba(148,163,184,0.35)", "accent": "#334155"},
+    }
+    t = tone_map.get(tone, tone_map["neutral"])
+
+    html = f"""
+    <div class="k8s-kpi" style="background:{t['bg']}; border:1px solid {t['border']};">
+      <div class="k8s-kpi-label">{label}</div>
+      <div class="k8s-kpi-value" style="color:{t['accent']};">{value}</div>
+      {f"<div class='k8s-kpi-help'>{help_text}</div>" if help_text else ""}
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _table_explorer(
+    title: str,
+    rows: List[Dict[str, Any]],
+    *,
+    default_height: int = 380,
+    key_prefix: str,
+    default_sort_col: Optional[str] = None,
+) -> None:
+    """Dynamic table view: search, column picker, row limit, downloads."""
+
+    st.markdown(f"<div class='k8s-section-title'>{title}</div>", unsafe_allow_html=True)
+
+    if not rows:
+        st.info("No rows.")
+        return
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.info("No rows.")
+        return
+
+    # Compactly stringify dict/list columns for display
+    for col in df.columns:
+        if df[col].apply(lambda v: isinstance(v, (dict, list))).any():
+            df[col] = df[col].apply(lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        q = st.text_input("Search", value="", key=f"{key_prefix}_q", help="Filters rows by substring across all visible columns")
+    with c2:
+        limit = st.selectbox("Rows", options=[50, 100, 250, 500, 1000], index=2, key=f"{key_prefix}_limit")
+    with c3:
+        height = st.selectbox("Height", options=[260, 320, 380, 460, 560], index=2, key=f"{key_prefix}_height")
+
+    all_cols = list(df.columns)
+    default_cols = all_cols[: min(len(all_cols), 10)]
+    cols = st.multiselect("Columns", options=all_cols, default=default_cols, key=f"{key_prefix}_cols")
+    if cols:
+        df = df[cols]
+
+    if q.strip():
+        ql = q.strip().lower()
+        mask = df.astype(str).apply(lambda s: s.str.lower().str.contains(ql, na=False))
+        df = df[mask.any(axis=1)]
+
+    if default_sort_col and default_sort_col in df.columns:
+        try:
+            df = df.sort_values(default_sort_col)
+        except Exception:  # noqa: BLE001
+            pass
+
+    df_view = df.head(int(limit))
+    st.dataframe(df_view, use_container_width=True, hide_index=True, height=int(height))
+
+    dcol1, dcol2 = st.columns(2)
+    with dcol1:
+        st.download_button(
+            "Download CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{key_prefix}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"{key_prefix}_dl_csv",
+        )
+    with dcol2:
+        st.download_button(
+            "Download JSON",
+            data=df.to_json(orient="records").encode("utf-8"),
+            file_name=f"{key_prefix}.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"{key_prefix}_dl_json",
+        )
 
 
 def _get_server_path() -> str:
@@ -39,14 +168,20 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
 
     sig = json.dumps(env, sort_keys=True)
     if force_reload or st.session_state.get("_k8s_tools_sig") != sig or "_k8s_tools" not in st.session_state:
+        # Merge overrides onto the current process environment.
+        # Some subprocess launchers treat provided env as a full replacement;
+        # keeping the base env avoids Windows/Python startup surprises.
+        subprocess_env = {**os.environ, **env}
+
+        # Use the legacy entrypoint file which ensures the project root is on sys.path.
         server_path = _get_server_path()
         client = MultiServerMCPClient(
             connections={
                 "kubernetes": {
                     "transport": "stdio",
-                    "command": "python",
+                    "command": sys.executable,
                     "args": [server_path],
-                    "env": env,
+                    "env": subprocess_env,
                 }
             }
         )
@@ -124,6 +259,23 @@ def _top_counts(items: List[Dict[str, Any]], key: str, top_n: int = 10) -> List[
     return sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
 
 
+def _top_n_with_other(counts: Dict[str, int], top_n: int = 12, other_label: str = "Other") -> List[Tuple[str, int]]:
+    items = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    head = items[:top_n]
+    tail = items[top_n:]
+    other = sum(v for _, v in tail)
+    if other > 0:
+        head.append((other_label, other))
+    return head
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _pod_phase_metrics(pods: List[Dict[str, Any]]) -> Dict[str, Any]:
     phase_counts = _count_by(pods, "phase")
     total = sum(phase_counts.values())
@@ -165,10 +317,15 @@ def _extract_table_payload(result: Any) -> Tuple[Optional[str], Optional[List[Di
     payload = result.get("result") if isinstance(result.get("result"), dict) else None
     if payload is None:
         return None, None
-    for key in ("pods", "nodes", "namespaces", "deployments", "services", "events"):
+    for key in ("pods", "nodes", "namespaces", "deployments", "services", "events", "service_accounts"):
         if key in payload and isinstance(payload[key], list):
             return key, payload[key]
     return None, None
+
+
+def _stream_text(text: str):
+    for line in (text or "").splitlines(True):
+        yield line
 
 
 def main() -> None:
@@ -178,14 +335,28 @@ def main() -> None:
     st.markdown(
         """
         <style>
+        @keyframes k8sGradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        @keyframes k8sFadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .k8s-hero, .k8s-card { animation: none !important; transition: none !important; }
+        }
         .k8s-layout { max-width: 1200px; margin: 0 auto; }
         .k8s-hero {
-            background: linear-gradient(120deg, #0b63d6, #22c55e, #0ea5e9);
+            background: linear-gradient(120deg, #0b63d6, #22c55e, #0ea5e9, #a855f7);
+            background-size: 300% 300%;
             border-radius: 18px;
             padding: 1.7rem 1.6rem 1.4rem 1.6rem;
             margin-bottom: 1.2rem;
             color: #fff;
             box-shadow: 0 12px 32px rgba(15, 23, 42, 0.35);
+            animation: k8sGradientShift 10s ease-in-out infinite;
         }
         .k8s-hero-title {
             font-size: 1.7rem;
@@ -201,6 +372,12 @@ def main() -> None:
             box-shadow: 0 6px 24px rgba(15, 23, 42, 0.10);
             border: 1px solid #d3ddec;
             margin-bottom: 1.0rem;
+            animation: k8sFadeIn 260ms ease-out;
+            transition: transform 160ms ease, box-shadow 160ms ease;
+        }
+        .k8s-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 34px rgba(15, 23, 42, 0.14);
         }
         .k8s-section-title {
             font-size: 1.1rem;
@@ -218,6 +395,40 @@ def main() -> None:
             margin-right: 0.35rem;
             margin-bottom: 0.35rem;
         }
+        .k8s-kpi {
+            border-radius: 16px;
+            padding: 0.75rem 0.85rem;
+            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+        }
+        .k8s-kpi-label {
+            font-size: 0.82rem;
+            opacity: 0.85;
+            letter-spacing: 0.02em;
+            margin-bottom: 0.25rem;
+        }
+        .k8s-kpi-value {
+            font-size: 1.35rem;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .k8s-kpi-help {
+            font-size: 0.78rem;
+            opacity: 0.85;
+            margin-top: 0.25rem;
+        }
+        .k8s-health-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.55rem;
+        }
+        .k8s-health-item {
+            border-radius: 14px;
+            padding: 0.55rem 0.65rem;
+            border: 1px solid rgba(148,163,184,0.35);
+            background: rgba(248,250,252,0.65);
+        }
+        .k8s-health-title { font-weight: 700; font-size: 0.9rem; }
+        .k8s-health-meta { opacity: 0.85; font-size: 0.78rem; margin-top: 0.15rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -254,9 +465,9 @@ def main() -> None:
 
         col_a, col_b = st.columns(2)
         with col_a:
-            reload_tools = st.button("Reload tools", type="primary", use_container_width=True)
+            reload_tools = st.button("Reload tools", type="primary", use_container_width=True, key="k8s_reload_tools")
         with col_b:
-            refresh = st.button("Refresh data", use_container_width=True)
+            refresh = st.button("Refresh data", use_container_width=True, key="k8s_refresh_data")
 
         st.caption("All Kubernetes interactions are executed through the MCP server.")
 
@@ -266,6 +477,12 @@ def main() -> None:
         tools = _get_tools(env, force_reload=reload_tools)
     except Exception as exc:  # noqa: BLE001
         st.error(f"Failed to load Kubernetes MCP tools: {exc}")
+        with st.expander("Debug details", expanded=False):
+            st.write("Command:")
+            st.code(f"{sys.executable} -m src.ai.mcp_servers.kubernetes.mcp")
+            st.write("Env overrides:")
+            st.json(env)
+            st.exception(exc)
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
@@ -273,23 +490,29 @@ def main() -> None:
     if refresh or "k8s_snapshot" not in st.session_state:
         with st.spinner("Fetching cluster data via MCP…"):
             snapshot: Dict[str, Any] = {}
+            snapshot["health"] = _invoke_tool(tools, "health_check", {})
+            snapshot["stats"] = _invoke_tool(tools, "get_cluster_stats", {})
             snapshot["overview"] = _invoke_tool(tools, "get_cluster_overview", {})
             snapshot["namespaces"] = _invoke_tool(tools, "list_namespaces", {})
             snapshot["nodes"] = _invoke_tool(tools, "list_nodes", {})
             snapshot["pods"] = _invoke_tool(tools, "list_pods", {})
             snapshot["deployments"] = _invoke_tool(tools, "list_deployments_all", {})
             snapshot["services"] = _invoke_tool(tools, "list_services_all", {})
+            snapshot["service_accounts"] = _invoke_tool(tools, "list_service_accounts_all", {})
             snapshot["events"] = _invoke_tool(tools, "list_events_all", {"limit": 250})
             st.session_state.k8s_snapshot = snapshot
 
     snapshot = st.session_state.get("k8s_snapshot", {})
 
+    health = snapshot.get("health")
+    stats = snapshot.get("stats")
     overview = snapshot.get("overview")
     namespaces = _as_list(snapshot.get("namespaces"), "namespaces")
     nodes = _as_list(snapshot.get("nodes"), "nodes")
     pods = _as_list(snapshot.get("pods"), "pods")
     deployments = _as_list(snapshot.get("deployments"), "deployments")
     services = _as_list(snapshot.get("services"), "services")
+    service_accounts = _as_list(snapshot.get("service_accounts"), "service_accounts")
     events = _as_list(snapshot.get("events"), "events")
 
     st.markdown("<div class='k8s-card'>", unsafe_allow_html=True)
@@ -298,15 +521,83 @@ def main() -> None:
     with col1:
         st.markdown("<div class='k8s-section-title'>Cluster Summary</div>", unsafe_allow_html=True)
 
+        # Health checks (reachability, version, basic API calls)
+        if isinstance(health, dict) and health.get("ok"):
+            version = health.get("version") if isinstance(health.get("version"), dict) else {}
+            ver_str = version.get("gitVersion") or "(unknown)"
+            st.markdown("<div class='k8s-pill'>Health</div>", unsafe_allow_html=True)
+            hcol_a, hcol_b, hcol_c = st.columns([1, 1, 1])
+            with hcol_a:
+                _kpi_card("Reachable", "Yes", tone="ok", help_text=ver_str)
+            with hcol_b:
+                ms = version.get("ms")
+                _kpi_card("API version", ver_str, tone="info", help_text=f"{ms} ms" if ms else "")
+            with hcol_c:
+                checks = health.get("checks") if isinstance(health.get("checks"), list) else []
+                ok_checks = len([c for c in checks if isinstance(c, dict) and c.get("ok")])
+                _kpi_card("Checks", f"{ok_checks}/{len(checks)}", tone="ok" if ok_checks == len(checks) else "warn")
+
+            checks = health.get("checks") if isinstance(health.get("checks"), list) else []
+            if checks:
+                st.markdown("<div class='k8s-health-grid'>", unsafe_allow_html=True)
+                for c in checks:
+                    if not isinstance(c, dict):
+                        continue
+                    name = c.get("name")
+                    ok = bool(c.get("ok"))
+                    ms = c.get("ms")
+                    err = c.get("error")
+                    badge = "ok" if ok else "bad"
+                    meta = f"{ms} ms" if ms is not None else ""
+                    if err:
+                        meta = (meta + " • " if meta else "") + str(err)[:120]
+                    st.markdown(
+                        f"""
+                        <div class='k8s-health-item'>
+                          <div class='k8s-health-title'>{name} <span style='color:{'#16a34a' if ok else '#dc2626'};'>●</span></div>
+                          <div class='k8s-health-meta'>{meta}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+        elif health is not None:
+            _render_tool_error("Health check failed", health)
+
         if isinstance(overview, dict) and overview.get("ok"):
             pods_metrics = _pod_phase_metrics(pods)
             dep_metrics = _deployment_health(deployments)
 
-            mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-            mcol1.metric("Nodes", len(nodes))
-            mcol2.metric("Namespaces", len(namespaces))
-            mcol3.metric("Pods", pods_metrics.get("total", 0))
-            mcol4.metric("Deployments", len(deployments))
+            # Prefer server-side stats when available (RBAC-resilient), fall back to local counts.
+            counts = stats.get("counts") if isinstance(stats, dict) and isinstance(stats.get("counts"), dict) else {}
+            nodes_count = counts.get("nodes") if counts else len(nodes)
+            ns_count = counts.get("namespaces") if counts else len(namespaces)
+            pods_count = counts.get("pods") if counts else pods_metrics.get("total", 0)
+            deploy_count = counts.get("deployments") if counts else len(deployments)
+            svc_count = counts.get("services") if counts else len(services)
+            sa_count = counts.get("serviceAccounts") if counts else len(service_accounts)
+
+            not_ready_nodes = 0
+            for node in nodes:
+                ready = False
+                for cond in node.get("conditions", []):
+                    if cond.get("type") == "Ready" and cond.get("status") == "True":
+                        ready = True
+                        break
+                if not ready:
+                    not_ready_nodes += 1
+
+            bad_pods = pods_metrics.get("failed", 0)
+
+            kcol1, kcol2, kcol3, kcol4 = st.columns(4)
+            with kcol1:
+                _kpi_card("Nodes", nodes_count if nodes_count is not None else "–", tone="warn" if not_ready_nodes else "info", help_text=f"NotReady: {not_ready_nodes}")
+            with kcol2:
+                _kpi_card("Namespaces", ns_count if ns_count is not None else "–", tone="info")
+            with kcol3:
+                _kpi_card("Pods", pods_count if pods_count is not None else "–", tone="bad" if bad_pods else "info", help_text=f"Failed: {bad_pods}")
+            with kcol4:
+                _kpi_card("Deployments", deploy_count if deploy_count is not None else "–", tone="info")
 
             st.markdown(
                 """
@@ -314,24 +605,44 @@ def main() -> None:
                 <span class='k8s-pill'>Pending</span>
                 <span class='k8s-pill'>Failed</span>
                 <span class='k8s-pill'>Services</span>
+                <span class='k8s-pill'>Service Accounts</span>
                 """,
                 unsafe_allow_html=True,
             )
 
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Running pods", pods_metrics["running"])
-            s2.metric("Pending pods", pods_metrics["pending"])
-            s3.metric("Failed pods", pods_metrics["failed"])
-            s4.metric("Services", len(services))
+            s1, s2, s3, s4, s5, s6 = st.columns(6)
+            with s1:
+                _kpi_card("Running", pods_metrics["running"], tone="ok")
+            with s2:
+                _kpi_card("Pending", pods_metrics["pending"], tone="warn" if pods_metrics["pending"] else "neutral")
+            with s3:
+                _kpi_card("Failed", pods_metrics["failed"], tone="bad" if pods_metrics["failed"] else "neutral")
+            with s4:
+                _kpi_card("Services", svc_count if svc_count is not None else "–", tone="info")
+            with s5:
+                _kpi_card("Service Accts", sa_count if sa_count is not None else "–", tone="info")
+            with s6:
+                _kpi_card("Events", len(events), tone="neutral")
+
+            if not_ready_nodes > 0 or pods_metrics.get("failed", 0) > 0:
+                st.warning(f"Potential issues detected: {not_ready_nodes} NotReady node(s), {pods_metrics.get('failed', 0)} Failed pod(s).")
+            else:
+                st.info("No obvious issues detected (basic checks).")
 
             st.caption(f"Deployment readiness: {dep_metrics['ready']}/{dep_metrics['desired']} ready ({dep_metrics['pct']:.1f}%)")
+
+            if isinstance(stats, dict) and stats.get("errors"):
+                with st.expander("Stats warnings (RBAC/permissions)", expanded=False):
+                    st.json(stats.get("errors"))
         else:
             _render_tool_error("Cluster overview failed", overview)
 
     with col2:
         st.markdown("<div class='k8s-section-title'>Quick Links</div>", unsafe_allow_html=True)
-        st.write("Terminal is available as a separate page: **Kubernetes Terminal**.")
-        st.write("Use the tabs below for dashboards, explorer views, and actions.")
+        st.write("Use the tabs below for dashboards, explorer views, actions, and a kubectl-like terminal.")
+        if isinstance(health, dict) and health.get("checks"):
+            with st.expander("Health check details", expanded=False):
+                st.json(health)
 
     tabs = st.tabs([
         "Overview",
@@ -361,17 +672,46 @@ def main() -> None:
                 labels={"x": "Phase", "y": "Pods"},
                 title="Pods by Phase",
             )
+            fig = _style_fig(fig)
             st.plotly_chart(fig, use_container_width=True)
 
-            top_ns = _top_counts(pods, "namespace", top_n=12)
+            ns_counts = _count_by(pods, "namespace")
+            top_ns = _top_n_with_other(ns_counts, top_n=12)
             if top_ns:
                 fig2 = px.bar(
-                    x=[k for k, _ in top_ns],
-                    y=[v for _, v in top_ns],
-                    labels={"x": "Namespace", "y": "Pods"},
-                    title="Top namespaces by pod count",
+                    x=[v for _, v in top_ns][::-1],
+                    y=[k for k, _ in top_ns][::-1],
+                    labels={"x": "Pods", "y": "Namespace"},
+                    title="Namespaces by pod count (top 12 + Other)",
+                    orientation="h",
                 )
+                fig2 = _style_fig(fig2, height=380)
                 st.plotly_chart(fig2, use_container_width=True)
+
+            # Hotspots: restarts
+            restart_rows = []
+            for p in pods:
+                r = _safe_int(p.get("restarts"))
+                if r > 0:
+                    restart_rows.append({"pod": f"{p.get('namespace')}/{p.get('name')}", "restarts": r, "node": p.get("node")})
+            restart_rows.sort(key=lambda r: r["restarts"], reverse=True)
+            top_restarts = restart_rows[:15]
+            if top_restarts:
+                st.markdown("#### Hotspots")
+                hcol1, hcol2 = st.columns([2, 1])
+                with hcol1:
+                    fig_r = px.bar(
+                        x=[r["restarts"] for r in top_restarts][::-1],
+                        y=[r["pod"] for r in top_restarts][::-1],
+                        labels={"x": "Restarts", "y": "Pod"},
+                        title="Top restarting pods",
+                        orientation="h",
+                    )
+                    fig_r = _style_fig(fig_r, height=420)
+                    st.plotly_chart(fig_r, use_container_width=True)
+                with hcol2:
+                    st.caption("Top restart pods")
+                    st.dataframe(top_restarts, use_container_width=True, height=420)
         else:
             st.info("No pods data available.")
 
@@ -390,29 +730,39 @@ def main() -> None:
                         "unready": max(0, desired - ready),
                     }
                 )
-            fig3 = px.histogram(
-                rows,
-                x="namespace",
-                y="unready",
-                title="Unready replicas by namespace (deployments)",
-            )
-            st.plotly_chart(fig3, use_container_width=True)
+            ns_unready: Dict[str, int] = {}
+            for r in rows:
+                ns = str(r.get("namespace") or "(unknown)")
+                ns_unready[ns] = ns_unready.get(ns, 0) + int(r.get("unready") or 0)
+
+            top_unready = _top_n_with_other(ns_unready, top_n=12)
+            if top_unready:
+                fig3 = px.bar(
+                    x=[v for _, v in top_unready][::-1],
+                    y=[k for k, _ in top_unready][::-1],
+                    labels={"x": "Unready replicas", "y": "Namespace"},
+                    title="Unready replicas by namespace (top 12 + Other)",
+                    orientation="h",
+                )
+                fig3 = _style_fig(fig3, height=380)
+                st.plotly_chart(fig3, use_container_width=True)
 
     # Namespaces
     with tabs[1]:
         st.subheader("Namespaces")
-        if not namespaces:
-            st.info("No namespaces returned.")
-        else:
-            st.dataframe(namespaces, use_container_width=True, height=360)
+        if namespaces:
             status_counts = _count_by(namespaces, "status")
+            top_status = _top_n_with_other(status_counts, top_n=8)
             fig = px.bar(
-                x=list(status_counts.keys()),
-                y=list(status_counts.values()),
-                labels={"x": "Status", "y": "Count"},
-                title="Namespaces by Status",
+                x=[v for _, v in top_status],
+                y=[k for k, _ in top_status],
+                labels={"x": "Count", "y": "Status"},
+                title="Namespaces by status",
+                orientation="h",
             )
+            fig = _style_fig(fig, height=300)
             st.plotly_chart(fig, use_container_width=True)
+        _table_explorer("Namespaces", namespaces, key_prefix="namespaces", default_sort_col="name")
 
     # Nodes
     with tabs[2]:
@@ -420,7 +770,7 @@ def main() -> None:
         if not nodes:
             st.info("No nodes returned.")
         else:
-            st.dataframe(nodes, use_container_width=True, height=360)
+            _table_explorer("Nodes", nodes, key_prefix="nodes", default_sort_col="name")
             ready_counts: Dict[str, int] = {"Ready": 0, "NotReady": 0}
             for node in nodes:
                 ready = False
@@ -430,6 +780,8 @@ def main() -> None:
                         break
                 ready_counts["Ready" if ready else "NotReady"] += 1
             fig = px.pie(names=list(ready_counts.keys()), values=list(ready_counts.values()), title="Node Readiness")
+            fig = _style_fig(fig)
+            fig.update_traces(hole=0.45, textinfo="percent+label")
             st.plotly_chart(fig, use_container_width=True)
 
     # Workloads
@@ -439,9 +791,15 @@ def main() -> None:
             st.info("No deployments returned.")
         else:
             ns_options = sorted({d.get("namespace") for d in deployments if d.get("namespace")})
-            selected_ns = st.selectbox("Namespace", options=["(all)"] + ns_options)
-            view = deployments if selected_ns == "(all)" else [d for d in deployments if d.get("namespace") == selected_ns]
-            st.dataframe(view, use_container_width=True, height=360)
+            selected_ns = st.multiselect(
+                "Namespaces",
+                options=ns_options,
+                default=[],
+                help="Type to search; leave empty for all.",
+                key="deployments_ns_multi",
+            )
+            view = deployments if not selected_ns else [d for d in deployments if d.get("namespace") in set(selected_ns)]
+            _table_explorer("Deployments", view, key_prefix="deployments")
 
             health = _deployment_health(view)
             st.caption(f"Ready replicas: {health['ready']}/{health['desired']} ({health['pct']:.1f}%)")
@@ -454,27 +812,31 @@ def main() -> None:
         else:
             ns_options = sorted({p.get("namespace") for p in pods if p.get("namespace")})
             phase_options = sorted({p.get("phase") for p in pods if p.get("phase")})
-            col_a, col_b = st.columns(2)
+            col_a, col_b, col_c = st.columns(3)
             with col_a:
-                selected_ns = st.selectbox("Namespace", options=["(all)"] + ns_options)
+                selected_ns = st.multiselect("Namespaces", options=ns_options, default=[], key="pods_ns_multi", help="Type to search; empty = all")
             with col_b:
-                selected_phase = st.selectbox("Phase", options=["(all)"] + phase_options)
+                selected_phase = st.multiselect("Phases", options=phase_options, default=[], key="pods_phase_multi")
+            with col_c:
+                min_restarts = st.number_input("Min restarts", min_value=0, max_value=10_000, value=0, step=1, key="pods_min_restarts")
 
             view = pods
-            if selected_ns != "(all)":
-                view = [p for p in view if p.get("namespace") == selected_ns]
-            if selected_phase != "(all)":
-                view = [p for p in view if p.get("phase") == selected_phase]
+            if selected_ns:
+                view = [p for p in view if p.get("namespace") in set(selected_ns)]
+            if selected_phase:
+                view = [p for p in view if p.get("phase") in set(selected_phase)]
+            if min_restarts:
+                view = [p for p in view if _safe_int(p.get("restarts")) >= int(min_restarts)]
 
-            st.dataframe(view, use_container_width=True, height=360)
+            _table_explorer("Pods", view, key_prefix="pods")
 
             st.markdown("---")
             st.subheader("Pod Logs")
             # Prefer selecting from known pods to avoid typos
             pod_choices = [f"{p.get('namespace')}/{p.get('name')}" for p in view if p.get("name") and p.get("namespace")]
-            pick = st.selectbox("Pod", options=[""] + sorted(pod_choices))
-            tail_lines = st.number_input("Tail lines", min_value=10, max_value=2000, value=200, step=10)
-            if st.button("Fetch logs"):
+            pick = st.selectbox("Pod", options=[""] + sorted(pod_choices), key="pod_logs_pick")
+            tail_lines = st.number_input("Tail lines", min_value=10, max_value=2000, value=200, step=10, key="pod_logs_tail")
+            if st.button("Fetch logs", key="pod_logs_fetch"):
                 if not pick:
                     st.warning("Select a pod first.")
                 else:
@@ -491,7 +853,7 @@ def main() -> None:
         if not services:
             st.info("No services returned.")
         else:
-            st.dataframe(services, use_container_width=True, height=360)
+            _table_explorer("Services", services, key_prefix="services")
             type_counts = _count_by(services, "type")
             fig = px.bar(
                 x=list(type_counts.keys()),
@@ -499,6 +861,7 @@ def main() -> None:
                 labels={"x": "Type", "y": "Services"},
                 title="Services by Type",
             )
+            fig = _style_fig(fig)
             st.plotly_chart(fig, use_container_width=True)
 
     # Events
@@ -508,17 +871,20 @@ def main() -> None:
             st.info("No events returned.")
         else:
             ns_options = sorted({e.get("namespace") for e in events if e.get("namespace")})
-            selected_ns = st.selectbox("Namespace", options=["(all)"] + ns_options, key="events_ns")
-            view = events if selected_ns == "(all)" else [e for e in events if e.get("namespace") == selected_ns]
-            st.dataframe(view, use_container_width=True, height=360)
-            top_reasons = _top_counts(view, "reason", top_n=12)
+            selected_ns = st.multiselect("Namespaces", options=ns_options, default=[], key="events_ns_multi", help="Type to search; empty = all")
+            view = events if not selected_ns else [e for e in events if e.get("namespace") in set(selected_ns)]
+            _table_explorer("Events", view, key_prefix="events")
+            reason_counts = _count_by(view, "reason")
+            top_reasons = _top_n_with_other(reason_counts, top_n=14)
             if top_reasons:
                 fig = px.bar(
-                    x=[k for k, _ in top_reasons],
-                    y=[v for _, v in top_reasons],
-                    labels={"x": "Reason", "y": "Count"},
-                    title="Top event reasons",
+                    x=[v for _, v in top_reasons][::-1],
+                    y=[k for k, _ in top_reasons][::-1],
+                    labels={"x": "Count", "y": "Reason"},
+                    title="Event reasons (top 14 + Other)",
+                    orientation="h",
                 )
+                fig = _style_fig(fig, height=420)
                 st.plotly_chart(fig, use_container_width=True)
 
     # Actions
@@ -531,9 +897,9 @@ def main() -> None:
         with act_tab_scale:
             dep_ns = st.text_input("Namespace", value="default", key="scale_ns")
             dep_name = st.text_input("Deployment name", key="scale_name")
-            dep_replicas = st.number_input("Replicas", min_value=0, max_value=1000, value=1, step=1)
+            dep_replicas = st.number_input("Replicas", min_value=0, max_value=1000, value=1, step=1, key="scale_replicas")
             confirm = st.checkbox("I understand this changes live workload", key="scale_confirm")
-            if st.button("Scale", type="primary"):
+            if st.button("Scale", type="primary", key="scale_submit"):
                 if not (dep_name and confirm):
                     st.warning("Provide a deployment name and confirm.")
                 else:
@@ -547,7 +913,7 @@ def main() -> None:
             dep_ns = st.text_input("Namespace", value="default", key="restart_ns")
             dep_name = st.text_input("Deployment name", key="restart_name")
             confirm = st.checkbox("I understand this will restart pods", key="restart_confirm")
-            if st.button("Restart deployment", type="secondary"):
+            if st.button("Restart deployment", type="secondary", key="restart_submit"):
                 if not (dep_name and confirm):
                     st.warning("Provide a deployment name and confirm.")
                 else:
@@ -561,7 +927,7 @@ def main() -> None:
             del_ns = st.text_input("Namespace", value="default", key="delete_ns")
             del_name = st.text_input("Pod name", key="delete_name")
             confirm = st.checkbox("I understand this deletes the pod", key="delete_confirm")
-            if st.button("Delete pod", type="secondary"):
+            if st.button("Delete pod", type="secondary", key="delete_submit"):
                 if not (del_name and confirm):
                     st.warning("Provide a pod name and confirm.")
                 else:
@@ -581,27 +947,95 @@ def main() -> None:
 
         col_a, col_b = st.columns([1, 1])
         with col_a:
-            if st.button("Clear terminal history", use_container_width=True):
+            if st.button("Clear terminal history", use_container_width=True, key="k8s_term_clear"):
                 st.session_state.k8s_terminal_history = []  # type: ignore[assignment]
         with col_b:
             st.caption("Supported: get pods/nodes/ns/deployments/services/events · logs · delete pod · scale deployment")
 
         history = st.session_state.k8s_terminal_history  # type: ignore[assignment]
-        with st.container():
-            if history:
-                last = history[-1]
-                st.markdown("#### Last command")
-                st.code(last.get("command", ""), language="bash")
-                if last.get("ok") and last.get("table_rows") is not None:
-                    st.caption(f"Table view: {last.get('table_key')} ({len(last.get('table_rows') or [])} rows)")
-                    st.dataframe(last.get("table_rows"), use_container_width=True, height=300)
-                elif not last.get("ok"):
-                    st.error(last.get("error") or "Command failed")
+        if "k8s_terminal_selected" not in st.session_state:
+            st.session_state.k8s_terminal_selected = -1  # type: ignore[assignment]
 
-                with st.expander("Raw MCP response", expanded=False):
-                    st.json(last.get("raw"))
+        left, right = st.columns([1, 2])
+        with left:
+            st.markdown("#### History")
+            if not history:
+                st.caption("No commands yet.")
+            else:
+                for i, h in enumerate(reversed(history[-30:])):
+                    real_i = len(history) - 1 - i
+                    label = h.get("command", "")
+                    ok = bool(h.get("ok"))
+                    tone = "ok" if ok else "bad"
+                    if st.button(label[:42] + ("…" if len(label) > 42 else ""), use_container_width=True, key=f"k8s_hist_{real_i}"):
+                        st.session_state.k8s_terminal_selected = real_i  # type: ignore[assignment]
+
+        with right:
+            idx = int(st.session_state.k8s_terminal_selected)  # type: ignore[arg-type]
+            if history and (idx < 0 or idx >= len(history)):
+                idx = len(history) - 1
+            if not history:
+                st.info("Run a command to see output here.")
+            else:
+                entry = history[idx]
+                st.markdown("#### Console")
+                st.code(entry.get("command", ""), language="bash")
+                if not entry.get("ok"):
+                    st.error(entry.get("error") or "Command failed")
+
+                output_tabs = st.tabs(["Table", "Text", "Raw"])
+                with output_tabs[0]:
+                    rows = entry.get("table_rows")
+                    if rows is not None:
+                        _table_explorer("Table output", rows, key_prefix=f"term_table_{idx}", default_height=320)
+                    else:
+                        st.info("No tabular output for this command.")
+
+                with output_tabs[1]:
+                    txt = entry.get("text") or ""
+                    lang = entry.get("text_lang") or "text"
+                    if txt:
+                        st.code(txt, language=lang)
+                    else:
+                        st.info("No text output for this command.")
+
+                with output_tabs[2]:
+                    st.json(entry.get("raw"))
 
         st.markdown("---")
+
+        with st.expander("Command builder", expanded=False):
+            b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1, 1])
+            with b_col1:
+                b_verb = st.selectbox("Verb", options=["get", "logs", "delete", "scale"], key="k8s_term_builder_verb")
+            with b_col2:
+                b_resource = st.selectbox(
+                    "Resource",
+                    options=["pods", "nodes", "namespaces", "deployments", "services", "events", "sa"],
+                    key="k8s_term_builder_resource",
+                )
+            with b_col3:
+                b_namespace = st.text_input("Namespace (-n)", value="default", key="k8s_term_builder_ns")
+            with b_col4:
+                b_output = st.selectbox("Output (-o)", options=["table", "wide", "yaml", "json"], key="k8s_term_builder_out")
+
+            example_cmd = ""
+            if b_verb == "get":
+                if b_resource in ("nodes", "namespaces"):
+                    example_cmd = f"get {b_resource} -o {b_output}"
+                else:
+                    example_cmd = f"get {b_resource} -n {b_namespace} -o {b_output}"
+            elif b_verb == "logs":
+                example_cmd = f"logs <pod-name> -n {b_namespace} --tail=200"
+            elif b_verb == "delete":
+                example_cmd = f"delete pod <pod-name> -n {b_namespace}"
+            elif b_verb == "scale":
+                example_cmd = f"scale deployment <deploy-name> -n {b_namespace} --replicas=2"
+
+            if st.button("Use in terminal", use_container_width=True, key="k8s_term_builder_apply") and example_cmd:
+                st.session_state.k8s_terminal_last = example_cmd  # type: ignore[assignment]
+                st.rerun()
+
         cmd = st.text_input(
             "kubectl-style command",
             value=st.session_state.get("k8s_terminal_last", "get pods -n default"),
@@ -610,7 +1044,7 @@ def main() -> None:
         )
         col_run, col_examples = st.columns([1, 3])
         with col_run:
-            run_clicked = st.button("Run command", type="primary", use_container_width=True)
+            run_clicked = st.button("Run command", type="primary", use_container_width=True, key="k8s_term_run")
         with col_examples:
             st.caption(
                 "Examples: `get pods -n default` · `get nodes` · `get services -n default` · `get events -n default` · "
@@ -619,29 +1053,56 @@ def main() -> None:
 
         if run_clicked and cmd.strip():
             st.session_state.k8s_terminal_last = cmd.strip()  # type: ignore[assignment]
-            with st.spinner("Executing via MCP…"):
-                try:
-                    result = _invoke_tool(tools, "kubectl_like", {"command": cmd.strip()})
-                    ok = bool(isinstance(result, dict) and result.get("ok"))
-                    error_text = result.get("error") if isinstance(result, dict) else ""
-                    table_key, table_rows = _extract_table_payload(result)
+            try:
+                captured: Dict[str, Any] = {}
 
-                    st.session_state.k8s_terminal_history.append(  # type: ignore[call-arg]
-                        {
-                            "command": cmd.strip(),
-                            "ok": ok,
-                            "error": error_text or "",
-                            "raw": result,
-                            "table_key": table_key,
-                            "table_rows": table_rows,
-                        }
-                    )
-                    st.rerun()
-                except Exception as exc:  # noqa: BLE001
-                    st.session_state.k8s_terminal_history.append(  # type: ignore[call-arg]
-                        {"command": cmd.strip(), "ok": False, "error": f"Error executing command: {exc}", "raw": None}
-                    )
-                    st.rerun()
+                def _run_stream():
+                    yield "Executing via MCP…\n"
+                    result = _invoke_tool(tools, "kubectl_like", {"command": cmd.strip()})
+                    captured["result"] = result
+
+                    if not isinstance(result, dict):
+                        yield "(Unexpected response type)\n"
+                        return
+
+                    if not result.get("ok"):
+                        yield f"Error: {result.get('error') or 'Command failed'}\n"
+                        return
+
+                    text = result.get("text") or ""
+                    if text:
+                        yield from _stream_text(text)
+                    else:
+                        yield "(No text output; see Table/Raw tabs above.)\n"
+
+                st.markdown("#### Live output")
+                st.write_stream(_run_stream())
+
+                result = captured.get("result")
+                ok = bool(isinstance(result, dict) and result.get("ok"))
+                error_text = result.get("error") if isinstance(result, dict) else ""
+                table_key, table_rows = _extract_table_payload(result)
+
+                text = result.get("text") if isinstance(result, dict) else ""
+                output = (result.get("output") if isinstance(result, dict) else None) or "table"
+                text_lang = "yaml" if output in ("yaml", "yml") else ("json" if output == "json" else "text")
+
+                entry = {
+                    "command": cmd.strip(),
+                    "ok": ok,
+                    "error": error_text or "",
+                    "raw": result,
+                    "table_key": table_key,
+                    "table_rows": table_rows,
+                    "text": text or "",
+                    "text_lang": text_lang,
+                }
+                st.session_state.k8s_terminal_history.append(entry)  # type: ignore[call-arg]
+            except Exception as exc:  # noqa: BLE001
+                st.session_state.k8s_terminal_history.append(  # type: ignore[call-arg]
+                    {"command": cmd.strip(), "ok": False, "error": f"Error executing command: {exc}", "raw": None, "table_key": None, "table_rows": None, "text": "", "text_lang": "text"}
+                )
+                st.exception(exc)
 
     st.markdown("</div>", unsafe_allow_html=True)
 

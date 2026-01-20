@@ -20,3 +20,4 @@ fastmcp<3
 requests
 langchain-mcp-adapters
 kubernetes
+PyYAML
