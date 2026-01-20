@@ -13,3 +13,10 @@ psycopg2-binary; platform_system != 'Windows'
 psycopg2-binary==2.9.9; platform_system == 'Windows'
 pdfplumber
 docx2txt
+watchdog
+langchain
+langchain-ollama
+fastmcp<3
+requests
+langchain-mcp-adapters
+kubernetes

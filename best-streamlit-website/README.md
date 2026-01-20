@@ -45,9 +45,34 @@ best-streamlit-website
    pip install -r requirements.txt
    ```
 
-3. Run the Streamlit application:
+3. Run the Streamlit application (from the project root):
+    ```powershell
+    python -m streamlit run .\app.py
+    ```
+
+### Enable auto re-run on code changes
+
+This project is configured to automatically re-run when you save changes to Python files.
+
+- The configuration lives in `.streamlit/config.toml`:
+   - `server.runOnSave = true`
+   - `server.fileWatcherType = "watchdog"`
+- If you prefer a different port:
+   ```powershell
+   python -m streamlit run .\app.py --server.port 8502
    ```
-   streamlit run pages/1_Home.py
+- On Windows PowerShell, you can join flags on one line as shown above.
+
+Troubleshooting:
+
+- If auto-reload doesn’t trigger, ensure `watchdog` is installed:
+   ```powershell
+   pip install watchdog
+   ```
+- For network drives or WSL, switching to polling may help. Edit `.streamlit/config.toml`:
+   ```toml
+   [server]
+   fileWatcherType = "poll"
    ```
 
 ## Usage Guidelines
