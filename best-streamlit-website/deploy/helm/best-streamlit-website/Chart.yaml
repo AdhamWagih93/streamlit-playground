@@ -1,0 +1,6 @@
+apiVersion: v2
+name: best-streamlit-website
+description: Best Streamlit Website + MCP servers + agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

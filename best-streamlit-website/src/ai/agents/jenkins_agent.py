@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import asyncio
+import sys
 
-from langchain_ollama.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from langchain_core.tools import tool
-from langchain.agents import create_agent
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
-from src.ai.mcp_servers.jenkins_server import JenkinsAuthConfig, JenkinsMCPServer
+from src.ai.agents.jenkins_agent_config import JenkinsToolAgentConfig
+from src.ai.agents.tool_agent_runner import build_tool_agent_runtime
+from src.ai.agents.tool_agent_types import LLMConfig, ToolAgentConfig
+from src.ai.mcp_servers.jenkins.utils.client import JenkinsAuthConfig, JenkinsMCPServer
+from src.ai.mcp_servers.jenkins.config import JenkinsMCPServerConfig
 
 
 @dataclass
@@ -40,14 +39,27 @@ class JenkinsAgent:
         self,
         server: JenkinsMCPServer,
         lc_agent,
+        mcp_tools,
         tool_call_events: List[Dict[str, Any]],
         user_name: Optional[str] = None,
     ) -> None:
         # Kept for direct, non-MCP calls ("Test connection" button).
         self.server = server
         self._agent = lc_agent
+        self._tools = list(mcp_tools or [])
         self._tool_call_events = tool_call_events
         self.user_name = user_name
+
+    def call_tool(self, tool_name: str, args: Optional[Dict[str, Any]] = None) -> Any:
+        """Call a Jenkins MCP tool directly (no LLM), using the same MCP client stack."""
+
+        args = args or {}
+        for t in self._tools:
+            if getattr(t, "name", None) == tool_name:
+                if hasattr(t, "ainvoke"):
+                    return asyncio.run(t.ainvoke(args))
+                return t.invoke(args)
+        raise ValueError(f"Unknown Jenkins MCP tool: {tool_name}")
 
     def _build_history_messages(self, history: Optional[List[Dict[str, str]]]) -> List[BaseMessage]:
         messages: List[BaseMessage] = []
@@ -138,64 +150,8 @@ class JenkinsAgent:
         if on_token is not None and answer:
             on_token(str(answer))
         return result
-
-
-def _build_mcp_connections(config: JenkinsAuthConfig, tool_call_events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build MultiServerMCPClient config and interceptors per official docs."""
-
-    env: Dict[str, str] = {}
-    if config.base_url:
-        env["JENKINS_BASE_URL"] = config.base_url
-    if config.username:
-        env["JENKINS_USERNAME"] = config.username
-    if config.api_token:
-        env["JENKINS_API_TOKEN"] = config.api_token
-    env["JENKINS_VERIFY_SSL"] = "true" if config.verify_ssl else "false"
-
-    async def logging_interceptor(
-        request: MCPToolCallRequest,
-        handler,
-    ):
-        started = datetime.utcnow().isoformat() + "Z"
-        entry: Dict[str, Any] = {
-            "server": request.server_name,
-            "tool": request.name,
-            "args": request.args,
-            "started_at": started,
-        }
-        try:
-            result = await handler(request)
-            entry["ok"] = True
-            entry["result_preview"] = str(getattr(result, "content", result))[:800]
-        except Exception as exc:  # noqa: BLE001
-            entry["ok"] = False
-            entry["result_preview"] = f"ERROR: {exc}"[:800]
-        finally:
-            entry["finished_at"] = datetime.utcnow().isoformat() + "Z"
-            tool_call_events.append(entry)
-        return result
-
-    connections: Dict[str, Any] = {
-        "jenkins": {
-            "transport": "stdio",
-            "command": "python",
-            "args": [
-                # Path is resolved relative to the ai package root when
-                # invoked via MultiServerMCPClient.
-                str(Path(__file__).resolve().parent.parent / "mcp_servers" / "jenkins_server.py"),
-            ],
-            "env": env,
-        }
-    }
-
-    return {
-        "connections": connections,
-        "tool_interceptors": [logging_interceptor],
-    }
-
-
 def build_jenkins_agent(
-    base_url: str,
+    base_url: Optional[str],
     username: Optional[str],
     api_token: Optional[str],
     verify_ssl: bool = True,
@@ -205,33 +161,64 @@ def build_jenkins_agent(
 ) -> JenkinsAgent:
     """Factory helper that follows the official MCP + create_agent pattern."""
 
-    config = JenkinsAuthConfig(
-        base_url=base_url,
-        username=username or None,
-        api_token=api_token or None,
-        verify_ssl=verify_ssl,
-    )
+    # Env-first defaults for local dev
+    defaults = JenkinsMCPServerConfig.from_env()
+    effective_base_url = base_url or defaults.base_url
+    effective_verify_ssl = verify_ssl if base_url is not None else defaults.verify_ssl
+
+    # Credentials are intentionally *not* supplied by the UI/agent.
+    # The Jenkins MCP server reads Jenkins auth from its own environment.
+    # (username/api_token args are kept only for backward compatibility.)
+    config = JenkinsAuthConfig(base_url=effective_base_url, username=None, api_token=None, verify_ssl=effective_verify_ssl)
     server = JenkinsMCPServer(config)
 
+    # Tool agent config (supports stdio by default, remote SSE when configured).
+    cfg = JenkinsToolAgentConfig.from_env()
+
+    # If the caller supplies a base_url/verify_ssl override, ensure it is passed
+    # into the stdio-launched MCP server env. For remote MCP, this doesn't
+    # affect the connection.
+    default_env = dict(getattr(cfg.tool_agent.mcp_server, "env_overrides", {}) or {})
+    if effective_base_url:
+        default_env["JENKINS_BASE_URL"] = effective_base_url
+    default_env["JENKINS_VERIFY_SSL"] = "true" if effective_verify_ssl else "false"
+
+    tool_agent = ToolAgentConfig.from_env(
+        agent_name=cfg.tool_agent.agent_name,
+        mcp_server_name="jenkins",
+        mcp_module="src.ai.mcp_servers.jenkins.mcp",
+        default_env=default_env,
+        remote_url_env="JENKINS_MCP_URL",
+        transport_env="JENKINS_MCP_TRANSPORT",
+        default_remote_url=JenkinsMCPServerConfig.from_env().mcp_url,
+    )
+
+    # Allow explicit overrides from callers (e.g., agent API service), while
+    # still keeping env-first defaults.
+    if model or llm_base_url:
+        effective_llm = LLMConfig(
+            base_url=llm_base_url or tool_agent.llm.base_url,
+            model=model or tool_agent.llm.model,
+            temperature=tool_agent.llm.temperature,
+        )
+        tool_agent = ToolAgentConfig(
+            agent_name=tool_agent.agent_name,
+            llm=effective_llm,
+            mcp_server=tool_agent.mcp_server,
+        )
+
     tool_call_events: List[Dict[str, Any]] = []
-    mcp_cfg = _build_mcp_connections(config, tool_call_events)
-
-    client = MultiServerMCPClient(
-        mcp_cfg["connections"],
-        tool_interceptors=mcp_cfg["tool_interceptors"],
+    runtime = build_tool_agent_runtime(
+        tool_agent,
+        python_executable=sys.executable,
+        tool_call_events=tool_call_events,
+        mcp_client_token=cfg.mcp_client_token,
     )
 
-    # Load MCP tools from the Jenkins server (official pattern)
-    import asyncio
-
-    tools = asyncio.run(client.get_tools())
-
-    llm = ChatOllama(
-        model=model or "qwen2.5:7b-instruct-q6_K",
-        base_url=llm_base_url,
-        temperature=0,
+    return JenkinsAgent(
+        server=server,
+        lc_agent=runtime.agent,
+        mcp_tools=runtime.tools,
+        tool_call_events=runtime.tool_call_events,
+        user_name=user_name,
     )
-
-    lc_agent = create_agent(llm, tools)
-
-    return JenkinsAgent(server=server, lc_agent=lc_agent, tool_call_events=tool_call_events, user_name=user_name)

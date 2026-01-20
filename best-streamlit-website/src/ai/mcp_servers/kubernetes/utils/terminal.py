@@ -60,19 +60,30 @@ def kubectl_like(clients: KubernetesClientSet, command: str) -> Dict[str, Any]:
                 i += 1
         return ns, i
 
+    def _parse_all_namespaces(start: int) -> bool:
+        i = start
+        while i < len(tokens):
+            t = tokens[i]
+            if t in ("-A", "--all-namespaces"):
+                return True
+            i += 1
+        return False
+
     if verb == "get":
         if idx >= len(tokens):
             return {"ok": False, "error": "Missing resource for 'get'.", "raw": raw}
         resource = tokens[idx]
         idx += 1
         ns, _ = _parse_namespace(idx)
+        all_namespaces = _parse_all_namespaces(idx)
         output = _parse_output(idx)
 
         if resource in ("pods", "po"):
             from .core_resources import list_pods
 
-            res = list_pods(clients.core, namespace=ns)
-            return _wrap_get_result(raw, "pods", res, namespace=ns, output=output)
+            effective_ns = None if all_namespaces else ns
+            res = list_pods(clients.core, namespace=effective_ns)
+            return _wrap_get_result(raw, "pods", res, namespace=effective_ns, output=output)
         if resource in ("nodes", "no"):
             from .core_resources import list_nodes
 
@@ -84,28 +95,52 @@ def kubectl_like(clients: KubernetesClientSet, command: str) -> Dict[str, Any]:
             res = list_namespaces(clients.core)
             return _wrap_get_result(raw, "namespaces", res, output=output)
         if resource in ("deployments", "deploy", "deployment"):
-            ns = ns or "default"
-            from .workloads import list_deployments
+            if all_namespaces:
+                from .workloads import list_deployments_all
 
-            res = list_deployments(clients.apps, namespace=ns)
+                res = list_deployments_all(clients.apps)
+                ns = None
+            else:
+                ns = ns or "default"
+                from .workloads import list_deployments
+
+                res = list_deployments(clients.apps, namespace=ns)
             return _wrap_get_result(raw, "deployments", res, namespace=ns, output=output)
         if resource in ("services", "svc", "service"):
-            ns = ns or "default"
-            from .core_resources import list_services
+            if all_namespaces:
+                from .core_resources import list_services_all
 
-            res = list_services(clients.core, namespace=ns)
+                res = list_services_all(clients.core)
+                ns = None
+            else:
+                ns = ns or "default"
+                from .core_resources import list_services
+
+                res = list_services(clients.core, namespace=ns)
             return _wrap_get_result(raw, "services", res, namespace=ns, output=output)
         if resource in ("events", "ev"):
-            ns = ns or "default"
-            from .core_resources import list_events
+            if all_namespaces:
+                from .core_resources import list_events_all
 
-            res = list_events(clients.core, namespace=ns)
+                res = list_events_all(clients.core)
+                ns = None
+            else:
+                ns = ns or "default"
+                from .core_resources import list_events
+
+                res = list_events(clients.core, namespace=ns)
             return _wrap_get_result(raw, "events", res, namespace=ns, output=output)
         if resource in ("serviceaccounts", "serviceaccount", "sa"):
-            ns = ns or "default"
-            from .access_mgmt import list_service_accounts
+            if all_namespaces:
+                from .access_mgmt import list_service_accounts_all
 
-            res = list_service_accounts(clients.core, namespace=ns)
+                res = list_service_accounts_all(clients.core)
+                ns = None
+            else:
+                ns = ns or "default"
+                from .access_mgmt import list_service_accounts
+
+                res = list_service_accounts(clients.core, namespace=ns)
             return _wrap_get_result(raw, "service_accounts", res, namespace=ns, output=output)
 
         return {
@@ -113,6 +148,32 @@ def kubectl_like(clients: KubernetesClientSet, command: str) -> Dict[str, Any]:
             "error": f"Unsupported resource for 'get': {resource}",
             "raw": raw,
             "hint": "Supported: pods, nodes, namespaces, deployments, services, events, sa.",
+        }
+
+    if verb == "create":
+        if idx >= len(tokens):
+            return {"ok": False, "error": "Missing resource for 'create'.", "raw": raw}
+        resource = tokens[idx]
+        idx += 1
+
+        if resource in ("namespace", "namespaces", "ns"):
+            if idx >= len(tokens):
+                return {"ok": False, "error": "Missing name for 'create namespace'.", "raw": raw}
+            name = tokens[idx]
+            from .core_resources import create_namespace
+
+            res = create_namespace(clients.core, name=name)
+            ok = bool(isinstance(res, dict) and res.get("ok"))
+            out: Dict[str, Any] = {"ok": ok, "verb": "create", "resource": "namespace", "name": name, "raw": raw, "result": res}
+            if not ok and isinstance(res, dict):
+                out["error"] = res.get("error")
+            return out
+
+        return {
+            "ok": False,
+            "error": f"Unsupported resource for 'create': {resource}",
+            "raw": raw,
+            "hint": "Supported: create namespace <name>",
         }
 
     if verb == "logs":
@@ -212,7 +273,12 @@ def kubectl_like(clients: KubernetesClientSet, command: str) -> Dict[str, Any]:
         res = scale_deployment(clients.apps, name=deploy_name, namespace=namespace, replicas=replicas)
         return {"ok": True, "verb": "scale", "resource": "deployment", "deployment": deploy_name, "namespace": namespace, "replicas": replicas, "raw": raw, "result": res}
 
-    return {"ok": False, "error": f"Unsupported verb: {verb}", "raw": raw, "hint": "Supported verbs: get, logs, delete, scale."}
+    return {
+        "ok": False,
+        "error": f"Unsupported verb: {verb}",
+        "raw": raw,
+        "hint": "Supported verbs: get, logs, delete, scale, create.",
+    }
 
 
 def _wrap_get_result(

@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}

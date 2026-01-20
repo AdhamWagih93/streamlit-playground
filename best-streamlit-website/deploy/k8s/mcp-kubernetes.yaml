@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: best-streamlit-website
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubernetes-mcp
+  namespace: best-streamlit-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubernetes-mcp
+  template:
+    metadata:
+      labels:
+        app: kubernetes-mcp
+    spec:
+      containers:
+        - name: kubernetes-mcp
+          image: best-streamlit-website/mcp-kubernetes:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            # Optional: mount a kubeconfig via Secret and set K8S_KUBECONFIG.
+            - name: K8S_CONTEXT
+              value: ""
+            - name: KUBERNETES_MCP_TRANSPORT
+              value: "http"
+            - name: KUBERNETES_MCP_HOST
+              value: "0.0.0.0"
+            - name: KUBERNETES_MCP_PORT
+              value: "8000"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-mcp
+  namespace: best-streamlit-website
+spec:
+  selector:
+    app: kubernetes-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

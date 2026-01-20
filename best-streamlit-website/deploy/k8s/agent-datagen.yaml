@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: best-streamlit-website
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datagen-agent
+  namespace: best-streamlit-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datagen-agent
+  template:
+    metadata:
+      labels:
+        app: datagen-agent
+    spec:
+      containers:
+        - name: datagen-agent
+          image: best-streamlit-website/agent-datagen:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+            - name: OLLAMA_MODEL
+              value: "qwen2.5:7b-instruct-q6_K"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datagen-agent
+  namespace: best-streamlit-website
+spec:
+  selector:
+    app: datagen-agent
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP

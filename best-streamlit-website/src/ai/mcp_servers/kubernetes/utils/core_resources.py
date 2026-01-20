@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from kubernetes.client import V1Namespace, V1ObjectMeta
 from kubernetes.client import ApiException
 
 
@@ -39,6 +40,16 @@ def list_nodes(core_api: Any) -> Dict[str, Any]:
         ]
         out.append({"name": node.metadata.name, "labels": node.metadata.labels or {}, "capacity": capacity, "conditions": conditions})
     return {"ok": True, "nodes": out}
+
+
+def create_namespace(core_api: Any, name: str) -> Dict[str, Any]:
+    try:
+        body = V1Namespace(metadata=V1ObjectMeta(name=name))
+        resp = core_api.create_namespace(body=body)
+    except ApiException as exc:
+        return {"ok": False, "error": str(exc)}
+
+    return {"ok": True, "name": resp.metadata.name}
 
 
 def list_pods(core_api: Any, namespace: Optional[str] = None) -> Dict[str, Any]:

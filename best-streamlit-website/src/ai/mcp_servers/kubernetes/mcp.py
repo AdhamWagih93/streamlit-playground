@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any, Dict, Optional
 
 from fastmcp import FastMCP
 
+from .config import KubernetesMCPServerConfig
 from .utils.access_mgmt import list_service_accounts as list_service_accounts_impl
 from .utils.access_mgmt import list_service_accounts_all as list_service_accounts_all_impl
 from .utils.clients import KubernetesClientSet, load_clients
@@ -12,6 +14,7 @@ from .utils.cluster import get_cluster_overview as get_cluster_overview_impl
 from .utils.cluster import get_cluster_stats as get_cluster_stats_impl
 from .utils.cluster import health_check as health_check_impl
 from .utils.core_resources import delete_pod as delete_pod_impl
+from .utils.core_resources import create_namespace as create_namespace_impl
 from .utils.core_resources import get_pod_logs as get_pod_logs_impl
 from .utils.core_resources import list_events as list_events_impl
 from .utils.core_resources import list_events_all as list_events_all_impl
@@ -37,9 +40,8 @@ def _clients_from_env() -> KubernetesClientSet:
     if _CLIENTS is not None:
         return _CLIENTS
 
-    kubeconfig = os.environ.get("K8S_KUBECONFIG") or None
-    context = os.environ.get("K8S_CONTEXT") or None
-    _CLIENTS = load_clients(kubeconfig=kubeconfig, context=context)
+    cfg = KubernetesMCPServerConfig.from_env()
+    _CLIENTS = load_clients(kubeconfig=cfg.kubeconfig, context=cfg.context)
     return _CLIENTS
 
 
@@ -74,6 +76,13 @@ def list_namespaces() -> Dict[str, Any]:
 def list_nodes() -> Dict[str, Any]:
     c = _clients_from_env()
     return list_nodes_impl(c.core)
+
+
+@mcp.tool
+def create_namespace(name: str) -> Dict[str, Any]:
+    """Create a namespace."""
+    c = _clients_from_env()
+    return create_namespace_impl(c.core, name=name)
 
 
 @mcp.tool
@@ -162,7 +171,29 @@ def kubectl_like(command: str) -> Dict[str, Any]:
 
 
 def run_stdio() -> None:
-    mcp.run(transport="stdio")
+    cfg = KubernetesMCPServerConfig.from_env()
+    transport = (os.environ.get("MCP_TRANSPORT") or cfg.mcp_transport or "stdio").lower().strip()
+    transport = "sse" if transport == "http" else transport
+
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+        return
+
+    host = os.environ.get("MCP_HOST") or cfg.mcp_host
+    port_raw = os.environ.get("MCP_PORT")
+    try:
+        port = int(port_raw) if port_raw else int(cfg.mcp_port)
+    except Exception:
+        port = int(cfg.mcp_port)
+
+    sig = inspect.signature(mcp.run)
+    kwargs: Dict[str, Any] = {"transport": transport}
+    if "host" in sig.parameters:
+        kwargs["host"] = host
+    if "port" in sig.parameters:
+        kwargs["port"] = port
+
+    mcp.run(**kwargs)
 
 
 if __name__ == "__main__":

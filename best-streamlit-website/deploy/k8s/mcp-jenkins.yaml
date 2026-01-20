@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: best-streamlit-website
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins-mcp
+  namespace: best-streamlit-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenkins-mcp
+  template:
+    metadata:
+      labels:
+        app: jenkins-mcp
+    spec:
+      containers:
+        - name: jenkins-mcp
+          image: best-streamlit-website/mcp-jenkins:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: JENKINS_BASE_URL
+              value: "http://jenkins:8080"
+            - name: JENKINS_VERIFY_SSL
+              value: "true"
+            - name: JENKINS_MCP_CLIENT_TOKEN
+              value: "dev-jenkins-mcp-token"
+            - name: JENKINS_MCP_TRANSPORT
+              value: "http"
+            - name: JENKINS_MCP_HOST
+              value: "0.0.0.0"
+            - name: JENKINS_MCP_PORT
+              value: "8000"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-mcp
+  namespace: best-streamlit-website
+spec:
+  selector:
+    app: jenkins-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

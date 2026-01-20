@@ -1,0 +1,36 @@
+{{- if and .Values.components.mcpHelm .Values.rbac.helmMcp.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: helm-mcp
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bsw.name" . }}-helm-mcp
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+rules:
+  # Helm release storage (defaults to secrets).
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bsw.name" . }}-helm-mcp
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bsw.name" . }}-helm-mcp
+subjects:
+  - kind: ServiceAccount
+    name: helm-mcp
+    namespace: {{ include "bsw.ns" . }}
+{{- end }}

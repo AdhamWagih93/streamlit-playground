@@ -1,0 +1,24 @@
+streamlit
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+kaleido
+streamlit-authenticator
+streamlit-option-menu
+cssutils
+SQLAlchemy>=2.0.0
+psycopg2-binary; platform_system != 'Windows'
+psycopg2-binary==2.9.9; platform_system == 'Windows'
+pdfplumber
+docx2txt
+watchdog
+langchain
+langchain-ollama
+langchain-mcp-adapters
+requests
+fastmcp<3
+kubernetes
+PyYAML
+docker

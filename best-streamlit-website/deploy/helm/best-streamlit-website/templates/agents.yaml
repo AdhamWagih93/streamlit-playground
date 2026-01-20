@@ -1,0 +1,179 @@
+{{- if .Values.components.agentDataGen }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datagen-agent
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.agentDataGen }}
+  selector:
+    matchLabels:
+      app: datagen-agent
+  template:
+    metadata:
+      labels:
+        app: datagen-agent
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: datagen-agent
+          image: {{ .Values.images.agentDataGen.repository }}:{{ .Values.images.agentDataGen.tag }}
+          imagePullPolicy: {{ .Values.images.agentDataGen.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.env.ollamaBaseUrl | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.env.ollamaModel | quote }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datagen-agent
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: datagen-agent
+  ports:
+    - name: http
+      port: {{ .Values.service.agents.port }}
+      targetPort: 8080
+  type: {{ .Values.service.agents.type }}
+{{- end }}
+
+{{- if .Values.components.agentJenkins }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins-agent
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.agentJenkins }}
+  selector:
+    matchLabels:
+      app: jenkins-agent
+  template:
+    metadata:
+      labels:
+        app: jenkins-agent
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: jenkins-agent
+          image: {{ .Values.images.agentJenkins.repository }}:{{ .Values.images.agentJenkins.tag }}
+          imagePullPolicy: {{ .Values.images.agentJenkins.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.env.ollamaBaseUrl | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.env.ollamaModel | quote }}
+            - name: JENKINS_BASE_URL
+              value: {{ .Values.env.jenkinsBaseUrl | quote }}
+            - name: JENKINS_VERIFY_SSL
+              value: {{ .Values.env.jenkinsVerifySsl | quote }}
+            - name: JENKINS_MCP_CLIENT_TOKEN
+              value: {{ .Values.env.jenkinsMcpClientToken | quote }}
+            - name: JENKINS_MCP_TRANSPORT
+              value: {{ .Values.env.jenkinsMcpTransport | quote }}
+            - name: JENKINS_MCP_URL
+              value: {{ .Values.env.jenkinsMcpUrl | quote }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-agent
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: jenkins-agent
+  ports:
+    - name: http
+      port: {{ .Values.service.agents.port }}
+      targetPort: 8080
+  type: {{ .Values.service.agents.type }}
+{{- end }}
+
+{{- if .Values.components.agentKubernetes }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubernetes-agent
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.agentKubernetes }}
+  selector:
+    matchLabels:
+      app: kubernetes-agent
+  template:
+    metadata:
+      labels:
+        app: kubernetes-agent
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: kubernetes-agent
+          image: {{ .Values.images.agentKubernetes.repository }}:{{ .Values.images.agentKubernetes.tag }}
+          imagePullPolicy: {{ .Values.images.agentKubernetes.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.env.ollamaBaseUrl | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.env.ollamaModel | quote }}
+            - name: K8S_CONTEXT
+              value: {{ .Values.env.k8sContext | quote }}
+            - name: KUBERNETES_MCP_TRANSPORT
+              value: {{ .Values.env.kubernetesMcpTransport | quote }}
+            - name: KUBERNETES_MCP_URL
+              value: {{ .Values.env.kubernetesMcpUrl | quote }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-agent
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: kubernetes-agent
+  ports:
+    - name: http
+      port: {{ .Values.service.agents.port }}
+      targetPort: 8080
+  type: {{ .Values.service.agents.type }}
+{{- end }}

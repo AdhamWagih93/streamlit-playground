@@ -128,31 +128,40 @@ st.markdown(
 
 def _build_jenkins_env(
     base_url: str,
-    username: str,
-    token: str,
     verify_ssl: bool,
 ) -> Dict[str, str]:
     """Build environment for the Jenkins FastMCP subprocess.
 
-    This mirrors the expectations in src/ai/mcp_servers/jenkins_server.py,
-    ensuring the MCP server sees the same credentials as the direct client.
+    Jenkins credentials are configured server-side via env vars
+    (e.g., JENKINS_USERNAME/JENKINS_API_TOKEN). The UI only passes runtime
+    connection settings like base URL + SSL verify, plus the required MCP
+    client auth token.
+
+    The MCP server process is launched via module entrypoint:
+    `python -m src.ai.mcp_servers.jenkins.mcp`.
     """
 
+    from src.ai.mcp_servers.jenkins.config import JenkinsMCPServerConfig
+    from src.streamlit_config import StreamlitAppConfig
+
+    cfg = StreamlitAppConfig.from_env()
     env = dict(os.environ)
-    if base_url:
-        env["JENKINS_BASE_URL"] = base_url
-    if username:
-        env["JENKINS_USERNAME"] = username
-    if token:
-        env["JENKINS_API_TOKEN"] = token
-    env["JENKINS_VERIFY_SSL"] = "true" if verify_ssl else "false"
-    return env
+
+    effective = JenkinsMCPServerConfig(
+        base_url=base_url or cfg.jenkins.base_url,
+        username=cfg.jenkins.username,
+        api_token=cfg.jenkins.api_token,
+        verify_ssl=verify_ssl,
+        mcp_client_token=cfg.jenkins.mcp_client_token,
+    )
+
+    return {**env, **effective.to_env_overrides()}
 
 
 if "jenkins_tool_calls" not in st.session_state:
-    st.session_state.jenkins_tool_calls: List[Dict[str, Any]] = []
+    st.session_state.jenkins_tool_calls = []  # type: ignore[assignment]
 if "jenkins_last_plan" not in st.session_state:
-    st.session_state.jenkins_last_plan: Dict[str, Any] | None = None
+    st.session_state.jenkins_last_plan = None  # type: ignore[assignment]
 
 
 st.markdown("<div class='agent-layout'>", unsafe_allow_html=True)
@@ -174,24 +183,26 @@ conn_col, _ = st.columns([1.5, 1])
 with conn_col:
     st.subheader("Jenkins connection")
     base_url = st.text_input("Jenkins base URL", value=st.session_state.get("jenkins_base_url", "http://localhost:8080"))
-    username = st.text_input("Username (optional)", value=st.session_state.get("jenkins_username", ""))
-    token = st.text_input("API token or password (optional)", type="password", value=st.session_state.get("jenkins_token", ""))
     verify_ssl = st.checkbox("Verify SSL certificates", value=st.session_state.get("jenkins_verify_ssl", True))
+
+    st.caption(
+        "Jenkins credentials are configured on the MCP server host via env vars "
+        "`JENKINS_USERNAME` and `JENKINS_API_TOKEN` (not collected in the UI). "
+        "MCP client auth uses `JENKINS_MCP_CLIENT_TOKEN`."
+    )
 
     if st.button("Test connection", type="primary"):
         st.session_state.jenkins_base_url = base_url
-        st.session_state.jenkins_username = username
-        st.session_state.jenkins_token = token
         st.session_state.jenkins_verify_ssl = verify_ssl
         try:
             agent = build_jenkins_agent(
                 base_url,
-                username,
-                token,
+                None,
+                None,
                 verify_ssl,
                 user_name=st.session_state.get("current_username", "Adham"),
             )
-            result = agent.server.get_server_info()
+            result = agent.call_tool("get_server_info", {})
             if result.get("ok"):
                 st.success(f"Connected to Jenkins at {result.get('url')}")
             else:
@@ -214,7 +225,7 @@ with main_col:
 
         use_chat_api = hasattr(st, "chat_input") and hasattr(st, "chat_message")
         if "jenkins_messages" not in st.session_state:
-            st.session_state.jenkins_messages: List[Dict[str, str]] = []
+            st.session_state.jenkins_messages = []  # type: ignore[assignment]
 
         if use_chat_api:
             for msg in st.session_state.jenkins_messages:
@@ -240,8 +251,8 @@ with main_col:
                         try:
                             agent = build_jenkins_agent(
                                 st.session_state.get("jenkins_base_url", base_url),
-                                st.session_state.get("jenkins_username", username),
-                                st.session_state.get("jenkins_token", token),
+                                None,
+                                None,
                                 st.session_state.get("jenkins_verify_ssl", verify_ssl),
                                 user_name=st.session_state.get("current_username", "Adham"),
                             )
@@ -290,8 +301,8 @@ with main_col:
                     try:
                         agent = build_jenkins_agent(
                             base_url,
-                            username,
-                            token,
+                            None,
+                            None,
                             verify_ssl,
                             user_name=st.session_state.get("current_username", "Adham"),
                         )
@@ -329,37 +340,41 @@ with main_col:
             "directly against the MCP server.",
         )
 
-        from pathlib import Path
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         # Discover available tools from the Jenkins FastMCP server via
         # MultiServerMCPClient.get_tools(), following the official docs.
-        # Pass through the current Jenkins credentials so the MCP
-        # subprocess authenticates correctly (avoiding 403s).
+        # Jenkins credentials are configured server-side (env vars) on the
+        # MCP server process.
         try:
             env = _build_jenkins_env(
                 st.session_state.get("jenkins_base_url", base_url),
-                st.session_state.get("jenkins_username", username),
-                st.session_state.get("jenkins_token", token),
                 st.session_state.get("jenkins_verify_ssl", verify_ssl),
             )
 
-            server_path = (
-                Path(__file__).resolve().parent.parent
-                / "src"
-                / "ai"
-                / "mcp_servers"
-                / "jenkins_server.py"
-            )
+            from src.streamlit_config import StreamlitAppConfig
+
+            app_cfg = StreamlitAppConfig.from_env()
+            j_transport = (app_cfg.jenkins.mcp_transport or "stdio").lower().strip()
+            j_transport = "sse" if j_transport == "http" else j_transport
+
+            if j_transport == "stdio":
+                conn = {
+                    "transport": "stdio",
+                    "command": "python",
+                    "args": ["-m", "src.ai.mcp_servers.jenkins.mcp"],
+                    "env": env,
+                }
+            else:
+                # Remote MCP servers are expected to expose SSE.
+                conn = {
+                    "transport": "sse",
+                    "url": app_cfg.jenkins.mcp_url,
+                }
 
             client = MultiServerMCPClient(
                 {
-                    "jenkins": {
-                        "transport": "stdio",
-                        "command": "python",
-                        "args": [str(server_path)],
-                        "env": env,
-                    }
+                    "jenkins": conn
                 }
             )
 
@@ -400,6 +415,8 @@ with main_col:
         template: Dict[str, Any] = {}
         param_help_lines: List[str] = []
         for name, meta in props.items():
+            if name == "_client_token":
+                continue
             placeholder: Any
             ptype = str(meta.get("type", "string"))
             if ptype == "integer":
@@ -440,6 +457,13 @@ with main_col:
                 args = json.loads(args_text) if args_text.strip() else {}
                 if not isinstance(args, dict):
                     raise ValueError("Arguments JSON must decode to an object.")
+
+                # Inject required MCP client auth token automatically.
+                from src.streamlit_config import StreamlitAppConfig
+
+                cfg = StreamlitAppConfig.from_env()
+                args["_client_token"] = cfg.jenkins.mcp_client_token
+
                 with st.spinner(f"Calling {tool_name} via MCP…"):
                     # MCP tools are async-first; prefer ainvoke via asyncio.
                     if hasattr(selected_tool, "ainvoke"):
@@ -547,19 +571,18 @@ with main_col:
             "tools, resources, and live callbacks (progress, logs, and tool calls).",
         )
 
-        from pathlib import Path
         from langchain_mcp_adapters.client import MultiServerMCPClient
         from langchain_mcp_adapters.callbacks import Callbacks, CallbackContext
         from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
         if "mcp_progress_events" not in st.session_state:
-            st.session_state.mcp_progress_events: List[Dict[str, Any]] = []
+            st.session_state.mcp_progress_events = []  # type: ignore[assignment]
         if "mcp_log_events" not in st.session_state:
-            st.session_state.mcp_log_events: List[Dict[str, Any]] = []
+            st.session_state.mcp_log_events = []  # type: ignore[assignment]
         if "mcp_tool_call_events" not in st.session_state:
-            st.session_state.mcp_tool_call_events: List[Dict[str, Any]] = []
+            st.session_state.mcp_tool_call_events = []  # type: ignore[assignment]
         if "mcp_tools_cache" not in st.session_state:
-            st.session_state.mcp_tools_cache: List[Dict[str, Any]] = []
+            st.session_state.mcp_tools_cache = []  # type: ignore[assignment]
 
         col_a, col_b = st.columns([1.2, 1])
 
@@ -609,10 +632,17 @@ with main_col:
                     handler,
                 ):
                     started = datetime.utcnow()
+                    safe_args: Dict[str, Any]
+                    try:
+                        safe_args = dict(request.args or {})
+                        if "_client_token" in safe_args:
+                            safe_args["_client_token"] = "***redacted***"
+                    except Exception:  # noqa: BLE001
+                        safe_args = {}
                     entry: Dict[str, Any] = {
                         "server": request.server_name,
                         "tool": request.name,
-                        "args": request.args,
+                        "args": safe_args,
                         "started_at": started.isoformat() + "Z",
                     }
                     try:
@@ -631,27 +661,31 @@ with main_col:
                     # Use the Jenkins MCP client helper with callbacks and interceptor.
                     env = _build_jenkins_env(
                         st.session_state.get("jenkins_base_url", base_url),
-                        st.session_state.get("jenkins_username", username),
-                        st.session_state.get("jenkins_token", token),
                         st.session_state.get("jenkins_verify_ssl", verify_ssl),
                     )
 
-                    server_path = (
-                        Path(__file__).resolve().parent.parent
-                        / "src"
-                        / "ai"
-                        / "mcp_servers"
-                        / "jenkins_server.py"
-                    )
+                    from src.streamlit_config import StreamlitAppConfig
+
+                    app_cfg = StreamlitAppConfig.from_env()
+                    j_transport = (app_cfg.jenkins.mcp_transport or "stdio").lower().strip()
+                    j_transport = "sse" if j_transport == "http" else j_transport
+
+                    if j_transport == "stdio":
+                        conn = {
+                            "transport": "stdio",
+                            "command": "python",
+                            "args": ["-m", "src.ai.mcp_servers.jenkins.mcp"],
+                            "env": env,
+                        }
+                    else:
+                        conn = {
+                            "transport": "sse",
+                            "url": app_cfg.jenkins.mcp_url,
+                        }
 
                     client = MultiServerMCPClient(
                         {
-                            "jenkins": {
-                                "transport": "stdio",
-                                "command": "python",
-                                "args": [str(server_path)],
-                                "env": env,
-                            }
+                            "jenkins": conn
                         },
                         callbacks=callbacks,
                         tool_interceptors=[logging_interceptor],
@@ -772,6 +806,6 @@ with side_col:
     st.markdown("---")
     st.markdown("**Tips**")
     st.markdown("- Start with read-only queries (jobs, builds, nodes) before triggering new builds.")
-    st.markdown("- Keep your Jenkins API token scoped to what the agent should be allowed to do.")
+    st.markdown("- Keep the Jenkins API token (server-side) scoped to what this agent should be allowed to do.")
 
 st.markdown("</div>", unsafe_allow_html=True)

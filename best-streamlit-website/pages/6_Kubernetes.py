@@ -142,16 +142,13 @@ def _table_explorer(
             use_container_width=True,
             key=f"{key_prefix}_dl_json",
         )
-
-
-def _get_server_path() -> str:
-    return str(Path(__file__).resolve().parent.parent / "src" / "ai" / "mcp_servers" / "kubernetes_server.py")
-
-
 def _build_env() -> Dict[str, str]:
+    from src.streamlit_config import StreamlitAppConfig
+
+    cfg = StreamlitAppConfig.from_env()
     env: Dict[str, str] = {}
-    kubeconfig = st.session_state.get("k8s_kubeconfig")
-    context = st.session_state.get("k8s_context")
+    kubeconfig = st.session_state.get("k8s_kubeconfig") or cfg.kubernetes.kubeconfig
+    context = st.session_state.get("k8s_context") or cfg.kubernetes.context
     if kubeconfig:
         env["K8S_KUBECONFIG"] = kubeconfig
     if context:
@@ -173,16 +170,27 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
         # keeping the base env avoids Windows/Python startup surprises.
         subprocess_env = {**os.environ, **env}
 
-        # Use the legacy entrypoint file which ensures the project root is on sys.path.
-        server_path = _get_server_path()
+        from src.streamlit_config import StreamlitAppConfig
+
+        cfg = StreamlitAppConfig.from_env()
+        transport = (cfg.kubernetes.mcp_transport or "stdio").lower().strip()
+        transport = "sse" if transport == "http" else transport
+
+        if transport == "stdio":
+            conn = {
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "src.ai.mcp_servers.kubernetes.mcp"],
+                "env": subprocess_env,
+            }
+        else:
+            conn = {
+                "transport": "sse",
+                "url": cfg.kubernetes.mcp_url,
+            }
         client = MultiServerMCPClient(
             connections={
-                "kubernetes": {
-                    "transport": "stdio",
-                    "command": sys.executable,
-                    "args": [server_path],
-                    "env": subprocess_env,
-                }
+                "kubernetes": conn
             }
         )
         st.session_state["_k8s_tools"] = asyncio.run(client.get_tools())
@@ -190,10 +198,85 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
     return st.session_state["_k8s_tools"]
 
 
+def _get_helm_tools(env: Dict[str, str], force_reload: bool = False):
+    """Load Helm MCP tools and keep them in session_state (tools are not pickle-safe)."""
+
+    from src.streamlit_config import StreamlitAppConfig
+
+    cfg = StreamlitAppConfig.from_env()
+    transport = (cfg.helm.mcp_transport or "stdio").lower().strip()
+    transport = "sse" if transport == "http" else transport
+
+    sig = json.dumps({"env": env, "transport": transport, "url": cfg.helm.mcp_url}, sort_keys=True)
+    def _format_exc(e: BaseException) -> str:
+        # Python 3.11+: MultiServerMCPClient uses TaskGroups; exceptions may be wrapped.
+        try:
+            if isinstance(e, BaseExceptionGroup):
+                parts: List[str] = []
+                for sub in e.exceptions:
+                    parts.append(_format_exc(sub))
+                joined = " | ".join(p for p in parts if p)
+                return joined or str(e)
+        except Exception:  # noqa: BLE001
+            pass
+        return str(e)
+
+    def _load(conn: Dict[str, Any]):
+        client = MultiServerMCPClient(connections={"helm": conn})
+        return asyncio.run(client.get_tools())
+
+    if force_reload or st.session_state.get("_helm_tools_sig") != sig or "_helm_tools" not in st.session_state:
+        subprocess_env = {**os.environ, **env}
+
+        conn_stdio = {
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "src.ai.mcp_servers.helm.mcp"],
+            "env": subprocess_env,
+        }
+        conn_remote = {
+            "transport": "sse",
+            "url": cfg.helm.mcp_url,
+        }
+
+        # Primary selection: configured transport.
+        primary = conn_stdio if transport == "stdio" else conn_remote
+        secondary = conn_stdio if primary is conn_remote else conn_remote
+
+        try:
+            st.session_state["_helm_tools"] = _load(primary)
+        except Exception as exc:  # noqa: BLE001
+            # Helpful fallback: if remote is configured but not reachable (common when running Streamlit locally),
+            # fall back to stdio so the page is usable.
+            if primary is conn_remote:
+                try:
+                    st.session_state["_helm_tools"] = _load(secondary)
+                except Exception as exc2:  # noqa: BLE001
+                    raise RuntimeError(_format_exc(exc2)) from exc2
+            else:
+                raise RuntimeError(_format_exc(exc)) from exc
+
+        st.session_state["_helm_tools_sig"] = sig
+    return st.session_state["_helm_tools"]
+
+
 def _invoke_tool(tools, name: str, args: Dict[str, Any]) -> Any:
-    tool = next((t for t in tools if getattr(t, "name", "") == name), None)
+    def _matches(tool_name: str, desired: str) -> bool:
+        if tool_name == desired:
+            return True
+        # LangChain MCP adapters often namespace tools to avoid collisions.
+        # Common formats: "helm__list_releases", "helm.list_releases", "helm:list_releases", "helm_list_releases".
+        for sep in ("__", ".", ":"):
+            if sep in tool_name and tool_name.rsplit(sep, 1)[-1] == desired:
+                return True
+        if tool_name.endswith("_" + desired):
+            return True
+        return False
+
+    tool = next((t for t in tools if _matches(str(getattr(t, "name", "")), name)), None)
     if tool is None:
-        raise ValueError(f"Tool {name} not found")
+        available = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
+        raise ValueError(f"Tool {name} not found. Available: {available}")
 
     if hasattr(tool, "ainvoke"):
         raw = asyncio.run(tool.ainvoke(args))
@@ -429,6 +512,21 @@ def main() -> None:
         }
         .k8s-health-title { font-weight: 700; font-size: 0.9rem; }
         .k8s-health-meta { opacity: 0.85; font-size: 0.78rem; margin-top: 0.15rem; }
+
+        /* Terminal input styling (targeted by aria-label) */
+        input[aria-label="kubectl-style command"] {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            background: #0b1220 !important;
+            color: #e2e8f0 !important;
+            border: 1px solid rgba(148,163,184,0.35) !important;
+            border-radius: 14px !important;
+            padding: 0.55rem 0.7rem !important;
+        }
+        input[aria-label="kubectl-style command"]:focus {
+            outline: none !important;
+            box-shadow: 0 0 0 3px rgba(34,197,94,0.22) !important;
+            border-color: rgba(34,197,94,0.6) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -639,7 +737,7 @@ def main() -> None:
 
     with col2:
         st.markdown("<div class='k8s-section-title'>Quick Links</div>", unsafe_allow_html=True)
-        st.write("Use the tabs below for dashboards, explorer views, actions, and a kubectl-like terminal.")
+        st.write("Use the tabs below for dashboards, explorer views, per-resource actions, and a kubectl-like terminal.")
         if isinstance(health, dict) and health.get("checks"):
             with st.expander("Health check details", expanded=False):
                 st.json(health)
@@ -652,7 +750,7 @@ def main() -> None:
         "Pods",
         "Services",
         "Events",
-        "Actions",
+        "Helm",
         "Terminal",
     ])
 
@@ -764,6 +862,22 @@ def main() -> None:
             st.plotly_chart(fig, use_container_width=True)
         _table_explorer("Namespaces", namespaces, key_prefix="namespaces", default_sort_col="name")
 
+        with st.expander("Namespace actions", expanded=False):
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                ns_to_create = st.text_input("Create namespace", value="", placeholder="e.g. staging", key="ns_create_name")
+            with c2:
+                create_confirm = st.checkbox("Confirm", key="ns_create_confirm")
+            if st.button("Create namespace", type="primary", use_container_width=True, key="ns_create_btn"):
+                if not ns_to_create.strip() or not create_confirm:
+                    st.warning("Provide a namespace name and confirm.")
+                else:
+                    res = _invoke_tool(tools, "create_namespace", {"name": ns_to_create.strip()})
+                    if isinstance(res, dict) and res.get("ok"):
+                        st.success(f"Created namespace: {res.get('name')}")
+                    else:
+                        _render_tool_error("Create namespace failed", res)
+
     # Nodes
     with tabs[2]:
         st.subheader("Nodes")
@@ -803,6 +917,36 @@ def main() -> None:
 
             health = _deployment_health(view)
             st.caption(f"Ready replicas: {health['ready']}/{health['desired']} ({health['pct']:.1f}%)")
+
+            with st.expander("Deployment actions", expanded=False):
+                dep_choices = [f"{d.get('namespace')}/{d.get('name')}" for d in view if d.get("name") and d.get("namespace")]
+                picked = st.selectbox("Deployment", options=[""] + sorted(dep_choices), key="dep_action_pick")
+                act1, act2 = st.columns(2)
+                with act1:
+                    replicas = st.number_input("Replicas", min_value=0, max_value=10_000, value=1, step=1, key="dep_action_replicas")
+                    confirm_scale = st.checkbox("Confirm scale", key="dep_action_scale_confirm")
+                    if st.button("Scale", type="primary", use_container_width=True, key="dep_action_scale_btn"):
+                        if not picked or not confirm_scale:
+                            st.warning("Pick a deployment and confirm.")
+                        else:
+                            ns, name = picked.split("/", 1)
+                            scale_result = _invoke_tool(tools, "scale_deployment", {"name": name, "namespace": ns, "replicas": int(replicas)})
+                            if isinstance(scale_result, dict) and scale_result.get("ok"):
+                                st.success(f"Scaled {ns}/{name} to {scale_result.get('replicas')} replicas.")
+                            else:
+                                _render_tool_error("Scaling failed", scale_result)
+                with act2:
+                    confirm_restart = st.checkbox("Confirm restart", key="dep_action_restart_confirm")
+                    if st.button("Restart deployment", type="secondary", use_container_width=True, key="dep_action_restart_btn"):
+                        if not picked or not confirm_restart:
+                            st.warning("Pick a deployment and confirm.")
+                        else:
+                            ns, name = picked.split("/", 1)
+                            restart_result = _invoke_tool(tools, "restart_deployment", {"name": name, "namespace": ns})
+                            if isinstance(restart_result, dict) and restart_result.get("ok"):
+                                st.success(f"Restart triggered for {ns}/{name}.")
+                            else:
+                                _render_tool_error("Restart failed", restart_result)
 
     # Pods
     with tabs[4]:
@@ -847,6 +991,21 @@ def main() -> None:
                     else:
                         _render_tool_error("Fetching logs failed", log_result)
 
+            with st.expander("Pod actions", expanded=False):
+                pod_choices = [f"{p.get('namespace')}/{p.get('name')}" for p in view if p.get("name") and p.get("namespace")]
+                pod_pick = st.selectbox("Pod", options=[""] + sorted(pod_choices), key="pod_action_pick")
+                confirm_delete = st.checkbox("Confirm delete", key="pod_action_delete_confirm")
+                if st.button("Delete pod", type="secondary", use_container_width=True, key="pod_action_delete_btn"):
+                    if not pod_pick or not confirm_delete:
+                        st.warning("Pick a pod and confirm.")
+                    else:
+                        ns, name = pod_pick.split("/", 1)
+                        del_result = _invoke_tool(tools, "delete_pod", {"name": name, "namespace": ns})
+                        if isinstance(del_result, dict) and del_result.get("ok"):
+                            st.success(f"Deleted pod {ns}/{name}.")
+                        else:
+                            _render_tool_error("Delete failed", del_result)
+
     # Services
     with tabs[5]:
         st.subheader("Services")
@@ -887,55 +1046,304 @@ def main() -> None:
                 fig = _style_fig(fig, height=420)
                 st.plotly_chart(fig, use_container_width=True)
 
-    # Actions
+    # Helm
     with tabs[7]:
-        st.subheader("Safe Actions")
-        st.write("These actions affect the cluster. They execute via MCP.")
+        st.subheader("Helm")
+        st.caption("Helm inventory and actions via the Helm MCP server.")
 
-        act_tab_scale, act_tab_restart, act_tab_delete = st.tabs(["Scale deployment", "Restart deployment", "Delete pod"])
+        helm_env = _build_env()
+        try:
+            helm_tools = _get_helm_tools(helm_env)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Failed to load Helm MCP tools: {exc}")
+            st.info("If running in Kubernetes, ensure the helm-mcp Deployment/Service exists and STREAMLIT_HELM_MCP_URL points to http://helm-mcp:8000/sse")
+            helm_tools = []
 
-        with act_tab_scale:
-            dep_ns = st.text_input("Namespace", value="default", key="scale_ns")
-            dep_name = st.text_input("Deployment name", key="scale_name")
-            dep_replicas = st.number_input("Replicas", min_value=0, max_value=1000, value=1, step=1, key="scale_replicas")
-            confirm = st.checkbox("I understand this changes live workload", key="scale_confirm")
-            if st.button("Scale", type="primary", key="scale_submit"):
-                if not (dep_name and confirm):
-                    st.warning("Provide a deployment name and confirm.")
+        if not helm_tools:
+            st.warning("Helm MCP tools are unavailable. Configure STREAMLIT_HELM_MCP_TRANSPORT=stdio for local dev, or deploy helm-mcp and set STREAMLIT_HELM_MCP_URL.")
+            st.markdown("---")
+            st.markdown("Nothing else to show until Helm MCP is reachable.")
+            # Do not stop the whole page; only skip Helm tab content.
+        else:
+
+            top1, top2, top3 = st.columns([1, 1, 2])
+            with top1:
+                if st.button("Refresh Helm tools", use_container_width=True, key="helm_refresh_tools"):
+                    helm_tools = _get_helm_tools(helm_env, force_reload=True)
+                    st.success("Reloaded Helm tools")
+            with top2:
+                if st.button("Helm health check", use_container_width=True, key="helm_health"):
+                    try:
+                        hc = _invoke_tool(helm_tools, "health_check", {})
+                        if isinstance(hc, dict) and hc.get("ok"):
+                            st.success("Helm MCP is reachable")
+                        st.json(hc)
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Helm health check failed: {exc}")
+            with top3:
+                st.info("Local dev defaults to your current kubeconfig context. For remote clusters, point Helm MCP at a kubeconfig/context or run it in-cluster.")
+
+            with st.expander("Show loaded tool names", expanded=False):
+                names = sorted({str(getattr(t, "name", "")) for t in (helm_tools or []) if getattr(t, "name", None)})
+                if not names:
+                    st.write("No tool names found.")
                 else:
-                    scale_result = _invoke_tool(tools, "scale_deployment", {"name": dep_name, "namespace": dep_ns, "replicas": int(dep_replicas)})
-                    if isinstance(scale_result, dict) and scale_result.get("ok"):
-                        st.success(f"Scaled {scale_result.get('name')} in {scale_result.get('namespace')} to {scale_result.get('replicas')} replicas.")
-                    else:
-                        _render_tool_error("Scaling failed", scale_result)
+                    st.code("\n".join(names), language="text")
 
-        with act_tab_restart:
-            dep_ns = st.text_input("Namespace", value="default", key="restart_ns")
-            dep_name = st.text_input("Deployment name", key="restart_name")
-            confirm = st.checkbox("I understand this will restart pods", key="restart_confirm")
-            if st.button("Restart deployment", type="secondary", key="restart_submit"):
-                if not (dep_name and confirm):
-                    st.warning("Provide a deployment name and confirm.")
-                else:
-                    restart_result = _invoke_tool(tools, "restart_deployment", {"name": dep_name, "namespace": dep_ns})
-                    if isinstance(restart_result, dict) and restart_result.get("ok"):
-                        st.success(f"Restart triggered for {restart_result.get('name')} in {restart_result.get('namespace')}.")
-                    else:
-                        _render_tool_error("Restart failed", restart_result)
+            st.markdown("#### Releases")
 
-        with act_tab_delete:
-            del_ns = st.text_input("Namespace", value="default", key="delete_ns")
-            del_name = st.text_input("Pod name", key="delete_name")
-            confirm = st.checkbox("I understand this deletes the pod", key="delete_confirm")
-            if st.button("Delete pod", type="secondary", key="delete_submit"):
-                if not (del_name and confirm):
-                    st.warning("Provide a pod name and confirm.")
+            rcol1, rcol2, rcol3, rcol4 = st.columns([2, 1, 1, 1])
+            with rcol1:
+                ns_names = sorted({str(n.get("name")) for n in (namespaces or []) if n.get("name")})
+                ns_filter = st.selectbox("Namespace", options=["(all)"] + ns_names, index=0, key="helm_ns_filter")
+            with rcol2:
+                all_namespaces = st.checkbox("All namespaces", value=True, key="helm_all_ns")
+            with rcol3:
+                auto_refresh = st.checkbox("Auto refresh", value=False, key="helm_auto_refresh")
+            with rcol4:
+                if st.button("Refresh releases", use_container_width=True, key="helm_refresh_releases"):
+                    st.session_state["_helm_releases_cache"] = None
+
+            if auto_refresh or st.session_state.get("_helm_releases_cache") is None:
+                try:
+                    args: Dict[str, Any] = {"all_namespaces": bool(all_namespaces)}
+                    if not all_namespaces and ns_filter != "(all)":
+                        args["namespace"] = ns_filter
+                    # Some adapters namespace tool names (e.g. "helm__list_releases").
+                    rel_tool_name = "list_releases"
+                    for t in helm_tools or []:
+                        tn = str(getattr(t, "name", ""))
+                        if tn == "list_releases" or tn.endswith("__list_releases") or tn.endswith(".list_releases") or tn.endswith(":list_releases") or tn.endswith("_list_releases"):
+                            rel_tool_name = tn
+                            break
+                    rel_result = _invoke_tool(helm_tools, rel_tool_name, args)
+                    st.session_state["_helm_releases_cache"] = rel_result
+                except Exception as exc:  # noqa: BLE001
+                    st.session_state["_helm_releases_cache"] = {"ok": False, "error": str(exc)}
+
+            rel_result = st.session_state.get("_helm_releases_cache")
+            releases = _as_list(rel_result, "releases")
+            if not isinstance(rel_result, dict) or not rel_result.get("ok"):
+                st.error("Failed to list releases")
+                st.json(rel_result)
+            elif not releases:
+                st.info("No releases found.")
+            else:
+                status_counts = _count_by(releases, "status")
+                k1, k2, k3, k4 = st.columns(4)
+                with k1:
+                    _kpi_card("Releases", len(releases), tone="info")
+                with k2:
+                    _kpi_card("Deployed", status_counts.get("deployed", 0), tone="ok")
+                with k3:
+                    _kpi_card("Failed", status_counts.get("failed", 0), tone="bad" if status_counts.get("failed", 0) else "neutral")
+                with k4:
+                    _kpi_card(
+                        "Pending",
+                        sum(v for k, v in status_counts.items() if str(k).startswith("pending")),
+                        tone="warn",
+                    )
+
+                _table_explorer("Helm releases", releases, key_prefix="helm_releases", default_sort_col="namespace")
+
+            st.markdown("#### Release details")
+            release_choices: List[str] = []
+            for r in releases:
+                name = r.get("name")
+                ns = r.get("namespace")
+                if name:
+                    release_choices.append(f"{ns}/{name}" if ns else str(name))
+            release_choices = sorted(set(release_choices))
+
+            det1, det2 = st.columns([2, 1])
+            with det1:
+                picked = st.selectbox("Release", options=[""] + release_choices, index=0, key="helm_release_pick")
+            with det2:
+                show_all_values = st.checkbox("All values", value=False, key="helm_all_values")
+
+            if picked:
+                if "/" in picked:
+                    picked_ns, picked_name = picked.split("/", 1)
                 else:
-                    del_result = _invoke_tool(tools, "delete_pod", {"name": del_name, "namespace": del_ns})
-                    if isinstance(del_result, dict) and del_result.get("ok"):
-                        st.success(f"Deleted pod {del_result.get('name')} in {del_result.get('namespace')}.")
+                    picked_ns, picked_name = None, picked
+
+                a1, a2, a3, a4 = st.columns(4)
+                with a1:
+                    if st.button("Status", use_container_width=True, key="helm_btn_status"):
+                        st.session_state["_helm_last_status"] = _invoke_tool(
+                            helm_tools,
+                            "get_release_status",
+                            {"release": picked_name, "namespace": picked_ns},
+                        )
+                with a2:
+                    if st.button("History", use_container_width=True, key="helm_btn_history"):
+                        st.session_state["_helm_last_history"] = _invoke_tool(
+                            helm_tools,
+                            "get_release_history",
+                            {"release": picked_name, "namespace": picked_ns, "max_entries": 25},
+                        )
+                with a3:
+                    if st.button("Values", use_container_width=True, key="helm_btn_values"):
+                        st.session_state["_helm_last_values"] = _invoke_tool(
+                            helm_tools,
+                            "get_release_values",
+                            {"release": picked_name, "namespace": picked_ns, "all_values": bool(show_all_values)},
+                        )
+                with a4:
+                    if st.button("Manifest", use_container_width=True, key="helm_btn_manifest"):
+                        st.session_state["_helm_last_manifest"] = _invoke_tool(
+                            helm_tools,
+                            "get_release_manifest",
+                            {"release": picked_name, "namespace": picked_ns},
+                        )
+
+                out_tabs = st.tabs(["Status", "History", "Values", "Manifest"])
+                with out_tabs[0]:
+                    st.json(st.session_state.get("_helm_last_status") or {"info": "Click Status"})
+                with out_tabs[1]:
+                    st.json(st.session_state.get("_helm_last_history") or {"info": "Click History"})
+                with out_tabs[2]:
+                    vv = st.session_state.get("_helm_last_values")
+                    if isinstance(vv, dict) and "values_text" in vv:
+                        st.code(str(vv.get("values_text", "")), language="yaml")
                     else:
-                        _render_tool_error("Delete failed", del_result)
+                        st.json(vv or {"info": "Click Values"})
+                with out_tabs[3]:
+                    mm = st.session_state.get("_helm_last_manifest")
+                    if isinstance(mm, dict) and mm.get("ok") and isinstance(mm.get("text"), str):
+                        st.code(mm.get("text"), language="yaml")
+                    else:
+                        st.json(mm or {"info": "Click Manifest"})
+
+                st.markdown("##### Uninstall")
+                u1, u2, u3 = st.columns([2, 1, 1])
+                with u1:
+                    confirm = st.checkbox("I understand this deletes the release", value=False, key="helm_uninstall_confirm")
+                with u2:
+                    keep_history = st.checkbox("Keep history", value=False, key="helm_keep_history")
+                with u3:
+                    if st.button("Uninstall", use_container_width=True, disabled=not confirm, key="helm_uninstall"):
+                        res = _invoke_tool(
+                            helm_tools,
+                            "uninstall_release",
+                            {
+                                "release": picked_name,
+                                "namespace": picked_ns,
+                                "keep_history": bool(keep_history),
+                                "wait": True,
+                                "timeout": "5m",
+                            },
+                        )
+                        st.json(res)
+                        st.session_state["_helm_releases_cache"] = None
+
+            st.markdown("#### Install / Upgrade")
+            with st.form("helm_upgrade_install"):
+                f1, f2, f3 = st.columns([1, 2, 1])
+                with f1:
+                    rel_name = st.text_input("Release name", value="", placeholder="my-release")
+                with f2:
+                    chart = st.text_input("Chart", value="", placeholder="bitnami/nginx or ./chart")
+                with f3:
+                    ns = st.text_input("Namespace", value="default")
+
+                g1, g2, g3, g4 = st.columns(4)
+                with g1:
+                    version = st.text_input("Version (optional)", value="")
+                with g2:
+                    wait = st.checkbox("Wait", value=True)
+                with g3:
+                    atomic = st.checkbox("Atomic", value=False)
+                with g4:
+                    dry_run = st.checkbox("Dry run", value=False)
+
+                values_yaml = st.text_area("Values YAML (optional)", value="", height=160)
+                set_values_json = st.text_area("--set values as JSON (optional)", value="{}", height=120)
+
+                submitted = st.form_submit_button("Run upgrade --install", use_container_width=True)
+
+            if submitted:
+                if not rel_name.strip() or not chart.strip():
+                    st.error("Release name and chart are required")
+                else:
+                    try:
+                        set_values: Dict[str, Any]
+                        set_values = json.loads(set_values_json or "{}")
+                        if not isinstance(set_values, dict):
+                            raise ValueError("--set JSON must be an object")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Invalid --set JSON: {exc}")
+                        set_values = {}
+
+                    res = _invoke_tool(
+                        helm_tools,
+                        "upgrade_install_release",
+                        {
+                            "release": rel_name.strip(),
+                            "chart": chart.strip(),
+                            "namespace": ns.strip() or "default",
+                            "create_namespace": True,
+                            "version": version.strip() or None,
+                            "values_yaml": values_yaml or None,
+                            "values_files": [],
+                            "set_values": set_values,
+                            "wait": bool(wait),
+                            "atomic": bool(atomic),
+                            "timeout": "10m",
+                            "dry_run": bool(dry_run),
+                        },
+                    )
+                    st.json(res)
+                    st.session_state["_helm_releases_cache"] = None
+
+            st.markdown("#### Repositories & Search")
+            rr1, rr2, rr3 = st.columns([1, 1, 2])
+            with rr1:
+                if st.button("List repos", use_container_width=True, key="helm_repo_list"):
+                    st.session_state["_helm_repos"] = _invoke_tool(helm_tools, "repo_list", {})
+            with rr2:
+                if st.button("Repo update", use_container_width=True, key="helm_repo_update"):
+                    st.session_state["_helm_repo_update"] = _invoke_tool(helm_tools, "repo_update", {})
+            with rr3:
+                st.write("")
+
+            if st.session_state.get("_helm_repos"):
+                repos_res = st.session_state.get("_helm_repos")
+                repos = _as_list(repos_res, "repos")
+                if isinstance(repos_res, dict) and repos_res.get("ok"):
+                    _table_explorer("Helm repos", repos, key_prefix="helm_repos")
+                else:
+                    st.json(repos_res)
+
+            if st.session_state.get("_helm_repo_update"):
+                st.json(st.session_state.get("_helm_repo_update"))
+
+            with st.expander("Add repo", expanded=False):
+                rname = st.text_input("Repo name", value="", key="helm_repo_name")
+                rurl = st.text_input("Repo URL", value="", key="helm_repo_url")
+                ruser = st.text_input("Username (optional)", value="", key="helm_repo_user")
+                rpass = st.text_input("Password (optional)", value="", type="password", key="helm_repo_pass")
+                if st.button("Add", use_container_width=True, key="helm_repo_add"):
+                    res = _invoke_tool(
+                        helm_tools,
+                        "repo_add",
+                        {"name": rname, "url": rurl, "username": ruser or None, "password": rpass or None},
+                    )
+                    st.json(res)
+
+            s1, s2, s3 = st.columns([3, 1, 1])
+            with s1:
+                search_q = st.text_input("Search repo", value="", placeholder="nginx", key="helm_search_q")
+            with s2:
+                include_versions = st.checkbox("All versions", value=False, key="helm_search_versions")
+            with s3:
+                if st.button("Search", use_container_width=True, key="helm_search") and search_q.strip():
+                    res = _invoke_tool(helm_tools, "search_repo", {"query": search_q.strip(), "versions": bool(include_versions)})
+                    matches = _as_list(res, "matches")
+                    if isinstance(res, dict) and res.get("ok"):
+                        _table_explorer("Search results", matches, key_prefix="helm_search")
+                    else:
+                        st.json(res)
 
     # Terminal
     with tabs[8]:
@@ -950,7 +1358,7 @@ def main() -> None:
             if st.button("Clear terminal history", use_container_width=True, key="k8s_term_clear"):
                 st.session_state.k8s_terminal_history = []  # type: ignore[assignment]
         with col_b:
-            st.caption("Supported: get pods/nodes/ns/deployments/services/events · logs · delete pod · scale deployment")
+            st.caption("Supported: get ... (-A supported) · logs · delete pod · scale deployment · create namespace")
 
         history = st.session_state.k8s_terminal_history  # type: ignore[assignment]
         if "k8s_terminal_selected" not in st.session_state:
@@ -1007,30 +1415,73 @@ def main() -> None:
         with st.expander("Command builder", expanded=False):
             b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1, 1])
             with b_col1:
-                b_verb = st.selectbox("Verb", options=["get", "logs", "delete", "scale"], key="k8s_term_builder_verb")
+                b_verb = st.selectbox("Verb", options=["get", "logs", "delete", "scale", "create"], key="k8s_term_builder_verb")
             with b_col2:
-                b_resource = st.selectbox(
-                    "Resource",
-                    options=["pods", "nodes", "namespaces", "deployments", "services", "events", "sa"],
-                    key="k8s_term_builder_resource",
-                )
+                if b_verb == "get":
+                    b_resource = st.selectbox(
+                        "Resource",
+                        options=["pods", "nodes", "namespaces", "deployments", "services", "events", "sa"],
+                        key="k8s_term_builder_resource_get",
+                    )
+                elif b_verb == "create":
+                    b_resource = st.selectbox("Resource", options=["namespace"], key="k8s_term_builder_resource_create")
+                elif b_verb == "scale":
+                    b_resource = "deployment"
+                    st.selectbox("Resource", options=["deployment"], index=0, key="k8s_term_builder_resource_scale", disabled=True)
+                elif b_verb == "delete":
+                    b_resource = "pod"
+                    st.selectbox("Resource", options=["pod"], index=0, key="k8s_term_builder_resource_delete", disabled=True)
+                else:
+                    b_resource = "pod"
+                    st.selectbox("Resource", options=["pod"], index=0, key="k8s_term_builder_resource_logs", disabled=True)
+
             with b_col3:
+                b_all_ns = False
+                if b_verb == "get" and b_resource not in ("nodes", "namespaces"):
+                    b_all_ns = st.checkbox("All namespaces (-A)", value=True if b_resource in ("deployments",) else False, key="k8s_term_builder_allns")
                 b_namespace = st.text_input("Namespace (-n)", value="default", key="k8s_term_builder_ns")
+
             with b_col4:
                 b_output = st.selectbox("Output (-o)", options=["table", "wide", "yaml", "json"], key="k8s_term_builder_out")
+
+            pods_for_picker = [f"{p.get('namespace')}/{p.get('name')}" for p in (pods or []) if p.get("namespace") and p.get("name")]
+            deps_for_picker = [f"{d.get('namespace')}/{d.get('name')}" for d in (deployments or []) if d.get("namespace") and d.get("name")]
 
             example_cmd = ""
             if b_verb == "get":
                 if b_resource in ("nodes", "namespaces"):
                     example_cmd = f"get {b_resource} -o {b_output}"
                 else:
-                    example_cmd = f"get {b_resource} -n {b_namespace} -o {b_output}"
+                    ns_part = "-A" if b_all_ns else f"-n {b_namespace}"
+                    example_cmd = f"get {b_resource} {ns_part} -o {b_output}"
             elif b_verb == "logs":
-                example_cmd = f"logs <pod-name> -n {b_namespace} --tail=200"
+                pick_pod = st.selectbox("Pod", options=[""] + sorted(pods_for_picker), key="k8s_term_builder_pod_logs")
+                if pick_pod:
+                    ns, name = pick_pod.split("/", 1)
+                    example_cmd = f"logs {name} -n {ns} --tail=200"
+                else:
+                    example_cmd = "logs <pod-name> -n default --tail=200"
             elif b_verb == "delete":
-                example_cmd = f"delete pod <pod-name> -n {b_namespace}"
+                pick_pod = st.selectbox("Pod", options=[""] + sorted(pods_for_picker), key="k8s_term_builder_pod_delete")
+                if pick_pod:
+                    ns, name = pick_pod.split("/", 1)
+                    example_cmd = f"delete pod {name} -n {ns}"
+                else:
+                    example_cmd = "delete pod <pod-name> -n default"
             elif b_verb == "scale":
-                example_cmd = f"scale deployment <deploy-name> -n {b_namespace} --replicas=2"
+                pick_dep = st.selectbox("Deployment", options=[""] + sorted(deps_for_picker), key="k8s_term_builder_dep")
+                rep = st.number_input("Replicas", min_value=0, max_value=10_000, value=2, step=1, key="k8s_term_builder_dep_rep")
+                if pick_dep:
+                    ns, name = pick_dep.split("/", 1)
+                    example_cmd = f"scale deployment {name} -n {ns} --replicas={int(rep)}"
+                else:
+                    example_cmd = f"scale deployment <deploy-name> -n default --replicas={int(rep)}"
+            elif b_verb == "create":
+                ns_name = st.text_input("Name", value="", placeholder="e.g. staging", key="k8s_term_builder_create_ns")
+                if ns_name.strip():
+                    example_cmd = f"create namespace {ns_name.strip()}"
+                else:
+                    example_cmd = "create namespace <name>"
 
             if st.button("Use in terminal", use_container_width=True, key="k8s_term_builder_apply") and example_cmd:
                 st.session_state.k8s_terminal_last = example_cmd  # type: ignore[assignment]
@@ -1047,8 +1498,8 @@ def main() -> None:
             run_clicked = st.button("Run command", type="primary", use_container_width=True, key="k8s_term_run")
         with col_examples:
             st.caption(
-                "Examples: `get pods -n default` · `get nodes` · `get services -n default` · `get events -n default` · "
-                "`logs my-pod -n default --tail=100` · `scale deployment my-app -n default --replicas=3`"
+                "Examples: `get deployments -A -o yaml` · `get pods -n default` · `get nodes` · `get services -A` · `get events -A` · "
+                "`logs my-pod -n default --tail=100` · `scale deployment my-app -n default --replicas=3` · `create namespace staging`"
             )
 
         if run_clicked and cmd.strip():

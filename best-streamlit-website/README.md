@@ -50,6 +50,43 @@ best-streamlit-website
     python -m streamlit run .\app.py
     ```
 
+## Configuration (env-first with local defaults)
+
+This repo uses small Python config modules that read from environment variables first and fall back to local-dev defaults when env vars are missing.
+
+- Streamlit UI config: `src/streamlit_config.py`
+- Jenkins MCP server config: `src/ai/mcp_servers/jenkins/config.py`
+- Kubernetes MCP server config: `src/ai/mcp_servers/kubernetes/config.py`
+- Agent configs:
+   - Jenkins tool-agent: `src/ai/agents/jenkins_agent_config.py`
+   - Kubernetes tool-agent: `src/ai/agents/kubernetes_agent_config.py`
+   - DataGen agent: `src/ai/agents/datagen_agent_config.py`
+
+Common env vars you may want to set for deployments:
+
+- Jenkins MCP:
+   - `JENKINS_BASE_URL`
+   - `JENKINS_VERIFY_SSL`
+   - `JENKINS_USERNAME` / `JENKINS_API_TOKEN` (server-side)
+   - `JENKINS_MCP_CLIENT_TOKEN` (shared secret between MCP server and clients)
+- Kubernetes MCP:
+   - `K8S_KUBECONFIG`
+   - `K8S_CONTEXT`
+- Agents / Ollama:
+   - `OLLAMA_BASE_URL`
+   - `OLLAMA_MODEL`
+   - `OLLAMA_TEMPERATURE`
+
+## Deployment-specific requirements
+
+If you plan to deploy Streamlit, MCP servers, and agents separately, install dependencies from the corresponding requirements file:
+
+- Streamlit UI: `deploy/streamlit/requirements.txt`
+- Jenkins MCP server: `deploy/mcp-jenkins/requirements.txt`
+- Kubernetes MCP server: `deploy/mcp-kubernetes/requirements.txt`
+- Tool agents (MCP tools): `deploy/agents/tool-agent/requirements.txt`
+- DataGen agent: `deploy/agents/datagen/requirements.txt`
+
 ### Enable auto re-run on code changes
 
 This project is configured to automatically re-run when you save changes to Python files.

@@ -1,0 +1,81 @@
+namespace: best-streamlit-website
+
+images:
+  streamlit:
+    repository: best-streamlit-website/streamlit
+    tag: local
+    pullPolicy: IfNotPresent
+  mcpJenkins:
+    repository: best-streamlit-website/mcp-jenkins
+    tag: local
+    pullPolicy: IfNotPresent
+  mcpKubernetes:
+    repository: best-streamlit-website/mcp-kubernetes
+    tag: local
+    pullPolicy: IfNotPresent
+  mcpHelm:
+    repository: best-streamlit-website/mcp-helm
+    tag: local
+    pullPolicy: IfNotPresent
+  agentDataGen:
+    repository: best-streamlit-website/agent-datagen
+    tag: local
+    pullPolicy: IfNotPresent
+  agentJenkins:
+    repository: best-streamlit-website/agent-jenkins
+    tag: local
+    pullPolicy: IfNotPresent
+  agentKubernetes:
+    repository: best-streamlit-website/agent-kubernetes
+    tag: local
+    pullPolicy: IfNotPresent
+
+env:
+  ollamaBaseUrl: http://ollama:11434
+  ollamaModel: qwen2.5:7b-instruct-q6_K
+
+  jenkinsBaseUrl: http://jenkins:8080
+  jenkinsVerifySsl: "true"
+  jenkinsMcpClientToken: dev-jenkins-mcp-token
+  jenkinsMcpTransport: http
+  jenkinsMcpUrl: http://jenkins-mcp:8000/sse
+
+  k8sContext: ""
+  kubernetesMcpTransport: http
+  kubernetesMcpUrl: http://kubernetes-mcp:8000/sse
+
+  helmMcpTransport: http
+  helmMcpUrl: http://helm-mcp:8000/sse
+
+components:
+  streamlit: true
+  mcpJenkins: true
+  mcpKubernetes: true
+  mcpHelm: true
+  agentDataGen: true
+  agentJenkins: true
+  agentKubernetes: true
+
+replicas:
+  streamlit: 1
+  mcpJenkins: 1
+  mcpKubernetes: 1
+  mcpHelm: 1
+  agentDataGen: 1
+  agentJenkins: 1
+  agentKubernetes: 1
+
+service:
+  streamlit:
+    type: ClusterIP
+    port: 80
+  agents:
+    type: ClusterIP
+    port: 8080
+  mcp:
+    type: ClusterIP
+    port: 8000
+
+rbac:
+  helmMcp:
+    enabled: true

@@ -1,0 +1,73 @@
+{{- if .Values.components.streamlit }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit-app
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.streamlit }}
+  selector:
+    matchLabels:
+      app: streamlit-app
+  template:
+    metadata:
+      labels:
+        app: streamlit-app
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: streamlit
+          image: {{ .Values.images.streamlit.repository }}:{{ .Values.images.streamlit.tag }}
+          imagePullPolicy: {{ .Values.images.streamlit.pullPolicy }}
+          ports:
+            - containerPort: 8501
+          env:
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.env.ollamaBaseUrl | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.env.ollamaModel | quote }}
+            - name: JENKINS_BASE_URL
+              value: {{ .Values.env.jenkinsBaseUrl | quote }}
+            - name: JENKINS_VERIFY_SSL
+              value: {{ .Values.env.jenkinsVerifySsl | quote }}
+            - name: JENKINS_MCP_CLIENT_TOKEN
+              value: {{ .Values.env.jenkinsMcpClientToken | quote }}
+            - name: STREAMLIT_JENKINS_MCP_TRANSPORT
+              value: {{ .Values.env.jenkinsMcpTransport | quote }}
+            - name: STREAMLIT_JENKINS_MCP_URL
+              value: {{ .Values.env.jenkinsMcpUrl | quote }}
+            - name: K8S_CONTEXT
+              value: {{ .Values.env.k8sContext | quote }}
+            - name: STREAMLIT_KUBERNETES_MCP_TRANSPORT
+              value: {{ .Values.env.kubernetesMcpTransport | quote }}
+            - name: STREAMLIT_KUBERNETES_MCP_URL
+              value: {{ .Values.env.kubernetesMcpUrl | quote }}
+            - name: STREAMLIT_HELM_MCP_TRANSPORT
+              value: {{ .Values.env.helmMcpTransport | quote }}
+            - name: STREAMLIT_HELM_MCP_URL
+              value: {{ .Values.env.helmMcpUrl | quote }}
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-app
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: streamlit-app
+  ports:
+    - name: http
+      port: {{ .Values.service.streamlit.port }}
+      targetPort: 8501
+  type: {{ .Values.service.streamlit.type }}
+{{- end }}

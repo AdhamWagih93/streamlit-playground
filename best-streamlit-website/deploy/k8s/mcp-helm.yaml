@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: best-streamlit-website
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: helm-mcp
+  namespace: best-streamlit-website
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: helm-mcp
+rules:
+  # Helm release storage (defaults to secrets).
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: helm-mcp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: helm-mcp
+subjects:
+  - kind: ServiceAccount
+    name: helm-mcp
+    namespace: best-streamlit-website
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helm-mcp
+  namespace: best-streamlit-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: helm-mcp
+  template:
+    metadata:
+      labels:
+        app: helm-mcp
+    spec:
+      serviceAccountName: helm-mcp
+      containers:
+        - name: helm-mcp
+          image: best-streamlit-website/mcp-helm:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HELM_MCP_TRANSPORT
+              value: "http"
+            - name: HELM_MCP_HOST
+              value: "0.0.0.0"
+            - name: HELM_MCP_PORT
+              value: "8000"
+            # Optional: enable raw helm execution (dangerous)
+            - name: HELM_ALLOW_RAW
+              value: "false"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: helm-mcp
+  namespace: best-streamlit-website
+spec:
+  selector:
+    app: helm-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

@@ -8,6 +8,8 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.tools import tool
 from langchain.agents import create_agent
 
+from src.ai.agents.datagen_agent_config import DataGenAgentConfig
+
 
 # -------- Tools --------
 @tool
@@ -93,12 +95,11 @@ def generate_sample_users(
 TOOLS = [write_json, read_json, generate_sample_users]
 
 
-# ---- Use Ollama instead of OpenAI ----
-# Replace with your host/port, e.g. "http://localhost:11434"
+cfg = DataGenAgentConfig.from_env()
 llm = ChatOllama(
-    model="qwen2.5:7b-instruct-q6_K",  # or any Ollama model you pulled
-    base_url="http://localhost:11434",
-    temperature=0,
+    model=cfg.model,
+    base_url=cfg.ollama_base_url,
+    temperature=cfg.temperature,
 )
 
 SYSTEM_MESSAGE = (
