@@ -34,7 +34,7 @@ spec:
             - name: KUBERNETES_MCP_TRANSPORT
               value: "http"
             - name: KUBERNETES_MCP_URL
-              value: "http://kubernetes-mcp:8000/sse"
+              value: "http://kubernetes-mcp:8000"
           readinessProbe:
             httpGet:
               path: /healthz

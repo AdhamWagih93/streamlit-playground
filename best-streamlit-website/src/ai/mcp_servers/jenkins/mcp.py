@@ -334,7 +334,6 @@ def create_scm_pipeline_job(
 def run_stdio() -> None:
     cfg = JenkinsMCPServerConfig.from_env()
     transport = (os.environ.get("MCP_TRANSPORT") or cfg.mcp_transport or "stdio").lower().strip()
-    transport = "sse" if transport == "http" else transport
 
     if transport == "stdio":
         mcp.run(transport="stdio")

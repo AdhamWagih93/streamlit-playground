@@ -17,7 +17,7 @@ class DockerMCPServerConfig:
     - DOCKER_TIMEOUT_SECONDS: client timeout (default: 60)
 
     MCP transport selection:
-    - DOCKER_MCP_TRANSPORT: stdio|http|sse (http is treated as sse)
+    - DOCKER_MCP_TRANSPORT: stdio|http|sse
     - DOCKER_MCP_HOST
     - DOCKER_MCP_PORT
     - DOCKER_MCP_URL: URL used by remote clients (when transport != stdio)
@@ -40,12 +40,11 @@ class DockerMCPServerConfig:
     DEFAULT_MCP_TRANSPORT: str = "stdio"
     DEFAULT_MCP_HOST: str = "0.0.0.0"
     DEFAULT_MCP_PORT: int = 8000
-    DEFAULT_MCP_URL: str = "http://docker-mcp:8000/sse"
+    DEFAULT_MCP_URL: str = "http://docker-mcp:8000"
 
     @classmethod
     def from_env(cls) -> "DockerMCPServerConfig":
-        transport_raw = env_str("DOCKER_MCP_TRANSPORT", cls.DEFAULT_MCP_TRANSPORT).lower().strip()
-        transport = "sse" if transport_raw == "http" else transport_raw
+        transport = env_str("DOCKER_MCP_TRANSPORT", cls.DEFAULT_MCP_TRANSPORT).lower().strip()
 
         return cls(
             docker_host=env_optional_str("DOCKER_HOST"),

@@ -17,7 +17,6 @@ set_theme(page_title="Docker MCP Test", page_icon="🐳")
 def _get_docker_tools(force_reload: bool = False):
     cfg = StreamlitAppConfig.from_env()
     transport = (cfg.docker.mcp_transport or "stdio").lower().strip()
-    transport = "sse" if transport == "http" else transport
 
     sig = f"{transport}|{cfg.docker.mcp_url}"
     if force_reload or st.session_state.get("_docker_tools_sig") != sig or "_docker_tools" not in st.session_state:
@@ -29,7 +28,7 @@ def _get_docker_tools(force_reload: bool = False):
                 "env": {**os.environ, **cfg.docker.to_env_overrides()},
             }
         else:
-            conn = {"transport": "sse", "url": cfg.docker.mcp_url}
+            conn = {"transport": transport, "url": cfg.docker.mcp_url}
 
         client = MultiServerMCPClient(connections={"docker": conn})
         st.session_state["_docker_tools"] = asyncio.run(client.get_tools())
@@ -63,7 +62,6 @@ st.caption("Uses the Python docker SDK via an MCP server. No docker CLI required
 
 cfg_for_hint = StreamlitAppConfig.from_env()
 transport_for_hint = (cfg_for_hint.docker.mcp_transport or "stdio").lower().strip()
-transport_for_hint = "sse" if transport_for_hint == "http" else transport_for_hint
 if transport_for_hint == "stdio":
     if importlib.util.find_spec("docker") is None:
         st.warning(

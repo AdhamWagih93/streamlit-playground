@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import sys
 
 import os
+import platform
 
 import plotly.express as px
 import pandas as pd
@@ -149,8 +150,23 @@ def _build_env() -> Dict[str, str]:
     env: Dict[str, str] = {}
     kubeconfig = st.session_state.get("k8s_kubeconfig") or cfg.kubernetes.kubeconfig
     context = st.session_state.get("k8s_context") or cfg.kubernetes.context
+
+    # Local/dev convenience: auto-detect the default kubeconfig path when
+    # nothing is configured via env/UI.
+    if not kubeconfig:
+        try:
+            default_kc = Path.home() / ".kube" / "config"
+            if default_kc.is_file():
+                kubeconfig = str(default_kc)
+        except Exception:  # noqa: BLE001
+            pass
+
     if kubeconfig:
+        # Set the common variants so Kubernetes client libs resolve the same cluster.
+        # Helm tools are hosted by kubernetes-mcp and inherit cluster selection
+        # from the Kubernetes MCP config/env.
         env["K8S_KUBECONFIG"] = kubeconfig
+        env["KUBECONFIG"] = kubeconfig
     if context:
         env["K8S_CONTEXT"] = context
 
@@ -163,18 +179,57 @@ def _build_env() -> Dict[str, str]:
 def _get_tools(env: Dict[str, str], force_reload: bool = False):
     """Load MCP tools and keep them in session_state (tools are not pickle-safe)."""
 
-    sig = json.dumps(env, sort_keys=True)
+    # Include code mtime so editing the MCP server code forces a reload.
+    # This prevents stale stdio subprocesses from lingering across Streamlit reruns.
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        watched = [
+            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "mcp.py",
+            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "helm.py",
+            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "helm_config.py",
+            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "helm_cli.py",
+            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "pyhelm3_backend.py",
+        ]
+        # Use ns precision to avoid missing reloads when files are edited rapidly.
+        code_mtime = 0
+        for p in watched:
+            if p.is_file():
+                code_mtime = max(code_mtime, int(p.stat().st_mtime_ns))
+    except Exception:  # noqa: BLE001
+        code_mtime = 0
+
+    from src.streamlit_config import StreamlitAppConfig
+
+    cfg = StreamlitAppConfig.from_env()
+    configured_transport = (cfg.kubernetes.mcp_transport or "stdio").lower().strip()
+    transport = "stdio" if st.session_state.get("k8s_force_stdio") else configured_transport
+    remote_url = cfg.kubernetes.mcp_url
+
+    sig = json.dumps(
+        {
+            "env": env,
+            "code_mtime": code_mtime,
+            "transport": transport,
+            "url": remote_url if transport != "stdio" else None,
+            "py": sys.executable,
+        },
+        sort_keys=True,
+    )
     if force_reload or st.session_state.get("_k8s_tools_sig") != sig or "_k8s_tools" not in st.session_state:
         # Merge overrides onto the current process environment.
         # Some subprocess launchers treat provided env as a full replacement;
         # keeping the base env avoids Windows/Python startup surprises.
         subprocess_env = {**os.environ, **env}
 
-        from src.streamlit_config import StreamlitAppConfig
-
-        cfg = StreamlitAppConfig.from_env()
-        transport = (cfg.kubernetes.mcp_transport or "stdio").lower().strip()
-        transport = "sse" if transport == "http" else transport
+        # Ensure the stdio subprocess imports this workspace's `src/...` package,
+        # even when other installed packages or different working directories
+        # would otherwise shadow it.
+        repo_root = str(Path(__file__).resolve().parent.parent)
+        existing_pp = subprocess_env.get("PYTHONPATH", "")
+        if existing_pp:
+            subprocess_env["PYTHONPATH"] = repo_root + os.pathsep + existing_pp
+        else:
+            subprocess_env["PYTHONPATH"] = repo_root
 
         if transport == "stdio":
             conn = {
@@ -185,8 +240,8 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
             }
         else:
             conn = {
-                "transport": "sse",
-                "url": cfg.kubernetes.mcp_url,
+                "transport": transport,
+                "url": remote_url,
             }
         client = MultiServerMCPClient(
             connections={
@@ -196,68 +251,6 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
         st.session_state["_k8s_tools"] = asyncio.run(client.get_tools())
         st.session_state["_k8s_tools_sig"] = sig
     return st.session_state["_k8s_tools"]
-
-
-def _get_helm_tools(env: Dict[str, str], force_reload: bool = False):
-    """Load Helm MCP tools and keep them in session_state (tools are not pickle-safe)."""
-
-    from src.streamlit_config import StreamlitAppConfig
-
-    cfg = StreamlitAppConfig.from_env()
-    transport = (cfg.helm.mcp_transport or "stdio").lower().strip()
-    transport = "sse" if transport == "http" else transport
-
-    sig = json.dumps({"env": env, "transport": transport, "url": cfg.helm.mcp_url}, sort_keys=True)
-    def _format_exc(e: BaseException) -> str:
-        # Python 3.11+: MultiServerMCPClient uses TaskGroups; exceptions may be wrapped.
-        try:
-            if isinstance(e, BaseExceptionGroup):
-                parts: List[str] = []
-                for sub in e.exceptions:
-                    parts.append(_format_exc(sub))
-                joined = " | ".join(p for p in parts if p)
-                return joined or str(e)
-        except Exception:  # noqa: BLE001
-            pass
-        return str(e)
-
-    def _load(conn: Dict[str, Any]):
-        client = MultiServerMCPClient(connections={"helm": conn})
-        return asyncio.run(client.get_tools())
-
-    if force_reload or st.session_state.get("_helm_tools_sig") != sig or "_helm_tools" not in st.session_state:
-        subprocess_env = {**os.environ, **env}
-
-        conn_stdio = {
-            "transport": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "src.ai.mcp_servers.helm.mcp"],
-            "env": subprocess_env,
-        }
-        conn_remote = {
-            "transport": "sse",
-            "url": cfg.helm.mcp_url,
-        }
-
-        # Primary selection: configured transport.
-        primary = conn_stdio if transport == "stdio" else conn_remote
-        secondary = conn_stdio if primary is conn_remote else conn_remote
-
-        try:
-            st.session_state["_helm_tools"] = _load(primary)
-        except Exception as exc:  # noqa: BLE001
-            # Helpful fallback: if remote is configured but not reachable (common when running Streamlit locally),
-            # fall back to stdio so the page is usable.
-            if primary is conn_remote:
-                try:
-                    st.session_state["_helm_tools"] = _load(secondary)
-                except Exception as exc2:  # noqa: BLE001
-                    raise RuntimeError(_format_exc(exc2)) from exc2
-            else:
-                raise RuntimeError(_format_exc(exc)) from exc
-
-        st.session_state["_helm_tools_sig"] = sig
-    return st.session_state["_helm_tools"]
 
 
 def _invoke_tool(tools, name: str, args: Dict[str, Any]) -> Any:
@@ -561,13 +554,51 @@ def main() -> None:
         st.session_state["k8s_kubeconfig"] = kubeconfig or ""
         st.session_state["k8s_context"] = context or ""
 
+        if "k8s_force_stdio" not in st.session_state:
+            st.session_state["k8s_force_stdio"] = bool(platform.system().lower().startswith("win"))
+
+        st.checkbox(
+            "Force local kubernetes-mcp (stdio)",
+            value=bool(st.session_state.get("k8s_force_stdio", False)),
+            help=(
+                "Ignores STREAMLIT_KUBERNETES_MCP_TRANSPORT/URL and starts the MCP server as a local stdio subprocess. "
+                "Use this to avoid calling a stale remote deployment."
+            ),
+            key="k8s_force_stdio",
+        )
+
+        from src.streamlit_config import StreamlitAppConfig
+
+        _cfg = StreamlitAppConfig.from_env()
+        _transport = ("stdio" if st.session_state.get("k8s_force_stdio") else (_cfg.kubernetes.mcp_transport or "stdio")).lower().strip()
+        if _transport == "stdio":
+            st.caption(f"MCP transport: stdio (local) via `{sys.executable} -m src.ai.mcp_servers.kubernetes.mcp`")
+        else:
+            st.caption(f"MCP transport: {_transport} (remote)")
+            st.caption(f"MCP URL: {_cfg.kubernetes.mcp_url}")
+
         col_a, col_b = st.columns(2)
         with col_a:
             reload_tools = st.button("Reload tools", type="primary", use_container_width=True, key="k8s_reload_tools")
         with col_b:
             refresh = st.button("Refresh data", use_container_width=True, key="k8s_refresh_data")
 
+        hard_reset = st.button(
+            "Hard reset (fix stale tools)",
+            use_container_width=True,
+            help="Clears cached MCP tool objects and snapshots to force a clean reconnect.",
+            key="k8s_hard_reset",
+        )
+
         st.caption("All Kubernetes interactions are executed through the MCP server.")
+
+    if hard_reset:
+        for k in ("_k8s_tools", "_k8s_tools_sig", "k8s_snapshot", "_helm_releases_cache"):
+            try:
+                st.session_state.pop(k, None)
+            except Exception:  # noqa: BLE001
+                pass
+        st.rerun()
 
     env = _build_env()
 
@@ -1049,44 +1080,43 @@ def main() -> None:
     # Helm
     with tabs[7]:
         st.subheader("Helm")
-        st.caption("Helm inventory and actions via the Helm MCP server.")
+        st.caption("Helm inventory and actions via the Kubernetes MCP server (Helm tools are exposed with a helm_ prefix).")
 
-        helm_env = _build_env()
-        try:
-            helm_tools = _get_helm_tools(helm_env)
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to load Helm MCP tools: {exc}")
-            st.info("If running in Kubernetes, ensure the helm-mcp Deployment/Service exists and STREAMLIT_HELM_MCP_URL points to http://helm-mcp:8000/sse")
-            helm_tools = []
+        # Helm tools are now provided by the kubernetes-mcp server itself.
+        helm_tools = tools or []
 
         if not helm_tools:
-            st.warning("Helm MCP tools are unavailable. Configure STREAMLIT_HELM_MCP_TRANSPORT=stdio for local dev, or deploy helm-mcp and set STREAMLIT_HELM_MCP_URL.")
+            st.warning("Kubernetes MCP tools are unavailable, so Helm tools are also unavailable.")
             st.markdown("---")
-            st.markdown("Nothing else to show until Helm MCP is reachable.")
-            # Do not stop the whole page; only skip Helm tab content.
+            st.markdown("Nothing else to show until kubernetes-mcp is reachable.")
         else:
 
             top1, top2, top3 = st.columns([1, 1, 2])
             with top1:
                 if st.button("Refresh Helm tools", use_container_width=True, key="helm_refresh_tools"):
-                    helm_tools = _get_helm_tools(helm_env, force_reload=True)
-                    st.success("Reloaded Helm tools")
+                    tools = _get_tools(env, force_reload=True)
+                    helm_tools = tools or []
+                    st.success("Reloaded tools (including Helm)")
             with top2:
                 if st.button("Helm health check", use_container_width=True, key="helm_health"):
                     try:
-                        hc = _invoke_tool(helm_tools, "health_check", {})
+                        hc = _invoke_tool(helm_tools, "helm_health_check", {})
                         if isinstance(hc, dict) and hc.get("ok"):
-                            st.success("Helm MCP is reachable")
+                            st.success("Helm (via kubernetes-mcp) is reachable")
                         st.json(hc)
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Helm health check failed: {exc}")
             with top3:
-                st.info("Local dev defaults to your current kubeconfig context. For remote clusters, point Helm MCP at a kubeconfig/context or run it in-cluster.")
+                st.info("Helm uses the same kubeconfig/context as Kubernetes. Configure HELM_* env vars for binary and auto-install behaviour.")
 
-            with st.expander("Show loaded tool names", expanded=False):
-                names = sorted({str(getattr(t, "name", "")) for t in (helm_tools or []) if getattr(t, "name", None)})
+            with st.expander("Show loaded Helm tool names", expanded=False):
+                names = sorted({
+                    str(getattr(t, "name", ""))
+                    for t in (helm_tools or [])
+                    if getattr(t, "name", "").startswith("helm_")
+                })
                 if not names:
-                    st.write("No tool names found.")
+                    st.write("No helm_* tools found on kubernetes-mcp.")
                 else:
                     st.code("\n".join(names), language="text")
 
@@ -1109,14 +1139,10 @@ def main() -> None:
                     args: Dict[str, Any] = {"all_namespaces": bool(all_namespaces)}
                     if not all_namespaces and ns_filter != "(all)":
                         args["namespace"] = ns_filter
-                    # Some adapters namespace tool names (e.g. "helm__list_releases").
-                    rel_tool_name = "list_releases"
-                    for t in helm_tools or []:
-                        tn = str(getattr(t, "name", ""))
-                        if tn == "list_releases" or tn.endswith("__list_releases") or tn.endswith(".list_releases") or tn.endswith(":list_releases") or tn.endswith("_list_releases"):
-                            rel_tool_name = tn
-                            break
-                    rel_result = _invoke_tool(helm_tools, rel_tool_name, args)
+                    # Helm tools on kubernetes-mcp are exposed with explicit
+                    # "helm_" prefixes (e.g. "helm_list_releases"). The
+                    # _invoke_tool helper already handles suffix matching.
+                    rel_result = _invoke_tool(helm_tools, "helm_list_releases", args)
                     st.session_state["_helm_releases_cache"] = rel_result
                 except Exception as exc:  # noqa: BLE001
                     st.session_state["_helm_releases_cache"] = {"ok": False, "error": str(exc)}
@@ -1172,28 +1198,28 @@ def main() -> None:
                     if st.button("Status", use_container_width=True, key="helm_btn_status"):
                         st.session_state["_helm_last_status"] = _invoke_tool(
                             helm_tools,
-                            "get_release_status",
+                            "helm_get_release_status",
                             {"release": picked_name, "namespace": picked_ns},
                         )
                 with a2:
                     if st.button("History", use_container_width=True, key="helm_btn_history"):
                         st.session_state["_helm_last_history"] = _invoke_tool(
                             helm_tools,
-                            "get_release_history",
+                            "helm_get_release_history",
                             {"release": picked_name, "namespace": picked_ns, "max_entries": 25},
                         )
                 with a3:
                     if st.button("Values", use_container_width=True, key="helm_btn_values"):
                         st.session_state["_helm_last_values"] = _invoke_tool(
                             helm_tools,
-                            "get_release_values",
+                            "helm_get_release_values",
                             {"release": picked_name, "namespace": picked_ns, "all_values": bool(show_all_values)},
                         )
                 with a4:
                     if st.button("Manifest", use_container_width=True, key="helm_btn_manifest"):
                         st.session_state["_helm_last_manifest"] = _invoke_tool(
                             helm_tools,
-                            "get_release_manifest",
+                            "helm_get_release_manifest",
                             {"release": picked_name, "namespace": picked_ns},
                         )
 
@@ -1225,7 +1251,7 @@ def main() -> None:
                     if st.button("Uninstall", use_container_width=True, disabled=not confirm, key="helm_uninstall"):
                         res = _invoke_tool(
                             helm_tools,
-                            "uninstall_release",
+                            "helm_uninstall_release",
                             {
                                 "release": picked_name,
                                 "namespace": picked_ns,
@@ -1277,7 +1303,7 @@ def main() -> None:
 
                     res = _invoke_tool(
                         helm_tools,
-                        "upgrade_install_release",
+                        "helm_upgrade_install_release",
                         {
                             "release": rel_name.strip(),
                             "chart": chart.strip(),
@@ -1300,10 +1326,10 @@ def main() -> None:
             rr1, rr2, rr3 = st.columns([1, 1, 2])
             with rr1:
                 if st.button("List repos", use_container_width=True, key="helm_repo_list"):
-                    st.session_state["_helm_repos"] = _invoke_tool(helm_tools, "repo_list", {})
+                    st.session_state["_helm_repos"] = _invoke_tool(helm_tools, "helm_repo_list", {})
             with rr2:
                 if st.button("Repo update", use_container_width=True, key="helm_repo_update"):
-                    st.session_state["_helm_repo_update"] = _invoke_tool(helm_tools, "repo_update", {})
+                    st.session_state["_helm_repo_update"] = _invoke_tool(helm_tools, "helm_repo_update", {})
             with rr3:
                 st.write("")
 
@@ -1326,7 +1352,7 @@ def main() -> None:
                 if st.button("Add", use_container_width=True, key="helm_repo_add"):
                     res = _invoke_tool(
                         helm_tools,
-                        "repo_add",
+                        "helm_repo_add",
                         {"name": rname, "url": rurl, "username": ruser or None, "password": rpass or None},
                     )
                     st.json(res)
@@ -1338,7 +1364,7 @@ def main() -> None:
                 include_versions = st.checkbox("All versions", value=False, key="helm_search_versions")
             with s3:
                 if st.button("Search", use_container_width=True, key="helm_search") and search_q.strip():
-                    res = _invoke_tool(helm_tools, "search_repo", {"query": search_q.strip(), "versions": bool(include_versions)})
+                    res = _invoke_tool(helm_tools, "helm_search_repo", {"query": search_q.strip(), "versions": bool(include_versions)})
                     matches = _as_list(res, "matches")
                     if isinstance(res, dict) and res.get("ok"):
                         _table_explorer("Search results", matches, key_prefix="helm_search")

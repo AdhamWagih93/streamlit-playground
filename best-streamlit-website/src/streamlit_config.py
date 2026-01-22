@@ -5,8 +5,8 @@ from typing import Dict
 
 from src.ai.mcp_servers.jenkins.config import JenkinsMCPServerConfig
 from src.ai.mcp_servers.kubernetes.config import KubernetesMCPServerConfig
-from src.ai.mcp_servers.helm.config import HelmMCPServerConfig
 from src.ai.mcp_servers.docker.config import DockerMCPServerConfig
+from src.ai.mcp_servers.nexus.config import NexusMCPServerConfig
 from src.config_utils import env_str
 
 
@@ -24,8 +24,8 @@ class StreamlitAppConfig:
 
     jenkins: JenkinsMCPServerConfig
     kubernetes: KubernetesMCPServerConfig
-    helm: HelmMCPServerConfig
     docker: DockerMCPServerConfig
+    nexus: NexusMCPServerConfig
 
     @classmethod
     def from_env(cls) -> "StreamlitAppConfig":
@@ -55,21 +55,6 @@ class StreamlitAppConfig:
             mcp_url=env_str("STREAMLIT_KUBERNETES_MCP_URL", kubernetes.mcp_url),
         )
 
-        helm = HelmMCPServerConfig.from_env()
-        helm = HelmMCPServerConfig(
-            helm_bin=helm.helm_bin,
-            auto_install=helm.auto_install,
-            auto_install_version=helm.auto_install_version,
-            auto_install_dir=helm.auto_install_dir,
-            kubeconfig=helm.kubeconfig,
-            kubecontext=helm.kubecontext,
-            allow_raw=helm.allow_raw,
-            mcp_transport=env_str("STREAMLIT_HELM_MCP_TRANSPORT", helm.mcp_transport),
-            mcp_host=helm.mcp_host,
-            mcp_port=helm.mcp_port,
-            mcp_url=env_str("STREAMLIT_HELM_MCP_URL", helm.mcp_url),
-        )
-
         docker = DockerMCPServerConfig.from_env()
         docker = DockerMCPServerConfig(
             docker_host=docker.docker_host,
@@ -82,7 +67,22 @@ class StreamlitAppConfig:
             mcp_url=env_str("STREAMLIT_DOCKER_MCP_URL", docker.mcp_url),
         )
 
-        return cls(jenkins=jenkins, kubernetes=kubernetes, helm=helm, docker=docker)
+        nexus = NexusMCPServerConfig.from_env()
+        nexus = NexusMCPServerConfig(
+            base_url=nexus.base_url,
+            username=nexus.username,
+            password=nexus.password,
+            token=nexus.token,
+            verify_ssl=nexus.verify_ssl,
+            mcp_client_token=env_str("STREAMLIT_NEXUS_MCP_CLIENT_TOKEN", nexus.mcp_client_token or "") or None,
+            allow_raw=nexus.allow_raw,
+            mcp_transport=env_str("STREAMLIT_NEXUS_MCP_TRANSPORT", nexus.mcp_transport),
+            mcp_host=nexus.mcp_host,
+            mcp_port=nexus.mcp_port,
+            mcp_url=env_str("STREAMLIT_NEXUS_MCP_URL", nexus.mcp_url),
+        )
+
+        return cls(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus)
 
     def build_jenkins_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         return {**base_env, **self.jenkins.to_env_overrides()}
@@ -90,8 +90,8 @@ class StreamlitAppConfig:
     def build_kubernetes_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         return {**base_env, **self.kubernetes.to_env_overrides()}
 
-    def build_helm_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
-        return {**base_env, **self.helm.to_env_overrides()}
-
     def build_docker_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         return {**base_env, **self.docker.to_env_overrides()}
+
+    def build_nexus_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
+        return {**base_env, **self.nexus.to_env_overrides()}

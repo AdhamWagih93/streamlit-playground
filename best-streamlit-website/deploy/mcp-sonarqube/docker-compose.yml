@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  sonarqube-mcp:
+    build:
+      context: ../..
+      dockerfile: deploy/mcp-sonarqube/Dockerfile
+    container_name: sonarqube-mcp-server
+    ports:
+      - "8002:8002"
+    environment:
+      - SONARQUBE_BASE_URL=${SONARQUBE_BASE_URL:-http://sonarqube:9000}
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN}
+      - SONARQUBE_USERNAME=${SONARQUBE_USERNAME}
+      - SONARQUBE_PASSWORD=${SONARQUBE_PASSWORD}
+      - SONARQUBE_VERIFY_SSL=${SONARQUBE_VERIFY_SSL:-true}
+      - SONARQUBE_MCP_CLIENT_TOKEN=${SONARQUBE_MCP_CLIENT_TOKEN:-dev-sonarqube-mcp-token}
+      - SONARQUBE_MCP_TRANSPORT=${SONARQUBE_MCP_TRANSPORT:-http}
+      - SONARQUBE_MCP_HOST=${SONARQUBE_MCP_HOST:-0.0.0.0}
+      - SONARQUBE_MCP_PORT=${SONARQUBE_MCP_PORT:-8002}
+      - SONARQUBE_MCP_URL=${SONARQUBE_MCP_URL:-http://sonarqube-mcp:8002}
+    networks:
+      - sonarqube-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Run SonarQube server itself
+  sonarqube:
+    image: sonarqube:10-community
+    container_name: sonarqube-server
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - sonarqube_extensions:/opt/sonarqube/extensions
+    networks:
+      - sonarqube-network
+    restart: unless-stopped
+
+networks:
+  sonarqube-network:
+    driver: bridge
+
+volumes:
+  sonarqube_data:
+  sonarqube_logs:
+  sonarqube_extensions:

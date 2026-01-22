@@ -53,14 +53,14 @@ def main() -> int:
         connections[name] = {"transport": "sse", "url": url}
 
     if args.transport == "stdio":
-        if args.server in {"helm", "all"}:
-            add_stdio("helm", "src.ai.mcp_servers.helm.mcp")
+        # Helm tools now live under kubernetes-mcp; there is no standalone
+        # helm-mcp process. Keep docker-mcp for local inspection.
         if args.server in {"docker", "all"}:
             add_stdio("docker", "src.ai.mcp_servers.docker.mcp")
     else:
         # Single URL mode: connect one server at a time
         if args.server == "all":
-            raise SystemExit("--server must be helm or docker when using --transport=sse")
+            raise SystemExit("--server must be docker when using --transport=sse")
         add_sse(args.server, args.url)
 
     asyncio.run(_list_tools(connections))

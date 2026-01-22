@@ -1,1 +1,0 @@
-"""Helm MCP server utilities."""

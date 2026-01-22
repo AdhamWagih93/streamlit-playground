@@ -1,0 +1,151 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sonarqube-mcp-config
+  namespace: default
+data:
+  SONARQUBE_BASE_URL: "http://sonarqube:9000"
+  SONARQUBE_VERIFY_SSL: "true"
+  SONARQUBE_MCP_TRANSPORT: "http"
+  SONARQUBE_MCP_HOST: "0.0.0.0"
+  SONARQUBE_MCP_PORT: "8002"
+  SONARQUBE_MCP_URL: "http://sonarqube-mcp:8002"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sonarqube-mcp-secrets
+  namespace: default
+type: Opaque
+stringData:
+  SONARQUBE_TOKEN: "your_sonarqube_token_here"
+  SONARQUBE_MCP_CLIENT_TOKEN: "your-secure-mcp-token"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarqube-mcp
+  namespace: default
+  labels:
+    app: sonarqube-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sonarqube-mcp
+  template:
+    metadata:
+      labels:
+        app: sonarqube-mcp
+    spec:
+      containers:
+      - name: sonarqube-mcp
+        image: sonarqube-mcp:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8002
+          name: http
+          protocol: TCP
+        env:
+        - name: SONARQUBE_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: sonarqube-mcp-config
+              key: SONARQUBE_BASE_URL
+        - name: SONARQUBE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-mcp-secrets
+              key: SONARQUBE_TOKEN
+        - name: SONARQUBE_VERIFY_SSL
+          valueFrom:
+            configMapKeyRef:
+              name: sonarqube-mcp-config
+              key: SONARQUBE_VERIFY_SSL
+        - name: SONARQUBE_MCP_CLIENT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-mcp-secrets
+              key: SONARQUBE_MCP_CLIENT_TOKEN
+        - name: SONARQUBE_MCP_TRANSPORT
+          valueFrom:
+            configMapKeyRef:
+              name: sonarqube-mcp-config
+              key: SONARQUBE_MCP_TRANSPORT
+        - name: SONARQUBE_MCP_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: sonarqube-mcp-config
+              key: SONARQUBE_MCP_HOST
+        - name: SONARQUBE_MCP_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: sonarqube-mcp-config
+              key: SONARQUBE_MCP_PORT
+        - name: SONARQUBE_MCP_URL
+          valueFrom:
+            configMapKeyRef:
+              name: sonarqube-mcp-config
+              key: SONARQUBE_MCP_URL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarqube-mcp
+  namespace: default
+  labels:
+    app: sonarqube-mcp
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8002
+    targetPort: 8002
+    protocol: TCP
+    name: http
+  selector:
+    app: sonarqube-mcp
+---
+# Optional: Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarqube-mcp
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: sonarqube-mcp.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sonarqube-mcp
+            port:
+              number: 8002

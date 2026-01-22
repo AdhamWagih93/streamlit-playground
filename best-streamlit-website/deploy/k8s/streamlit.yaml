@@ -38,15 +38,11 @@ spec:
             - name: STREAMLIT_JENKINS_MCP_TRANSPORT
               value: "http"
             - name: STREAMLIT_JENKINS_MCP_URL
-              value: "http://jenkins-mcp:8000/sse"
+              value: "http://jenkins-mcp:8000"
             - name: STREAMLIT_KUBERNETES_MCP_TRANSPORT
               value: "http"
             - name: STREAMLIT_KUBERNETES_MCP_URL
-              value: "http://kubernetes-mcp:8000/sse"
-            - name: STREAMLIT_HELM_MCP_TRANSPORT
-              value: "http"
-            - name: STREAMLIT_HELM_MCP_URL
-              value: "http://helm-mcp:8000/sse"
+              value: "http://kubernetes-mcp:8000"
           readinessProbe:
             httpGet:
               path: /_stcore/health

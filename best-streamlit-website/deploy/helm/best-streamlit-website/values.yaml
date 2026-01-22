@@ -13,10 +13,6 @@ images:
     repository: best-streamlit-website/mcp-kubernetes
     tag: local
     pullPolicy: IfNotPresent
-  mcpHelm:
-    repository: best-streamlit-website/mcp-helm
-    tag: local
-    pullPolicy: IfNotPresent
   agentDataGen:
     repository: best-streamlit-website/agent-datagen
     tag: local
@@ -38,20 +34,16 @@ env:
   jenkinsVerifySsl: "true"
   jenkinsMcpClientToken: dev-jenkins-mcp-token
   jenkinsMcpTransport: http
-  jenkinsMcpUrl: http://jenkins-mcp:8000/sse
+  jenkinsMcpUrl: http://jenkins-mcp:8000
 
   k8sContext: ""
   kubernetesMcpTransport: http
-  kubernetesMcpUrl: http://kubernetes-mcp:8000/sse
-
-  helmMcpTransport: http
-  helmMcpUrl: http://helm-mcp:8000/sse
+  kubernetesMcpUrl: http://kubernetes-mcp:8000
 
 components:
   streamlit: true
   mcpJenkins: true
   mcpKubernetes: true
-  mcpHelm: true
   agentDataGen: true
   agentJenkins: true
   agentKubernetes: true
@@ -60,7 +52,6 @@ replicas:
   streamlit: 1
   mcpJenkins: 1
   mcpKubernetes: 1
-  mcpHelm: 1
   agentDataGen: 1
   agentJenkins: 1
   agentKubernetes: 1
@@ -75,7 +66,3 @@ service:
   mcp:
     type: ClusterIP
     port: 8000
-
-rbac:
-  helmMcp:
-    enabled: true

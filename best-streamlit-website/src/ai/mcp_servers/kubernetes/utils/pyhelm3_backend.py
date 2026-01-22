@@ -4,6 +4,36 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 
+def _looks_like_kube_unreachable(msg: str) -> bool:
+    low = (msg or "").lower()
+    return any(
+        s in low
+        for s in [
+            "kubernetes cluster unreachable",
+            "http://localhost:8080/version",
+            "the connection to the server localhost:8080",
+            "dial tcp",
+            "getaddrinfow",
+        ]
+    )
+
+
+def _kube_hint(*, kubeconfig: Optional[str], kubecontext: Optional[str]) -> str:
+    bits = [
+        "Local/dev: set K8S_KUBECONFIG (or KUBECONFIG) to a valid kubeconfig path.",
+        "Remote/in-cluster: ensure the Pod runs inside Kubernetes and has a ServiceAccount + RBAC.",
+        "Remote/out-of-cluster: mount a kubeconfig and set K8S_KUBECONFIG (or KUBECONFIG).",
+    ]
+    cfg_bits = []
+    if kubeconfig:
+        cfg_bits.append(f"kubeconfig={kubeconfig}")
+    if kubecontext:
+        cfg_bits.append(f"kubecontext={kubecontext}")
+    if cfg_bits:
+        bits.append("Current: " + ", ".join(cfg_bits))
+    return " ".join(bits)
+
+
 def _maybe_import_pyhelm3():
     try:
         from pyhelm3 import Client  # type: ignore
@@ -89,11 +119,22 @@ def list_releases(
 
     try:
         rows = asyncio.run(_run())
+        return {"ok": True, "releases": rows}
     except RuntimeError:
         # In case an event loop is already running (unlikely in FastMCP tool), create a new task.
-        rows = asyncio.get_event_loop().run_until_complete(_run())
-
-    return {"ok": True, "releases": rows}
+        try:
+            rows = asyncio.get_event_loop().run_until_complete(_run())
+            return {"ok": True, "releases": rows}
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            if _looks_like_kube_unreachable(msg):
+                return {"ok": False, "error": "Kubernetes cluster unreachable.", "details": msg, "hint": _kube_hint(kubeconfig=kubeconfig, kubecontext=kubecontext)}
+            return {"ok": False, "error": msg}
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if _looks_like_kube_unreachable(msg):
+            return {"ok": False, "error": "Kubernetes cluster unreachable.", "details": msg, "hint": _kube_hint(kubeconfig=kubeconfig, kubecontext=kubecontext)}
+        return {"ok": False, "error": msg}
 
 
 def uninstall_release(
@@ -118,7 +159,18 @@ def uninstall_release(
 
     try:
         asyncio.run(_run())
+        return {"ok": True}
     except RuntimeError:
-        asyncio.get_event_loop().run_until_complete(_run())
-
-    return {"ok": True}
+        try:
+            asyncio.get_event_loop().run_until_complete(_run())
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            if _looks_like_kube_unreachable(msg):
+                return {"ok": False, "error": "Kubernetes cluster unreachable.", "details": msg, "hint": _kube_hint(kubeconfig=kubeconfig, kubecontext=kubecontext)}
+            return {"ok": False, "error": msg}
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if _looks_like_kube_unreachable(msg):
+            return {"ok": False, "error": "Kubernetes cluster unreachable.", "details": msg, "hint": _kube_hint(kubeconfig=kubeconfig, kubecontext=kubecontext)}
+        return {"ok": False, "error": msg}

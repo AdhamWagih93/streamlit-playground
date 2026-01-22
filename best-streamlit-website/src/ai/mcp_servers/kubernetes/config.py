@@ -18,7 +18,7 @@ class KubernetesMCPServerConfig:
     kubeconfig loading rules.
 
     MCP transport selection:
-    - KUBERNETES_MCP_TRANSPORT: stdio|http|sse (http is treated as sse)
+    - KUBERNETES_MCP_TRANSPORT: stdio|http|sse
     - KUBERNETES_MCP_HOST
     - KUBERNETES_MCP_PORT
     - KUBERNETES_MCP_URL: URL used by remote clients (when transport != stdio)
@@ -34,12 +34,11 @@ class KubernetesMCPServerConfig:
     DEFAULT_MCP_TRANSPORT: str = "stdio"
     DEFAULT_MCP_HOST: str = "0.0.0.0"
     DEFAULT_MCP_PORT: int = 8000
-    DEFAULT_MCP_URL: str = "http://kubernetes-mcp:8000/sse"
+    DEFAULT_MCP_URL: str = "http://kubernetes-mcp:8000"
 
     @classmethod
     def from_env(cls) -> "KubernetesMCPServerConfig":
-        transport_raw = env_str("KUBERNETES_MCP_TRANSPORT", cls.DEFAULT_MCP_TRANSPORT).lower().strip()
-        transport = "sse" if transport_raw == "http" else transport_raw
+        transport = env_str("KUBERNETES_MCP_TRANSPORT", cls.DEFAULT_MCP_TRANSPORT).lower().strip()
         return cls(
             kubeconfig=env_optional_str("K8S_KUBECONFIG"),
             context=env_optional_str("K8S_CONTEXT"),

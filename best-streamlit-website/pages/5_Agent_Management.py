@@ -153,6 +153,10 @@ def _build_jenkins_env(
         api_token=cfg.jenkins.api_token,
         verify_ssl=verify_ssl,
         mcp_client_token=cfg.jenkins.mcp_client_token,
+        mcp_transport=cfg.jenkins.mcp_transport,
+        mcp_host=cfg.jenkins.mcp_host,
+        mcp_port=cfg.jenkins.mcp_port,
+        mcp_url=cfg.jenkins.mcp_url,
     )
 
     return {**env, **effective.to_env_overrides()}

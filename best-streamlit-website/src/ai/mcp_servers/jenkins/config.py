@@ -20,7 +20,7 @@ class JenkinsMCPServerConfig:
     - JENKINS_MCP_CLIENT_TOKEN
 
     MCP transport selection:
-    - JENKINS_MCP_TRANSPORT: stdio|http|sse (http is treated as sse)
+    - JENKINS_MCP_TRANSPORT: stdio|http|sse
     - JENKINS_MCP_HOST
     - JENKINS_MCP_PORT
     - JENKINS_MCP_URL: URL used by remote clients (when transport != stdio)
@@ -42,12 +42,11 @@ class JenkinsMCPServerConfig:
     DEFAULT_MCP_TRANSPORT: str = "stdio"
     DEFAULT_MCP_HOST: str = "0.0.0.0"
     DEFAULT_MCP_PORT: int = 8000
-    DEFAULT_MCP_URL: str = "http://jenkins-mcp:8000/sse"
+    DEFAULT_MCP_URL: str = "http://jenkins-mcp:8000"
 
     @classmethod
     def from_env(cls) -> "JenkinsMCPServerConfig":
-        transport_raw = env_str("JENKINS_MCP_TRANSPORT", cls.DEFAULT_MCP_TRANSPORT).lower().strip()
-        transport = "sse" if transport_raw == "http" else transport_raw
+        transport = env_str("JENKINS_MCP_TRANSPORT", cls.DEFAULT_MCP_TRANSPORT).lower().strip()
         return cls(
             base_url=env_str("JENKINS_BASE_URL", cls.DEFAULT_BASE_URL),
             username=env_optional_str("JENKINS_USERNAME"),

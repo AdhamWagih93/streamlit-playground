@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
+import socket
 import subprocess
 import tarfile
 import urllib.request
@@ -27,12 +29,166 @@ class HelmCliError(RuntimeError):
     pass
 
 
+def _try_parse_kubeconfig_server(kubeconfig_path: str) -> Optional[str]:
+    """Best-effort parse of the active cluster server URL from kubeconfig.
+
+    Avoids a hard dependency on PyYAML by using a simple regex that matches
+    `server: <url>`.
+    """
+
+    try:
+        text = Path(kubeconfig_path).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    # Kubeconfig is YAML; server URLs are typically on their own line.
+    m = re.search(r"^\s*server:\s*(\S+)\s*$", text, flags=re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def _docker_desktop_dns_workaround_args(cfg: HelmExecConfig) -> List[str]:
+    """Return Helm args to work around DNS issues on Windows + Docker Desktop.
+
+    Some environments intermittently fail to resolve `kubernetes.docker.internal`
+    (Go reports `getaddrinfow`). When that happens, Helm can't reach the API
+    server even though it is usually available on loopback.
+
+    Workaround:
+    - Override the API server to 127.0.0.1 (avoids DNS resolution entirely).
+    - Keep TLS hostname verification using `--kube-tls-server-name`.
+
+    This only applies when:
+    - Running on Windows
+    - kubeconfig's server hostname is `kubernetes.docker.internal`
+    - Loopback API server is reachable (avoids DNS entirely)
+    """
+
+    if not cfg.kubeconfig:
+        return []
+
+    if platform.system().lower() != "windows":
+        return []
+
+    server = _try_parse_kubeconfig_server(cfg.kubeconfig)
+    if not server or "kubernetes.docker.internal" not in server:
+        return []
+
+    # Parse `https://host:port/...` best-effort.
+    m = re.match(r"^(https?)://([^/:]+)(?::(\d+))?(/.*)?$", server.strip())
+    if not m:
+        return []
+
+    scheme, host, port_raw, _path = m.groups()
+    host = (host or "").strip().lower()
+    if host != "kubernetes.docker.internal":
+        return []
+
+    try:
+        port = int(port_raw) if port_raw else 443
+    except Exception:
+        port = 443
+
+    # Prefer loopback whenever it is reachable; this avoids DNS entirely.
+    # This also helps with intermittent Go getaddrinfow failures.
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.6):
+            pass
+    except Exception:
+        return []
+
+    return [
+        "--kube-apiserver",
+        f"{scheme}://127.0.0.1:{port}",
+        "--kube-tls-server-name",
+        "kubernetes.docker.internal",
+    ]
+
+
+def _kube_unreachable_hint(*, cfg: HelmExecConfig) -> str:
+    # Keep this concise; it is shown to end users.
+    local_bits = [
+        "Local/dev: set K8S_KUBECONFIG (or KUBECONFIG) to a valid kubeconfig path.",
+        "Optional: set K8S_CONTEXT.",
+        "Sanity check: `kubectl version --short` should work from the same environment.",
+    ]
+    dd_bits = [
+        "Windows/Docker Desktop: if you see kubernetes.docker.internal DNS failures, restart Docker Desktop or flush DNS (`ipconfig /flushdns`).",
+        "If it still fails, add `127.0.0.1 kubernetes.docker.internal` to your hosts file (requires admin).",
+        "If you see 'service provider could not be loaded or initialized', run `netsh winsock reset` in an elevated terminal and reboot.",
+    ]
+
+    docker_internal_bits: List[str] = []
+    try:
+        if cfg.kubeconfig:
+            server = _try_parse_kubeconfig_server(cfg.kubeconfig) or ""
+            if "kubernetes.docker.internal" in server and platform.system().lower() != "windows":
+                docker_internal_bits.append(
+                    "Your kubeconfig points at kubernetes.docker.internal (Docker Desktop). "
+                    "That hostname is typically only resolvable on the Windows host, not inside containers/remote MCP servers. "
+                    "Run kubernetes-mcp locally via stdio, or update kubeconfig to use a reachable API server address."
+                )
+    except Exception:
+        pass
+    remote_bits = [
+        "Remote/in-cluster: ensure the Pod runs inside Kubernetes (KUBERNETES_SERVICE_HOST set) and has a ServiceAccount + RBAC.",
+        "Remote/out-of-cluster: mount a kubeconfig and set K8S_KUBECONFIG (or KUBECONFIG).",
+    ]
+    # Mention current effective config to reduce confusion.
+    cfg_bits = []
+    if cfg.kubeconfig:
+        cfg_bits.append(f"Using kubeconfig: {cfg.kubeconfig}")
+    if cfg.kubecontext:
+        cfg_bits.append(f"Using kubecontext: {cfg.kubecontext}")
+    cfg_line = (" " + " | ".join(cfg_bits)) if cfg_bits else ""
+    return " ".join(local_bits + dd_bits + docker_internal_bits + remote_bits) + cfg_line
+
+
+def _normalize_kube_unreachable_error(
+    *,
+    cfg: HelmExecConfig,
+    code: int,
+    stdout: str,
+    stderr: str,
+    command: Sequence[str],
+) -> Optional[Dict[str, Any]]:
+    """Detect common kube connectivity failures and return a friendlier error.
+
+    Helm (and kubectl) may fall back to http://localhost:8080 when no kubeconfig
+    and no in-cluster config are available. That is almost never what users want.
+    """
+
+    combined = "\n".join([stderr or "", stdout or ""]).strip().lower()
+    if not combined:
+        return None
+
+    patterns = [
+        "kubernetes cluster unreachable",
+        "get \"http://localhost:8080/version\"",
+        "http://localhost:8080/version",
+        "the connection to the server localhost:8080",
+        "dial tcp",
+        "getaddrinfow",
+    ]
+
+    if not any(p in combined for p in patterns):
+        return None
+
+    # Prefer stderr as the user-facing message, but fall back to stdout.
+    raw = (stderr or "").strip() or (stdout or "").strip() or f"helm exited {code}"
+    return {
+        "ok": False,
+        "error": "Kubernetes cluster unreachable.",
+        "details": raw,
+        "hint": _kube_unreachable_hint(cfg=cfg),
+        "command": list(command),
+        "exit_code": int(code),
+    }
+
+
 def _build_env(cfg: HelmExecConfig, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = dict(base_env or {})
     if cfg.kubeconfig:
         env["KUBECONFIG"] = cfg.kubeconfig
-    if cfg.kubecontext:
-        env["HELM_KUBECONTEXT"] = cfg.kubecontext
     return env
 
 
@@ -171,14 +327,17 @@ def _run(
     *,
     base_env: Optional[Dict[str, str]] = None,
     timeout_seconds: int = 120,
-) -> Tuple[int, str, str]:
-    """Run `helm <args>` and return (code, stdout, stderr)."""
+) -> Tuple[int, str, str, List[str]]:
+    """Run `helm <args>` and return (code, stdout, stderr, command)."""
 
     global_args: List[str] = []
     if cfg.kubeconfig:
         global_args.extend(["--kubeconfig", cfg.kubeconfig])
     if cfg.kubecontext:
         global_args.extend(["--kube-context", cfg.kubecontext])
+
+    # Targeted workaround for Windows DNS issues with Docker Desktop kubeconfigs.
+    global_args.extend(_docker_desktop_dns_workaround_args(cfg))
 
     helm_bin = _resolve_helm_bin(cfg)
     cmd = [helm_bin, *global_args, *list(args)]
@@ -193,13 +352,16 @@ def _run(
     except subprocess.TimeoutExpired as exc:
         raise HelmCliError(f"Helm command timed out after {timeout_seconds}s: {' '.join(cmd)}") from exc
 
-    return int(proc.returncode), (proc.stdout or ""), (proc.stderr or "")
+    return int(proc.returncode), (proc.stdout or ""), (proc.stderr or ""), list(cmd)
 
 
 def run_json(cfg: HelmExecConfig, args: Sequence[str], *, timeout_seconds: int = 120) -> Dict[str, Any]:
-    code, out, err = _run(cfg, args, timeout_seconds=timeout_seconds)
+    code, out, err, command = _run(cfg, args, timeout_seconds=timeout_seconds)
     if code != 0:
-        return {"ok": False, "error": err.strip() or out.strip() or f"helm exited {code}", "command": [cfg.helm_bin, *list(args)]}
+        normalized = _normalize_kube_unreachable_error(cfg=cfg, code=code, stdout=out, stderr=err, command=command)
+        if normalized:
+            return normalized
+        return {"ok": False, "error": err.strip() or out.strip() or f"helm exited {code}", "command": command, "exit_code": int(code)}
 
     text = out.strip()
     if not text:
@@ -212,9 +374,12 @@ def run_json(cfg: HelmExecConfig, args: Sequence[str], *, timeout_seconds: int =
 
 
 def run_text(cfg: HelmExecConfig, args: Sequence[str], *, timeout_seconds: int = 120) -> Dict[str, Any]:
-    code, out, err = _run(cfg, args, timeout_seconds=timeout_seconds)
+    code, out, err, command = _run(cfg, args, timeout_seconds=timeout_seconds)
     if code != 0:
-        return {"ok": False, "error": err.strip() or out.strip() or f"helm exited {code}", "command": [cfg.helm_bin, *list(args)]}
+        normalized = _normalize_kube_unreachable_error(cfg=cfg, code=code, stdout=out, stderr=err, command=command)
+        if normalized:
+            return normalized
+        return {"ok": False, "error": err.strip() or out.strip() or f"helm exited {code}", "command": command, "exit_code": int(code)}
     return {"ok": True, "text": out}
 
 
@@ -336,8 +501,16 @@ def upgrade_install(
                 continue
             args.extend(["--set", f"{k}={v}"])
 
+    global_args: List[str] = []
+    if cfg.kubeconfig:
+        global_args.extend(["--kubeconfig", cfg.kubeconfig])
+    if cfg.kubecontext:
+        global_args.extend(["--kube-context", cfg.kubecontext])
+    global_args.extend(_docker_desktop_dns_workaround_args(cfg))
+
     try:
-        cmd = [_resolve_helm_bin(cfg), *args]
+        helm_bin = _resolve_helm_bin(cfg)
+        cmd = [helm_bin, *global_args, *args]
         proc = subprocess.run(
             cmd,
             input=stdin_data,
