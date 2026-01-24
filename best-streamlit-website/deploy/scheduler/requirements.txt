@@ -1,0 +1,6 @@
+fastmcp<3
+mcp>=1.7.1
+SQLAlchemy>=2.0.0
+psycopg2-binary
+langchain-mcp-adapters
+requests

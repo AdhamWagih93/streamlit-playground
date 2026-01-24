@@ -89,11 +89,11 @@ spec:
               key: SONARQUBE_MCP_URL
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "100m"
+            memory: "64Mi"
+            cpu: "5m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "128Mi"
+            cpu: "30m"
         livenessProbe:
           httpGet:
             path: /health

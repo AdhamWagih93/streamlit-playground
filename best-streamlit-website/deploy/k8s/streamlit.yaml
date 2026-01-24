@@ -43,6 +43,13 @@ spec:
               value: "http"
             - name: STREAMLIT_KUBERNETES_MCP_URL
               value: "http://kubernetes-mcp:8000"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              cpu: 50m
+              memory: 256Mi
           readinessProbe:
             httpGet:
               path: /_stcore/health
@@ -62,4 +69,5 @@ spec:
     - name: http
       port: 80
       targetPort: 8501
-  type: ClusterIP
+      nodePort: 30001
+  type: NodePort

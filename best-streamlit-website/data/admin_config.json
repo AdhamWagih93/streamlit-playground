@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-01-23T12:32:10.992998Z",
+  "pages": {
+    "pages/0_Home.py": true,
+    "pages/1_Team_Task_Manager.py": true,
+    "pages/2_DevOps_Referral_Agent.py": true,
+    "pages/3_WFH_Schedule.py": true,
+    "pages/4_DataGen_Agent.py": true,
+    "pages/5_Agent_Management.py": true,
+    "pages/6_Kubernetes.py": true,
+    "pages/10_MCP_Scheduler.py": true,
+    "pages/7_Setup.py": true,
+    "pages/8_Docker_MCP_Test.py": true,
+    "pages/9_Nexus_Explorer.py": true,
+    "pages/11_Database.py": true
+  },
+  "mcp_servers": {
+    "jenkins": {
+      "enabled": true,
+      "base_url": null,
+      "verify_ssl": null,
+      "transport": "stdio",
+      "url": null
+    },
+    "kubernetes": {
+      "enabled": true,
+      "kubeconfig": null,
+      "context": null,
+      "transport": "stdio",
+      "url": null
+    },
+    "docker": {
+      "enabled": true,
+      "docker_host": null,
+      "docker_tls_verify": null,
+      "docker_cert_path": null,
+      "docker_timeout_seconds": null,
+      "transport": "stdio",
+      "url": null
+    },
+    "nexus": {
+      "enabled": true,
+      "base_url": null,
+      "verify_ssl": null,
+      "allow_raw": null,
+      "transport": "stdio",
+      "url": null
+    },
+    "scheduler": {
+      "enabled": true,
+      "transport": null,
+      "url": null
+    }
+  },
+  "agents": {
+    "datagen": {
+      "enabled": true,
+      "ollama_base_url": null,
+      "model": null,
+      "temperature": null
+    },
+    "jenkins_agent": {
+      "enabled": false
+    },
+    "kubernetes_agent": {
+      "enabled": true
+    }
+  }
+}

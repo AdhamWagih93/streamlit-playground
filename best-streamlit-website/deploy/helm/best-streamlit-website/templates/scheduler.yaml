@@ -1,0 +1,70 @@
+{{- if .Values.components.scheduler }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.scheduler }}
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: scheduler
+          image: {{ .Values.images.scheduler.repository }}:{{ .Values.images.scheduler.tag }}
+          imagePullPolicy: {{ .Values.images.scheduler.pullPolicy }}
+          ports:
+            - containerPort: 8010
+          env:
+            # Scheduler MCP server
+            - name: SCHEDULER_MCP_TRANSPORT
+              value: {{ .Values.env.schedulerMcpTransport | quote }}
+            - name: SCHEDULER_MCP_HOST
+              value: "0.0.0.0"
+            - name: SCHEDULER_MCP_PORT
+              value: "8010"
+
+            # Central DB (recommended in K8s). If empty, scheduler falls back to local SQLite.
+            - name: PLATFORM_DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+
+            # MCP targets (scheduler calls other MCP servers)
+            - name: JENKINS_MCP_TRANSPORT
+              value: {{ .Values.env.jenkinsMcpTransport | quote }}
+            - name: JENKINS_MCP_URL
+              value: {{ .Values.env.jenkinsMcpUrl | quote }}
+            - name: JENKINS_MCP_CLIENT_TOKEN
+              value: {{ .Values.env.jenkinsMcpClientToken | quote }}
+
+            - name: KUBERNETES_MCP_TRANSPORT
+              value: {{ .Values.env.kubernetesMcpTransport | quote }}
+            - name: KUBERNETES_MCP_URL
+              value: {{ .Values.env.kubernetesMcpUrl | quote }}
+
+          resources:
+            {{- toYaml .Values.resources.scheduler | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: scheduler
+  ports:
+    - name: http
+      port: {{ .Values.service.scheduler.port }}
+      targetPort: 8010
+  type: {{ .Values.service.scheduler.type }}
+{{- end }}

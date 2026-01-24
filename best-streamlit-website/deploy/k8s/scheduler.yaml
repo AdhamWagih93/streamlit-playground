@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  labels:
+    app: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: best-streamlit-website/scheduler:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8010
+          env:
+            - name: SCHEDULER_MCP_TRANSPORT
+              value: http
+            - name: SCHEDULER_MCP_HOST
+              value: 0.0.0.0
+            - name: SCHEDULER_MCP_PORT
+              value: "8010"
+            # Central DB (set this in k8s; local dev defaults to SQLite)
+            - name: PLATFORM_DATABASE_URL
+              value: postgresql+psycopg2://platform:platform-dev-password@platform-db-pgpool:5432/platform
+            # Target MCP servers (scheduler calls these to execute jobs)
+            - name: JENKINS_MCP_TRANSPORT
+              value: http
+            - name: JENKINS_MCP_URL
+              value: http://jenkins-mcp:8000
+            - name: JENKINS_MCP_CLIENT_TOKEN
+              value: dev-jenkins-mcp-token
+            - name: KUBERNETES_MCP_TRANSPORT
+              value: http
+            - name: KUBERNETES_MCP_URL
+              value: http://kubernetes-mcp:8000
+            - name: DOCKER_MCP_TRANSPORT
+              value: http
+            - name: DOCKER_MCP_URL
+              value: http://docker-mcp:8000
+            - name: NEXUS_MCP_TRANSPORT
+              value: http
+            - name: NEXUS_MCP_URL
+              value: http://nexus-mcp:8000
+          resources:
+            requests:
+              cpu: 5m
+              memory: 64Mi
+            limits:
+              cpu: 30m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler
+  labels:
+    app: scheduler
+spec:
+  selector:
+    app: scheduler
+  ports:
+    - name: http
+      port: 8010
+      targetPort: 8010
+  type: ClusterIP

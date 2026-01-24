@@ -44,6 +44,12 @@ spec:
               value: {{ .Values.env.kubernetesMcpTransport | quote }}
             - name: STREAMLIT_KUBERNETES_MCP_URL
               value: {{ .Values.env.kubernetesMcpUrl | quote }}
+            - name: STREAMLIT_SCHEDULER_MCP_TRANSPORT
+              value: {{ .Values.env.schedulerMcpTransport | quote }}
+            - name: STREAMLIT_SCHEDULER_MCP_URL
+              value: {{ .Values.env.schedulerMcpUrl | quote }}
+          resources:
+            {{- toYaml .Values.resources.streamlit | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /_stcore/health

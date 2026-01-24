@@ -17,6 +17,7 @@ watchdog
 langchain
 langchain-ollama
 fastmcp<3
+mcp>=1.7.1
 requests
 langchain-mcp-adapters
 kubernetes

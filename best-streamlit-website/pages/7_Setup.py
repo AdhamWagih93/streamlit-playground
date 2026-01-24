@@ -12,6 +12,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import streamlit as st
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from src.ai.mcp_langchain_tools import invoke_tool as _invoke_shared
+from src.ai.mcp_langchain_tools import matches_tool_name as _matches_shared
+from src.ai.mcp_langchain_tools import normalise_mcp_result as _normalise_shared
 from src.streamlit_config import StreamlitAppConfig
 from src.theme import set_theme
 
@@ -48,59 +51,15 @@ def _load_yaml(text: str) -> Dict[str, Any]:
 
 
 def _matches(tool_name: str, desired: str) -> bool:
-    if tool_name == desired:
-        return True
-    for sep in ("__", ".", ":"):
-        if sep in tool_name and tool_name.rsplit(sep, 1)[-1] == desired:
-            return True
-    if tool_name.endswith("_" + desired):
-        return True
-    return False
+    return _matches_shared(tool_name, desired)
 
 
 def _normalise_mcp_result(value: Any) -> Any:
-    """Normalise MCP tool results into plain Python data.
-
-    Depending on adapter/version, results may come back as:
-    - a plain dict
-    - a list of content blocks: [{"type": "text", "text": "{...json...}"}, ...]
-    - an object with a `.content` attribute containing those blocks
-    """
-
-    if isinstance(value, dict):
-        return value
-
-    if hasattr(value, "content"):
-        try:
-            return _normalise_mcp_result(getattr(value, "content"))
-        except Exception:  # noqa: BLE001
-            pass
-
-    if isinstance(value, list):
-        text_parts: List[str] = []
-        for item in value:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                text_parts.append(item["text"])
-
-        if text_parts:
-            text = "\n".join(text_parts).strip()
-            try:
-                return json.loads(text)
-            except Exception:  # noqa: BLE001
-                return {"ok": True, "text": text}
-
-    return value
+    return _normalise_shared(value)
 
 
 def _invoke(tools: List[Any], name: str, args: Dict[str, Any]) -> Any:
-    tool = next((t for t in tools if _matches(str(getattr(t, "name", "")), name)), None)
-    if tool is None:
-        available = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
-        raise ValueError(f"Tool {name} not found. Available: {available}")
-
-    if hasattr(tool, "ainvoke"):
-        return _normalise_mcp_result(asyncio.run(tool.ainvoke(args)))
-    return _normalise_mcp_result(tool.invoke(args))
+    return _invoke_shared(list(tools or []), name, dict(args or {}))
 
 
 def _tool_names(tools: List[Any]) -> List[str]:
@@ -225,7 +184,9 @@ def _cache_set(key: str, value: Any) -> None:
     st.session_state["_setup_cache"][key] = value
 
 
-cfg = StreamlitAppConfig.from_env()
+from src.streamlit_config import get_app_config
+
+cfg = get_app_config()
 
 
 def _watched_k8s_files() -> List[Path]:
@@ -374,69 +335,120 @@ k8s_tools: List[Any] = []
 docker_tools: List[Any] = []
 nexus_tools: List[Any] = []
 
+
 _mcp_python = str(st.session_state.get("setup_mcp_python") or sys.executable)
 
-st.subheader("MCP tools")
-c1, c2, c3 = st.columns(3)
 
-with c1:
-    st.markdown("#### kubernetes-mcp")
-    try:
-        k8s_tools = _get_tools(
-            cache_key="_setup_k8s_tools",
-            server_name="kubernetes",
-            module="src.ai.mcp_servers.kubernetes.mcp",
-            transport=k8s_transport,
-            url=cfg.kubernetes.mcp_url,
-            env=_k8s_tool_env(),
-            python_executable=_mcp_python,
-            watched_files=_watched_k8s_files(),
+@st.fragment
+def _render_mcp_tools_fragment() -> Tuple[List[Any], List[Any], List[Any]]:
+    """Render MCP tool loading in an isolated fragment.
+
+    This prevents slow tool discovery (stdio subprocess startup / remote tool listing)
+    from re-running on every widget interaction elsewhere on the page.
+    """
+
+    st.subheader("MCP tools")
+    st.caption("To speed up initial render, tools are loaded on demand.")
+
+    if "setup_autoload_tools" not in st.session_state:
+        st.session_state["setup_autoload_tools"] = False
+
+    cols = st.columns([1, 1, 1])
+    with cols[0]:
+        autoload = st.toggle(
+            "Auto-load on open",
+            value=bool(st.session_state.get("setup_autoload_tools")),
+            key="setup_autoload_tools",
+            help="If enabled, this page will connect to MCP servers during initial render.",
         )
-        _status_badge(True, f"Loaded {len(k8s_tools)} tool(s)")
-    except Exception as exc:  # noqa: BLE001
-        _status_badge(False, "Failed to load tools", detail=str(exc))
-    with st.expander("Tool names", expanded=False):
-        st.code("\n".join(_tool_names(k8s_tools)) or "<none>", language="text")
+    with cols[1]:
+        load_now = st.button("Load/refresh tools", use_container_width=True, key="setup_load_tools")
+    with cols[2]:
+        show_names = st.checkbox("Show tool names", value=False, key="setup_show_tool_names")
 
-with c2:
-    st.markdown("#### docker-mcp")
-    try:
-        docker_tools = _get_tools(
-            cache_key="_setup_docker_tools",
-            server_name="docker",
-            module="src.ai.mcp_servers.docker.mcp",
-            transport=docker_transport,
-            url=cfg.docker.mcp_url,
-            env=dict(cfg.docker.to_env_overrides()),
-            python_executable=_mcp_python,
-            watched_files=_watched_docker_files(),
-        )
-        _status_badge(True, f"Loaded {len(docker_tools)} tool(s)")
-    except Exception as exc:  # noqa: BLE001
-        _status_badge(False, "Failed to load tools", detail=str(exc))
-    with st.expander("Tool names", expanded=False):
-        st.code("\n".join(_tool_names(docker_tools)) or "<none>", language="text")
+    # If we haven't loaded tools yet and autoload is off, don't connect.
+    have_any_cached = any(
+        k in st.session_state
+        for k in ("_setup_k8s_tools", "_setup_docker_tools", "_setup_nexus_tools")
+    )
+    if not autoload and not load_now and not have_any_cached:
+        st.info("Click 'Load/refresh tools' when you're ready to connect.")
+        return [], [], []
 
-with c3:
-    st.markdown("#### nexus-mcp")
-    try:
-        nexus_tools = _get_tools(
-            cache_key="_setup_nexus_tools",
-            server_name="nexus",
-            module="src.ai.mcp_servers.nexus.mcp",
-            transport=nexus_transport,
-            url=cfg.nexus.mcp_url,
-            env=dict(cfg.nexus.to_env_overrides()),
-            python_executable=_mcp_python,
-            watched_files=_watched_nexus_files(),
-        )
-        _status_badge(True, f"Loaded {len(nexus_tools)} tool(s)")
-    except Exception as exc:  # noqa: BLE001
-        _status_badge(False, "Failed to load tools", detail=str(exc))
-    with st.expander("Tool names", expanded=False):
-        st.code("\n".join(_tool_names(nexus_tools)) or "<none>", language="text")
+    k8s_tools_local: List[Any] = []
+    docker_tools_local: List[Any] = []
+    nexus_tools_local: List[Any] = []
 
-st.markdown("---")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.markdown("#### kubernetes-mcp")
+        try:
+            k8s_tools_local = _get_tools(
+                cache_key="_setup_k8s_tools",
+                server_name="kubernetes",
+                module="src.ai.mcp_servers.kubernetes.mcp",
+                transport=k8s_transport,
+                url=cfg.kubernetes.mcp_url,
+                env=_k8s_tool_env(),
+                python_executable=_mcp_python,
+                watched_files=_watched_k8s_files(),
+                force_reload=bool(load_now),
+            )
+            _status_badge(True, f"Loaded {len(k8s_tools_local)} tool(s)")
+        except Exception as exc:  # noqa: BLE001
+            _status_badge(False, "Failed to load tools", detail=str(exc))
+        if show_names:
+            with st.expander("Tool names", expanded=False):
+                st.code("\n".join(_tool_names(k8s_tools_local)) or "<none>", language="text")
+
+    with c2:
+        st.markdown("#### docker-mcp")
+        try:
+            docker_tools_local = _get_tools(
+                cache_key="_setup_docker_tools",
+                server_name="docker",
+                module="src.ai.mcp_servers.docker.mcp",
+                transport=docker_transport,
+                url=cfg.docker.mcp_url,
+                env=dict(cfg.docker.to_env_overrides()),
+                python_executable=_mcp_python,
+                watched_files=_watched_docker_files(),
+                force_reload=bool(load_now),
+            )
+            _status_badge(True, f"Loaded {len(docker_tools_local)} tool(s)")
+        except Exception as exc:  # noqa: BLE001
+            _status_badge(False, "Failed to load tools", detail=str(exc))
+        if show_names:
+            with st.expander("Tool names", expanded=False):
+                st.code("\n".join(_tool_names(docker_tools_local)) or "<none>", language="text")
+
+    with c3:
+        st.markdown("#### nexus-mcp")
+        try:
+            nexus_tools_local = _get_tools(
+                cache_key="_setup_nexus_tools",
+                server_name="nexus",
+                module="src.ai.mcp_servers.nexus.mcp",
+                transport=nexus_transport,
+                url=cfg.nexus.mcp_url,
+                env=dict(cfg.nexus.to_env_overrides()),
+                python_executable=_mcp_python,
+                watched_files=_watched_nexus_files(),
+                force_reload=bool(load_now),
+            )
+            _status_badge(True, f"Loaded {len(nexus_tools_local)} tool(s)")
+        except Exception as exc:  # noqa: BLE001
+            _status_badge(False, "Failed to load tools", detail=str(exc))
+        if show_names:
+            with st.expander("Tool names", expanded=False):
+                st.code("\n".join(_tool_names(nexus_tools_local)) or "<none>", language="text")
+
+    st.markdown("---")
+    return k8s_tools_local, docker_tools_local, nexus_tools_local
+
+
+k8s_tools, docker_tools, nexus_tools = _render_mcp_tools_fragment()
 
 
 def _run_checks() -> Dict[str, Any]:
@@ -498,16 +510,42 @@ def _run_checks() -> Dict[str, Any]:
     return out
 
 
-if st.button("Refresh status", use_container_width=True):
-    _cache_set("status", _run_checks())
+@st.fragment
+def _render_status_fragment() -> Dict[str, Any]:
+    """Run expensive health/resource checks in a fragment.
 
-status = _cache_get("status")
+    This keeps the rest of the Setup page responsive: changing inputs/widgets
+    won't re-run network calls unless you explicitly refresh.
+    """
 
-# Refresh if the cached status is missing newer keys (e.g. after code updates).
-_required_status_keys = {"k8s_health", "helm_health", "docker_health", "nexus_health", "releases"}
-if not isinstance(status, dict) or not _required_status_keys.issubset(set(status.keys())):
-    status = _run_checks()
-    _cache_set("status", status)
+    st.subheader("Connectivity")
+    st.caption("Click refresh to run MCP health checks and inventory calls.")
+
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        refresh_now = st.button("Refresh status", use_container_width=True, key="setup_refresh_status")
+    with col_b:
+        keep_auto = st.toggle(
+            "Auto-refresh when missing",
+            value=False,
+            key="setup_auto_refresh_status",
+            help="If enabled, the first visit will run checks automatically.",
+        )
+
+    cached = _cache_get("status")
+    if refresh_now or (keep_auto and not isinstance(cached, dict)):
+        with st.spinner("Running checks…"):
+            cached = _run_checks()
+        _cache_set("status", cached)
+
+    if not isinstance(cached, dict):
+        st.info("No status yet. Click 'Refresh status'.")
+        return {}
+
+    return cached
+
+
+status = _render_status_fragment()
 
 
 def _as_list(obj: Any, key: str) -> List[Dict[str, Any]]:

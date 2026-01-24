@@ -1,0 +1,28 @@
+postgresql-ha:
+  fullnameOverride: platform-db
+
+  postgresql:
+    username: platform
+    database: platform
+    # Set this securely per environment (helm --set-file / secret mgmt)
+    password: platform-dev-password
+
+    resources:
+      requests:
+        cpu: 10m
+        memory: 128Mi
+      limits:
+        cpu: 50m
+        memory: 256Mi
+
+  pgpool:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 50m
+        memory: 128Mi
+
+  metrics:
+    enabled: false

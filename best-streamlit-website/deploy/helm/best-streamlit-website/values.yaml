@@ -5,6 +5,10 @@ images:
     repository: best-streamlit-website/streamlit
     tag: local
     pullPolicy: IfNotPresent
+  scheduler:
+    repository: best-streamlit-website/scheduler
+    tag: local
+    pullPolicy: IfNotPresent
   mcpJenkins:
     repository: best-streamlit-website/mcp-jenkins
     tag: local
@@ -40,8 +44,17 @@ env:
   kubernetesMcpTransport: http
   kubernetesMcpUrl: http://kubernetes-mcp:8000
 
+  schedulerMcpTransport: http
+  schedulerMcpUrl: http://scheduler:8010
+
+  # Central DB for scheduler history (recommended in K8s).
+  # Example:
+  # platformDatabaseUrl: postgresql+psycopg2://user:pass@platform-db-pgpool:5432/platform
+  platformDatabaseUrl: ""
+
 components:
   streamlit: true
+  scheduler: false
   mcpJenkins: true
   mcpKubernetes: true
   agentDataGen: true
@@ -50,6 +63,7 @@ components:
 
 replicas:
   streamlit: 1
+  scheduler: 1
   mcpJenkins: 1
   mcpKubernetes: 1
   agentDataGen: 1
@@ -60,9 +74,65 @@ service:
   streamlit:
     type: ClusterIP
     port: 80
+  scheduler:
+    type: ClusterIP
+    port: 8010
   agents:
     type: ClusterIP
     port: 8080
   mcp:
     type: ClusterIP
     port: 8000
+
+# Resource requests/limits (very low defaults).
+# Override these per environment (dev/minikube vs prod) as needed.
+resources:
+  streamlit:
+    requests:
+      cpu: 10m
+      memory: 128Mi
+    limits:
+      cpu: 50m
+      memory: 256Mi
+  scheduler:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi
+  mcpJenkins:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi
+  mcpKubernetes:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi
+  agentDataGen:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi
+  agentJenkins:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi
+  agentKubernetes:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi

@@ -28,6 +28,8 @@ spec:
               value: {{ .Values.env.ollamaBaseUrl | quote }}
             - name: OLLAMA_MODEL
               value: {{ .Values.env.ollamaModel | quote }}
+          resources:
+            {{- toYaml .Values.resources.agentDataGen | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -93,6 +95,8 @@ spec:
               value: {{ .Values.env.jenkinsMcpTransport | quote }}
             - name: JENKINS_MCP_URL
               value: {{ .Values.env.jenkinsMcpUrl | quote }}
+          resources:
+            {{- toYaml .Values.resources.agentJenkins | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -154,6 +158,8 @@ spec:
               value: {{ .Values.env.kubernetesMcpTransport | quote }}
             - name: KUBERNETES_MCP_URL
               value: {{ .Values.env.kubernetesMcpUrl | quote }}
+          resources:
+            {{- toYaml .Values.resources.agentKubernetes | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /healthz

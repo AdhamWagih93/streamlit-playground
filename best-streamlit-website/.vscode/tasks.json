@@ -1,0 +1,40 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Dev: Run Scheduler MCP",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "src.scheduler.main"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SCHEDULER_MCP_TRANSPORT": "http",
+          "SCHEDULER_MCP_HOST": "127.0.0.1",
+          "SCHEDULER_MCP_PORT": "8010",
+          "SCHEDULER_TICK_SECONDS": "5",
+          "SCHEDULER_BOOTSTRAP_JOBS": "true"
+        }
+      }
+    },
+    {
+      "label": "Dev: Run Streamlit",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "streamlit", "run", "app.py"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Dev: Run Streamlit + Scheduler",
+      "dependsOn": ["Dev: Run Scheduler MCP", "Dev: Run Streamlit"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}

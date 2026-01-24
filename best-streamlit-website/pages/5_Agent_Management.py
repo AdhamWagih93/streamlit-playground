@@ -7,11 +7,17 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
+from src.admin_config import load_admin_config
 from src.theme import set_theme
 from src.ai.agents.jenkins_agent import build_jenkins_agent
 
 
 set_theme(page_title="Agent Management", page_icon="🤖")
+
+admin = load_admin_config()
+if not admin.is_agent_enabled("jenkins_agent", default=True):
+    st.info("Jenkins tool agent is disabled by Admin.")
+    st.stop()
 
 # Persist a simple user identity for contextual prompts
 if "current_username" not in st.session_state:
@@ -142,9 +148,9 @@ def _build_jenkins_env(
     """
 
     from src.ai.mcp_servers.jenkins.config import JenkinsMCPServerConfig
-    from src.streamlit_config import StreamlitAppConfig
+    from src.streamlit_config import get_app_config
 
-    cfg = StreamlitAppConfig.from_env()
+    cfg = get_app_config()
     env = dict(os.environ)
 
     effective = JenkinsMCPServerConfig(
@@ -348,17 +354,43 @@ with main_col:
 
         # Discover available tools from the Jenkins FastMCP server via
         # MultiServerMCPClient.get_tools(), following the official docs.
-        # Jenkins credentials are configured server-side (env vars) on the
-        # MCP server process.
-        try:
+        # IMPORTANT: this can be slow, so it's opt-in.
+
+        def _direct_tools_sig() -> str:
+            from src.streamlit_config import get_app_config
+
+            env = _build_jenkins_env(
+                st.session_state.get("jenkins_base_url", base_url),
+                st.session_state.get("jenkins_verify_ssl", verify_ssl),
+            )
+            app_cfg = get_app_config()
+            j_transport = (app_cfg.jenkins.mcp_transport or "stdio").lower().strip()
+            j_transport = "sse" if j_transport == "http" else j_transport
+            return json.dumps(
+                {
+                    "transport": j_transport,
+                    "url": app_cfg.jenkins.mcp_url,
+                    # Don't include secrets; just capture presence.
+                    "env_keys": sorted([k for k in env.keys() if k.startswith("JENKINS_")]),
+                },
+                sort_keys=True,
+            )
+
+        def _load_direct_tools(*, force: bool = False) -> List[Any]:
+            from src.streamlit_config import get_app_config
+
+            sig = _direct_tools_sig()
+            cache_key = "_jenkins_direct_tools"
+            sig_key = "_jenkins_direct_tools_sig"
+            if (not force) and st.session_state.get(sig_key) == sig and cache_key in st.session_state:
+                return list(st.session_state.get(cache_key) or [])
+
             env = _build_jenkins_env(
                 st.session_state.get("jenkins_base_url", base_url),
                 st.session_state.get("jenkins_verify_ssl", verify_ssl),
             )
 
-            from src.streamlit_config import StreamlitAppConfig
-
-            app_cfg = StreamlitAppConfig.from_env()
+            app_cfg = get_app_config()
             j_transport = (app_cfg.jenkins.mcp_transport or "stdio").lower().strip()
             j_transport = "sse" if j_transport == "http" else j_transport
 
@@ -370,21 +402,36 @@ with main_col:
                     "env": env,
                 }
             else:
-                # Remote MCP servers are expected to expose SSE.
                 conn = {
                     "transport": "sse",
                     "url": app_cfg.jenkins.mcp_url,
                 }
 
-            client = MultiServerMCPClient(
-                {
-                    "jenkins": conn
-                }
-            )
+            client = MultiServerMCPClient({"jenkins": conn})
+            tools_local = asyncio.run(client.get_tools())
+            st.session_state[cache_key] = tools_local
+            st.session_state[sig_key] = sig
+            return list(tools_local or [])
 
-            mcp_tools = asyncio.run(client.get_tools())
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Error fetching tools from Jenkins MCP server: {exc}")
+        b1, b2 = st.columns([1, 3])
+        with b1:
+            load_now = st.button("Load/refresh tools", use_container_width=True)
+        with b2:
+            st.caption("Tool discovery can take a few seconds (runs on demand).")
+
+        mcp_tools = st.session_state.get("_jenkins_direct_tools")
+        if load_now:
+            try:
+                with st.spinner("Discovering Jenkins tools via MCP…"):
+                    mcp_tools = _load_direct_tools(force=True)
+                st.success("Tools loaded.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Error fetching tools from Jenkins MCP server: {exc}")
+                st.markdown("</div>", unsafe_allow_html=True)
+                st.stop()
+
+        if not mcp_tools:
+            st.info("Tools are not loaded yet. Click **Load/refresh tools**.")
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
@@ -463,9 +510,9 @@ with main_col:
                     raise ValueError("Arguments JSON must decode to an object.")
 
                 # Inject required MCP client auth token automatically.
-                from src.streamlit_config import StreamlitAppConfig
+                from src.streamlit_config import get_app_config
 
-                cfg = StreamlitAppConfig.from_env()
+                cfg = get_app_config()
                 args["_client_token"] = cfg.jenkins.mcp_client_token
 
                 with st.spinner(f"Calling {tool_name} via MCP…"):
@@ -668,9 +715,9 @@ with main_col:
                         st.session_state.get("jenkins_verify_ssl", verify_ssl),
                     )
 
-                    from src.streamlit_config import StreamlitAppConfig
+                    from src.streamlit_config import get_app_config
 
-                    app_cfg = StreamlitAppConfig.from_env()
+                    app_cfg = get_app_config()
                     j_transport = (app_cfg.jenkins.mcp_transport or "stdio").lower().strip()
                     j_transport = "sse" if j_transport == "http" else j_transport
 

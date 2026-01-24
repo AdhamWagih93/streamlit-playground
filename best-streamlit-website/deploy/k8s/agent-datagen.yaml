@@ -29,6 +29,13 @@ spec:
               value: "http://ollama:11434"
             - name: OLLAMA_MODEL
               value: "qwen2.5:7b-instruct-q6_K"
+          resources:
+            requests:
+              cpu: 5m
+              memory: 64Mi
+            limits:
+              cpu: 30m
+              memory: 128Mi
           readinessProbe:
             httpGet:
               path: /healthz

@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from src.admin_config import load_admin_config
 from src.theme import set_theme
 
 
@@ -144,9 +145,9 @@ def _table_explorer(
             key=f"{key_prefix}_dl_json",
         )
 def _build_env() -> Dict[str, str]:
-    from src.streamlit_config import StreamlitAppConfig
+    from src.streamlit_config import get_app_config
 
-    cfg = StreamlitAppConfig.from_env()
+    cfg = get_app_config()
     env: Dict[str, str] = {}
     kubeconfig = st.session_state.get("k8s_kubeconfig") or cfg.kubernetes.kubeconfig
     context = st.session_state.get("k8s_context") or cfg.kubernetes.context
@@ -198,9 +199,9 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
     except Exception:  # noqa: BLE001
         code_mtime = 0
 
-    from src.streamlit_config import StreamlitAppConfig
+    from src.streamlit_config import get_app_config
 
-    cfg = StreamlitAppConfig.from_env()
+    cfg = get_app_config()
     configured_transport = (cfg.kubernetes.mcp_transport or "stdio").lower().strip()
     transport = "stdio" if st.session_state.get("k8s_force_stdio") else configured_transport
     remote_url = cfg.kubernetes.mcp_url
@@ -407,6 +408,11 @@ def _stream_text(text: str):
 def main() -> None:
     set_theme(PAGE_TITLE)
 
+    admin = load_admin_config()
+    if not admin.is_mcp_enabled("kubernetes", default=True):
+        st.info("Kubernetes MCP is disabled by Admin.")
+        return
+
     # Page-level styling for a richer Kubernetes dashboard
     st.markdown(
         """
@@ -567,9 +573,9 @@ def main() -> None:
             key="k8s_force_stdio",
         )
 
-        from src.streamlit_config import StreamlitAppConfig
+        from src.streamlit_config import get_app_config
 
-        _cfg = StreamlitAppConfig.from_env()
+        _cfg = get_app_config()
         _transport = ("stdio" if st.session_state.get("k8s_force_stdio") else (_cfg.kubernetes.mcp_transport or "stdio")).lower().strip()
         if _transport == "stdio":
             st.caption(f"MCP transport: stdio (local) via `{sys.executable} -m src.ai.mcp_servers.kubernetes.mcp`")
@@ -582,6 +588,15 @@ def main() -> None:
             reload_tools = st.button("Reload tools", type="primary", use_container_width=True, key="k8s_reload_tools")
         with col_b:
             refresh = st.button("Refresh data", use_container_width=True, key="k8s_refresh_data")
+
+        if "k8s_auto_fetch" not in st.session_state:
+            st.session_state["k8s_auto_fetch"] = False
+        st.toggle(
+            "Auto-fetch snapshot on open",
+            value=bool(st.session_state.get("k8s_auto_fetch")),
+            key="k8s_auto_fetch",
+            help="Improves perceived performance when off: the page loads instantly, and you fetch data only when needed.",
+        )
 
         hard_reset = st.button(
             "Hard reset (fix stale tools)",
@@ -615,8 +630,22 @@ def main() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    # Snapshot (single refresh point to avoid repeated MCP calls during one render)
-    if refresh or "k8s_snapshot" not in st.session_state:
+    @st.fragment
+    def _maybe_fetch_snapshot_fragment() -> None:
+        """Fetch cluster snapshot in an isolated fragment.
+
+        Expensive MCP calls are triggered only by the Refresh button or
+        auto-fetch on the first visit. Other UI interactions won't re-run
+        these calls.
+        """
+
+        should_fetch = bool(refresh)
+        if not should_fetch and "k8s_snapshot" not in st.session_state:
+            should_fetch = bool(st.session_state.get("k8s_auto_fetch"))
+
+        if not should_fetch:
+            return
+
         with st.spinner("Fetching cluster data via MCP…"):
             snapshot: Dict[str, Any] = {}
             snapshot["health"] = _invoke_tool(tools, "health_check", {})
@@ -631,7 +660,17 @@ def main() -> None:
             snapshot["events"] = _invoke_tool(tools, "list_events_all", {"limit": 250})
             st.session_state.k8s_snapshot = snapshot
 
-    snapshot = st.session_state.get("k8s_snapshot", {})
+    _maybe_fetch_snapshot_fragment()
+
+    snapshot = st.session_state.get("k8s_snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+
+    # If we haven't fetched anything yet, don't render the heavy dashboards.
+    if not snapshot:
+        st.info("Connected. Click 'Refresh data' in the sidebar to fetch a cluster snapshot.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
 
     health = snapshot.get("health")
     stats = snapshot.get("stats")

@@ -1,10 +1,16 @@
 import streamlit as st
 
+from src.admin_config import load_admin_config
 from src.theme import set_theme
 from src.ai.agents.datagen_agent import run_agent
 
 
 set_theme(page_title="DataGen Agent", page_icon="🧪")
+
+admin = load_admin_config()
+if not admin.is_agent_enabled("datagen", default=True):
+    st.info("DataGen agent is disabled by Admin.")
+    st.stop()
 
 # --- Custom styling for a modern chat-like experience ---
 st.markdown(

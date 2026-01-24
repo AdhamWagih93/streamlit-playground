@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.config_utils import env_str
+from src.admin_config import load_admin_config
 
 
 @dataclass(frozen=True)
@@ -29,3 +30,30 @@ class DataGenAgentConfig:
             temp = cls.DEFAULT_TEMPERATURE
 
         return cls(ollama_base_url=base_url, model=model, temperature=temp)
+
+    @classmethod
+    def load(cls) -> "DataGenAgentConfig":
+        """Load config from env and apply admin overrides (if present)."""
+
+        cfg = cls.from_env()
+        admin = load_admin_config()
+        raw = (admin.agents or {}).get("datagen", {})
+        if not isinstance(raw, dict):
+            return cfg
+
+        # Back-compat: earlier drafts used "base_url".
+        base_url = raw.get("ollama_base_url") or raw.get("base_url")
+        model = raw.get("model")
+        temperature = raw.get("temperature")
+
+        effective_base_url = str(base_url).strip() if isinstance(base_url, str) and base_url.strip() else cfg.ollama_base_url
+        effective_model = str(model).strip() if isinstance(model, str) and model.strip() else cfg.model
+
+        effective_temp = cfg.temperature
+        if temperature is not None:
+            try:
+                effective_temp = float(temperature)
+            except Exception:
+                effective_temp = cfg.temperature
+
+        return cls(ollama_base_url=effective_base_url, model=effective_model, temperature=effective_temp)

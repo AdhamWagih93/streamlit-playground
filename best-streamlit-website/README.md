@@ -50,6 +50,16 @@ best-streamlit-website
     python -m streamlit run .\app.py
     ```
 
+## Scheduler service (local dev)
+
+The MCP scheduler runs as a separate process (it does not run inside Streamlit). Locally, it uses SQLite at `data/scheduler.db` by default.
+
+- Start the scheduler MCP server (recommended):
+   - VS Code Task: **Dev: Run Scheduler MCP** (or **Dev: Run Streamlit + Scheduler**)
+   - PowerShell helper: `./scripts/start_scheduler_background.ps1`
+
+When using the repo-local SQLite scheduler DB, the scheduler auto-creates a small set of default jobs if the DB is empty (disable with `SCHEDULER_BOOTSTRAP_JOBS=false`).
+
 ## Configuration (env-first with local defaults)
 
 This repo uses small Python config modules that read from environment variables first and fall back to local-dev defaults when env vars are missing.

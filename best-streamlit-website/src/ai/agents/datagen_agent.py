@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from functools import lru_cache
 from typing import List
 import json
 import random
@@ -94,14 +97,6 @@ def generate_sample_users(
 
 TOOLS = [write_json, read_json, generate_sample_users]
 
-
-cfg = DataGenAgentConfig.from_env()
-llm = ChatOllama(
-    model=cfg.model,
-    base_url=cfg.ollama_base_url,
-    temperature=cfg.temperature,
-)
-
 SYSTEM_MESSAGE = (
     "You are DataGen, a helpful assistant that generates sample data for applications. "
     "To generate users, you need: first_names (list), last_names (list), domains (list), min_age, max_age. "
@@ -112,7 +107,14 @@ SYSTEM_MESSAGE = (
     "If the user refers to 'those users' from a previous request, ask them to specify the details again."
 )
 
-agent = create_agent(llm, TOOLS, system_prompt=SYSTEM_MESSAGE)
+@lru_cache(maxsize=8)
+def _agent_for(model: str, base_url: str, temperature: float):
+    llm = ChatOllama(
+        model=model,
+        base_url=base_url,
+        temperature=temperature,
+    )
+    return create_agent(llm, TOOLS, system_prompt=SYSTEM_MESSAGE)
 
 
 def run_agent(user_input: str, history: List[BaseMessage]) -> AIMessage:
@@ -122,6 +124,8 @@ def run_agent(user_input: str, history: List[BaseMessage]) -> AIMessage:
     currently forwarded to the underlying agent (stateless by design).
     """
     try:
+        cfg = DataGenAgentConfig.load()
+        agent = _agent_for(cfg.model, cfg.ollama_base_url, float(cfg.temperature))
         result = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
         # Debug: see all messages including tool calls
         print("Full agent result:", result)

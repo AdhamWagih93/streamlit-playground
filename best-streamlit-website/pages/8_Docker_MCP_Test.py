@@ -7,15 +7,22 @@ from typing import Any, Dict, List
 import streamlit as st
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from src.ai.mcp_langchain_tools import invoke_tool, tool_names
+from src.admin_config import load_admin_config
+from src.streamlit_config import get_app_config
 from src.theme import set_theme
-from src.streamlit_config import StreamlitAppConfig
 
 
 set_theme(page_title="Docker MCP Test", page_icon="🐳")
 
+admin = load_admin_config()
+if not admin.is_mcp_enabled("docker", default=True):
+    st.info("Docker MCP is disabled by Admin.")
+    st.stop()
+
 
 def _get_docker_tools(force_reload: bool = False):
-    cfg = StreamlitAppConfig.from_env()
+    cfg = get_app_config()
     transport = (cfg.docker.mcp_transport or "stdio").lower().strip()
 
     sig = f"{transport}|{cfg.docker.mcp_url}"
@@ -38,29 +45,13 @@ def _get_docker_tools(force_reload: bool = False):
 
 
 def _invoke(tools, name: str, args: Dict[str, Any]) -> Any:
-    def _matches(tool_name: str, desired: str) -> bool:
-        if tool_name == desired:
-            return True
-        for sep in ("__", ".", ":"):
-            if sep in tool_name and tool_name.rsplit(sep, 1)[-1] == desired:
-                return True
-        if tool_name.endswith("_" + desired):
-            return True
-        return False
-
-    tool = next((t for t in tools if _matches(str(getattr(t, "name", "")), name)), None)
-    if tool is None:
-        available = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
-        raise ValueError(f"Tool {name} not found. Available: {available}")
-    if hasattr(tool, "ainvoke"):
-        return asyncio.run(tool.ainvoke(args))
-    return tool.invoke(args)
+    return invoke_tool(list(tools or []), name, dict(args or {}))
 
 
 st.title("Docker MCP Tools")
 st.caption("Uses the Python docker SDK via an MCP server. No docker CLI required.")
 
-cfg_for_hint = StreamlitAppConfig.from_env()
+cfg_for_hint = get_app_config()
 transport_for_hint = (cfg_for_hint.docker.mcp_transport or "stdio").lower().strip()
 if transport_for_hint == "stdio":
     if importlib.util.find_spec("docker") is None:
@@ -74,11 +65,35 @@ if transport_for_hint == "stdio":
             "Either set DOCKER_CERT_PATH to a folder containing ca.pem/cert.pem/key.pem, or unset DOCKER_TLS_VERIFY for local Docker Desktop."
         )
 
-try:
-    tools = _get_docker_tools()
-except Exception as exc:  # noqa: BLE001
-    st.error(f"Failed to load Docker MCP tools: {exc}")
-    st.info("For local dev, ensure Docker Desktop/daemon is running. For remote, set DOCKER_HOST/DOCKER_TLS_VERIFY/DOCKER_CERT_PATH or use STREAMLIT_DOCKER_MCP_URL with SSE.")
+with st.sidebar:
+    st.subheader("Docker MCP")
+    if "docker_auto_load_tools" not in st.session_state:
+        st.session_state.docker_auto_load_tools = False
+    st.session_state.docker_auto_load_tools = st.toggle(
+        "Auto-load tools on open",
+        value=bool(st.session_state.docker_auto_load_tools),
+        help="When enabled, the page will discover tools automatically on open. Leave off for fastest loads.",
+    )
+
+    load_clicked = st.button("Load/refresh tools", use_container_width=True)
+
+should_load = bool(load_clicked) or (
+    bool(st.session_state.get("docker_auto_load_tools")) and "_docker_tools" not in st.session_state
+)
+
+if should_load:
+    try:
+        _get_docker_tools(force_reload=bool(load_clicked))
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to load Docker MCP tools: {exc}")
+        st.info(
+            "For local dev, ensure Docker Desktop/daemon is running. "
+            "For remote, set DOCKER_HOST/DOCKER_TLS_VERIFY/DOCKER_CERT_PATH or use STREAMLIT_DOCKER_MCP_URL with SSE."
+        )
+
+tools = st.session_state.get("_docker_tools")
+if not tools:
+    st.info("Docker tools are not loaded yet. Click **Load/refresh tools** in the sidebar.")
     st.stop()
 
 col1, col2 = st.columns([1, 2])
@@ -90,11 +105,11 @@ with col2:
     st.write(f"Loaded {len(tools)} tools")
 
 with st.expander("Show loaded tool names", expanded=False):
-    tool_names = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
-    if not tool_names:
+    names = tool_names(list(tools or []))
+    if not names:
         st.write("No tool names found.")
     else:
-        st.code("\n".join(tool_names), language="text")
+        st.code("\n".join(names), language="text")
 
 st.markdown("---")
 

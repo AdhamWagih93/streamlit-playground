@@ -12,11 +12,18 @@ import pandas as pd
 import streamlit as st
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from src.streamlit_config import StreamlitAppConfig
+from src.ai.mcp_langchain_tools import invoke_tool
+from src.admin_config import load_admin_config
+from src.streamlit_config import StreamlitAppConfig, get_app_config
 from src.theme import set_theme
 
 
 set_theme(page_title="Nexus Explorer", page_icon="🗄️")
+
+admin = load_admin_config()
+if not admin.is_mcp_enabled("nexus", default=True):
+    st.info("Nexus MCP is disabled by Admin.")
+    st.stop()
 
 
 def _safe_json_loads(raw: str) -> Optional[Any]:
@@ -74,7 +81,7 @@ def _build_stdio_env(cfg: StreamlitAppConfig, overrides: Dict[str, str]) -> Dict
 
 
 def _get_nexus_tools(*, force_reload: bool = False, overrides: Optional[Dict[str, str]] = None):
-    cfg = StreamlitAppConfig.from_env()
+    cfg = get_app_config()
     transport = (cfg.nexus.mcp_transport or "stdio").lower().strip()
 
     # Include server code mtime so stdio subprocess reloads on code edits.
@@ -114,30 +121,13 @@ def _get_nexus_tools(*, force_reload: bool = False, overrides: Optional[Dict[str
 
 
 def _invoke(tools, name: str, args: Dict[str, Any]) -> Any:
-    def _matches(tool_name: str, desired: str) -> bool:
-        if tool_name == desired:
-            return True
-        for sep in ("__", ".", ":"):
-            if sep in tool_name and tool_name.rsplit(sep, 1)[-1] == desired:
-                return True
-        if tool_name.endswith("_" + desired):
-            return True
-        return False
-
-    tool = next((t for t in tools if _matches(str(getattr(t, "name", "")), name)), None)
-    if tool is None:
-        available = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
-        raise ValueError(f"Tool {name} not found. Available: {available}")
-
-    if hasattr(tool, "ainvoke"):
-        return asyncio.run(tool.ainvoke(args))
-    return tool.invoke(args)
+    return invoke_tool(list(tools or []), name, dict(args or {}))
 
 
 st.title("Nexus Explorer")
 st.caption("Explore Sonatype Nexus Repository Manager via an MCP server (local-first).")
 
-cfg = StreamlitAppConfig.from_env()
+cfg = get_app_config()
 
 with st.expander("Connection (current config)", expanded=False):
     st.json(cfg.nexus.to_dict())
@@ -181,14 +171,34 @@ if token:
 if mcp_client_token:
     overrides_env["NEXUS_MCP_CLIENT_TOKEN"] = mcp_client_token
 
-try:
-    tools = _get_nexus_tools(overrides=overrides_env)
-except Exception as exc:  # noqa: BLE001
-    st.error(f"Failed to load Nexus MCP tools: {exc}")
-    st.info(
-        "For local dev, ensure Nexus is running and reachable at the Base URL. "
-        "Defaults assume http://localhost:8081"
+with st.sidebar:
+    st.divider()
+    if "nexus_auto_load_tools" not in st.session_state:
+        st.session_state.nexus_auto_load_tools = False
+    st.session_state.nexus_auto_load_tools = st.toggle(
+        "Auto-load tools on open",
+        value=bool(st.session_state.nexus_auto_load_tools),
+        help="When enabled, the page will discover tools automatically on open. Leave off for fastest loads.",
     )
+    load_clicked = st.button("Load/refresh tools", use_container_width=True)
+
+should_load = bool(load_clicked) or (
+    bool(st.session_state.get("nexus_auto_load_tools")) and "_nexus_tools" not in st.session_state
+)
+
+if should_load:
+    try:
+        _get_nexus_tools(force_reload=bool(load_clicked), overrides=overrides_env)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to load Nexus MCP tools: {exc}")
+        st.info(
+            "For local dev, ensure Nexus is running and reachable at the Base URL. "
+            "Defaults assume http://localhost:8081"
+        )
+
+tools = st.session_state.get("_nexus_tools")
+if not tools:
+    st.info("Nexus tools are not loaded yet. Click **Load/refresh tools** in the sidebar.")
     st.stop()
 
 
