@@ -117,6 +117,50 @@ def _agent_for(model: str, base_url: str, temperature: float):
     return create_agent(llm, TOOLS, system_prompt=SYSTEM_MESSAGE)
 
 
+def _generate_mock_response(user_input: str) -> AIMessage:
+    """Generate a mock response when Ollama is disabled."""
+    # Extract number of users from input (default to 10)
+    import re
+    match = re.search(r'(\d+)\s*users?', user_input.lower())
+    count = int(match.group(1)) if match else 10
+
+    # Generate sample users with default parameters
+    default_first_names = ["Alice", "Bob", "Charlie", "Diana", "Eva", "Frank", "Grace", "Henry", "Ivy", "Jack"]
+    default_last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis"]
+    default_domains = ["example.com", "test.com", "demo.com"]
+
+    first_names = default_first_names * ((count // len(default_first_names)) + 1)
+    first_names = first_names[:count]
+
+    result = generate_sample_users(
+        first_names=first_names,
+        last_names=default_last_names,
+        domains=default_domains,
+        min_age=18,
+        max_age=65
+    )
+
+    # Check if user wants to save to file
+    save_match = re.search(r'save.*?to\s+([^\s]+\.json)', user_input.lower())
+    if save_match:
+        filepath = save_match.group(1)
+        write_result = write_json(filepath, result)
+        response = (
+            f"Generated {count} sample users and saved to {filepath}.\n\n"
+            f"**Note:** Ollama is disabled. Using mock data generator.\n\n"
+            f"Summary: {result['count']} users created with random names, emails, and ages.\n\n"
+            f"{write_result}"
+        )
+    else:
+        response = (
+            f"Generated {count} sample users.\n\n"
+            f"**Note:** Ollama is disabled. Using mock data generator.\n\n"
+            f"```json\n{json.dumps(result, indent=2)}\n```"
+        )
+
+    return AIMessage(content=response)
+
+
 def run_agent(user_input: str, history: List[BaseMessage]) -> AIMessage:
     """Invoke the DataGen agent with a single user message.
 
@@ -125,12 +169,28 @@ def run_agent(user_input: str, history: List[BaseMessage]) -> AIMessage:
     """
     try:
         cfg = DataGenAgentConfig.load()
-        agent = _agent_for(cfg.model, cfg.ollama_base_url, float(cfg.temperature))
-        result = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
-        # Debug: see all messages including tool calls
-        print("Full agent result:", result)
 
-        return result["messages"][-1]
+        # Check if Ollama is disabled - use mock data
+        if not cfg.enabled:
+            return _generate_mock_response(user_input)
+
+        # Try to use Ollama agent
+        try:
+            agent = _agent_for(cfg.model, cfg.ollama_base_url, float(cfg.temperature))
+            result = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
+            # Debug: see all messages including tool calls
+            print("Full agent result:", result)
+            return result["messages"][-1]
+        except Exception as ollama_error:
+            # Fallback to mock data if Ollama connection fails
+            print(f"Ollama connection failed: {ollama_error}. Falling back to mock data.")
+            fallback_response = _generate_mock_response(user_input)
+            fallback_response.content = (
+                f"**Warning:** Could not connect to Ollama ({str(ollama_error)}). "
+                f"Using mock data generator instead.\n\n{fallback_response.content}"
+            )
+            return fallback_response
+
     except Exception as e:  # noqa: BLE001
         import traceback
 

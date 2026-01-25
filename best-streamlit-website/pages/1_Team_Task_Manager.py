@@ -355,6 +355,224 @@ if not st.session_state.tasks_cache:
     st.session_state.tasks_cache = load_tasks()
 
 
+# ==============================================================================
+# NEW FEATURE: Task Templates
+# ==============================================================================
+TASK_TEMPLATES = {
+    "Bug Report": {
+        "title_prefix": "[BUG] ",
+        "description": "## Description\n\n## Steps to Reproduce\n1. \n2. \n3. \n\n## Expected Behavior\n\n## Actual Behavior\n\n## Environment\n- OS: \n- Browser: \n- Version: ",
+        "priority": "High",
+        "tags": ["bug"],
+        "estimates_hours": 4,
+    },
+    "Feature Request": {
+        "title_prefix": "[FEATURE] ",
+        "description": "## Summary\n\n## User Story\nAs a [user], I want [goal] so that [benefit].\n\n## Acceptance Criteria\n- [ ] \n- [ ] \n- [ ] \n\n## Technical Notes\n",
+        "priority": "Medium",
+        "tags": ["feature"],
+        "estimates_hours": 8,
+    },
+    "Documentation": {
+        "title_prefix": "[DOCS] ",
+        "description": "## Documentation Scope\n\n## Target Audience\n\n## Sections to Cover\n- [ ] \n- [ ] \n\n## Resources\n",
+        "priority": "Low",
+        "tags": ["docs"],
+        "estimates_hours": 2,
+    },
+    "DevOps Task": {
+        "title_prefix": "[DEVOPS] ",
+        "description": "## Objective\n\n## Infrastructure Changes\n\n## Rollback Plan\n\n## Monitoring\n",
+        "priority": "High",
+        "tags": ["devops", "infrastructure"],
+        "estimates_hours": 6,
+    },
+    "Security Review": {
+        "title_prefix": "[SEC] ",
+        "description": "## Security Scope\n\n## Threat Model\n\n## Checklist\n- [ ] Authentication\n- [ ] Authorization\n- [ ] Input Validation\n- [ ] Data Encryption\n\n## Findings\n",
+        "priority": "Critical",
+        "tags": ["security"],
+        "estimates_hours": 8,
+    },
+}
+
+# ==============================================================================
+# NEW FEATURE: Sprint Management
+# ==============================================================================
+if "sprints" not in st.session_state:
+    st.session_state.sprints = [
+        {
+            "id": "sprint-1",
+            "name": "Sprint 1",
+            "start_date": date.today().isoformat(),
+            "end_date": (date.today() + timedelta(days=14)).isoformat(),
+            "goal": "Initial sprint goals",
+            "status": "active",
+        }
+    ]
+
+if "active_sprint" not in st.session_state:
+    st.session_state.active_sprint = "sprint-1"
+
+# ==============================================================================
+# NEW FEATURE: Bulk Operations
+# ==============================================================================
+if "bulk_mode" not in st.session_state:
+    st.session_state.bulk_mode = False
+
+if "selected_tasks" not in st.session_state:
+    st.session_state.selected_tasks = set()
+
+# ==============================================================================
+# NEW FEATURE: Time Tracking
+# ==============================================================================
+if "time_logs" not in st.session_state:
+    st.session_state.time_logs = {}  # task_id -> list of {hours, date, user, note}
+
+# ==============================================================================
+# Helper Functions for New Features
+# ==============================================================================
+
+def get_cycle_time_metrics(tasks):
+    """Calculate cycle time metrics for completed tasks."""
+    metrics = {
+        "avg_cycle_time_hours": 0,
+        "median_cycle_time_hours": 0,
+        "p90_cycle_time_hours": 0,
+        "total_completed": 0,
+        "throughput_per_week": 0,
+    }
+
+    cycle_times = []
+    completed_dates = []
+
+    for task in tasks:
+        if task.get("status") in ("Done", "Closed"):
+            created = task.get("created_at")
+            done_at = task.get("done_at")
+
+            if not done_at:
+                # Try to find done timestamp from history
+                for h in reversed(task.get("history") or []):
+                    if h.get("what", "").startswith("status->Done"):
+                        done_at = h.get("when")
+                        break
+
+            if created and done_at:
+                try:
+                    created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    done_dt = datetime.fromisoformat(done_at.replace("Z", "+00:00"))
+                    cycle_hours = (done_dt - created_dt).total_seconds() / 3600
+                    cycle_times.append(cycle_hours)
+                    completed_dates.append(done_dt)
+                except Exception:
+                    pass
+
+    if cycle_times:
+        import numpy as np
+        metrics["avg_cycle_time_hours"] = round(np.mean(cycle_times), 1)
+        metrics["median_cycle_time_hours"] = round(np.median(cycle_times), 1)
+        metrics["p90_cycle_time_hours"] = round(np.percentile(cycle_times, 90), 1)
+        metrics["total_completed"] = len(cycle_times)
+
+        # Calculate weekly throughput (last 4 weeks)
+        four_weeks_ago = datetime.now() - timedelta(weeks=4)
+        recent_completed = sum(1 for d in completed_dates if d > four_weeks_ago)
+        metrics["throughput_per_week"] = round(recent_completed / 4, 1)
+
+    return metrics
+
+
+def log_time(task_id: str, hours: float, user: str, note: str = ""):
+    """Log time spent on a task."""
+    if task_id not in st.session_state.time_logs:
+        st.session_state.time_logs[task_id] = []
+
+    st.session_state.time_logs[task_id].append({
+        "hours": hours,
+        "date": datetime.now().isoformat(),
+        "user": user,
+        "note": note,
+    })
+
+
+def get_task_total_time(task_id: str) -> float:
+    """Get total time logged for a task."""
+    logs = st.session_state.time_logs.get(task_id, [])
+    return sum(log["hours"] for log in logs)
+
+
+def create_burndown_chart(sprint_tasks, sprint_start, sprint_end):
+    """Create a burn-down chart for the sprint."""
+    import plotly.graph_objects as go
+
+    start_date = datetime.fromisoformat(sprint_start).date()
+    end_date = datetime.fromisoformat(sprint_end).date()
+    days = (end_date - start_date).days + 1
+
+    # Ideal burn-down line
+    total_points = len(sprint_tasks)
+    ideal_line = [total_points - (total_points / days * i) for i in range(days + 1)]
+    dates = [start_date + timedelta(days=i) for i in range(days + 1)]
+
+    # Actual burn-down (tasks remaining per day)
+    actual_line = []
+    for i, d in enumerate(dates):
+        remaining = total_points
+        for task in sprint_tasks:
+            done_at = task.get("done_at")
+            if not done_at:
+                for h in reversed(task.get("history") or []):
+                    if h.get("what", "").startswith("status->Done"):
+                        done_at = h.get("when")
+                        break
+            if done_at:
+                try:
+                    done_date = datetime.fromisoformat(done_at.replace("Z", "+00:00")).date()
+                    if done_date <= d:
+                        remaining -= 1
+                except Exception:
+                    pass
+        actual_line.append(remaining)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=dates,
+        y=ideal_line,
+        mode='lines',
+        name='Ideal',
+        line=dict(color='#3B82F6', dash='dash', width=2),
+    ))
+
+    # Only show actual up to today
+    today = date.today()
+    actual_dates = [d for d in dates if d <= today]
+    actual_values = actual_line[:len(actual_dates)]
+
+    fig.add_trace(go.Scatter(
+        x=actual_dates,
+        y=actual_values,
+        mode='lines+markers',
+        name='Actual',
+        line=dict(color='#10B981', width=3),
+        marker=dict(size=8),
+    ))
+
+    fig.update_layout(
+        title="Sprint Burn-down Chart",
+        xaxis_title="Date",
+        yaxis_title="Tasks Remaining",
+        height=350,
+        margin=dict(l=20, r=20, t=40, b=20),
+        hovermode='x unified',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+    )
+
+    return fig
+
+
 # ----- Layout -----
 
 # --- Main container ---
@@ -1497,22 +1715,116 @@ if active_ticket_id:
         st.stop()
 
 
-board_tab, queue_tab, gantt_tab, analytics_tab, tags_tab, timeline_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs([
+board_tab, queue_tab, sprint_tab, gantt_tab, analytics_tab, tags_tab, timeline_tab, report_tab, io_tab, history_tab, doc_tab = st.tabs([
     "🗂 Board",
     "⚡ Queue",
+    "🏃 Sprints",
     "📅 Gantt Chart",
     "📊 Analytics",
     "🏷 Tags",
     "🗓 Timeline",
     "📨 Report",
     "📁 Import / Export",
-    "� History",
-    "�📖 Documentation"
+    "📜 History",
+    "📖 Documentation"
 ])
 
 with board_tab:
     st.markdown('<div class="ttm-section-gap"></div>', unsafe_allow_html=True)
     st.subheader("Kanban Board")
+
+    # ==============================================================================
+    # BULK OPERATIONS MODE
+    # ==============================================================================
+    bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 2, 2])
+
+    with bulk_col1:
+        st.session_state.bulk_mode = st.toggle("Bulk Mode", value=st.session_state.bulk_mode, key="bulk-mode-toggle")
+
+    if st.session_state.bulk_mode:
+        with bulk_col2:
+            selected_count = len(st.session_state.selected_tasks)
+            st.caption(f"**{selected_count}** tasks selected")
+
+            if selected_count > 0:
+                bulk_action = st.selectbox(
+                    "Bulk Action",
+                    ["Select action...", "Change Status", "Change Priority", "Change Assignee", "Add Tag", "Delete Tasks"],
+                    key="bulk-action-select"
+                )
+
+        with bulk_col3:
+            if st.session_state.bulk_mode and len(st.session_state.selected_tasks) > 0:
+                if bulk_action == "Change Status":
+                    new_status = st.selectbox("New Status", FLOW_STATUSES + [DEFERRED_STATUS], key="bulk-new-status")
+                    if st.button("Apply Status Change", type="primary"):
+                        for task_id in st.session_state.selected_tasks:
+                            tasks_repo.update_task_status(task_id, new_status, by=st.session_state.username)
+                        st.session_state.tasks_cache = load_tasks()
+                        st.session_state.selected_tasks = set()
+                        st.success(f"Updated {selected_count} tasks to {new_status}")
+                        st.rerun()
+
+                elif bulk_action == "Change Priority":
+                    new_priority = st.selectbox("New Priority", PRIORITIES, key="bulk-new-priority")
+                    if st.button("Apply Priority Change", type="primary"):
+                        for task_id in st.session_state.selected_tasks:
+                            tasks_repo.update_task(task_id, {"priority": new_priority})
+                        st.session_state.tasks_cache = load_tasks()
+                        st.session_state.selected_tasks = set()
+                        st.success(f"Updated {selected_count} tasks to {new_priority}")
+                        st.rerun()
+
+                elif bulk_action == "Change Assignee":
+                    new_assignee = st.selectbox("New Assignee", ["Unassigned"] + st.session_state.users, key="bulk-new-assignee")
+                    if st.button("Apply Assignee Change", type="primary"):
+                        for task_id in st.session_state.selected_tasks:
+                            tasks_repo.update_task(task_id, {"assignee": new_assignee})
+                        st.session_state.tasks_cache = load_tasks()
+                        st.session_state.selected_tasks = set()
+                        st.success(f"Assigned {selected_count} tasks to {new_assignee}")
+                        st.rerun()
+
+                elif bulk_action == "Add Tag":
+                    new_tag = st.text_input("Tag to Add", key="bulk-new-tag")
+                    if st.button("Apply Tag", type="primary") and new_tag.strip():
+                        for task_id in st.session_state.selected_tasks:
+                            for t in st.session_state.tasks_cache:
+                                if t["id"] == task_id:
+                                    current_tags = t.get("tags") or []
+                                    if new_tag.strip() not in current_tags:
+                                        current_tags.append(new_tag.strip())
+                                        tasks_repo.update_task(task_id, {"tags": current_tags})
+                                    break
+                        st.session_state.tasks_cache = load_tasks()
+                        st.session_state.selected_tasks = set()
+                        st.success(f"Added tag '{new_tag}' to {selected_count} tasks")
+                        st.rerun()
+
+                elif bulk_action == "Delete Tasks":
+                    st.warning(f"This will delete {selected_count} tasks permanently!")
+                    if st.button("Confirm Delete", type="primary"):
+                        for task_id in st.session_state.selected_tasks:
+                            tasks_repo.delete_task(task_id)
+                        st.session_state.tasks_cache = load_tasks()
+                        st.session_state.selected_tasks = set()
+                        st.success(f"Deleted {selected_count} tasks")
+                        st.rerun()
+
+        # Select/Deselect all buttons
+        if st.session_state.bulk_mode:
+            sel_col1, sel_col2 = st.columns(2)
+            with sel_col1:
+                if st.button("Select All Visible"):
+                    for t in filtered:
+                        st.session_state.selected_tasks.add(t["id"])
+                    st.rerun()
+            with sel_col2:
+                if st.button("Deselect All"):
+                    st.session_state.selected_tasks = set()
+                    st.rerun()
+
+    st.divider()
 
     # Kanban columns including Backlog (original layout) --------------------------------------
     # Toggles for optional columns
@@ -1586,10 +1898,28 @@ with board_tab:
                 # Add Task popover (index for quick access)
                 with st.popover(f"➕", use_container_width=True):
                     st.markdown(f"#### New Task in {status}")
-                    nt_title = st.text_input("Title", key=f"nt-title-{status}")
-                    nt_desc = st.text_area("Description", key=f"nt-desc-{status}")
+
+                    # Task Template Selector
+                    template_options = ["None (blank)"] + list(TASK_TEMPLATES.keys())
+                    selected_template = st.selectbox(
+                        "Use Template",
+                        template_options,
+                        key=f"nt-template-{status}",
+                        help="Select a template to pre-fill task fields"
+                    )
+
+                    # Apply template defaults
+                    template_data = TASK_TEMPLATES.get(selected_template, {}) if selected_template != "None (blank)" else {}
+                    default_title = template_data.get("title_prefix", "")
+                    default_desc = template_data.get("description", "")
+                    default_priority_idx = PRIORITIES.index(template_data.get("priority", "Medium")) if template_data.get("priority") in PRIORITIES else 1
+                    default_est = template_data.get("estimates_hours", 1.0)
+                    default_tags = template_data.get("tags", [])
+
+                    nt_title = st.text_input("Title", value=default_title, key=f"nt-title-{status}")
+                    nt_desc = st.text_area("Description", value=default_desc, key=f"nt-desc-{status}", height=120)
                     nt_assignee = st.selectbox("Assignee", ["(none)"]+st.session_state.users, index=0, key=f"nt-assignee-{status}")
-                    nt_priority = st.selectbox("Priority", PRIORITIES, index=1, key=f"nt-priority-{status}")
+                    nt_priority = st.selectbox("Priority", PRIORITIES, index=default_priority_idx, key=f"nt-priority-{status}")
                     nt_has_start = st.checkbox("Has start date", value=False, key=f"nt-has-start-{status}")
                     nt_start = st.date_input("Start", value=date.today(), key=f"nt-start-{status}") if nt_has_start else None
                     due_key = f"nt-due-{status}"
@@ -1600,8 +1930,10 @@ with board_tab:
                     elif due_key not in st.session_state:
                         st.session_state[due_key] = add_workdays_sun_thu(date.today(), 5, include_today=True)
                     nt_due = st.date_input("Due", key=due_key)
-                    nt_est = st.number_input("Estimate (h)", min_value=0.0, value=1.0, step=0.5, key=f"nt-est-{status}")
-                    nt_tags_raw = st.text_input("Tags (comma, optional)", key=f"nt-tags-{status}")
+                    nt_est = st.number_input("Estimate (h)", min_value=0.0, value=float(default_est), step=0.5, key=f"nt-est-{status}")
+                    # Pre-fill tags from template
+                    default_tags_str = ", ".join(default_tags) if default_tags else ""
+                    nt_tags_raw = st.text_input("Tags (comma, optional)", value=default_tags_str, key=f"nt-tags-{status}")
                     st.caption("Reviewer will be auto-set when moving from Review → Done.")
                     if st.button("Create", key=f"nt-create-{status}"):
                         if nt_title.strip():
@@ -1627,6 +1959,20 @@ with board_tab:
                             st.rerun()
             for t in kanban_data[status]:
                 tid = t['id']
+
+                # Bulk selection checkbox when in bulk mode
+                if st.session_state.bulk_mode:
+                    is_selected = tid in st.session_state.selected_tasks
+                    if st.checkbox(
+                        f"Select: {t.get('title', 'Untitled')[:30]}",
+                        value=is_selected,
+                        key=f"bulk-sel-{tid}",
+                        label_visibility="collapsed"
+                    ):
+                        st.session_state.selected_tasks.add(tid)
+                    else:
+                        st.session_state.selected_tasks.discard(tid)
+
                 card_html = make_card_html(t)
                 st.markdown(card_html, unsafe_allow_html=True)
                 # Button bar: wrap in container for styling
@@ -1987,6 +2333,176 @@ with queue_tab:
                         st.session_state.active_ticket = sel_id
                         st.rerun()
             st.caption("Queue respects current filters and view mode. Scores are heuristic (priority, urgency, progress, staleness).")
+
+# ==============================================================================
+# SPRINT PLANNING TAB
+# ==============================================================================
+with sprint_tab:
+    st.subheader("Sprint Planning & Management 🏃")
+
+    # Sprint Overview Cards
+    sprint_overview_cols = st.columns(4)
+
+    active_sprint_data = None
+    for s in st.session_state.sprints:
+        if s["id"] == st.session_state.active_sprint:
+            active_sprint_data = s
+            break
+
+    if active_sprint_data:
+        sprint_tasks = [t for t in st.session_state.tasks_cache
+                        if t.get("sprint_id") == active_sprint_data["id"]]
+        done_tasks = [t for t in sprint_tasks if t.get("status") in ("Done", "Closed")]
+        in_progress = [t for t in sprint_tasks if t.get("status") == "In Progress"]
+
+        with sprint_overview_cols[0]:
+            st.metric("Sprint Tasks", len(sprint_tasks))
+        with sprint_overview_cols[1]:
+            st.metric("Completed", len(done_tasks),
+                      delta=f"{round(len(done_tasks)/max(1,len(sprint_tasks))*100)}%")
+        with sprint_overview_cols[2]:
+            st.metric("In Progress", len(in_progress))
+        with sprint_overview_cols[3]:
+            days_left = (datetime.fromisoformat(active_sprint_data["end_date"]).date() - date.today()).days
+            st.metric("Days Left", max(0, days_left))
+    else:
+        with sprint_overview_cols[0]:
+            st.info("No active sprint")
+
+    st.divider()
+
+    # Two columns: Sprint Management | Burn-down Chart
+    sprint_col1, sprint_col2 = st.columns([1, 1.5])
+
+    with sprint_col1:
+        st.markdown("#### Manage Sprints")
+
+        # Sprint selector
+        sprint_options = {s["id"]: s["name"] for s in st.session_state.sprints}
+        selected_sprint_id = st.selectbox(
+            "Select Sprint",
+            options=list(sprint_options.keys()),
+            format_func=lambda x: sprint_options.get(x, x),
+            key="sprint-selector"
+        )
+
+        if selected_sprint_id:
+            st.session_state.active_sprint = selected_sprint_id
+            for s in st.session_state.sprints:
+                if s["id"] == selected_sprint_id:
+                    st.markdown(f"**Goal:** {s.get('goal', 'Not set')}")
+                    st.markdown(f"**Period:** {s['start_date']} to {s['end_date']}")
+                    st.markdown(f"**Status:** {s.get('status', 'active').title()}")
+                    break
+
+        # Create new sprint
+        with st.expander("Create New Sprint"):
+            new_sprint_name = st.text_input("Sprint Name", value=f"Sprint {len(st.session_state.sprints)+1}")
+            new_sprint_goal = st.text_area("Sprint Goal", height=80)
+            new_sprint_start = st.date_input("Start Date", value=date.today())
+            new_sprint_duration = st.selectbox("Duration", [7, 14, 21, 28], index=1)
+
+            if st.button("Create Sprint", type="primary"):
+                new_sprint = {
+                    "id": f"sprint-{len(st.session_state.sprints)+1}",
+                    "name": new_sprint_name,
+                    "start_date": new_sprint_start.isoformat(),
+                    "end_date": (new_sprint_start + timedelta(days=new_sprint_duration)).isoformat(),
+                    "goal": new_sprint_goal,
+                    "status": "active",
+                }
+                st.session_state.sprints.append(new_sprint)
+                st.session_state.active_sprint = new_sprint["id"]
+                st.success(f"Created {new_sprint_name}")
+                st.rerun()
+
+        # Add tasks to sprint
+        with st.expander("Add Tasks to Sprint"):
+            backlog_tasks = [t for t in st.session_state.tasks_cache
+                            if t.get("status") == "Backlog" and not t.get("sprint_id")]
+            if backlog_tasks:
+                task_options = {t["id"]: t.get("title", "Untitled")[:50] for t in backlog_tasks}
+                selected_tasks = st.multiselect(
+                    "Select tasks from backlog",
+                    options=list(task_options.keys()),
+                    format_func=lambda x: task_options.get(x, x),
+                    key="sprint-add-tasks"
+                )
+
+                if selected_tasks and st.button("Add to Sprint"):
+                    for task_id in selected_tasks:
+                        # Update task with sprint_id
+                        for t in st.session_state.tasks_cache:
+                            if t["id"] == task_id:
+                                t["sprint_id"] = st.session_state.active_sprint
+                                tasks_repo.update_task(task_id, {"sprint_id": st.session_state.active_sprint})
+                                break
+                    st.success(f"Added {len(selected_tasks)} tasks to sprint")
+                    st.rerun()
+            else:
+                st.info("No backlog tasks available to add")
+
+    with sprint_col2:
+        st.markdown("#### Sprint Progress")
+
+        if active_sprint_data:
+            sprint_tasks = [t for t in st.session_state.tasks_cache
+                            if t.get("sprint_id") == active_sprint_data["id"]]
+
+            if sprint_tasks:
+                try:
+                    fig = create_burndown_chart(
+                        sprint_tasks,
+                        active_sprint_data["start_date"],
+                        active_sprint_data["end_date"]
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Could not generate burn-down chart: {e}")
+
+                # Sprint task breakdown
+                st.markdown("**Task Breakdown by Status:**")
+                status_counts = {}
+                for t in sprint_tasks:
+                    s = t.get("status", "Unknown")
+                    status_counts[s] = status_counts.get(s, 0) + 1
+
+                breakdown_df = pd.DataFrame([
+                    {"Status": k, "Count": v} for k, v in status_counts.items()
+                ])
+                if not breakdown_df.empty:
+                    fig_breakdown = px.pie(
+                        breakdown_df, values="Count", names="Status",
+                        color_discrete_sequence=px.colors.qualitative.Set2,
+                        hole=0.4
+                    )
+                    fig_breakdown.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
+                    st.plotly_chart(fig_breakdown, use_container_width=True)
+            else:
+                st.info("No tasks assigned to this sprint yet")
+        else:
+            st.info("Select or create a sprint to view progress")
+
+    st.divider()
+
+    # Cycle Time Metrics
+    st.markdown("#### Performance Metrics")
+    metrics = get_cycle_time_metrics(st.session_state.tasks_cache)
+
+    metric_cols = st.columns(5)
+    with metric_cols[0]:
+        avg_days = round(metrics["avg_cycle_time_hours"] / 24, 1) if metrics["avg_cycle_time_hours"] else 0
+        st.metric("Avg Cycle Time", f"{avg_days} days")
+    with metric_cols[1]:
+        median_days = round(metrics["median_cycle_time_hours"] / 24, 1) if metrics["median_cycle_time_hours"] else 0
+        st.metric("Median Cycle Time", f"{median_days} days")
+    with metric_cols[2]:
+        p90_days = round(metrics["p90_cycle_time_hours"] / 24, 1) if metrics["p90_cycle_time_hours"] else 0
+        st.metric("P90 Cycle Time", f"{p90_days} days")
+    with metric_cols[3]:
+        st.metric("Total Completed", metrics["total_completed"])
+    with metric_cols[4]:
+        st.metric("Weekly Throughput", f"{metrics['throughput_per_week']} tasks")
 
 with gantt_tab:
     st.subheader("Gantt Chart 📅")

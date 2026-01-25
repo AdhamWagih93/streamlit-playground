@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import os
 import sys
 from typing import Any, Dict, List
@@ -11,6 +12,7 @@ from src.ai.mcp_langchain_tools import invoke_tool, tool_names
 from src.admin_config import load_admin_config
 from src.streamlit_config import get_app_config
 from src.theme import set_theme
+from src.mcp_health import add_mcp_status_styles
 
 
 set_theme(page_title="Docker MCP Test", page_icon="🐳")
@@ -20,10 +22,109 @@ if not admin.is_mcp_enabled("docker", default=True):
     st.info("Docker MCP is disabled by Admin.")
     st.stop()
 
+# Add status badge styles
+add_mcp_status_styles()
+
+# Modern styling
+st.markdown(
+    """
+    <style>
+    .docker-hero {
+        background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
+        border-radius: 20px;
+        padding: 2rem 2.5rem;
+        margin-bottom: 2rem;
+        color: white;
+        box-shadow: 0 10px 40px rgba(37, 99, 235, 0.3);
+    }
+    .docker-hero h1 {
+        font-size: 2.2rem;
+        font-weight: 800;
+        margin: 0 0 0.5rem 0;
+        letter-spacing: 0.5px;
+    }
+    .docker-hero p {
+        margin: 0;
+        font-size: 1.05rem;
+        opacity: 0.95;
+    }
+    .docker-card {
+        background: linear-gradient(145deg, #ffffff, #f8fafc);
+        border-radius: 16px;
+        padding: 1.5rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+        margin-bottom: 1rem;
+    }
+    .docker-card h3 {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin: 0 0 1rem 0;
+        color: #1e293b;
+    }
+    .container-status-running {
+        color: #059669;
+        font-weight: 600;
+    }
+    .container-status-exited {
+        color: #dc2626;
+        font-weight: 600;
+    }
+    .container-status-paused {
+        color: #f59e0b;
+        font-weight: 600;
+    }
+    .container-status-created {
+        color: #6366f1;
+        font-weight: 600;
+    }
+    .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    .metric-box {
+        background: #f1f5f9;
+        border-radius: 12px;
+        padding: 1rem;
+        text-align: center;
+        border: 1px solid #e2e8f0;
+    }
+    .metric-box-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #0f172a;
+    }
+    .metric-box-label {
+        font-size: 0.85rem;
+        color: #64748b;
+        margin-top: 0.25rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+st.markdown(
+    """
+    <div class="docker-hero">
+        <h1>🐳 Docker Container Management</h1>
+        <p>Monitor and manage Docker containers via MCP server • No Docker CLI required</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def _get_docker_tools(force_reload: bool = False):
     cfg = get_app_config()
     transport = (cfg.docker.mcp_transport or "stdio").lower().strip()
+
+    # Convert "http" to "sse" for MCP over HTTP
+    if transport == "http":
+        transport = "sse"
 
     sig = f"{transport}|{cfg.docker.mcp_url}"
     if force_reload or st.session_state.get("_docker_tools_sig") != sig or "_docker_tools" not in st.session_state:
@@ -48,130 +149,474 @@ def _invoke(tools, name: str, args: Dict[str, Any]) -> Any:
     return invoke_tool(list(tools or []), name, dict(args or {}))
 
 
-st.title("Docker MCP Tools")
-st.caption("Uses the Python docker SDK via an MCP server. No docker CLI required.")
+# Connection status info
+st.subheader("🔍 Connection Status")
 
+cfg = get_app_config()
+transport = (cfg.docker.mcp_transport or "stdio").lower().strip()
+
+col_info1, col_info2 = st.columns(2)
+with col_info1:
+    st.markdown(
+        f"""
+        <div class="docker-card" style="padding: 1rem;">
+            <div style="color: #64748b;">Transport: <strong>{transport}</strong></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+with col_info2:
+    if transport != "stdio":
+        st.markdown(
+            f"""
+            <div class="docker-card" style="padding: 1rem;">
+                <div style="color: #64748b; font-size: 0.85rem;">URL: <code>{cfg.docker.mcp_url}</code></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+# Prerequisites check
 cfg_for_hint = get_app_config()
 transport_for_hint = (cfg_for_hint.docker.mcp_transport or "stdio").lower().strip()
+
 if transport_for_hint == "stdio":
     if importlib.util.find_spec("docker") is None:
-        st.warning(
-            "Local stdio mode requires the Python package 'docker'. "
-            "Install dependencies with: python -m pip install -r requirements.txt"
+        st.error(
+            "⚠️ **Missing dependency:** The Python package `docker` is required for local stdio mode.\n\n"
+            "Install with: `pip install docker`"
         )
     if cfg_for_hint.docker.docker_tls_verify and not cfg_for_hint.docker.docker_cert_path:
         st.warning(
-            "DOCKER_TLS_VERIFY is enabled but DOCKER_CERT_PATH is not set. "
-            "Either set DOCKER_CERT_PATH to a folder containing ca.pem/cert.pem/key.pem, or unset DOCKER_TLS_VERIFY for local Docker Desktop."
+            "⚠️ **TLS Configuration:** DOCKER_TLS_VERIFY is enabled but DOCKER_CERT_PATH is not set.\n\n"
+            "Set DOCKER_CERT_PATH to a folder containing ca.pem/cert.pem/key.pem, "
+            "or disable DOCKER_TLS_VERIFY for local Docker Desktop."
         )
 
+st.divider()
+
+# Sidebar controls
 with st.sidebar:
-    st.subheader("Docker MCP")
+    st.markdown("### 🎛️ Controls")
+
     if "docker_auto_load_tools" not in st.session_state:
         st.session_state.docker_auto_load_tools = False
+
     st.session_state.docker_auto_load_tools = st.toggle(
         "Auto-load tools on open",
         value=bool(st.session_state.docker_auto_load_tools),
-        help="When enabled, the page will discover tools automatically on open. Leave off for fastest loads.",
+        help="When enabled, the page will discover tools automatically on open.",
     )
 
-    load_clicked = st.button("Load/refresh tools", use_container_width=True)
+    load_clicked = st.button("🔄 Load/refresh tools", use_container_width=True)
 
+    st.divider()
+
+    st.markdown("### 📊 Quick Stats")
+    containers_count = len(st.session_state.get("_docker_containers_list", []))
+    images_count = len(st.session_state.get("_docker_images_list", []))
+
+    st.metric("Containers", containers_count)
+    st.metric("Images", images_count)
+
+# Tool loading
 should_load = bool(load_clicked) or (
     bool(st.session_state.get("docker_auto_load_tools")) and "_docker_tools" not in st.session_state
 )
 
 if should_load:
     try:
-        _get_docker_tools(force_reload=bool(load_clicked))
-    except Exception as exc:  # noqa: BLE001
+        with st.spinner("Loading Docker MCP tools..."):
+            _get_docker_tools(force_reload=bool(load_clicked))
+            st.success("✓ Tools loaded successfully")
+    except Exception as exc:
         st.error(f"Failed to load Docker MCP tools: {exc}")
         st.info(
-            "For local dev, ensure Docker Desktop/daemon is running. "
-            "For remote, set DOCKER_HOST/DOCKER_TLS_VERIFY/DOCKER_CERT_PATH or use STREAMLIT_DOCKER_MCP_URL with SSE."
+            "**Troubleshooting:**\n"
+            "- Ensure Docker Desktop/daemon is running\n"
+            "- For remote connections, verify DOCKER_HOST, DOCKER_TLS_VERIFY, and DOCKER_CERT_PATH\n"
+            "- Check `docker info` in your terminal"
         )
 
 tools = st.session_state.get("_docker_tools")
 if not tools:
-    st.info("Docker tools are not loaded yet. Click **Load/refresh tools** in the sidebar.")
+    st.info("🔧 Docker tools are not loaded yet. Click **Load/refresh tools** in the sidebar to begin.")
     st.stop()
 
-col1, col2 = st.columns([1, 2])
-with col1:
-    if st.button("Refresh tools", use_container_width=True):
-        tools = _get_docker_tools(force_reload=True)
-        st.success("Reloaded")
-with col2:
-    st.write(f"Loaded {len(tools)} tools")
+# ==============================================================================
+# QUICK ACTIONS PANEL
+# ==============================================================================
+st.markdown("### Quick Actions")
 
-with st.expander("Show loaded tool names", expanded=False):
-    names = tool_names(list(tools or []))
-    if not names:
-        st.write("No tool names found.")
-    else:
-        st.code("\n".join(names), language="text")
+qa_cols = st.columns(5)
 
-st.markdown("---")
+with qa_cols[0]:
+    if st.button("List All Containers", use_container_width=True, type="primary"):
+        with st.spinner("Loading..."):
+            result = _invoke(tools, "list_containers", {"all": True})
+            if isinstance(result, dict) and result.get("ok"):
+                st.session_state["_docker_containers_list"] = result.get("containers") or []
+                st.success(f"Found {len(result.get('containers', []))} containers")
+            else:
+                st.error(f"Failed: {result}")
 
-st.subheader("Health")
-if st.button("Health check", use_container_width=True):
-    st.json(_invoke(tools, "health_check", {}))
+with qa_cols[1]:
+    if st.button("List Images", use_container_width=True):
+        with st.spinner("Loading..."):
+            result = _invoke(tools, "list_images", {"all": False})
+            if isinstance(result, dict) and result.get("ok"):
+                st.session_state["_docker_images_list"] = result.get("images") or []
+                st.success(f"Found {len(result.get('images', []))} images")
+            else:
+                st.error(f"Failed: {result}")
 
-st.subheader("Containers")
-cc1, cc2 = st.columns([1, 3])
-with cc1:
-    show_all = st.checkbox("Show all", value=True)
-    if st.button("List containers", use_container_width=True):
-        st.session_state["_docker_containers"] = _invoke(tools, "list_containers", {"all": bool(show_all)})
-
-containers_res = st.session_state.get("_docker_containers")
-containers: List[Dict[str, Any]] = []
-if isinstance(containers_res, dict) and containers_res.get("ok"):
-    containers = containers_res.get("containers") or []
-
-with cc2:
-    if containers:
-        st.dataframe(containers, use_container_width=True, hide_index=True)
-
-picked = st.selectbox(
-    "Container (id)",
-    options=[""] + [c.get("id") for c in containers if c.get("id")],
-    index=0,
-)
-
-if picked:
-    a1, a2, a3, a4 = st.columns(4)
-    with a1:
-        if st.button("Start", use_container_width=True):
-            st.json(_invoke(tools, "start_container", {"container_id": picked}))
-    with a2:
-        if st.button("Stop", use_container_width=True):
-            st.json(_invoke(tools, "stop_container", {"container_id": picked, "timeout": 10}))
-    with a3:
-        if st.button("Restart", use_container_width=True):
-            st.json(_invoke(tools, "restart_container", {"container_id": picked, "timeout": 10}))
-    with a4:
-        if st.button("Remove", use_container_width=True):
-            st.json(_invoke(tools, "remove_container", {"container_id": picked, "force": True, "remove_volumes": False}))
-
-    st.markdown("##### Logs")
-    tail = st.number_input("Tail", min_value=10, max_value=5000, value=200, step=10)
-    if st.button("Get logs", use_container_width=True):
-        res = _invoke(tools, "container_logs", {"container_id": picked, "tail": int(tail), "timestamps": True})
-        if isinstance(res, dict) and res.get("ok"):
-            st.code(res.get("text") or "", language="text")
+with qa_cols[2]:
+    if st.button("Stop All Running", use_container_width=True):
+        containers = st.session_state.get("_docker_containers_list", [])
+        running = [c for c in containers if c.get("status", "").lower().startswith("running")]
+        if running:
+            with st.spinner(f"Stopping {len(running)} containers..."):
+                stopped = 0
+                for c in running:
+                    res = _invoke(tools, "stop_container", {"container_id": c.get("id")[:12], "timeout": 10})
+                    if isinstance(res, dict) and res.get("ok"):
+                        stopped += 1
+                st.success(f"Stopped {stopped}/{len(running)} containers")
+                st.rerun()
         else:
-            st.json(res)
+            st.info("No running containers to stop")
 
-st.subheader("Images")
-if st.button("List images", use_container_width=True):
-    st.session_state["_docker_images"] = _invoke(tools, "list_images", {})
+with qa_cols[3]:
+    if st.button("System Prune", use_container_width=True):
+        st.session_state["_docker_show_prune_confirm"] = True
 
-images_res = st.session_state.get("_docker_images")
-if isinstance(images_res, dict) and images_res.get("ok"):
-    st.dataframe(images_res.get("images") or [], use_container_width=True, hide_index=True)
+with qa_cols[4]:
+    if st.button("Refresh All", use_container_width=True):
+        with st.spinner("Refreshing..."):
+            # Refresh containers
+            result = _invoke(tools, "list_containers", {"all": True})
+            if isinstance(result, dict) and result.get("ok"):
+                st.session_state["_docker_containers_list"] = result.get("containers") or []
+            # Refresh images
+            result = _invoke(tools, "list_images", {"all": False})
+            if isinstance(result, dict) and result.get("ok"):
+                st.session_state["_docker_images_list"] = result.get("images") or []
+            st.success("Refreshed!")
+            st.rerun()
 
-with st.expander("Pull image", expanded=False):
-    ref = st.text_input("Image ref", value="hello-world:latest")
-    if st.button("Pull", use_container_width=True) and ref.strip():
-        st.json(_invoke(tools, "pull_image", {"ref": ref.strip()}))
+# System Prune Confirmation
+if st.session_state.get("_docker_show_prune_confirm"):
+    st.warning("**System Prune** will remove stopped containers, unused networks, dangling images, and build cache.")
+    col_confirm, col_cancel = st.columns(2)
+    with col_confirm:
+        if st.button("Confirm Prune", type="primary", use_container_width=True):
+            with st.spinner("Pruning..."):
+                result = _invoke(tools, "docker_prune", {"prune_volumes": False})
+                if isinstance(result, dict) and result.get("ok"):
+                    st.success(f"Pruned! Reclaimed: {result.get('space_reclaimed', 'unknown')} bytes")
+                else:
+                    st.error(f"Failed: {result}")
+            st.session_state["_docker_show_prune_confirm"] = False
+            st.rerun()
+    with col_cancel:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state["_docker_show_prune_confirm"] = False
+            st.rerun()
+
+st.divider()
+
+# Main content tabs
+tabs = st.tabs(["📦 Containers", "💿 Images", "🔧 Tools & Debug"])
+
+# --- CONTAINERS TAB ---
+with tabs[0]:
+    st.markdown('<div class="docker-card">', unsafe_allow_html=True)
+    st.markdown("### Container Management")
+
+    col_filter, col_action = st.columns([2, 1])
+
+    with col_filter:
+        show_all = st.checkbox("Show all containers (including stopped)", value=True)
+        search_filter = st.text_input("🔍 Filter by name or ID", placeholder="Search containers...")
+
+    with col_action:
+        if st.button("🔄 Refresh Containers", use_container_width=True):
+            with st.spinner("Loading containers..."):
+                result = _invoke(tools, "list_containers", {"all": bool(show_all)})
+                if isinstance(result, dict) and result.get("ok"):
+                    st.session_state["_docker_containers_list"] = result.get("containers") or []
+                    st.success("Refreshed!")
+                else:
+                    st.error(f"Failed to list containers: {result}")
+
+    containers_list: List[Dict[str, Any]] = st.session_state.get("_docker_containers_list", [])
+
+    if containers_list:
+        # Apply search filter
+        if search_filter.strip():
+            containers_list = [
+                c for c in containers_list
+                if search_filter.lower() in (c.get("name") or "").lower()
+                or search_filter.lower() in (c.get("id") or "").lower()
+            ]
+
+        # Summary metrics
+        running = sum(1 for c in containers_list if c.get("status", "").lower().startswith("running"))
+        stopped = sum(1 for c in containers_list if c.get("status", "").lower().startswith("exited"))
+        other = len(containers_list) - running - stopped
+
+        st.markdown(
+            f"""
+            <div class="metric-grid">
+                <div class="metric-box">
+                    <div class="metric-box-value" style="color: #059669;">{running}</div>
+                    <div class="metric-box-label">Running</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-box-value" style="color: #dc2626;">{stopped}</div>
+                    <div class="metric-box-label">Stopped</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-box-value" style="color: #6366f1;">{other}</div>
+                    <div class="metric-box-label">Other</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-box-value">{len(containers_list)}</div>
+                    <div class="metric-box-label">Total</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Container list
+        for container in containers_list:
+            container_id = container.get("id", "")[:12]
+            container_name = container.get("name", "Unknown")
+            status = container.get("status", "unknown")
+            image = container.get("image", "")
+
+            # Determine status class
+            status_class = "container-status-created"
+            if "running" in status.lower():
+                status_class = "container-status-running"
+            elif "exited" in status.lower():
+                status_class = "container-status-exited"
+            elif "paused" in status.lower():
+                status_class = "container-status-paused"
+
+            with st.expander(f"🐳 {container_name} ({container_id})", expanded=False):
+                col_info, col_actions = st.columns([2, 1])
+
+                with col_info:
+                    st.markdown(f"**Status:** <span class='{status_class}'>{status}</span>", unsafe_allow_html=True)
+                    st.markdown(f"**Image:** `{image}`")
+                    st.markdown(f"**ID:** `{container_id}`")
+
+                with col_actions:
+                    action_col1, action_col2 = st.columns(2)
+
+                    with action_col1:
+                        if st.button("▶️ Start", key=f"start_{container_id}", use_container_width=True):
+                            with st.spinner("Starting..."):
+                                res = _invoke(tools, "start_container", {"container_id": container_id})
+                                if isinstance(res, dict) and res.get("ok"):
+                                    st.success("Started!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed: {res}")
+
+                        if st.button("⏸️ Stop", key=f"stop_{container_id}", use_container_width=True):
+                            with st.spinner("Stopping..."):
+                                res = _invoke(tools, "stop_container", {"container_id": container_id, "timeout": 10})
+                                if isinstance(res, dict) and res.get("ok"):
+                                    st.success("Stopped!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed: {res}")
+
+                    with action_col2:
+                        if st.button("🔄 Restart", key=f"restart_{container_id}", use_container_width=True):
+                            with st.spinner("Restarting..."):
+                                res = _invoke(tools, "restart_container", {"container_id": container_id, "timeout": 10})
+                                if isinstance(res, dict) and res.get("ok"):
+                                    st.success("Restarted!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed: {res}")
+
+                        # Destructive action with confirmation
+                        if st.button("🗑️ Remove", key=f"remove_{container_id}", use_container_width=True, type="secondary"):
+                            if f"confirm_remove_{container_id}" not in st.session_state:
+                                st.session_state[f"confirm_remove_{container_id}"] = True
+                                st.warning("⚠️ Click again to confirm removal")
+                            else:
+                                with st.spinner("Removing..."):
+                                    res = _invoke(tools, "remove_container", {
+                                        "container_id": container_id,
+                                        "force": True,
+                                        "remove_volumes": False
+                                    })
+                                    if isinstance(res, dict) and res.get("ok"):
+                                        st.success("Removed!")
+                                        del st.session_state[f"confirm_remove_{container_id}"]
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Failed: {res}")
+
+                # Logs section
+                st.markdown("---")
+                st.markdown("**📋 Container Logs**")
+
+                log_tail = st.slider("Number of lines", 10, 1000, 200, key=f"tail_{container_id}")
+
+                if st.button("View Logs", key=f"logs_{container_id}"):
+                    with st.spinner("Fetching logs..."):
+                        res = _invoke(tools, "container_logs", {
+                            "container_id": container_id,
+                            "tail": int(log_tail),
+                            "timestamps": True
+                        })
+                        if isinstance(res, dict) and res.get("ok"):
+                            logs_text = res.get("text") or ""
+                            if logs_text:
+                                st.code(logs_text, language="text", line_numbers=True)
+                            else:
+                                st.info("No logs available")
+                        else:
+                            st.error(f"Failed to fetch logs: {res}")
+    else:
+        st.info("No containers found. Click **Refresh Containers** to load the container list.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- IMAGES TAB ---
+with tabs[1]:
+    st.markdown('<div class="docker-card">', unsafe_allow_html=True)
+    st.markdown("### Image Management")
+
+    col_search, col_refresh = st.columns([3, 1])
+
+    with col_search:
+        image_search = st.text_input("🔍 Filter images", placeholder="Search by name or tag...")
+
+    with col_refresh:
+        if st.button("🔄 Refresh Images", use_container_width=True):
+            with st.spinner("Loading images..."):
+                result = _invoke(tools, "list_images", {})
+                if isinstance(result, dict) and result.get("ok"):
+                    st.session_state["_docker_images_list"] = result.get("images") or []
+                    st.success("Refreshed!")
+                else:
+                    st.error(f"Failed to list images: {result}")
+
+    images_list: List[Dict[str, Any]] = st.session_state.get("_docker_images_list", [])
+
+    if images_list:
+        # Apply search filter
+        if image_search.strip():
+            images_list = [
+                img for img in images_list
+                if image_search.lower() in str(img.get("tags", [])).lower()
+                or image_search.lower() in (img.get("id") or "").lower()
+            ]
+
+        st.markdown(f"**Total Images:** {len(images_list)}")
+
+        # Display images in a table
+        if images_list:
+            st.dataframe(
+                images_list,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "id": st.column_config.TextColumn("ID", width="small"),
+                    "tags": st.column_config.ListColumn("Tags"),
+                    "size": st.column_config.NumberColumn("Size", format="%d bytes"),
+                }
+            )
+    else:
+        st.info("No images found. Click **Refresh Images** to load the image list.")
+
+    st.divider()
+
+    # Pull image section
+    with st.expander("⬇️ Pull New Image", expanded=False):
+        st.markdown("Pull a Docker image from a registry")
+
+        image_ref = st.text_input(
+            "Image reference",
+            value="hello-world:latest",
+            placeholder="e.g., nginx:latest, python:3.11-slim",
+            help="Specify image name and optional tag"
+        )
+
+        if st.button("Pull Image", use_container_width=True, type="primary"):
+            if image_ref.strip():
+                with st.spinner(f"Pulling {image_ref}..."):
+                    res = _invoke(tools, "pull_image", {"ref": image_ref.strip()})
+                    if isinstance(res, dict) and res.get("ok"):
+                        st.success(f"✓ Successfully pulled {image_ref}")
+                        # Refresh images list
+                        result = _invoke(tools, "list_images", {})
+                        if isinstance(result, dict) and result.get("ok"):
+                            st.session_state["_docker_images_list"] = result.get("images") or []
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to pull image: {res}")
+            else:
+                st.warning("Please enter an image reference")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TOOLS & DEBUG TAB ---
+with tabs[2]:
+    st.markdown('<div class="docker-card">', unsafe_allow_html=True)
+    st.markdown("### Available MCP Tools")
+
+    col_info, col_refresh = st.columns([3, 1])
+
+    with col_info:
+        st.markdown(f"**Loaded Tools:** {len(tools)}")
+
+    with col_refresh:
+        if st.button("🔄 Reload Tools", use_container_width=True):
+            tools = _get_docker_tools(force_reload=True)
+            st.success("Tools reloaded!")
+            st.rerun()
+
+    # List all available tools
+    with st.expander("📋 Show All Tool Names", expanded=False):
+        names = tool_names(list(tools or []))
+        if names:
+            for idx, name in enumerate(names, 1):
+                st.markdown(f"{idx}. `{name}`")
+        else:
+            st.info("No tools available")
+
+    st.divider()
+
+    # Health check
+    st.markdown("### 🏥 Docker Health Check")
+
+    if st.button("Run Health Check", use_container_width=True):
+        with st.spinner("Checking Docker daemon health..."):
+            health_result = _invoke(tools, "health_check", {})
+            if isinstance(health_result, dict):
+                if health_result.get("ok"):
+                    st.success("✓ Docker daemon is healthy")
+                else:
+                    st.error("✗ Docker daemon reported issues")
+                st.json(health_result)
+            else:
+                st.error("Unexpected health check response format")
+                st.code(str(health_result))
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Footer
+st.divider()
+st.caption(
+    "💡 **Tip:** Use the sidebar to enable auto-load for automatic tool discovery. "
+    "Destructive operations (like container removal) require confirmation."
+)

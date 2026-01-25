@@ -93,6 +93,11 @@ def _get_tools(
     force_reload: bool = False,
     watched_files: Optional[List[Path]] = None,
 ) -> List[Any]:
+    # Convert "http" to "sse" for MCP over HTTP
+    transport = transport.lower().strip()
+    if transport == "http":
+        transport = "sse"
+
     # Include code mtime so local edits to the MCP server force reload.
     try:
         watched = list(watched_files or [])

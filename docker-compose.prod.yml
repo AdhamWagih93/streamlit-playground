@@ -1,0 +1,139 @@
+# Production overrides for Docker Compose
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+services:
+  streamlit:
+    build:
+      target: production
+      no_cache: false
+    environment:
+      # Production database (PostgreSQL)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
+
+      # Disable debug features
+      - DEBUG=false
+      - STREAMLIT_SERVER_HEADLESS=true
+
+      # Production Ollama model
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct-q6_K}
+      - OLLAMA_ENABLED=true
+
+      # Redis for session/caching
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      # No source mounts in production
+      - ./data:/app/data:delegated
+    mem_limit: 1024m
+    cpus: 1.0
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+
+  scheduler:
+    environment:
+      # Production database
+      - SCHEDULER_DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
+      - PLATFORM_DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
+
+      # Production timing
+      - SCHEDULER_TICK_SECONDS=30
+      - SCHEDULER_BOOTSTRAP_JOBS=false
+
+      # Production logging
+      - LOG_LEVEL=INFO
+    volumes:
+      # No source mounts in production
+      - ./data:/app/data:delegated
+    mem_limit: 512m
+    cpus: 0.5
+    restart: always
+    depends_on:
+      - postgres
+
+  docker-mcp:
+    environment:
+      - LOG_LEVEL=INFO
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    mem_limit: 256m
+    cpus: 0.2
+    restart: always
+
+  jenkins-mcp:
+    environment:
+      - LOG_LEVEL=INFO
+      - JENKINS_VERIFY_SSL=true
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    mem_limit: 512m
+    cpus: 0.5
+    restart: always
+
+  kubernetes-mcp:
+    environment:
+      - LOG_LEVEL=INFO
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    mem_limit: 512m
+    cpus: 0.5
+    restart: always
+
+  # PostgreSQL for production
+  postgres:
+    image: postgres:16-alpine
+    container_name: bsw-postgres
+    environment:
+      - POSTGRES_USER=bsw
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bsw_password}
+      - POSTGRES_DB=bsw
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    mem_limit: 512m
+    cpus: 0.5
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bsw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - best-streamlit-network
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: bsw-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    mem_limit: 256m
+    cpus: 0.2
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - best-streamlit-network
+
+  # Ollama with production model
+  ollama:
+    mem_limit: 4096m
+    cpus: 2.0
+    restart: always
+
+volumes:
+  postgres-data:
+    name: bsw-postgres-data
+  redis-data:
+    name: bsw-redis-data

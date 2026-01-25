@@ -18,6 +18,8 @@ def get_page_catalog() -> List[PageSpec]:
 
     return [
         PageSpec("pages/0_Home.py", "Home", "🏠", "Home", always_visible=True),
+        PageSpec("pages/12_System_Status.py", "System Status", "🔍", "Home", always_visible=True),
+        PageSpec("pages/13_MCP_Servers.py", "MCP Servers", "🔌", "Home", always_visible=True),
         PageSpec("pages/1_Team_Task_Manager.py", "Team Task Manager", "📋", "Team"),
         PageSpec("pages/2_DevOps_Referral_Agent.py", "DevOps Referral Agent", "🧑‍💼", "Team"),
         PageSpec("pages/3_WFH_Schedule.py", "WFH Schedule", "📅", "Team"),
@@ -28,6 +30,8 @@ def get_page_catalog() -> List[PageSpec]:
         PageSpec("pages/7_Setup.py", "Setup", "🛠️", "AI Playground"),
         PageSpec("pages/8_Docker_MCP_Test.py", "Docker MCP Test", "🐳", "AI Playground"),
         PageSpec("pages/9_Nexus_Explorer.py", "Nexus Explorer", "📦", "AI Playground"),
+        PageSpec("pages/14_Git_Explorer.py", "Git Explorer", "📂", "AI Playground"),
+        PageSpec("pages/15_Trivy_Scanner.py", "Trivy Scanner", "🔒", "AI Playground"),
         PageSpec("pages/11_Database.py", "Database", "🗄️", "Admin"),
     ]
 

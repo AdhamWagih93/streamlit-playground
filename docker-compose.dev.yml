@@ -1,0 +1,77 @@
+# Development overrides for Docker Compose
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  streamlit:
+    build:
+      cache_from:
+        - bsw-streamlit:dev
+    environment:
+      # Enable debug mode
+      - DEBUG=true
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_RUN_ON_SAVE=true
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=watchdog
+
+      # Disable Ollama by default in dev (save resources)
+      - OLLAMA_ENABLED=${OLLAMA_ENABLED:-false}
+    volumes:
+      # Additional dev mounts for config
+      - ./best-streamlit-website/.streamlit:/app/.streamlit:cached
+      - ./best-streamlit-website/assets:/app/assets:cached
+    command: >
+      sh -c "pip install watchdog &&
+             python -m streamlit run app.py
+             --server.address=0.0.0.0
+             --server.port=8501
+             --server.runOnSave=true
+             --server.fileWatcherType=watchdog"
+
+  scheduler:
+    environment:
+      # More frequent ticks in dev for testing
+      - SCHEDULER_TICK_SECONDS=10
+      # Auto-bootstrap demo jobs
+      - SCHEDULER_BOOTSTRAP_JOBS=true
+      # Enable debug logging
+      - LOG_LEVEL=DEBUG
+    volumes:
+      # Mount config files
+      - ./best-streamlit-website/data:/app/data:delegated
+
+  docker-mcp:
+    environment:
+      - LOG_LEVEL=DEBUG
+    # Expose additional ports for debugging
+    ports:
+      - "8001:8000"
+      - "5678:5678"  # Python debugger port
+
+  jenkins-mcp:
+    environment:
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "8002:8000"
+      - "5679:5678"  # Python debugger port
+
+  kubernetes-mcp:
+    environment:
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "8003:8000"
+      - "5680:5678"  # Python debugger port
+
+  # Additional development service: Lightweight DB admin
+  db-admin:
+    image: coleifer/sqlite-web:latest
+    container_name: bsw-db-admin
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./data:/data:ro
+    environment:
+      - SQLITE_DATABASE=/data/tasks.db
+    networks:
+      - bsw-network
+    profiles:
+      - tools

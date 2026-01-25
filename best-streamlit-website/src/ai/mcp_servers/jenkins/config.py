@@ -39,7 +39,7 @@ class JenkinsMCPServerConfig:
     DEFAULT_BASE_URL: str = "http://localhost:8080"
     DEFAULT_VERIFY_SSL: bool = True
     DEFAULT_DEV_CLIENT_TOKEN: str = "dev-jenkins-mcp-token"
-    DEFAULT_MCP_TRANSPORT: str = "stdio"
+    DEFAULT_MCP_TRANSPORT: str = "http"
     DEFAULT_MCP_HOST: str = "0.0.0.0"
     DEFAULT_MCP_PORT: int = 8000
     DEFAULT_MCP_URL: str = "http://jenkins-mcp:8000"

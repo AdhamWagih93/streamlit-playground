@@ -707,12 +707,13 @@ def helm_raw(args: List[str]) -> Dict[str, Any]:
 
 
 def run_stdio() -> None:
-    cfg = KubernetesMCPServerConfig.from_env()
-    transport = (os.environ.get("MCP_TRANSPORT") or cfg.mcp_transport or "stdio").lower().strip()
+    """Run the Kubernetes MCP server over HTTP.
 
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-        return
+    The function name is kept for backwards compatibility with existing
+    entrypoints, but the server no longer supports stdio transport.
+    """
+
+    cfg = KubernetesMCPServerConfig.from_env()
 
     host = os.environ.get("MCP_HOST") or cfg.mcp_host
     port_raw = os.environ.get("MCP_PORT")
@@ -722,7 +723,7 @@ def run_stdio() -> None:
         port = int(cfg.mcp_port)
 
     sig = inspect.signature(mcp.run)
-    kwargs: Dict[str, Any] = {"transport": transport}
+    kwargs: Dict[str, Any] = {"transport": "http"}
     if "host" in sig.parameters:
         kwargs["host"] = host
     if "port" in sig.parameters:

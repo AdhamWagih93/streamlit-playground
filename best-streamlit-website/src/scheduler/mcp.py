@@ -191,19 +191,13 @@ def scheduler_list_runs(limit: int = 50, job_id: Optional[str] = None) -> Dict[s
 def run() -> None:
     cfg = SchedulerConfig.from_env()
     start_background_scheduler(cfg)
-
-    transport = (cfg.mcp_transport or "http").lower().strip()
-    # FastMCP: older versions may use 'sse' for http. We follow existing server pattern.
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-        return
-
+    # HTTP-only MCP server; stdio mode is no longer supported.
     # Use explicit host/port when supported.
     # FastMCP signature differs across versions, so keep it permissive.
     try:
-        mcp.run(transport=transport, host=cfg.mcp_host, port=int(cfg.mcp_port))
+        mcp.run(transport="http", host=cfg.mcp_host, port=int(cfg.mcp_port))
     except TypeError:
-        mcp.run(transport=transport)
+        mcp.run(transport="http")
 
 
 if __name__ == "__main__":

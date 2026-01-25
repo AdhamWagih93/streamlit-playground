@@ -48,7 +48,7 @@ class NexusMCPServerConfig:
     DEFAULT_BASE_URL: str = "http://localhost:8081"
     DEFAULT_VERIFY_SSL: bool = True
 
-    DEFAULT_MCP_TRANSPORT: str = "stdio"
+    DEFAULT_MCP_TRANSPORT: str = "http"
     DEFAULT_MCP_HOST: str = "0.0.0.0"
     DEFAULT_MCP_PORT: int = 8003
     DEFAULT_MCP_URL: str = "http://nexus-mcp:8003"

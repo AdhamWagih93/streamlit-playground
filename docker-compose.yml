@@ -1,0 +1,300 @@
+# Best Streamlit Website - Docker Compose Configuration
+# This setup provides a complete local development environment with hot-reload support
+
+services:
+  # =============================================================================
+  # Core Application Services
+  # =============================================================================
+
+  streamlit:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/streamlit/Dockerfile
+    container_name: bsw-streamlit
+    ports:
+      - "8502:8501"
+    environment:
+      # Scheduler MCP connection
+      - SCHEDULER_MCP_TRANSPORT=http
+      - SCHEDULER_MCP_URL=http://scheduler:8010
+      - STREAMLIT_SCHEDULER_MCP_TRANSPORT=http
+      - STREAMLIT_SCHEDULER_MCP_URL=http://scheduler:8010
+
+      # Jenkins MCP connection
+      - JENKINS_MCP_TRANSPORT=http
+      - JENKINS_MCP_URL=http://jenkins-mcp:8000
+      - STREAMLIT_JENKINS_MCP_TRANSPORT=http
+      - STREAMLIT_JENKINS_MCP_URL=http://jenkins-mcp:8000
+      - JENKINS_BASE_URL=${JENKINS_BASE_URL:-http://jenkins:8080}
+      - JENKINS_VERIFY_SSL=${JENKINS_VERIFY_SSL:-false}
+
+      # Kubernetes MCP connection
+      - KUBERNETES_MCP_TRANSPORT=http
+      - KUBERNETES_MCP_URL=http://kubernetes-mcp:8000
+      - STREAMLIT_KUBERNETES_MCP_TRANSPORT=http
+      - STREAMLIT_KUBERNETES_MCP_URL=http://kubernetes-mcp:8000
+
+      # Docker MCP connection
+      - DOCKER_MCP_TRANSPORT=http
+      - DOCKER_MCP_URL=http://docker-mcp:8000
+      - STREAMLIT_DOCKER_MCP_TRANSPORT=http
+      - STREAMLIT_DOCKER_MCP_URL=http://docker-mcp:8000
+
+      # Nexus MCP connection (optional)
+      - NEXUS_MCP_TRANSPORT=http
+      - NEXUS_MCP_URL=http://nexus-mcp:8000
+      - STREAMLIT_NEXUS_MCP_TRANSPORT=http
+      - STREAMLIT_NEXUS_MCP_URL=http://nexus-mcp:8000
+
+      # Ollama configuration
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-tinyllama}
+      - OLLAMA_ENABLED=${OLLAMA_ENABLED:-true}
+
+      # Database configuration (SQLite for local dev)
+      - DATABASE_URL=sqlite:////app/data/tasks.db
+    volumes:
+      # Hot-reload support: mount source code
+      - ./best-streamlit-website:/app:cached
+      # Persistent data directory
+      - ./data:/app/data:delegated
+    depends_on:
+      - scheduler
+      - docker-mcp
+    mem_limit: 512m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - bsw-network
+
+  scheduler:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/scheduler/Dockerfile
+    container_name: bsw-scheduler
+    ports:
+      - "8010:8010"
+    environment:
+      # Scheduler configuration
+      - SCHEDULER_MCP_TRANSPORT=http
+      - SCHEDULER_MCP_HOST=0.0.0.0
+      - SCHEDULER_MCP_PORT=8010
+      - SCHEDULER_TICK_SECONDS=${SCHEDULER_TICK_SECONDS:-5}
+      - SCHEDULER_MAX_JOBS_PER_TICK=${SCHEDULER_MAX_JOBS_PER_TICK:-20}
+      - SCHEDULER_BOOTSTRAP_JOBS=${SCHEDULER_BOOTSTRAP_JOBS:-true}
+
+      # Database configuration
+      - SCHEDULER_DATABASE_URL=sqlite:////app/data/scheduler.db
+
+      # MCP server connections for scheduled jobs
+      - JENKINS_MCP_TRANSPORT=http
+      - JENKINS_MCP_URL=http://jenkins-mcp:8000
+      - KUBERNETES_MCP_TRANSPORT=http
+      - KUBERNETES_MCP_URL=http://kubernetes-mcp:8000
+      - DOCKER_MCP_TRANSPORT=http
+      - DOCKER_MCP_URL=http://docker-mcp:8000
+      - NEXUS_MCP_TRANSPORT=http
+      - NEXUS_MCP_URL=http://nexus-mcp:8000
+    volumes:
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+      # Persistent data
+      - ./data:/app/data:delegated
+    mem_limit: 256m
+    cpus: 0.25
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - bsw-network
+
+  # =============================================================================
+  # MCP Servers
+  # =============================================================================
+
+  docker-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-docker/Dockerfile
+    container_name: bsw-docker-mcp
+    ports:
+      - "8001:8000"
+    environment:
+      # Docker connection (connect to host Docker daemon)
+      - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
+      - DOCKER_MCP_TRANSPORT=http
+      - DOCKER_MCP_HOST=0.0.0.0
+      - DOCKER_MCP_PORT=8000
+      # Explicit FastMCP overrides so the HTTP server listens on all interfaces
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    volumes:
+      # Mount Docker socket to communicate with host daemon
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 128m
+    cpus: 0.1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  jenkins-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-jenkins/Dockerfile
+    container_name: bsw-jenkins-mcp
+    ports:
+      - "8002:8000"
+    environment:
+      # Jenkins connection
+      - JENKINS_BASE_URL=${JENKINS_BASE_URL:-http://jenkins:8080}
+      - JENKINS_USERNAME=${JENKINS_USERNAME:-}
+      - JENKINS_API_TOKEN=${JENKINS_API_TOKEN:-}
+      - JENKINS_VERIFY_SSL=${JENKINS_VERIFY_SSL:-false}
+
+      # MCP server configuration
+      - JENKINS_MCP_TRANSPORT=http
+      - JENKINS_MCP_HOST=0.0.0.0
+      - JENKINS_MCP_PORT=8000
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      - JENKINS_MCP_CLIENT_TOKEN=${JENKINS_MCP_CLIENT_TOKEN:-dev-jenkins-mcp-token}
+    volumes:
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 256m
+    cpus: 0.25
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  kubernetes-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-kubernetes/Dockerfile
+    container_name: bsw-kubernetes-mcp
+    ports:
+      - "8003:8000"
+    environment:
+      # Kubernetes connection (uses kubeconfig from host)
+      - K8S_KUBECONFIG=${K8S_KUBECONFIG:-}
+      - K8S_CONTEXT=${K8S_CONTEXT:-}
+
+      # MCP server configuration
+      - KUBERNETES_MCP_TRANSPORT=http
+      - KUBERNETES_MCP_HOST=0.0.0.0
+      - KUBERNETES_MCP_PORT=8000
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    volumes:
+      # Mount kubeconfig if available (use USERPROFILE on Windows, HOME on Linux)
+      - ${USERPROFILE:-${HOME}}/.kube:/root/.kube:ro
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 256m
+    cpus: 0.25
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  nexus-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-jenkins/Dockerfile  # Reuse Jenkins Dockerfile as template
+    container_name: bsw-nexus-mcp
+    ports:
+      - "8004:8000"
+    environment:
+      # Nexus connection
+      - NEXUS_BASE_URL=${NEXUS_BASE_URL:-http://nexus:8081}
+      - NEXUS_USERNAME=${NEXUS_USERNAME:-}
+      - NEXUS_PASSWORD=${NEXUS_PASSWORD:-}
+
+      # MCP server configuration
+      - NEXUS_MCP_TRANSPORT=http
+      - NEXUS_MCP_HOST=0.0.0.0
+      - NEXUS_MCP_PORT=8000
+    volumes:
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 128m
+    cpus: 0.1
+    restart: unless-stopped
+    networks:
+      - bsw-network
+    profiles:
+      - full  # Only start with --profile full
+
+  # =============================================================================
+  # AI Services (Optional)
+  # =============================================================================
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: bsw-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_MODELS=${OLLAMA_MODEL:-tinyllama}
+    mem_limit: 1024m
+    cpus: 1.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - bsw-network
+    profiles:
+      - ai  # Only start with --profile ai
+
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  bsw-network:
+    name: best-streamlit-network
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+
+volumes:
+  ollama-data:
+    name: bsw-ollama-data

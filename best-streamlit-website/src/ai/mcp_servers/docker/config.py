@@ -37,7 +37,7 @@ class DockerMCPServerConfig:
     mcp_port: int
     mcp_url: str
 
-    DEFAULT_MCP_TRANSPORT: str = "stdio"
+    DEFAULT_MCP_TRANSPORT: str = "http"
     DEFAULT_MCP_HOST: str = "0.0.0.0"
     DEFAULT_MCP_PORT: int = 8000
     DEFAULT_MCP_URL: str = "http://docker-mcp:8000"

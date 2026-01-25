@@ -330,10 +330,8 @@ def _render_mcp_servers_section(admin: AdminConfig) -> bool:
                 )
                 transport = st.selectbox(
                     "Transport",
-                    options=["stdio", "http"],
-                    index=0
-                    if str(cur.get("transport") or getattr(cfg.jenkins, "mcp_transport", "stdio")).lower() == "stdio"
-                    else 1,
+                    options=["http"],
+                    index=0,
                     key="settings_jenkins_transport",
                 )
                 url = st.text_input(
@@ -364,10 +362,8 @@ def _render_mcp_servers_section(admin: AdminConfig) -> bool:
                 st.markdown("**Overrides (non-secret)**")
                 transport = st.selectbox(
                     "Transport",
-                    options=["stdio", "http"],
-                    index=0
-                    if str(cur.get("transport") or getattr(cfg.kubernetes, "mcp_transport", "stdio")).lower() == "stdio"
-                    else 1,
+                    options=["http"],
+                    index=0,
                     key="settings_kubernetes_transport",
                 )
                 url = st.text_input(
@@ -389,10 +385,8 @@ def _render_mcp_servers_section(admin: AdminConfig) -> bool:
                 st.markdown("**Overrides (non-secret)**")
                 transport = st.selectbox(
                     "Transport",
-                    options=["stdio", "http"],
-                    index=0
-                    if str(cur.get("transport") or getattr(cfg.docker, "mcp_transport", "stdio")).lower() == "stdio"
-                    else 1,
+                    options=["http"],
+                    index=0,
                     key="settings_docker_transport",
                 )
                 url = st.text_input(
@@ -430,10 +424,8 @@ def _render_mcp_servers_section(admin: AdminConfig) -> bool:
                 )
                 transport = st.selectbox(
                     "Transport",
-                    options=["stdio", "http"],
-                    index=0
-                    if str(cur.get("transport") or getattr(cfg.nexus, "mcp_transport", "stdio")).lower() == "stdio"
-                    else 1,
+                    options=["http"],
+                    index=0,
                     key="settings_nexus_transport",
                 )
                 url = st.text_input(

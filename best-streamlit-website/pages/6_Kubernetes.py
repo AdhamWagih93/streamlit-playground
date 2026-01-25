@@ -204,6 +204,11 @@ def _get_tools(env: Dict[str, str], force_reload: bool = False):
     cfg = get_app_config()
     configured_transport = (cfg.kubernetes.mcp_transport or "stdio").lower().strip()
     transport = "stdio" if st.session_state.get("k8s_force_stdio") else configured_transport
+
+    # Convert "http" to "sse" for MCP over HTTP
+    if transport == "http":
+        transport = "sse"
+
     remote_url = cfg.kubernetes.mcp_url
 
     sig = json.dumps(
@@ -270,14 +275,26 @@ def _invoke_tool(tools, name: str, args: Dict[str, Any]) -> Any:
     tool = next((t for t in tools if _matches(str(getattr(t, "name", "")), name)), None)
     if tool is None:
         available = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
-        raise ValueError(f"Tool {name} not found. Available: {available}")
+        return {
+            "ok": False,
+            "error": f"Tool {name} not found.",
+            "available_tools": available,
+        }
 
-    if hasattr(tool, "ainvoke"):
-        raw = asyncio.run(tool.ainvoke(args))
-    else:
-        raw = tool.invoke(args)
-
-    return _normalise_mcp_result(raw)
+    try:
+        if hasattr(tool, "ainvoke"):
+            raw = asyncio.run(tool.ainvoke(args))
+        else:
+            raw = tool.invoke(args)
+        return _normalise_mcp_result(raw)
+    except Exception as exc:  # noqa: BLE001
+        # Surface MCP transport/TaskGroup errors as a structured result so
+        # the page can render cleanly instead of crashing.
+        return {
+            "ok": False,
+            "error": str(exc),
+            "tool": str(getattr(tool, "name", name)),
+        }
 
 
 def _normalise_mcp_result(value: Any) -> Any:
@@ -811,6 +828,82 @@ def main() -> None:
         if isinstance(health, dict) and health.get("checks"):
             with st.expander("Health check details", expanded=False):
                 st.json(health)
+
+    # ==============================================================================
+    # QUICK ACTIONS PANEL
+    # ==============================================================================
+    st.markdown("### Quick Actions")
+    qa_cols = st.columns(5)
+
+    with qa_cols[0]:
+        if st.button("Get All Pods", use_container_width=True, type="primary"):
+            st.session_state["k8s_quick_action"] = "pods"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols[1]:
+        if st.button("List Deployments", use_container_width=True):
+            st.session_state["k8s_quick_action"] = "deployments"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols[2]:
+        if st.button("Check Events", use_container_width=True):
+            st.session_state["k8s_quick_action"] = "events"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols[3]:
+        if st.button("Namespace Stats", use_container_width=True):
+            st.session_state["k8s_quick_action"] = "namespaces"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols[4]:
+        if st.button("Node Status", use_container_width=True):
+            st.session_state["k8s_quick_action"] = "nodes"
+            st.session_state["k8s_quick_result"] = None
+
+    # Execute quick action if requested
+    quick_action = st.session_state.get("k8s_quick_action")
+    if quick_action:
+        with st.spinner(f"Executing {quick_action}..."):
+            tool_map = {
+                "pods": "get_pods",
+                "deployments": "get_deployments",
+                "events": "get_events",
+                "namespaces": "get_namespaces",
+                "nodes": "get_nodes",
+            }
+            tool_name = tool_map.get(quick_action)
+            if tool_name and tools:
+                try:
+                    tool = next((t for t in tools if t.name == tool_name), None)
+                    if tool:
+                        result = asyncio.run(tool.ainvoke({"namespace": "all"}))
+                        st.session_state["k8s_quick_result"] = result
+                        st.session_state["k8s_quick_action"] = None
+                except Exception as e:
+                    st.error(f"Quick action failed: {e}")
+                    st.session_state["k8s_quick_action"] = None
+
+    # Display quick result
+    quick_result = st.session_state.get("k8s_quick_result")
+    if quick_result:
+        with st.expander("Quick Action Result", expanded=True):
+            if isinstance(quick_result, dict):
+                if quick_result.get("items"):
+                    items = quick_result.get("items", [])
+                    if items and isinstance(items[0], dict):
+                        df = pd.DataFrame(items)
+                        st.dataframe(df, use_container_width=True, height=200)
+                    else:
+                        st.json(quick_result)
+                else:
+                    st.json(quick_result)
+            else:
+                st.write(quick_result)
+            if st.button("Clear Result"):
+                st.session_state["k8s_quick_result"] = None
+                st.rerun()
+
+    st.divider()
 
     tabs = st.tabs([
         "Overview",

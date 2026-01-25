@@ -332,12 +332,13 @@ def create_scm_pipeline_job(
 
 
 def run_stdio() -> None:
-    cfg = JenkinsMCPServerConfig.from_env()
-    transport = (os.environ.get("MCP_TRANSPORT") or cfg.mcp_transport or "stdio").lower().strip()
+    """Run the Jenkins MCP server over HTTP.
 
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-        return
+    The function name is kept for backwards compatibility with existing
+    entrypoints, but the server no longer supports stdio transport.
+    """
+
+    cfg = JenkinsMCPServerConfig.from_env()
 
     # Best-effort network transport support (depends on fastmcp version).
     # We only pass kwargs that `FastMCP.run()` actually accepts.
@@ -349,7 +350,7 @@ def run_stdio() -> None:
         port = int(cfg.mcp_port)
 
     sig = inspect.signature(mcp.run)
-    kwargs: Dict[str, Any] = {"transport": transport}
+    kwargs: Dict[str, Any] = {"transport": "http"}
     if "host" in sig.parameters:
         kwargs["host"] = host
     if "port" in sig.parameters:

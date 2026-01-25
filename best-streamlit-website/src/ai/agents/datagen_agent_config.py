@@ -13,10 +13,12 @@ class DataGenAgentConfig:
     ollama_base_url: str
     model: str
     temperature: float
+    enabled: bool  # Whether Ollama is enabled
 
     DEFAULT_BASE_URL: str = "http://localhost:11434"
-    DEFAULT_MODEL: str = "qwen2.5:7b-instruct-q6_K"
+    DEFAULT_MODEL: str = "tinyllama"  # Changed to lightweight model
     DEFAULT_TEMPERATURE: float = 0.0
+    DEFAULT_ENABLED: bool = True
 
     @classmethod
     def from_env(cls) -> "DataGenAgentConfig":
@@ -29,7 +31,11 @@ class DataGenAgentConfig:
         except Exception:
             temp = cls.DEFAULT_TEMPERATURE
 
-        return cls(ollama_base_url=base_url, model=model, temperature=temp)
+        # Check if Ollama is enabled
+        raw_enabled = env_str("OLLAMA_ENABLED", str(cls.DEFAULT_ENABLED)).lower()
+        enabled = raw_enabled in ("true", "1", "yes", "on")
+
+        return cls(ollama_base_url=base_url, model=model, temperature=temp, enabled=enabled)
 
     @classmethod
     def load(cls) -> "DataGenAgentConfig":
@@ -45,6 +51,7 @@ class DataGenAgentConfig:
         base_url = raw.get("ollama_base_url") or raw.get("base_url")
         model = raw.get("model")
         temperature = raw.get("temperature")
+        enabled = raw.get("enabled")
 
         effective_base_url = str(base_url).strip() if isinstance(base_url, str) and base_url.strip() else cfg.ollama_base_url
         effective_model = str(model).strip() if isinstance(model, str) and model.strip() else cfg.model
@@ -56,4 +63,8 @@ class DataGenAgentConfig:
             except Exception:
                 effective_temp = cfg.temperature
 
-        return cls(ollama_base_url=effective_base_url, model=effective_model, temperature=effective_temp)
+        effective_enabled = cfg.enabled
+        if enabled is not None:
+            effective_enabled = bool(enabled)
+
+        return cls(ollama_base_url=effective_base_url, model=effective_model, temperature=effective_temp, enabled=effective_enabled)

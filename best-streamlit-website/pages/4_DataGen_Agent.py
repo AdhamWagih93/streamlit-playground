@@ -3,6 +3,7 @@ import streamlit as st
 from src.admin_config import load_admin_config
 from src.theme import set_theme
 from src.ai.agents.datagen_agent import run_agent
+from src.ai.agents.datagen_agent_config import DataGenAgentConfig
 
 
 set_theme(page_title="DataGen Agent", page_icon="🧪")
@@ -11,6 +12,16 @@ admin = load_admin_config()
 if not admin.is_agent_enabled("datagen", default=True):
     st.info("DataGen agent is disabled by Admin.")
     st.stop()
+
+# Check Ollama status
+cfg = DataGenAgentConfig.load()
+if not cfg.enabled:
+    st.warning(
+        f"Ollama is currently disabled. The DataGen agent will use mock data generation instead of AI. "
+        f"To enable Ollama, set `OLLAMA_ENABLED=true` in your environment or .env file and ensure "
+        f"Ollama is running at `{cfg.ollama_base_url}`. For development, you can use a lightweight model "
+        f"like `tinyllama` (637MB)."
+    )
 
 # --- Custom styling for a modern chat-like experience ---
 st.markdown(

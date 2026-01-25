@@ -8,6 +8,8 @@ from src.ai.mcp_servers.kubernetes.config import KubernetesMCPServerConfig
 from src.ai.mcp_servers.docker.config import DockerMCPServerConfig
 from src.ai.mcp_servers.nexus.config import NexusMCPServerConfig
 from src.ai.mcp_servers.scheduler.config import SchedulerMCPServerConfig
+from src.ai.mcp_servers.git.config import GitMCPServerConfig
+from src.ai.mcp_servers.trivy.config import TrivyMCPServerConfig
 from src.config_utils import env_str
 from src.admin_config import AdminConfig, load_admin_config
 from src.page_catalog import known_page_paths
@@ -30,6 +32,8 @@ class StreamlitAppConfig:
     docker: DockerMCPServerConfig
     nexus: NexusMCPServerConfig
     scheduler: SchedulerMCPServerConfig
+    git: GitMCPServerConfig
+    trivy: TrivyMCPServerConfig
 
     @classmethod
     def from_env(cls) -> "StreamlitAppConfig":
@@ -94,7 +98,31 @@ class StreamlitAppConfig:
             mcp_port=scheduler.mcp_port,
         )
 
-        return cls(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler)
+        git = GitMCPServerConfig.from_env()
+        git = GitMCPServerConfig(
+            repo_path=git.repo_path,
+            default_branch=git.default_branch,
+            timeout_seconds=git.timeout_seconds,
+            mcp_transport=env_str("STREAMLIT_GIT_MCP_TRANSPORT", git.mcp_transport),
+            mcp_host=git.mcp_host,
+            mcp_port=git.mcp_port,
+            mcp_url=env_str("STREAMLIT_GIT_MCP_URL", git.mcp_url),
+        )
+
+        trivy = TrivyMCPServerConfig.from_env()
+        trivy = TrivyMCPServerConfig(
+            cache_dir=trivy.cache_dir,
+            timeout_seconds=trivy.timeout_seconds,
+            severity=trivy.severity,
+            ignore_unfixed=trivy.ignore_unfixed,
+            skip_db_update=trivy.skip_db_update,
+            mcp_transport=env_str("STREAMLIT_TRIVY_MCP_TRANSPORT", trivy.mcp_transport),
+            mcp_host=trivy.mcp_host,
+            mcp_port=trivy.mcp_port,
+            mcp_url=env_str("STREAMLIT_TRIVY_MCP_URL", trivy.mcp_url),
+        )
+
+        return cls(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler, git=git, trivy=trivy)
 
     @classmethod
     def load(cls) -> "StreamlitAppConfig":
@@ -119,6 +147,12 @@ class StreamlitAppConfig:
 
     def build_nexus_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         return {**base_env, **self.nexus.to_env_overrides()}
+
+    def build_git_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
+        return {**base_env, **self.git.to_env_overrides()}
+
+    def build_trivy_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
+        return {**base_env, **self.trivy.to_env_overrides()}
 
 
 def _apply_admin_overrides(cfg: StreamlitAppConfig, admin: AdminConfig) -> StreamlitAppConfig:
@@ -200,7 +234,49 @@ def _apply_admin_overrides(cfg: StreamlitAppConfig, admin: AdminConfig) -> Strea
         mcp_port=cfg.scheduler.mcp_port,
     )
 
-    return StreamlitAppConfig(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler)
+    # Git
+    git_timeout = _get("git", "timeout_seconds")
+    try:
+        git_timeout_i = int(git_timeout) if git_timeout is not None else cfg.git.timeout_seconds
+    except Exception:
+        git_timeout_i = cfg.git.timeout_seconds
+
+    git = GitMCPServerConfig(
+        repo_path=_get("git", "repo_path") if _get("git", "repo_path") is not None else cfg.git.repo_path,
+        default_branch=str(_get("git", "default_branch") or cfg.git.default_branch),
+        timeout_seconds=git_timeout_i,
+        mcp_transport=str(_get("git", "transport") or cfg.git.mcp_transport),
+        mcp_host=cfg.git.mcp_host,
+        mcp_port=cfg.git.mcp_port,
+        mcp_url=str(_get("git", "url") or cfg.git.mcp_url),
+    )
+
+    # Trivy
+    trivy_timeout = _get("trivy", "timeout_seconds")
+    try:
+        trivy_timeout_i = int(trivy_timeout) if trivy_timeout is not None else cfg.trivy.timeout_seconds
+    except Exception:
+        trivy_timeout_i = cfg.trivy.timeout_seconds
+
+    trivy_ignore_unfixed = _get("trivy", "ignore_unfixed")
+    trivy_ignore_unfixed_b = bool(trivy_ignore_unfixed) if trivy_ignore_unfixed is not None else cfg.trivy.ignore_unfixed
+
+    trivy_skip_db = _get("trivy", "skip_db_update")
+    trivy_skip_db_b = bool(trivy_skip_db) if trivy_skip_db is not None else cfg.trivy.skip_db_update
+
+    trivy = TrivyMCPServerConfig(
+        cache_dir=_get("trivy", "cache_dir") if _get("trivy", "cache_dir") is not None else cfg.trivy.cache_dir,
+        timeout_seconds=trivy_timeout_i,
+        severity=str(_get("trivy", "severity") or cfg.trivy.severity),
+        ignore_unfixed=trivy_ignore_unfixed_b,
+        skip_db_update=trivy_skip_db_b,
+        mcp_transport=str(_get("trivy", "transport") or cfg.trivy.mcp_transport),
+        mcp_host=cfg.trivy.mcp_host,
+        mcp_port=cfg.trivy.mcp_port,
+        mcp_url=str(_get("trivy", "url") or cfg.trivy.mcp_url),
+    )
+
+    return StreamlitAppConfig(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler, git=git, trivy=trivy)
 
 
 def get_app_config() -> StreamlitAppConfig:

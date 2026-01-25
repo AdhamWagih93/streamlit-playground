@@ -84,6 +84,10 @@ def _get_nexus_tools(*, force_reload: bool = False, overrides: Optional[Dict[str
     cfg = get_app_config()
     transport = (cfg.nexus.mcp_transport or "stdio").lower().strip()
 
+    # Convert "http" to "sse" for MCP over HTTP
+    if transport == "http":
+        transport = "sse"
+
     # Include server code mtime so stdio subprocess reloads on code edits.
     mtime = _get_nexus_mcp_mtime()
 

@@ -20,14 +20,14 @@
       "enabled": true,
       "base_url": null,
       "verify_ssl": null,
-      "transport": "stdio",
+      "transport": "http",
       "url": null
     },
     "kubernetes": {
       "enabled": true,
       "kubeconfig": null,
       "context": null,
-      "transport": "stdio",
+      "transport": "http",
       "url": null
     },
     "docker": {
@@ -36,7 +36,7 @@
       "docker_tls_verify": null,
       "docker_cert_path": null,
       "docker_timeout_seconds": null,
-      "transport": "stdio",
+      "transport": "http",
       "url": null
     },
     "nexus": {
@@ -44,7 +44,7 @@
       "base_url": null,
       "verify_ssl": null,
       "allow_raw": null,
-      "transport": "stdio",
+      "transport": "http",
       "url": null
     },
     "scheduler": {

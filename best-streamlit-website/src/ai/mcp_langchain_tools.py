@@ -64,12 +64,37 @@ def normalise_mcp_result(value: Any) -> Any:
 
 
 def invoke_tool(tools: List[Any], name: str, args: Dict[str, Any]) -> Any:
+    """Invoke an MCP tool and normalise its result.
+
+    This helper deliberately catches all exceptions (including network
+    failures and TaskGroup errors raised by underlying MCP transports)
+    and returns a structured error payload instead. This prevents
+    unhandled exceptions from crashing Streamlit pages.
+    """
+
     tool = next((t for t in tools if matches_tool_name(str(getattr(t, "name", "")), name)), None)
     if tool is None:
         available = tool_names(tools)
-        raise ValueError(f"Tool {name} not found. Available: {available}")
+        # Return a structured error instead of raising, so callers can
+        # surface this cleanly in the UI.
+        return {
+            "ok": False,
+            "error": f"Tool {name} not found.",
+            "available_tools": available,
+        }
 
-    if hasattr(tool, "ainvoke"):
-        return normalise_mcp_result(asyncio.run(tool.ainvoke(args)))
-
-    return normalise_mcp_result(tool.invoke(args))
+    try:
+        if hasattr(tool, "ainvoke"):
+            raw = asyncio.run(tool.ainvoke(args))
+        else:
+            raw = tool.invoke(args)
+        return normalise_mcp_result(raw)
+    except Exception as exc:  # noqa: BLE001
+        # Normalise all transport/adapter errors into a simple dict so
+        # Streamlit pages and background jobs can handle failures
+        # gracefully without exposing low-level TaskGroup tracebacks.
+        return {
+            "ok": False,
+            "error": str(exc),
+            "tool": str(getattr(tool, "name", name)),
+        }
