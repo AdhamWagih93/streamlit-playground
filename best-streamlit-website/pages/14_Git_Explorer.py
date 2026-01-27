@@ -133,6 +133,7 @@ def _get_git_tools(force_reload: bool = False) -> List[Dict[str, Any]]:
     client = _get_git_client(force_new=force_reload)
     tools = client.list_tools(force_refresh=force_reload)
     st.session_state["_git_tools"] = tools
+    st.session_state["_git_tools_sig"] = get_server_url("git")
     return tools
 
 
@@ -147,6 +148,11 @@ st.subheader("Connection Status")
 
 cfg = get_app_config()
 git_url = get_server_url("git")
+
+# Invalidate cached tools if the target URL changes
+if st.session_state.get("_git_tools_sig") != git_url:
+    st.session_state.pop("_git_tools", None)
+    st.session_state["_git_tools_sig"] = git_url
 
 st.markdown(
     f"""

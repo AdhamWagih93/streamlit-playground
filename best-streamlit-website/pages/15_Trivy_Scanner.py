@@ -158,6 +158,7 @@ def _get_trivy_tools(force_reload: bool = False) -> List[Dict[str, Any]]:
     client = _get_trivy_client(force_new=force_reload)
     tools = client.list_tools(force_refresh=force_reload)
     st.session_state["_trivy_tools"] = tools
+    st.session_state["_trivy_tools_sig"] = get_server_url("trivy")
     return tools
 
 
@@ -214,6 +215,11 @@ def _extract_vulnerabilities(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 st.subheader("Connection Status")
 
 trivy_url = get_server_url("trivy")
+
+# Invalidate cached tools if the target URL changes
+if st.session_state.get("_trivy_tools_sig") != trivy_url:
+    st.session_state.pop("_trivy_tools", None)
+    st.session_state["_trivy_tools_sig"] = trivy_url
 
 st.markdown(
     f"""

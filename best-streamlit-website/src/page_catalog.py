@@ -204,13 +204,6 @@ def get_page_catalog() -> List[PageSpec]:
             group="Platform",
             description="Database explorer",
         ),
-        PageSpec(
-            path="pages/7_Setup.py",
-            title="Setup",
-            icon="🛠️",
-            group="Platform",
-            description="Platform configuration",
-        ),
     ]
 
 

@@ -417,7 +417,7 @@ st.divider()
 # Quick Actions
 st.subheader("🚀 Quick Actions")
 
-action_col1, action_col2, action_col3 = st.columns(3)
+action_col1, action_col2 = st.columns(2)
 
 with action_col1:
     if st.button("🔄 Refresh Status", use_container_width=True):
@@ -426,10 +426,6 @@ with action_col1:
 with action_col2:
     if st.button("📊 View Logs", use_container_width=True):
         st.info("Use `docker-compose logs -f` or `./scripts/dev-logs.ps1` to view service logs")
-
-with action_col3:
-    if st.button("🛠️ Setup Guide", use_container_width=True):
-        st.switch_page("pages/7_Setup.py")
 
 # System Health Summary
 st.divider()

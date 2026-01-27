@@ -39,6 +39,7 @@ def _get_nexus_tools(*, force_reload: bool = False) -> List[Dict[str, Any]]:
     client = _get_nexus_client(force_new=force_reload)
     tools = client.list_tools(force_refresh=force_reload)
     st.session_state["_nexus_tools"] = tools
+    st.session_state["_nexus_tools_sig"] = get_server_url("nexus")
     return tools
 
 
@@ -52,6 +53,11 @@ st.title("Nexus Explorer")
 st.caption("Explore Sonatype Nexus Repository Manager via MCP server.")
 
 nexus_url = get_server_url("nexus")
+
+# Invalidate cached tools if the target URL changes
+if st.session_state.get("_nexus_tools_sig") != nexus_url:
+    st.session_state.pop("_nexus_tools", None)
+    st.session_state["_nexus_tools_sig"] = nexus_url
 
 with st.expander("Connection info", expanded=False):
     st.write(f"**Transport:** streamable-http")

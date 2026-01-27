@@ -123,6 +123,7 @@ def _get_docker_tools(force_reload: bool = False) -> List[Dict[str, Any]]:
     client = _get_docker_client(force_new=force_reload)
     tools = client.list_tools(force_refresh=force_reload)
     st.session_state["_docker_tools"] = tools
+    st.session_state["_docker_tools_sig"] = get_server_url("docker")
     return tools
 
 
@@ -136,6 +137,11 @@ def _invoke(tools, name: str, args: Dict[str, Any]) -> Any:
 st.subheader("🔍 Connection Status")
 
 docker_url = get_server_url("docker")
+
+# Invalidate cached tools if the target URL changes
+if st.session_state.get("_docker_tools_sig") != docker_url:
+    st.session_state.pop("_docker_tools", None)
+    st.session_state["_docker_tools_sig"] = docker_url
 
 st.markdown(
     f"""

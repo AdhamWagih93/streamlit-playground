@@ -1,30 +1,9 @@
-from __future__ import annotations
-
-import json
-import platform
-import shutil
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+"""Setup page removed."""
 
 import streamlit as st
 
-from src.mcp_client import get_mcp_client
-from src.streamlit_config import StreamlitAppConfig
-from src.theme import set_theme
-
-
-set_theme(page_title="Setup", page_icon="🛠️")
-
-st.title("Setup")
-st.caption(
-    "Deploy using either Helm or raw Kubernetes manifests. "
-    "Both flows start by building/pushing images (Docker MCP) and verifying them in Nexus (Nexus MCP)."
-)
-
-ROOT = Path(__file__).resolve().parent.parent
-CHART_DIR = ROOT / "deploy" / "helm" / "best-streamlit-website"
-VALUES_PATH = CHART_DIR / "values.yaml"
-CHART_PATH = CHART_DIR / "Chart.yaml"
+st.info("The Setup page has been removed.")
+st.stop()
 
 
 def _safe_read(path: Path) -> str:

@@ -148,6 +148,7 @@ def _get_tools(force_reload: bool = False) -> List[Dict[str, Any]]:
     client = _get_k8s_client(force_new=force_reload)
     tools = client.list_tools(force_refresh=force_reload)
     st.session_state["_k8s_tools"] = tools
+    st.session_state["_k8s_tools_sig"] = get_server_url("kubernetes")
     return tools
 
 
@@ -392,6 +393,12 @@ def main() -> None:
         k8s_url = get_server_url("kubernetes")
         st.caption(f"MCP transport: streamable-http")
         st.caption(f"MCP URL: {k8s_url}")
+
+        # Invalidate cached tools if the target URL changes
+        if st.session_state.get("_k8s_tools_sig") != k8s_url:
+            for k in ("_k8s_tools", "k8s_snapshot", "_helm_releases_cache"):
+                st.session_state.pop(k, None)
+            st.session_state["_k8s_tools_sig"] = k8s_url
 
         col_a, col_b = st.columns(2)
         with col_a:

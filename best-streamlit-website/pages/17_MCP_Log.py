@@ -583,7 +583,8 @@ with tabs[4]:
 # Footer
 st.divider()
 st.caption(
-    "**Note:** MCP logs are automatically collected when using the logging interceptor. "
+    "**Note:** MCP logs are automatically collected for tool calls made via the unified MCP client "
+    "and the logging interceptor (for MultiServerMCPClient). "
     "Old logs are cleaned up based on the retention period (default: 30 days). "
     "All sensitive data (passwords, tokens) is automatically redacted."
 )

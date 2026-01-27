@@ -515,29 +515,26 @@ with devops_tab:
 
     with d3:
         with st.container(border=True):
-            st.markdown("#### 🛠️ Setup")
-            st.caption("Configure MCP servers and environment connectivity.")
-            st.page_link("pages/7_Setup.py", label="Open →", icon="🛠️")
+            st.markdown("#### 📦 Nexus Explorer")
+            st.caption("Explore Nexus repositories and artifacts.")
+            st.page_link("pages/9_Nexus_Explorer.py", label="Open →", icon="📦")
 
     d4, d5, d6 = st.columns(3)
 
     with d4:
         with st.container(border=True):
-            st.markdown("#### 📦 Nexus Explorer")
-            st.caption("Explore Nexus repositories and artifacts.")
-            st.page_link("pages/9_Nexus_Explorer.py", label="Open →", icon="📦")
-
-    with d5:
-        with st.container(border=True):
             st.markdown("#### 📊 System Status")
             st.caption("Monitor system health and service status.")
             st.page_link("pages/12_System_Status.py", label="Open →", icon="📊")
 
-    with d6:
+    with d5:
         with st.container(border=True):
             st.markdown("#### 🔌 MCP Servers")
             st.caption("Central management for all MCP servers.")
             st.page_link("pages/13_MCP_Servers.py", label="Open →", icon="🔌")
+
+    with d6:
+        st.empty()
 
 with ai_tab:
     a1, a2, a3 = st.columns(3)
