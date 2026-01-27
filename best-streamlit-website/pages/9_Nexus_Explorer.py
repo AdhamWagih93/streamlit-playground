@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import asyncio
-import importlib.util
 import json
-import os
-import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from src.ai.mcp_langchain_tools import invoke_tool
 from src.admin_config import load_admin_config
-from src.streamlit_config import StreamlitAppConfig, get_app_config
+from src.mcp_client import get_mcp_client, get_server_url
+from src.streamlit_config import get_app_config
 from src.theme import set_theme
 
 
@@ -35,147 +29,38 @@ def _safe_json_loads(raw: str) -> Optional[Any]:
         return None
 
 
-def _normalize_mcp_result(result: Any) -> Any:
-    if isinstance(result, dict):
-        return result
-
-    # LangChain MCP adapters sometimes return objects with a `.content` list.
-    content = getattr(result, "content", None)
-    if isinstance(content, list) and content:
-        # Prefer first text block.
-        text = None
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                text = block.get("text")
-                break
-        if isinstance(text, str):
-            parsed = _safe_json_loads(text)
-            return parsed if parsed is not None else {"ok": False, "text": text}
-
-    # Fallback: stringify
-    try:
-        return {"ok": False, "text": str(result)}
-    except Exception:
-        return {"ok": False, "text": "(unprintable result)"}
+def _get_nexus_client(force_new: bool = False):
+    """Get the Nexus MCP client."""
+    return get_mcp_client("nexus", force_new=force_new)
 
 
-def _get_nexus_mcp_mtime() -> float:
-    try:
-        p = Path(__file__).resolve().parent.parent / "src" / "ai" / "mcp_servers" / "nexus" / "mcp.py"
-        return p.stat().st_mtime
-    except Exception:
-        return 0.0
-
-
-def _build_stdio_env(cfg: StreamlitAppConfig, overrides: Dict[str, str]) -> Dict[str, str]:
-    # Start with the server's env defaults.
-    env = {**os.environ, **cfg.nexus.to_env_overrides()}
-
-    # Apply per-page overrides.
-    for k, v in (overrides or {}).items():
-        if v is None:
-            continue
-        env[str(k)] = str(v)
-
-    return env
-
-
-def _get_nexus_tools(*, force_reload: bool = False, overrides: Optional[Dict[str, str]] = None):
-    cfg = get_app_config()
-    transport = (cfg.nexus.mcp_transport or "stdio").lower().strip()
-
-    # Convert "http" to "sse" for MCP over HTTP
-    if transport == "http":
-        transport = "sse"
-
-    # Include server code mtime so stdio subprocess reloads on code edits.
-    mtime = _get_nexus_mcp_mtime()
-
-    # Signature includes connection mode + target + relevant override knobs.
-    sig_parts = [
-        transport,
-        cfg.nexus.mcp_url,
-        str(mtime),
-        overrides.get("NEXUS_BASE_URL", "") if overrides else "",
-        overrides.get("NEXUS_USERNAME", "") if overrides else "",
-        "has_password" if (overrides and overrides.get("NEXUS_PASSWORD")) else "no_password",
-        "has_token" if (overrides and overrides.get("NEXUS_TOKEN")) else "no_token",
-        overrides.get("NEXUS_VERIFY_SSL", "") if overrides else "",
-        overrides.get("NEXUS_ALLOW_RAW", "") if overrides else "",
-        "has_mcp_token" if (overrides and overrides.get("NEXUS_MCP_CLIENT_TOKEN")) else "no_mcp_token",
-    ]
-    sig = "|".join(sig_parts)
-
-    if force_reload or st.session_state.get("_nexus_tools_sig") != sig or "_nexus_tools" not in st.session_state:
-        if transport == "stdio":
-            conn = {
-                "transport": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "src.ai.mcp_servers.nexus.mcp"],
-                "env": _build_stdio_env(cfg, overrides or {}),
-            }
-        else:
-            conn = {"transport": transport, "url": cfg.nexus.mcp_url}
-
-        client = MultiServerMCPClient(connections={"nexus": conn})
-        st.session_state["_nexus_tools"] = asyncio.run(client.get_tools())
-        st.session_state["_nexus_tools_sig"] = sig
-
-    return st.session_state["_nexus_tools"]
+def _get_nexus_tools(*, force_reload: bool = False) -> List[Dict[str, Any]]:
+    """Get Nexus MCP tools using the unified client."""
+    client = _get_nexus_client(force_new=force_reload)
+    tools = client.list_tools(force_refresh=force_reload)
+    st.session_state["_nexus_tools"] = tools
+    return tools
 
 
 def _invoke(tools, name: str, args: Dict[str, Any]) -> Any:
-    return invoke_tool(list(tools or []), name, dict(args or {}))
+    """Invoke a Nexus MCP tool."""
+    client = _get_nexus_client()
+    return client.invoke(name, args)
 
 
 st.title("Nexus Explorer")
-st.caption("Explore Sonatype Nexus Repository Manager via an MCP server (local-first).")
+st.caption("Explore Sonatype Nexus Repository Manager via MCP server.")
 
-cfg = get_app_config()
+nexus_url = get_server_url("nexus")
 
-with st.expander("Connection (current config)", expanded=False):
-    st.json(cfg.nexus.to_dict())
-
-transport = (cfg.nexus.mcp_transport or "stdio").lower().strip()
-if transport == "stdio":
-    # Simple local dependency hint.
-    if importlib.util.find_spec("requests") is None:
-        st.warning(
-            "Local stdio mode requires the Python package 'requests'. "
-            "Install dependencies with: python -m pip install -r requirements.txt"
-        )
-
-st.sidebar.header("Nexus connection")
-st.sidebar.caption("Overrides apply only in local stdio mode.")
-
-base_url = st.sidebar.text_input("Base URL", value=cfg.nexus.base_url)
-username = st.sidebar.text_input("Username", value=cfg.nexus.username or "")
-password = st.sidebar.text_input("Password", value=cfg.nexus.password or "", type="password")
-token = st.sidebar.text_input("Bearer token", value=cfg.nexus.token or "", type="password")
-verify_ssl = st.sidebar.checkbox("Verify SSL", value=bool(cfg.nexus.verify_ssl))
-allow_raw = st.sidebar.checkbox("Enable raw request tool", value=bool(cfg.nexus.allow_raw))
-mcp_client_token = st.sidebar.text_input("MCP client token", value=cfg.nexus.mcp_client_token or "", type="password")
-
-if transport != "stdio":
-    st.sidebar.info(
-        "Running in remote mode; connection overrides must be configured on the Nexus MCP server.",
-    )
-
-overrides_env: Dict[str, str] = {
-    "NEXUS_BASE_URL": base_url.strip(),
-    "NEXUS_VERIFY_SSL": "true" if verify_ssl else "false",
-    "NEXUS_ALLOW_RAW": "true" if allow_raw else "false",
-}
-if username.strip():
-    overrides_env["NEXUS_USERNAME"] = username.strip()
-if password:
-    overrides_env["NEXUS_PASSWORD"] = password
-if token:
-    overrides_env["NEXUS_TOKEN"] = token
-if mcp_client_token:
-    overrides_env["NEXUS_MCP_CLIENT_TOKEN"] = mcp_client_token
+with st.expander("Connection info", expanded=False):
+    st.write(f"**Transport:** streamable-http")
+    st.write(f"**MCP URL:** `{nexus_url}`")
 
 with st.sidebar:
+    st.header("Nexus connection")
+    st.caption(f"URL: {nexus_url}")
+
     st.divider()
     if "nexus_auto_load_tools" not in st.session_state:
         st.session_state.nexus_auto_load_tools = False
@@ -192,12 +77,12 @@ should_load = bool(load_clicked) or (
 
 if should_load:
     try:
-        _get_nexus_tools(force_reload=bool(load_clicked), overrides=overrides_env)
+        _get_nexus_tools(force_reload=bool(load_clicked))
     except Exception as exc:  # noqa: BLE001
         st.error(f"Failed to load Nexus MCP tools: {exc}")
         st.info(
-            "For local dev, ensure Nexus is running and reachable at the Base URL. "
-            "Defaults assume http://localhost:8081"
+            "Ensure the Nexus MCP server is running and reachable. "
+            f"Expected URL: {nexus_url}"
         )
 
 tools = st.session_state.get("_nexus_tools")
@@ -209,15 +94,19 @@ if not tools:
 c1, c2, c3 = st.columns([1, 2, 2])
 with c1:
     if st.button("Refresh tools", use_container_width=True):
-        tools = _get_nexus_tools(force_reload=True, overrides=overrides_env)
+        tools = _get_nexus_tools(force_reload=True)
         st.success("Reloaded")
 with c2:
     st.metric("Tools", len(tools))
 with c3:
-    st.write(f"Transport: **{transport}**")
+    st.write("Transport: **streamable-http**")
 
 with st.expander("Show loaded tool names", expanded=False):
-    tool_names = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
+    tool_names = sorted({
+        t.get("name", "") if isinstance(t, dict) else str(getattr(t, "name", ""))
+        for t in (tools or [])
+        if (t.get("name") if isinstance(t, dict) else getattr(t, "name", None))
+    })
     st.code("\n".join(tool_names) if tool_names else "(no tools)", language="text")
 
 
@@ -234,7 +123,7 @@ tabs = st.tabs([
 with tabs[0]:
     st.subheader("Health")
     if st.button("Run health check", use_container_width=True):
-        res = _normalize_mcp_result(_invoke(tools, "nexus_health_check", {}))
+        res = _invoke(tools, "nexus_health_check", {})
         st.json(res)
 
 # -------------------- Repositories --------------------
@@ -243,7 +132,7 @@ with tabs[1]:
     col_a, col_b = st.columns([1, 3])
     with col_a:
         if st.button("List repositories", use_container_width=True):
-            st.session_state["_nexus_repos"] = _normalize_mcp_result(_invoke(tools, "nexus_list_repositories", {}))
+            st.session_state["_nexus_repos"] = _invoke(tools, "nexus_list_repositories", {})
 
     repos_res = st.session_state.get("_nexus_repos")
     repos: List[Dict[str, Any]] = []
@@ -287,8 +176,8 @@ with tabs[2]:
             "version": version or None,
             "continuation_token": cont or None,
         }
-        st.session_state["_nexus_search_components"] = _normalize_mcp_result(
-            _invoke(tools, "nexus_search_components", args)
+        st.session_state["_nexus_search_components"] = _invoke(
+            tools, "nexus_search_components", args
         )
 
     res = st.session_state.get("_nexus_search_components")
@@ -330,8 +219,8 @@ with tabs[3]:
             "version": version or None,
             "continuation_token": cont or None,
         }
-        st.session_state["_nexus_search_assets"] = _normalize_mcp_result(
-            _invoke(tools, "nexus_list_assets", args)
+        st.session_state["_nexus_search_assets"] = _invoke(
+            tools, "nexus_list_assets", args
         )
 
     res = st.session_state.get("_nexus_search_assets")
@@ -349,7 +238,7 @@ with tabs[3]:
             asset_ids = [it.get("id") for it in items if isinstance(it, dict) and it.get("id")]
             picked = st.selectbox("Asset id (metadata)", options=[""] + asset_ids, index=0)
             if picked and st.button("Get asset metadata", use_container_width=True):
-                st.json(_normalize_mcp_result(_invoke(tools, "nexus_get_asset", {"asset_id": picked})))
+                st.json(_invoke(tools, "nexus_get_asset", {"asset_id": picked}))
         else:
             st.json(res)
     elif res:
@@ -362,13 +251,13 @@ with tabs[4]:
     a1, a2, a3 = st.columns(3)
     with a1:
         if st.button("List users", use_container_width=True):
-            st.session_state["_nexus_users"] = _normalize_mcp_result(_invoke(tools, "nexus_list_users", {}))
+            st.session_state["_nexus_users"] = _invoke(tools, "nexus_list_users", {})
     with a2:
         if st.button("List roles", use_container_width=True):
-            st.session_state["_nexus_roles"] = _normalize_mcp_result(_invoke(tools, "nexus_list_roles", {}))
+            st.session_state["_nexus_roles"] = _invoke(tools, "nexus_list_roles", {})
     with a3:
         if st.button("List tasks", use_container_width=True):
-            st.session_state["_nexus_tasks"] = _normalize_mcp_result(_invoke(tools, "nexus_list_tasks", {}))
+            st.session_state["_nexus_tasks"] = _invoke(tools, "nexus_list_tasks", {})
 
     users = st.session_state.get("_nexus_users")
     roles = st.session_state.get("_nexus_roles")
@@ -422,17 +311,15 @@ with tabs[5]:
         if headers is None:
             headers = {}
 
-        res = _normalize_mcp_result(
-            _invoke(
-                tools,
-                "nexus_raw_request",
-                {
-                    "method": method,
-                    "path": path,
-                    "params": params,
-                    "json_body": body,
-                    "headers": headers,
-                },
-            )
+        res = _invoke(
+            tools,
+            "nexus_raw_request",
+            {
+                "method": method,
+                "path": path,
+                "params": params,
+                "json_body": body,
+                "headers": headers,
+            },
         )
         st.json(res)

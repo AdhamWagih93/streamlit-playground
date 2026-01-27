@@ -1,16 +1,11 @@
-import asyncio
-import os
-import sys
 from typing import Any, Dict, List
 
 import streamlit as st
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from src.ai.mcp_langchain_tools import invoke_tool, tool_names
 from src.admin_config import load_admin_config
-from src.streamlit_config import get_app_config
-from src.theme import set_theme
+from src.mcp_client import get_mcp_client, get_server_url
 from src.mcp_health import add_mcp_status_styles
+from src.theme import set_theme
 
 
 set_theme(page_title="Trivy Scanner", page_icon="🔒")
@@ -153,35 +148,23 @@ st.markdown(
 )
 
 
-def _get_trivy_tools(force_reload: bool = False):
-    cfg = get_app_config()
-    transport = (cfg.trivy.mcp_transport or "stdio").lower().strip()
+def _get_trivy_client(force_new: bool = False):
+    """Get the Trivy MCP client."""
+    return get_mcp_client("trivy", force_new=force_new)
 
-    # Convert "http" to "sse" for MCP over HTTP
-    if transport == "http":
-        transport = "sse"
 
-    sig = f"{transport}|{cfg.trivy.mcp_url}"
-    if force_reload or st.session_state.get("_trivy_tools_sig") != sig or "_trivy_tools" not in st.session_state:
-        if transport == "stdio":
-            conn = {
-                "transport": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "src.ai.mcp_servers.trivy.mcp"],
-                "env": {**os.environ, **cfg.trivy.to_env_overrides()},
-            }
-        else:
-            conn = {"transport": transport, "url": cfg.trivy.mcp_url}
-
-        client = MultiServerMCPClient(connections={"trivy": conn})
-        st.session_state["_trivy_tools"] = asyncio.run(client.get_tools())
-        st.session_state["_trivy_tools_sig"] = sig
-
-    return st.session_state["_trivy_tools"]
+def _get_trivy_tools(force_reload: bool = False) -> List[Dict[str, Any]]:
+    """Get Trivy MCP tools using the unified client."""
+    client = _get_trivy_client(force_new=force_reload)
+    tools = client.list_tools(force_refresh=force_reload)
+    st.session_state["_trivy_tools"] = tools
+    return tools
 
 
 def _invoke(tools, name: str, args: Dict[str, Any]) -> Any:
-    return invoke_tool(list(tools or []), name, dict(args or {}))
+    """Invoke a Trivy MCP tool."""
+    client = _get_trivy_client()
+    return client.invoke(name, args)
 
 
 def _count_vulnerabilities(data: Dict[str, Any]) -> Dict[str, int]:
@@ -230,29 +213,16 @@ def _extract_vulnerabilities(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 # Connection status info
 st.subheader("Connection Status")
 
-cfg = get_app_config()
-transport = (cfg.trivy.mcp_transport or "stdio").lower().strip()
+trivy_url = get_server_url("trivy")
 
-col_info1, col_info2 = st.columns(2)
-with col_info1:
-    st.markdown(
-        f"""
-        <div class="trivy-card" style="padding: 1rem;">
-            <div style="color: #64748b;">Transport: <strong>{transport}</strong></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-with col_info2:
-    if transport != "stdio":
-        st.markdown(
-            f"""
-            <div class="trivy-card" style="padding: 1rem;">
-                <div style="color: #64748b; font-size: 0.85rem;">URL: <code>{cfg.trivy.mcp_url}</code></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+st.markdown(
+    f"""
+    <div class="trivy-card" style="padding: 1rem;">
+        <div style="color: #64748b;">Transport: <strong>streamable-http</strong> &nbsp;|&nbsp; URL: <code>{trivy_url}</code></div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
@@ -756,10 +726,10 @@ with tabs[5]:
 
     # List all available tools
     with st.expander("Show All Tool Names", expanded=False):
-        names = tool_names(list(tools or []))
-        if names:
-            for idx, name in enumerate(names, 1):
-                st.markdown(f"{idx}. `{name}`")
+        if tools:
+            for idx, tool in enumerate(tools, 1):
+                tool_name = tool.get("name", "unknown") if isinstance(tool, dict) else str(tool)
+                st.markdown(f"{idx}. `{tool_name}`")
         else:
             st.info("No tools available")
 

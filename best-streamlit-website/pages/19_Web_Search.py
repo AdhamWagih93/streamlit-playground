@@ -1,14 +1,13 @@
 """Web Search - Search the web using DuckDuckGo."""
 
-import asyncio
-import os
 from datetime import datetime
 
 import streamlit as st
 
 from src.admin_config import load_admin_config
-from src.theme import set_theme
+from src.mcp_client import get_mcp_client
 from src.mcp_health import add_mcp_status_styles
+from src.theme import set_theme
 
 
 set_theme(page_title="Web Search", page_icon="🔍")
@@ -139,33 +138,16 @@ if "search_history" not in st.session_state:
     st.session_state.search_history = []
 
 
-def _get_mcp_client():
+def _get_websearch_client():
     """Get the Web Search MCP client."""
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-    from src.mcp_log import create_logging_interceptor
-
-    url = os.getenv("STREAMLIT_WEBSEARCH_MCP_URL", "http://websearch-mcp:8009")
-
-    interceptor = create_logging_interceptor(source="websearch_page")
-
-    return MultiServerMCPClient(
-        {"websearch": {"transport": "sse", "url": url}},
-        tool_interceptors=[interceptor],
-    )
+    return get_mcp_client("websearch")
 
 
 def _call_tool(tool_name: str, **kwargs):
     """Call a Web Search MCP tool."""
     try:
-        client = _get_mcp_client()
-        tools = asyncio.run(client.get_tools())
-
-        tool = next((t for t in tools if t.name == tool_name), None)
-        if not tool:
-            return {"ok": False, "error": f"Tool not found: {tool_name}"}
-
-        result = asyncio.run(tool.ainvoke(kwargs))
-        return result
+        client = _get_websearch_client()
+        return client.invoke(tool_name, kwargs)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

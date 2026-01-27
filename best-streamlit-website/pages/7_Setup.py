@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import sys
 import platform
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from src.ai.mcp_langchain_tools import invoke_tool as _invoke_shared
-from src.ai.mcp_langchain_tools import matches_tool_name as _matches_shared
-from src.ai.mcp_langchain_tools import normalise_mcp_result as _normalise_shared
+from src.mcp_client import get_mcp_client
 from src.streamlit_config import StreamlitAppConfig
 from src.theme import set_theme
 
@@ -50,20 +44,23 @@ def _load_yaml(text: str) -> Dict[str, Any]:
         return {}
 
 
-def _matches(tool_name: str, desired: str) -> bool:
-    return _matches_shared(tool_name, desired)
-
-
-def _normalise_mcp_result(value: Any) -> Any:
-    return _normalise_shared(value)
-
-
-def _invoke(tools: List[Any], name: str, args: Dict[str, Any]) -> Any:
-    return _invoke_shared(list(tools or []), name, dict(args or {}))
+def _invoke(server_name: str, name: str, args: Dict[str, Any]) -> Any:
+    """Invoke an MCP tool using the unified client."""
+    client = get_mcp_client(server_name)
+    return client.invoke(name, args)
 
 
 def _tool_names(tools: List[Any]) -> List[str]:
-    return sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
+    """Get list of tool names."""
+    if not tools:
+        return []
+    names = []
+    for t in tools:
+        if isinstance(t, dict):
+            names.append(t.get("name", ""))
+        elif hasattr(t, "name"):
+            names.append(str(getattr(t, "name", "")))
+    return sorted(set(n for n in names if n))
 
 
 def _render_jsonish(value: Any) -> None:
@@ -85,67 +82,14 @@ def _get_tools(
     *,
     cache_key: str,
     server_name: str,
-    module: str,
-    transport: str,
-    url: str,
-    env: Dict[str, str],
-    python_executable: Optional[str] = None,
     force_reload: bool = False,
-    watched_files: Optional[List[Path]] = None,
+    **kwargs,  # Accept but ignore old parameters for compatibility
 ) -> List[Any]:
-    # Convert "http" to "sse" for MCP over HTTP
-    transport = transport.lower().strip()
-    if transport == "http":
-        transport = "sse"
-
-    # Include code mtime so local edits to the MCP server force reload.
-    try:
-        watched = list(watched_files or [])
-        code_mtime = 0
-        for p in watched:
-            if p.is_file():
-                code_mtime = max(code_mtime, int(p.stat().st_mtime_ns))
-    except Exception:  # noqa: BLE001
-        code_mtime = 0
-
-    sig = json.dumps(
-        {
-            "transport": transport,
-            "url": url,
-            "env": env,
-            "code_mtime": code_mtime,
-            "python": (python_executable or sys.executable),
-        },
-        sort_keys=True,
-    )
-    sig_key = f"{cache_key}_sig"
-
-    if force_reload or st.session_state.get(sig_key) != sig or cache_key not in st.session_state:
-        subprocess_env = {**os.environ, **env}
-
-        # Ensure the stdio subprocess imports this workspace's `src/...` package.
-        repo_root = str(ROOT)
-        existing_pp = subprocess_env.get("PYTHONPATH", "")
-        if existing_pp:
-            subprocess_env["PYTHONPATH"] = repo_root + os.pathsep + existing_pp
-        else:
-            subprocess_env["PYTHONPATH"] = repo_root
-
-        if transport == "stdio":
-            conn = {
-                "transport": "stdio",
-                "command": (python_executable or sys.executable),
-                "args": ["-m", module],
-                "env": subprocess_env,
-            }
-        else:
-            conn = {"transport": transport, "url": url}
-
-        client = MultiServerMCPClient(connections={server_name: conn})
-        st.session_state[cache_key] = asyncio.run(client.get_tools())
-        st.session_state[sig_key] = sig
-
-    return list(st.session_state.get(cache_key) or [])
+    """Get tools using the unified MCP client."""
+    client = get_mcp_client(server_name, force_new=force_reload)
+    tools = client.list_tools(force_refresh=force_reload)
+    st.session_state[cache_key] = tools
+    return tools
 
 
 def _expected_components(values: Dict[str, Any]) -> Dict[str, bool]:

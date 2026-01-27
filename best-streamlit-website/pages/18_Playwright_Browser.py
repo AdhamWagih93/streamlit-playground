@@ -1,15 +1,14 @@
 """Playwright Browser - Interactive browser automation and web scraping."""
 
-import asyncio
-import base64
-import os
 from datetime import datetime
+import os
 
 import streamlit as st
 
 from src.admin_config import load_admin_config
-from src.theme import set_theme
+from src.mcp_client import get_mcp_client, get_server_url
 from src.mcp_health import add_mcp_status_styles
+from src.theme import set_theme
 
 
 set_theme(page_title="Playwright Browser", page_icon="🎭")
@@ -109,33 +108,16 @@ if "pw_history" not in st.session_state:
     st.session_state.pw_history = []
 
 
-def _get_mcp_client():
+def _get_playwright_client():
     """Get the Playwright MCP client."""
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-    from src.mcp_log import create_logging_interceptor
-
-    url = os.getenv("STREAMLIT_PLAYWRIGHT_MCP_URL", "http://playwright-mcp:8008")
-
-    interceptor = create_logging_interceptor(source="playwright_page")
-
-    return MultiServerMCPClient(
-        {"playwright": {"transport": "sse", "url": url}},
-        tool_interceptors=[interceptor],
-    )
+    return get_mcp_client("playwright")
 
 
 def _call_tool(tool_name: str, **kwargs):
     """Call a Playwright MCP tool."""
     try:
-        client = _get_mcp_client()
-        tools = asyncio.run(client.get_tools())
-
-        tool = next((t for t in tools if t.name == tool_name), None)
-        if not tool:
-            return {"ok": False, "error": f"Tool not found: {tool_name}"}
-
-        result = asyncio.run(tool.ainvoke(kwargs))
-        return result
+        client = _get_playwright_client()
+        return client.invoke(tool_name, kwargs)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

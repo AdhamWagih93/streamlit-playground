@@ -1,19 +1,13 @@
-import asyncio
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import sys
-
-import os
-import platform
-
-import plotly.express as px
 import pandas as pd
+import plotly.express as px
 import streamlit as st
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from src.admin_config import load_admin_config
+from src.mcp_client import get_mcp_client, get_server_url
 from src.theme import set_theme
 
 
@@ -144,193 +138,23 @@ def _table_explorer(
             use_container_width=True,
             key=f"{key_prefix}_dl_json",
         )
-def _build_env() -> Dict[str, str]:
-    from src.streamlit_config import get_app_config
-
-    cfg = get_app_config()
-    env: Dict[str, str] = {}
-    kubeconfig = st.session_state.get("k8s_kubeconfig") or cfg.kubernetes.kubeconfig
-    context = st.session_state.get("k8s_context") or cfg.kubernetes.context
-
-    # Local/dev convenience: auto-detect the default kubeconfig path when
-    # nothing is configured via env/UI.
-    if not kubeconfig:
-        try:
-            default_kc = Path.home() / ".kube" / "config"
-            if default_kc.is_file():
-                kubeconfig = str(default_kc)
-        except Exception:  # noqa: BLE001
-            pass
-
-    if kubeconfig:
-        # Set the common variants so Kubernetes client libs resolve the same cluster.
-        # Helm tools are hosted by kubernetes-mcp and inherit cluster selection
-        # from the Kubernetes MCP config/env.
-        env["K8S_KUBECONFIG"] = kubeconfig
-        env["KUBECONFIG"] = kubeconfig
-    if context:
-        env["K8S_CONTEXT"] = context
-
-    for key in ("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"):
-        if key in os.environ and key not in env:
-            env[key] = os.environ[key]
-    return env
+def _get_k8s_client(force_new: bool = False):
+    """Get the Kubernetes MCP client."""
+    return get_mcp_client("kubernetes", force_new=force_new)
 
 
-def _get_tools(env: Dict[str, str], force_reload: bool = False):
-    """Load MCP tools and keep them in session_state (tools are not pickle-safe)."""
-
-    # Include code mtime so editing the MCP server code forces a reload.
-    # This prevents stale stdio subprocesses from lingering across Streamlit reruns.
-    try:
-        repo_root = Path(__file__).resolve().parent.parent
-        watched = [
-            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "mcp.py",
-            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "helm.py",
-            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "helm_config.py",
-            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "helm_cli.py",
-            repo_root / "src" / "ai" / "mcp_servers" / "kubernetes" / "utils" / "pyhelm3_backend.py",
-        ]
-        # Use ns precision to avoid missing reloads when files are edited rapidly.
-        code_mtime = 0
-        for p in watched:
-            if p.is_file():
-                code_mtime = max(code_mtime, int(p.stat().st_mtime_ns))
-    except Exception:  # noqa: BLE001
-        code_mtime = 0
-
-    from src.streamlit_config import get_app_config
-
-    cfg = get_app_config()
-    configured_transport = (cfg.kubernetes.mcp_transport or "stdio").lower().strip()
-    transport = "stdio" if st.session_state.get("k8s_force_stdio") else configured_transport
-
-    # Convert "http" to "sse" for MCP over HTTP
-    if transport == "http":
-        transport = "sse"
-
-    remote_url = cfg.kubernetes.mcp_url
-
-    sig = json.dumps(
-        {
-            "env": env,
-            "code_mtime": code_mtime,
-            "transport": transport,
-            "url": remote_url if transport != "stdio" else None,
-            "py": sys.executable,
-        },
-        sort_keys=True,
-    )
-    if force_reload or st.session_state.get("_k8s_tools_sig") != sig or "_k8s_tools" not in st.session_state:
-        # Merge overrides onto the current process environment.
-        # Some subprocess launchers treat provided env as a full replacement;
-        # keeping the base env avoids Windows/Python startup surprises.
-        subprocess_env = {**os.environ, **env}
-
-        # Ensure the stdio subprocess imports this workspace's `src/...` package,
-        # even when other installed packages or different working directories
-        # would otherwise shadow it.
-        repo_root = str(Path(__file__).resolve().parent.parent)
-        existing_pp = subprocess_env.get("PYTHONPATH", "")
-        if existing_pp:
-            subprocess_env["PYTHONPATH"] = repo_root + os.pathsep + existing_pp
-        else:
-            subprocess_env["PYTHONPATH"] = repo_root
-
-        if transport == "stdio":
-            conn = {
-                "transport": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "src.ai.mcp_servers.kubernetes.mcp"],
-                "env": subprocess_env,
-            }
-        else:
-            conn = {
-                "transport": transport,
-                "url": remote_url,
-            }
-        client = MultiServerMCPClient(
-            connections={
-                "kubernetes": conn
-            }
-        )
-        st.session_state["_k8s_tools"] = asyncio.run(client.get_tools())
-        st.session_state["_k8s_tools_sig"] = sig
-    return st.session_state["_k8s_tools"]
+def _get_tools(force_reload: bool = False) -> List[Dict[str, Any]]:
+    """Load MCP tools using the unified client."""
+    client = _get_k8s_client(force_new=force_reload)
+    tools = client.list_tools(force_refresh=force_reload)
+    st.session_state["_k8s_tools"] = tools
+    return tools
 
 
 def _invoke_tool(tools, name: str, args: Dict[str, Any]) -> Any:
-    def _matches(tool_name: str, desired: str) -> bool:
-        if tool_name == desired:
-            return True
-        # LangChain MCP adapters often namespace tools to avoid collisions.
-        # Common formats: "helm__list_releases", "helm.list_releases", "helm:list_releases", "helm_list_releases".
-        for sep in ("__", ".", ":"):
-            if sep in tool_name and tool_name.rsplit(sep, 1)[-1] == desired:
-                return True
-        if tool_name.endswith("_" + desired):
-            return True
-        return False
-
-    tool = next((t for t in tools if _matches(str(getattr(t, "name", "")), name)), None)
-    if tool is None:
-        available = sorted({str(getattr(t, "name", "")) for t in (tools or []) if getattr(t, "name", None)})
-        return {
-            "ok": False,
-            "error": f"Tool {name} not found.",
-            "available_tools": available,
-        }
-
-    try:
-        if hasattr(tool, "ainvoke"):
-            raw = asyncio.run(tool.ainvoke(args))
-        else:
-            raw = tool.invoke(args)
-        return _normalise_mcp_result(raw)
-    except Exception as exc:  # noqa: BLE001
-        # Surface MCP transport/TaskGroup errors as a structured result so
-        # the page can render cleanly instead of crashing.
-        return {
-            "ok": False,
-            "error": str(exc),
-            "tool": str(getattr(tool, "name", name)),
-        }
-
-
-def _normalise_mcp_result(value: Any) -> Any:
-    """Normalise MCP tool results into plain Python data.
-
-    Depending on the adapter/version, results may come back as:
-    - a plain dict (ideal)
-    - a list of content blocks: [{"type": "text", "text": "{...json...}"}, ...]
-    - an object with a `.content` attribute containing those blocks
-    """
-
-    if isinstance(value, dict):
-        return value
-
-    if hasattr(value, "content"):
-        try:
-            return _normalise_mcp_result(getattr(value, "content"))
-        except Exception:  # noqa: BLE001
-            pass
-
-    if isinstance(value, list):
-        text_parts: List[str] = []
-        for item in value:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                text_parts.append(item["text"])
-
-        if text_parts:
-            text = "\n".join(text_parts).strip()
-            try:
-                parsed = json.loads(text)
-                return parsed
-            except Exception:  # noqa: BLE001
-                # Not JSON; still return structured content.
-                return {"ok": True, "text": text}
-
-    return value
+    """Invoke a Kubernetes MCP tool."""
+    client = _get_k8s_client()
+    return client.invoke(name, args)
 
 
 def _as_list(result: Any, key: str) -> List[Dict[str, Any]]:
@@ -564,41 +388,10 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Kubernetes Connection")
-        kubeconfig = st.text_input(
-            "Kubeconfig path (optional)",
-            value=st.session_state.get("k8s_kubeconfig", ""),
-            help="Leave empty to use default kubeconfig (e.g. ~/.kube/config)",
-        )
-        context = st.text_input(
-            "Context (optional)",
-            value=st.session_state.get("k8s_context", ""),
-            help="Optional Kubernetes context name",
-        )
-        st.session_state["k8s_kubeconfig"] = kubeconfig or ""
-        st.session_state["k8s_context"] = context or ""
 
-        if "k8s_force_stdio" not in st.session_state:
-            st.session_state["k8s_force_stdio"] = bool(platform.system().lower().startswith("win"))
-
-        st.checkbox(
-            "Force local kubernetes-mcp (stdio)",
-            value=bool(st.session_state.get("k8s_force_stdio", False)),
-            help=(
-                "Ignores STREAMLIT_KUBERNETES_MCP_TRANSPORT/URL and starts the MCP server as a local stdio subprocess. "
-                "Use this to avoid calling a stale remote deployment."
-            ),
-            key="k8s_force_stdio",
-        )
-
-        from src.streamlit_config import get_app_config
-
-        _cfg = get_app_config()
-        _transport = ("stdio" if st.session_state.get("k8s_force_stdio") else (_cfg.kubernetes.mcp_transport or "stdio")).lower().strip()
-        if _transport == "stdio":
-            st.caption(f"MCP transport: stdio (local) via `{sys.executable} -m src.ai.mcp_servers.kubernetes.mcp`")
-        else:
-            st.caption(f"MCP transport: {_transport} (remote)")
-            st.caption(f"MCP URL: {_cfg.kubernetes.mcp_url}")
+        k8s_url = get_server_url("kubernetes")
+        st.caption(f"MCP transport: streamable-http")
+        st.caption(f"MCP URL: {k8s_url}")
 
         col_a, col_b = st.columns(2)
         with col_a:
@@ -632,17 +425,13 @@ def main() -> None:
                 pass
         st.rerun()
 
-    env = _build_env()
-
     try:
-        tools = _get_tools(env, force_reload=reload_tools)
+        tools = _get_tools(force_reload=reload_tools)
     except Exception as exc:  # noqa: BLE001
         st.error(f"Failed to load Kubernetes MCP tools: {exc}")
         with st.expander("Debug details", expanded=False):
-            st.write("Command:")
-            st.code(f"{sys.executable} -m src.ai.mcp_servers.kubernetes.mcp")
-            st.write("Env overrides:")
-            st.json(env)
+            st.write("MCP URL:")
+            st.code(get_server_url("kubernetes"))
             st.exception(exc)
         st.markdown("</div>", unsafe_allow_html=True)
         return
@@ -872,13 +661,11 @@ def main() -> None:
                 "nodes": "get_nodes",
             }
             tool_name = tool_map.get(quick_action)
-            if tool_name and tools:
+            if tool_name:
                 try:
-                    tool = next((t for t in tools if t.name == tool_name), None)
-                    if tool:
-                        result = asyncio.run(tool.ainvoke({"namespace": "all"}))
-                        st.session_state["k8s_quick_result"] = result
-                        st.session_state["k8s_quick_action"] = None
+                    result = _invoke_tool(tools, tool_name, {"namespace": "all"})
+                    st.session_state["k8s_quick_result"] = result
+                    st.session_state["k8s_quick_action"] = None
                 except Exception as e:
                     st.error(f"Quick action failed: {e}")
                     st.session_state["k8s_quick_action"] = None
@@ -1226,7 +1013,7 @@ def main() -> None:
             top1, top2, top3 = st.columns([1, 1, 2])
             with top1:
                 if st.button("Refresh Helm tools", use_container_width=True, key="helm_refresh_tools"):
-                    tools = _get_tools(env, force_reload=True)
+                    tools = _get_tools(force_reload=True)
                     helm_tools = tools or []
                     st.success("Reloaded tools (including Helm)")
             with top2:
@@ -1243,9 +1030,9 @@ def main() -> None:
 
             with st.expander("Show loaded Helm tool names", expanded=False):
                 names = sorted({
-                    str(getattr(t, "name", ""))
+                    t.get("name", "") if isinstance(t, dict) else str(getattr(t, "name", ""))
                     for t in (helm_tools or [])
-                    if getattr(t, "name", "").startswith("helm_")
+                    if (t.get("name", "") if isinstance(t, dict) else str(getattr(t, "name", ""))).startswith("helm_")
                 })
                 if not names:
                     st.write("No helm_* tools found on kubernetes-mcp.")

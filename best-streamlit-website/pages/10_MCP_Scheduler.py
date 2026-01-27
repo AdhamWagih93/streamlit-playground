@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,10 +12,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from langchain_mcp_adapters.client import MultiServerMCPClient
-
-from src.ai.mcp_langchain_tools import invoke_tool
 from src.ai.mcp_specs import build_server_specs
+from src.mcp_client import get_mcp_client
 from src.streamlit_config import get_app_config
 from src.theme import set_theme
 
@@ -230,58 +226,32 @@ def _normalise_streamable_http_url(url: str) -> str:
     return base + "/mcp"
 
 
-def _scheduler_langchain_conn_from_spec(spec: Any) -> Dict[str, Any]:
-    transport = str(getattr(spec, "transport", "http") or "http").lower().strip()
-    if transport == "http":
-        transport = "streamable-http"
-
-    if transport == "stdio":
-        env = {**os.environ, **dict(getattr(spec, "env", {}) or {})}
-        return {
-            "transport": "stdio",
-            "command": getattr(spec, "python_executable", None) or os.environ.get("PYTHON") or "python",
-            "args": ["-m", str(getattr(spec, "module", ""))],
-            "env": env,
-        }
-
-    url = str(getattr(spec, "url", ""))
-    if transport == "streamable-http":
-        url = _normalise_streamable_http_url(url)
-    return {"transport": transport, "url": url}
+def _get_scheduler_client(force_new: bool = False):
+    """Get the Scheduler MCP client."""
+    return get_mcp_client("scheduler", force_new=force_new)
 
 
 def _scheduler_list_tools_cached(defs: Dict[str, Any], *, force_reload: bool = False) -> List[Any]:
-    spec = defs.get("scheduler")
-    if spec is None:
+    """Get scheduler tools using unified client."""
+    try:
+        client = _get_scheduler_client(force_new=force_reload)
+        tools = client.list_tools(force_refresh=force_reload)
+        st.session_state["scheduler_tools"] = tools
+        st.session_state.pop("scheduler_last_error", None)
+        st.session_state["scheduler_connected"] = True
+        return tools
+    except Exception as exc:
+        st.session_state["scheduler_tools"] = []
+        st.session_state["scheduler_last_error"] = str(exc)
+        st.session_state["scheduler_connected"] = False
         return []
-
-    cache_key = "scheduler_tools"
-    sig_key = "scheduler_tools_sig"
-    sig = _scheduler_spec_sig(spec)
-    if force_reload or st.session_state.get(sig_key) != sig or cache_key not in st.session_state:
-        try:
-            conn = _scheduler_langchain_conn_from_spec(spec)
-            client = MultiServerMCPClient(connections={"scheduler": conn})
-            st.session_state[cache_key] = asyncio.run(client.get_tools())
-            st.session_state[sig_key] = sig
-            st.session_state.pop("scheduler_last_error", None)
-            st.session_state["scheduler_connected"] = True
-        except Exception as exc:
-            st.session_state[cache_key] = []
-            st.session_state[sig_key] = sig
-            st.session_state["scheduler_last_error"] = str(exc)
-            st.session_state["scheduler_connected"] = False
-    return list(st.session_state.get(cache_key) or [])
 
 
 def _call_scheduler_tool(tool: str, args: Dict[str, Any], defs: Dict[str, Any]) -> Dict[str, Any]:
+    """Call a scheduler MCP tool using unified client."""
     try:
-        tools = _scheduler_list_tools_cached(defs)
-        if not tools:
-            msg = st.session_state.get("scheduler_last_error") or "Scheduler tools are not available."
-            return {"ok": False, "error": "scheduler_unavailable", "details": msg}
-
-        res = invoke_tool(tools, tool, args)
+        client = _get_scheduler_client()
+        res = client.invoke(tool, args)
         if isinstance(res, dict) and "ok" in res:
             return res
         return {"ok": True, "result": res}

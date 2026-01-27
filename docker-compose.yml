@@ -303,8 +303,6 @@ services:
     restart: unless-stopped
     networks:
       - bsw-network
-    profiles:
-      - full  # Only start with --profile full
 
   git-mcp:
     build:

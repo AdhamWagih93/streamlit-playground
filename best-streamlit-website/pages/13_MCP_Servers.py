@@ -1,6 +1,7 @@
 """Central MCP Server Management Page - With debugging."""
 
 import asyncio
+import json
 import os
 import traceback
 from datetime import datetime
@@ -66,6 +67,63 @@ def _to_json_safe(value: Any, seen: Set[int] | None = None) -> Any:
 def _normalise_streamable_http_url(raw_url: str) -> str:
     """Normalize URL for streamable-http transport (deprecated, use _get_mcp_url)."""
     return _get_mcp_url(raw_url)
+
+
+def _extract_tool_schema(tool: Any) -> Dict[str, Any]:
+    """Best-effort extraction of tool input schema."""
+    if hasattr(tool, "args_schema") and tool.args_schema:
+        schema_src = tool.args_schema
+        if hasattr(schema_src, "model_json_schema"):
+            try:
+                return schema_src.model_json_schema()  # pydantic v2
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(schema_src, "schema"):
+            try:
+                return schema_src.schema()  # pydantic v1
+            except Exception:  # noqa: BLE001
+                pass
+
+    if hasattr(tool, "schema"):
+        try:
+            return tool.schema()  # langchain tools may expose schema()
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {}
+
+
+def _example_from_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a minimal example payload from a JSON schema."""
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
+    example: Dict[str, Any] = {}
+
+    def _placeholder(value_schema: Dict[str, Any]) -> Any:
+        if "default" in value_schema:
+            return value_schema["default"]
+        if "examples" in value_schema and value_schema["examples"]:
+            return value_schema["examples"][0]
+        value_type = value_schema.get("type")
+        if value_type == "string":
+            return ""
+        if value_type == "integer":
+            return 0
+        if value_type == "number":
+            return 0.0
+        if value_type == "boolean":
+            return False
+        if value_type == "array":
+            return []
+        if value_type == "object":
+            return {}
+        return None
+
+    for key, value_schema in properties.items():
+        if key in required:
+            example[key] = _placeholder(value_schema if isinstance(value_schema, dict) else {})
+
+    return example
 
 
 set_theme(page_title="MCP Servers", page_icon="🔌")
@@ -136,6 +194,7 @@ MCP_SERVERS = [
         "name": "Jenkins MCP",
         "icon": "🔧",
         "url": os.getenv("STREAMLIT_JENKINS_MCP_URL", "http://jenkins-mcp:8000"),
+        "optional": True,
         "description": "CI/CD pipeline integration",
     },
     {
@@ -190,13 +249,17 @@ MCP_SERVERS = [
 ]
 
 # Header with options
-col1, col2, col3 = st.columns([2, 1, 1])
+col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
 with col1:
     st.subheader("📊 Server Health Dashboard")
 with col2:
     debug_mode = st.checkbox("Debug Mode", value=False, help="Show detailed debug information")
 with col3:
     auto_refresh = st.checkbox("Auto-refresh (30s)", value=False)
+with col4:
+    include_optional = st.checkbox("Include optional", value=False)
+
+visible_servers = [s for s in MCP_SERVERS if include_optional or not s.get("optional")]
 
 if auto_refresh:
     import time
@@ -219,9 +282,9 @@ if check_all or check_http:
     progress = st.progress(0)
     status_text = st.empty()
 
-    for i, server in enumerate(MCP_SERVERS):
+    for i, server in enumerate(visible_servers):
         status_text.text(f"Checking {server['name']}...")
-        progress.progress((i + 1) / len(MCP_SERVERS))
+        progress.progress((i + 1) / len(visible_servers))
 
         try:
             if check_http:
@@ -276,7 +339,7 @@ else:
     st.divider()
 
     # Server cards
-    for server in MCP_SERVERS:
+    for server in visible_servers:
         health = health_results.get(server["id"], {})
         status = health.get("status", "unknown")
         server_debug = debug_info.get(server["id"], {})
@@ -340,8 +403,8 @@ st.caption("View and test tools available on each MCP server")
 # Server selector for tool exploration
 tool_server = st.selectbox(
     "Select Server",
-    options=[s["id"] for s in MCP_SERVERS],
-    format_func=lambda x: next((s["name"] for s in MCP_SERVERS if s["id"] == x), x),
+    options=[s["id"] for s in visible_servers],
+    format_func=lambda x: next((s["name"] for s in visible_servers if s["id"] == x), x),
 )
 
 # Transport selection
@@ -352,33 +415,18 @@ transport_option = st.selectbox(
 )
 
 if st.button("Load Tools", use_container_width=True):
-    selected_server = next((s for s in MCP_SERVERS if s["id"] == tool_server), None)
+    selected_server = next((s for s in visible_servers if s["id"] == tool_server), None)
     if selected_server:
         with st.spinner(f"Loading tools from {selected_server['name']}..."):
             try:
-                from langchain_mcp_adapters.client import MultiServerMCPClient
+                from src.mcp_client import get_mcp_client
 
-                raw_url = selected_server["url"]
-                base_url = _get_base_url(raw_url)
-                mcp_url = _get_mcp_url(raw_url)
-
-                # Use proper URL based on transport
-                if transport_option == "streamable-http":
-                    url = mcp_url
-                else:  # sse
-                    url = base_url
-
-                # Try the selected transport
-                client = MultiServerMCPClient({
-                    tool_server: {
-                        "transport": transport_option,
-                        "url": url,
-                    }
-                })
-                tools = asyncio.run(client.get_tools())
+                # Use unified client for tool loading
+                client = get_mcp_client(tool_server, url=selected_server["url"], force_new=True)
+                tools = client.list_tools(force_refresh=True)
                 tool_list = list(tools or [])
                 st.session_state[f"_mcp_tools_{tool_server}"] = tool_list
-                st.success(f"Loaded {len(tool_list)} tools using {transport_option}!")
+                st.success(f"Loaded {len(tool_list)} tools!")
 
             except BaseException as e:
                 # Catch BaseException to handle ExceptionGroup/TaskGroup errors
@@ -397,18 +445,100 @@ loaded_tools = st.session_state.get(f"_mcp_tools_{tool_server}", [])
 if loaded_tools:
     st.markdown(f"**{len(loaded_tools)} tools available:**")
 
+    # Handle both dict and object formats for tools
+    def _get_tool_name(t):
+        return t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+
+    def _get_tool_desc(t):
+        return t.get("description", "") if isinstance(t, dict) else getattr(t, "description", "")
+
+    def _get_tool_schema(t):
+        if isinstance(t, dict):
+            return t.get("inputSchema", {})
+        return _extract_tool_schema(t)
+
+    tool_map = {_get_tool_name(tool): tool for tool in loaded_tools}
+
     for tool in loaded_tools:
-        with st.expander(f"🔧 {tool.name}", expanded=False):
-            st.markdown(f"**Description:** {tool.description[:200] if tool.description else 'No description'}...")
-            if hasattr(tool, "args_schema") and tool.args_schema:
+        tool_name = _get_tool_name(tool)
+        tool_desc = _get_tool_desc(tool)
+        with st.expander(f"🔧 {tool_name}", expanded=False):
+            st.markdown(f"**Description:** {tool_desc[:200] if tool_desc else 'No description'}...")
+
+            schema = _get_tool_schema(tool)
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
+
+            if properties:
                 st.markdown("**Parameters:**")
-                schema = tool.args_schema.schema() if hasattr(tool.args_schema, "schema") else {}
-                if schema.get("properties"):
-                    for param, details in schema.get("properties", {}).items():
-                        required = param in schema.get("required", [])
-                        st.markdown(f"- `{param}` ({details.get('type', 'any')}) {'*required*' if required else ''}")
+                for param, details in properties.items():
+                    details = details if isinstance(details, dict) else {}
+                    required_flag = "*required*" if param in required else ""
+                    param_type = details.get("type", "any")
+                    description = details.get("description", "")
+                    if description:
+                        st.markdown(f"- `{param}` ({param_type}) {required_flag} — {description}")
+                    else:
+                        st.markdown(f"- `{param}` ({param_type}) {required_flag}")
+            else:
+                st.info("No parameter schema provided for this tool.")
+
+            if schema:
+                st.markdown("**Raw schema:**")
+                st.json(schema)
 else:
     st.info("Click **Load Tools** to see available tools for the selected server.")
+
+# Tool runner
+if loaded_tools:
+    st.subheader("▶️ Tool Runner")
+    st.caption("Call a tool with custom JSON arguments")
+
+    selected_tool_name = st.selectbox(
+        "Tool",
+        options=sorted(tool_map.keys()),
+    )
+    selected_tool = tool_map.get(selected_tool_name)
+    selected_schema = _get_tool_schema(selected_tool) if selected_tool else {}
+    selected_example = _example_from_schema(selected_schema) if selected_schema else {}
+
+    if selected_schema:
+        st.markdown("**Input schema:**")
+        st.json(selected_schema)
+
+    default_payload = json.dumps(selected_example or {}, indent=2)
+    payload_text = st.text_area(
+        "Arguments (JSON)",
+        value=default_payload,
+        height=180,
+        help="Provide a JSON object with tool parameters. Leave empty for {}.",
+    )
+
+    call_tool_button = st.button("Run Tool", type="primary", use_container_width=True)
+    if call_tool_button and selected_tool_name:
+        try:
+            from src.mcp_client import get_mcp_client
+
+            payload = json.loads(payload_text.strip() or "{}")
+            if not isinstance(payload, dict):
+                raise ValueError("Payload must be a JSON object.")
+
+            with st.spinner(f"Running {selected_tool_name}..."):
+                # Get the server info to find URL
+                selected_server = next((s for s in visible_servers if s["id"] == tool_server), None)
+                if not selected_server:
+                    raise ValueError(f"Server {tool_server} not found")
+
+                # Use unified client to invoke tool
+                client = get_mcp_client(tool_server, url=selected_server["url"])
+                result = client.invoke(selected_tool_name, payload)
+
+            st.success("Tool completed.")
+            st.json(_to_json_safe(result))
+        except Exception as e:
+            st.error(f"Tool call failed: {e}")
+            if debug_mode:
+                st.code(traceback.format_exc(), language="text")
 
 st.divider()
 
@@ -476,7 +606,7 @@ st.divider()
 st.subheader("⚙️ Connection Information")
 st.caption("MCP server URLs and transport configuration")
 
-for server in MCP_SERVERS:
+for server in visible_servers:
     with st.expander(f"{server['icon']} {server['name']}", expanded=False):
         raw_url = server['url']
         base_url = _get_base_url(raw_url)

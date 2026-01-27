@@ -32,14 +32,14 @@ def _client_from_env() -> PlaywrightClient:
 
 
 @mcp.tool
-def playwright_health_check() -> Dict[str, Any]:
+async def playwright_health_check() -> Dict[str, Any]:
     """Check Playwright availability and configuration."""
     c = _client_from_env()
-    return c.health_check()
+    return await c.health_check()
 
 
 @mcp.tool
-def playwright_navigate(
+async def playwright_navigate(
     url: str,
     wait_until: str = "domcontentloaded",
 ) -> Dict[str, Any]:
@@ -50,11 +50,11 @@ def playwright_navigate(
         wait_until: When to consider navigation complete (load, domcontentloaded, networkidle)
     """
     c = _client_from_env()
-    return c.navigate(url, wait_until)
+    return await c.navigate(url, wait_until)
 
 
 @mcp.tool
-def playwright_get_content(
+async def playwright_get_content(
     selector: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get page content or specific element content.
@@ -63,11 +63,11 @@ def playwright_get_content(
         selector: Optional CSS selector to get specific element (gets full page if not provided)
     """
     c = _client_from_env()
-    return c.get_page_content(selector)
+    return await c.get_page_content(selector)
 
 
 @mcp.tool
-def playwright_screenshot(
+async def playwright_screenshot(
     full_page: bool = False,
     selector: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -78,22 +78,22 @@ def playwright_screenshot(
         selector: Capture specific element only
     """
     c = _client_from_env()
-    return c.screenshot(full_page, selector)
+    return await c.screenshot(full_page, selector)
 
 
 @mcp.tool
-def playwright_click(selector: str) -> Dict[str, Any]:
+async def playwright_click(selector: str) -> Dict[str, Any]:
     """Click an element on the page.
 
     Args:
         selector: CSS selector for the element to click
     """
     c = _client_from_env()
-    return c.click(selector)
+    return await c.click(selector)
 
 
 @mcp.tool
-def playwright_fill(selector: str, value: str) -> Dict[str, Any]:
+async def playwright_fill(selector: str, value: str) -> Dict[str, Any]:
     """Fill an input field with a value.
 
     Args:
@@ -101,11 +101,11 @@ def playwright_fill(selector: str, value: str) -> Dict[str, Any]:
         value: Value to fill in
     """
     c = _client_from_env()
-    return c.fill(selector, value)
+    return await c.fill(selector, value)
 
 
 @mcp.tool
-def playwright_type(
+async def playwright_type(
     selector: str,
     text: str,
     delay: int = 50,
@@ -118,11 +118,11 @@ def playwright_type(
         delay: Delay between keystrokes in milliseconds
     """
     c = _client_from_env()
-    return c.type_text(selector, text, delay)
+    return await c.type_text(selector, text, delay)
 
 
 @mcp.tool
-def playwright_press_key(
+async def playwright_press_key(
     key: str,
     selector: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -133,11 +133,11 @@ def playwright_press_key(
         selector: Optional element to focus first
     """
     c = _client_from_env()
-    return c.press_key(key, selector)
+    return await c.press_key(key, selector)
 
 
 @mcp.tool
-def playwright_wait_for(
+async def playwright_wait_for(
     selector: str,
     state: str = "visible",
 ) -> Dict[str, Any]:
@@ -148,47 +148,47 @@ def playwright_wait_for(
         state: State to wait for (attached, detached, visible, hidden)
     """
     c = _client_from_env()
-    return c.wait_for_selector(selector, state)
+    return await c.wait_for_selector(selector, state)
 
 
 @mcp.tool
-def playwright_get_links(selector: str = "a") -> Dict[str, Any]:
+async def playwright_get_links(selector: str = "a") -> Dict[str, Any]:
     """Get all links on the current page.
 
     Args:
         selector: CSS selector for link elements (default: all anchor tags)
     """
     c = _client_from_env()
-    return c.get_links(selector)
+    return await c.get_links(selector)
 
 
 @mcp.tool
-def playwright_get_forms() -> Dict[str, Any]:
+async def playwright_get_forms() -> Dict[str, Any]:
     """Get all forms on the current page with their inputs."""
     c = _client_from_env()
-    return c.get_forms()
+    return await c.get_forms()
 
 
 @mcp.tool
-def playwright_evaluate(script: str) -> Dict[str, Any]:
+async def playwright_evaluate(script: str) -> Dict[str, Any]:
     """Execute JavaScript code on the page.
 
     Args:
         script: JavaScript code to execute
     """
     c = _client_from_env()
-    return c.evaluate(script)
+    return await c.evaluate(script)
 
 
 @mcp.tool
-def playwright_page_info() -> Dict[str, Any]:
+async def playwright_page_info() -> Dict[str, Any]:
     """Get information about the current page (URL, title, viewport)."""
     c = _client_from_env()
-    return c.get_page_info()
+    return await c.get_page_info()
 
 
 @mcp.tool
-def playwright_scroll(
+async def playwright_scroll(
     direction: str = "down",
     amount: int = 500,
 ) -> Dict[str, Any]:
@@ -199,28 +199,28 @@ def playwright_scroll(
         amount: Pixels to scroll
     """
     c = _client_from_env()
-    return c.scroll(direction, amount)
+    return await c.scroll(direction, amount)
 
 
 @mcp.tool
-def playwright_back() -> Dict[str, Any]:
+async def playwright_back() -> Dict[str, Any]:
     """Go back in browser history."""
     c = _client_from_env()
-    return c.go_back()
+    return await c.go_back()
 
 
 @mcp.tool
-def playwright_forward() -> Dict[str, Any]:
+async def playwright_forward() -> Dict[str, Any]:
     """Go forward in browser history."""
     c = _client_from_env()
-    return c.go_forward()
+    return await c.go_forward()
 
 
 @mcp.tool
-def playwright_close() -> Dict[str, Any]:
+async def playwright_close() -> Dict[str, Any]:
     """Close the browser instance."""
     c = _client_from_env()
-    return c.close()
+    return await c.close()
 
 
 def run_stdio() -> None:
