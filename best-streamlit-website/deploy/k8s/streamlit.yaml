@@ -36,13 +36,19 @@ spec:
             - name: JENKINS_MCP_CLIENT_TOKEN
               value: "dev-jenkins-mcp-token"
             - name: STREAMLIT_JENKINS_MCP_TRANSPORT
-              value: "http"
+              value: "streamable-http"
             - name: STREAMLIT_JENKINS_MCP_URL
-              value: "http://jenkins-mcp:8000"
+              value: "http://jenkins-mcp:8000/mcp"
             - name: STREAMLIT_KUBERNETES_MCP_TRANSPORT
-              value: "http"
+              value: "streamable-http"
             - name: STREAMLIT_KUBERNETES_MCP_URL
-              value: "http://kubernetes-mcp:8000"
+              value: "http://kubernetes-mcp:8000/mcp"
+            - name: DATABASE_URL
+              value: "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"
+            - name: PLATFORM_DATABASE_URL
+              value: "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"
+            - name: MCP_LOG_DATABASE_URL
+              value: "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"
           resources:
             requests:
               cpu: 10m

@@ -45,7 +45,6 @@ def _bootstrap_default_jobs(cfg: SchedulerConfig) -> None:
     create jobs via the UI.
 
     Safety:
-    - Only auto-runs by default for the repo-local SQLite DB (data/scheduler.db)
     - Can be disabled with SCHEDULER_BOOTSTRAP_JOBS=false
     """
 
@@ -53,11 +52,12 @@ def _bootstrap_default_jobs(cfg: SchedulerConfig) -> None:
     if not _env_bool("SCHEDULER_BOOTSTRAP_JOBS", True):
         return
 
-    db = str(cfg.database_url or "")
-    is_local_sqlite = db.startswith("sqlite:///") and db.replace("\\", "/").endswith("/data/scheduler.db")
-    if not is_local_sqlite:
-        # Avoid auto-seeding shared/prod databases.
-        return
+    # Avoid auto-seeding shared/prod databases unless explicitly enabled.
+    if not _env_bool("SCHEDULER_BOOTSTRAP_ALLOW_SHARED", False):
+        db = str(cfg.database_url or "")
+        is_local_sqlite = db.startswith("sqlite:///") and db.replace("\\", "/").endswith("/data/scheduler.db")
+        if not is_local_sqlite:
+            return
 
     try:
         existing = list_jobs_impl(cfg.database_url)

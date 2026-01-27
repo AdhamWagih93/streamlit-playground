@@ -32,9 +32,11 @@ spec:
             - name: SCHEDULER_MCP_PORT
               value: "8010"
 
-            # Central DB (recommended in K8s). If empty, scheduler falls back to local SQLite.
+            # Central DB (recommended in K8s).
+            {{- if .Values.env.platformDatabaseUrl }}
             - name: PLATFORM_DATABASE_URL
               value: {{ .Values.env.platformDatabaseUrl | quote }}
+            {{- end }}
 
             # MCP targets (scheduler calls other MCP servers)
             - name: JENKINS_MCP_TRANSPORT

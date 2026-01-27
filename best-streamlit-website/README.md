@@ -52,13 +52,13 @@ best-streamlit-website
 
 ## Scheduler service (local dev)
 
-The MCP scheduler runs as a separate process (it does not run inside Streamlit). Locally, it uses SQLite at `data/scheduler.db` by default.
+The MCP scheduler runs as a separate process (it does not run inside Streamlit). Locally, it uses PostgreSQL by default (via `PLATFORM_DATABASE_URL`/`SCHEDULER_DATABASE_URL`).
 
 - Start the scheduler MCP server (recommended):
    - VS Code Task: **Dev: Run Scheduler MCP** (or **Dev: Run Streamlit + Scheduler**)
    - PowerShell helper: `./scripts/start_scheduler_background.ps1`
 
-When using the repo-local SQLite scheduler DB, the scheduler auto-creates a small set of default jobs if the DB is empty (disable with `SCHEDULER_BOOTSTRAP_JOBS=false`).
+When bootstrapping is enabled, the scheduler can auto-create a small set of default jobs if the DB is empty (disable with `SCHEDULER_BOOTSTRAP_JOBS=false`).
 
 ## Configuration (env-first with local defaults)
 

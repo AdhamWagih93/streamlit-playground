@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Best Streamlit Website - Development Startup Script (Linux/macOS)
-# This script starts the full development stack using Docker Compose
+# This script starts the full development stack using Podman Compose
 
 set -e
 
@@ -13,7 +13,8 @@ GRAY='\033[0;37m'
 NC='\033[0m' # No Color
 
 # Parse arguments
-WITH_AI=false
+# Enable AI profile (Ollama) by default
+WITH_AI=true
 WITH_TOOLS=false
 FULL=false
 DETACH=false
@@ -54,9 +55,14 @@ echo -e "${CYAN}Best Streamlit Website - Dev Startup${NC}"
 echo -e "${CYAN}=====================================${NC}"
 echo ""
 
-# Check if Docker is running
-if ! docker info &>/dev/null; then
-    echo -e "${RED}ERROR: Docker is not running. Please start Docker.${NC}"
+# Work around Docker Desktop BuildKit/Buildx issues on some environments
+# by forcing compose to use the classic builder instead of buildx bake.
+export DOCKER_BUILDKIT=0
+export COMPOSE_DOCKER_CLI_BUILD=0
+
+# Check if Podman is available
+if ! command -v podman &>/dev/null; then
+    echo -e "${RED}ERROR: podman is not installed or not in PATH.${NC}"
     exit 1
 fi
 
@@ -78,21 +84,28 @@ if [ ! -d "data" ]; then
     mkdir -p data
 fi
 
-# Build compose command
-COMPOSE_CMD="docker-compose -f docker-compose.yml -f docker-compose.dev.yml"
+# Build compose command (Podman Compose)
+COMPOSE_CMD="podman compose -f docker-compose.yml -f docker-compose.dev.yml"
 PROFILES=()
 
-# Add profiles
+# Collect profile names and set COMPOSE_PROFILES env var
 if [ "$WITH_AI" = true ] || [ "$FULL" = true ]; then
-    PROFILES+=("--profile" "ai")
+    PROFILES+=("ai")
 fi
 
 if [ "$WITH_TOOLS" = true ] || [ "$FULL" = true ]; then
-    PROFILES+=("--profile" "tools")
+    PROFILES+=("tools")
 fi
 
 if [ "$FULL" = true ]; then
-    PROFILES+=("--profile" "full")
+    PROFILES+=("full")
+fi
+
+if [ ${#PROFILES[@]} -gt 0 ]; then
+    IFS=',' read -r -a _TMP <<< "${PROFILES[*]}"
+    export COMPOSE_PROFILES="${_TMP[*]}"
+else
+    unset COMPOSE_PROFILES
 fi
 
 # Build command arguments
@@ -107,12 +120,12 @@ if [ "$BUILD" = true ]; then
 fi
 
 echo -e "${GREEN}Starting services...${NC}"
-echo -e "${GRAY}Command: $COMPOSE_CMD ${CMD_ARGS[*]} ${PROFILES[*]}${NC}"
+echo -e "${GRAY}Command: COMPOSE_PROFILES=${COMPOSE_PROFILES:-""} $COMPOSE_CMD ${CMD_ARGS[*]}${NC}"
 echo ""
 
-# Execute docker-compose
+# Execute podman compose
 export COMPOSE_PROJECT_NAME="bsw"
-$COMPOSE_CMD "${CMD_ARGS[@]}" "${PROFILES[@]}"
+$COMPOSE_CMD "${CMD_ARGS[@]}"
 
 if [ $? -eq 0 ]; then
     echo ""

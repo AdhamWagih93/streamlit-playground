@@ -142,9 +142,9 @@ docker-compose exec ollama ollama pull tinyllama
     ┌──────────────┴──────────────┐
     │                             │
 ┌───▼────────────────┐  ┌─────────▼──────────────┐
-│   MCP Servers      │  │   SQLite Databases     │
-│ (FastMCP Framework)│  │  - tasks.db            │
-│                    │  │  - scheduler.db        │
+│   MCP Servers      │  │   PostgreSQL Database  │
+│ (FastMCP Framework)│  │  - tasks               │
+│                    │  │  - scheduler           │
 │ • Scheduler (8010) │  └────────────────────────┘
 │ • Jenkins (8002)   │
 │ • Kubernetes (8003)│
@@ -167,7 +167,7 @@ docker-compose exec ollama ollama pull tinyllama
    - Kubernetes: Cluster management
    - Docker: Container operations
 
-3. **Data Layer** - SQLite for local dev
+3. **Data Layer** - PostgreSQL
    - Task tracking and history
    - Scheduler job definitions
    - User schedules and preferences
@@ -206,15 +206,11 @@ All services support hot-reload in development mode:
 
 ### Database Access
 
-SQLite databases are stored in `./data/`:
+PostgreSQL is exposed at `localhost:5432` by default.
 
 ```bash
 # Access via DB Admin tool (if started with -WithTools)
 http://localhost:8090
-
-# Or use SQLite CLI
-sqlite3 data/tasks.db
-sqlite3 data/scheduler.db
 ```
 
 ### Debugging
@@ -327,16 +323,16 @@ If you see "Could not connect to Ollama":
    docker-compose exec ollama ollama pull tinyllama
    ```
 
-### Database Locked Errors
+### Database Connection Errors
 
-SQLite doesn't support multiple writers. For concurrent access:
+If you see database connection errors:
 
-1. **Use PostgreSQL (production mode):**
+1. **Ensure Postgres is running:**
    ```bash
-   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+   docker-compose ps
    ```
 
-2. **Or reset the database:**
+2. **Reset the database (dev):**
    ```bash
    .\scripts\dev-reset.ps1 -KeepData:$false
    ```

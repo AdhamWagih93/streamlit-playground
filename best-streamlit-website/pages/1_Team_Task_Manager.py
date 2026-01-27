@@ -2594,7 +2594,18 @@ with tags_tab:
             tag_df = pd.DataFrame(tag_rows)
             # Basic aggregations
             tag_counts = tag_df.groupby('tag')['task_id'].nunique().sort_values(ascending=False)
-            top_n = st.slider("Top N tags for detailed charts", min_value=3, max_value=min(30, len(tag_counts)), value=min(10, len(tag_counts)), key="tags-top-n")
+            max_top_n = min(30, len(tag_counts))
+            if max_top_n <= 3:
+                top_n = max_top_n
+                st.caption(f"Showing top {top_n} tags (not enough tags to adjust).")
+            else:
+                top_n = st.slider(
+                    "Top N tags for detailed charts",
+                    min_value=3,
+                    max_value=max_top_n,
+                    value=min(10, max_top_n),
+                    key="tags-top-n",
+                )
             top_tags = tag_counts.head(top_n).index.tolist()
             # KPI metrics
             total_tags = tag_counts.shape[0]
@@ -3245,7 +3256,7 @@ with doc_tab:
         <h3>12. History & Audit Trail</h3>
         <p>Every significant mutation appends a history event (<code>created</code>, <code>status-&gt;X</code>, <code>priority-&gt;Y</code>, <code>edited</code>, <code>check_added</code>, <code>check_done</code>, <code>comment_added</code>, etc.). Timestamps are UTC ISO‑8601.</p>
         <h3>13. Data Persistence</h3>
-        <p>SQLite database at <code>data/tasks.db</code> via SQLAlchemy. JSON‑encoded list fields keep schema minimal. Lightweight in‑place migrations add missing columns if needed. To scale, replace the DB URL with PostgreSQL and introduce normalized tables for history/comments.</p>
+        <p>PostgreSQL database via SQLAlchemy (configured by <code>DATABASE_URL</code>). JSON‑encoded list fields keep schema minimal. Lightweight in‑place migrations add missing columns if needed. For larger scale, introduce normalized tables for history/comments.</p>
         <h3>14. Limitations & Future Enhancements</h3>
         <ul style='font-size:0.75rem;'>
             <li>No authentication layer (impersonation is trust‑based).</li>

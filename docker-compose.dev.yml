@@ -33,6 +33,7 @@ services:
       - SCHEDULER_TICK_SECONDS=10
       # Auto-bootstrap demo jobs
       - SCHEDULER_BOOTSTRAP_JOBS=true
+      - SCHEDULER_BOOTSTRAP_ALLOW_SHARED=true
       # Enable debug logging
       - LOG_LEVEL=DEBUG
     volumes:
@@ -63,14 +64,12 @@ services:
 
   # Additional development service: Lightweight DB admin
   db-admin:
-    image: coleifer/sqlite-web:latest
+    image: adminer:4
     container_name: bsw-db-admin
     ports:
       - "8090:8080"
-    volumes:
-      - ./data:/data:ro
-    environment:
-      - SQLITE_DATABASE=/data/tasks.db
+    depends_on:
+      - postgres
     networks:
       - bsw-network
     profiles:

@@ -14,6 +14,16 @@ Write-Host "Best Streamlit Website - Dev Startup" -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Enable AI profile (Ollama) by default when no explicit profile flags are passed
+if (-not $WithAI -and -not $WithTools -and -not $Full) {
+    $WithAI = $true
+}
+
+# Work around Docker Desktop BuildKit/Buildx issues on some Windows setups
+# by forcing compose to use the classic builder instead of buildx bake.
+$env:DOCKER_BUILDKIT = "0"
+$env:COMPOSE_DOCKER_CLI_BUILD = "0"
+
 # Check if Docker is running
 try {
     docker info | Out-Null
@@ -40,10 +50,10 @@ if (-not (Test-Path "data")) {
     New-Item -ItemType Directory -Path "data" | Out-Null
 }
 
-# Build compose command
-$composeCmd = "docker-compose -f docker-compose.yml -f docker-compose.dev.yml"
+# Build compose command (Docker Compose v2 via `docker compose`)
+$composeCmd = "docker compose -f docker-compose.yml -f docker-compose.dev.yml"
 
-# Add profiles
+# Compute profiles and set COMPOSE_PROFILES env var
 $profiles = @()
 if ($WithAI -or $Full) {
     $profiles += "ai"
@@ -55,6 +65,12 @@ if ($Full) {
     $profiles += "full"
 }
 
+if ($profiles.Count -gt 0) {
+    $env:COMPOSE_PROFILES = ($profiles -join ",")
+} else {
+    $env:COMPOSE_PROFILES = $null
+}
+
 # Build the command
 $cmdArgs = @("up")
 
@@ -64,13 +80,6 @@ if ($Detach) {
 
 if ($Build) {
     $cmdArgs += "--build"
-}
-
-if ($profiles.Count -gt 0) {
-    foreach ($profile in $profiles) {
-        $cmdArgs += "--profile"
-        $cmdArgs += $profile
-    }
 }
 
 Write-Host "Starting services..." -ForegroundColor Green

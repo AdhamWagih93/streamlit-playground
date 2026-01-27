@@ -9,6 +9,8 @@ services:
     environment:
       # Production database (PostgreSQL)
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
+      - PLATFORM_DATABASE_URL=${PLATFORM_DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
+      - MCP_LOG_DATABASE_URL=${MCP_LOG_DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
 
       # Disable debug features
       - DEBUG=false

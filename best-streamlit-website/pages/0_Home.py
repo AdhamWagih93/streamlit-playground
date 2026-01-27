@@ -14,7 +14,7 @@ from src.tasks_repo import get_all_tasks, init_db
 from src.theme import set_theme
 
 
-set_theme(page_title="Best Streamlit Website", page_icon="🌐")
+set_theme(page_title="BSW Platform", page_icon="🚀")
 
 
 # ==============================================================================
@@ -176,7 +176,7 @@ def _generate_velocity_chart() -> go.Figure:
         y=[created_by_day[d] for d in dates],
         mode='lines+markers',
         name='Created',
-        line=dict(color='#3B82F6', width=3),
+        line=dict(color='#6366f1', width=3),
         marker=dict(size=8),
     ))
 
@@ -218,9 +218,9 @@ if "show_velocity_chart" not in st.session_state:
 st.markdown(
     """
     <div class="st-hero">
-        <h1>🌐 Best Streamlit Website</h1>
-        <p>A comprehensive platform for team management, DevOps automation, and AI-powered workflows.
-        Manage tasks, monitor infrastructure, orchestrate deployments, and explore AI agents - all in one place.</p>
+        <h1>🚀 BSW Platform</h1>
+        <p>Your unified platform for team management, DevOps automation, and AI-powered workflows.
+        Manage tasks, monitor infrastructure, orchestrate deployments, and build intelligent agents.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -351,7 +351,7 @@ with kpi_cols[2]:
     st.markdown(
         f"""
         <div class="st-metric">
-            <div class="st-metric-value" style="color: #6c5ce7;">{kpis['review']}</div>
+            <div class="st-metric-value" style="color: #8b5cf6;">{kpis['review']}</div>
             <div class="st-metric-label">In Review</div>
         </div>
         """,

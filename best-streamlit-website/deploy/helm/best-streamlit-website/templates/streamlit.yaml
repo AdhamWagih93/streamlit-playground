@@ -48,6 +48,14 @@ spec:
               value: {{ .Values.env.schedulerMcpTransport | quote }}
             - name: STREAMLIT_SCHEDULER_MCP_URL
               value: {{ .Values.env.schedulerMcpUrl | quote }}
+            {{- if .Values.env.platformDatabaseUrl }}
+            - name: DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+            - name: PLATFORM_DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+            - name: MCP_LOG_DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.streamlit | nindent 12 }}
           readinessProbe:

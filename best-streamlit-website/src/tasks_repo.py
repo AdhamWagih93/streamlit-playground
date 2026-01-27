@@ -1,8 +1,7 @@
 """Task repository abstraction using SQLAlchemy.
 
-Default storage: SQLite (data/tasks.db).
-To switch to PostgreSQL set environment variable DATABASE_URL, e.g.:
-  export DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/dbname
+Default storage: PostgreSQL.
+Override with DATABASE_URL if needed.
 
 All list-like fields (tags, comments, history) are stored as JSON text.
 This keeps the schema simple and portable. For production you may wish
@@ -81,12 +80,12 @@ def get_engine():
         return _engine
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
-        # default sqlite path relative to project root data folder
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        data_dir = os.path.join(base_dir, "data")
-        os.makedirs(data_dir, exist_ok=True)
-        db_path = os.path.join(data_dir, "tasks.db")
-        db_url = f"sqlite:///{db_path}"
+        user = os.environ.get("POSTGRES_USER", "bsw")
+        password = os.environ.get("POSTGRES_PASSWORD", "bsw")
+        host = os.environ.get("POSTGRES_HOST", "postgres")
+        port = os.environ.get("POSTGRES_PORT", "5432")
+        name = os.environ.get("POSTGRES_DB", "bsw")
+        db_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
     _engine = create_engine(db_url, future=True, echo=False)
     SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False, future=True)
     return _engine

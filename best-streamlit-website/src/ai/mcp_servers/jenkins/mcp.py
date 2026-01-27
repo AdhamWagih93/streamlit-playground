@@ -349,14 +349,10 @@ def run_stdio() -> None:
     except Exception:
         port = int(cfg.mcp_port)
 
-    sig = inspect.signature(mcp.run)
-    kwargs: Dict[str, Any] = {"transport": "http"}
-    if "host" in sig.parameters:
-        kwargs["host"] = host
-    if "port" in sig.parameters:
-        kwargs["port"] = port
-
-    mcp.run(**kwargs)
+    try:
+        mcp.run(transport="http", host=host, port=port)
+    except TypeError:
+        mcp.run(transport="http")
 
 
 if __name__ == "__main__":

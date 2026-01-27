@@ -12,6 +12,16 @@ from src.ai.mcp_servers.kubernetes.config import KubernetesMCPServerConfig
 from src.ai.mcp_servers.nexus.config import NexusMCPServerConfig
 
 
+def _normalise_streamable_http_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    base = raw.rstrip("/")
+    if base.endswith("/mcp"):
+        return base
+    return base + "/mcp"
+
+
 def build_target_specs() -> Dict[str, MCPServerSpec]:
     """Build MCP server specs for the scheduler runtime.
 
@@ -21,7 +31,7 @@ def build_target_specs() -> Dict[str, MCPServerSpec]:
     - Uses the same env vars as the MCP server configs (JENKINS_MCP_URL, etc.)
     - For stdio mode, launches the server modules as subprocesses.
 
-    Note: MultiServerMCPClient expects "sse" for HTTP transports.
+    Note: FastMCP HTTP transport maps to streamable-http.
     """
 
     j = JenkinsMCPServerConfig.from_env()
@@ -31,7 +41,7 @@ def build_target_specs() -> Dict[str, MCPServerSpec]:
 
     def _t(x: str) -> str:
         t = (x or "").lower().strip()
-        return "sse" if t == "http" else (t or "stdio")
+        return "streamable-http" if t == "http" else (t or "stdio")
 
     specs: Dict[str, MCPServerSpec] = {
         "jenkins": MCPServerSpec(
@@ -92,5 +102,6 @@ def build_langchain_conn(spec: MCPServerSpec) -> Dict[str, Any]:
             "env": env,
         }
 
-    # MultiServerMCPClient uses sse for http.
+    if transport == "streamable-http":
+        return {"transport": transport, "url": _normalise_streamable_http_url(str(spec.url or ""))}
     return {"transport": transport, "url": str(spec.url or "")}

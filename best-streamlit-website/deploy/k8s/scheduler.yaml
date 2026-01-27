@@ -27,7 +27,7 @@ spec:
               value: 0.0.0.0
             - name: SCHEDULER_MCP_PORT
               value: "8010"
-            # Central DB (set this in k8s; local dev defaults to SQLite)
+            # Central DB (set this in k8s)
             - name: PLATFORM_DATABASE_URL
               value: postgresql+psycopg2://platform:platform-dev-password@platform-db-pgpool:5432/platform
             # Target MCP servers (scheduler calls these to execute jobs)

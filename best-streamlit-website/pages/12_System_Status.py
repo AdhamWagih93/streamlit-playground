@@ -1,11 +1,12 @@
+import asyncio
 import streamlit as st
 import requests
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 import os
 
 from src.theme import set_theme
+from src.mcp_health import check_mcp_server_simple
 
 
 set_theme(page_title="System Status", page_icon="🔍")
@@ -143,39 +144,32 @@ def check_service_health(name: str, url: str, endpoint: str = "/health") -> dict
         }
 
 
-def check_database(db_path: str) -> dict:
-    """Check if a SQLite database is accessible."""
+def check_database(db_url: str) -> dict:
+    """Check if a database is accessible via SQLAlchemy."""
+    if not (db_url or "").strip():
+        return {
+            "status": "missing",
+            "message": "Database URL not set",
+            "tables": 0,
+        }
+
     try:
-        if not os.path.exists(db_path):
-            return {
-                "status": "missing",
-                "message": "Database file not found",
-                "size": 0,
-                "tables": 0,
-            }
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sa_inspect
 
-        # Get file size
-        size_bytes = os.path.getsize(db_path)
-        size_mb = size_bytes / (1024 * 1024)
-
-        # Try to connect and get table count
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table'")
-        table_count = cursor.fetchone()[0]
-        conn.close()
-
+        engine = create_engine(db_url, future=True, echo=False, pool_pre_ping=True)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        table_count = len(sa_inspect(engine).get_table_names())
         return {
             "status": "healthy",
             "message": "Database accessible",
-            "size": f"{size_mb:.2f} MB",
             "tables": table_count,
         }
     except Exception as e:
         return {
             "status": "error",
             "message": str(e),
-            "size": 0,
             "tables": 0,
         }
 
@@ -187,7 +181,7 @@ def get_environment_info() -> dict:
         "deployment_mode": os.getenv("DEPLOYMENT_MODE", "docker-compose"),
         "ollama_enabled": os.getenv("OLLAMA_ENABLED", "true"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "tinyllama"),
-        "database_url": os.getenv("DATABASE_URL", "sqlite:////app/data/tasks.db"),
+        "database_url": os.getenv("DATABASE_URL", "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"),
         "scheduler_url": os.getenv("SCHEDULER_MCP_URL", "http://scheduler:8010"),
     }
 
@@ -205,6 +199,7 @@ if auto_refresh:
 # Define services to check
 services = [
     {
+        "type": "http",
         "name": "Streamlit UI",
         "url": "http://localhost:8502",
         "endpoint": "/_stcore/health",
@@ -212,37 +207,42 @@ services = [
         "icon": "🌐",
     },
     {
+        "type": "mcp",
+        "id": "scheduler",
         "name": "Scheduler MCP",
-        "url": os.getenv("SCHEDULER_MCP_URL", "http://localhost:8010"),
-        "endpoint": "/health",
+        "url": os.getenv("STREAMLIT_SCHEDULER_MCP_URL", os.getenv("SCHEDULER_MCP_URL", "http://scheduler:8010")),
         "description": "Background job orchestration",
         "icon": "⏱️",
     },
     {
+        "type": "mcp",
+        "id": "docker",
         "name": "Docker MCP",
-        "url": os.getenv("DOCKER_MCP_URL", "http://localhost:8001"),
-        "endpoint": "/health",
+        "url": os.getenv("STREAMLIT_DOCKER_MCP_URL", os.getenv("DOCKER_MCP_URL", "http://docker-mcp:8000")),
         "description": "Docker container management",
         "icon": "🐳",
     },
     {
+        "type": "mcp",
+        "id": "jenkins",
         "name": "Jenkins MCP",
-        "url": os.getenv("JENKINS_MCP_URL", "http://localhost:8002"),
-        "endpoint": "/health",
+        "url": os.getenv("STREAMLIT_JENKINS_MCP_URL", os.getenv("JENKINS_MCP_URL", "http://jenkins-mcp:8000")),
         "description": "CI/CD pipeline integration",
         "icon": "🔧",
     },
     {
+        "type": "mcp",
+        "id": "kubernetes",
         "name": "Kubernetes MCP",
-        "url": os.getenv("KUBERNETES_MCP_URL", "http://localhost:8003"),
-        "endpoint": "/health",
+        "url": os.getenv("STREAMLIT_KUBERNETES_MCP_URL", os.getenv("KUBERNETES_MCP_URL", "http://kubernetes-mcp:8000")),
         "description": "K8s cluster management",
         "icon": "☸️",
     },
     {
+        "type": "mcp",
+        "id": "nexus",
         "name": "Nexus MCP",
-        "url": os.getenv("NEXUS_MCP_URL", "http://localhost:8004"),
-        "endpoint": "/health",
+        "url": os.getenv("STREAMLIT_NEXUS_MCP_URL", os.getenv("NEXUS_MCP_URL", "http://nexus-mcp:8000")),
         "description": "Artifact repository",
         "icon": "📦",
     },
@@ -251,7 +251,10 @@ services = [
 # Check all services
 service_results = []
 for service in services:
-    health = check_service_health(service["name"], service["url"], service["endpoint"])
+    if service.get("type") == "mcp":
+        health = asyncio.run(check_mcp_server_simple(service.get("id", service["name"]), service["url"], timeout=6.0))
+    else:
+        health = check_service_health(service["name"], service["url"], service.get("endpoint", "/health"))
     service_results.append({**service, **health})
 
 # Display service health in a grid
@@ -302,14 +305,22 @@ st.divider()
 st.subheader("📊 Database Status")
 
 databases = [
-    {"name": "Tasks Database", "path": "./data/tasks.db", "description": "Task management and team data"},
-    {"name": "Scheduler Database", "path": "./data/scheduler.db", "description": "Job scheduling and execution history"},
+    {
+        "name": "Tasks Database",
+        "url": os.getenv("DATABASE_URL", "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"),
+        "description": "Task management and team data",
+    },
+    {
+        "name": "Scheduler Database",
+        "url": os.getenv("PLATFORM_DATABASE_URL", os.getenv("SCHEDULER_DATABASE_URL", "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw")),
+        "description": "Job scheduling and execution history",
+    },
 ]
 
 db_cols = st.columns(2)
 for idx, db in enumerate(databases):
     with db_cols[idx % 2]:
-        db_status = check_database(db["path"])
+        db_status = check_database(db["url"])
 
         status_class = {
             "healthy": "status-healthy",
@@ -333,12 +344,8 @@ for idx, db in enumerate(databases):
                     <span class="status-badge {status_class}">{status_text}</span>
                 </div>
                 <div class="metric-row">
-                    <span class="metric-label">Path:</span>
-                    <span class="metric-value" style="font-family: monospace; font-size: 0.85rem;">{db['path']}</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">Size:</span>
-                    <span class="metric-value">{db_status.get('size', 'N/A')}</span>
+                    <span class="metric-label">URL:</span>
+                    <span class="metric-value" style="font-family: monospace; font-size: 0.85rem;">{db['url']}</span>
                 </div>
                 <div class="metric-row">
                     <span class="metric-label">Tables:</span>

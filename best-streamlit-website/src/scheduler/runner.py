@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from threading import Event
 from typing import Any, Dict, List, Optional
 
+import requests
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from src.ai.mcp_langchain_tools import invoke_tool
@@ -41,6 +42,85 @@ def _parse_args(raw: str) -> Dict[str, Any]:
         return {}
 
 
+def _normalise_mcp_http_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    base = raw.rstrip("/")
+    if base.endswith("/mcp"):
+        return base
+    return base + "/mcp"
+
+
+def _extract_sse_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    data_lines = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:"):].strip())
+    if not data_lines:
+        return {}
+    payload = "\n".join(data_lines).strip()
+    try:
+        return json.loads(payload)
+    except Exception:
+        return {}
+
+
+def _call_mcp_http_tool(url: str, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    endpoint = _normalise_mcp_http_url(url)
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    init_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "bsw-scheduler", "version": "1.0"},
+        },
+    }
+    init_resp = requests.post(endpoint, json=init_payload, headers=headers, timeout=15)
+    if init_resp.status_code >= 400:
+        return {"ok": False, "error": f"HTTP {init_resp.status_code}", "details": init_resp.text[:500]}
+    session_id = init_resp.headers.get("mcp-session-id")
+    if not session_id:
+        return {"ok": False, "error": "Missing mcp-session-id", "details": init_resp.text[:500]}
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": args},
+    }
+    resp = requests.post(
+        endpoint,
+        json=payload,
+        headers={**headers, "mcp-session-id": session_id},
+        timeout=15,
+    )
+    if resp.status_code >= 400:
+        return {"ok": False, "error": f"HTTP {resp.status_code}", "details": resp.text[:500]}
+
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        data = _extract_sse_json(resp.text) or {}
+    else:
+        try:
+            data = resp.json()
+        except Exception:
+            return {"ok": False, "error": "Invalid JSON response", "details": resp.text[:500]}
+
+    if isinstance(data, dict) and data.get("error"):
+        return {"ok": False, "error": str(data.get("error"))}
+
+    return data.get("result", {"ok": True, "result": data})
+
+
 def run_scheduler_forever(cfg: SchedulerConfig, stop_event: Event, state: SchedulerRuntimeState) -> None:
     """Blocking loop that executes due jobs on a wall-clock timer."""
 
@@ -69,16 +149,23 @@ def run_scheduler_forever(cfg: SchedulerConfig, stop_event: Event, state: Schedu
                 if spec is None:
                     raise ValueError(f"Unknown server: {job.server}")
 
-                conn = build_langchain_conn(spec)
-                client = MultiServerMCPClient(connections={job.server: conn})
-                tools = asyncio.run(client.get_tools())
+                transport = (spec.transport or "stdio").lower().strip()
+                if transport in {"http", "streamable-http"}:
+                    tools = None
+                else:
+                    conn = build_langchain_conn(spec)
+                    client = MultiServerMCPClient(connections={job.server: conn})
+                    tools = asyncio.run(client.get_tools())
 
                 args = _parse_args(job.args_json)
                 token = getattr(spec, "client_token", None)
                 if token and "_client_token" not in args:
                     args["_client_token"] = token
 
-                result = invoke_tool(list(tools or []), job.tool, args)
+                if transport in {"http", "streamable-http"}:
+                    result = _call_mcp_http_tool(str(spec.url or ""), job.tool, args)
+                else:
+                    result = invoke_tool(list(tools or []), job.tool, args)
                 if isinstance(result, dict):
                     res_dict = result
                     ok_val = bool(result.get("ok")) if "ok" in result else True

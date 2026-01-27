@@ -13,7 +13,7 @@ class SchedulerConfig:
     DB selection:
     - PLATFORM_DATABASE_URL: shared DB URL (preferred)
     - SCHEDULER_DATABASE_URL: scheduler-specific DB URL
-    - If neither is set, defaults to local SQLite at data/scheduler.db
+    - If neither is set, defaults to local Postgres connection.
 
     Loop:
     - SCHEDULER_TICK_SECONDS: how often to check for due jobs (default: 5)
@@ -26,7 +26,6 @@ class SchedulerConfig:
 
     Notes:
     - In Kubernetes, set PLATFORM_DATABASE_URL to the central Postgres cluster.
-    - In local Windows runs, omit DB URLs to use SQLite.
     """
 
     database_url: str
@@ -46,11 +45,12 @@ class SchedulerConfig:
         ).strip()
 
         if not db_url:
-            # Default sqlite path under repo-root data/.
-            repo_root = Path(__file__).resolve().parents[2]
-            data_dir = repo_root / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            db_url = f"sqlite:///{(data_dir / 'scheduler.db').as_posix()}"
+            user = os.environ.get("POSTGRES_USER", "bsw")
+            password = os.environ.get("POSTGRES_PASSWORD", "bsw")
+            host = os.environ.get("POSTGRES_HOST", "postgres")
+            port = os.environ.get("POSTGRES_PORT", "5432")
+            name = os.environ.get("POSTGRES_DB", "bsw")
+            db_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
         tick_seconds = _env_int("SCHEDULER_TICK_SECONDS", 5)
         max_jobs = _env_int("SCHEDULER_MAX_JOBS_PER_TICK", 20)

@@ -15,6 +15,25 @@ from src.admin_config import AdminConfig, load_admin_config
 from src.page_catalog import known_page_paths
 
 
+def _normalise_streamlit_transport(transport: str) -> str:
+    t = (transport or "").lower().strip()
+    if t == "http":
+        return "streamable-http"
+    return t or "streamable-http"
+
+
+def _normalise_streamlit_url(url: str, transport: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return u
+    if _normalise_streamlit_transport(transport) != "streamable-http":
+        return u
+    base = u.rstrip("/")
+    if base.endswith("/mcp"):
+        return base
+    return base + "/mcp"
+
+
 @dataclass(frozen=True)
 class StreamlitAppConfig:
     """Streamlit app configuration.
@@ -41,41 +60,49 @@ class StreamlitAppConfig:
         # while still defaulting to the same dev token as the server config.
         jenkins = JenkinsMCPServerConfig.from_env()
         streamlit_token = env_str("STREAMLIT_JENKINS_MCP_CLIENT_TOKEN", jenkins.mcp_client_token)
+        j_transport = _normalise_streamlit_transport(env_str("STREAMLIT_JENKINS_MCP_TRANSPORT", jenkins.mcp_transport))
+        j_url = _normalise_streamlit_url(env_str("STREAMLIT_JENKINS_MCP_URL", jenkins.mcp_url), j_transport)
         jenkins = JenkinsMCPServerConfig(
             base_url=jenkins.base_url,
             username=jenkins.username,
             api_token=jenkins.api_token,
             verify_ssl=jenkins.verify_ssl,
             mcp_client_token=streamlit_token,
-            mcp_transport=env_str("STREAMLIT_JENKINS_MCP_TRANSPORT", jenkins.mcp_transport),
+            mcp_transport=j_transport,
             mcp_host=jenkins.mcp_host,
             mcp_port=jenkins.mcp_port,
-            mcp_url=env_str("STREAMLIT_JENKINS_MCP_URL", jenkins.mcp_url),
+            mcp_url=j_url,
         )
 
         kubernetes = KubernetesMCPServerConfig.from_env()
+        k_transport = _normalise_streamlit_transport(env_str("STREAMLIT_KUBERNETES_MCP_TRANSPORT", kubernetes.mcp_transport))
+        k_url = _normalise_streamlit_url(env_str("STREAMLIT_KUBERNETES_MCP_URL", kubernetes.mcp_url), k_transport)
         kubernetes = KubernetesMCPServerConfig(
             kubeconfig=kubernetes.kubeconfig,
             context=kubernetes.context,
-            mcp_transport=env_str("STREAMLIT_KUBERNETES_MCP_TRANSPORT", kubernetes.mcp_transport),
+            mcp_transport=k_transport,
             mcp_host=kubernetes.mcp_host,
             mcp_port=kubernetes.mcp_port,
-            mcp_url=env_str("STREAMLIT_KUBERNETES_MCP_URL", kubernetes.mcp_url),
+            mcp_url=k_url,
         )
 
         docker = DockerMCPServerConfig.from_env()
+        d_transport = _normalise_streamlit_transport(env_str("STREAMLIT_DOCKER_MCP_TRANSPORT", docker.mcp_transport))
+        d_url = _normalise_streamlit_url(env_str("STREAMLIT_DOCKER_MCP_URL", docker.mcp_url), d_transport)
         docker = DockerMCPServerConfig(
             docker_host=docker.docker_host,
             docker_tls_verify=docker.docker_tls_verify,
             docker_cert_path=docker.docker_cert_path,
             docker_timeout_seconds=docker.docker_timeout_seconds,
-            mcp_transport=env_str("STREAMLIT_DOCKER_MCP_TRANSPORT", docker.mcp_transport),
+            mcp_transport=d_transport,
             mcp_host=docker.mcp_host,
             mcp_port=docker.mcp_port,
-            mcp_url=env_str("STREAMLIT_DOCKER_MCP_URL", docker.mcp_url),
+            mcp_url=d_url,
         )
 
         nexus = NexusMCPServerConfig.from_env()
+        n_transport = _normalise_streamlit_transport(env_str("STREAMLIT_NEXUS_MCP_TRANSPORT", nexus.mcp_transport))
+        n_url = _normalise_streamlit_url(env_str("STREAMLIT_NEXUS_MCP_URL", nexus.mcp_url), n_transport)
         nexus = NexusMCPServerConfig(
             base_url=nexus.base_url,
             username=nexus.username,
@@ -84,42 +111,48 @@ class StreamlitAppConfig:
             verify_ssl=nexus.verify_ssl,
             mcp_client_token=env_str("STREAMLIT_NEXUS_MCP_CLIENT_TOKEN", nexus.mcp_client_token or "") or None,
             allow_raw=nexus.allow_raw,
-            mcp_transport=env_str("STREAMLIT_NEXUS_MCP_TRANSPORT", nexus.mcp_transport),
+            mcp_transport=n_transport,
             mcp_host=nexus.mcp_host,
             mcp_port=nexus.mcp_port,
-            mcp_url=env_str("STREAMLIT_NEXUS_MCP_URL", nexus.mcp_url),
+            mcp_url=n_url,
         )
 
         scheduler = SchedulerMCPServerConfig.from_env()
+        s_transport = _normalise_streamlit_transport(env_str("STREAMLIT_SCHEDULER_MCP_TRANSPORT", scheduler.mcp_transport))
+        s_url = _normalise_streamlit_url(env_str("STREAMLIT_SCHEDULER_MCP_URL", scheduler.mcp_url), s_transport)
         scheduler = SchedulerMCPServerConfig(
-            mcp_transport=env_str("STREAMLIT_SCHEDULER_MCP_TRANSPORT", scheduler.mcp_transport),
-            mcp_url=env_str("STREAMLIT_SCHEDULER_MCP_URL", scheduler.mcp_url),
+            mcp_transport=s_transport,
+            mcp_url=s_url,
             mcp_host=scheduler.mcp_host,
             mcp_port=scheduler.mcp_port,
         )
 
         git = GitMCPServerConfig.from_env()
+        g_transport = _normalise_streamlit_transport(env_str("STREAMLIT_GIT_MCP_TRANSPORT", git.mcp_transport))
+        g_url = _normalise_streamlit_url(env_str("STREAMLIT_GIT_MCP_URL", git.mcp_url), g_transport)
         git = GitMCPServerConfig(
             repo_path=git.repo_path,
             default_branch=git.default_branch,
             timeout_seconds=git.timeout_seconds,
-            mcp_transport=env_str("STREAMLIT_GIT_MCP_TRANSPORT", git.mcp_transport),
+            mcp_transport=g_transport,
             mcp_host=git.mcp_host,
             mcp_port=git.mcp_port,
-            mcp_url=env_str("STREAMLIT_GIT_MCP_URL", git.mcp_url),
+            mcp_url=g_url,
         )
 
         trivy = TrivyMCPServerConfig.from_env()
+        t_transport = _normalise_streamlit_transport(env_str("STREAMLIT_TRIVY_MCP_TRANSPORT", trivy.mcp_transport))
+        t_url = _normalise_streamlit_url(env_str("STREAMLIT_TRIVY_MCP_URL", trivy.mcp_url), t_transport)
         trivy = TrivyMCPServerConfig(
             cache_dir=trivy.cache_dir,
             timeout_seconds=trivy.timeout_seconds,
             severity=trivy.severity,
             ignore_unfixed=trivy.ignore_unfixed,
             skip_db_update=trivy.skip_db_update,
-            mcp_transport=env_str("STREAMLIT_TRIVY_MCP_TRANSPORT", trivy.mcp_transport),
+            mcp_transport=t_transport,
             mcp_host=trivy.mcp_host,
             mcp_port=trivy.mcp_port,
-            mcp_url=env_str("STREAMLIT_TRIVY_MCP_URL", trivy.mcp_url),
+            mcp_url=t_url,
         )
 
         return cls(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler, git=git, trivy=trivy)

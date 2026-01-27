@@ -5,6 +5,10 @@ images:
     repository: best-streamlit-website/streamlit
     tag: local
     pullPolicy: IfNotPresent
+  postgres:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
   scheduler:
     repository: best-streamlit-website/scheduler
     tag: local
@@ -37,20 +41,20 @@ env:
   jenkinsBaseUrl: http://jenkins:8080
   jenkinsVerifySsl: "true"
   jenkinsMcpClientToken: dev-jenkins-mcp-token
-  jenkinsMcpTransport: http
-  jenkinsMcpUrl: http://jenkins-mcp:8000
+  jenkinsMcpTransport: streamable-http
+  jenkinsMcpUrl: http://jenkins-mcp:8000/mcp
 
   k8sContext: ""
-  kubernetesMcpTransport: http
-  kubernetesMcpUrl: http://kubernetes-mcp:8000
+  kubernetesMcpTransport: streamable-http
+  kubernetesMcpUrl: http://kubernetes-mcp:8000/mcp
 
-  schedulerMcpTransport: http
-  schedulerMcpUrl: http://scheduler:8010
+  schedulerMcpTransport: streamable-http
+  schedulerMcpUrl: http://scheduler:8010/mcp
 
   # Central DB for scheduler history (recommended in K8s).
   # Example:
   # platformDatabaseUrl: postgresql+psycopg2://user:pass@platform-db-pgpool:5432/platform
-  platformDatabaseUrl: ""
+  platformDatabaseUrl: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
 
 components:
   streamlit: true
@@ -60,6 +64,7 @@ components:
   agentDataGen: true
   agentJenkins: true
   agentKubernetes: true
+  postgres: true
 
 replicas:
   streamlit: 1
@@ -83,6 +88,15 @@ service:
   mcp:
     type: ClusterIP
     port: 8000
+  postgres:
+    type: ClusterIP
+    port: 5432
+
+postgres:
+  database: bsw
+  username: bsw
+  password: bsw
+  storageSize: 1Gi
 
 # Resource requests/limits (very low defaults).
 # Override these per environment (dev/minikube vs prod) as needed.
@@ -136,3 +150,10 @@ resources:
     limits:
       cpu: 30m
       memory: 128Mi
+  postgres:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 50m
+      memory: 256Mi

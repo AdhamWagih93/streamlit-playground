@@ -17,42 +17,68 @@ services:
       # Scheduler MCP connection
       - SCHEDULER_MCP_TRANSPORT=http
       - SCHEDULER_MCP_URL=http://scheduler:8010
-      - STREAMLIT_SCHEDULER_MCP_TRANSPORT=http
-      - STREAMLIT_SCHEDULER_MCP_URL=http://scheduler:8010
+      - STREAMLIT_SCHEDULER_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_SCHEDULER_MCP_URL=http://scheduler:8010/mcp
 
       # Jenkins MCP connection
       - JENKINS_MCP_TRANSPORT=http
       - JENKINS_MCP_URL=http://jenkins-mcp:8000
-      - STREAMLIT_JENKINS_MCP_TRANSPORT=http
-      - STREAMLIT_JENKINS_MCP_URL=http://jenkins-mcp:8000
+      - STREAMLIT_JENKINS_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_JENKINS_MCP_URL=http://jenkins-mcp:8000/mcp
       - JENKINS_BASE_URL=${JENKINS_BASE_URL:-http://jenkins:8080}
       - JENKINS_VERIFY_SSL=${JENKINS_VERIFY_SSL:-false}
 
       # Kubernetes MCP connection
       - KUBERNETES_MCP_TRANSPORT=http
       - KUBERNETES_MCP_URL=http://kubernetes-mcp:8000
-      - STREAMLIT_KUBERNETES_MCP_TRANSPORT=http
-      - STREAMLIT_KUBERNETES_MCP_URL=http://kubernetes-mcp:8000
+      - STREAMLIT_KUBERNETES_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_KUBERNETES_MCP_URL=http://kubernetes-mcp:8000/mcp
 
       # Docker MCP connection
       - DOCKER_MCP_TRANSPORT=http
       - DOCKER_MCP_URL=http://docker-mcp:8000
-      - STREAMLIT_DOCKER_MCP_TRANSPORT=http
-      - STREAMLIT_DOCKER_MCP_URL=http://docker-mcp:8000
+      - STREAMLIT_DOCKER_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_DOCKER_MCP_URL=http://docker-mcp:8000/mcp
 
       # Nexus MCP connection (optional)
       - NEXUS_MCP_TRANSPORT=http
       - NEXUS_MCP_URL=http://nexus-mcp:8000
-      - STREAMLIT_NEXUS_MCP_TRANSPORT=http
-      - STREAMLIT_NEXUS_MCP_URL=http://nexus-mcp:8000
+      - STREAMLIT_NEXUS_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_NEXUS_MCP_URL=http://nexus-mcp:8000/mcp
+
+      # Git MCP connection
+      - GIT_MCP_TRANSPORT=http
+      - GIT_MCP_URL=http://git-mcp:8000
+      - STREAMLIT_GIT_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_GIT_MCP_URL=http://git-mcp:8000/mcp
+
+      # Trivy MCP connection
+      - TRIVY_MCP_TRANSPORT=http
+      - TRIVY_MCP_URL=http://trivy-mcp:8000
+      - STREAMLIT_TRIVY_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_TRIVY_MCP_URL=http://trivy-mcp:8000/mcp
+
+      # Playwright MCP connection
+      - PLAYWRIGHT_MCP_TRANSPORT=http
+      - PLAYWRIGHT_MCP_URL=http://playwright-mcp:8000
+      - STREAMLIT_PLAYWRIGHT_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_PLAYWRIGHT_MCP_URL=http://playwright-mcp:8000/mcp
+
+      # WebSearch MCP connection
+      - WEBSEARCH_MCP_TRANSPORT=http
+      - WEBSEARCH_MCP_URL=http://websearch-mcp:8000
+      - STREAMLIT_WEBSEARCH_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_WEBSEARCH_MCP_URL=http://websearch-mcp:8000/mcp
 
       # Ollama configuration
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-tinyllama}
       - OLLAMA_ENABLED=${OLLAMA_ENABLED:-true}
 
-      # Database configuration (SQLite for local dev)
-      - DATABASE_URL=sqlite:////app/data/tasks.db
+      # Database configuration (PostgreSQL)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
+      - PLATFORM_DATABASE_URL=${PLATFORM_DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
+      - MCP_LOG_DATABASE_URL=${MCP_LOG_DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
     volumes:
       # Hot-reload support: mount source code
       - ./best-streamlit-website:/app:cached
@@ -61,6 +87,7 @@ services:
     depends_on:
       - scheduler
       - docker-mcp
+      - postgres
     mem_limit: 512m
     cpus: 0.5
     restart: unless-stopped
@@ -88,9 +115,11 @@ services:
       - SCHEDULER_TICK_SECONDS=${SCHEDULER_TICK_SECONDS:-5}
       - SCHEDULER_MAX_JOBS_PER_TICK=${SCHEDULER_MAX_JOBS_PER_TICK:-20}
       - SCHEDULER_BOOTSTRAP_JOBS=${SCHEDULER_BOOTSTRAP_JOBS:-true}
+      - SCHEDULER_BOOTSTRAP_ALLOW_SHARED=${SCHEDULER_BOOTSTRAP_ALLOW_SHARED:-true}
 
       # Database configuration
-      - SCHEDULER_DATABASE_URL=sqlite:////app/data/scheduler.db
+      - SCHEDULER_DATABASE_URL=${SCHEDULER_DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
+      - PLATFORM_DATABASE_URL=${PLATFORM_DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
 
       # MCP server connections for scheduled jobs
       - JENKINS_MCP_TRANSPORT=http
@@ -115,6 +144,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    networks:
+      - bsw-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: bsw-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-bsw}
+      - POSTGRES_USER=${POSTGRES_USER:-bsw}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bsw}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    mem_limit: 256m
+    cpus: 0.2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - bsw-network
 
@@ -255,6 +306,142 @@ services:
     profiles:
       - full  # Only start with --profile full
 
+  git-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-git/Dockerfile
+    container_name: bsw-git-mcp
+    ports:
+      - "8005:8000"
+    environment:
+      # MCP server configuration
+      - GIT_MCP_TRANSPORT=http
+      - GIT_MCP_HOST=0.0.0.0
+      - GIT_MCP_PORT=8000
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    volumes:
+      # Mount workspace for git operations (configurable)
+      - ${GIT_WORKSPACE:-./data/repos}:/repos:cached
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 128m
+    cpus: 0.1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  trivy-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-trivy/Dockerfile
+    container_name: bsw-trivy-mcp
+    ports:
+      - "8006:8000"
+    environment:
+      # MCP server configuration
+      - TRIVY_MCP_TRANSPORT=http
+      - TRIVY_MCP_HOST=0.0.0.0
+      - TRIVY_MCP_PORT=8000
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      # Trivy configuration
+      - TRIVY_SEVERITY=${TRIVY_SEVERITY:-CRITICAL,HIGH,MEDIUM,LOW}
+      - TRIVY_SKIP_DB_UPDATE=${TRIVY_SKIP_DB_UPDATE:-false}
+    volumes:
+      # Trivy cache for vulnerability database
+      - trivy-cache:/root/.cache/trivy
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 512m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  playwright-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-playwright/Dockerfile
+    container_name: bsw-playwright-mcp
+    ports:
+      - "8007:8000"
+    environment:
+      # MCP server configuration
+      - PLAYWRIGHT_MCP_TRANSPORT=http
+      - PLAYWRIGHT_MCP_HOST=0.0.0.0
+      - PLAYWRIGHT_MCP_PORT=8000
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      # Playwright configuration
+      - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-true}
+      - PLAYWRIGHT_BROWSER=${PLAYWRIGHT_BROWSER:-chromium}
+    volumes:
+      # Screenshots output directory
+      - ./data/playwright:/tmp/playwright
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 512m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  websearch-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-websearch/Dockerfile
+    container_name: bsw-websearch-mcp
+    ports:
+      - "8008:8000"
+    environment:
+      # MCP server configuration
+      - WEBSEARCH_MCP_TRANSPORT=http
+      - WEBSEARCH_MCP_HOST=0.0.0.0
+      - WEBSEARCH_MCP_PORT=8000
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      # WebSearch configuration
+      - WEBSEARCH_MAX_RESULTS=${WEBSEARCH_MAX_RESULTS:-10}
+      - WEBSEARCH_REGION=${WEBSEARCH_REGION:-wt-wt}
+      - WEBSEARCH_SAFESEARCH=${WEBSEARCH_SAFESEARCH:-moderate}
+    volumes:
+      # Hot-reload support
+      - ./best-streamlit-website/src:/app/src:cached
+    mem_limit: 128m
+    cpus: 0.1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
   # =============================================================================
   # AI Services (Optional)
   # =============================================================================
@@ -262,25 +449,34 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: bsw-ollama
+    restart: unless-stopped
     ports:
       - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
     environment:
-      - OLLAMA_MODELS=${OLLAMA_MODEL:-tinyllama}
-    mem_limit: 1024m
-    cpus: 1.0
-    restart: unless-stopped
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_NUM_CTX=32768
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    networks:
-      - bsw-network
+      # Query tags endpoint; it's stable once server is ready
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4096MiB
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     profiles:
-      - ai  # Only start with --profile ai
+      - notai  # Only start with --profile ai
 
 # =============================================================================
 # Networks
@@ -298,3 +494,7 @@ networks:
 volumes:
   ollama-data:
     name: bsw-ollama-data
+  trivy-cache:
+    name: bsw-trivy-cache
+  postgres-data:
+    name: bsw-postgres-data
