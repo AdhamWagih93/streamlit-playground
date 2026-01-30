@@ -15,7 +15,7 @@ class DataGenAgentConfig:
     temperature: float
     enabled: bool  # Whether Ollama is enabled
 
-    DEFAULT_BASE_URL: str = "http://localhost:11434"
+    DEFAULT_BASE_URL: str = "http://ollama:11434"
     DEFAULT_MODEL: str = "tinyllama"  # Changed to lightweight model
     DEFAULT_TEMPERATURE: float = 0.0
     DEFAULT_ENABLED: bool = True

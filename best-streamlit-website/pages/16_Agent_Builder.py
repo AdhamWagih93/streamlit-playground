@@ -1,6 +1,7 @@
 """Dynamic Agent Builder - Create and chat with custom multi-MCP agents."""
 
 import uuid
+import os
 
 import streamlit as st
 from typing import Any, Dict, List
@@ -205,7 +206,7 @@ with st.sidebar:
 
     ollama_url = st.text_input(
         "Ollama URL",
-        value=st.session_state.get("_ollama_url", "http://localhost:11434"),
+        value=st.session_state.get("_ollama_url", os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")),
         help="URL of your Ollama server",
     )
     st.session_state["_ollama_url"] = ollama_url

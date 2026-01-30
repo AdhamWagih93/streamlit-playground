@@ -22,9 +22,12 @@ class WebSearchMCPServerConfig:
     - WEBSEARCH_MCP_PORT
     - WEBSEARCH_MCP_URL: URL used by remote clients (when transport != stdio)
 
+    Tavily configuration:
+    - TAVILY_API_KEY: required for Tavily search.
+
     Notes:
-    - Uses DuckDuckGo for web searches (no API key required).
-    - Supports text search, news search, and image search.
+    - Uses Tavily for web searches (API key required).
+    - Supports text search and news search; image search is supported when the Tavily API returns images.
     """
 
     max_results: int

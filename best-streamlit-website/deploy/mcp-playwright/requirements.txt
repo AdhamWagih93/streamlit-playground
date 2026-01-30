@@ -1,2 +1,3 @@
 fastmcp<3
 playwright
+py-key-value-aio[redis]

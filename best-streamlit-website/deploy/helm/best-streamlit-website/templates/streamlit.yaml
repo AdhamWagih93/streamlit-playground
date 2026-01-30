@@ -24,6 +24,8 @@ spec:
           ports:
             - containerPort: 8501
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
             - name: OLLAMA_BASE_URL
               value: {{ .Values.env.ollamaBaseUrl | quote }}
             - name: OLLAMA_MODEL

@@ -1,0 +1,1 @@
+"""Git MCP prompts package."""

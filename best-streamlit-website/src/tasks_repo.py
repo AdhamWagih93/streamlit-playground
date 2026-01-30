@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from sqlalchemy import (
-    create_engine, Column, String, Text, Float, select
+    create_engine, Column, String, Text, Float, select, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -137,10 +137,8 @@ def ensure_default_team():
     engine = get_engine()
     with engine.begin() as conn:
         try:
-            if engine.url.get_backend_name().startswith('sqlite'):
-                conn.exec_driver_sql("UPDATE tasks SET team = :team WHERE team IS NULL OR team = ''", {"team": DEFAULT_TEAM})
-            else:
-                conn.exec_driver_sql("UPDATE tasks SET team = :team WHERE team IS NULL OR team = ''", {"team": DEFAULT_TEAM})
+            stmt = text("UPDATE tasks SET team = :team WHERE team IS NULL OR team = ''")
+            conn.execute(stmt, {"team": DEFAULT_TEAM})
         except Exception:
             pass
 

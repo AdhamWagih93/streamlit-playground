@@ -1,0 +1,1 @@
+"""Docker MCP resources package."""

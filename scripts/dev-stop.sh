@@ -36,7 +36,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
 export COMPOSE_PROJECT_NAME="bsw"
-COMPOSE_CMD="docker-compose -f docker-compose.yml -f docker-compose.dev.yml"
+COMPOSE_CMD="podman compose -f docker-compose.yml -f docker-compose.dev.yml"
 
 if [ "$REMOVE" = true ]; then
     echo -e "${YELLOW}Stopping and removing containers...${NC}"

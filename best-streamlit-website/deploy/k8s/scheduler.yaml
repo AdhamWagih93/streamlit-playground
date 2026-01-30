@@ -21,6 +21,8 @@ spec:
           ports:
             - containerPort: 8010
           env:
+            - name: TZ
+              value: "Africa/Cairo"
             - name: SCHEDULER_MCP_TRANSPORT
               value: http
             - name: SCHEDULER_MCP_HOST

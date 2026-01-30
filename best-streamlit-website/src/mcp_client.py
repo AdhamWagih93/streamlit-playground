@@ -26,7 +26,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-import streamlit as st
+
+try:
+    import streamlit as st
+except Exception:  # pragma: no cover
+    st = None  # type: ignore[assignment]
 
 
 def _mcp_protocol_version() -> str:
@@ -105,6 +109,7 @@ MCP_SERVER_ENV_VARS = {
     "trivy": "STREAMLIT_TRIVY_MCP_URL",
     "playwright": "STREAMLIT_PLAYWRIGHT_MCP_URL",
     "websearch": "STREAMLIT_WEBSEARCH_MCP_URL",
+    "local": "STREAMLIT_LOCAL_MCP_URL",
 }
 
 # Default URLs for each server (used when env var not set)
@@ -118,6 +123,7 @@ MCP_SERVER_DEFAULTS = {
     "trivy": "http://trivy-mcp:8000",
     "playwright": "http://playwright-mcp:8000",
     "websearch": "http://websearch-mcp:8000",
+    "local": "http://local-mcp:8000",
 }
 
 
@@ -137,6 +143,7 @@ def get_server_url(server_name: str) -> str:
             "nexus": cfg.nexus.mcp_url,
             "git": cfg.git.mcp_url,
             "trivy": cfg.trivy.mcp_url,
+            "local": getattr(cfg, "local", None),
             "playwright": getattr(cfg, "playwright", None),
             "websearch": getattr(cfg, "websearch", None),
         }
@@ -171,6 +178,8 @@ class MCPClient:
         self.config = config
         self._session_id: Optional[str] = None
         self._tools_cache: Optional[List[Dict[str, Any]]] = None
+        self._prompts_cache: Optional[List[Dict[str, Any]]] = None
+        self._resources_cache: Optional[List[Dict[str, Any]]] = None
         self._initialized = False
         self._logging_initialized = False
 
@@ -347,6 +356,115 @@ class MCPClient:
             return tools
 
         return []
+
+    def list_prompts(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """List available prompts from the MCP server.
+
+        Args:
+            force_refresh: If True, refresh the prompts cache
+
+        Returns:
+            List of prompt definitions
+        """
+        if self._prompts_cache is not None and not force_refresh:
+            return self._prompts_cache
+
+        if not self._initialized:
+            success, _ = self.initialize()
+            if not success:
+                return []
+
+        success, response = self._make_request("prompts/list", {}, request_id=20)
+        if not success:
+            return []
+
+        if isinstance(response, dict) and response.get("error"):
+            return []
+
+        result = response.get("result", response)
+        prompts = result.get("prompts", [])
+
+        if isinstance(prompts, list):
+            self._prompts_cache = prompts
+            return prompts
+
+        return []
+
+    def get_prompt(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Fetch a rendered prompt from the MCP server.
+
+        Args:
+            name: Prompt name
+            arguments: Prompt arguments
+
+        Returns:
+            Prompt payload (may include messages/content depending on server)
+        """
+        if not self._initialized:
+            success, init_response = self.initialize()
+            if not success:
+                return {"ok": False, "error": f"Failed to initialize: {init_response.get('error')}"}
+
+        success, response = self._make_request(
+            "prompts/get",
+            {"name": name, "arguments": arguments or {}},
+            request_id=21,
+        )
+
+        if not success:
+            return {"ok": False, "error": response.get("error", "Unknown error")}
+
+        if isinstance(response, dict) and response.get("error"):
+            err = response.get("error")
+            return {"ok": False, "error": err}
+
+        result = response.get("result", response)
+        if isinstance(result, dict) and "ok" not in result:
+            result["ok"] = True
+        return result if isinstance(result, dict) else {"ok": True, "result": result}
+
+    def list_resources(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """List available resources from the MCP server."""
+        if self._resources_cache is not None and not force_refresh:
+            return self._resources_cache
+
+        if not self._initialized:
+            success, _ = self.initialize()
+            if not success:
+                return []
+
+        success, response = self._make_request("resources/list", {}, request_id=30)
+        if not success:
+            return []
+
+        if isinstance(response, dict) and response.get("error"):
+            return []
+
+        result = response.get("result", response)
+        resources = result.get("resources", [])
+        if isinstance(resources, list):
+            self._resources_cache = resources
+            return resources
+        return []
+
+    def read_resource(self, uri: str) -> Dict[str, Any]:
+        """Read a resource by URI from the MCP server."""
+        if not self._initialized:
+            success, init_response = self.initialize()
+            if not success:
+                return {"ok": False, "error": f"Failed to initialize: {init_response.get('error')}"}
+
+        success, response = self._make_request("resources/read", {"uri": uri}, request_id=31)
+        if not success:
+            return {"ok": False, "error": response.get("error", "Unknown error")}
+
+        if isinstance(response, dict) and response.get("error"):
+            return {"ok": False, "error": response.get("error")}
+
+        result = response.get("result", response)
+        if isinstance(result, dict) and "ok" not in result:
+            result["ok"] = True
+        return result if isinstance(result, dict) else {"ok": True, "result": result}
 
     def _normalize_tool_name(self, name: str) -> str:
         return (name or "").strip().lower().replace("-", "_")
@@ -581,19 +699,40 @@ class MCPClient:
             }
 
         tools = self.list_tools()
+        prompts = self.list_prompts(force_refresh=False)
+        resources = self.list_resources(force_refresh=False)
         response_time = int((datetime.now() - started).total_seconds() * 1000)
 
         return {
             "ok": True,
             "status": "healthy",
-            "message": f"{len(tools)} tools available",
+            "message": f"{len(tools)} tools, {len(prompts)} prompts, {len(resources)} resources",
             "tool_count": len(tools),
+            "prompt_count": len(prompts),
+            "resource_count": len(resources),
             "response_time_ms": response_time,
         }
 
 
 # Session state cache for MCP clients
 _CLIENT_CACHE_KEY = "_mcp_clients_cache"
+
+# Fallback (non-Streamlit) cache
+_CLIENT_CACHE_FALLBACK: Dict[str, "MCPClient"] = {}
+
+
+def _get_client_cache() -> Dict[str, "MCPClient"]:
+    if st is not None:
+        try:
+            if _CLIENT_CACHE_KEY not in st.session_state:
+                st.session_state[_CLIENT_CACHE_KEY] = {}
+            cache = st.session_state[_CLIENT_CACHE_KEY]
+            if isinstance(cache, dict):
+                return cache
+        except Exception:
+            pass
+
+    return _CLIENT_CACHE_FALLBACK
 
 
 def get_mcp_client(
@@ -616,10 +755,7 @@ def get_mcp_client(
     Returns:
         MCPClient instance
     """
-    if _CLIENT_CACHE_KEY not in st.session_state:
-        st.session_state[_CLIENT_CACHE_KEY] = {}
-
-    cache = st.session_state[_CLIENT_CACHE_KEY]
+    cache = _get_client_cache()
 
     # Resolve URL
     resolved_url = url or get_server_url(server_name)
@@ -630,14 +766,15 @@ def get_mcp_client(
 
     inferred_source = source
     if inferred_source is None:
-        try:
-            from streamlit.runtime.scriptrunner import get_script_run_ctx
+        if st is not None:
+            try:
+                from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-            ctx = get_script_run_ctx()
-            if ctx and getattr(ctx, "script_path", None):
-                inferred_source = os.path.basename(ctx.script_path)
-        except Exception:
-            inferred_source = None
+                ctx = get_script_run_ctx()
+                if ctx and getattr(ctx, "script_path", None):
+                    inferred_source = os.path.basename(ctx.script_path)
+            except Exception:
+                inferred_source = None
 
     config = MCPServerConfig(
         name=server_name,

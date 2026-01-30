@@ -5,7 +5,8 @@ param(
     [switch]$WithAI,      # Include Ollama service
     [switch]$WithTools,   # Include development tools (DB admin)
     [switch]$Full,        # Include all optional services
-    [switch]$Detach,      # Run in background
+    [switch]$Detach,      # Run in background (deprecated: default is detached)
+    [switch]$Foreground,  # Run attached (stream logs in terminal)
     [switch]$Build        # Force rebuild images
 )
 
@@ -74,7 +75,16 @@ if ($profiles.Count -gt 0) {
 # Build the command
 $cmdArgs = @("up")
 
-if ($Detach) {
+# Default to detached unless explicitly asked to run in the foreground.
+$runDetached = $true
+if ($Foreground) {
+    $runDetached = $false
+}
+if ($PSBoundParameters.ContainsKey('Detach') -and $Detach) {
+    $runDetached = $true
+}
+
+if ($runDetached) {
     $cmdArgs += "-d"
 }
 
@@ -97,11 +107,13 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "=====================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "Access the application at:" -ForegroundColor Cyan
-    Write-Host "  Streamlit UI:     http://localhost:8501" -ForegroundColor White
+    Write-Host "  Streamlit UI:     http://localhost:8502" -ForegroundColor White
+    Write-Host "  Chainlit Agent Lab: http://localhost:8503" -ForegroundColor White
     Write-Host "  Scheduler MCP:    http://localhost:8010" -ForegroundColor White
     Write-Host "  Docker MCP:       http://localhost:8001" -ForegroundColor White
     Write-Host "  Jenkins MCP:      http://localhost:8002" -ForegroundColor White
     Write-Host "  Kubernetes MCP:   http://localhost:8003" -ForegroundColor White
+    Write-Host "  Local MCP:        http://localhost:8009" -ForegroundColor White
 
     if ($WithTools -or $Full) {
         Write-Host "  DB Admin:         http://localhost:8090" -ForegroundColor White
@@ -115,6 +127,8 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "Useful commands:" -ForegroundColor Cyan
     Write-Host "  View logs:        .\scripts\dev-logs.ps1" -ForegroundColor Gray
     Write-Host "  Stop services:    .\scripts\dev-stop.ps1" -ForegroundColor Gray
+    Write-Host "  Restart services: .\scripts\dev-restart.ps1" -ForegroundColor Gray
+    Write-Host "  Deploy changes:   .\scripts\dev-deploy.ps1" -ForegroundColor Gray
     Write-Host "  Reset data:       .\scripts\dev-reset.ps1" -ForegroundColor Gray
 } else {
     Write-Host ""

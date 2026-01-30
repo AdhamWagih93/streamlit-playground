@@ -1,0 +1,74 @@
+{{- if .Values.components.chainlitAgentLab }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chainlit-agent-lab
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.chainlitAgentLab }}
+  selector:
+    matchLabels:
+      app: chainlit-agent-lab
+  template:
+    metadata:
+      labels:
+        app: chainlit-agent-lab
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: chainlit-agent-lab
+          image: {{ .Values.images.chainlitAgentLab.repository }}:{{ .Values.images.chainlitAgentLab.tag }}
+          imagePullPolicy: {{ .Values.images.chainlitAgentLab.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.env.ollamaBaseUrl | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.env.ollamaModel | quote }}
+
+            # MCP URLs (reuse the same env as StreamlitAppConfig expects)
+            - name: STREAMLIT_JENKINS_MCP_TRANSPORT
+              value: {{ .Values.env.jenkinsMcpTransport | quote }}
+            - name: STREAMLIT_JENKINS_MCP_URL
+              value: {{ .Values.env.jenkinsMcpUrl | quote }}
+            - name: STREAMLIT_KUBERNETES_MCP_TRANSPORT
+              value: {{ .Values.env.kubernetesMcpTransport | quote }}
+            - name: STREAMLIT_KUBERNETES_MCP_URL
+              value: {{ .Values.env.kubernetesMcpUrl | quote }}
+            - name: STREAMLIT_SCHEDULER_MCP_TRANSPORT
+              value: {{ .Values.env.schedulerMcpTransport | quote }}
+            - name: STREAMLIT_SCHEDULER_MCP_URL
+              value: {{ .Values.env.schedulerMcpUrl | quote }}
+
+            {{- if .Values.env.platformDatabaseUrl }}
+            - name: DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+            - name: PLATFORM_DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+            - name: MCP_LOG_DATABASE_URL
+              value: {{ .Values.env.platformDatabaseUrl | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources.chainlitAgentLab | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chainlit-agent-lab
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: chainlit-agent-lab
+  ports:
+    - name: http
+      port: {{ .Values.service.chainlitAgentLab.port }}
+      targetPort: 8000
+  type: {{ .Values.service.chainlitAgentLab.type }}
+{{- end }}

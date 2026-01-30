@@ -1,3 +1,4 @@
 fastmcp<3
 kubernetes
 PyYAML
+py-key-value-aio[redis]

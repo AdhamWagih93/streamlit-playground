@@ -24,6 +24,16 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
+            - name: MCP_CACHE_ENABLED
+              value: "true"
+            - name: MCP_CACHE_BACKEND
+              value: "redis"
+            - name: MCP_REDIS_HOST
+              value: {{ .Values.env.redisHost | quote }}
+            - name: MCP_REDIS_PORT
+              value: {{ .Values.env.redisPort | quote }}
             - name: JENKINS_BASE_URL
               value: {{ .Values.env.jenkinsBaseUrl | quote }}
             - name: JENKINS_VERIFY_SSL
@@ -83,6 +93,16 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
+            - name: MCP_CACHE_ENABLED
+              value: "true"
+            - name: MCP_CACHE_BACKEND
+              value: "redis"
+            - name: MCP_REDIS_HOST
+              value: {{ .Values.env.redisHost | quote }}
+            - name: MCP_REDIS_PORT
+              value: {{ .Values.env.redisPort | quote }}
             - name: K8S_CONTEXT
               value: {{ .Values.env.k8sContext | quote }}
             - name: KUBERNETES_MCP_TRANSPORT

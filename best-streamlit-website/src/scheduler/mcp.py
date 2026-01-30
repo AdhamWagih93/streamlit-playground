@@ -19,8 +19,13 @@ from src.scheduler.repo import (
 )
 from src.scheduler.runner import SchedulerRuntimeState, run_scheduler_forever
 
+from src.scheduler.prompts import register_prompts
+
 
 mcp = FastMCP("scheduler")
+
+# Prompts
+register_prompts(mcp)
 
 _STOP = Event()
 _THREAD: Optional[Thread] = None

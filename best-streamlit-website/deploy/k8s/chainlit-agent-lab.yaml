@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chainlit-agent-lab
+  namespace: best-streamlit-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chainlit-agent-lab
+  template:
+    metadata:
+      labels:
+        app: chainlit-agent-lab
+    spec:
+      containers:
+        - name: chainlit-agent-lab
+          image: best-streamlit-website/chainlit-agent-lab:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: TZ
+              value: "Africa/Cairo"
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+            - name: OLLAMA_MODEL
+              value: "qwen2.5:7b-instruct-q6_K"
+
+            # MCP endpoints (StreamlitAppConfig env convention)
+            - name: STREAMLIT_JENKINS_MCP_TRANSPORT
+              value: "streamable-http"
+            - name: STREAMLIT_JENKINS_MCP_URL
+              value: "http://jenkins-mcp:8000/mcp"
+            - name: STREAMLIT_KUBERNETES_MCP_TRANSPORT
+              value: "streamable-http"
+            - name: STREAMLIT_KUBERNETES_MCP_URL
+              value: "http://kubernetes-mcp:8000/mcp"
+            - name: STREAMLIT_SCHEDULER_MCP_TRANSPORT
+              value: "streamable-http"
+            - name: STREAMLIT_SCHEDULER_MCP_URL
+              value: "http://scheduler:8010/mcp"
+
+            - name: DATABASE_URL
+              value: "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"
+            - name: PLATFORM_DATABASE_URL
+              value: "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"
+            - name: MCP_LOG_DATABASE_URL
+              value: "postgresql+psycopg2://bsw:bsw@postgres:5432/bsw"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              cpu: 50m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chainlit-agent-lab
+  namespace: best-streamlit-website
+spec:
+  selector:
+    app: chainlit-agent-lab
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      nodePort: 30002
+  type: NodePort

@@ -16,10 +16,13 @@ docx2txt
 watchdog
 langchain
 langchain-ollama
+langgraph
 langchain-mcp-adapters
 requests
 fastmcp<3
+mcp>=1.7.1
 kubernetes
 PyYAML
 docker
 aiohttp
+langchain-text-splitters

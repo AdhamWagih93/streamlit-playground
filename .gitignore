@@ -1,0 +1,63 @@
+# --------------------------------------------------------------------------------------
+# Secrets / env files
+# --------------------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# Common secret material
+**/*secrets*.toml
+**/*secrets*.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.crt
+
+# --------------------------------------------------------------------------------------
+# Local volumes / runtime data (docker-compose mounts)
+# --------------------------------------------------------------------------------------
+# Root data/ is used as a runtime volume; do not commit.
+/data/
+
+# Streamlit/Chainlit runtime metadata
+best-streamlit-website/.streamlit/secrets.toml
+best-streamlit-website/.chainlit/
+best-streamlit-website/chainlit.md
+
+# Playwright artifacts (often screenshots/videos)
+**/playwright/
+
+# Local repos cache
+**/repos/
+
+# Local schedules cache
+**/wfh_schedules/
+
+# Databases
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# --------------------------------------------------------------------------------------
+# Python
+# --------------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+ENV/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --------------------------------------------------------------------------------------
+# Editor / tooling
+# --------------------------------------------------------------------------------------
+.vscode/mcp.json
+
+# OS
+.DS_Store
+Thumbs.db

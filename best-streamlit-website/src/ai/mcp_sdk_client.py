@@ -173,6 +173,12 @@ async def call_tool(spec: MCPServerSpec, name: str, arguments: Optional[Dict[str
     async with _open_session(spec) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
+            # Populate tool list to enable validation and avoid warnings
+            # about missing tool metadata.
+            try:
+                await session.list_tools()
+            except Exception:  # noqa: BLE001
+                pass
             res = await session.call_tool(name, arguments=args)
 
     # Try to decode JSON from returned text content for convenience.

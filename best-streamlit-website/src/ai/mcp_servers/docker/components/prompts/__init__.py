@@ -1,0 +1,1 @@
+"""Docker MCP prompts package."""

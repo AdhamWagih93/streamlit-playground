@@ -8,9 +8,16 @@ from fastmcp import FastMCP
 
 from .config import PlaywrightMCPServerConfig
 from .utils.client import PlaywrightClient
+from ..cache import configure_mcp_cache
+
+from .prompts import register_prompts
 
 
 mcp = FastMCP("playwright-mcp")
+configure_mcp_cache(mcp, server_name="playwright")
+
+# Prompts
+register_prompts(mcp)
 
 _CLIENT: Optional[PlaywrightClient] = None
 

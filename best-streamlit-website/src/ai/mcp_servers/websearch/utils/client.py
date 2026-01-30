@@ -1,13 +1,13 @@
-"""Web Search client using DuckDuckGo."""
+"""Web Search client using Tavily."""
 
 from __future__ import annotations
 
-from datetime import datetime
+import os
 from typing import Any, Dict, List, Optional
 
 
 class WebSearchClient:
-    """Client for web searches using DuckDuckGo."""
+    """Client for web searches using Tavily."""
 
     def __init__(
         self,
@@ -21,22 +21,95 @@ class WebSearchClient:
         self.safesearch = safesearch
         self.timeout_seconds = timeout_seconds
 
+    def _api_key(self) -> str:
+        return (os.environ.get("TAVILY_API_KEY") or "").strip()
+
+    def _tavily(self):
+        from tavily import TavilyClient
+
+        api_key = self._api_key()
+        if not api_key:
+            raise RuntimeError(
+                "TAVILY_API_KEY is not set. Add it to your .env and restart the websearch-mcp service."
+            )
+
+        # The official client doesn't expose a timeout parameter; if needed, we'd switch to raw requests.
+        return TavilyClient(api_key=api_key)
+
+    def _search(
+        self,
+        query: str,
+        max_results: Optional[int] = None,
+        *,
+        topic: str = "general",
+        include_answer: bool = False,
+        include_images: bool = False,
+        include_raw_content: bool = False,
+        search_depth: str = "basic",
+    ) -> Dict[str, Any]:
+        client = self._tavily()
+
+        max_res = int(max_results or self.max_results)
+        payload = client.search(
+            query=query,
+            max_results=max_res,
+            topic=topic,
+            search_depth=search_depth,
+            include_answer=include_answer,
+            include_images=include_images,
+            include_raw_content=include_raw_content,
+        )
+
+        # Normalize into our existing structure.
+        results_in = payload.get("results") or []
+        formatted: List[Dict[str, Any]] = []
+        for r in results_in:
+            if not isinstance(r, dict):
+                continue
+            formatted.append(
+                {
+                    "title": r.get("title") or "",
+                    "url": r.get("url") or "",
+                    "snippet": (r.get("content") or "")[:500],
+                    "score": r.get("score"),
+                }
+            )
+
+        out: Dict[str, Any] = {
+            "ok": True,
+            "provider": "tavily",
+            "query": query,
+            "count": len(formatted),
+            "results": formatted,
+        }
+        if "answer" in payload:
+            out["answer"] = payload.get("answer")
+        if include_images and "images" in payload:
+            out["images"] = payload.get("images")
+        return out
+
     def health_check(self) -> Dict[str, Any]:
-        """Check DuckDuckGo search availability."""
         try:
-            from duckduckgo_search import DDGS
+            # Import check
+            from tavily import TavilyClient  # noqa: F401
+
+            has_key = bool(self._api_key())
             return {
-                "ok": True,
-                "service": "DuckDuckGo",
+                "ok": has_key,
+                "service": "Tavily",
+                "has_api_key": has_key,
                 "max_results": self.max_results,
                 "region": self.region,
                 "safesearch": self.safesearch,
+                **({"message": "TAVILY_API_KEY is not set"} if not has_key else {}),
             }
         except ImportError as e:
             return {
                 "ok": False,
-                "error": f"duckduckgo-search not installed: {e}",
+                "error": f"tavily-python not installed: {e}",
             }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def search(
         self,
@@ -54,34 +127,10 @@ class WebSearchClient:
         Returns:
             Search results with title, URL, and snippet
         """
+        # Tavily does not use region; keep the parameter for backward compatibility.
+        _ = region
         try:
-            from duckduckgo_search import DDGS
-
-            max_res = max_results or self.max_results
-            reg = region or self.region
-
-            with DDGS() as ddgs:
-                results = list(ddgs.text(
-                    query,
-                    region=reg,
-                    safesearch=self.safesearch,
-                    max_results=max_res,
-                ))
-
-            formatted = []
-            for r in results:
-                formatted.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("href", r.get("link", "")),
-                    "snippet": r.get("body", r.get("snippet", ""))[:500],
-                })
-
-            return {
-                "ok": True,
-                "query": query,
-                "count": len(formatted),
-                "results": formatted,
-            }
+            return self._search(query, max_results=max_results, topic="general")
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -101,37 +150,10 @@ class WebSearchClient:
         Returns:
             News results
         """
+        # Tavily doesn't support DuckDuckGo-style timelimit; keep the parameter but ignore.
+        _ = timelimit
         try:
-            from duckduckgo_search import DDGS
-
-            max_res = max_results or self.max_results
-
-            with DDGS() as ddgs:
-                results = list(ddgs.news(
-                    query,
-                    region=self.region,
-                    safesearch=self.safesearch,
-                    timelimit=timelimit,
-                    max_results=max_res,
-                ))
-
-            formatted = []
-            for r in results:
-                formatted.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("url", r.get("link", "")),
-                    "snippet": r.get("body", r.get("excerpt", ""))[:500],
-                    "source": r.get("source", ""),
-                    "date": r.get("date", ""),
-                })
-
-            return {
-                "ok": True,
-                "query": query,
-                "count": len(formatted),
-                "timelimit": timelimit,
-                "results": formatted,
-            }
+            return self._search(query, max_results=max_results, topic="news")
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -153,38 +175,11 @@ class WebSearchClient:
         Returns:
             Image search results
         """
+        # Tavily doesn't support size/type filters like DuckDuckGo; keep parameters but ignore.
+        _ = size
+        _ = image_type
         try:
-            from duckduckgo_search import DDGS
-
-            max_res = max_results or self.max_results
-
-            with DDGS() as ddgs:
-                results = list(ddgs.images(
-                    query,
-                    region=self.region,
-                    safesearch=self.safesearch,
-                    size=size,
-                    type_image=image_type,
-                    max_results=max_res,
-                ))
-
-            formatted = []
-            for r in results:
-                formatted.append({
-                    "title": r.get("title", ""),
-                    "image_url": r.get("image", ""),
-                    "thumbnail": r.get("thumbnail", ""),
-                    "source_url": r.get("url", ""),
-                    "width": r.get("width"),
-                    "height": r.get("height"),
-                })
-
-            return {
-                "ok": True,
-                "query": query,
-                "count": len(formatted),
-                "results": formatted,
-            }
+            return self._search(query, max_results=max_results, include_images=True)
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -206,148 +201,44 @@ class WebSearchClient:
         Returns:
             Video search results
         """
-        try:
-            from duckduckgo_search import DDGS
-
-            max_res = max_results or self.max_results
-
-            with DDGS() as ddgs:
-                results = list(ddgs.videos(
-                    query,
-                    region=self.region,
-                    safesearch=self.safesearch,
-                    timelimit=timelimit,
-                    resolution=resolution,
-                    max_results=max_res,
-                ))
-
-            formatted = []
-            for r in results:
-                formatted.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("content", r.get("url", "")),
-                    "description": r.get("description", "")[:300],
-                    "publisher": r.get("publisher", ""),
-                    "duration": r.get("duration", ""),
-                    "views": r.get("statistics", {}).get("viewCount") if r.get("statistics") else None,
-                    "thumbnail": r.get("images", {}).get("large") if r.get("images") else None,
-                })
-
-            return {
-                "ok": True,
-                "query": query,
-                "count": len(formatted),
-                "results": formatted,
-            }
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        # Tavily doesn't provide a dedicated video search endpoint.
+        _ = timelimit
+        _ = resolution
+        return {
+            "ok": False,
+            "provider": "tavily",
+            "error": "Video search is not supported by the current Tavily integration.",
+        }
 
     def instant_answer(self, query: str) -> Dict[str, Any]:
-        """Get instant answer for a query.
-
-        Args:
-            query: Search query
-
-        Returns:
-            Instant answer if available
-        """
+        """Return a direct answer (when available) using Tavily's answer field."""
         try:
-            from duckduckgo_search import DDGS
-
-            with DDGS() as ddgs:
-                results = list(ddgs.answers(query))
-
-            if results:
-                answer = results[0]
-                return {
-                    "ok": True,
-                    "query": query,
-                    "answer": answer.get("text", ""),
-                    "url": answer.get("url", ""),
-                    "source": answer.get("source", ""),
-                }
-            return {
-                "ok": True,
-                "query": query,
-                "answer": None,
-                "message": "No instant answer available",
-            }
+            return self._search(query, max_results=3, include_answer=True)
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     def suggestions(self, query: str) -> Dict[str, Any]:
-        """Get search suggestions.
+        """Return suggestions for a query.
 
-        Args:
-            query: Partial search query
-
-        Returns:
-            Search suggestions
+        Tavily does not provide suggestions/autocomplete; this is kept for API compatibility.
         """
-        try:
-            from duckduckgo_search import DDGS
+        return {
+            "ok": False,
+            "provider": "tavily",
+            "error": "Suggestions are not supported by the current Tavily integration.",
+            "query": query,
+        }
 
-            with DDGS() as ddgs:
-                results = list(ddgs.suggestions(query))
+    def maps_search(self, query: str, place: Optional[str] = None, max_results: Optional[int] = None) -> Dict[str, Any]:
+        """Return map/place results.
 
-            suggestions = [r.get("phrase", r) for r in results if r]
-
-            return {
-                "ok": True,
-                "query": query,
-                "suggestions": suggestions[:10],
-            }
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-    def maps_search(
-        self,
-        query: str,
-        place: Optional[str] = None,
-        max_results: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Search for places/locations.
-
-        Args:
-            query: Search query (e.g., "restaurants", "hotels")
-            place: Location to search in (e.g., "New York")
-            max_results: Maximum number of results
-
-        Returns:
-            Places/locations results
+        Tavily does not provide maps; this is kept for API compatibility.
         """
-        try:
-            from duckduckgo_search import DDGS
-
-            max_res = max_results or self.max_results
-
-            with DDGS() as ddgs:
-                results = list(ddgs.maps(
-                    query,
-                    place=place,
-                    max_results=max_res,
-                ))
-
-            formatted = []
-            for r in results:
-                formatted.append({
-                    "title": r.get("title", ""),
-                    "address": r.get("address", ""),
-                    "phone": r.get("phone", ""),
-                    "url": r.get("url", ""),
-                    "latitude": r.get("latitude"),
-                    "longitude": r.get("longitude"),
-                    "rating": r.get("rating"),
-                    "reviews": r.get("reviews"),
-                    "category": r.get("category", ""),
-                })
-
-            return {
-                "ok": True,
-                "query": query,
-                "place": place,
-                "count": len(formatted),
-                "results": formatted,
-            }
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        _ = max_results
+        q = query if not place else f"{query} near {place}"
+        return {
+            "ok": False,
+            "provider": "tavily",
+            "error": "Maps search is not supported by the current Tavily integration.",
+            "query": q,
+        }

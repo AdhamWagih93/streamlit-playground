@@ -9,8 +9,9 @@ from src.ai.mcp_servers.docker.config import DockerMCPServerConfig
 from src.ai.mcp_servers.nexus.config import NexusMCPServerConfig
 from src.ai.mcp_servers.scheduler.config import SchedulerMCPServerConfig
 from src.ai.mcp_servers.git.config import GitMCPServerConfig
+from src.ai.mcp_servers.local.config import LocalMCPServerConfig
 from src.ai.mcp_servers.trivy.config import TrivyMCPServerConfig
-from src.config_utils import env_str
+from src.config_utils import env_bool, env_str
 from src.admin_config import AdminConfig, load_admin_config
 from src.page_catalog import known_page_paths
 
@@ -53,6 +54,7 @@ class StreamlitAppConfig:
     scheduler: SchedulerMCPServerConfig
     git: GitMCPServerConfig
     trivy: TrivyMCPServerConfig
+    local: LocalMCPServerConfig
 
     @classmethod
     def from_env(cls) -> "StreamlitAppConfig":
@@ -155,7 +157,19 @@ class StreamlitAppConfig:
             mcp_url=t_url,
         )
 
-        return cls(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler, git=git, trivy=trivy)
+        local = LocalMCPServerConfig.from_env()
+        l_transport = _normalise_streamlit_transport(env_str("STREAMLIT_LOCAL_MCP_TRANSPORT", local.mcp_transport))
+        l_url = _normalise_streamlit_url(env_str("STREAMLIT_LOCAL_MCP_URL", local.mcp_url), l_transport)
+        local = LocalMCPServerConfig(
+            root_path=env_str("STREAMLIT_LOCAL_MCP_ROOT", local.root_path),
+            allow_write=env_bool("STREAMLIT_LOCAL_MCP_ALLOW_WRITE", local.allow_write),
+            mcp_transport=l_transport,
+            mcp_host=local.mcp_host,
+            mcp_port=local.mcp_port,
+            mcp_url=l_url,
+        )
+
+        return cls(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler, git=git, trivy=trivy, local=local)
 
     @classmethod
     def load(cls) -> "StreamlitAppConfig":
@@ -186,6 +200,9 @@ class StreamlitAppConfig:
 
     def build_trivy_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         return {**base_env, **self.trivy.to_env_overrides()}
+
+    def build_local_mcp_subprocess_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
+        return {**base_env, **self.local.to_env_overrides()}
 
 
 def _apply_admin_overrides(cfg: StreamlitAppConfig, admin: AdminConfig) -> StreamlitAppConfig:
@@ -309,7 +326,27 @@ def _apply_admin_overrides(cfg: StreamlitAppConfig, admin: AdminConfig) -> Strea
         mcp_url=str(_get("trivy", "url") or cfg.trivy.mcp_url),
     )
 
-    return StreamlitAppConfig(jenkins=jenkins, kubernetes=kubernetes, docker=docker, nexus=nexus, scheduler=scheduler, git=git, trivy=trivy)
+    local_allow_write = _get("local", "allow_write")
+    local_allow_write_b = bool(local_allow_write) if local_allow_write is not None else cfg.local.allow_write
+    local = LocalMCPServerConfig(
+        root_path=str(_get("local", "root_path") or cfg.local.root_path),
+        allow_write=local_allow_write_b,
+        mcp_transport=str(_get("local", "transport") or cfg.local.mcp_transport),
+        mcp_host=cfg.local.mcp_host,
+        mcp_port=cfg.local.mcp_port,
+        mcp_url=str(_get("local", "url") or cfg.local.mcp_url),
+    )
+
+    return StreamlitAppConfig(
+        jenkins=jenkins,
+        kubernetes=kubernetes,
+        docker=docker,
+        nexus=nexus,
+        scheduler=scheduler,
+        git=git,
+        trivy=trivy,
+        local=local,
+    )
 
 
 def get_app_config() -> StreamlitAppConfig:

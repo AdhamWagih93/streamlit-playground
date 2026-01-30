@@ -2,11 +2,26 @@
 # Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
 
 services:
+  chainlit-agent-lab:
+    environment:
+      - TZ=Africa/Cairo
+      - DEBUG=false
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct-q6_K}
+    volumes:
+      - ./data:/app/data:delegated
+    mem_limit: 1024m
+    cpus: 1.0
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+
   streamlit:
     build:
       target: production
       no_cache: false
     environment:
+      - TZ=Africa/Cairo
       # Production database (PostgreSQL)
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
       - PLATFORM_DATABASE_URL=${PLATFORM_DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
@@ -34,6 +49,7 @@ services:
 
   scheduler:
     environment:
+      - TZ=Africa/Cairo
       # Production database
       - SCHEDULER_DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
       - PLATFORM_DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw_password@postgres:5432/bsw}
@@ -55,6 +71,11 @@ services:
 
   docker-mcp:
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - LOG_LEVEL=INFO
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
@@ -65,6 +86,11 @@ services:
 
   jenkins-mcp:
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - LOG_LEVEL=INFO
       - JENKINS_VERIFY_SSL=true
       - MCP_TRANSPORT=http
@@ -76,6 +102,11 @@ services:
 
   kubernetes-mcp:
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - LOG_LEVEL=INFO
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
@@ -84,11 +115,31 @@ services:
     cpus: 0.5
     restart: always
 
+  local-mcp:
+    environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+      - LOCAL_MCP_ROOT=/app
+      - LOCAL_MCP_ALLOW_WRITE=false
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    volumes:
+      - ./data:/app/data:delegated
+    mem_limit: 256m
+    cpus: 0.25
+    restart: always
+
   # PostgreSQL for production
   postgres:
     image: postgres:16-alpine
     container_name: bsw-postgres
     environment:
+      - TZ=Africa/Cairo
       - POSTGRES_USER=bsw
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bsw_password}
       - POSTGRES_DB=bsw
@@ -113,6 +164,8 @@ services:
     image: redis:7-alpine
     container_name: bsw-redis
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    environment:
+      - TZ=Africa/Cairo
     volumes:
       - redis-data:/data
     ports:

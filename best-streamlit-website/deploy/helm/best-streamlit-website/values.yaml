@@ -1,9 +1,17 @@
 namespace: best-streamlit-website
 
 images:
+  chainlitAgentLab:
+    repository: best-streamlit-website/chainlit-agent-lab
+    tag: local
+    pullPolicy: IfNotPresent
   streamlit:
     repository: best-streamlit-website/streamlit
     tag: local
+    pullPolicy: IfNotPresent
+  redis:
+    repository: redis
+    tag: 7-alpine
     pullPolicy: IfNotPresent
   postgres:
     repository: postgres
@@ -35,6 +43,9 @@ images:
     pullPolicy: IfNotPresent
 
 env:
+  timezone: Africa/Cairo
+  redisHost: redis
+  redisPort: "6379"
   ollamaBaseUrl: http://ollama:11434
   ollamaModel: qwen2.5:7b-instruct-q6_K
 
@@ -57,6 +68,7 @@ env:
   platformDatabaseUrl: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
 
 components:
+  chainlitAgentLab: true
   streamlit: true
   scheduler: false
   mcpJenkins: true
@@ -65,8 +77,10 @@ components:
   agentJenkins: true
   agentKubernetes: true
   postgres: true
+  redis: true
 
 replicas:
+  chainlitAgentLab: 1
   streamlit: 1
   scheduler: 1
   mcpJenkins: 1
@@ -76,6 +90,9 @@ replicas:
   agentKubernetes: 1
 
 service:
+  chainlitAgentLab:
+    type: ClusterIP
+    port: 80
   streamlit:
     type: ClusterIP
     port: 80
@@ -91,6 +108,9 @@ service:
   postgres:
     type: ClusterIP
     port: 5432
+  redis:
+    type: ClusterIP
+    port: 6379
 
 postgres:
   database: bsw
@@ -101,6 +121,13 @@ postgres:
 # Resource requests/limits (very low defaults).
 # Override these per environment (dev/minikube vs prod) as needed.
 resources:
+  chainlitAgentLab:
+    requests:
+      cpu: 10m
+      memory: 128Mi
+    limits:
+      cpu: 50m
+      memory: 256Mi
   streamlit:
     requests:
       cpu: 10m
@@ -157,3 +184,10 @@ resources:
     limits:
       cpu: 50m
       memory: 256Mi
+  redis:
+    requests:
+      cpu: 5m
+      memory: 64Mi
+    limits:
+      cpu: 30m
+      memory: 128Mi

@@ -9,6 +9,11 @@ services:
     ports:
       - "8002:8002"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - SONARQUBE_BASE_URL=${SONARQUBE_BASE_URL:-http://sonarqube:9000}
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN}
       - SONARQUBE_USERNAME=${SONARQUBE_USERNAME}
@@ -36,11 +41,28 @@ services:
     ports:
       - "9000:9000"
     environment:
+      - TZ=Africa/Cairo
       - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    depends_on:
+      - redis
     volumes:
       - sonarqube_data:/opt/sonarqube/data
       - sonarqube_logs:/opt/sonarqube/logs
       - sonarqube_extensions:/opt/sonarqube/extensions
+    networks:
+      - sonarqube-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sonarqube-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    environment:
+      - TZ=Africa/Cairo
+    volumes:
+      - redis-data:/data
     networks:
       - sonarqube-network
     restart: unless-stopped
@@ -53,3 +75,4 @@ volumes:
   sonarqube_data:
   sonarqube_logs:
   sonarqube_extensions:
+  redis-data:

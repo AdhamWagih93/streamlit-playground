@@ -7,6 +7,7 @@ from multiple MCP servers dynamically at runtime.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import sys
 from dataclasses import dataclass, field
@@ -17,7 +18,36 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_ollama.chat_models import ChatOllama
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+try:
+    from langgraph.prebuilt import create_agent as _lg_create_agent  # type: ignore
+except Exception:  # noqa: BLE001
+    _lg_create_agent = None
+
 from langgraph.prebuilt import create_react_agent
+
+
+def _create_langgraph_agent(llm: Any, tools: List[Any], system_prompt: str) -> Any:
+    if _lg_create_agent is not None:
+        try:
+            return _lg_create_agent(llm, tools, system_prompt=system_prompt)  # type: ignore[call-arg]
+        except TypeError:
+            pass
+
+    sig = inspect.signature(create_react_agent)
+    if "state_modifier" in sig.parameters:
+        return create_react_agent(llm, tools, state_modifier=system_prompt)
+    if "prompt" in sig.parameters:
+        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                MessagesPlaceholder("messages"),
+            ]
+        )
+        return create_react_agent(llm, tools, prompt=prompt)
+
+    return create_react_agent(llm, tools)
 
 from src.mcp_log import create_logging_interceptor
 from src.ai.mcp_servers.jenkins.config import JenkinsMCPServerConfig
@@ -83,7 +113,7 @@ MCP_SERVERS = {
     },
     "websearch": {
         "name": "Web Search",
-        "description": "Search the web, news, images, videos using DuckDuckGo",
+        "description": "Search the web and news using Tavily",
         "icon": "🔍",
         "module": "src.ai.mcp_servers.websearch.mcp",
         "config_class": WebSearchMCPServerConfig,
@@ -120,7 +150,8 @@ def _get_transport(config) -> str:
     """Normalize transport type."""
     t = getattr(config, "mcp_transport", "stdio") or "stdio"
     t = t.lower().strip()
-    return "sse" if t == "http" else t
+    # FastMCP http transport speaks streamable-http on the /mcp endpoint.
+    return "streamable-http" if t == "http" else t
 
 
 def _build_connection(server_key: str, config) -> Dict[str, Any]:
@@ -159,7 +190,7 @@ def build_dynamic_agent(
     selected_servers: List[str],
     system_prompt: str = "",
     model_name: str = "llama3.2",
-    ollama_base_url: str = "http://localhost:11434",
+    ollama_base_url: str = "http://ollama:11434",
     temperature: float = 0.1,
     tool_call_events: Optional[List[ToolCallEvent]] = None,
     session_id: Optional[str] = None,
@@ -265,12 +296,7 @@ def build_dynamic_agent(
 
     final_system_prompt = system_prompt or default_system
 
-    # Create LangGraph react agent
-    agent = create_react_agent(
-        llm,
-        tools,
-        state_modifier=final_system_prompt,
-    )
+    agent = _create_langgraph_agent(llm, list(tools), final_system_prompt)
 
     return DynamicAgentRuntime(
         client=client,

@@ -295,7 +295,7 @@ def _render_mcp_servers_section(admin: AdminConfig) -> bool:
     cfg = get_app_config()
     changed = False
 
-    servers: List[str] = ["jenkins", "kubernetes", "docker", "nexus"]
+    servers: List[str] = ["jenkins", "kubernetes", "docker", "nexus", "local"]
     tabs = st.tabs([s.capitalize() for s in servers])
 
     for tab, server in zip(tabs, servers):
@@ -452,6 +452,46 @@ def _render_mcp_servers_section(admin: AdminConfig) -> bool:
                     admin.mcp_servers[server]["url"] = url.strip() or None
                     changed = True
 
+            elif server == "local":
+                st.markdown("**Overrides (non-secret)**")
+                root_path = st.text_input(
+                    "Root path",
+                    value=str(cur.get("root_path") or ""),
+                    placeholder=str(getattr(cfg.local, "root_path", "")),
+                    key="settings_local_root_path",
+                )
+                allow_write = st.toggle(
+                    "Allow write",
+                    value=_coerce_bool(cur.get("allow_write", getattr(cfg.local, "allow_write", True)), True),
+                    key="settings_local_allow_write",
+                )
+                transport = st.selectbox(
+                    "Transport",
+                    options=["http"],
+                    index=0,
+                    key="settings_local_transport",
+                )
+                url = st.text_input(
+                    "Remote MCP URL (http transport)",
+                    value=str(cur.get("url") or ""),
+                    placeholder=str(getattr(cfg.local, "mcp_url", "")),
+                    key="settings_local_url",
+                )
+
+                admin.mcp_servers.setdefault(server, {})
+                if root_path.strip() != str(cur.get("root_path") or "").strip():
+                    admin.mcp_servers[server]["root_path"] = root_path.strip() or None
+                    changed = True
+                if bool(allow_write) != _coerce_bool(cur.get("allow_write", getattr(cfg.local, "allow_write", True)), True):
+                    admin.mcp_servers[server]["allow_write"] = bool(allow_write)
+                    changed = True
+                if str(transport).strip() != str(cur.get("transport") or "").strip():
+                    admin.mcp_servers[server]["transport"] = str(transport).strip()
+                    changed = True
+                if url.strip() != str(cur.get("url") or "").strip():
+                    admin.mcp_servers[server]["url"] = url.strip() or None
+                    changed = True
+
             st.caption("Tip: clear an override field to fall back to environment config.")
 
     return changed
@@ -490,7 +530,7 @@ def _render_agents_section(admin: AdminConfig) -> bool:
         base_url = st.text_input(
             "Ollama base URL",
             value=str(cur.get("ollama_base_url") or ""),
-            placeholder="http://localhost:11434",
+            placeholder="http://ollama:11434",
             key="settings_agent_datagen_base_url",
         )
         temperature = st.slider(

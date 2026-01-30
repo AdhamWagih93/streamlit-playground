@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 WITH_AI=true
 WITH_TOOLS=false
 FULL=false
-DETACH=false
+DETACH=true
 BUILD=false
 
 while [[ $# -gt 0 ]]; do
@@ -38,13 +38,17 @@ while [[ $# -gt 0 ]]; do
             DETACH=true
             shift
             ;;
+        --foreground)
+            DETACH=false
+            shift
+            ;;
         -b|--build)
             BUILD=true
             shift
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--ai] [--tools] [--full] [-d|--detach] [-b|--build]"
+            echo "Usage: $0 [--ai] [--tools] [--full] [--foreground] [-d|--detach] [-b|--build]"
             exit 1
             ;;
     esac
@@ -134,7 +138,8 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}=====================================${NC}"
     echo ""
     echo -e "${CYAN}Access the application at:${NC}"
-    echo -e "  Streamlit UI:     http://localhost:8501"
+    echo -e "  Streamlit UI:     http://localhost:8502"
+    echo -e "  Chainlit Agent Lab: http://localhost:8503"
     echo -e "  Scheduler MCP:    http://localhost:8010"
     echo -e "  Docker MCP:       http://localhost:8001"
     echo -e "  Jenkins MCP:      http://localhost:8002"

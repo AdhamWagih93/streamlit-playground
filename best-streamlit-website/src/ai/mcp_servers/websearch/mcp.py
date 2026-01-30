@@ -8,9 +8,16 @@ from fastmcp import FastMCP
 
 from .config import WebSearchMCPServerConfig
 from .utils.client import WebSearchClient
+from ..cache import configure_mcp_cache
+
+from .prompts import register_prompts
 
 
 mcp = FastMCP("websearch-mcp")
+configure_mcp_cache(mcp, server_name="websearch")
+
+# Prompts
+register_prompts(mcp)
 
 _CLIENT: Optional[WebSearchClient] = None
 
@@ -44,7 +51,7 @@ def websearch_search(
     max_results: Optional[int] = None,
     region: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Perform a web search using DuckDuckGo.
+    """Perform a web search using Tavily.
 
     Args:
         query: Search query
@@ -61,7 +68,7 @@ def websearch_news(
     max_results: Optional[int] = None,
     timelimit: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search for news articles.
+    """Search for news articles (Tavily topic=news).
 
     Args:
         query: Search query
@@ -79,7 +86,7 @@ def websearch_images(
     size: Optional[str] = None,
     image_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search for images.
+    """Search for images (when provided by Tavily).
 
     Args:
         query: Search query

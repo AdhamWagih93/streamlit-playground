@@ -37,6 +37,8 @@ spec:
           ports:
             - containerPort: 5432
           env:
+            - name: TZ
+              value: "Africa/Cairo"
             - name: POSTGRES_DB
               value: "bsw"
             - name: POSTGRES_USER

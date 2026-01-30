@@ -12,7 +12,7 @@ $repoRoot = Split-Path -Parent $scriptPath
 Set-Location $repoRoot
 
 $env:COMPOSE_PROJECT_NAME = "bsw"
-$composeCmd = "docker-compose -f docker-compose.yml -f docker-compose.dev.yml"
+$composeCmd = "docker compose -f docker-compose.yml -f docker-compose.dev.yml"
 
 $cmdArgs = "logs"
 

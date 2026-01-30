@@ -1,0 +1,1 @@
+"""Nexus MCP prompts package."""

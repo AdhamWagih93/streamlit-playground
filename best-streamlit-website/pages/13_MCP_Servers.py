@@ -226,6 +226,13 @@ MCP_SERVERS = [
         "description": "Git repository operations",
     },
     {
+        "id": "local",
+        "name": "Local MCP",
+        "icon": "🗂️",
+        "url": os.getenv("STREAMLIT_LOCAL_MCP_URL", "http://local-mcp:8000"),
+        "description": "Local file system tools",
+    },
+    {
         "id": "trivy",
         "name": "Trivy MCP",
         "icon": "🔒",

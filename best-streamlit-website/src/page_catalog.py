@@ -172,6 +172,13 @@ def get_page_catalog() -> List[PageSpec]:
             group="AI & Agents",
             description="AI-powered search",
         ),
+        PageSpec(
+            path="pages/21_Agent_Lab.py",
+            title="Agent Lab",
+            icon="🧪",
+            group="AI & Agents",
+            description="Test Normal/RAG/Deep agents",
+        ),
         # =====================================================================
         # PLATFORM - Administration & Monitoring
         # =====================================================================
@@ -196,6 +203,13 @@ def get_page_catalog() -> List[PageSpec]:
             icon="📝",
             group="Platform",
             description="Tool call history",
+        ),
+        PageSpec(
+            path="pages/20_Local_File_System.py",
+            title="Local Files",
+            icon="🗂️",
+            group="Platform",
+            description="Local file operations",
         ),
         PageSpec(
             path="pages/11_Database.py",

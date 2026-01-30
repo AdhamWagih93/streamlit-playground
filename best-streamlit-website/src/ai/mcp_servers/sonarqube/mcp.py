@@ -12,6 +12,9 @@ from fastmcp import FastMCP
 from .config import SonarQubeMCPServerConfig
 from .utils.auth import auth_or_error
 from .utils.client import SonarQubeAuthConfig, SonarQubeMCPServer
+from ..cache import configure_mcp_cache
+
+from .prompts import register_prompts
 
 
 # Global client instance
@@ -40,6 +43,10 @@ mcp = FastMCP(
     "SonarQube MCP Server",
     dependencies=["requests"],
 )
+configure_mcp_cache(mcp, server_name="sonarqube")
+
+# Prompts
+register_prompts(mcp)
 
 # ========== System & Server Tools ==========
 

@@ -85,6 +85,7 @@ class AdminConfig:
             },
             "nexus": {"enabled": True, "base_url": None, "verify_ssl": None, "allow_raw": None, "transport": None, "url": None},
             "scheduler": {"enabled": True, "transport": None, "url": None},
+            "local": {"enabled": True, "root_path": None, "allow_write": None, "transport": None, "url": None},
         }
 
         agents = {

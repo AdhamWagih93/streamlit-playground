@@ -24,6 +24,8 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
             - name: OLLAMA_BASE_URL
               value: {{ .Values.env.ollamaBaseUrl | quote }}
             - name: OLLAMA_MODEL
@@ -81,6 +83,8 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
             - name: OLLAMA_BASE_URL
               value: {{ .Values.env.ollamaBaseUrl | quote }}
             - name: OLLAMA_MODEL
@@ -148,6 +152,8 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
             - name: OLLAMA_BASE_URL
               value: {{ .Values.env.ollamaBaseUrl | quote }}
             - name: OLLAMA_MODEL

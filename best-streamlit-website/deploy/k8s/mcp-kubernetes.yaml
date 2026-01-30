@@ -25,6 +25,16 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            - name: TZ
+              value: "Africa/Cairo"
+            - name: MCP_CACHE_ENABLED
+              value: "true"
+            - name: MCP_CACHE_BACKEND
+              value: "redis"
+            - name: MCP_REDIS_HOST
+              value: "redis"
+            - name: MCP_REDIS_PORT
+              value: "6379"
             # Optional: mount a kubeconfig via Secret and set K8S_KUBECONFIG.
             - name: K8S_CONTEXT
               value: ""

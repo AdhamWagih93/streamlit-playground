@@ -1,0 +1,1 @@
+"""Nexus MCP resources package."""

@@ -25,6 +25,8 @@ spec:
           ports:
             - containerPort: 8501
           env:
+            - name: TZ
+              value: "Africa/Cairo"
             - name: OLLAMA_BASE_URL
               value: "http://ollama:11434"
             - name: OLLAMA_MODEL

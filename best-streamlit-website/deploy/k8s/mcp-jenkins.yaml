@@ -25,6 +25,16 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            - name: TZ
+              value: "Africa/Cairo"
+            - name: MCP_CACHE_ENABLED
+              value: "true"
+            - name: MCP_CACHE_BACKEND
+              value: "redis"
+            - name: MCP_REDIS_HOST
+              value: "redis"
+            - name: MCP_REDIS_PORT
+              value: "6379"
             - name: JENKINS_BASE_URL
               value: "http://jenkins:8080"
             - name: JENKINS_VERIFY_SSL

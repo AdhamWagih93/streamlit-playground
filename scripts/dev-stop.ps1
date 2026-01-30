@@ -10,13 +10,21 @@ Write-Host "Stopping Best Streamlit Website" -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Check if Docker is running
+try {
+    docker info | Out-Null
+} catch {
+    Write-Host "ERROR: Docker is not running. Please start Docker Desktop." -ForegroundColor Red
+    exit 1
+}
+
 # Navigate to repository root
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptPath
 Set-Location $repoRoot
 
 $env:COMPOSE_PROJECT_NAME = "bsw"
-$composeCmd = "docker-compose -f docker-compose.yml -f docker-compose.dev.yml"
+$composeCmd = "docker compose -f docker-compose.yml -f docker-compose.dev.yml"
 
 if ($Remove) {
     Write-Host "Stopping and removing containers..." -ForegroundColor Yellow

@@ -47,6 +47,16 @@ spec:
           name: http
           protocol: TCP
         env:
+        - name: TZ
+          value: "Africa/Cairo"
+        - name: MCP_CACHE_ENABLED
+          value: "true"
+        - name: MCP_CACHE_BACKEND
+          value: "redis"
+        - name: MCP_REDIS_HOST
+          value: "redis"
+        - name: MCP_REDIS_PORT
+          value: "6379"
         - name: SONARQUBE_BASE_URL
           valueFrom:
             configMapKeyRef:

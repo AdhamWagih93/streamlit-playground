@@ -32,6 +32,9 @@ from .utils.workloads import list_deployments as list_deployments_impl
 from .utils.workloads import list_deployments_all as list_deployments_all_impl
 from .utils.workloads import restart_deployment as restart_deployment_impl
 from .utils.workloads import scale_deployment as scale_deployment_impl
+from ..cache import configure_mcp_cache
+
+from .prompts import register_prompts
 
 # Helm integration: re-expose Helm tools on the kubernetes-mcp server so
 # callers can reach both Kubernetes and Helm via a single MCP endpoint
@@ -61,6 +64,10 @@ from .utils.helm import (
 
 
 mcp = FastMCP("kubernetes-mcp")
+configure_mcp_cache(mcp, server_name="kubernetes")
+
+# Prompts
+register_prompts(mcp)
 
 _CLIENTS: Optional[KubernetesClientSet] = None
 

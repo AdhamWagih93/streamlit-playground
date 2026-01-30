@@ -2,11 +2,21 @@
 # Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 services:
+  chainlit-agent-lab:
+    environment:
+      - TZ=Africa/Cairo
+      - DEBUG=true
+      - OLLAMA_ENABLED=${OLLAMA_ENABLED:-false}
+    volumes:
+      - ./best-streamlit-website:/app:cached
+      - ./data:/app/data:delegated
+
   streamlit:
     build:
       cache_from:
         - bsw-streamlit:dev
     environment:
+      - TZ=Africa/Cairo
       # Enable debug mode
       - DEBUG=true
       - STREAMLIT_SERVER_HEADLESS=true
@@ -29,6 +39,7 @@ services:
 
   scheduler:
     environment:
+      - TZ=Africa/Cairo
       # More frequent ticks in dev for testing
       - SCHEDULER_TICK_SECONDS=10
       # Auto-bootstrap demo jobs
@@ -42,6 +53,11 @@ services:
 
   docker-mcp:
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - LOG_LEVEL=DEBUG
     # Expose additional ports for debugging
     ports:
@@ -50,6 +66,11 @@ services:
 
   jenkins-mcp:
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - LOG_LEVEL=DEBUG
     ports:
       - "8002:8000"
@@ -57,10 +78,27 @@ services:
 
   kubernetes-mcp:
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       - LOG_LEVEL=DEBUG
     ports:
       - "8003:8000"
       - "5680:5678"  # Python debugger port
+
+  local-mcp:
+    environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "8009:8000"
+      - "5681:5678"  # Python debugger port
 
   # Additional development service: Lightweight DB admin
   db-admin:

@@ -22,7 +22,9 @@ class LLMConfig:
     model: str
     temperature: float
 
-    DEFAULT_BASE_URL: str = "http://localhost:11434"
+    # Default to the Docker Compose network hostname.
+    # (Can be overridden via OLLAMA_BASE_URL or per-agent overrides.)
+    DEFAULT_BASE_URL: str = "http://ollama:11434"
     DEFAULT_MODEL: str = "qwen2.5:7b-instruct-q6_K"
     DEFAULT_TEMPERATURE: float = 0.0
 
@@ -67,11 +69,16 @@ class MCPRemoteServerConfig:
     url: str
 
     def to_connection(self) -> Dict[str, Any]:
-        # LangChain MCP adapters typically use SSE for network transport.
-        # We accept `http` in configs but map it to SSE by providing this connection.
+        # FastMCP http transport speaks streamable-http on the /mcp endpoint.
+        # Keep SSE available by using transport="sse" explicitly when needed.
+        url = (self.url or "").strip()
+        if url:
+            base = url.rstrip("/")
+            if not base.endswith("/mcp"):
+                url = base + "/mcp"
         return {
-            "transport": "sse",
-            "url": self.url,
+            "transport": "streamable-http",
+            "url": url,
         }
 
 
@@ -129,11 +136,16 @@ class ToolAgentConfig:
                     env_overrides[k] = v
 
         transport_raw = env_str(transport_env, "stdio").lower().strip()
-        transport = "sse" if transport_raw == "http" else transport_raw
+        transport = "streamable-http" if transport_raw == "http" else transport_raw
 
         if transport == "stdio":
             mcp = MCPStdioModuleServerConfig(server_name=mcp_server_name, module=mcp_module, env_overrides=env_overrides)
         else:
             url = env_str(remote_url_env, default_remote_url)
+            # Normalize FastMCP http endpoint URLs to include /mcp
+            if transport == "streamable-http":
+                base = (url or "").strip().rstrip("/")
+                if base and not base.endswith("/mcp"):
+                    url = base + "/mcp"
             mcp = MCPRemoteServerConfig(server_name=mcp_server_name, url=url)
         return cls(agent_name=agent_name, llm=llm, mcp_server=mcp)

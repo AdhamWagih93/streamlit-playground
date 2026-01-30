@@ -38,6 +38,8 @@ spec:
           ports:
             - containerPort: 5432
           env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
             - name: POSTGRES_DB
               value: {{ .Values.postgres.database | quote }}
             - name: POSTGRES_USER

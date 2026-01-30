@@ -201,7 +201,7 @@ services = [
     {
         "type": "http",
         "name": "Streamlit UI",
-        "url": "http://localhost:8502",
+        "url": "http://localhost:8501",
         "endpoint": "/_stcore/health",
         "description": "Main web interface",
         "icon": "🌐",
@@ -317,10 +317,13 @@ databases = [
     },
 ]
 
+db_results: List[Dict[str, Any]] = []
+
 db_cols = st.columns(2)
 for idx, db in enumerate(databases):
     with db_cols[idx % 2]:
         db_status = check_database(db["url"])
+        db_results.append({**db, **db_status})
 
         status_class = {
             "healthy": "status-healthy",
@@ -434,14 +437,65 @@ healthy_count = sum(1 for r in service_results if r["status"] == "healthy")
 total_services = len(service_results)
 health_percentage = (healthy_count / total_services * 100) if total_services > 0 else 0
 
-db_healthy = sum(1 for db in databases if check_database(db["path"])["status"] == "healthy")
-db_total = len(databases)
+db_healthy = sum(1 for db in (db_results or []) if db.get("status") == "healthy")
+db_total = len(db_results or [])
 
 summary_col1, summary_col2, summary_col3 = st.columns(3)
 
 summary_col1.metric("Services Online", f"{healthy_count}/{total_services}", f"{health_percentage:.0f}%")
 summary_col2.metric("Databases", f"{db_healthy}/{db_total}", "Accessible" if db_healthy == db_total else "Check status")
 summary_col3.metric("Last Check", datetime.now().strftime("%H:%M:%S"), "Live")
+
+# Compact status breakdown
+service_status_order = ["healthy", "unhealthy", "unreachable", "timeout", "error"]
+service_status_counts = {k: 0 for k in service_status_order}
+for r in service_results:
+    key = r.get("status", "error")
+    service_status_counts[key] = service_status_counts.get(key, 0) + 1
+
+db_status_order = ["healthy", "missing", "error"]
+db_status_counts = {k: 0 for k in db_status_order}
+for r in db_results or []:
+    key = r.get("status", "error")
+    db_status_counts[key] = db_status_counts.get(key, 0) + 1
+
+badge_class = {
+    "healthy": "status-healthy",
+    "unhealthy": "status-unhealthy",
+    "unreachable": "status-unhealthy",
+    "timeout": "status-unknown",
+    "error": "status-unhealthy",
+    "missing": "status-unknown",
+}
+
+service_badges = " ".join(
+    [
+        f"<span class='status-badge {badge_class.get(k, 'status-unknown')}'>{k}: {service_status_counts.get(k, 0)}</span>"
+        for k in service_status_order
+    ]
+)
+db_badges = " ".join(
+    [
+        f"<span class='status-badge {badge_class.get(k, 'status-unknown')}'>{k}: {db_status_counts.get(k, 0)}</span>"
+        for k in db_status_order
+    ]
+)
+
+st.markdown(
+    f"""
+    <div class="status-card" style="padding: 0.75rem 1rem;">
+        <div class="metric-row" style="align-items: center; gap: 0.5rem;">
+            <span class="metric-label">Services:</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">{service_badges}</div>
+        </div>
+        <div class="metric-row" style="align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+            <span class="metric-label">Databases:</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">{db_badges}</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if health_percentage < 100:
     st.warning(

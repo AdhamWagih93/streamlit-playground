@@ -156,7 +156,7 @@ def build_jenkins_agent(
     api_token: Optional[str],
     verify_ssl: bool = True,
     model: Optional[str] = None,
-    llm_base_url: str = "http://localhost:11434",
+    llm_base_url: str = "http://ollama:11434",
     user_name: Optional[str] = None,
 ) -> JenkinsAgent:
     """Factory helper that follows the official MCP + create_agent pattern."""

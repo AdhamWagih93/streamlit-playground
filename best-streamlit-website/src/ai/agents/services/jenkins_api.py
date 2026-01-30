@@ -33,7 +33,7 @@ def healthz() -> Dict[str, Any]:
 def chat(req: ChatRequest) -> ChatResponse:
     cfg = JenkinsMCPServerConfig.from_env()
 
-    ollama_base_url = env_str("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_base_url = env_str("OLLAMA_BASE_URL", "http://ollama:11434")
     ollama_model = env_str("OLLAMA_MODEL", "qwen2.5:7b-instruct-q6_K")
 
     agent = build_jenkins_agent(

@@ -1,0 +1,48 @@
+{{- if .Values.components.redis }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.images.redis.repository }}:{{ .Values.images.redis.tag }}
+          imagePullPolicy: {{ .Values.images.redis.pullPolicy }}
+          ports:
+            - containerPort: 6379
+          command: ["redis-server", "--appendonly", "yes"]
+          env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
+          resources:
+            {{- toYaml .Values.resources.redis | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: {{ .Values.service.redis.port }}
+      targetPort: 6379
+  type: {{ .Values.service.redis.type }}
+{{- end }}

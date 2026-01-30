@@ -23,3 +23,6 @@ level = "info"
 [client]
 toolbarMode = "auto"
 showSidebarNavigation = false
+
+[browser]
+gatherUsageStats = false

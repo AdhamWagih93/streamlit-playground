@@ -1,0 +1,1 @@
+"""Trivy MCP resources package."""

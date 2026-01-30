@@ -1,0 +1,1 @@
+"""Kubernetes MCP prompts package."""

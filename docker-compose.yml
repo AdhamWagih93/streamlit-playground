@@ -6,6 +6,85 @@ services:
   # Core Application Services
   # =============================================================================
 
+  chainlit-agent-lab:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/chainlit/Dockerfile
+    container_name: bsw-chainlit-agent-lab
+    ports:
+      - "8503:8000"
+    environment:
+      - TZ=Africa/Cairo
+
+      # MCP connections (same env pattern as Streamlit)
+      - SCHEDULER_MCP_TRANSPORT=http
+      - SCHEDULER_MCP_URL=http://scheduler:8010
+      - STREAMLIT_SCHEDULER_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_SCHEDULER_MCP_URL=http://scheduler:8010/mcp
+
+      - JENKINS_MCP_TRANSPORT=http
+      - JENKINS_MCP_URL=http://jenkins-mcp:8000
+      - STREAMLIT_JENKINS_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_JENKINS_MCP_URL=http://jenkins-mcp:8000/mcp
+      - JENKINS_BASE_URL=${JENKINS_BASE_URL:-http://jenkins:8080}
+      - JENKINS_VERIFY_SSL=${JENKINS_VERIFY_SSL:-false}
+
+      - KUBERNETES_MCP_TRANSPORT=http
+      - KUBERNETES_MCP_URL=http://kubernetes-mcp:8000
+      - STREAMLIT_KUBERNETES_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_KUBERNETES_MCP_URL=http://kubernetes-mcp:8000/mcp
+
+      - DOCKER_MCP_TRANSPORT=http
+      - DOCKER_MCP_URL=http://docker-mcp:8000
+      - STREAMLIT_DOCKER_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_DOCKER_MCP_URL=http://docker-mcp:8000/mcp
+
+      - NEXUS_MCP_TRANSPORT=http
+      - NEXUS_MCP_URL=http://nexus-mcp:8000
+      - STREAMLIT_NEXUS_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_NEXUS_MCP_URL=http://nexus-mcp:8000/mcp
+
+      - GIT_MCP_TRANSPORT=http
+      - GIT_MCP_URL=http://git-mcp:8000
+      - STREAMLIT_GIT_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_GIT_MCP_URL=http://git-mcp:8000/mcp
+
+      - TRIVY_MCP_TRANSPORT=http
+      - TRIVY_MCP_URL=http://trivy-mcp:8000
+      - STREAMLIT_TRIVY_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_TRIVY_MCP_URL=http://trivy-mcp:8000/mcp
+
+      - LOCAL_MCP_TRANSPORT=http
+      - LOCAL_MCP_URL=http://local-mcp:8000
+      - STREAMLIT_LOCAL_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_LOCAL_MCP_URL=http://local-mcp:8000/mcp
+      - STREAMLIT_LOCAL_MCP_ROOT=/app
+      - STREAMLIT_LOCAL_MCP_ALLOW_WRITE=true
+
+      - PLAYWRIGHT_MCP_TRANSPORT=http
+      - PLAYWRIGHT_MCP_URL=http://playwright-mcp:8000
+      - STREAMLIT_PLAYWRIGHT_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_PLAYWRIGHT_MCP_URL=http://playwright-mcp:8000/mcp
+
+      - WEBSEARCH_MCP_TRANSPORT=http
+      - WEBSEARCH_MCP_URL=http://websearch-mcp:8000
+      - STREAMLIT_WEBSEARCH_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_WEBSEARCH_MCP_URL=http://websearch-mcp:8000/mcp
+
+      # Ollama configuration
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-tinyllama}
+    volumes:
+      - ./best-streamlit-website:/app:cached
+      - ./data:/app/data:delegated
+    depends_on:
+      - scheduler
+      - docker-mcp
+      - local-mcp
+    restart: unless-stopped
+    networks:
+      - bsw-network
+
   streamlit:
     build:
       context: ./best-streamlit-website
@@ -14,6 +93,7 @@ services:
     ports:
       - "8502:8501"
     environment:
+      - TZ=Africa/Cairo
       # Scheduler MCP connection
       - SCHEDULER_MCP_TRANSPORT=http
       - SCHEDULER_MCP_URL=http://scheduler:8010
@@ -58,6 +138,14 @@ services:
       - STREAMLIT_TRIVY_MCP_TRANSPORT=streamable-http
       - STREAMLIT_TRIVY_MCP_URL=http://trivy-mcp:8000/mcp
 
+      # Local MCP connection
+      - LOCAL_MCP_TRANSPORT=http
+      - LOCAL_MCP_URL=http://local-mcp:8000
+      - STREAMLIT_LOCAL_MCP_TRANSPORT=streamable-http
+      - STREAMLIT_LOCAL_MCP_URL=http://local-mcp:8000/mcp
+      - STREAMLIT_LOCAL_MCP_ROOT=/app
+      - STREAMLIT_LOCAL_MCP_ALLOW_WRITE=true
+
       # Playwright MCP connection
       - PLAYWRIGHT_MCP_TRANSPORT=http
       - PLAYWRIGHT_MCP_URL=http://playwright-mcp:8000
@@ -87,6 +175,7 @@ services:
     depends_on:
       - scheduler
       - docker-mcp
+      - local-mcp
       - postgres
     mem_limit: 512m
     cpus: 0.5
@@ -108,6 +197,7 @@ services:
     ports:
       - "8010:8010"
     environment:
+      - TZ=Africa/Cairo
       # Scheduler configuration
       - SCHEDULER_MCP_TRANSPORT=http
       - SCHEDULER_MCP_HOST=0.0.0.0
@@ -153,6 +243,7 @@ services:
     ports:
       - "5432:5432"
     environment:
+      - TZ=Africa/Cairo
       - POSTGRES_DB=${POSTGRES_DB:-bsw}
       - POSTGRES_USER=${POSTGRES_USER:-bsw}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bsw}
@@ -169,6 +260,27 @@ services:
     networks:
       - bsw-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: bsw-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    environment:
+      - TZ=Africa/Cairo
+    volumes:
+      - redis-data:/data
+    mem_limit: 128m
+    cpus: 0.1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bsw-network
+
   # =============================================================================
   # MCP Servers
   # =============================================================================
@@ -181,6 +293,11 @@ services:
     ports:
       - "8001:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # Docker connection (connect to host Docker daemon)
       - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
       - DOCKER_MCP_TRANSPORT=http
@@ -214,6 +331,11 @@ services:
     ports:
       - "8002:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # Jenkins connection
       - JENKINS_BASE_URL=${JENKINS_BASE_URL:-http://jenkins:8080}
       - JENKINS_USERNAME=${JENKINS_USERNAME:-}
@@ -251,6 +373,11 @@ services:
     ports:
       - "8003:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # Kubernetes connection (uses kubeconfig from host)
       - K8S_KUBECONFIG=${K8S_KUBECONFIG:-}
       - K8S_CONTEXT=${K8S_CONTEXT:-}
@@ -287,6 +414,11 @@ services:
     ports:
       - "8004:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # Nexus connection
       - NEXUS_BASE_URL=${NEXUS_BASE_URL:-http://nexus:8081}
       - NEXUS_USERNAME=${NEXUS_USERNAME:-}
@@ -312,6 +444,11 @@ services:
     ports:
       - "8005:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # MCP server configuration
       - GIT_MCP_TRANSPORT=http
       - GIT_MCP_HOST=0.0.0.0
@@ -344,6 +481,11 @@ services:
     ports:
       - "8006:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # MCP server configuration
       - TRIVY_MCP_TRANSPORT=http
       - TRIVY_MCP_HOST=0.0.0.0
@@ -379,6 +521,11 @@ services:
     ports:
       - "8007:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # MCP server configuration
       - PLAYWRIGHT_MCP_TRANSPORT=http
       - PLAYWRIGHT_MCP_HOST=0.0.0.0
@@ -414,6 +561,11 @@ services:
     ports:
       - "8008:8000"
     environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
       # MCP server configuration
       - WEBSEARCH_MCP_TRANSPORT=http
       - WEBSEARCH_MCP_HOST=0.0.0.0
@@ -426,11 +578,50 @@ services:
       - WEBSEARCH_MAX_RESULTS=${WEBSEARCH_MAX_RESULTS:-10}
       - WEBSEARCH_REGION=${WEBSEARCH_REGION:-wt-wt}
       - WEBSEARCH_SAFESEARCH=${WEBSEARCH_SAFESEARCH:-moderate}
+      # Tavily (recommended)
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
     volumes:
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 128m
     cpus: 0.1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - bsw-network
+
+  local-mcp:
+    build:
+      context: ./best-streamlit-website
+      dockerfile: deploy/mcp-local/Dockerfile
+    container_name: bsw-local-mcp
+    ports:
+      - "8009:8000"
+    environment:
+      - TZ=Africa/Cairo
+      - MCP_CACHE_ENABLED=true
+      - MCP_CACHE_BACKEND=redis
+      - MCP_REDIS_HOST=redis
+      - MCP_REDIS_PORT=6379
+      # Local MCP configuration
+      - LOCAL_MCP_TRANSPORT=http
+      - LOCAL_MCP_HOST=0.0.0.0
+      - LOCAL_MCP_PORT=8000
+      - LOCAL_MCP_ROOT=/app
+      - LOCAL_MCP_ALLOW_WRITE=true
+      # Explicit FastMCP overrides
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    volumes:
+      - ./best-streamlit-website:/app:cached
+      - ./data:/app/data:delegated
+    mem_limit: 256m
+    cpus: 0.25
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
@@ -451,18 +642,21 @@ services:
     ports:
       - "11434:11434"
     environment:
+      - TZ=Africa/Cairo
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_NUM_CTX=32768
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
-      - ollama_data:/root/.ollama
+      - ollama-data:/root/.ollama
     healthcheck:
       # Query tags endpoint; it's stable once server is ready
       test: ["CMD", "curl", "-fsS", "http://localhost:11434/api/tags"]
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - bsw-network
     deploy:
       resources:
         limits:
@@ -474,7 +668,7 @@ services:
               count: all
               capabilities: [gpu]
     profiles:
-      - notai  # Only start with --profile ai
+      - ai  # Only start with --profile ai
 
 # =============================================================================
 # Networks
@@ -491,7 +685,10 @@ networks:
 
 volumes:
   ollama-data:
-    name: bsw-ollama-data
+    external: true
+    name: demo_ollama_data
+  redis-data:
+    name: bsw-redis-data
   trivy-cache:
     name: bsw-trivy-cache
   postgres-data:
