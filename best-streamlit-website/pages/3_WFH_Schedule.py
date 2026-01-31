@@ -57,13 +57,12 @@ MEMBER_AVATARS: Dict[str, str] = {
 
 # Personal, soft attendance preferences (validated as warnings only).
 PREFERS_WFO_DAYS: Dict[str, Set[int]] = {
-    "Karam": {0, 1},
 }
 
 DISLIKES_WFO_DAYS: Dict[str, Set[int]] = {
     "Hesham": {0, 3},
     "Abdelkhalek": {6, 3},
-    "Salma": {3},
+    "Salma": {6, 3},
 }
 
 # Default public holidays for Egypt 2026
@@ -884,13 +883,18 @@ def load_full_year_from_weeks(base_schedule: Dict[str, Dict[str, str]]) -> Dict[
 
 
 def get_week_start_for_date(d: date) -> date:
+    # Week files are Sunday-starting. UX requirement: starting Friday, treat the upcoming Sunday
+    # as the "current" week (e.g., Fri 2026-01-30 -> week 2026-02-01).
     ref = d
-    if d.weekday() == 5:
+    if d.weekday() == 4:
+        ref = d + timedelta(days=2)
+    elif d.weekday() == 5:
         ref = d + timedelta(days=1)
     offset = (ref.weekday() - 6) % 7
     return ref - timedelta(days=offset)
 
 
+@st.cache_data(show_spinner=False)
 def build_error_free_base_schedule(max_attempts: int = 50) -> tuple[List[Set[str]], Dict[str, Dict[str, str]]]:
     last_errors: List[tuple[date | None, str]] = []
     for _ in range(max_attempts):
@@ -906,6 +910,7 @@ def build_error_free_base_schedule(max_attempts: int = 50) -> tuple[List[Set[str
     raise RuntimeError(f"Unable to generate an error-free schedule after {max_attempts} attempts. Example error: {example}")
 
 
+@st.cache_data(show_spinner=False)
 def validate_schedule(year_sched: Dict[str, Dict[str, str]]) -> tuple[List[tuple[date | None, str]], List[tuple[date | None, str]]]:
     errors: List[tuple[date | None, str]] = []
     warnings: List[tuple[date | None, str]] = []
@@ -1015,6 +1020,7 @@ def validate_schedule(year_sched: Dict[str, Dict[str, str]]) -> tuple[List[tuple
     return dedup_errors, dedup_warnings
 
 
+@st.cache_data(show_spinner=False)
 def compute_pair_meet_counts(year_sched: Dict[str, Dict[str, str]]) -> pd.DataFrame:
     from collections import defaultdict
     pair_counts: Dict[tuple[str, str], int] = defaultdict(int)
@@ -1040,6 +1046,7 @@ def compute_pair_meet_counts(year_sched: Dict[str, Dict[str, str]]) -> pd.DataFr
     return matrix
 
 
+@st.cache_data(show_spinner=False)
 def compute_member_totals(year_sched: Dict[str, Dict[str, str]]) -> pd.DataFrame:
     counts: Dict[str, int] = {m: 0 for m in TEAM_MEMBERS}
     for assignments in year_sched.values():
@@ -1052,6 +1059,19 @@ def compute_member_totals(year_sched: Dict[str, Dict[str, str]]) -> pd.DataFrame
         for m in TEAM_MEMBERS
     ]
     return pd.DataFrame(records).sort_values("Member").reset_index(drop=True)
+
+
+_fragment = getattr(st, "fragment", lambda f: f)
+
+
+def _filter_warnings(warnings: List[tuple[date | None, str]], today: date, ignore_past: bool) -> List[tuple[date | None, str]]:
+    if not ignore_past:
+        return warnings
+    filtered: List[tuple[date | None, str]] = []
+    for dt, msg in warnings:
+        if dt is None or dt >= today:
+            filtered.append((dt, msg))
+    return filtered
 
 
 # =============================================================================
@@ -1496,9 +1516,18 @@ def render_team_statistics(year_sched: Dict[str, Dict[str, str]]):
         st.plotly_chart(fig, use_container_width=True)
 
 
-def render_validations(year_sched: Dict[str, Dict[str, str]]):
+def render_validations(
+    year_sched: Dict[str, Dict[str, str]],
+    *,
+    today: date,
+    ignore_past_warnings: bool,
+    key_prefix: str = "validations",
+):
     """Render validation results."""
-    errors, warnings = validate_schedule(year_sched)
+    errors, all_warnings = validate_schedule(year_sched)
+    warnings = _filter_warnings(all_warnings, today=today, ignore_past=ignore_past_warnings)
+
+    hidden_past_warnings = max(0, len(all_warnings) - len(warnings))
 
     col1, col2 = st.columns(2)
 
@@ -1526,16 +1555,42 @@ def render_validations(year_sched: Dict[str, Dict[str, str]]):
 
     st.markdown("")
 
+    if ignore_past_warnings and hidden_past_warnings:
+        st.caption(f"Ignoring {hidden_past_warnings} warning(s) from the past.")
+
     if not errors and not warnings:
         st.success("No rule violations or preference warnings detected.")
         return
+
+    show_all = st.checkbox(
+        "Show all validations",
+        value=False,
+        key=f"{key_prefix}__show_all",
+        help="Shows every validation item (can be a long list).",
+    )
+    query = st.text_input(
+        "Filter validations",
+        value="",
+        key=f"{key_prefix}__filter",
+        placeholder="Type to filter by name/keyword...",
+    ).strip().lower()
+
+    def _matches(msg: str) -> bool:
+        if not query:
+            return True
+        return query in msg.lower()
+
+    filtered_errors = [(dt, msg) for dt, msg in errors if _matches(msg)]
+    filtered_warnings = [(dt, msg) for dt, msg in warnings if _matches(msg)]
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("#### Rule Violations")
-        if errors:
-            for dt, msg in errors[:10]:
+        errs = filtered_errors
+        if errs:
+            to_show = errs if show_all else errs[:10]
+            for dt, msg in to_show:
                 dt_str = dt.strftime("%a %d %b") if dt else "Undated"
                 st.markdown(
                     f"""
@@ -1546,15 +1601,17 @@ def render_validations(year_sched: Dict[str, Dict[str, str]]):
                     """,
                     unsafe_allow_html=True,
                 )
-            if len(errors) > 10:
-                st.caption(f"... and {len(errors) - 10} more")
+            if not show_all and len(errs) > 10:
+                st.caption(f"... and {len(errs) - 10} more")
         else:
-            st.success("No rule violations")
+            st.success("No rule violations" if not query else "No matching rule violations")
 
     with col2:
         st.markdown("#### Preference Warnings")
-        if warnings:
-            for dt, msg in warnings[:10]:
+        warns = filtered_warnings
+        if warns:
+            to_show = warns if show_all else warns[:10]
+            for dt, msg in to_show:
                 dt_str = dt.strftime("%a %d %b") if dt else "Undated"
                 st.markdown(
                     f"""
@@ -1565,10 +1622,10 @@ def render_validations(year_sched: Dict[str, Dict[str, str]]):
                     """,
                     unsafe_allow_html=True,
                 )
-            if len(warnings) > 10:
-                st.caption(f"... and {len(warnings) - 10} more")
+            if not show_all and len(warns) > 10:
+                st.caption(f"... and {len(warns) - 10} more")
         else:
-            st.info("No preference warnings")
+            st.info("No preference warnings" if not query else "No matching preference warnings")
 
 
 def render_holidays_management(holidays: Dict[str, List[str]], public_holidays: Dict[str, str]):
@@ -1680,19 +1737,38 @@ def render_edit_interface(
         st.info("No editable weeks available.")
         return
 
-    label_map = {}
-    for ws in editable_sundays:
+    # Default to editing 2 weeks (current + next). No single-week mode.
+    selected_week_starts: List[date] = []
+    if current_week_start in editable_sundays:
+        selected_week_starts.append(current_week_start)
+    if next_week_start and next_week_start in editable_sundays:
+        selected_week_starts.append(next_week_start)
+
+    if not selected_week_starts:
+        st.info("No editable weeks available.")
+        return
+
+    def _label_for_week(ws: date) -> str:
         if ws == current_week_start:
-            label_map[f"Current Week ({ws.isoformat()})"] = ws
-        else:
-            label_map[f"Next Week ({ws.isoformat()})"] = ws
+            return f"Current ({ws.isoformat()})"
+        return f"Next ({ws.isoformat()})"
 
-    selected_label = st.selectbox("Select Week to Edit", list(label_map.keys()))
-    week_start = label_map[selected_label]
+    if len(selected_week_starts) == 2:
+        st.caption(
+            "Editing a 2-week plan (current + next). Saving updates those week files; propagate copies the 2-week cycle forward."
+        )
+    else:
+        st.caption(
+            "Only one editable week is available. Saving updates that week file; propagate copies it forward."
+        )
 
-    week_days = load_week(week_start, base_schedule)
-    if not week_days:
-        st.write("No working days for this week.")
+    # Load the weeks we will edit
+    weeks_by_start: Dict[date, Dict[str, Dict[str, str]]] = {}
+    for ws in selected_week_starts:
+        weeks_by_start[ws] = load_week(ws, base_schedule)
+
+    if all(not days for days in weeks_by_start.values()):
+        st.write("No working days for the selected week(s).")
         return
 
     st.markdown("### Quick Adjustments")
@@ -1705,9 +1781,13 @@ def render_edit_interface(
 
         member_quick = st.selectbox("Team Member", TEAM_MEMBERS, key="quick_wfh_member")
 
+        # Use the first selected week for quick adjustments
+        primary_ws = selected_week_starts[0]
+        primary_week_days = weeks_by_start.get(primary_ws, {})
+
         member_wfo_days = [
             (iso, date.fromisoformat(iso))
-            for iso, members in sorted(week_days.items())
+            for iso, members in sorted(primary_week_days.items())
             if members.get(member_quick) == "WFO"
         ]
 
@@ -1717,9 +1797,9 @@ def render_edit_interface(
             iso_quick, d_quick = member_wfo_days[day_idx]
 
             if st.button(f"Mark {member_quick} as WFH on {d_quick:%a %d}", type="primary"):
-                new_week_days = {k: v.copy() for k, v in week_days.items()}
+                new_week_days = {k: v.copy() for k, v in primary_week_days.items()}
                 new_week_days[iso_quick][member_quick] = "WFH"
-                save_week(week_start, new_week_days)
+                save_week(primary_ws, new_week_days)
                 st.success("Updated!")
                 st.rerun()
         else:
@@ -1734,7 +1814,7 @@ def render_edit_interface(
 
         out_days = [
             (iso, date.fromisoformat(iso))
-            for iso, members in sorted(week_days.items())
+            for iso, members in sorted(primary_week_days.items())
             if members.get(member_out) == "WFO"
         ]
 
@@ -1743,7 +1823,7 @@ def render_edit_interface(
             idx_out = st.selectbox("Their Office Day", range(len(labels_out)), format_func=lambda i: labels_out[i])
             iso_swap, d_swap = out_days[idx_out]
 
-            day_members_full = week_days.get(iso_swap, {})
+            day_members_full = primary_week_days.get(iso_swap, {})
             swap_candidates = [
                 m for m in TEAM_MEMBERS
                 if m != member_out and day_members_full.get(m, "WFH") == "WFH"
@@ -1753,10 +1833,10 @@ def render_edit_interface(
                 member_in = st.selectbox("Swap With", swap_candidates)
 
                 if st.button(f"Swap {member_out} ↔ {member_in}", type="primary"):
-                    new_week_days = {k: v.copy() for k, v in week_days.items()}
+                    new_week_days = {k: v.copy() for k, v in primary_week_days.items()}
                     new_week_days[iso_swap][member_out] = "WFH"
                     new_week_days[iso_swap][member_in] = "WFO"
-                    save_week(week_start, new_week_days)
+                    save_week(primary_ws, new_week_days)
                     st.success("Swap applied!")
                     st.rerun()
             else:
@@ -1765,35 +1845,182 @@ def render_edit_interface(
             st.caption("No office days to swap.")
         st.markdown('</div>', unsafe_allow_html=True)
 
+    st.markdown("### Bulk Actions")
+
+    bulk_col1, bulk_col2 = st.columns(2)
+    with bulk_col1:
+        st.markdown("**Set a member's weekly office days**")
+        bulk_member = st.selectbox("Member", TEAM_MEMBERS, key="bulk_member")
+        day_labels = [
+            (0, "Sun"),
+            (1, "Mon"),
+            (2, "Tue"),
+            (3, "Wed"),
+            (4, "Thu"),
+        ]
+        wfo_offsets = st.multiselect(
+            "Office days",
+            options=[lbl for _off, lbl in day_labels],
+            default=[],
+            key="bulk_member_days",
+        )
+        if st.button("Apply to selected scope", type="secondary", key="bulk_apply_member"):
+            wfo_offset_set = {off for off, lbl in day_labels if lbl in set(wfo_offsets)}
+            for ws in selected_week_starts:
+                week_days = load_week(ws, base_schedule)
+                new_week_days = {k: v.copy() for k, v in week_days.items()}
+                for iso, assigns in new_week_days.items():
+                    d = date.fromisoformat(iso)
+                    offset = (d - ws).days
+                    assigns[bulk_member] = "WFO" if offset in wfo_offset_set else "WFH"
+                save_week(ws, new_week_days)
+            st.success("Applied.")
+            st.rerun()
+
+    with bulk_col2:
+        st.markdown("**Set who is in office on a specific day**")
+        if primary_week_days:
+            day_options = [
+                (iso, date.fromisoformat(iso).strftime("%a %d %b"))
+                for iso in sorted(primary_week_days.keys())
+            ]
+            day_label_by_iso = {iso: lbl for iso, lbl in day_options}
+            chosen_iso = st.selectbox(
+                "Day",
+                options=[iso for iso, _lbl in day_options],
+                format_func=lambda iso: day_label_by_iso.get(str(iso), str(iso)),
+                key="bulk_day_iso",
+            )
+            chosen_members = st.multiselect(
+                "Members in office",
+                options=TEAM_MEMBERS,
+                default=[m for m in TEAM_MEMBERS if primary_week_days.get(chosen_iso, {}).get(m) == "WFO"],
+                key="bulk_day_members",
+            )
+            if st.button("Apply day to selected scope", type="secondary", key="bulk_apply_day"):
+                for ws in selected_week_starts:
+                    week_days = load_week(ws, base_schedule)
+                    new_week_days = {k: v.copy() for k, v in week_days.items()}
+                    # Find matching weekday offset in each selected week
+                    d0 = date.fromisoformat(chosen_iso)
+                    offset0 = (d0 - primary_ws).days
+                    target_date = ws + timedelta(days=offset0)
+                    target_iso = target_date.isoformat()
+                    if target_iso not in new_week_days:
+                        continue
+                    for m in TEAM_MEMBERS:
+                        new_week_days[target_iso][m] = "WFO" if m in set(chosen_members) else "WFH"
+                    save_week(ws, new_week_days)
+                st.success("Applied.")
+                st.rerun()
+        else:
+            st.caption("No week data available for bulk day edits.")
+
     st.markdown("### Full Week Editor")
 
-    records = []
-    for iso, members in sorted(week_days.items()):
-        d = date.fromisoformat(iso)
-        row = {"Day": d.strftime("%a %d %b"), "Date": iso}
-        for member in TEAM_MEMBERS:
-            row[member] = members.get(member, "WFH")
-        records.append(row)
+    records: List[Dict[str, str]] = []
+    for ws in selected_week_starts:
+        week_days = weeks_by_start.get(ws, {})
+        for iso, members in sorted(week_days.items()):
+            d = date.fromisoformat(iso)
+            rec: Dict[str, str] = {
+                "Week": _label_for_week(ws),
+                "WeekStart": ws.isoformat(),
+                "Day": d.strftime("%a %d %b"),
+                "Date": iso,
+            }
+            for member in TEAM_MEMBERS:
+                rec[member] = members.get(member, "WFH")
+            records.append(rec)
 
     df = pd.DataFrame(records)
 
-    col_config = {"Day": st.column_config.TextColumn(disabled=True)}
+    col_config = {
+        "Week": st.column_config.TextColumn(disabled=True),
+        "WeekStart": st.column_config.TextColumn(disabled=True),
+        "Day": st.column_config.TextColumn(disabled=True),
+        "Date": st.column_config.TextColumn(disabled=True),
+    }
     for member in TEAM_MEMBERS:
         col_config[member] = st.column_config.SelectboxColumn(options=["WFH", "WFO"], default="WFH")
 
     edited = st.data_editor(df, column_config=col_config, hide_index=True, num_rows="fixed")
 
+    st.markdown("### Save")
+    propagate = st.checkbox(
+        "Propagate this plan to the rest of the year (overwrites future weeks)",
+        value=False,
+        help="Copies the current/next week plan forward. If you edited both weeks, it propagates a 2-week cycle.",
+    )
+
     if st.button("Save Changes", type="primary"):
-        new_week_days: Dict[str, Dict[str, str]] = {}
+        new_days_by_ws: Dict[date, Dict[str, Dict[str, str]]] = {}
         for _, row in edited.iterrows():
-            iso = row["Date"]
+            ws_iso = str(row.get("WeekStart", ""))
+            try:
+                ws = date.fromisoformat(ws_iso)
+            except ValueError:
+                continue
+
+            iso = str(row.get("Date", ""))
+            if not iso:
+                continue
+
             members: Dict[str, str] = {}
             for member in TEAM_MEMBERS:
                 val = str(row.get(member, "WFH")).upper()
                 members[member] = "WFO" if val == "WFO" else "WFH"
-            new_week_days[iso] = members
-        save_week(week_start, new_week_days)
-        st.success("Week schedule saved!")
+
+            new_days_by_ws.setdefault(ws, {})[iso] = members
+
+        for ws, days in new_days_by_ws.items():
+            save_week(ws, days)
+
+        if propagate and selected_week_starts:
+            with st.spinner("Propagating plan across the year..."):
+                templates: Dict[int, Dict[int, Dict[str, str]]] = {}
+                # Build templates keyed by week parity (0=current-like, 1=next-like)
+                for ws in selected_week_starts:
+                    parity = 0 if ws == current_week_start else 1
+                    template_days = new_days_by_ws.get(ws) or load_week(ws, base_schedule)
+                    by_offset: Dict[int, Dict[str, str]] = {}
+                    for iso, assigns in template_days.items():
+                        try:
+                            d = date.fromisoformat(iso)
+                        except ValueError:
+                            continue
+                        off = (d - ws).days
+                        if 0 <= off <= 4:
+                            by_offset[off] = assigns
+                    templates[parity] = by_offset
+
+                all_sundays = iter_sundays_in_year()
+                for ws in all_sundays:
+                    if ws <= max(selected_week_starts):
+                        continue
+                    delta_weeks = (ws - current_week_start).days // 7
+                    parity = 0 if delta_weeks % 2 == 0 else 1
+                    # If only one week was edited, fall back to parity 0 template.
+                    if parity not in templates:
+                        parity = 0
+                    by_offset = templates.get(parity, {})
+
+                    existing_days = load_week(ws, base_schedule)
+                    new_week_days: Dict[str, Dict[str, str]] = {k: v.copy() for k, v in existing_days.items()}
+
+                    for off in range(5):
+                        d = ws + timedelta(days=off)
+                        iso = d.isoformat()
+                        if iso not in base_schedule:
+                            continue
+                        assigns = by_offset.get(off)
+                        if assigns is None:
+                            continue
+                        new_week_days[iso] = {m: assigns.get(m, "WFH") for m in TEAM_MEMBERS}
+
+                    save_week(ws, new_week_days)
+
+        st.success("Saved!")
         st.rerun()
 
 
@@ -1834,16 +2061,31 @@ def main():
 
         st.divider()
 
+        st.markdown("### Filters")
+        if hasattr(st, "toggle"):
+            ignore_past_warnings = st.toggle(
+                "Ignore past warnings",
+                value=True,
+                help="When enabled, only current & future warnings are shown (errors are unaffected).",
+            )
+        else:
+            ignore_past_warnings = st.checkbox(
+                "Ignore past warnings",
+                value=True,
+                help="When enabled, only current & future warnings are shown (errors are unaffected).",
+            )
+
+        st.divider()
+
         st.markdown("### Navigation")
-        nav_options = ["Overview", "My Schedule", "Statistics", "Editing", "Holidays", "Validations"]
+        nav_options = ["Overview", "My Schedule", "Statistics", "Editing", "Holidays"]
         selected_nav = st.radio("Go to", nav_options, label_visibility="collapsed")
 
     # Main content based on navigation
-    if selected_nav == "Overview":
-        # Today cards
+    @_fragment
+    def _render_overview():
         render_today_cards(year_sched, holidays, public_holidays)
 
-        # Week tables
         col1, col2 = st.columns(2)
 
         with col1:
@@ -1854,6 +2096,41 @@ def main():
             if next_week_start.year == YEAR:
                 next_week_days = load_week(next_week_start, base_schedule)
                 render_week_table("Next Week", next_week_days, holidays, public_holidays, next_week_start)
+
+        with st.expander("✅ Validations", expanded=True):
+            render_validations(
+                year_sched,
+                today=today,
+                ignore_past_warnings=ignore_past_warnings,
+                key_prefix="overview_validations",
+            )
+
+    @_fragment
+    def _render_statistics():
+        st.markdown('<div class="section-title">📊 Team Statistics</div>', unsafe_allow_html=True)
+
+        errs, warns_all = validate_schedule(year_sched)
+        warns = _filter_warnings(warns_all, today=today, ignore_past=ignore_past_warnings)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Rule violations", len(errs))
+        with c2:
+            st.metric("Warnings", len(warns))
+
+        render_team_statistics(year_sched)
+
+    @_fragment
+    def _render_editing():
+        st.markdown('<div class="section-title">✏️ Edit Schedule</div>', unsafe_allow_html=True)
+        render_edit_interface(base_schedule, current_week_start, next_week_start if next_week_start.year == YEAR else None)
+
+    @_fragment
+    def _render_holidays():
+        st.markdown('<div class="section-title">🎉 Holiday Management</div>', unsafe_allow_html=True)
+        render_holidays_management(holidays, public_holidays)
+
+    if selected_nav == "Overview":
+        _render_overview()
 
     elif selected_nav == "My Schedule":
         st.markdown('<div class="section-title">👤 Personal Schedule View</div>', unsafe_allow_html=True)
@@ -1866,24 +2143,18 @@ def main():
         render_calendar_heatmap(year_sched, member_to_view)
 
     elif selected_nav == "Statistics":
-        st.markdown('<div class="section-title">📊 Team Statistics</div>', unsafe_allow_html=True)
-        render_team_statistics(year_sched)
+        _render_statistics()
 
     elif selected_nav == "Editing":
-        st.markdown('<div class="section-title">✏️ Edit Schedule</div>', unsafe_allow_html=True)
-        render_edit_interface(base_schedule, current_week_start, next_week_start if next_week_start.year == YEAR else None)
+        _render_editing()
 
     elif selected_nav == "Holidays":
-        st.markdown('<div class="section-title">🎉 Holiday Management</div>', unsafe_allow_html=True)
-        render_holidays_management(holidays, public_holidays)
-
-    elif selected_nav == "Validations":
-        st.markdown('<div class="section-title">✅ Schedule Validations</div>', unsafe_allow_html=True)
-        render_validations(year_sched)
+        _render_holidays()
 
     # Footer
     st.divider()
-    errors, warnings = validate_schedule(year_sched)
+    errors, warnings_all = validate_schedule(year_sched)
+    warnings = _filter_warnings(warnings_all, today=today, ignore_past=ignore_past_warnings)
     status_icon = "✅" if not errors else "⚠️"
     st.caption(
         f"{status_icon} WFH Schedule {YEAR} | {len(TEAM_MEMBERS)} team members | "

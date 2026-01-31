@@ -72,6 +72,9 @@ class AgentRuntime:
     rag_enabled: bool = False
     rag_index_summary: Optional[str] = None
 
+    # Optional: LangChain deep agent executor/runnable (when available)
+    deep_agent: Optional[Any] = None
+
 
 def get_available_servers() -> Dict[str, Dict[str, Any]]:
     """Expose the same MCP server catalog as the Dynamic Agent Builder."""
@@ -81,6 +84,31 @@ def get_available_servers() -> Dict[str, Dict[str, Any]]:
 
 def _utc_now() -> str:
     return datetime.utcnow().isoformat() + "Z"
+
+
+def _iter_leaf_exceptions(exc: BaseException) -> Iterable[BaseException]:
+    sub = getattr(exc, "exceptions", None)
+    if isinstance(sub, list) and sub:
+        for e in sub:
+            if isinstance(e, BaseException):
+                yield from _iter_leaf_exceptions(e)
+        return
+    yield exc
+
+
+def _format_exception_summary(exc: BaseException, *, max_leaves: int = 6) -> str:
+    leaves = list(_iter_leaf_exceptions(exc))
+    head = f"{type(exc).__name__}: {exc}"
+    if len(leaves) <= 1:
+        return head
+
+    lines = [head, "Underlying exceptions:"]
+    for i, leaf in enumerate(leaves[:max_leaves], start=1):
+        msg = str(leaf).strip() or repr(leaf)
+        lines.append(f"{i}. {type(leaf).__name__}: {msg}")
+    if len(leaves) > max_leaves:
+        lines.append(f"... ({len(leaves) - max_leaves} more)")
+    return "\n".join(lines)
 
 
 def _get_transport(config: Any) -> str:
@@ -240,6 +268,73 @@ def _create_langgraph_agent(llm: Any, tools: List[Any], system_prompt: str) -> A
     return create_react_agent(llm, tools)
 
 
+def _try_build_langchain_deep_agent(llm: Any, tools: List[Any], system_prompt: str) -> Optional[Any]:
+    """Best-effort integration with LangChain's deep agent factory.
+
+    The exact import path/signature varies across LangChain versions, so this
+    function tries a few common locations and adapts kwargs by signature.
+    """
+
+    try:
+        import importlib
+    except Exception:
+        return None
+
+    candidates = [
+        ("langchain.agents", "deep_agent"),
+        ("langchain.agents", "create_deep_agent"),
+        ("langchain.agents.deep_agent", "deep_agent"),
+        ("langchain.agents.deep_agent", "create_deep_agent"),
+    ]
+
+    value_by_param = {
+        "llm": llm,
+        "model": llm,
+        "chat_model": llm,
+        "tools": tools,
+        "toolkit": tools,
+        "system_prompt": system_prompt,
+        "instructions": system_prompt,
+    }
+
+    for module_name, attr in candidates:
+        try:
+            mod = importlib.import_module(module_name)
+            factory = getattr(mod, attr, None)
+            if not callable(factory):
+                continue
+
+            sig = None
+            try:
+                sig = inspect.signature(factory)
+            except Exception:
+                sig = None
+
+            if sig is None:
+                # Best guess call
+                try:
+                    return factory(llm=llm, tools=tools, system_prompt=system_prompt)
+                except Exception:
+                    continue
+
+            kwargs: Dict[str, Any] = {}
+            for name, param in sig.parameters.items():
+                if name in value_by_param:
+                    kwargs[name] = value_by_param[name]
+                    continue
+                if param.kind in (param.VAR_KEYWORD, param.VAR_POSITIONAL):
+                    continue
+
+            try:
+                return factory(**kwargs)
+            except Exception:
+                continue
+        except Exception:
+            continue
+
+    return None
+
+
 def _build_tool_logging_interceptor(
     tool_call_events: List[ToolCallEvent],
     *,
@@ -302,37 +397,127 @@ def build_normal_agent(
     ollama_base_url: str = "http://ollama:11434",
     temperature: float = 0.1,
     system_prompt: str = "",
+    enable_rag: bool = True,
+    embedding_model: str = "nomic-embed-text",
+    repo_root: Optional[Path] = None,
     tool_call_events: Optional[List[ToolCallEvent]] = None,
     session_id: Optional[str] = None,
     source: str = "agent_lab",
 ) -> AgentRuntime:
-    """Normal ReAct agent with tools from selected MCP servers."""
+    """Normal ReAct agent with tools from selected MCP servers.
+
+    By default, this also adds a lightweight repo-context retrieval tool
+    (vector-based when available, lexical fallback otherwise).
+    """
 
     if not selected_servers:
         raise ValueError("At least one MCP server must be selected")
 
     tool_call_events = tool_call_events if tool_call_events is not None else []
 
-    connections = _build_connections(selected_servers)
-
     interceptors = _build_tool_logging_interceptor(tool_call_events, source=source, session_id=session_id)
-    client = MultiServerMCPClient(connections, tool_interceptors=interceptors)
-    tools = asyncio.run(client.get_tools())
+
+    # Tool discovery across multiple servers can raise ExceptionGroup when one
+    # server is down. Prefer a partial-success path to keep the agent usable.
+    effective_servers = list(selected_servers)
+    try:
+        connections = _build_connections(effective_servers)
+        client = MultiServerMCPClient(connections, tool_interceptors=interceptors)
+        tools = asyncio.run(client.get_tools())
+    except BaseException as exc:  # noqa: BLE001
+        failures: Dict[str, str] = {}
+        ok_servers: List[str] = []
+
+        for srv in selected_servers:
+            try:
+                one_conn = _build_connections([srv])
+                one_client = MultiServerMCPClient(one_conn, tool_interceptors=interceptors)
+                _ = asyncio.run(one_client.get_tools())
+                ok_servers.append(srv)
+            except BaseException as sub_exc:  # noqa: BLE001
+                failures[srv] = _format_exception_summary(sub_exc)
+
+        if not ok_servers:
+            details = "\n".join([f"- {srv}: {msg}" for srv, msg in failures.items()])
+            raise RuntimeError(
+                "Failed to connect to any selected MCP servers during tool discovery.\n" + details
+            ) from exc
+
+        effective_servers = ok_servers
+        connections = _build_connections(effective_servers)
+        client = MultiServerMCPClient(connections, tool_interceptors=interceptors)
+        try:
+            tools = asyncio.run(client.get_tools())
+        except BaseException as exc2:  # noqa: BLE001
+            raise RuntimeError(_format_exception_summary(exc2)) from exc2
 
     llm = ChatOllama(model=model_name, base_url=ollama_base_url, temperature=temperature)
     final_system = system_prompt.strip() or _default_system_prompt()
-    agent = _create_langgraph_agent(llm, list(tools), final_system)
+
+    combined_tools = list(tools)
+    rag_summary: Optional[str] = None
+    rag_enabled = False
+
+    if enable_rag:
+        root = repo_root or Path(__file__).resolve().parents[4]
+        retriever = None
+        rag_mode = "vector"
+        try:
+            retriever, rag_summary = _build_inmemory_retriever(
+                root,
+                ollama_base_url=ollama_base_url,
+                embedding_model=embedding_model,
+            )
+        except Exception as rag_exc:  # noqa: BLE001
+            rag_mode = "lexical"
+            rag_summary = f"Lexical search fallback (RAG unavailable): {rag_exc}"
+
+        @tool("retrieve_repo_context")
+        def retrieve_repo_context(query: str) -> str:
+            """Search this repo's code/docs and return relevant excerpts with file paths."""
+
+            if rag_mode != "vector" or retriever is None:
+                return _fallback_lexical_search(root, query)
+
+            docs: List[Document]
+            try:
+                docs = retriever.invoke(query)  # type: ignore[assignment]
+            except Exception:
+                docs = retriever.get_relevant_documents(query)  # type: ignore[attr-defined]
+
+            parts: List[str] = []
+            for d in docs:
+                path = (d.metadata or {}).get("path", "")
+                snippet = (d.page_content or "").strip()
+                if len(snippet) > 1200:
+                    snippet = snippet[:1200] + "..."
+                parts.append(f"FILE: {path}\n{snippet}")
+            return "\n\n---\n\n".join(parts) if parts else "(no matches)"
+
+        combined_tools.append(retrieve_repo_context)
+        rag_enabled = True
+
+        rag_hint = (
+            "If the user's question relates to this codebase, first call retrieve_repo_context to gather relevant files."
+        )
+        if rag_mode != "vector":
+            rag_hint += " (This session is using lexical search fallback.)"
+        final_system = final_system + "\n\n" + rag_hint
+
+    agent = _create_langgraph_agent(llm, combined_tools, final_system)
 
     return AgentRuntime(
         client=client,
-        tools=list(tools),
+        tools=combined_tools,
         agent=agent,
         tool_call_events=tool_call_events,
-        selected_servers=list(selected_servers),
+        selected_servers=list(effective_servers),
         system_prompt=final_system,
         model_name=model_name,
         ollama_base_url=ollama_base_url,
         temperature=temperature,
+        rag_enabled=rag_enabled,
+        rag_index_summary=rag_summary,
     )
 
 
@@ -507,64 +692,18 @@ def build_rag_agent(
         ollama_base_url=ollama_base_url,
         temperature=temperature,
         system_prompt=system_prompt.strip() or _default_system_prompt(),
+        enable_rag=True,
+        embedding_model=embedding_model,
+        repo_root=repo_root,
         tool_call_events=tool_call_events,
         session_id=session_id,
         source=source,
     )
 
-    root = repo_root or Path(__file__).resolve().parents[4]
-    retriever = None
-    summary = ""
-    rag_mode = "vector"
-    try:
-        retriever, summary = _build_inmemory_retriever(
-            root,
-            ollama_base_url=ollama_base_url,
-            embedding_model=embedding_model,
-        )
-    except Exception as exc:  # noqa: BLE001
-        rag_mode = "lexical"
-        summary = f"Lexical search fallback (RAG unavailable): {exc}"
-
-    @tool("retrieve_repo_context")
-    def retrieve_repo_context(query: str) -> str:
-        """Search this repo's code/docs and return relevant excerpts with file paths."""
-
-        if rag_mode != "vector" or retriever is None:
-            return _fallback_lexical_search(root, query)
-
-        docs: List[Document]
-        try:
-            # Newer LC retrievers are Runnables.
-            docs = retriever.invoke(query)  # type: ignore[assignment]
-        except Exception:
-            docs = retriever.get_relevant_documents(query)  # type: ignore[attr-defined]
-
-        parts: List[str] = []
-        for d in docs:
-            path = (d.metadata or {}).get("path", "")
-            snippet = (d.page_content or "").strip()
-            if len(snippet) > 1200:
-                snippet = snippet[:1200] + "..."
-            parts.append(f"FILE: {path}\n{snippet}")
-        return "\n\n---\n\n".join(parts) if parts else "(no matches)"
-
-    # Rebuild the agent to include the retriever tool.
+    # Strengthen the hint for the explicit RAG mode.
     llm = ChatOllama(model=model_name, base_url=ollama_base_url, temperature=temperature)
-    rag_hint = "When answering questions about this codebase, first call retrieve_repo_context."
-    if rag_mode != "vector":
-        rag_hint += " (This session is using lexical search fallback.)"
-
-    final_system = (system_prompt.strip() or _default_system_prompt()) + "\n\n" + rag_hint
-
-    combined_tools = list(runtime.tools) + [retrieve_repo_context]
-    runtime.tools = combined_tools
-    runtime.system_prompt = final_system
-    runtime.agent = _create_langgraph_agent(llm, combined_tools, final_system)
-    runtime.rag_enabled = True
-    runtime.rag_index_summary = summary
-    runtime.ollama_base_url = ollama_base_url
-    runtime.temperature = temperature
+    runtime.system_prompt = runtime.system_prompt + "\n\n" + "When in doubt, call retrieve_repo_context first."
+    runtime.agent = _create_langgraph_agent(llm, runtime.tools, runtime.system_prompt)
     return runtime
 
 
@@ -579,7 +718,11 @@ def build_deep_agent(
     session_id: Optional[str] = None,
     source: str = "agent_lab",
 ) -> AgentRuntime:
-    """"Deep" agent: generates a plan, then uses tools to execute."""
+    """"Deep" agent.
+
+    Prefer LangChain's deep agent factory when available; otherwise fall back
+    to the existing plan→ReAct flow in run_deep_agent_query().
+    """
 
     final_system = system_prompt.strip() or _deep_system_prompt()
     runtime = build_normal_agent(
@@ -588,10 +731,14 @@ def build_deep_agent(
         ollama_base_url=ollama_base_url,
         temperature=temperature,
         system_prompt=final_system,
+        enable_rag=True,
         tool_call_events=tool_call_events,
         session_id=session_id,
         source=source,
     )
+
+    llm = ChatOllama(model=model_name, base_url=ollama_base_url, temperature=temperature)
+    runtime.deep_agent = _try_build_langchain_deep_agent(llm, runtime.tools, runtime.system_prompt)
     return runtime
 
 
@@ -600,7 +747,36 @@ def run_deep_agent_query(
     query: str,
     chat_history: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[str, str, List[ToolCallEvent]]:
-    """Run a deep query: create plan, then answer using tools."""
+    """Run a deep query.
+
+    If a LangChain deep agent is available, use it directly. Otherwise, fall
+    back to the internal plan→ReAct flow.
+    """
+
+    events_before = len(runtime.tool_call_events)
+
+    if runtime.deep_agent is not None:
+        deep = runtime.deep_agent
+        try:
+            # Common runnable input schemas.
+            try:
+                result = deep.invoke({"input": query})
+            except Exception:
+                result = deep.invoke(query)
+
+            plan = "(generated by deep agent)"
+            answer = ""
+            if isinstance(result, dict):
+                answer = str(result.get("output") or result.get("answer") or result.get("result") or "")
+                plan = str(result.get("plan") or plan)
+            else:
+                answer = str(result)
+
+            runtime.last_plan = plan
+            return plan, answer, runtime.tool_call_events[events_before:]
+        except Exception:
+            # Fall back to legacy flow if deep agent invocation fails.
+            pass
 
     llm = ChatOllama(model=runtime.model_name, base_url=runtime.ollama_base_url, temperature=runtime.temperature)
 
@@ -616,5 +792,5 @@ def run_deep_agent_query(
 
     runtime.last_plan = plan
     augmented_query = f"PLAN:\n{plan}\n\nREQUEST:\n{query}"
-    answer, events = run_agent_query(runtime, augmented_query, chat_history=chat_history)
-    return plan, answer, events
+    answer, _events = run_agent_query(runtime, augmented_query, chat_history=chat_history)
+    return plan, answer, runtime.tool_call_events[events_before:]

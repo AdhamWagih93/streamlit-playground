@@ -60,6 +60,23 @@ def configure_mcp_cache(mcp, *, server_name: str, prefix: Optional[str] = None) 
         password = os.environ.get("MCP_REDIS_PASSWORD") or None
         db = int(os.environ.get("MCP_REDIS_DB", "0"))
 
+    # Fail open: if Redis isn't reachable (common when running a single service
+    # from compose), skip caching rather than crashing all requests.
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis(
+            host=host,
+            port=port,
+            password=password,
+            db=db,
+            socket_connect_timeout=float(os.environ.get("MCP_REDIS_CONNECT_TIMEOUT", "0.25")),
+            socket_timeout=float(os.environ.get("MCP_REDIS_TIMEOUT", "0.25")),
+        )
+        client.ping()
+    except Exception:
+        return
+
     base_store = RedisStore(host=host, port=port, password=password, db=db)
     namespaced = PrefixCollectionsWrapper(
         key_value=base_store,

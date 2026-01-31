@@ -80,7 +80,9 @@ services:
     depends_on:
       - scheduler
       - docker-mcp
+      - kubernetes-mcp
       - local-mcp
+      - redis
     restart: unless-stopped
     networks:
       - bsw-network

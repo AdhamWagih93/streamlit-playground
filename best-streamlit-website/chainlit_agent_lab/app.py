@@ -33,6 +33,32 @@ from src.ai.agents.agent_lab import (
 APP_TITLE = "Agent Lab (Chainlit)"
 
 
+def _iter_leaf_exceptions(exc: BaseException) -> List[BaseException]:
+    leaves: List[BaseException] = []
+    sub = getattr(exc, "exceptions", None)
+    if isinstance(sub, list) and sub:
+        for e in sub:
+            if isinstance(e, BaseException):
+                leaves.extend(_iter_leaf_exceptions(e))
+        return leaves
+    return [exc]
+
+
+def _format_exception_summary(exc: BaseException, *, max_leaves: int = 6) -> str:
+    leaves = _iter_leaf_exceptions(exc)
+    head = f"{type(exc).__name__}: {exc}"
+    if len(leaves) <= 1:
+        return head
+
+    lines = [head, "Underlying exceptions:"]
+    for i, leaf in enumerate(leaves[:max_leaves], start=1):
+        msg = str(leaf).strip() or repr(leaf)
+        lines.append(f"{i}. {type(leaf).__name__}: {msg}")
+    if len(leaves) > max_leaves:
+        lines.append(f"... ({len(leaves) - max_leaves} more)")
+    return "\n".join(lines)
+
+
 def _stable_hash(obj: Any) -> str:
     try:
         return json.dumps(obj, sort_keys=True, default=str)
@@ -147,20 +173,7 @@ async def _build_runtime_if_needed(*, force: bool = False) -> Tuple[Optional[Age
     agent_type = str(cfg.get("agent_type") or "Normal")
 
     try:
-        if agent_type == "RAG":
-            rt = await _to_thread(
-                build_rag_agent,
-                selected_servers=selected_servers,
-                model_name=str(cfg.get("model") or "llama3.2"),
-                embedding_model=str(cfg.get("embedding_model") or "nomic-embed-text"),
-                ollama_base_url=str(cfg.get("ollama_url") or "http://ollama:11434"),
-                temperature=float(cfg.get("temperature") or 0.1),
-                system_prompt=str(cfg.get("system_prompt") or ""),
-                tool_call_events=tool_events,
-                session_id=str(cl.user_session.get("session_id") or ""),
-                source="chainlit_agent_lab",
-            )
-        elif agent_type == "Deep":
+        if agent_type == "Deep":
             rt = await _to_thread(
                 build_deep_agent,
                 selected_servers=selected_servers,
@@ -180,6 +193,8 @@ async def _build_runtime_if_needed(*, force: bool = False) -> Tuple[Optional[Age
                 ollama_base_url=str(cfg.get("ollama_url") or "http://ollama:11434"),
                 temperature=float(cfg.get("temperature") or 0.1),
                 system_prompt=str(cfg.get("system_prompt") or ""),
+                enable_rag=True,
+                embedding_model=str(cfg.get("embedding_model") or "nomic-embed-text"),
                 tool_call_events=tool_events,
                 session_id=str(cl.user_session.get("session_id") or ""),
                 source="chainlit_agent_lab",
@@ -191,7 +206,7 @@ async def _build_runtime_if_needed(*, force: bool = False) -> Tuple[Optional[Age
     except Exception as exc:
         _reset_runtime()
         cl.user_session.set("last_build_fingerprint", fingerprint)
-        return None, f"{type(exc).__name__}: {exc}"
+        return None, _format_exception_summary(exc)
 
 
 async def _render_new_tool_calls(events: List[ToolCallEvent], *, start_index: int) -> None:
@@ -270,7 +285,7 @@ async def on_chat_start() -> None:
             Select(
                 id="agent_type",
                 label="Agent type",
-                values=["Normal", "RAG", "Deep"],
+                values=["Normal", "Deep"],
                 initial_index=0,
             ),
             Tags(
@@ -283,6 +298,11 @@ async def on_chat_start() -> None:
                 id="model",
                 label="Ollama model",
                 initial=str(default_cfg["model"]),
+            ),
+            TextInput(
+                id="embedding_model",
+                label="Embedding model (for repo RAG)",
+                initial=str(default_cfg["embedding_model"]),
             ),
             TextInput(
                 id="ollama_url",
@@ -333,7 +353,7 @@ async def on_settings_update(settings: Dict[str, Any]) -> None:
         normalized = [s for s in normalized if s in known] + [s for s in normalized if s not in known]
         cfg["servers"] = normalized
 
-    for k in ["agent_type", "model", "ollama_url", "temperature", "system_prompt", "auto_build"]:
+    for k in ["agent_type", "model", "embedding_model", "ollama_url", "temperature", "system_prompt", "auto_build"]:
         if k in settings:
             cfg[k] = settings[k]
 
@@ -372,11 +392,28 @@ async def al_inventory(action: cl.Action) -> None:
             tools = inv.get("tools") or []
             prompts = inv.get("prompts") or []
             resources = inv.get("resources") or []
-            lines.append(
-                f"- **{srv}** @ `{inv.get('url')}`: {len(tools)} tools, {len(prompts)} prompts, {len(resources)} resources"
-            )
+            tool_names: List[str] = []
+            for t in tools:
+                if isinstance(t, dict):
+                    name = t.get("name")
+                else:
+                    name = getattr(t, "name", None)
+                if name:
+                    tool_names.append(str(name))
+
+            lines.append(f"### {srv}")
+            lines.append(f"- URL: `{inv.get('url')}`")
+            lines.append(f"- Tools: {len(tools)}")
+            if tool_names:
+                preview = ", ".join(tool_names[:30])
+                if len(tool_names) > 30:
+                    preview += ", …"
+                lines.append(f"- Tool names: {preview}")
+            lines.append(f"- Prompts: {len(prompts)}")
+            lines.append(f"- Resources: {len(resources)}")
         except Exception as exc:
-            lines.append(f"- **{srv}**: error: {type(exc).__name__}: {exc}")
+            lines.append(f"### {srv}")
+            lines.append(f"- Error: {_format_exception_summary(exc)}")
 
     await cl.Message(content="\n".join(lines)).send()
 
@@ -780,7 +817,7 @@ async def _handle_user_message(user_text: str) -> None:
                 history.append({"role": "user", "content": user_text})
                 history.append({"role": "assistant", "content": answer})
         except Exception as exc:
-            await cl.Message(content=f"Agent error: {type(exc).__name__}: {exc}").send()
+            await cl.Message(content=f"Agent error: {_format_exception_summary(exc)}").send()
 
     cl.user_session.set("history", history)
 
@@ -830,11 +867,28 @@ async def on_message(message: cl.Message) -> None:
                 tools = inv.get("tools") or []
                 prompts = inv.get("prompts") or []
                 resources = inv.get("resources") or []
-                lines.append(
-                    f"- **{srv}** @ `{inv.get('url')}`: {len(tools)} tools, {len(prompts)} prompts, {len(resources)} resources"
-                )
+                tool_names: List[str] = []
+                for t in tools:
+                    if isinstance(t, dict):
+                        name = t.get("name")
+                    else:
+                        name = getattr(t, "name", None)
+                    if name:
+                        tool_names.append(str(name))
+
+                lines.append(f"### {srv}")
+                lines.append(f"- URL: `{inv.get('url')}`")
+                lines.append(f"- Tools: {len(tools)}")
+                if tool_names:
+                    preview = ", ".join(tool_names[:30])
+                    if len(tool_names) > 30:
+                        preview += ", …"
+                    lines.append(f"- Tool names: {preview}")
+                lines.append(f"- Prompts: {len(prompts)}")
+                lines.append(f"- Resources: {len(resources)}")
             except Exception as exc:
-                lines.append(f"- **{srv}**: error: {type(exc).__name__}: {exc}")
+                lines.append(f"### {srv}")
+                lines.append(f"- Error: {_format_exception_summary(exc)}")
 
         await cl.Message(content="\n".join(lines)).send()
         return
