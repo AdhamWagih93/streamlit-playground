@@ -139,7 +139,6 @@ if [ $? -eq 0 ]; then
     echo ""
     echo -e "${CYAN}Access the application at:${NC}"
     echo -e "  Streamlit UI:     http://localhost:8502"
-    echo -e "  Chainlit Agent Lab: http://localhost:8503"
     echo -e "  Scheduler MCP:    http://localhost:8010"
     echo -e "  Docker MCP:       http://localhost:8001"
     echo -e "  Jenkins MCP:      http://localhost:8002"

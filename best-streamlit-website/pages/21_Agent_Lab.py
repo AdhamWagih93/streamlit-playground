@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import traceback
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import os
@@ -28,6 +29,403 @@ if not admin.is_agent_enabled("agent_lab", default=True):
 
 add_mcp_status_styles()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTANTS & PRESETS
+# ─────────────────────────────────────────────────────────────────────────────
+
+AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
+    "devops": {
+        "name": "DevOps Engineer",
+        "icon": "🔧",
+        "description": "Full-stack DevOps with K8s, Docker, Jenkins, and Git",
+        "servers": ["kubernetes", "docker", "jenkins", "git"],
+        "system_prompt": (
+            "You are an expert DevOps engineer assistant. Help users with:\n"
+            "- Kubernetes cluster management and troubleshooting\n"
+            "- Docker container operations and debugging\n"
+            "- CI/CD pipeline management with Jenkins\n"
+            "- Git operations and code review\n"
+            "Always explain your actions and suggest best practices."
+        ),
+        "color": "#3b82f6",
+    },
+    "security": {
+        "name": "Security Analyst",
+        "icon": "🛡️",
+        "description": "Security scanning with Trivy and code analysis",
+        "servers": ["trivy", "git", "sonarqube"],
+        "system_prompt": (
+            "You are a security analyst assistant focused on:\n"
+            "- Vulnerability scanning and assessment\n"
+            "- Security best practices and compliance\n"
+            "- Code security review\n"
+            "- Remediation recommendations\n"
+            "Always prioritize security findings by severity."
+        ),
+        "color": "#ef4444",
+    },
+    "infrastructure": {
+        "name": "Infrastructure Manager",
+        "icon": "🏗️",
+        "description": "Infrastructure with K8s, Docker, and Nexus",
+        "servers": ["kubernetes", "docker", "nexus"],
+        "system_prompt": (
+            "You are an infrastructure management assistant helping with:\n"
+            "- Container orchestration and scaling\n"
+            "- Artifact repository management\n"
+            "- Infrastructure health monitoring\n"
+            "- Resource optimization\n"
+            "Provide actionable insights and automation suggestions."
+        ),
+        "color": "#8b5cf6",
+    },
+    "automation": {
+        "name": "Automation Specialist",
+        "icon": "🤖",
+        "description": "Workflow automation with scheduling and CI/CD",
+        "servers": ["scheduler", "jenkins", "docker"],
+        "system_prompt": (
+            "You are an automation specialist focused on:\n"
+            "- Scheduled task management\n"
+            "- CI/CD pipeline automation\n"
+            "- Workflow optimization\n"
+            "- Process automation patterns\n"
+            "Help users automate repetitive tasks efficiently."
+        ),
+        "color": "#22c55e",
+    },
+    "explorer": {
+        "name": "Code Explorer",
+        "icon": "🔍",
+        "description": "Code exploration with Git, filesystem, and web search",
+        "servers": ["git", "local", "websearch"],
+        "system_prompt": (
+            "You are a code exploration assistant helping with:\n"
+            "- Repository analysis and navigation\n"
+            "- File system exploration\n"
+            "- Web research for technical solutions\n"
+            "- Code understanding and documentation\n"
+            "Help users understand and navigate codebases effectively."
+        ),
+        "color": "#f59e0b",
+    },
+    "custom": {
+        "name": "Custom Agent",
+        "icon": "⚙️",
+        "description": "Build your own agent with any servers",
+        "servers": [],
+        "system_prompt": "",
+        "color": "#6b7280",
+    },
+}
+
+QUICK_QUERIES: List[Dict[str, Any]] = [
+    {"label": "Cluster Health", "query": "Check the overall health of the Kubernetes cluster", "icon": "💚", "servers": ["kubernetes"]},
+    {"label": "Running Pods", "query": "List all running pods across namespaces", "icon": "📦", "servers": ["kubernetes"]},
+    {"label": "Docker Status", "query": "Show all Docker containers with their status", "icon": "🐳", "servers": ["docker"]},
+    {"label": "Recent Commits", "query": "Show the last 10 commits in the repository", "icon": "📝", "servers": ["git"]},
+    {"label": "Security Scan", "query": "Run a security vulnerability scan on the current project", "icon": "🔒", "servers": ["trivy"]},
+    {"label": "Jenkins Jobs", "query": "List all Jenkins jobs and their last build status", "icon": "🏗️", "servers": ["jenkins"]},
+    {"label": "Failed Pods", "query": "Find any pods in error or CrashLoopBackOff state", "icon": "⚠️", "servers": ["kubernetes"]},
+    {"label": "Resource Usage", "query": "Show resource usage (CPU/memory) across the cluster", "icon": "📊", "servers": ["kubernetes"]},
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STYLES
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.markdown(
+    """
+    <style>
+    /* Enhanced Hero Section */
+    .agentlab-hero {
+        background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 40%, #a855f7 70%, #ec4899 100%);
+        background-size: 200% 200%;
+        animation: gradient-shift 8s ease infinite;
+        border-radius: 24px;
+        padding: 2rem 2.5rem;
+        margin-bottom: 1.5rem;
+        color: white;
+        box-shadow: 0 12px 48px rgba(99, 102, 241, 0.3);
+        position: relative;
+        overflow: hidden;
+    }
+    .agentlab-hero::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        opacity: 0.3;
+    }
+    @keyframes gradient-shift {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    .agentlab-hero h1 {
+        font-size: 2.2rem;
+        font-weight: 800;
+        margin: 0 0 0.5rem 0;
+        position: relative;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .agentlab-hero p {
+        margin: 0;
+        opacity: 0.95;
+        font-size: 1.05rem;
+        position: relative;
+    }
+    .hero-stats {
+        display: flex;
+        gap: 1.5rem;
+        margin-top: 1.25rem;
+        position: relative;
+    }
+    .hero-stat {
+        background: rgba(255,255,255,0.15);
+        backdrop-filter: blur(10px);
+        padding: 0.6rem 1rem;
+        border-radius: 12px;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .hero-stat strong {
+        font-size: 1.1rem;
+    }
+
+    /* Preset Cards */
+    .preset-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+    .preset-card {
+        background: linear-gradient(145deg, #ffffff, #f8fafc);
+        border-radius: 14px;
+        padding: 1rem;
+        border: 2px solid #e2e8f0;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: center;
+    }
+    .preset-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+    }
+    .preset-card.selected {
+        border-color: #6366f1;
+        background: linear-gradient(145deg, #eef2ff, #e0e7ff);
+    }
+    .preset-icon {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+    }
+    .preset-name {
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: #1e293b;
+    }
+    .preset-desc {
+        font-size: 0.75rem;
+        color: #64748b;
+        margin-top: 0.25rem;
+    }
+
+    /* Quick Actions */
+    .quick-actions {
+        background: linear-gradient(135deg, rgba(14,165,233,0.06), rgba(99,102,241,0.06));
+        border-radius: 16px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+        border: 1px solid rgba(99,102,241,0.15);
+    }
+    .quick-actions-title {
+        font-size: 1rem;
+        font-weight: 700;
+        margin-bottom: 0.75rem;
+        color: #4f46e5;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .quick-btn-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    /* Tool call cards */
+    .tool-call-card {
+        background: #f8fafc;
+        border-radius: 12px;
+        padding: 0.9rem;
+        margin: 0.5rem 0;
+        border-left: 4px solid #6366f1;
+        font-size: 0.88rem;
+        transition: all 0.2s ease;
+    }
+    .tool-call-card:hover {
+        background: #f1f5f9;
+    }
+    .tool-call-success { border-left-color: #22c55e; }
+    .tool-call-error { border-left-color: #ef4444; }
+
+    /* Server Health Cards */
+    .server-health-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+    }
+    .server-health-card {
+        background: linear-gradient(145deg, #ffffff, #f8fafc);
+        border-radius: 12px;
+        padding: 0.9rem;
+        border: 1px solid #e2e8f0;
+        transition: all 0.2s ease;
+    }
+    .server-health-card:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .server-health-card.healthy {
+        border-left: 3px solid #22c55e;
+    }
+    .server-health-card.unhealthy {
+        border-left: 3px solid #ef4444;
+    }
+    .server-name {
+        font-weight: 700;
+        font-size: 0.95rem;
+        margin-bottom: 0.25rem;
+    }
+    .server-tools {
+        font-size: 0.8rem;
+        color: #64748b;
+    }
+
+    /* Chat Enhancement */
+    .chat-message-actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        opacity: 0.6;
+        transition: opacity 0.2s;
+    }
+    .chat-message-actions:hover {
+        opacity: 1;
+    }
+
+    /* Metrics Row */
+    .metrics-row {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .metric-card {
+        flex: 1;
+        background: linear-gradient(145deg, #ffffff, #f8fafc);
+        border-radius: 14px;
+        padding: 1rem 1.25rem;
+        border: 1px solid #e2e8f0;
+        text-align: center;
+    }
+    .metric-value {
+        font-size: 1.8rem;
+        font-weight: 800;
+        color: #1e293b;
+    }
+    .metric-label {
+        font-size: 0.8rem;
+        color: #64748b;
+        margin-top: 0.2rem;
+    }
+
+    /* Timeline */
+    .timeline-container {
+        position: relative;
+        padding-left: 1.5rem;
+    }
+    .timeline-container::before {
+        content: '';
+        position: absolute;
+        left: 0.5rem;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: linear-gradient(to bottom, #6366f1, #a855f7);
+    }
+    .timeline-item {
+        position: relative;
+        padding: 0.75rem 0;
+        padding-left: 1.5rem;
+    }
+    .timeline-item::before {
+        content: '';
+        position: absolute;
+        left: -1.1rem;
+        top: 1rem;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #6366f1;
+        border: 2px solid white;
+        box-shadow: 0 0 0 2px #6366f1;
+    }
+    .timeline-item.success::before { background: #22c55e; box-shadow: 0 0 0 2px #22c55e; }
+    .timeline-item.error::before { background: #ef4444; box-shadow: 0 0 0 2px #ef4444; }
+
+    /* Conversation Export */
+    .export-panel {
+        background: #f8fafc;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-top: 1rem;
+        border: 1px dashed #cbd5e1;
+    }
+
+    /* Empty State */
+    .empty-state {
+        text-align: center;
+        padding: 3rem 2rem;
+        color: #64748b;
+    }
+    .empty-state-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    /* Recent Queries */
+    .recent-query {
+        background: #f8fafc;
+        border-radius: 8px;
+        padding: 0.6rem 0.9rem;
+        margin: 0.4rem 0;
+        cursor: pointer;
+        transition: all 0.15s;
+        border: 1px solid transparent;
+    }
+    .recent-query:hover {
+        background: #eef2ff;
+        border-color: #c7d2fe;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER FUNCTIONS
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _stable_hash(obj: Any) -> str:
     try:
@@ -139,7 +537,6 @@ def _extract_prompt_text(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    # FastMCP often returns {result: {messages:[{role,content}]}} or similar.
     messages = payload.get("messages") or payload.get("message")
     if isinstance(messages, list) and messages:
         msg0 = messages[0]
@@ -148,14 +545,12 @@ def _extract_prompt_text(payload: Any) -> str:
             if isinstance(content, str):
                 return content
             if isinstance(content, list):
-                # Content blocks
                 texts = []
                 for c in content:
                     if isinstance(c, dict) and c.get("type") == "text":
                         texts.append(str(c.get("text") or ""))
                 return "\n".join([t for t in texts if t])
 
-    # Sometimes it's a plain string in result.
     result = payload.get("result")
     if isinstance(result, str):
         return result
@@ -172,14 +567,19 @@ def _ollama_health(base_url: str) -> Dict[str, Any]:
     if not url:
         return {"ok": False, "message": "No URL"}
 
-    # Ollama commonly supports /api/tags and /api/version.
     try:
         resp = requests.get(url + "/api/tags", timeout=2)
         if 200 <= resp.status_code < 400:
             data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             models = data.get("models") if isinstance(data, dict) else None
             model_count = len(models) if isinstance(models, list) else None
-            return {"ok": True, "message": f"Reachable{f' ({model_count} models)' if model_count is not None else ''}"}
+            model_names = [m.get("name", "") for m in models[:5]] if isinstance(models, list) else []
+            return {
+                "ok": True,
+                "message": f"Reachable ({model_count} models)" if model_count else "Reachable",
+                "model_count": model_count,
+                "models": model_names,
+            }
         return {"ok": False, "message": f"HTTP {resp.status_code}"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
@@ -267,7 +667,6 @@ def _generate_system_prompt_with_ollama(
     except Exception:
         ChatOllama = None
 
-    # Build a compact capability summary.
     tool_lines: List[str] = []
     prompt_lines: List[str] = []
     resource_lines: List[str] = []
@@ -311,7 +710,6 @@ def _generate_system_prompt_with_ollama(
         msg = llm.invoke([HumanMessage(content=prompt_text)])
         return str(getattr(msg, "content", "") or "").strip()
 
-    # Fallback: Ollama HTTP API
     base = (ollama_url or "").rstrip("/")
     resp = requests.post(
         base + "/api/generate",
@@ -344,7 +742,7 @@ def _render_exception(title: str, exc: BaseException) -> None:
     sub_excs: List[BaseException] = []
     if hasattr(exc, "exceptions") and isinstance(getattr(exc, "exceptions"), tuple):
         try:
-            sub_excs = list(getattr(exc, "exceptions"))  # type: ignore[arg-type]
+            sub_excs = list(getattr(exc, "exceptions"))
         except Exception:
             sub_excs = []
 
@@ -383,49 +781,53 @@ def _lazy_import() -> Any:
     )
 
 
-st.markdown(
-    """
-    <style>
-    .agentlab-hero {
-        background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 55%, #a855f7 100%);
-        border-radius: 20px;
-        padding: 1.8rem 2.2rem;
-        margin-bottom: 1.25rem;
-        color: white;
-        box-shadow: 0 10px 40px rgba(99, 102, 241, 0.25);
-    }
-    .agentlab-hero h1 {
-        font-size: 2.0rem;
-        font-weight: 800;
-        margin: 0 0 0.25rem 0;
-    }
-    .agentlab-hero p { margin: 0; opacity: 0.95; }
+def _export_conversation_markdown(messages: List[Dict[str, Any]], tool_calls: List[Any]) -> str:
+    """Export conversation to markdown format."""
+    lines = ["# Agent Lab Conversation\n", f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"]
 
-    .tool-call-card {
-        background: #f8fafc;
-        border-radius: 10px;
-        padding: 0.85rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #6366f1;
-        font-size: 0.9rem;
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        lines.append(f"## {role.title()}\n")
+        lines.append(f"{content}\n\n")
+
+    if tool_calls:
+        lines.append("---\n\n## Tool Calls\n")
+        for tc in tool_calls:
+            status = "✅" if getattr(tc, "ok", False) else "❌"
+            lines.append(f"- {status} **{getattr(tc, 'server', 'unknown')}**.{getattr(tc, 'tool', 'unknown')}\n")
+
+    return "".join(lines)
+
+
+def _export_conversation_json(messages: List[Dict[str, Any]], tool_calls: List[Any], config: Dict[str, Any]) -> str:
+    """Export conversation to JSON format."""
+    export_data = {
+        "exported_at": datetime.now().isoformat(),
+        "config": {
+            "agent_type": config.get("agent_type"),
+            "servers": config.get("servers", []),
+            "model": config.get("model"),
+            "temperature": config.get("temperature"),
+        },
+        "messages": messages,
+        "tool_calls": [
+            {
+                "server": getattr(tc, "server", ""),
+                "tool": getattr(tc, "tool", ""),
+                "args": getattr(tc, "args", {}),
+                "ok": getattr(tc, "ok", False),
+                "result_preview": getattr(tc, "result_preview", "")[:500],
+            }
+            for tc in tool_calls
+        ],
     }
-    .tool-call-success { border-left-color: #22c55e; }
-    .tool-call-error { border-left-color: #ef4444; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    return json.dumps(export_data, indent=2, default=str)
 
-st.markdown(
-    """
-    <div class="agentlab-hero">
-        <h1>Agent Lab</h1>
-        <p>Try Normal / RAG / Deep agents against your running MCP servers using natural language.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STATE INITIALIZATION
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _init_state() -> None:
     st.session_state.setdefault("agentlab_session_id", str(uuid.uuid4())[:8])
@@ -436,6 +838,11 @@ def _init_state() -> None:
     st.session_state.setdefault("agentlab_auto_build", True)
     st.session_state.setdefault("agentlab_last_build_fingerprint", None)
     st.session_state.setdefault("agentlab_last_build_error", None)
+    st.session_state.setdefault("agentlab_selected_preset", "custom")
+    st.session_state.setdefault("agentlab_recent_queries", [])
+    st.session_state.setdefault("agentlab_favorite_queries", [])
+    st.session_state.setdefault("agentlab_processing", False)
+    st.session_state.setdefault("agentlab_processing_response", None)
     st.session_state.setdefault(
         "agentlab_config",
         {
@@ -469,19 +876,18 @@ try:
 except Exception as exc:
     AGENTS_AVAILABLE = False
     AGENT_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-    AgentRuntime = Any  # type: ignore[assignment]
-    ToolCallEvent = Any  # type: ignore[assignment]
-    build_deep_agent = None  # type: ignore[assignment]
-    build_normal_agent = None  # type: ignore[assignment]
-    build_rag_agent = None  # type: ignore[assignment]
-    get_available_servers = None  # type: ignore[assignment]
-    run_agent_query = None  # type: ignore[assignment]
-    run_deep_agent_query = None  # type: ignore[assignment]
+    AgentRuntime = Any
+    ToolCallEvent = Any
+    build_deep_agent = None
+    build_normal_agent = None
+    build_rag_agent = None
+    get_available_servers = None
+    run_agent_query = None
+    run_deep_agent_query = None
 
 
 def _fallback_server_catalog() -> Dict[str, Dict[str, Any]]:
     """Best-effort server catalog for browsing tools/prompts/resources without LangChain."""
-
     try:
         from src.streamlit_config import StreamlitAppConfig
         from src.ai.mcp_specs import build_server_specs
@@ -496,20 +902,9 @@ def _fallback_server_catalog() -> Dict[str, Dict[str, Any]]:
             }
         return out
     except Exception:
-        # Minimal fallback: use admin config defaults.
-        # (URLs still resolve via _resolve_server_url/get_server_url.)
         candidates = [
-            "docker",
-            "git",
-            "jenkins",
-            "kubernetes",
-            "local",
-            "nexus",
-            "playwright",
-            "scheduler",
-            "sonarqube",
-            "trivy",
-            "websearch",
+            "docker", "git", "jenkins", "kubernetes", "local",
+            "nexus", "playwright", "scheduler", "sonarqube", "trivy", "websearch",
         ]
         return {k: {"name": k, "description": ""} for k in candidates if admin.is_mcp_enabled(k, default=True)}
 
@@ -517,29 +912,142 @@ def _fallback_server_catalog() -> Dict[str, Dict[str, Any]]:
 servers = get_available_servers() if AGENTS_AVAILABLE and get_available_servers else _fallback_server_catalog()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HERO SECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Calculate stats for hero
+total_servers = len(servers)
+healthy_servers = 0
+total_tools = 0
+for k in servers.keys():
+    url = _resolve_server_url(k)
+    snap = _server_snapshot(k, url)
+    if snap.get("ok"):
+        healthy_servers += 1
+        total_tools += int(snap.get("tool_count") or 0)
+
+ollama_status = _ollama_health(st.session_state.agentlab_config.get("ollama_url", "http://ollama:11434"))
+
+st.markdown(
+    f"""
+    <div class="agentlab-hero">
+        <h1>🧪 Agent Lab</h1>
+        <p>Build and test AI agents with Natural Language against your MCP servers</p>
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <span>🖥️</span>
+                <span><strong>{healthy_servers}/{total_servers}</strong> Servers</span>
+            </div>
+            <div class="hero-stat">
+                <span>🔧</span>
+                <span><strong>{total_tools}</strong> Tools</span>
+            </div>
+            <div class="hero-stat">
+                <span>{'✅' if ollama_status.get('ok') else '❌'}</span>
+                <span>Ollama {ollama_status.get('model_count', 0) if ollama_status.get('ok') else 'Offline'}</span>
+            </div>
+            <div class="hero-stat">
+                <span>💬</span>
+                <span><strong>{len(st.session_state.agentlab_messages)}</strong> Messages</span>
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT PRESETS SECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.markdown("### 🎯 Quick Start: Agent Presets")
+st.caption("Select a preset to quickly configure your agent, or choose Custom to build your own")
+
+preset_cols = st.columns(len(AGENT_PRESETS))
+for col, (preset_key, preset_info) in zip(preset_cols, AGENT_PRESETS.items()):
+    with col:
+        is_selected = st.session_state.get("agentlab_selected_preset") == preset_key
+        if st.button(
+            f"{preset_info['icon']}\n\n**{preset_info['name']}**",
+            key=f"preset_{preset_key}",
+            use_container_width=True,
+            type="primary" if is_selected else "secondary",
+        ):
+            st.session_state.agentlab_selected_preset = preset_key
+            if preset_key != "custom":
+                st.session_state.agentlab_config["servers"] = preset_info["servers"]
+                st.session_state.agentlab_config["system_prompt"] = preset_info["system_prompt"]
+            st.session_state.agentlab_last_build_fingerprint = None  # Force rebuild
+            st.rerun()
+
+# Show preset description
+current_preset = AGENT_PRESETS.get(st.session_state.get("agentlab_selected_preset", "custom"), AGENT_PRESETS["custom"])
+st.caption(f"**{current_preset['name']}:** {current_preset['description']}")
+
+st.divider()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL CALL RENDERER
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _render_tool_calls(tool_calls: List[ToolCallEvent]) -> None:
     if not tool_calls:
-        st.caption("No tool calls yet")
-        return
-
-    for ev in reversed(tool_calls[-20:]):
-        ok = bool(getattr(ev, "ok", False))
-        cls = "tool-call-success" if ok else "tool-call-error"
-        args = getattr(ev, "args", {}) or {}
         st.markdown(
-            f"""
-            <div class="tool-call-card {cls}">
-                <div><b>{ev.server}</b> · <code>{ev.tool}</code></div>
-                <div style="opacity:0.85; margin-top:0.35rem;"><code>{str(args)[:800]}</code></div>
-                <div style="opacity:0.75; margin-top:0.35rem;">{(ev.result_preview or '')[:800]}</div>
+            """
+            <div class="empty-state">
+                <div class="empty-state-icon">🔧</div>
+                <div>No tool calls yet</div>
+                <div style="font-size: 0.85rem; margin-top: 0.5rem;">
+                    Start a conversation to see tool usage here
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+        return
 
+    st.markdown(f"**{len(tool_calls)} tool call(s)** in this session")
+
+    # Timeline view
+    st.markdown('<div class="timeline-container">', unsafe_allow_html=True)
+    for ev in reversed(tool_calls[-20:]):
+        ok = bool(getattr(ev, "ok", False))
+        cls = "success" if ok else "error"
+        args = getattr(ev, "args", {}) or {}
+        started = getattr(ev, "started_at", "")[:19] if hasattr(ev, "started_at") else ""
+
+        st.markdown(
+            f"""
+            <div class="timeline-item {cls}">
+                <div style="font-weight: 600; color: #1e293b;">
+                    {ev.server} · <code style="background: #e2e8f0; padding: 0.1rem 0.4rem; border-radius: 4px;">{ev.tool}</code>
+                    {'✅' if ok else '❌'}
+                </div>
+                <div style="font-size: 0.8rem; color: #64748b; margin-top: 0.25rem;">
+                    {started}
+                </div>
+                <div style="font-size: 0.85rem; margin-top: 0.35rem;">
+                    <code style="word-break: break-all;">{str(args)[:400]}</code>
+                </div>
+                <div style="font-size: 0.8rem; color: #64748b; margin-top: 0.35rem;">
+                    {(getattr(ev, 'result_preview', '') or '')[:300]}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("### Configuration")
+    st.markdown("### ⚙️ Configuration")
 
     if not AGENTS_AVAILABLE:
         st.warning(
@@ -548,103 +1056,103 @@ with st.sidebar:
             f"\n\nDetails: {AGENT_IMPORT_ERROR or 'unknown import error'}"
         )
 
-    refresh = st.button("Refresh server info", use_container_width=True)
-    if refresh:
-        st.cache_data.clear()
-        st.rerun()
+    # Quick refresh button
+    col_refresh, col_clear = st.columns(2)
+    with col_refresh:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    with col_clear:
+        if st.button("🗑️ Clear", use_container_width=True):
+            st.session_state.agentlab_messages = []
+            st.session_state.agentlab_tool_calls = []
+            st.session_state.agentlab_runtime = None
+            st.session_state.agentlab_session_id = str(uuid.uuid4())[:8]
+            st.rerun()
 
+    st.divider()
+
+    # Agent Type Selection
+    st.markdown("#### Agent Type")
+    agent_type_help = {
+        "Normal": "Standard tool-calling agent",
+        "RAG": "Retrieval-augmented with vector search",
+        "Deep": "Plan-then-execute with reasoning",
+    }
     st.session_state.agentlab_config["agent_type"] = st.selectbox(
         "Agent type",
         options=["Normal", "RAG", "Deep"],
         index=["Normal", "RAG", "Deep"].index(st.session_state.agentlab_config.get("agent_type", "Normal")),
+        help=agent_type_help.get(st.session_state.agentlab_config.get("agent_type", "Normal")),
+        label_visibility="collapsed",
     )
-
-    st.markdown("#### MCP servers")
-    selected_servers: List[str] = []
-
-    # Pre-fetch snapshots for nicer labels + metadata panel.
-    server_rows: List[Dict[str, Any]] = []
-    for key, info in servers.items():
-        url = _resolve_server_url(key)
-        snap = _server_snapshot(key, url)
-        server_rows.append(
-            {
-                "server": key,
-                "name": info.get("name", key),
-                "url": url,
-                "status": snap.get("status"),
-                "tools": snap.get("tool_count"),
-                "prompts": snap.get("prompt_count"),
-                "latency_ms": snap.get("response_time_ms"),
-                "message": snap.get("message"),
-            }
-        )
-
-    with st.expander("Server overview", expanded=False):
-        st.dataframe(server_rows, use_container_width=True, hide_index=True)
-
-    for key, info in servers.items():
-        url = _resolve_server_url(key)
-        snap = _server_snapshot(key, url)
-        icon = get_status_icon(str(snap.get("status") or "unknown"))
-        label = f"{icon} {info['name']} ({snap.get('tool_count', 0)} tools, {snap.get('prompt_count', 0)} prompts)"
-        checked = st.checkbox(
-            label,
-            value=key in st.session_state.agentlab_config.get("servers", []),
-            help=info.get("description", ""),
-        )
-        if checked:
-            selected_servers.append(key)
-    st.session_state.agentlab_config["servers"] = selected_servers
-
-    st.session_state.agentlab_auto_build = st.toggle(
-        "Auto-build agent",
-        value=bool(st.session_state.get("agentlab_auto_build", True)),
-        help="When enabled, the agent rebuilds automatically when selections/config change.",
-    )
-
-    # Subtle Ollama health indicator.
-    ollama_url_for_check = st.session_state.agentlab_config.get(
-        "ollama_url", os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-    )
-    _oll = _ollama_health(str(ollama_url_for_check))
-    st.caption(f"Ollama: {'✓' if _oll.get('ok') else '✗'} {(_oll.get('message') or '').strip()}")
-
-    if selected_servers:
-        with st.expander("Selected servers (details)", expanded=False):
-            for k in selected_servers:
-                url = _resolve_server_url(k)
-                snap = _server_snapshot(k, url)
-                st.markdown(
-                    f"**{k}** · {get_status_icon(str(snap.get('status') or 'unknown'))} {snap.get('status')} · {url}"
-                )
-                if snap.get("message"):
-                    st.caption(str(snap.get("message")))
-                if snap.get("sample_tools"):
-                    st.caption("Tools: " + ", ".join([str(x) for x in snap.get("sample_tools")]))
-                if snap.get("sample_prompts"):
-                    st.caption("Prompts: " + ", ".join([str(x) for x in snap.get("sample_prompts")]))
-                if snap.get("sample_resources"):
-                    st.caption("Resources: " + ", ".join([str(x) for x in snap.get("sample_resources")]))
 
     st.divider()
 
-    st.markdown("#### Model")
+    # MCP Servers with Health Status
+    st.markdown("#### 🖥️ MCP Servers")
+
+    selected_servers: List[str] = []
+    server_rows: List[Dict[str, Any]] = []
+
+    for key, info in servers.items():
+        url = _resolve_server_url(key)
+        snap = _server_snapshot(key, url)
+        server_rows.append({
+            "server": key,
+            "name": info.get("name", key),
+            "url": url,
+            "status": snap.get("status"),
+            "ok": snap.get("ok"),
+            "tools": snap.get("tool_count"),
+            "prompts": snap.get("prompt_count"),
+            "latency_ms": snap.get("response_time_ms"),
+        })
+
+    # Compact server selection
+    for key, info in servers.items():
+        url = _resolve_server_url(key)
+        snap = _server_snapshot(key, url)
+        icon = "✅" if snap.get("ok") else "❌"
+        tool_count = snap.get("tool_count", 0)
+
+        checked = st.checkbox(
+            f"{icon} **{info['name']}** ({tool_count} tools)",
+            value=key in st.session_state.agentlab_config.get("servers", []),
+            key=f"srv_{key}",
+        )
+        if checked:
+            selected_servers.append(key)
+
+    st.session_state.agentlab_config["servers"] = selected_servers
+
+    # Server health expander
+    with st.expander("📊 Server Health", expanded=False):
+        for row in server_rows:
+            status_icon = "🟢" if row.get("ok") else "🔴"
+            latency = f"{row.get('latency_ms', 0):.0f}ms" if row.get("latency_ms") else "N/A"
+            st.markdown(f"{status_icon} **{row['name']}** - {row['tools']} tools - {latency}")
+
+    st.divider()
+
+    # Model Settings
+    st.markdown("#### 🤖 Model")
+
     st.session_state.agentlab_config["model"] = st.text_input(
-        "Ollama model",
+        "Model name",
         value=st.session_state.agentlab_config.get("model", "llama3.2"),
+        placeholder="llama3.2, mistral, codellama...",
     )
+
     st.session_state.agentlab_config["ollama_url"] = st.text_input(
         "Ollama URL",
         value=st.session_state.agentlab_config.get("ollama_url", os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")),
     )
 
-    if st.session_state.agentlab_config.get("agent_type") == "RAG":
-        st.session_state.agentlab_config["embedding_model"] = st.text_input(
-            "Embedding model (Ollama)",
-            value=st.session_state.agentlab_config.get("embedding_model", "nomic-embed-text"),
-            help="Used only for vector RAG indexing; falls back to lexical search if unavailable.",
-        )
+    # Show available models from Ollama
+    if ollama_status.get("ok") and ollama_status.get("models"):
+        st.caption(f"Available: {', '.join(ollama_status.get('models', []))}")
+
     st.session_state.agentlab_config["temperature"] = st.slider(
         "Temperature",
         min_value=0.0,
@@ -653,65 +1161,66 @@ with st.sidebar:
         step=0.1,
     )
 
+    if st.session_state.agentlab_config.get("agent_type") == "RAG":
+        st.session_state.agentlab_config["embedding_model"] = st.text_input(
+            "Embedding model",
+            value=st.session_state.agentlab_config.get("embedding_model", "nomic-embed-text"),
+        )
+
     st.divider()
 
-    st.markdown("#### System prompt")
+    # System Prompt
+    st.markdown("#### 📝 System Prompt")
     st.session_state.agentlab_config["system_prompt"] = st.text_area(
         "System prompt",
         value=st.session_state.agentlab_config.get("system_prompt", ""),
-        height=130,
+        height=120,
         placeholder="Optional: override the agent's system prompt",
         label_visibility="collapsed",
     )
 
-    gen_col1, gen_col2 = st.columns([1.0, 1.0])
-    with gen_col1:
-        gen_sys = st.button("Generate system prompt", use_container_width=True)
-    with gen_col2:
-        clear_sys = st.button("Clear", use_container_width=True)
-
-    if clear_sys:
-        st.session_state.agentlab_config["system_prompt"] = ""
-        st.rerun()
-
-    if gen_sys:
-        if not selected_servers:
-            st.error("Select at least one MCP server")
-        else:
-            with st.spinner("Generating system prompt with Ollama..."):
-                try:
-                    cfg = st.session_state.agentlab_config
-                    sys_prompt = _generate_system_prompt_with_ollama(
-                        ollama_url=str(cfg.get("ollama_url") or "http://ollama:11434"),
-                        model=str(cfg.get("model") or "llama3.2"),
-                        temperature=float(cfg.get("temperature") or 0.1),
-                        selected_servers=list(selected_servers),
-                    )
-                    if sys_prompt:
-                        st.session_state.agentlab_config["system_prompt"] = sys_prompt
-                        st.success("System prompt generated")
-                        st.rerun()
-                    else:
-                        st.warning("No system prompt returned")
-                except Exception as exc:
-                    _render_exception("Failed to generate system prompt", exc)
+    col_gen, col_clr = st.columns(2)
+    with col_gen:
+        if st.button("✨ Generate", use_container_width=True):
+            if not selected_servers:
+                st.error("Select servers first")
+            else:
+                with st.spinner("Generating..."):
+                    try:
+                        cfg = st.session_state.agentlab_config
+                        sys_prompt = _generate_system_prompt_with_ollama(
+                            ollama_url=str(cfg.get("ollama_url") or "http://ollama:11434"),
+                            model=str(cfg.get("model") or "llama3.2"),
+                            temperature=float(cfg.get("temperature") or 0.1),
+                            selected_servers=list(selected_servers),
+                        )
+                        if sys_prompt:
+                            st.session_state.agentlab_config["system_prompt"] = sys_prompt
+                            st.success("Generated!")
+                            st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc)[:100])
+    with col_clr:
+        if st.button("Clear", use_container_width=True):
+            st.session_state.agentlab_config["system_prompt"] = ""
+            st.rerun()
 
     st.divider()
 
-    rebuild = st.button("Rebuild now", type="primary", use_container_width=True)
-    clear = st.button("Clear chat", type="secondary", use_container_width=True)
+    # Auto-build toggle and rebuild
+    st.session_state.agentlab_auto_build = st.toggle(
+        "Auto-build agent",
+        value=bool(st.session_state.get("agentlab_auto_build", True)),
+    )
 
-    if clear:
-        st.session_state.agentlab_messages = []
-        st.session_state.agentlab_tool_calls = []
-        st.session_state.agentlab_runtime = None
-        st.session_state.agentlab_session_id = str(uuid.uuid4())[:8]
-        st.rerun()
-
-    if rebuild:
+    if st.button("🔨 Rebuild Agent", type="primary", use_container_width=True):
         st.session_state.agentlab_last_build_fingerprint = None
         st.rerun()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT BUILD
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _maybe_build_agent(selected_servers: List[str]) -> None:
     if not AGENTS_AVAILABLE:
@@ -736,7 +1245,7 @@ def _maybe_build_agent(selected_servers: List[str]) -> None:
     if st.session_state.get("agentlab_last_build_fingerprint") == fingerprint and st.session_state.get("agentlab_runtime") is not None:
         return
 
-    with st.spinner("Auto-building agent for current selections..."):
+    with st.spinner("Building agent..."):
         st.session_state.agentlab_tool_calls = []
         agent_type = cfg.get("agent_type", "Normal")
         try:
@@ -787,64 +1296,203 @@ def _maybe_build_agent(selected_servers: List[str]) -> None:
 _maybe_build_agent(selected_servers)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# METRICS ROW
+# ─────────────────────────────────────────────────────────────────────────────
+
 runtime: Optional[AgentRuntime] = st.session_state.agentlab_runtime
 
 selected = st.session_state.agentlab_config.get("servers", [])
 if selected:
-    total_tools = 0
-    total_prompts = 0
+    sel_tools = 0
+    sel_prompts = 0
     for k in selected:
         url = _resolve_server_url(k)
         snap = _server_snapshot(k, url)
-        total_tools += int(snap.get("tool_count") or 0)
-        total_prompts += int(snap.get("prompt_count") or 0)
+        sel_tools += int(snap.get("tool_count") or 0)
+        sel_prompts += int(snap.get("prompt_count") or 0)
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Selected servers", str(len(selected)))
-    m2.metric("Total tools", str(total_tools))
-    m3.metric("Total prompts", str(total_prompts))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Selected Servers", str(len(selected)))
+    m2.metric("Available Tools", str(sel_tools))
+    m3.metric("Total Prompts", str(sel_prompts))
+    m4.metric("Agent Status", "✅ Ready" if runtime else "⚠️ Not Built")
 
-status_line = "Ready" if runtime is not None else "Not ready"
 if st.session_state.get("agentlab_last_build_error"):
-    st.error(f"Agent build error: {st.session_state.get('agentlab_last_build_error')}")
-else:
-    st.caption(f"Agent status: {status_line}")
+    st.error(f"Build error: {st.session_state.get('agentlab_last_build_error')}")
 
-tab_chat, tab_tools, tab_prompts, tab_resources, tab_calls = st.tabs(
-    ["Chat", "Tools", "Prompts", "Resources", "Tool calls"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QUICK ACTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+if runtime and selected:
+    st.markdown(
+        """
+        <div class="quick-actions">
+            <div class="quick-actions-title">
+                ⚡ Quick Actions
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Filter quick queries by available servers
+    available_queries = [
+        q for q in QUICK_QUERIES
+        if any(s in selected for s in q.get("servers", []))
+    ]
+
+    if available_queries:
+        cols = st.columns(min(4, len(available_queries)))
+        for i, query in enumerate(available_queries[:8]):
+            with cols[i % 4]:
+                if st.button(
+                    f"{query['icon']} {query['label']}",
+                    key=f"quick_{i}",
+                    use_container_width=True,
+                ):
+                    st.session_state.agentlab_pending_user_message = query["query"]
+                    # Add to recent queries
+                    recent = st.session_state.get("agentlab_recent_queries", [])
+                    if query["query"] not in recent:
+                        recent.insert(0, query["query"])
+                        st.session_state.agentlab_recent_queries = recent[:10]
+                    st.rerun()
+    else:
+        st.caption("Select servers to see relevant quick actions")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN TABS
+# ─────────────────────────────────────────────────────────────────────────────
+
+tab_chat, tab_tools, tab_prompts, tab_resources, tab_calls, tab_export = st.tabs(
+    ["💬 Chat", "🔧 Tools", "📋 Prompts", "📁 Resources", "📊 Tool Calls", "💾 Export"]
 )
 
 with tab_chat:
     if not AGENTS_AVAILABLE:
         st.info(
             "Chat is disabled in this environment because LangChain dependencies are missing. "
-            "Run the app in the dev container/compose stack, or install `best-streamlit-website/requirements.txt` "
-            "into the current Python environment."
+            "Run the app in the dev container/compose stack, or install `best-streamlit-website/requirements.txt`."
         )
     elif runtime is None:
-        st.info("Select servers in the sidebar — the agent auto-builds when enabled.")
+        st.markdown(
+            """
+            <div class="empty-state">
+                <div class="empty-state-icon">🤖</div>
+                <div style="font-size: 1.1rem; font-weight: 600;">No Agent Built</div>
+                <div style="margin-top: 0.5rem;">
+                    Select servers in the sidebar to build an agent and start chatting
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+    # Recent queries sidebar
+    recent_queries = st.session_state.get("agentlab_recent_queries", [])
+    if recent_queries and runtime:
+        with st.expander("📜 Recent Queries", expanded=False):
+            for rq in recent_queries[:5]:
+                if st.button(rq[:50] + "..." if len(rq) > 50 else rq, key=f"recent_{hash(rq)}"):
+                    st.session_state.agentlab_pending_user_message = rq
+                    st.rerun()
+
+    # Render chat messages
     for msg in st.session_state.agentlab_messages:
         role = msg.get("role", "user")
         with st.chat_message(role):
             st.markdown(msg.get("content", ""))
 
-    # Support one-click prompt execution (sets a pending message).
+    # Check if we have a pending response (from background processing)
+    if st.session_state.get("agentlab_processing_response"):
+        response_data = st.session_state.agentlab_processing_response
+        st.session_state.agentlab_processing_response = None
+
+        if response_data.get("error"):
+            st.error(f"Agent error: {response_data['error']}")
+        else:
+            st.session_state.agentlab_messages.append({
+                "role": "assistant",
+                "content": response_data.get("content", "")
+            })
+        st.rerun()
+
+    # Show processing indicator if query is in progress
+    if st.session_state.get("agentlab_processing"):
+        with st.chat_message("assistant"):
+            st.markdown(
+                """
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div class="processing-dot"></div>
+                    <span style="color: #64748b;">Processing your request...</span>
+                </div>
+                <style>
+                .processing-dot {
+                    width: 12px;
+                    height: 12px;
+                    background: #6366f1;
+                    border-radius: 50%;
+                    animation: pulse 1.5s ease-in-out infinite;
+                }
+                @keyframes pulse {
+                    0%, 100% { opacity: 0.4; transform: scale(0.8); }
+                    50% { opacity: 1; transform: scale(1.2); }
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+        # Auto-refresh to check for completion
+        import time
+        time.sleep(0.5)
+        st.rerun()
+
+    # Helper function to run agent query in thread
+    def _execute_agent_query(rt, query_text, history, agent_type_val):
+        """Execute agent query and store result in session state."""
+        try:
+            if agent_type_val == "Deep":
+                plan, answer, _events = run_deep_agent_query(rt, query_text, chat_history=history)
+                content = f"**Plan**\n{plan or ''}\n\n**Answer**\n{answer}"
+            else:
+                answer, _events = run_agent_query(rt, query_text, chat_history=history)
+                content = answer
+            return {"content": content, "error": None}
+        except Exception as exc:
+            return {"content": "", "error": str(exc)}
+
+    # Handle pending message
     pending = st.session_state.get("agentlab_pending_user_message")
-    if pending and runtime is not None:
+    if pending and runtime is not None and not st.session_state.get("agentlab_processing"):
         st.session_state.agentlab_pending_user_message = None
         user_text = str(pending)
         st.session_state.agentlab_messages.append({"role": "user", "content": user_text})
+
+        # Add to recent queries
+        recent = st.session_state.get("agentlab_recent_queries", [])
+        if user_text not in recent:
+            recent.insert(0, user_text)
+            st.session_state.agentlab_recent_queries = recent[:10]
+
         with st.chat_message("user"):
             st.markdown(user_text)
 
+        # Execute query with status
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.status("Processing...", expanded=True) as status:
+                st.write("🤔 Analyzing your request...")
                 cfg = st.session_state.agentlab_config
                 agent_type = cfg.get("agent_type", "Normal")
+
                 try:
+                    st.write("🔧 Calling tools...")
                     if agent_type == "Deep":
                         plan, answer, _events = run_deep_agent_query(runtime, user_text, chat_history=st.session_state.agentlab_messages[:-1])
+                        status.update(label="Complete!", state="complete")
                         st.markdown("**Plan**")
                         st.markdown(plan or "")
                         st.markdown("**Answer**")
@@ -852,26 +1500,41 @@ with tab_chat:
                         st.session_state.agentlab_messages.append({"role": "assistant", "content": f"Plan:\n{plan}\n\nAnswer:\n{answer}"})
                     else:
                         answer, _events = run_agent_query(runtime, user_text, chat_history=st.session_state.agentlab_messages[:-1])
+                        status.update(label="Complete!", state="complete")
                         st.markdown(answer)
                         st.session_state.agentlab_messages.append({"role": "assistant", "content": answer})
                 except Exception as exc:
+                    status.update(label="Error", state="error")
                     _render_exception("Agent error", exc)
 
         st.rerun()
 
-    prompt = st.chat_input("Ask in natural language (or use Prompts tab buttons)")
-    if prompt and runtime is not None:
+    # Chat input
+    prompt = st.chat_input("Ask in natural language...", disabled=(runtime is None or st.session_state.get("agentlab_processing")))
+    if prompt and runtime is not None and not st.session_state.get("agentlab_processing"):
         st.session_state.agentlab_messages.append({"role": "user", "content": prompt})
+
+        # Add to recent queries
+        recent = st.session_state.get("agentlab_recent_queries", [])
+        if prompt not in recent:
+            recent.insert(0, prompt)
+            st.session_state.agentlab_recent_queries = recent[:10]
+
         with st.chat_message("user"):
             st.markdown(prompt)
 
+        # Execute query with status
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.status("Processing...", expanded=True) as status:
+                st.write("🤔 Analyzing your request...")
                 cfg = st.session_state.agentlab_config
                 agent_type = cfg.get("agent_type", "Normal")
+
                 try:
+                    st.write("🔧 Calling tools...")
                     if agent_type == "Deep":
                         plan, answer, _events = run_deep_agent_query(runtime, prompt, chat_history=st.session_state.agentlab_messages[:-1])
+                        status.update(label="Complete!", state="complete")
                         st.markdown("**Plan**")
                         st.markdown(plan or "")
                         st.markdown("**Answer**")
@@ -879,21 +1542,27 @@ with tab_chat:
                         st.session_state.agentlab_messages.append({"role": "assistant", "content": f"Plan:\n{plan}\n\nAnswer:\n{answer}"})
                     else:
                         answer, _events = run_agent_query(runtime, prompt, chat_history=st.session_state.agentlab_messages[:-1])
+                        status.update(label="Complete!", state="complete")
                         st.markdown(answer)
                         st.session_state.agentlab_messages.append({"role": "assistant", "content": answer})
                 except Exception as exc:
+                    status.update(label="Error", state="error")
                     _render_exception("Agent error", exc)
 
         st.rerun()
 
 
 with tab_tools:
-    st.markdown("### Tools")
+    st.markdown("### 🔧 Available Tools")
+
     if not selected_servers:
-        st.info("Select at least one server in the sidebar.")
+        st.info("Select at least one server in the sidebar to browse tools.")
     else:
-        search = st.text_input("Search tools", value="", placeholder="e.g. health, list, scan, repo")
-        show_schema = st.toggle("Show schemas", value=False)
+        col_search, col_toggle = st.columns([3, 1])
+        with col_search:
+            search = st.text_input("🔍 Search tools", value="", placeholder="e.g. health, list, scan, deploy")
+        with col_toggle:
+            show_schema = st.toggle("Show schemas", value=False)
 
         tool_rows: List[Dict[str, Any]] = []
         for srv in selected_servers:
@@ -906,65 +1575,71 @@ with tab_tools:
             q = search.lower().strip()
             tool_rows = [r for r in tool_rows if q in r.get("name", "").lower() or q in r.get("description", "").lower()]
 
-        st.caption(f"{len(tool_rows)} tool(s) across selected servers")
-        for r in tool_rows[:250]:
-            title = f"{r['server']}.{r['name']}" + (f"  ·  {r['args']}" if r.get("args") else "")
-            with st.expander(title, expanded=False):
-                if r.get("description"):
-                    st.write(r.get("description"))
-                if show_schema and r.get("_schema"):
-                    st.code(json.dumps(r.get("_schema"), indent=2, default=str)[:6000], language="json")
-                st.code(json.dumps({"tool": r["name"], "args": {}}, indent=2), language="json")
+        st.caption(f"**{len(tool_rows)}** tool(s) across {len(selected_servers)} server(s)")
+
+        # Group by server
+        tools_by_server: Dict[str, List[Dict[str, Any]]] = {}
+        for r in tool_rows:
+            srv = r.get("server", "unknown")
+            if srv not in tools_by_server:
+                tools_by_server[srv] = []
+            tools_by_server[srv].append(r)
+
+        for srv, tools in tools_by_server.items():
+            with st.expander(f"**{srv}** ({len(tools)} tools)", expanded=True):
+                for r in tools[:50]:
+                    st.markdown(f"**`{r['name']}`** - {r.get('description', 'No description')[:100]}")
+                    if r.get("args"):
+                        st.caption(f"Args: `{r.get('args')}`")
+                    if show_schema and r.get("_schema"):
+                        st.code(json.dumps(r.get("_schema"), indent=2, default=str)[:3000], language="json")
 
 
 with tab_prompts:
-    st.markdown("### Prompts")
+    st.markdown("### 📋 Server Prompts")
+
     if not selected_servers:
         st.info("Select at least one server in the sidebar.")
     else:
-        pcol1, pcol2 = st.columns([1.0, 1.2])
+        pcol1, pcol2 = st.columns([1, 2])
         with pcol1:
             prompt_server = st.selectbox("Server", options=list(selected_servers), index=0)
         with pcol2:
-            prompt_search = st.text_input("Search prompts", value="", placeholder="e.g. workflow, runbook")
+            prompt_search = st.text_input("🔍 Search prompts", value="", placeholder="workflow, runbook...")
 
         url = _resolve_server_url(prompt_server)
         inv = _server_inventory(prompt_server, url)
         prompt_rows = [_prompt_to_row(prompt_server, p) for p in (inv.get("prompts") or [])]
+
         if prompt_search:
             q = prompt_search.lower().strip()
             prompt_rows = [r for r in prompt_rows if q in (r.get("name", "").lower()) or q in (r.get("description", "").lower()) or q in (r.get("title", "").lower())]
 
-        st.caption(f"{len(prompt_rows)} prompt(s) on {prompt_server}")
+        st.caption(f"**{len(prompt_rows)}** prompt(s) on {prompt_server}")
 
         args_json = st.text_area(
             "Prompt arguments (JSON)",
             value="{}",
-            height=110,
+            height=80,
             help="Most prompts accept named args. Provide a JSON object here.",
         )
 
-        for r in prompt_rows[:200]:
+        for r in prompt_rows[:50]:
             display = r.get("title") or r.get("name")
-            header = f"{r['server']}.{r['name']}" + (f"  ·  {display}" if display and display != r.get("name") else "")
-            with st.expander(header, expanded=False):
+            with st.expander(f"**{r['name']}** - {display}", expanded=False):
                 if r.get("description"):
                     st.write(r.get("description"))
                 if r.get("args"):
                     st.caption(f"Args: {r.get('args')}")
-                if r.get("_schema"):
-                    st.code(json.dumps(r.get("_schema"), indent=2, default=str)[:4000], language="json")
 
-                b1, b2, b3 = st.columns([1.0, 1.0, 1.2])
-                run_it = b1.button("Run → chat", key=f"run_prompt:{r['server']}:{r['name']}")
-                set_sys = b2.button("Set as system", key=f"sys_prompt:{r['server']}:{r['name']}")
-                preview = b3.button("Preview", key=f"preview_prompt:{r['server']}:{r['name']}")
+                b1, b2, b3 = st.columns(3)
+                run_it = b1.button("▶️ Run", key=f"run_prompt:{r['server']}:{r['name']}")
+                set_sys = b2.button("📝 Set System", key=f"sys_prompt:{r['server']}:{r['name']}")
+                preview = b3.button("👁️ Preview", key=f"preview_prompt:{r['server']}:{r['name']}")
 
                 parsed_args: Dict[str, Any] = {}
                 try:
                     parsed_args = json.loads(args_json or "{}")
-                    if not isinstance(parsed_args, dict):
-                        parsed_args = {}
                 except Exception:
                     parsed_args = {}
 
@@ -980,7 +1655,7 @@ with tab_prompts:
                             st.code(text[:8000], language="text")
                         if set_sys:
                             st.session_state.agentlab_config["system_prompt"] = text
-                            st.success("System prompt set")
+                            st.success("System prompt set!")
                         if run_it:
                             st.session_state.agentlab_pending_user_message = text
                             st.success("Queued for chat")
@@ -988,40 +1663,50 @@ with tab_prompts:
                         _render_exception("Failed to run prompt", exc)
 
         st.divider()
-        st.markdown("#### Custom prompt")
-        custom = st.text_area("Write your own prompt", value="", height=120)
-        send_custom = st.button("Send to chat", use_container_width=True)
-        if send_custom and custom.strip():
+        st.markdown("#### ✏️ Custom Prompt")
+        custom = st.text_area("Write your own prompt", value="", height=100)
+        if st.button("Send to Chat", use_container_width=True) and custom.strip():
             st.session_state.agentlab_pending_user_message = custom.strip()
             st.success("Queued for chat")
 
 
 with tab_resources:
-    st.markdown("### Resources")
+    st.markdown("### 📁 Resources")
+
     if not selected_servers:
         st.info("Select at least one server in the sidebar.")
     else:
-        rcol1, rcol2 = st.columns([1.0, 1.2])
+        rcol1, rcol2 = st.columns([1, 2])
         with rcol1:
             res_server = st.selectbox("Server", options=list(selected_servers), index=0, key="res_server")
         with rcol2:
-            res_search = st.text_input("Search resources", value="", placeholder="uri/name")
+            res_search = st.text_input("🔍 Search resources", value="", placeholder="uri, name...")
 
         url = _resolve_server_url(res_server)
         inv = _server_inventory(res_server, url)
         res_rows = [_resource_to_row(res_server, r) for r in (inv.get("resources") or [])]
+
         if res_search:
             q = res_search.lower().strip()
-            res_rows = [r for r in res_rows if q in r.get("uri", "").lower() or q in r.get("name", "").lower() or q in r.get("description", "").lower()]
+            res_rows = [r for r in res_rows if q in r.get("uri", "").lower() or q in r.get("name", "").lower()]
 
-        st.caption(f"{len(res_rows)} resource(s) on {res_server}")
+        st.caption(f"**{len(res_rows)}** resource(s) on {res_server}")
+
         if not res_rows:
-            st.info("No resources reported by this server.")
+            st.markdown(
+                """
+                <div class="empty-state">
+                    <div class="empty-state-icon">📁</div>
+                    <div>No resources reported by this server</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         else:
             options = [r.get("uri") for r in res_rows if r.get("uri")]
             selected_uri = st.selectbox("Resource URI", options=options, index=0)
-            read_btn = st.button("Read resource", type="primary")
-            if read_btn and selected_uri:
+
+            if st.button("📖 Read Resource", type="primary") and selected_uri:
                 client = get_mcp_client(res_server, url=_resolve_server_url(res_server), timeout=10.0, force_new=True, source="agent_lab")
                 try:
                     payload = client.read_resource(selected_uri)
@@ -1031,5 +1716,68 @@ with tab_resources:
 
 
 with tab_calls:
-    st.markdown("### Tool calls")
+    st.markdown("### 📊 Tool Call History")
     _render_tool_calls(st.session_state.agentlab_tool_calls)
+
+
+with tab_export:
+    st.markdown("### 💾 Export Conversation")
+
+    messages = st.session_state.agentlab_messages
+    tool_calls = st.session_state.agentlab_tool_calls
+    config = st.session_state.agentlab_config
+
+    if not messages:
+        st.markdown(
+            """
+            <div class="empty-state">
+                <div class="empty-state-icon">💬</div>
+                <div>No conversation to export</div>
+                <div style="font-size: 0.85rem; margin-top: 0.5rem;">
+                    Start a conversation in the Chat tab first
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info(f"**{len(messages)}** messages, **{len(tool_calls)}** tool calls")
+
+        col_md, col_json = st.columns(2)
+
+        with col_md:
+            md_content = _export_conversation_markdown(messages, tool_calls)
+            st.download_button(
+                "📄 Download Markdown",
+                data=md_content,
+                file_name=f"agent_lab_conversation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+        with col_json:
+            json_content = _export_conversation_json(messages, tool_calls, config)
+            st.download_button(
+                "📋 Download JSON",
+                data=json_content,
+                file_name=f"agent_lab_conversation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        st.divider()
+
+        with st.expander("Preview Export", expanded=False):
+            st.code(md_content[:5000], language="markdown")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FOOTER
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.divider()
+st.caption(
+    "**Tips:** Select a preset to quick-start, use Quick Actions for common queries, "
+    "or type your own questions. The agent can chain multiple tools to complete complex tasks. "
+    f"Session ID: `{st.session_state.agentlab_session_id}`"
+)

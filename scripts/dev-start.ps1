@@ -108,7 +108,6 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "Access the application at:" -ForegroundColor Cyan
     Write-Host "  Streamlit UI:     http://localhost:8502" -ForegroundColor White
-    Write-Host "  Chainlit Agent Lab: http://localhost:8503" -ForegroundColor White
     Write-Host "  Scheduler MCP:    http://localhost:8010" -ForegroundColor White
     Write-Host "  Docker MCP:       http://localhost:8001" -ForegroundColor White
     Write-Host "  Jenkins MCP:      http://localhost:8002" -ForegroundColor White

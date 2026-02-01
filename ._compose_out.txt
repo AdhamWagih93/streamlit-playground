@@ -1,0 +1,738 @@
+name: bsw
+services:
+  docker-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-docker/Dockerfile
+    cpus: 0.1
+    container_name: bsw-docker-mcp
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_MCP_HOST: 0.0.0.0
+      DOCKER_MCP_PORT: "8000"
+      DOCKER_MCP_TRANSPORT: http
+      LOG_LEVEL: DEBUG
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8000/health
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8001"
+        protocol: tcp
+      - mode: ingress
+        target: 5678
+        published: "5678"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  git-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-git/Dockerfile
+    cpus: 0.1
+    container_name: bsw-git-mcp
+    environment:
+      GIT_MCP_HOST: 0.0.0.0
+      GIT_MCP_PORT: "8000"
+      GIT_MCP_TRANSPORT: http
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -sf -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"bsw-health","version":"1.0"}}}'' http://localhost:8000/mcp > /dev/null'
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8005"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\data\repos
+        target: /repos
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  jenkins-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-jenkins/Dockerfile
+    cpus: 0.1
+    container_name: bsw-jenkins-mcp
+    environment:
+      JENKINS_API_TOKEN: ""
+      JENKINS_BASE_URL: http://jenkins:8080
+      JENKINS_MCP_CLIENT_TOKEN: dev-jenkins-mcp-token
+      JENKINS_MCP_HOST: 0.0.0.0
+      JENKINS_MCP_PORT: "8000"
+      JENKINS_MCP_TRANSPORT: http
+      JENKINS_USERNAME: ""
+      JENKINS_VERIFY_SSL: "false"
+      LOG_LEVEL: DEBUG
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -f http://localhost:8000/health || exit 1
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8002"
+        protocol: tcp
+      - mode: ingress
+        target: 5678
+        published: "5679"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  kubernetes-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-kubernetes/Dockerfile
+    cpus: 0.1
+    container_name: bsw-kubernetes-mcp
+    environment:
+      K8S_CONTEXT: ""
+      K8S_KUBECONFIG: ""
+      KUBERNETES_MCP_HOST: 0.0.0.0
+      KUBERNETES_MCP_PORT: "8000"
+      KUBERNETES_MCP_TRANSPORT: http
+      LOG_LEVEL: DEBUG
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -f http://localhost:8000/health || exit 1
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8003"
+        protocol: tcp
+      - mode: ingress
+        target: 5678
+        published: "5680"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham/.kube
+        target: /root/.kube
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  local-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-local/Dockerfile
+    cpus: 0.1
+    container_name: bsw-local-mcp
+    environment:
+      LOCAL_MCP_ALLOW_WRITE: "true"
+      LOCAL_MCP_HOST: 0.0.0.0
+      LOCAL_MCP_PORT: "8000"
+      LOCAL_MCP_ROOT: /app
+      LOCAL_MCP_TRANSPORT: http
+      LOG_LEVEL: DEBUG
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -sf -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"bsw-health","version":"1.0"}}}'' http://localhost:8000/mcp > /dev/null'
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8009"
+        protocol: tcp
+      - mode: ingress
+        target: 5678
+        published: "5681"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+        target: /app
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\data
+        target: /app/data
+        bind:
+          create_host_path: true
+  nexus-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-jenkins/Dockerfile
+    cpus: 0.1
+    container_name: bsw-nexus-mcp
+    environment:
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      NEXUS_BASE_URL: http://nexus:8081
+      NEXUS_MCP_HOST: 0.0.0.0
+      NEXUS_MCP_PORT: "8000"
+      NEXUS_MCP_TRANSPORT: http
+      NEXUS_PASSWORD: ""
+      NEXUS_USERNAME: ""
+      TZ: Africa/Cairo
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8004"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  ollama:
+    profiles:
+      - ai
+    container_name: bsw-ollama
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: "4294967296"
+        reservations:
+          devices:
+            - capabilities:
+                - gpu
+              driver: nvidia
+              count: -1
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_NUM_CTX: "32768"
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://localhost:11434/api/tags
+      timeout: 5s
+      interval: 10s
+      retries: 10
+    image: ollama/ollama:latest
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 11434
+        published: "11434"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: ollama-data
+        target: /root/.ollama
+        volume: {}
+  playwright-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-playwright/Dockerfile
+    cpus: 0.25
+    container_name: bsw-playwright-mcp
+    environment:
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      PLAYWRIGHT_BROWSER: chromium
+      PLAYWRIGHT_HEADLESS: "true"
+      PLAYWRIGHT_MCP_HOST: 0.0.0.0
+      PLAYWRIGHT_MCP_PORT: "8000"
+      PLAYWRIGHT_MCP_TRANSPORT: http
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -sf -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"bsw-health","version":"1.0"}}}'' http://localhost:8000/mcp > /dev/null'
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "268435456"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8007"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\data\playwright
+        target: /tmp/playwright
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  postgres:
+    cpus: 0.2
+    container_name: bsw-postgres
+    environment:
+      POSTGRES_DB: bsw
+      POSTGRES_PASSWORD: bsw
+      POSTGRES_USER: bsw
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      timeout: 5s
+      interval: 10s
+      retries: 5
+    image: postgres:16-alpine
+    mem_limit: "268435456"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 5432
+        published: "5432"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql/data
+        volume: {}
+  redis:
+    cpus: 0.05
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    container_name: bsw-redis
+    environment:
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      timeout: 3s
+      interval: 10s
+      retries: 5
+    image: redis:7-alpine
+    mem_limit: "67108864"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 6379
+        published: "6379"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: redis-data
+        target: /data
+        volume: {}
+  scheduler:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/scheduler/Dockerfile
+    cpus: 0.2
+    container_name: bsw-scheduler
+    environment:
+      DOCKER_MCP_TRANSPORT: http
+      DOCKER_MCP_URL: http://docker-mcp:8000
+      JENKINS_MCP_TRANSPORT: http
+      JENKINS_MCP_URL: http://jenkins-mcp:8000
+      KUBERNETES_MCP_TRANSPORT: http
+      KUBERNETES_MCP_URL: http://kubernetes-mcp:8000
+      LOG_LEVEL: DEBUG
+      NEXUS_MCP_TRANSPORT: http
+      NEXUS_MCP_URL: http://nexus-mcp:8000
+      PLATFORM_DATABASE_URL: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
+      SCHEDULER_BOOTSTRAP_ALLOW_SHARED: "true"
+      SCHEDULER_BOOTSTRAP_JOBS: "true"
+      SCHEDULER_DATABASE_URL: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
+      SCHEDULER_MAX_JOBS_PER_TICK: "20"
+      SCHEDULER_MCP_HOST: 0.0.0.0
+      SCHEDULER_MCP_PORT: "8010"
+      SCHEDULER_MCP_TRANSPORT: http
+      SCHEDULER_TICK_SECONDS: "10"
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8010/health
+      timeout: 5s
+      interval: 20s
+      retries: 3
+      start_period: 20s
+    mem_limit: "201326592"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8010
+        published: "8010"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\data
+        target: /app/data
+        bind:
+          create_host_path: true
+  streamlit:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/streamlit/Dockerfile
+      cache_from:
+        - bsw-streamlit:dev
+    cpus: 0.35
+    command:
+      - sh
+      - -c
+      - |-
+        pip install watchdog &&
+               python -m streamlit run app.py
+               --server.address=0.0.0.0
+               --server.port=8501
+               --server.runOnSave=true
+               --server.fileWatcherType=watchdog
+    container_name: bsw-streamlit
+    depends_on:
+      docker-mcp:
+        condition: service_started
+        required: true
+      local-mcp:
+        condition: service_started
+        required: true
+      postgres:
+        condition: service_started
+        required: true
+      scheduler:
+        condition: service_started
+        required: true
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
+      DEBUG: "true"
+      DOCKER_MCP_TRANSPORT: http
+      DOCKER_MCP_URL: http://docker-mcp:8000
+      GIT_MCP_TRANSPORT: http
+      GIT_MCP_URL: http://git-mcp:8000
+      JENKINS_BASE_URL: http://jenkins:8080
+      JENKINS_MCP_TRANSPORT: http
+      JENKINS_MCP_URL: http://jenkins-mcp:8000
+      JENKINS_VERIFY_SSL: "false"
+      KUBERNETES_MCP_TRANSPORT: http
+      KUBERNETES_MCP_URL: http://kubernetes-mcp:8000
+      LOCAL_MCP_TRANSPORT: http
+      LOCAL_MCP_URL: http://local-mcp:8000
+      MCP_LOG_DATABASE_URL: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
+      NEXUS_MCP_TRANSPORT: http
+      NEXUS_MCP_URL: http://nexus-mcp:8000
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_ENABLED: "false"
+      OLLAMA_MODEL: tinyllama
+      PLATFORM_DATABASE_URL: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
+      PLAYWRIGHT_MCP_TRANSPORT: http
+      PLAYWRIGHT_MCP_URL: http://playwright-mcp:8000
+      SCHEDULER_MCP_TRANSPORT: http
+      SCHEDULER_MCP_URL: http://scheduler:8010
+      STREAMLIT_DOCKER_MCP_TRANSPORT: streamable-http
+      STREAMLIT_DOCKER_MCP_URL: http://docker-mcp:8000/mcp
+      STREAMLIT_GIT_MCP_TRANSPORT: streamable-http
+      STREAMLIT_GIT_MCP_URL: http://git-mcp:8000/mcp
+      STREAMLIT_JENKINS_MCP_TRANSPORT: streamable-http
+      STREAMLIT_JENKINS_MCP_URL: http://jenkins-mcp:8000/mcp
+      STREAMLIT_KUBERNETES_MCP_TRANSPORT: streamable-http
+      STREAMLIT_KUBERNETES_MCP_URL: http://kubernetes-mcp:8000/mcp
+      STREAMLIT_LOCAL_MCP_ALLOW_WRITE: "true"
+      STREAMLIT_LOCAL_MCP_ROOT: /app
+      STREAMLIT_LOCAL_MCP_TRANSPORT: streamable-http
+      STREAMLIT_LOCAL_MCP_URL: http://local-mcp:8000/mcp
+      STREAMLIT_NEXUS_MCP_TRANSPORT: streamable-http
+      STREAMLIT_NEXUS_MCP_URL: http://nexus-mcp:8000/mcp
+      STREAMLIT_PLAYWRIGHT_MCP_TRANSPORT: streamable-http
+      STREAMLIT_PLAYWRIGHT_MCP_URL: http://playwright-mcp:8000/mcp
+      STREAMLIT_SCHEDULER_MCP_TRANSPORT: streamable-http
+      STREAMLIT_SCHEDULER_MCP_URL: http://scheduler:8010/mcp
+      STREAMLIT_SERVER_FILE_WATCHER_TYPE: watchdog
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_SERVER_RUN_ON_SAVE: "true"
+      STREAMLIT_TRIVY_MCP_TRANSPORT: streamable-http
+      STREAMLIT_TRIVY_MCP_URL: http://trivy-mcp:8000/mcp
+      STREAMLIT_WEBSEARCH_MCP_TRANSPORT: streamable-http
+      STREAMLIT_WEBSEARCH_MCP_URL: http://websearch-mcp:8000/mcp
+      TRIVY_MCP_TRANSPORT: http
+      TRIVY_MCP_URL: http://trivy-mcp:8000
+      TZ: Africa/Cairo
+      WEBSEARCH_MCP_TRANSPORT: http
+      WEBSEARCH_MCP_URL: http://websearch-mcp:8000
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8501/_stcore/health
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 40s
+    mem_limit: "402653184"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8501
+        published: "8502"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+        target: /app
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\data
+        target: /app/data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\.streamlit
+        target: /app/.streamlit
+        bind:
+          create_host_path: true
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\assets
+        target: /app/assets
+        bind:
+          create_host_path: true
+  trivy-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-trivy/Dockerfile
+    cpus: 0.25
+    container_name: bsw-trivy-mcp
+    environment:
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TRIVY_MCP_HOST: 0.0.0.0
+      TRIVY_MCP_PORT: "8000"
+      TRIVY_MCP_TRANSPORT: http
+      TRIVY_SEVERITY: CRITICAL,HIGH,MEDIUM,LOW
+      TRIVY_SKIP_DB_UPDATE: "false"
+      TZ: Africa/Cairo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -sf -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"bsw-health","version":"1.0"}}}'' http://localhost:8000/mcp > /dev/null'
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "268435456"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8006"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: trivy-cache
+        target: /root/.cache/trivy
+        volume: {}
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+  websearch-mcp:
+    build:
+      context: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website
+      dockerfile: deploy/mcp-websearch/Dockerfile
+    cpus: 0.1
+    container_name: bsw-websearch-mcp
+    environment:
+      MCP_CACHE_BACKEND: redis
+      MCP_CACHE_ENABLED: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_PORT: "6379"
+      MCP_TRANSPORT: http
+      TAVILY_API_KEY: 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
+      TZ: Africa/Cairo
+      WEBSEARCH_MAX_RESULTS: "10"
+      WEBSEARCH_MCP_HOST: 0.0.0.0
+      WEBSEARCH_MCP_PORT: "8000"
+      WEBSEARCH_MCP_TRANSPORT: http
+      WEBSEARCH_REGION: wt-wt
+      WEBSEARCH_SAFESEARCH: moderate
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -sf -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"bsw-health","version":"1.0"}}}'' http://localhost:8000/mcp > /dev/null'
+      timeout: 5s
+      interval: 20s
+      retries: 3
+    mem_limit: "100663296"
+    networks:
+      bsw-network: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8008"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: C:\Users\Adham\.claude-worktrees\best-streamlit-website\nostalgic-goldberg\best-streamlit-website\src
+        target: /app/src
+        bind:
+          create_host_path: true
+networks:
+  bsw-network:
+    name: best-streamlit-network
+    driver: bridge
+volumes:
+  ollama-data:
+    name: demo_ollama_data
+    external: true
+  postgres-data:
+    name: bsw-postgres-data
+  redis-data:
+    name: bsw-redis-data
+  trivy-cache:
+    name: bsw-trivy-cache
+x-dev-resources-medium:
+  cpus: 0.35
+  mem_limit: 384m
+x-dev-resources-small:
+  cpus: 0.2
+  mem_limit: 192m
+x-dev-resources-tiny:
+  cpus: 0.1
+  mem_limit: 96m

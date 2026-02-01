@@ -20,10 +20,8 @@
 # Root data/ is used as a runtime volume; do not commit.
 /data/
 
-# Streamlit/Chainlit runtime metadata
+# Streamlit runtime metadata
 best-streamlit-website/.streamlit/secrets.toml
-best-streamlit-website/.chainlit/
-best-streamlit-website/chainlit.md
 
 # Playwright artifacts (often screenshots/videos)
 **/playwright/

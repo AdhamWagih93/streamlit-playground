@@ -1,17 +1,25 @@
 # Development overrides for Docker Compose
-# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Goal: keep the dev stack lighter by applying conservative CPU/memory limits.
+# Note: resource limits are enforced by Docker Desktop / Docker Engine, but exact behavior can
+# vary by platform and Compose version.
+
+x-dev-resources-tiny: &dev_resources_tiny
+  mem_limit: 96m
+  cpus: 0.10
+
+x-dev-resources-small: &dev_resources_small
+  mem_limit: 192m
+  cpus: 0.20
+
+x-dev-resources-medium: &dev_resources_medium
+  mem_limit: 384m
+  cpus: 0.35
 
 services:
-  chainlit-agent-lab:
-    environment:
-      - TZ=Africa/Cairo
-      - DEBUG=true
-      - OLLAMA_ENABLED=${OLLAMA_ENABLED:-false}
-    volumes:
-      - ./best-streamlit-website:/app:cached
-      - ./data:/app/data:delegated
-
   streamlit:
+    <<: *dev_resources_medium
     build:
       cache_from:
         - bsw-streamlit:dev
@@ -38,6 +46,7 @@ services:
              --server.fileWatcherType=watchdog"
 
   scheduler:
+    <<: *dev_resources_small
     environment:
       - TZ=Africa/Cairo
       # More frequent ticks in dev for testing
@@ -52,6 +61,7 @@ services:
       - ./best-streamlit-website/data:/app/data:delegated
 
   docker-mcp:
+    <<: *dev_resources_tiny
     environment:
       - TZ=Africa/Cairo
       - MCP_CACHE_ENABLED=true
@@ -65,6 +75,7 @@ services:
       - "5678:5678"  # Python debugger port
 
   jenkins-mcp:
+    <<: *dev_resources_tiny
     environment:
       - TZ=Africa/Cairo
       - MCP_CACHE_ENABLED=true
@@ -77,6 +88,7 @@ services:
       - "5679:5678"  # Python debugger port
 
   kubernetes-mcp:
+    <<: *dev_resources_tiny
     environment:
       - TZ=Africa/Cairo
       - MCP_CACHE_ENABLED=true
@@ -89,6 +101,7 @@ services:
       - "5680:5678"  # Python debugger port
 
   local-mcp:
+    <<: *dev_resources_tiny
     environment:
       - TZ=Africa/Cairo
       - MCP_CACHE_ENABLED=true
@@ -100,8 +113,38 @@ services:
       - "8009:8000"
       - "5681:5678"  # Python debugger port
 
+  # These services exist in docker-compose.yml but aren't overridden above.
+  # Add limits here so dev runs stay lighter.
+
+  postgres:
+    mem_limit: 256m
+    cpus: 0.20
+
+  redis:
+    mem_limit: 64m
+    cpus: 0.05
+
+  git-mcp:
+    <<: *dev_resources_tiny
+
+  nexus-mcp:
+    <<: *dev_resources_tiny
+
+  websearch-mcp:
+    <<: *dev_resources_tiny
+
+  trivy-mcp:
+    mem_limit: 256m
+    cpus: 0.25
+    # Tip: set TRIVY_SKIP_DB_UPDATE=true in your .env to avoid DB downloads in dev.
+
+  playwright-mcp:
+    mem_limit: 256m
+    cpus: 0.25
+
   # Additional development service: Lightweight DB admin
   db-admin:
+    <<: *dev_resources_tiny
     image: adminer:4
     container_name: bsw-db-admin
     ports:

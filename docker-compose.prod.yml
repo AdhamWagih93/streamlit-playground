@@ -2,20 +2,6 @@
 # Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
 
 services:
-  chainlit-agent-lab:
-    environment:
-      - TZ=Africa/Cairo
-      - DEBUG=false
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct-q6_K}
-    volumes:
-      - ./data:/app/data:delegated
-    mem_limit: 1024m
-    cpus: 1.0
-    restart: always
-    depends_on:
-      - postgres
-      - redis
-
   streamlit:
     build:
       target: production

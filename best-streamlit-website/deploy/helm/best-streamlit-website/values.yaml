@@ -1,10 +1,6 @@
 namespace: best-streamlit-website
 
 images:
-  chainlitAgentLab:
-    repository: best-streamlit-website/chainlit-agent-lab
-    tag: local
-    pullPolicy: IfNotPresent
   streamlit:
     repository: best-streamlit-website/streamlit
     tag: local
@@ -68,7 +64,6 @@ env:
   platformDatabaseUrl: postgresql+psycopg2://bsw:bsw@postgres:5432/bsw
 
 components:
-  chainlitAgentLab: true
   streamlit: true
   scheduler: false
   mcpJenkins: true
@@ -80,7 +75,6 @@ components:
   redis: true
 
 replicas:
-  chainlitAgentLab: 1
   streamlit: 1
   scheduler: 1
   mcpJenkins: 1
@@ -90,9 +84,6 @@ replicas:
   agentKubernetes: 1
 
 service:
-  chainlitAgentLab:
-    type: ClusterIP
-    port: 80
   streamlit:
     type: ClusterIP
     port: 80
@@ -121,13 +112,6 @@ postgres:
 # Resource requests/limits (very low defaults).
 # Override these per environment (dev/minikube vs prod) as needed.
 resources:
-  chainlitAgentLab:
-    requests:
-      cpu: 10m
-      memory: 128Mi
-    limits:
-      cpu: 50m
-      memory: 256Mi
   streamlit:
     requests:
       cpu: 10m

@@ -1,0 +1,1 @@
+time="2026-02-01T04:38:14+02:00" level=warning msg="The \"HOME\" variable is not set. Defaulting to a blank string."

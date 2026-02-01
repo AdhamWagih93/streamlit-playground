@@ -628,49 +628,99 @@ def main() -> None:
     # ==============================================================================
     # QUICK ACTIONS PANEL
     # ==============================================================================
-    st.markdown("### Quick Actions")
+    st.markdown(
+        """
+        <div style="background: linear-gradient(135deg, rgba(14,165,233,0.08), rgba(34,197,94,0.08));
+                    border-radius: 16px; padding: 1rem 1.2rem; margin-bottom: 1rem;
+                    border: 1px solid rgba(14,165,233,0.2);">
+            <div style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.6rem; color: #0284c7;">
+                ⚡ Quick Actions
+            </div>
+            <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.5rem;">
+                One-click operations to quickly inspect your cluster resources
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     qa_cols = st.columns(5)
 
     with qa_cols[0]:
-        if st.button("Get All Pods", use_container_width=True, type="primary"):
+        if st.button("🔍 All Pods", use_container_width=True, type="primary", help="List all pods across namespaces"):
             st.session_state["k8s_quick_action"] = "pods"
             st.session_state["k8s_quick_result"] = None
 
     with qa_cols[1]:
-        if st.button("List Deployments", use_container_width=True):
+        if st.button("📦 Deployments", use_container_width=True, help="List all deployments"):
             st.session_state["k8s_quick_action"] = "deployments"
             st.session_state["k8s_quick_result"] = None
 
     with qa_cols[2]:
-        if st.button("Check Events", use_container_width=True):
+        if st.button("📋 Events", use_container_width=True, help="View recent cluster events"):
             st.session_state["k8s_quick_action"] = "events"
             st.session_state["k8s_quick_result"] = None
 
     with qa_cols[3]:
-        if st.button("Namespace Stats", use_container_width=True):
+        if st.button("🏷️ Namespaces", use_container_width=True, help="List all namespaces"):
             st.session_state["k8s_quick_action"] = "namespaces"
             st.session_state["k8s_quick_result"] = None
 
     with qa_cols[4]:
-        if st.button("Node Status", use_container_width=True):
+        if st.button("🖥️ Nodes", use_container_width=True, help="View node status"):
             st.session_state["k8s_quick_action"] = "nodes"
+            st.session_state["k8s_quick_result"] = None
+
+    # Second row of quick actions
+    qa_cols2 = st.columns(5)
+
+    with qa_cols2[0]:
+        if st.button("🌐 Services", use_container_width=True, help="List all services"):
+            st.session_state["k8s_quick_action"] = "services"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols2[1]:
+        if st.button("🔄 Health Check", use_container_width=True, help="Run cluster health check"):
+            st.session_state["k8s_quick_action"] = "health"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols2[2]:
+        if st.button("📊 Cluster Stats", use_container_width=True, help="Get cluster statistics"):
+            st.session_state["k8s_quick_action"] = "stats"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols2[3]:
+        if st.button("⎈ Helm Releases", use_container_width=True, help="List Helm releases"):
+            st.session_state["k8s_quick_action"] = "helm"
+            st.session_state["k8s_quick_result"] = None
+
+    with qa_cols2[4]:
+        if st.button("👤 Service Accounts", use_container_width=True, help="List service accounts"):
+            st.session_state["k8s_quick_action"] = "serviceaccounts"
             st.session_state["k8s_quick_result"] = None
 
     # Execute quick action if requested
     quick_action = st.session_state.get("k8s_quick_action")
     if quick_action:
         with st.spinner(f"Executing {quick_action}..."):
+            # Map quick actions to correct MCP tool names
             tool_map = {
-                "pods": "get_pods",
-                "deployments": "get_deployments",
-                "events": "get_events",
-                "namespaces": "get_namespaces",
-                "nodes": "get_nodes",
+                "pods": ("list_pods", {}),
+                "deployments": ("list_deployments_all", {}),
+                "events": ("list_events_all", {"limit": 100}),
+                "namespaces": ("list_namespaces", {}),
+                "nodes": ("list_nodes", {}),
+                "services": ("list_services_all", {}),
+                "health": ("health_check", {}),
+                "stats": ("get_cluster_stats", {}),
+                "helm": ("helm_list_releases", {"all_namespaces": True}),
+                "serviceaccounts": ("list_service_accounts_all", {}),
             }
-            tool_name = tool_map.get(quick_action)
-            if tool_name:
+            tool_info = tool_map.get(quick_action)
+            if tool_info:
+                tool_name, tool_args = tool_info
                 try:
-                    result = _invoke_tool(tools, tool_name, {"namespace": "all"})
+                    result = _invoke_tool(tools, tool_name, tool_args)
                     st.session_state["k8s_quick_result"] = result
                     st.session_state["k8s_quick_action"] = None
                 except Exception as e:
@@ -680,22 +730,104 @@ def main() -> None:
     # Display quick result
     quick_result = st.session_state.get("k8s_quick_result")
     if quick_result:
-        with st.expander("Quick Action Result", expanded=True):
-            if isinstance(quick_result, dict):
-                if quick_result.get("items"):
-                    items = quick_result.get("items", [])
-                    if items and isinstance(items[0], dict):
-                        df = pd.DataFrame(items)
-                        st.dataframe(df, use_container_width=True, height=200)
-                    else:
-                        st.json(quick_result)
-                else:
+        st.markdown(
+            """
+            <div style="background: rgba(34,197,94,0.08); border-radius: 12px; padding: 0.8rem 1rem;
+                        margin-bottom: 0.8rem; border: 1px solid rgba(34,197,94,0.2);">
+                <div style="font-size: 0.95rem; font-weight: 600; color: #16a34a;">
+                    ✓ Quick Action Result
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if isinstance(quick_result, dict):
+            # Check if the result is ok
+            if not quick_result.get("ok"):
+                st.error(f"Action failed: {quick_result.get('error', 'Unknown error')}")
+                with st.expander("Error Details", expanded=False):
                     st.json(quick_result)
             else:
-                st.write(quick_result)
-            if st.button("Clear Result"):
-                st.session_state["k8s_quick_result"] = None
-                st.rerun()
+                # Extract items from common response keys
+                items = None
+                result_key = None
+                for key in ("pods", "deployments", "events", "namespaces", "nodes", "services",
+                            "service_accounts", "releases", "items", "counts", "checks"):
+                    if key in quick_result:
+                        value = quick_result[key]
+                        if isinstance(value, list):
+                            items = value
+                            result_key = key
+                            break
+                        elif isinstance(value, dict) and key == "counts":
+                            # Handle cluster stats counts
+                            st.success("Cluster Statistics")
+                            count_cols = st.columns(len(value))
+                            for i, (k, v) in enumerate(value.items()):
+                                with count_cols[i % len(count_cols)]:
+                                    _kpi_card(k, v, tone="info")
+                            result_key = key
+                            break
+
+                if result_key == "checks" and isinstance(quick_result.get("checks"), list):
+                    # Health check display
+                    checks = quick_result.get("checks", [])
+                    version = quick_result.get("version", {})
+                    st.success(f"Health Check Complete - API Version: {version.get('gitVersion', 'N/A')}")
+                    check_cols = st.columns(min(len(checks), 4))
+                    for i, check in enumerate(checks):
+                        with check_cols[i % len(check_cols)]:
+                            ok = check.get("ok", False)
+                            _kpi_card(
+                                check.get("name", "Check"),
+                                "✓ OK" if ok else "✗ Failed",
+                                tone="ok" if ok else "bad",
+                                help_text=f"{check.get('ms', 0)} ms"
+                            )
+
+                elif items and isinstance(items, list) and len(items) > 0:
+                    st.success(f"Found {len(items)} {result_key}")
+                    if isinstance(items[0], dict):
+                        df = pd.DataFrame(items)
+                        # Select useful columns for display, excluding complex nested data
+                        exclude_cols = {"conditions", "labels", "annotations", "spec", "status", "metadata"}
+                        display_cols = [c for c in df.columns if c.lower() not in exclude_cols][:10]
+                        if display_cols:
+                            st.dataframe(df[display_cols], use_container_width=True, height=320)
+                        else:
+                            st.dataframe(df, use_container_width=True, height=320)
+
+                        # Download buttons
+                        dl_cols = st.columns(2)
+                        with dl_cols[0]:
+                            st.download_button(
+                                "📥 Download CSV",
+                                data=df.to_csv(index=False).encode("utf-8"),
+                                file_name=f"k8s_{result_key}.csv",
+                                mime="text/csv",
+                                use_container_width=True,
+                            )
+                        with dl_cols[1]:
+                            st.download_button(
+                                "📥 Download JSON",
+                                data=json.dumps(items, indent=2).encode("utf-8"),
+                                file_name=f"k8s_{result_key}.json",
+                                mime="application/json",
+                                use_container_width=True,
+                            )
+                    else:
+                        st.json(quick_result)
+                elif result_key != "counts" and result_key != "checks":
+                    st.info("No items found in result")
+                    with st.expander("Raw Result", expanded=False):
+                        st.json(quick_result)
+        else:
+            st.write(quick_result)
+
+        if st.button("🗑️ Clear Result", use_container_width=False):
+            st.session_state["k8s_quick_result"] = None
+            st.rerun()
 
     st.divider()
 

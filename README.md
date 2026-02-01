@@ -25,7 +25,6 @@ The fastest way to get started is using Docker Compose:
 
 This will start:
 - Streamlit UI (http://localhost:8502)
-- Chainlit Agent Lab UI (http://localhost:8503)
 - Scheduler MCP (http://localhost:8010)
 - Docker MCP (http://localhost:8001)
 - Jenkins MCP (http://localhost:8002)
