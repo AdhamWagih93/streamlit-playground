@@ -38,6 +38,13 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptPath
 Set-Location $repoRoot
 
+# Ensure kubeconfig bind-mount variable is set (used by kubernetes-mcp service)
+if (-not $env:KUBE_DIR -or $env:KUBE_DIR.Trim() -eq "") {
+    if ($env:USERPROFILE) {
+        $env:KUBE_DIR = (Join-Path $env:USERPROFILE ".kube")
+    }
+}
+
 # Check if .env exists, if not copy from example
 if (-not (Test-Path ".env")) {
     Write-Host "Creating .env file from .env.example..." -ForegroundColor Yellow

@@ -88,6 +88,14 @@ if [ ! -d "data" ]; then
     mkdir -p data
 fi
 
+# Podman-compose (python) can struggle with nested env interpolation in volume sources.
+# Always export an absolute KUBE_DIR so the kubernetes-mcp bind mount works.
+if [ -z "${KUBE_DIR:-}" ]; then
+    if [ -n "${HOME:-}" ]; then
+        export KUBE_DIR="${HOME}/.kube"
+    fi
+fi
+
 # Build compose command (Podman Compose)
 COMPOSE_CMD="podman compose -f docker-compose.yml -f docker-compose.dev.yml"
 PROFILES=()

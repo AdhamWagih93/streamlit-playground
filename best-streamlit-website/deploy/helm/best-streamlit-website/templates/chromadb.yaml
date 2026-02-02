@@ -1,0 +1,88 @@
+{{- if .Values.components.chromadb }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chromadb-data
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.chromadb.storageSize | default "2Gi" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chromadb
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chromadb
+  template:
+    metadata:
+      labels:
+        app: chromadb
+        {{- include "bsw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: chromadb
+          image: {{ .Values.images.chromadb.repository }}:{{ .Values.images.chromadb.tag }}
+          imagePullPolicy: {{ .Values.images.chromadb.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: TZ
+              value: {{ .Values.env.timezone | quote }}
+            - name: IS_PERSISTENT
+              value: "TRUE"
+            - name: PERSIST_DIRECTORY
+              value: "/chroma/chroma"
+            - name: ANONYMIZED_TELEMETRY
+              value: "FALSE"
+            - name: ALLOW_RESET
+              value: "TRUE"
+          resources:
+            {{- toYaml .Values.resources.chromadb | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /chroma/chroma
+          readinessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: chromadb-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chromadb
+  namespace: {{ include "bsw.ns" . }}
+  labels:
+    {{- include "bsw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: chromadb
+  ports:
+    - name: http
+      port: {{ .Values.service.chromadb.port }}
+      targetPort: 8000
+  type: {{ .Values.service.chromadb.type }}
+{{- end }}

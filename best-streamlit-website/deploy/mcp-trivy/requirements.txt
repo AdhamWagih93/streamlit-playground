@@ -1,2 +1,2 @@
-fastmcp<3
+fastmcp==3.0.0
 py-key-value-aio[redis]

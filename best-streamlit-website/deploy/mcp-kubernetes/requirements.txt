@@ -1,4 +1,4 @@
-fastmcp<3
+fastmcp==3.0.0
 kubernetes
 PyYAML
 py-key-value-aio[redis]

@@ -2,6 +2,15 @@
 
 This module provides utilities for creating agents that can use tools
 from multiple MCP servers dynamically at runtime.
+
+Supports two modes:
+1. LangChain MCP Adapters (default): Uses langchain-mcp-adapters for tool discovery
+2. FastMCP 3.0.0 Unified Server: Uses FastMCP mount() with namespacing
+
+FastMCP 3.0.0 Features:
+- mount() with namespace for automatic tool prefixing
+- FileSystemProvider for directory-based tool discovery
+- Built-in namespacing to avoid tool name collisions
 """
 
 from __future__ import annotations
@@ -24,6 +33,16 @@ except Exception:  # noqa: BLE001
     _lg_create_agent = None
 
 from langgraph.prebuilt import create_react_agent
+
+# FastMCP 3.0.0 imports (optional, for unified server mode)
+try:
+    from fastmcp import FastMCP
+    from fastmcp.server.providers.filesystem import FileSystemProvider
+    FASTMCP_V3_AVAILABLE = True
+except ImportError:
+    FASTMCP_V3_AVAILABLE = False
+    FastMCP = None
+    FileSystemProvider = None
 
 
 def _create_langgraph_agent(llm: Any, tools: List[Any], system_prompt: str) -> Any:
@@ -374,8 +393,8 @@ def list_agent_tools(runtime: DynamicAgentRuntime) -> List[Dict[str, Any]]:
         # Try to determine which server this tool belongs to
         server = "unknown"
         for server_key in runtime.selected_servers:
-            # Tools are often prefixed with server name
-            if name.startswith(f"{server_key}_") or name.startswith(f"{server_key}."):
+            # Tools are often prefixed with server name (namespace_toolname or namespace__toolname)
+            if name.startswith(f"{server_key}_") or name.startswith(f"{server_key}__") or name.startswith(f"{server_key}."):
                 server = server_key
                 break
 
@@ -386,3 +405,130 @@ def list_agent_tools(runtime: DynamicAgentRuntime) -> List[Dict[str, Any]]:
         })
 
     return tools_info
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FASTMCP 3.0.0 UNIFIED SERVER MODE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def is_fastmcp_v3_available() -> bool:
+    """Check if FastMCP 3.0.0+ is available with mount and FileSystemProvider."""
+    return FASTMCP_V3_AVAILABLE
+
+
+def get_fastmcp_version() -> Optional[str]:
+    """Get the installed FastMCP version."""
+    try:
+        import fastmcp
+        return getattr(fastmcp, "__version__", None)
+    except ImportError:
+        return None
+
+
+def create_unified_mcp_server(
+    selected_servers: List[str],
+    *,
+    use_namespace: bool = True,
+    server_name: str = "unified-mcp",
+) -> Optional[Any]:
+    """Create a unified FastMCP server with mounted sub-servers.
+
+    Uses FastMCP 3.0.0's mount() with namespace for automatic tool prefixing.
+
+    Args:
+        selected_servers: List of server keys to mount
+        use_namespace: If True, prefix tools with server namespace
+        server_name: Name for the unified server
+
+    Returns:
+        Configured FastMCP server, or None if FastMCP 3.0.0 not available
+    """
+    if not FASTMCP_V3_AVAILABLE:
+        return None
+
+    try:
+        from src.ai.mcp_servers.unified_server import create_unified_server
+        return create_unified_server(
+            selected_servers,
+            use_namespace=use_namespace,
+            server_name=server_name,
+        )
+    except ImportError:
+        return None
+
+
+def mount_filesystem_provider(
+    mcp_server: Any,
+    root_path: str,
+    *,
+    namespace: Optional[str] = None,
+    reload: bool = False,
+) -> bool:
+    """Mount a FileSystemProvider on an existing FastMCP server.
+
+    Scans a directory for @tool, @resource, and @prompt decorated functions.
+
+    Args:
+        mcp_server: The FastMCP server to mount on
+        root_path: Directory to scan for tools
+        namespace: Optional namespace prefix
+        reload: If True, re-scan on each request
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not FASTMCP_V3_AVAILABLE or FileSystemProvider is None:
+        return False
+
+    try:
+        from pathlib import Path
+        provider = FileSystemProvider(root=Path(root_path), reload=reload)
+        fs_mcp = FastMCP(f"fs-{namespace or 'tools'}", providers=[provider])
+        mcp_server.mount(fs_mcp, namespace=namespace)
+        return True
+    except Exception:
+        return False
+
+
+def get_namespaced_tool_info(tool_name: str) -> Dict[str, str]:
+    """Parse a namespaced tool name.
+
+    FastMCP 3.0.0 uses underscore for namespace: namespace_toolname
+    LangChain skills use double underscore: namespace__toolname
+
+    Args:
+        tool_name: The tool name (e.g., "kubernetes_list_pods")
+
+    Returns:
+        Dict with 'namespace' and 'base_name' keys
+    """
+    # Try double underscore first (LangChain skills pattern)
+    if "__" in tool_name:
+        parts = tool_name.split("__", 1)
+        return {"namespace": parts[0], "base_name": parts[1]}
+
+    # Try single underscore (FastMCP pattern)
+    if "_" in tool_name:
+        parts = tool_name.split("_", 1)
+        # Only consider it namespaced if the first part looks like a server name
+        if parts[0] in MCP_SERVERS:
+            return {"namespace": parts[0], "base_name": parts[1]}
+
+    return {"namespace": None, "base_name": tool_name}
+
+
+def list_mcp_server_metadata() -> Dict[str, Dict[str, Any]]:
+    """Get metadata about all available MCP servers.
+
+    Returns:
+        Dict mapping server key to metadata (name, description, icon, etc.)
+    """
+    return {
+        key: {
+            "name": info["name"],
+            "description": info["description"],
+            "icon": info["icon"],
+            "module": info["module"],
+        }
+        for key, info in MCP_SERVERS.items()
+    }

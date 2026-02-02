@@ -41,7 +41,13 @@ def configure_mcp_cache(mcp, *, server_name: str, prefix: Optional[str] = None) 
         return
 
     try:
-        from fastmcp.server.middleware.caching import ResponseCachingMiddleware
+        try:
+            # FastMCP <=2.x
+            from fastmcp.server.middleware.caching import ResponseCachingMiddleware
+        except Exception:
+            # FastMCP 3.x+ (module layout changed)
+            from fastmcp.middleware.caching import ResponseCachingMiddleware  # type: ignore
+
         from key_value.aio.stores.redis import RedisStore
         from key_value.aio.wrappers.prefix_collections import PrefixCollectionsWrapper
     except Exception:

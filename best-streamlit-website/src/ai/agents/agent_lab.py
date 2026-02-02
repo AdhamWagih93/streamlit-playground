@@ -38,6 +38,15 @@ from src.mcp_log import create_logging_interceptor
 from src.ai.agents.dynamic_agent import MCP_SERVERS
 from src.streamlit_config import StreamlitAppConfig
 from src.ai.mcp_specs import build_server_specs
+from src.ai.agents.skills import (
+    load_skill,
+    list_available_skills,
+    namespace_tools,
+    extract_streamlit_code,
+    validate_streamlit_code,
+    wrap_streamlit_code,
+    STREAMLIT_DEVELOPER_SKILL,
+)
 
 
 @dataclass
@@ -398,6 +407,9 @@ def build_normal_agent(
     temperature: float = 0.1,
     system_prompt: str = "",
     enable_rag: bool = True,
+    enable_skills: bool = True,
+    enable_streamlit_developer: bool = True,
+    namespace_mcp_tools: bool = True,
     embedding_model: str = "nomic-embed-text",
     repo_root: Optional[Path] = None,
     tool_call_events: Optional[List[ToolCallEvent]] = None,
@@ -408,6 +420,22 @@ def build_normal_agent(
 
     By default, this also adds a lightweight repo-context retrieval tool
     (vector-based when available, lexical fallback otherwise).
+
+    Args:
+        selected_servers: List of MCP server keys to enable
+        model_name: Ollama model name
+        ollama_base_url: Ollama server URL
+        temperature: LLM temperature
+        system_prompt: Custom system prompt (optional)
+        enable_rag: Enable RAG retrieval tool (default True)
+        enable_skills: Enable skill loading tools (default True)
+        enable_streamlit_developer: Enable built-in Streamlit developer mode (default True)
+        namespace_mcp_tools: Prefix MCP tools with server namespace (default True)
+        embedding_model: Embedding model for RAG
+        repo_root: Root path for RAG indexing
+        tool_call_events: List to collect tool call events
+        session_id: Session ID for logging
+        source: Source identifier for logging
     """
 
     if not selected_servers:
@@ -420,10 +448,29 @@ def build_normal_agent(
     # Tool discovery across multiple servers can raise ExceptionGroup when one
     # server is down. Prefer a partial-success path to keep the agent usable.
     effective_servers = list(selected_servers)
+    tools_by_server: Dict[str, List[Any]] = {}
+
     try:
         connections = _build_connections(effective_servers)
         client = MultiServerMCPClient(connections, tool_interceptors=interceptors)
         tools = asyncio.run(client.get_tools())
+
+        # If namespacing enabled, try to identify tools by server
+        if namespace_mcp_tools:
+            # Tools from MultiServerMCPClient may have server info in metadata
+            for t in tools:
+                # Try to extract server from tool name pattern or metadata
+                server_key = None
+                tool_name = getattr(t, 'name', '')
+                for srv in effective_servers:
+                    if tool_name.startswith(f"{srv}_") or tool_name.startswith(f"{srv}."):
+                        server_key = srv
+                        break
+                if server_key:
+                    if server_key not in tools_by_server:
+                        tools_by_server[server_key] = []
+                    tools_by_server[server_key].append(t)
+
     except BaseException as exc:  # noqa: BLE001
         failures: Dict[str, str] = {}
         ok_servers: List[str] = []
@@ -432,8 +479,10 @@ def build_normal_agent(
             try:
                 one_conn = _build_connections([srv])
                 one_client = MultiServerMCPClient(one_conn, tool_interceptors=interceptors)
-                _ = asyncio.run(one_client.get_tools())
+                srv_tools = asyncio.run(one_client.get_tools())
                 ok_servers.append(srv)
+                if namespace_mcp_tools:
+                    tools_by_server[srv] = list(srv_tools)
             except BaseException as sub_exc:  # noqa: BLE001
                 failures[srv] = _format_exception_summary(sub_exc)
 
@@ -452,9 +501,43 @@ def build_normal_agent(
             raise RuntimeError(_format_exception_summary(exc2)) from exc2
 
     llm = ChatOllama(model=model_name, base_url=ollama_base_url, temperature=temperature)
-    final_system = system_prompt.strip() or _default_system_prompt()
 
-    combined_tools = list(tools)
+    # Build system prompt with Streamlit developer capability
+    base_system = system_prompt.strip() or _default_system_prompt()
+
+    if enable_streamlit_developer:
+        streamlit_hint = (
+            "\n\n## Streamlit Developer Mode\n"
+            "You have built-in Streamlit development capabilities. When the user asks for UI components, "
+            "dashboards, visualizations, or any Streamlit-related code, generate complete, runnable code.\n"
+            "IMPORTANT: Wrap your Streamlit code in ```streamlit code blocks for automatic rendering.\n"
+            "Example:\n```streamlit\nimport streamlit as st\nst.title('Hello')\n```\n"
+        )
+        base_system = base_system + streamlit_hint
+
+    final_system = base_system
+
+    # Apply namespace prefix to MCP tools if enabled
+    combined_tools: List[Any] = []
+    if namespace_mcp_tools and tools_by_server:
+        for srv, srv_tools in tools_by_server.items():
+            namespaced = namespace_tools(srv_tools, srv)
+            combined_tools.extend(namespaced)
+        # Add any tools not assigned to a server
+        assigned_tools = set()
+        for srv_tools in tools_by_server.values():
+            for t in srv_tools:
+                assigned_tools.add(id(t))
+        for t in tools:
+            if id(t) not in assigned_tools:
+                combined_tools.append(t)
+    else:
+        combined_tools = list(tools)
+
+    # Add skill tools if enabled
+    if enable_skills:
+        combined_tools.append(load_skill)
+        combined_tools.append(list_available_skills)
     rag_summary: Optional[str] = None
     rag_enabled = False
 

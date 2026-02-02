@@ -88,6 +88,11 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
       - PLATFORM_DATABASE_URL=${PLATFORM_DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
       - MCP_LOG_DATABASE_URL=${MCP_LOG_DATABASE_URL:-postgresql+psycopg2://bsw:bsw@postgres:5432/bsw}
+
+      # ChromaDB configuration (Knowledge Base)
+      - CHROMADB_HOST=${CHROMADB_HOST:-chromadb}
+      - CHROMADB_PORT=${CHROMADB_PORT:-8000}
+      - CHROMADB_URL=${CHROMADB_URL:-http://chromadb:8000}
     volumes:
       # Hot-reload support: mount source code
       - ./best-streamlit-website:/app:cached
@@ -98,8 +103,8 @@ services:
       - docker-mcp
       - local-mcp
       - postgres
+      - chromadb
     mem_limit: 512m
-    cpus: 0.5
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
@@ -147,7 +152,6 @@ services:
       # Persistent data
       - ./data:/app/data:delegated
     mem_limit: 256m
-    cpus: 0.25
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
@@ -171,7 +175,6 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     mem_limit: 256m
-    cpus: 0.2
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -192,7 +195,6 @@ services:
     volumes:
       - redis-data:/data
     mem_limit: 128m
-    cpus: 0.1
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -234,7 +236,6 @@ services:
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 128m
-    cpus: 0.1
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -276,7 +277,6 @@ services:
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 256m
-    cpus: 0.25
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
@@ -312,12 +312,11 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
     volumes:
-      # Mount kubeconfig if available (use USERPROFILE on Windows, HOME on Linux)
-      - ${USERPROFILE:-${HOME}}/.kube:/root/.kube:ro
+      # Mount kubeconfig dir from host (set KUBE_DIR to an absolute path, e.g. /home/user/.kube)
+      - ${KUBE_DIR}:/root/.kube:ro
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 256m
-    cpus: 0.25
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
@@ -352,7 +351,6 @@ services:
     volumes:
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 128m
-    cpus: 0.1
     restart: unless-stopped
     networks:
       - bsw-network
@@ -381,10 +379,11 @@ services:
     volumes:
       # Mount workspace for git operations (configurable)
       - ${GIT_WORKSPACE:-./data/repos}:/repos:cached
+      # Mount the project root (contains .git) for repository insights
+      - .:/repos/project:cached
       # Hot-reload support
-      - ./best-streamlit-website/src:/app/src:cached
+      - ./best-streamlit-website:/app:cached
     mem_limit: 128m
-    cpus: 0.1
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
@@ -424,7 +423,6 @@ services:
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 512m
-    cpus: 0.5
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
@@ -464,7 +462,6 @@ services:
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 512m
-    cpus: 0.5
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
@@ -505,7 +502,6 @@ services:
       # Hot-reload support
       - ./best-streamlit-website/src:/app/src:cached
     mem_limit: 128m
-    cpus: 0.1
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
@@ -542,13 +538,42 @@ services:
       - ./best-streamlit-website:/app:cached
       - ./data:/app/data:delegated
     mem_limit: 256m
-    cpus: 0.25
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"bsw-health\",\"version\":\"1.0\"}}}' http://localhost:8000/mcp > /dev/null"]
       interval: 20s
       timeout: 5s
       retries: 3
+    networks:
+      - bsw-network
+
+  # =============================================================================
+  # Vector Database (Knowledge Base)
+  # =============================================================================
+
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    container_name: bsw-chromadb
+    ports:
+      - "8100:8000"
+    environment:
+      - TZ=Africa/Cairo
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+      - ALLOW_RESET=TRUE
+      - CHROMA_SERVER_AUTHN_PROVIDER=
+      - CHROMA_SERVER_AUTHN_CREDENTIALS=
+    volumes:
+      - chromadb-data:/chroma/chroma
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - bsw-network
 
@@ -581,8 +606,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 4096MiB
+          memory: 8604MiB
         reservations:
           devices:
             - driver: nvidia
@@ -614,3 +638,5 @@ volumes:
     name: bsw-trivy-cache
   postgres-data:
     name: bsw-postgres-data
+  chromadb-data:
+    name: bsw-chromadb-data

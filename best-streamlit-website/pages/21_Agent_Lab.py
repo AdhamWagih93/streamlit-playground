@@ -18,9 +18,39 @@ from src.admin_config import load_admin_config
 from src.mcp_health import add_mcp_status_styles, get_status_icon
 from src.mcp_client import get_mcp_client, get_server_url
 from src.theme import set_theme
+from src.ai.agents.skills import (
+    extract_streamlit_code,
+    validate_streamlit_code,
+    wrap_streamlit_code,
+    list_skills,
+)
+
+# Knowledge Base integration
+KB_AVAILABLE = False
+KB_CLIENT = None
+try:
+    from src.knowledge_base import get_kb_client, KBSearchResult
+    KB_AVAILABLE = True
+except ImportError:
+    get_kb_client = None
+    KBSearchResult = None
+
+# FastMCP 3.0.0 status check
+try:
+    from src.ai.agents.dynamic_agent import (
+        is_fastmcp_v3_available,
+        get_fastmcp_version,
+        get_namespaced_tool_info,
+    )
+    FASTMCP_V3_AVAILABLE = is_fastmcp_v3_available()
+    FASTMCP_VERSION = get_fastmcp_version()
+except ImportError:
+    FASTMCP_V3_AVAILABLE = False
+    FASTMCP_VERSION = None
+    get_namespaced_tool_info = None
 
 
-set_theme(page_title="Agent Lab", page_icon="🧪")
+set_theme(page_title="Agent Lab", page_icon="🧪", layout="wide")
 
 admin = load_admin_config()
 if not admin.is_agent_enabled("agent_lab", default=True):
@@ -139,127 +169,74 @@ QUICK_QUERIES: List[Dict[str, Any]] = [
 st.markdown(
     """
     <style>
-    /* Enhanced Hero Section */
-    .agentlab-hero {
-        background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 40%, #a855f7 70%, #ec4899 100%);
-        background-size: 200% 200%;
-        animation: gradient-shift 8s ease infinite;
-        border-radius: 24px;
-        padding: 2rem 2.5rem;
-        margin-bottom: 1.5rem;
-        color: white;
-        box-shadow: 0 12px 48px rgba(99, 102, 241, 0.3);
-        position: relative;
-        overflow: hidden;
-    }
-    .agentlab-hero::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-        opacity: 0.3;
-    }
-    @keyframes gradient-shift {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-    }
-    .agentlab-hero h1 {
-        font-size: 2.2rem;
-        font-weight: 800;
-        margin: 0 0 0.5rem 0;
-        position: relative;
-        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .agentlab-hero p {
-        margin: 0;
-        opacity: 0.95;
-        font-size: 1.05rem;
-        position: relative;
-    }
-    .hero-stats {
-        display: flex;
-        gap: 1.5rem;
-        margin-top: 1.25rem;
-        position: relative;
-    }
-    .hero-stat {
-        background: rgba(255,255,255,0.15);
-        backdrop-filter: blur(10px);
-        padding: 0.6rem 1rem;
+    /* CHAT-FIRST LAYOUT - Chat is prominently at top */
+
+    /* Compact Status Bar (replaces bulky hero) */
+    .status-bar {
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
         border-radius: 12px;
-        font-size: 0.9rem;
+        padding: 0.75rem 1.25rem;
+        margin-bottom: 1rem;
+        color: white;
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-    }
-    .hero-stat strong {
-        font-size: 1.1rem;
-    }
-
-    /* Preset Cards */
-    .preset-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 0.75rem;
-        margin-bottom: 1rem;
-    }
-    .preset-card {
-        background: linear-gradient(145deg, #ffffff, #f8fafc);
-        border-radius: 14px;
-        padding: 1rem;
-        border: 2px solid #e2e8f0;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        text-align: center;
-    }
-    .preset-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.1);
-    }
-    .preset-card.selected {
-        border-color: #6366f1;
-        background: linear-gradient(145deg, #eef2ff, #e0e7ff);
-    }
-    .preset-icon {
-        font-size: 2rem;
-        margin-bottom: 0.5rem;
-    }
-    .preset-name {
-        font-weight: 700;
-        font-size: 0.9rem;
-        color: #1e293b;
-    }
-    .preset-desc {
-        font-size: 0.75rem;
-        color: #64748b;
-        margin-top: 0.25rem;
-    }
-
-    /* Quick Actions */
-    .quick-actions {
-        background: linear-gradient(135deg, rgba(14,165,233,0.06), rgba(99,102,241,0.06));
-        border-radius: 16px;
-        padding: 1rem 1.25rem;
-        margin-bottom: 1rem;
-        border: 1px solid rgba(99,102,241,0.15);
-    }
-    .quick-actions-title {
-        font-size: 1rem;
-        font-weight: 700;
-        margin-bottom: 0.75rem;
-        color: #4f46e5;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-    .quick-btn-grid {
-        display: flex;
+        justify-content: space-between;
         flex-wrap: wrap;
         gap: 0.5rem;
+    }
+    .status-bar-title {
+        font-size: 1.1rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .status-badges {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+    .status-badge {
+        background: rgba(255,255,255,0.2);
+        padding: 0.25rem 0.6rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    /* Chat Container - Primary focus area */
+    .chat-container {
+        background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    /* Quick Actions - Compact row above chat */
+    .quick-actions-row {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+    }
+    .quick-action-btn {
+        background: linear-gradient(145deg, #f1f5f9, #e2e8f0);
+        border: 1px solid #cbd5e1;
+        border-radius: 20px;
+        padding: 0.35rem 0.75rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+    .quick-action-btn:hover {
+        background: linear-gradient(145deg, #e0e7ff, #c7d2fe);
+        border-color: #6366f1;
     }
 
     /* Tool call cards */
@@ -277,76 +254,6 @@ st.markdown(
     }
     .tool-call-success { border-left-color: #22c55e; }
     .tool-call-error { border-left-color: #ef4444; }
-
-    /* Server Health Cards */
-    .server-health-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-        gap: 0.75rem;
-        margin-top: 0.75rem;
-    }
-    .server-health-card {
-        background: linear-gradient(145deg, #ffffff, #f8fafc);
-        border-radius: 12px;
-        padding: 0.9rem;
-        border: 1px solid #e2e8f0;
-        transition: all 0.2s ease;
-    }
-    .server-health-card:hover {
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    }
-    .server-health-card.healthy {
-        border-left: 3px solid #22c55e;
-    }
-    .server-health-card.unhealthy {
-        border-left: 3px solid #ef4444;
-    }
-    .server-name {
-        font-weight: 700;
-        font-size: 0.95rem;
-        margin-bottom: 0.25rem;
-    }
-    .server-tools {
-        font-size: 0.8rem;
-        color: #64748b;
-    }
-
-    /* Chat Enhancement */
-    .chat-message-actions {
-        display: flex;
-        gap: 0.5rem;
-        margin-top: 0.5rem;
-        opacity: 0.6;
-        transition: opacity 0.2s;
-    }
-    .chat-message-actions:hover {
-        opacity: 1;
-    }
-
-    /* Metrics Row */
-    .metrics-row {
-        display: flex;
-        gap: 1rem;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        flex: 1;
-        background: linear-gradient(145deg, #ffffff, #f8fafc);
-        border-radius: 14px;
-        padding: 1rem 1.25rem;
-        border: 1px solid #e2e8f0;
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #1e293b;
-    }
-    .metric-label {
-        font-size: 0.8rem;
-        color: #64748b;
-        margin-top: 0.2rem;
-    }
 
     /* Timeline */
     .timeline-container {
@@ -382,40 +289,46 @@ st.markdown(
     .timeline-item.success::before { background: #22c55e; box-shadow: 0 0 0 2px #22c55e; }
     .timeline-item.error::before { background: #ef4444; box-shadow: 0 0 0 2px #ef4444; }
 
-    /* Conversation Export */
-    .export-panel {
-        background: #f8fafc;
-        border-radius: 12px;
-        padding: 1rem;
-        margin-top: 1rem;
-        border: 1px dashed #cbd5e1;
-    }
-
     /* Empty State */
     .empty-state {
         text-align: center;
-        padding: 3rem 2rem;
+        padding: 2rem 1.5rem;
         color: #64748b;
     }
     .empty-state-icon {
-        font-size: 3rem;
-        margin-bottom: 1rem;
+        font-size: 2.5rem;
+        margin-bottom: 0.75rem;
         opacity: 0.5;
     }
 
-    /* Recent Queries */
-    .recent-query {
-        background: #f8fafc;
-        border-radius: 8px;
-        padding: 0.6rem 0.9rem;
-        margin: 0.4rem 0;
-        cursor: pointer;
-        transition: all 0.15s;
-        border: 1px solid transparent;
+    /* Processing indicator */
+    .processing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem;
+        background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(168,85,247,0.1));
+        border-radius: 12px;
+        margin: 0.5rem 0;
     }
-    .recent-query:hover {
-        background: #eef2ff;
-        border-color: #c7d2fe;
+    .processing-dot {
+        width: 10px;
+        height: 10px;
+        background: #6366f1;
+        border-radius: 50%;
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 0.4; transform: scale(0.8); }
+        50% { opacity: 1; transform: scale(1.2); }
+    }
+
+    /* Preset Pills */
+    .preset-pills {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
     }
     </style>
     """,
@@ -825,6 +738,61 @@ def _export_conversation_json(messages: List[Dict[str, Any]], tool_calls: List[A
     return json.dumps(export_data, indent=2, default=str)
 
 
+def _get_kb_client_safe():
+    """Get Knowledge Base client with error handling."""
+    global KB_CLIENT
+    if not KB_AVAILABLE:
+        return None
+    if KB_CLIENT is not None:
+        return KB_CLIENT
+    try:
+        KB_CLIENT = get_kb_client()
+        if KB_CLIENT.is_connected():
+            return KB_CLIENT
+        return None
+    except Exception:
+        return None
+
+
+def _get_kb_documents() -> List[Dict[str, Any]]:
+    """Get list of documents from Knowledge Base."""
+    client = _get_kb_client_safe()
+    if not client:
+        return []
+    try:
+        return client.list_documents()
+    except Exception:
+        return []
+
+
+def _search_kb(query: str, document_ids: Optional[List[str]] = None, n_results: int = 5) -> List[Any]:
+    """Search Knowledge Base for relevant chunks."""
+    client = _get_kb_client_safe()
+    if not client:
+        return []
+    try:
+        return client.search(query=query, n_results=n_results, document_ids=document_ids)
+    except Exception:
+        return []
+
+
+def _format_kb_context(results: List[Any]) -> str:
+    """Format KB search results as context for the agent."""
+    if not results:
+        return ""
+
+    context_parts = ["<knowledge_base_context>"]
+    for i, result in enumerate(results, 1):
+        source = getattr(result, "source", "unknown")
+        chunk_text = getattr(result, "chunk_text", "")
+        relevance = getattr(result, "relevance_score", 0) * 100
+        context_parts.append(
+            f"\n[Document {i}: {source} (Relevance: {relevance:.0f}%)]\n{chunk_text}\n"
+        )
+    context_parts.append("</knowledge_base_context>")
+    return "\n".join(context_parts)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STATE INITIALIZATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -843,6 +811,11 @@ def _init_state() -> None:
     st.session_state.setdefault("agentlab_favorite_queries", [])
     st.session_state.setdefault("agentlab_processing", False)
     st.session_state.setdefault("agentlab_processing_response", None)
+    st.session_state.setdefault("agentlab_generated_code", None)
+    st.session_state.setdefault("agentlab_code_history", [])
+    st.session_state.setdefault("agentlab_kb_enabled", False)
+    st.session_state.setdefault("agentlab_kb_documents", [])
+    st.session_state.setdefault("agentlab_kb_results_count", 5)
     st.session_state.setdefault(
         "agentlab_config",
         {
@@ -913,10 +886,10 @@ servers = get_available_servers() if AGENTS_AVAILABLE and get_available_servers 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HERO SECTION
+# COMPACT STATUS BAR (replaces bulky hero)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Calculate stats for hero
+# Calculate stats
 total_servers = len(servers)
 healthy_servers = 0
 total_tools = 0
@@ -929,64 +902,30 @@ for k in servers.keys():
 
 ollama_status = _ollama_health(st.session_state.agentlab_config.get("ollama_url", "http://ollama:11434"))
 
+# Check KB status
+kb_client = _get_kb_client_safe()
+kb_connected = kb_client is not None and kb_client.is_connected() if kb_client else False
+
+# Check if agent is ready (from session state)
+_agent_ready = st.session_state.agentlab_runtime is not None
+selected_servers: List[str] = st.session_state.agentlab_config.get("servers", [])
+
+# Compact status bar
 st.markdown(
     f"""
-    <div class="agentlab-hero">
-        <h1>🧪 Agent Lab</h1>
-        <p>Build and test AI agents with Natural Language against your MCP servers</p>
-        <div class="hero-stats">
-            <div class="hero-stat">
-                <span>🖥️</span>
-                <span><strong>{healthy_servers}/{total_servers}</strong> Servers</span>
-            </div>
-            <div class="hero-stat">
-                <span>🔧</span>
-                <span><strong>{total_tools}</strong> Tools</span>
-            </div>
-            <div class="hero-stat">
-                <span>{'✅' if ollama_status.get('ok') else '❌'}</span>
-                <span>Ollama {ollama_status.get('model_count', 0) if ollama_status.get('ok') else 'Offline'}</span>
-            </div>
-            <div class="hero-stat">
-                <span>💬</span>
-                <span><strong>{len(st.session_state.agentlab_messages)}</strong> Messages</span>
-            </div>
+    <div class="status-bar">
+        <div class="status-bar-title">🧪 Agent Lab</div>
+        <div class="status-badges">
+            <span class="status-badge">{'✅' if _agent_ready else '⚠️'} {'Ready' if _agent_ready else 'Not Built'}</span>
+            <span class="status-badge">🖥️ {healthy_servers}/{total_servers}</span>
+            <span class="status-badge">🔧 {total_tools} tools</span>
+            <span class="status-badge">{'✅' if ollama_status.get('ok') else '❌'} Ollama</span>
+            <span class="status-badge">💬 {len(st.session_state.agentlab_messages)}</span>
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT PRESETS SECTION
-# ─────────────────────────────────────────────────────────────────────────────
-
-st.markdown("### 🎯 Quick Start: Agent Presets")
-st.caption("Select a preset to quickly configure your agent, or choose Custom to build your own")
-
-preset_cols = st.columns(len(AGENT_PRESETS))
-for col, (preset_key, preset_info) in zip(preset_cols, AGENT_PRESETS.items()):
-    with col:
-        is_selected = st.session_state.get("agentlab_selected_preset") == preset_key
-        if st.button(
-            f"{preset_info['icon']}\n\n**{preset_info['name']}**",
-            key=f"preset_{preset_key}",
-            use_container_width=True,
-            type="primary" if is_selected else "secondary",
-        ):
-            st.session_state.agentlab_selected_preset = preset_key
-            if preset_key != "custom":
-                st.session_state.agentlab_config["servers"] = preset_info["servers"]
-                st.session_state.agentlab_config["system_prompt"] = preset_info["system_prompt"]
-            st.session_state.agentlab_last_build_fingerprint = None  # Force rebuild
-            st.rerun()
-
-# Show preset description
-current_preset = AGENT_PRESETS.get(st.session_state.get("agentlab_selected_preset", "custom"), AGENT_PRESETS["custom"])
-st.caption(f"**{current_preset['name']}:** {current_preset['description']}")
-
-st.divider()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1169,6 +1108,62 @@ with st.sidebar:
 
     st.divider()
 
+    # Knowledge Base Section
+    st.markdown("#### 📚 Knowledge Base")
+
+    kb_client = _get_kb_client_safe()
+    if not KB_AVAILABLE:
+        st.caption("KB not installed (`pip install chromadb`)")
+    elif not kb_client:
+        st.caption("ChromaDB not connected")
+        if st.button("🔄 Retry KB", use_container_width=True):
+            st.rerun()
+    else:
+        # KB is available and connected
+        kb_docs = _get_kb_documents()
+
+        st.session_state.agentlab_kb_enabled = st.toggle(
+            "Enable Knowledge Base",
+            value=st.session_state.get("agentlab_kb_enabled", False),
+            help="Search uploaded documents for relevant context",
+        )
+
+        if st.session_state.agentlab_kb_enabled:
+            if not kb_docs:
+                st.info("No documents. [Upload documents](/Knowledge_Base)")
+            else:
+                # Document selection
+                doc_options = ["All Documents"] + [d.get("filename", "Unknown") for d in kb_docs]
+                selected_doc_names = st.multiselect(
+                    "Search in documents",
+                    options=doc_options,
+                    default=["All Documents"],
+                    help="Select specific documents or search all",
+                )
+
+                # Convert to document IDs
+                if "All Documents" in selected_doc_names or not selected_doc_names:
+                    st.session_state.agentlab_kb_documents = []
+                else:
+                    selected_ids = []
+                    for doc in kb_docs:
+                        if doc.get("filename") in selected_doc_names:
+                            selected_ids.append(doc.get("id"))
+                    st.session_state.agentlab_kb_documents = selected_ids
+
+                # Number of results
+                st.session_state.agentlab_kb_results_count = st.slider(
+                    "Context chunks",
+                    min_value=1,
+                    max_value=10,
+                    value=st.session_state.get("agentlab_kb_results_count", 5),
+                    help="Number of relevant chunks to include",
+                )
+
+                st.caption(f"📊 {len(kb_docs)} docs | {kb_client.get_collection_stats().get('total_chunks', 0)} chunks")
+
+    st.divider()
+
     # System Prompt
     st.markdown("#### 📝 System Prompt")
     st.session_state.agentlab_config["system_prompt"] = st.text_area(
@@ -1297,259 +1292,319 @@ _maybe_build_agent(selected_servers)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METRICS ROW
+# MAIN CONTENT - CHAT FIRST LAYOUT
 # ─────────────────────────────────────────────────────────────────────────────
 
-runtime: Optional[AgentRuntime] = st.session_state.agentlab_runtime
-
+# Get runtime after build
+runtime = st.session_state.agentlab_runtime
 selected = st.session_state.agentlab_config.get("servers", [])
-if selected:
-    sel_tools = 0
-    sel_prompts = 0
-    for k in selected:
-        url = _resolve_server_url(k)
-        snap = _server_snapshot(k, url)
-        sel_tools += int(snap.get("tool_count") or 0)
-        sel_prompts += int(snap.get("prompt_count") or 0)
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Selected Servers", str(len(selected)))
-    m2.metric("Available Tools", str(sel_tools))
-    m3.metric("Total Prompts", str(sel_prompts))
-    m4.metric("Agent Status", "✅ Ready" if runtime else "⚠️ Not Built")
-
+# Show build error if any
 if st.session_state.get("agentlab_last_build_error"):
     st.error(f"Build error: {st.session_state.get('agentlab_last_build_error')}")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PRIMARY CHAT SECTION - This is the main focus
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# QUICK ACTIONS
-# ─────────────────────────────────────────────────────────────────────────────
-
-if runtime and selected:
-    st.markdown(
-        """
-        <div class="quick-actions">
-            <div class="quick-actions-title">
-                ⚡ Quick Actions
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Filter quick queries by available servers
+# Chat input FIRST - at the very top for immediate access
+if not AGENTS_AVAILABLE:
+    st.warning("Agent runtime unavailable. Select servers in the sidebar to configure.")
+elif runtime is None:
+    st.info("👈 Select MCP servers in the sidebar to build an agent and start chatting.")
+else:
+    # Quick action pills (compact, inline with chat)
     available_queries = [
         q for q in QUICK_QUERIES
         if any(s in selected for s in q.get("servers", []))
     ]
-
     if available_queries:
-        cols = st.columns(min(4, len(available_queries)))
+        quick_cols = st.columns(min(8, len(available_queries)))
         for i, query in enumerate(available_queries[:8]):
-            with cols[i % 4]:
+            with quick_cols[i % 8]:
                 if st.button(
                     f"{query['icon']} {query['label']}",
                     key=f"quick_{i}",
                     use_container_width=True,
                 ):
                     st.session_state.agentlab_pending_user_message = query["query"]
-                    # Add to recent queries
-                    recent = st.session_state.get("agentlab_recent_queries", [])
-                    if query["query"] not in recent:
-                        recent.insert(0, query["query"])
-                        st.session_state.agentlab_recent_queries = recent[:10]
                     st.rerun()
-    else:
-        st.caption("Select servers to see relevant quick actions")
 
+# Render chat messages
+for msg in st.session_state.agentlab_messages:
+    role = msg.get("role", "user")
+    with st.chat_message(role):
+        st.markdown(msg.get("content", ""))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN TABS
-# ─────────────────────────────────────────────────────────────────────────────
+# Handle pending message (from quick actions or chat input)
+pending = st.session_state.get("agentlab_pending_user_message")
+if pending and runtime is not None:
+    st.session_state.agentlab_pending_user_message = None
+    user_text = str(pending)
+    st.session_state.agentlab_messages.append({"role": "user", "content": user_text})
 
-tab_chat, tab_tools, tab_prompts, tab_resources, tab_calls, tab_export = st.tabs(
-    ["💬 Chat", "🔧 Tools", "📋 Prompts", "📁 Resources", "📊 Tool Calls", "💾 Export"]
+    with st.chat_message("user"):
+        st.markdown(user_text)
+
+    # Execute query
+    with st.chat_message("assistant"):
+        with st.status("Processing...", expanded=True) as status:
+            st.write("🤔 Analyzing your request...")
+            cfg = st.session_state.agentlab_config
+            agent_type = cfg.get("agent_type", "Normal")
+
+            # Knowledge Base context injection
+            query_with_context = user_text
+            if st.session_state.get("agentlab_kb_enabled"):
+                st.write("📚 Searching Knowledge Base...")
+                kb_results = _search_kb(
+                    query=user_text,
+                    document_ids=st.session_state.get("agentlab_kb_documents") or None,
+                    n_results=st.session_state.get("agentlab_kb_results_count", 5),
+                )
+                if kb_results:
+                    kb_context = _format_kb_context(kb_results)
+                    query_with_context = f"{kb_context}\n\nUser Question: {user_text}"
+                    st.write(f"📄 Found {len(kb_results)} relevant document chunks")
+
+            try:
+                st.write("🔧 Calling tools...")
+                if agent_type == "Deep":
+                    plan, answer, _events = run_deep_agent_query(runtime, query_with_context, chat_history=st.session_state.agentlab_messages[:-1])
+                    status.update(label="Complete!", state="complete")
+                    st.markdown("**Plan**")
+                    st.markdown(plan or "")
+                    st.markdown("**Answer**")
+                    st.markdown(answer)
+                    full_content = f"Plan:\n{plan}\n\nAnswer:\n{answer}"
+                    st.session_state.agentlab_messages.append({"role": "assistant", "content": full_content})
+                    # Check for Streamlit code
+                    code = extract_streamlit_code(full_content)
+                    if code:
+                        st.session_state.agentlab_generated_code = code
+                        history = st.session_state.get("agentlab_code_history", [])
+                        history.insert(0, {"code": code, "timestamp": datetime.now().isoformat(), "query": user_text[:100]})
+                        st.session_state.agentlab_code_history = history[:20]
+                        st.info("🎨 Streamlit code detected! Check the **Code Preview** tab to see and run it.")
+                else:
+                    answer, _events = run_agent_query(runtime, query_with_context, chat_history=st.session_state.agentlab_messages[:-1])
+                    status.update(label="Complete!", state="complete")
+                    st.markdown(answer)
+                    st.session_state.agentlab_messages.append({"role": "assistant", "content": answer})
+                    # Check for Streamlit code
+                    code = extract_streamlit_code(answer)
+                    if code:
+                        st.session_state.agentlab_generated_code = code
+                        history = st.session_state.get("agentlab_code_history", [])
+                        history.insert(0, {"code": code, "timestamp": datetime.now().isoformat(), "query": user_text[:100]})
+                        st.session_state.agentlab_code_history = history[:20]
+                        st.info("🎨 Streamlit code detected! Check the **Code Preview** tab to see and run it.")
+            except Exception as exc:
+                status.update(label="Error", state="error")
+                _render_exception("Agent error", exc)
+
+    st.rerun()
+
+# Chat input - single unified handler
+prompt = st.chat_input("Ask in natural language...", disabled=(runtime is None))
+if prompt and runtime is not None:
+    st.session_state.agentlab_pending_user_message = prompt
+    st.rerun()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECONDARY FEATURES - Tabs for tools, code preview, etc.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+st.divider()
+
+tab_code, tab_tools, tab_prompts, tab_resources, tab_calls, tab_export = st.tabs(
+    ["🎨 Code Preview", "🔧 Tools", "📋 Prompts", "📁 Resources", "📊 Tool Calls", "💾 Export"]
 )
 
-with tab_chat:
-    if not AGENTS_AVAILABLE:
-        st.info(
-            "Chat is disabled in this environment because LangChain dependencies are missing. "
-            "Run the app in the dev container/compose stack, or install `best-streamlit-website/requirements.txt`."
-        )
-    elif runtime is None:
+# ─────────────────────────────────────────────────────────────────────────────
+# CODE PREVIEW TAB
+# ─────────────────────────────────────────────────────────────────────────────
+
+with tab_code:
+    st.markdown("### 🎨 Code Preview & Live Render")
+
+    generated_code = st.session_state.get("agentlab_generated_code")
+    code_history = st.session_state.get("agentlab_code_history", [])
+
+    if not generated_code and not code_history:
         st.markdown(
             """
             <div class="empty-state">
-                <div class="empty-state-icon">🤖</div>
-                <div style="font-size: 1.1rem; font-weight: 600;">No Agent Built</div>
+                <div class="empty-state-icon">🎨</div>
+                <div style="font-size: 1.1rem; font-weight: 600;">No Code Generated Yet</div>
                 <div style="margin-top: 0.5rem;">
-                    Select servers in the sidebar to build an agent and start chatting
+                    Ask the agent to create Streamlit code, dashboards, or visualizations.<br>
+                    <b>Example prompts:</b>
+                </div>
+                <div style="margin-top: 1rem; text-align: left; display: inline-block;">
+                    <code>Create a dashboard showing system metrics with charts</code><br>
+                    <code>Build a beautiful form with validation</code><br>
+                    <code>Generate a data visualization with sample data</code>
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+    else:
+        # Code editor/viewer section
+        col_code, col_preview = st.columns([1, 1])
 
-    # Recent queries sidebar
-    recent_queries = st.session_state.get("agentlab_recent_queries", [])
-    if recent_queries and runtime:
-        with st.expander("📜 Recent Queries", expanded=False):
-            for rq in recent_queries[:5]:
-                if st.button(rq[:50] + "..." if len(rq) > 50 else rq, key=f"recent_{hash(rq)}"):
-                    st.session_state.agentlab_pending_user_message = rq
-                    st.rerun()
+        with col_code:
+            st.markdown("#### Source Code")
 
-    # Render chat messages
-    for msg in st.session_state.agentlab_messages:
-        role = msg.get("role", "user")
-        with st.chat_message(role):
-            st.markdown(msg.get("content", ""))
+            # Code history dropdown
+            if code_history:
+                history_options = ["Current"] + [
+                    f"{i+1}. {h.get('query', 'Code')[:40]}..." for i, h in enumerate(code_history[:10])
+                ]
+                selected_history = st.selectbox(
+                    "Code History",
+                    options=history_options,
+                    index=0,
+                    key="code_history_select",
+                )
 
-    # Check if we have a pending response (from background processing)
-    if st.session_state.get("agentlab_processing_response"):
-        response_data = st.session_state.agentlab_processing_response
-        st.session_state.agentlab_processing_response = None
+                if selected_history != "Current" and code_history:
+                    idx = history_options.index(selected_history) - 1
+                    if 0 <= idx < len(code_history):
+                        generated_code = code_history[idx].get("code", "")
 
-        if response_data.get("error"):
-            st.error(f"Agent error: {response_data['error']}")
-        else:
-            st.session_state.agentlab_messages.append({
-                "role": "assistant",
-                "content": response_data.get("content", "")
-            })
-        st.rerun()
-
-    # Show processing indicator if query is in progress
-    if st.session_state.get("agentlab_processing"):
-        with st.chat_message("assistant"):
-            st.markdown(
-                """
-                <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div class="processing-dot"></div>
-                    <span style="color: #64748b;">Processing your request...</span>
-                </div>
-                <style>
-                .processing-dot {
-                    width: 12px;
-                    height: 12px;
-                    background: #6366f1;
-                    border-radius: 50%;
-                    animation: pulse 1.5s ease-in-out infinite;
-                }
-                @keyframes pulse {
-                    0%, 100% { opacity: 0.4; transform: scale(0.8); }
-                    50% { opacity: 1; transform: scale(1.2); }
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
+            # Editable code area
+            edited_code = st.text_area(
+                "Edit Code",
+                value=generated_code or "",
+                height=400,
+                key="code_editor",
+                label_visibility="collapsed",
             )
-        # Auto-refresh to check for completion
-        import time
-        time.sleep(0.5)
-        st.rerun()
 
-    # Helper function to run agent query in thread
-    def _execute_agent_query(rt, query_text, history, agent_type_val):
-        """Execute agent query and store result in session state."""
-        try:
-            if agent_type_val == "Deep":
-                plan, answer, _events = run_deep_agent_query(rt, query_text, chat_history=history)
-                content = f"**Plan**\n{plan or ''}\n\n**Answer**\n{answer}"
+            # Action buttons
+            btn_col1, btn_col2, btn_col3 = st.columns(3)
+            with btn_col1:
+                if st.button("▶️ Run Code", type="primary", use_container_width=True):
+                    st.session_state.agentlab_run_code = edited_code
+                    st.rerun()
+            with btn_col2:
+                if st.button("📋 Copy", use_container_width=True):
+                    st.toast("Code copied to clipboard!")
+            with btn_col3:
+                st.download_button(
+                    "💾 Download",
+                    data=edited_code or "",
+                    file_name="generated_streamlit.py",
+                    mime="text/x-python",
+                    use_container_width=True,
+                )
+
+            # Validation status
+            if edited_code:
+                validation = validate_streamlit_code(edited_code)
+                if validation["valid"]:
+                    st.success("✅ Code validation passed")
+                else:
+                    st.error(f"❌ Validation errors: {', '.join(validation['errors'])}")
+
+        with col_preview:
+            st.markdown("#### Live Preview")
+
+            code_to_run = st.session_state.get("agentlab_run_code") or generated_code
+
+            if code_to_run:
+                validation = validate_streamlit_code(code_to_run)
+
+                if not validation["valid"]:
+                    st.error(f"Cannot run code: {', '.join(validation['errors'])}")
+                else:
+                    # Wrap and execute the code
+                    try:
+                        wrapped_code = wrap_streamlit_code(code_to_run)
+
+                        # Create a safe execution environment
+                        exec_globals = {
+                            "__builtins__": __builtins__,
+                            "st": st,
+                            "pd": None,
+                            "np": None,
+                            "px": None,
+                            "go": None,
+                            "json": json,
+                            "datetime": datetime,
+                        }
+
+                        # Try to import optional libraries
+                        try:
+                            import pandas as pd
+                            exec_globals["pd"] = pd
+                        except ImportError:
+                            pass
+
+                        try:
+                            import numpy as np
+                            exec_globals["np"] = np
+                        except ImportError:
+                            pass
+
+                        try:
+                            import plotly.express as px
+                            import plotly.graph_objects as go
+                            exec_globals["px"] = px
+                            exec_globals["go"] = go
+                        except ImportError:
+                            pass
+
+                        # Execute the code in a container
+                        with st.container():
+                            st.markdown(
+                                """
+                                <div style="background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(168,85,247,0.1));
+                                            border-radius: 12px; padding: 0.5rem; margin-bottom: 1rem;
+                                            border: 1px solid rgba(99,102,241,0.2);">
+                                    <span style="color: #6366f1; font-weight: 600;">🔴 Live Preview</span>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+
+                            # Execute the generated code
+                            exec(wrapped_code, exec_globals)
+
+                    except SyntaxError as e:
+                        st.error(f"Syntax Error: {e}")
+                        st.code(str(e), language="text")
+                    except Exception as e:
+                        st.error(f"Execution Error: {type(e).__name__}: {e}")
+                        with st.expander("Error Details"):
+                            st.code(traceback.format_exc(), language="text")
+
+                # Clear the run flag
+                if st.session_state.get("agentlab_run_code"):
+                    st.session_state.agentlab_run_code = None
             else:
-                answer, _events = run_agent_query(rt, query_text, chat_history=history)
-                content = answer
-            return {"content": content, "error": None}
-        except Exception as exc:
-            return {"content": "", "error": str(exc)}
+                st.info("Click 'Run Code' to see the live preview")
 
-    # Handle pending message
-    pending = st.session_state.get("agentlab_pending_user_message")
-    if pending and runtime is not None and not st.session_state.get("agentlab_processing"):
-        st.session_state.agentlab_pending_user_message = None
-        user_text = str(pending)
-        st.session_state.agentlab_messages.append({"role": "user", "content": user_text})
+        # Quick Templates Section
+        st.divider()
+        st.markdown("#### 🚀 Quick Templates")
+        st.caption("Click to load a template into the chat")
 
-        # Add to recent queries
-        recent = st.session_state.get("agentlab_recent_queries", [])
-        if user_text not in recent:
-            recent.insert(0, user_text)
-            st.session_state.agentlab_recent_queries = recent[:10]
+        template_cols = st.columns(4)
+        templates = [
+            ("📊 Metrics Dashboard", "Create a beautiful metrics dashboard with 4 KPI cards showing random data, using gradient backgrounds and modern styling"),
+            ("📈 Interactive Chart", "Create an interactive line chart with sample time series data using Plotly, with hover tooltips and a clean design"),
+            ("📝 User Form", "Create a professional user input form with name, email, and message fields, with validation and a submit button"),
+            ("📋 Data Table", "Create an interactive data table with sample employee data, including search, sort, and download functionality"),
+        ]
 
-        with st.chat_message("user"):
-            st.markdown(user_text)
-
-        # Execute query with status
-        with st.chat_message("assistant"):
-            with st.status("Processing...", expanded=True) as status:
-                st.write("🤔 Analyzing your request...")
-                cfg = st.session_state.agentlab_config
-                agent_type = cfg.get("agent_type", "Normal")
-
-                try:
-                    st.write("🔧 Calling tools...")
-                    if agent_type == "Deep":
-                        plan, answer, _events = run_deep_agent_query(runtime, user_text, chat_history=st.session_state.agentlab_messages[:-1])
-                        status.update(label="Complete!", state="complete")
-                        st.markdown("**Plan**")
-                        st.markdown(plan or "")
-                        st.markdown("**Answer**")
-                        st.markdown(answer)
-                        st.session_state.agentlab_messages.append({"role": "assistant", "content": f"Plan:\n{plan}\n\nAnswer:\n{answer}"})
-                    else:
-                        answer, _events = run_agent_query(runtime, user_text, chat_history=st.session_state.agentlab_messages[:-1])
-                        status.update(label="Complete!", state="complete")
-                        st.markdown(answer)
-                        st.session_state.agentlab_messages.append({"role": "assistant", "content": answer})
-                except Exception as exc:
-                    status.update(label="Error", state="error")
-                    _render_exception("Agent error", exc)
-
-        st.rerun()
-
-    # Chat input
-    prompt = st.chat_input("Ask in natural language...", disabled=(runtime is None or st.session_state.get("agentlab_processing")))
-    if prompt and runtime is not None and not st.session_state.get("agentlab_processing"):
-        st.session_state.agentlab_messages.append({"role": "user", "content": prompt})
-
-        # Add to recent queries
-        recent = st.session_state.get("agentlab_recent_queries", [])
-        if prompt not in recent:
-            recent.insert(0, prompt)
-            st.session_state.agentlab_recent_queries = recent[:10]
-
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Execute query with status
-        with st.chat_message("assistant"):
-            with st.status("Processing...", expanded=True) as status:
-                st.write("🤔 Analyzing your request...")
-                cfg = st.session_state.agentlab_config
-                agent_type = cfg.get("agent_type", "Normal")
-
-                try:
-                    st.write("🔧 Calling tools...")
-                    if agent_type == "Deep":
-                        plan, answer, _events = run_deep_agent_query(runtime, prompt, chat_history=st.session_state.agentlab_messages[:-1])
-                        status.update(label="Complete!", state="complete")
-                        st.markdown("**Plan**")
-                        st.markdown(plan or "")
-                        st.markdown("**Answer**")
-                        st.markdown(answer)
-                        st.session_state.agentlab_messages.append({"role": "assistant", "content": f"Plan:\n{plan}\n\nAnswer:\n{answer}"})
-                    else:
-                        answer, _events = run_agent_query(runtime, prompt, chat_history=st.session_state.agentlab_messages[:-1])
-                        status.update(label="Complete!", state="complete")
-                        st.markdown(answer)
-                        st.session_state.agentlab_messages.append({"role": "assistant", "content": answer})
-                except Exception as exc:
-                    status.update(label="Error", state="error")
-                    _render_exception("Agent error", exc)
-
-        st.rerun()
+        for i, (label, prompt_template) in enumerate(templates):
+            with template_cols[i]:
+                if st.button(label, key=f"template_{i}", use_container_width=True):
+                    st.session_state.agentlab_pending_user_message = prompt_template
+                    st.rerun()
 
 
 with tab_tools:

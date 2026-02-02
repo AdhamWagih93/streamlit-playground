@@ -7,22 +7,16 @@
 
 x-dev-resources-tiny: &dev_resources_tiny
   mem_limit: 96m
-  cpus: 0.10
 
 x-dev-resources-small: &dev_resources_small
   mem_limit: 192m
-  cpus: 0.20
 
 x-dev-resources-medium: &dev_resources_medium
   mem_limit: 384m
-  cpus: 0.35
 
 services:
   streamlit:
     <<: *dev_resources_medium
-    build:
-      cache_from:
-        - bsw-streamlit:dev
     environment:
       - TZ=Africa/Cairo
       # Enable debug mode
@@ -118,11 +112,9 @@ services:
 
   postgres:
     mem_limit: 256m
-    cpus: 0.20
 
   redis:
     mem_limit: 64m
-    cpus: 0.05
 
   git-mcp:
     <<: *dev_resources_tiny
@@ -135,12 +127,16 @@ services:
 
   trivy-mcp:
     mem_limit: 256m
-    cpus: 0.25
     # Tip: set TRIVY_SKIP_DB_UPDATE=true in your .env to avoid DB downloads in dev.
 
   playwright-mcp:
     mem_limit: 256m
-    cpus: 0.25
+
+  chromadb:
+    mem_limit: 256m
+    environment:
+      - TZ=Africa/Cairo
+      - LOG_LEVEL=DEBUG
 
   # Additional development service: Lightweight DB admin
   db-admin:

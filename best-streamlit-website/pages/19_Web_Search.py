@@ -121,7 +121,7 @@ st.markdown(
     """
     <div class="search-hero">
         <h1>🔍 Web Search</h1>
-        <p>Search the web for text, news, images, videos, and places using DuckDuckGo</p>
+        <p>Search the web for text, news, images, videos, and places using Tavily</p>
     </div>
     """,
     unsafe_allow_html=True,

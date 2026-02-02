@@ -3,7 +3,7 @@ uvicorn[standard]
 langchain
 langchain-ollama
 langchain-mcp-adapters
-fastmcp<3
+fastmcp==3.0.0
 kubernetes
 PyYAML
 requests

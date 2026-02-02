@@ -17,7 +17,7 @@ watchdog
 langchain
 langchain-ollama
 langgraph
-fastmcp<3
+fastmcp==3.0.0
 mcp>=1.7.1
 requests
 langchain-mcp-adapters
@@ -26,3 +26,5 @@ kubernetes
 PyYAML
 docker
 aiohttp
+chromadb
+pypdf

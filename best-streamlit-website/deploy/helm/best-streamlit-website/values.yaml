@@ -13,6 +13,10 @@ images:
     repository: postgres
     tag: 16-alpine
     pullPolicy: IfNotPresent
+  chromadb:
+    repository: chromadb/chroma
+    tag: "0.5.23"
+    pullPolicy: IfNotPresent
   scheduler:
     repository: best-streamlit-website/scheduler
     tag: local
@@ -58,6 +62,11 @@ env:
   schedulerMcpTransport: streamable-http
   schedulerMcpUrl: http://scheduler:8010/mcp
 
+  # ChromaDB configuration (Knowledge Base)
+  chromadbHost: chromadb
+  chromadbPort: "8000"
+  chromadbUrl: http://chromadb:8000
+
   # Central DB for scheduler history (recommended in K8s).
   # Example:
   # platformDatabaseUrl: postgresql+psycopg2://user:pass@platform-db-pgpool:5432/platform
@@ -73,6 +82,7 @@ components:
   agentKubernetes: true
   postgres: true
   redis: true
+  chromadb: true
 
 replicas:
   streamlit: 1
@@ -102,6 +112,12 @@ service:
   redis:
     type: ClusterIP
     port: 6379
+  chromadb:
+    type: ClusterIP
+    port: 8000
+
+chromadb:
+  storageSize: 2Gi
 
 postgres:
   database: bsw
@@ -175,3 +191,10 @@ resources:
     limits:
       cpu: 30m
       memory: 128Mi
+  chromadb:
+    requests:
+      cpu: 10m
+      memory: 128Mi
+    limits:
+      cpu: 100m
+      memory: 512Mi
