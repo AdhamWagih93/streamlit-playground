@@ -320,17 +320,25 @@ div[data-testid="stPopover"] > div {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
-/* ---------- Admin view ---------- */
-.admin-header {
+/* ---------- History / Admin view ---------- */
+.history-section {
+    margin-top: 2.5rem;
+    border-top: 2px solid var(--border);
+    padding-top: 1.5rem;
+}
+.history-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.25rem;
+}
+.history-section-title {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 1.25rem 0 0.75rem;
-    border-top: 2px solid var(--border);
-    margin-top: 2rem;
 }
-.admin-header h3 {
-    font-size: 1rem;
+.history-section-title h3 {
+    font-size: 1.05rem;
     font-weight: 700;
     color: var(--text-primary);
     margin: 0;
@@ -339,56 +347,186 @@ div[data-testid="stPopover"] > div {
 .admin-badge {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
+    padding: 2px 9px;
     border-radius: 20px;
-    font-size: 0.68rem;
+    font-size: 0.67rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     background: rgba(74, 144, 217, 0.1);
     color: var(--accent);
-    border: 1px solid rgba(74, 144, 217, 0.25);
+    border: 1px solid rgba(74, 144, 217, 0.3);
+}
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
 }
 .stat-card {
     background: var(--bg-card);
     border: 1px solid var(--border-light);
     border-radius: var(--radius);
-    padding: 1rem 1.25rem;
+    padding: 1rem 1rem 0.85rem;
     text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+.stat-card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--accent);
+    opacity: 0.4;
+    border-radius: var(--radius) var(--radius) 0 0;
 }
 .stat-card .stat-value {
-    font-size: 1.6rem;
+    font-size: 1.55rem;
     font-weight: 700;
     color: var(--text-primary);
-    line-height: 1.2;
+    line-height: 1.15;
 }
 .stat-card .stat-label {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 500;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-top: 0.2rem;
+    letter-spacing: 0.06em;
+    margin-top: 0.25rem;
+}
+.stat-card .stat-sub {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+}
+.stat-meta-row {
+    display: flex;
+    gap: 20px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: 0.4rem 0 1rem;
+    flex-wrap: wrap;
+}
+.stat-meta-row span strong {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+.filter-bar {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+}
+.filter-bar-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+.session-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    margin-bottom: 0.6rem;
+    overflow: hidden;
+}
+.session-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.7rem 1rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-light);
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.session-card-id {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    padding: 1px 6px;
+}
+.session-card-user {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.session-card-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    flex-wrap: wrap;
 }
 .history-row {
     background: var(--bg-card);
     border: 1px solid var(--border-light);
+    border-left: 3px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 0.75rem 1rem;
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.35rem;
+}
+.history-row.role-user {
+    border-left-color: var(--accent);
+}
+.history-row.role-assistant {
+    border-left-color: var(--success);
 }
 .history-row-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 0.3rem;
+    flex-wrap: wrap;
+    gap: 4px;
 }
-.history-row-meta {
+.history-role-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.history-role-badge.role-user {
+    background: rgba(74, 144, 217, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(74, 144, 217, 0.2);
+}
+.history-role-badge.role-assistant {
+    background: rgba(45, 138, 78, 0.1);
+    color: var(--success);
+    border: 1px solid rgba(45, 138, 78, 0.2);
+}
+.history-row-ident {
+    display: flex;
+    gap: 8px;
+    align-items: center;
     font-size: 0.72rem;
     color: var(--text-muted);
+}
+.history-content {
+    font-size: 0.84rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+    margin-bottom: 0.3rem;
+    word-break: break-word;
+}
+.history-row-meta {
+    font-size: 0.7rem;
+    color: var(--text-muted);
     display: flex;
-    gap: 12px;
+    gap: 14px;
+    flex-wrap: wrap;
 }
 </style>
 """
@@ -1271,6 +1409,7 @@ def render_lobby():
         st.markdown('</div>', unsafe_allow_html=True)
 
 
+
 # ---------------------------------------------------------------------------
 # TOOLBAR
 # ---------------------------------------------------------------------------
@@ -1530,105 +1669,108 @@ def render_chat():
 # ---------------------------------------------------------------------------
 def render_admin():
     """Full conversation history dashboard — visible to admins only, in lobby only."""
-    st.markdown(
-        '<div class="admin-header">'
-        '<h3>Conversation History</h3>'
-        '<span class="admin-badge">Admin</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="history-section">', unsafe_allow_html=True)
+
+    # -- Section header --
+    hc1, hc2 = st.columns([6, 1])
+    with hc1:
+        st.markdown(
+            '<div class="history-section-title">'
+            '<h3>Conversation History</h3>'
+            '<span class="admin-badge">Admin</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    with hc2:
+        if st.button("Refresh", use_container_width=True, key="admin_refresh"):
+            st.rerun()
 
     if psycopg2 is None:
         st.warning("psycopg2 is not installed. Run: `pip install psycopg2-binary`")
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
     conn = _get_db_connection()
     if conn is None:
         st.warning("Could not connect to the database. Check your Vault / DB configuration.")
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    # -- Stats row --
+    # -- Stats grid (6 cards) --
     stats = db_fetch_stats()
+    avg_dur   = float(stats.get("avg_duration_s") or 0)
+    max_dur   = float(stats.get("max_duration_s") or 0)
+    first_msg = stats.get("first_message")
+    last_msg  = stats.get("last_message")
+
     if stats:
-        cs = st.columns(5)
+        cs = st.columns(6)
         cards = [
-            ("Total Messages",  format_number(int(stats.get("total_messages", 0)))),
-            ("Sessions",        format_number(int(stats.get("total_sessions", 0)))),
-            ("User Messages",   format_number(int(stats.get("user_messages", 0)))),
-            ("Asst. Messages",  format_number(int(stats.get("assistant_messages", 0)))),
-            ("Total Tokens",    format_number(int(stats.get("total_tokens", 0)))),
+            ("Sessions",       format_number(int(stats.get("total_sessions", 0))),
+             f"First: {first_msg.strftime('%b %d') if first_msg else '—'}"),
+            ("Total Messages", format_number(int(stats.get("total_messages", 0))),
+             f"Last: {last_msg.strftime('%b %d') if last_msg else '—'}"),
+            ("User",           format_number(int(stats.get("user_messages", 0))),
+             "messages sent"),
+            ("Assistant",      format_number(int(stats.get("assistant_messages", 0))),
+             "responses given"),
+            ("Avg Response",   format_duration(avg_dur),
+             f"Max: {format_duration(max_dur)}"),
+            ("Total Tokens",   format_number(int(stats.get("total_tokens", 0))),
+             "estimated"),
         ]
-        for col, (label, value) in zip(cs, cards):
+        for col, (label, value, sub) in zip(cs, cards):
             with col:
                 st.markdown(
                     f'<div class="stat-card">'
                     f'<div class="stat-value">{value}</div>'
                     f'<div class="stat-label">{label}</div>'
+                    f'<div class="stat-sub">{sub}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-        avg_dur = stats.get("avg_duration_s") or 0
-        max_dur = stats.get("max_duration_s") or 0
-        first_msg = stats.get("first_message")
-        last_msg  = stats.get("last_message")
-        st.markdown(
-            f'<div class="msg-meta" style="justify-content:flex-start;gap:20px;margin:0.75rem 0;">'
-            f'<span>Avg response: {format_duration(float(avg_dur))}</span>'
-            f'<span>Max response: {format_duration(float(max_dur))}</span>'
-            f'<span>First: {first_msg.strftime("%Y-%m-%d %H:%M") if first_msg else "—"}</span>'
-            f'<span>Last: {last_msg.strftime("%Y-%m-%d %H:%M") if last_msg else "—"}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown('<hr class="divider">', unsafe_allow_html=True)
-
-    # -- Filters row --
+    # -- Filter bar --
     sessions  = db_fetch_sessions()
     usernames = db_fetch_usernames()
 
-    session_options  = ["All"] + [s["session_id"] for s in sessions]
-    username_options = ["All"] + usernames
+    session_options  = ["All sessions"] + [s["session_id"] for s in sessions]
+    username_options = ["All users"] + usernames
 
-    fc1, fc2, fc3, fc4, fc5, fc6 = st.columns([1.8, 1.4, 1.2, 1.4, 1.4, 1])
+    st.markdown(
+        '<div class="filter-bar">'
+        '<div class="filter-bar-label">Filter history</div>',
+        unsafe_allow_html=True,
+    )
+    fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1.6, 1.2, 1.4, 1.4])
     with fc1:
         sel_session = st.selectbox(
-            "Session", session_options,
-            format_func=lambda s: s if s == "All" else f"{s[:14]}…",
-            label_visibility="collapsed", key="admin_session_filter",
+            "Session",
+            session_options,
+            format_func=lambda s: s if s == "All sessions" else f"{s[:18]}…",
+            key="admin_session_filter",
         )
     with fc2:
-        sel_username = st.selectbox(
-            "User", username_options,
-            label_visibility="collapsed", key="admin_username_filter",
-        )
+        sel_username = st.selectbox("User", username_options, key="admin_username_filter")
     with fc3:
-        sel_role = st.selectbox(
-            "Role", ["All", "User", "Assistant"],
-            label_visibility="collapsed", key="admin_role_filter",
-        )
+        sel_role = st.selectbox("Role", ["All", "User", "Assistant"], key="admin_role_filter")
     with fc4:
-        date_from = st.date_input("From", value=None, key="admin_date_from",
-                                  label_visibility="collapsed")
+        date_from = st.date_input("From date", value=None, key="admin_date_from")
     with fc5:
-        date_to = st.date_input("To", value=None, key="admin_date_to",
-                                label_visibility="collapsed")
-    with fc6:
-        if st.button("Refresh", use_container_width=True, key="admin_refresh"):
-            st.rerun()
+        date_to = st.date_input("To date", value=None, key="admin_date_to")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # -- Fetch rows --
     rows = db_fetch_history(
-        limit=300,
-        session_filter=None if sel_session == "All" else sel_session,
-        username_filter=None if sel_username == "All" else sel_username,
+        limit=500,
+        session_filter=None if sel_session == "All sessions" else sel_session,
+        username_filter=None if sel_username == "All users" else sel_username,
         role_filter=sel_role,
         date_from=datetime.combine(date_from, datetime.min.time()) if date_from else None,
         date_to=datetime.combine(date_to, datetime.max.time()) if date_to else None,
     )
 
-    # -- Clear all DB (with confirmation) --
+    # -- Danger zone (admin only) --
     with st.expander("Danger Zone", expanded=False):
         st.warning("This will permanently delete **all** conversation history from the database.")
         confirm = st.checkbox("I understand, delete all history", key="admin_clear_confirm")
@@ -1636,6 +1778,7 @@ def render_admin():
             "Clear All History",
             disabled=not confirm,
             use_container_width=True,
+            type="primary",
             key="admin_clear_all",
         ):
             if db_clear_all():
@@ -1644,88 +1787,121 @@ def render_admin():
             else:
                 st.error("Failed to delete history. Check DB connection.")
 
-    st.markdown('<hr class="divider">', unsafe_allow_html=True)
-
+    # -- Result count --
     if not rows:
-        st.caption("No messages found for the selected filters.")
+        st.markdown(
+            '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:0.85rem;">'
+            'No messages match the selected filters.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    st.caption(f"{len(rows)} message{'s' if len(rows) != 1 else ''} shown")
+    n_sessions = len({r["session_id"] for r in rows})
+    st.markdown(
+        f'<div class="stat-meta-row">'
+        f'<span><strong>{len(rows)}</strong> messages</span>'
+        f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     # -- Tabs --
     tab_sessions, tab_flat = st.tabs(["By Session", "Flat Log"])
 
+    # ---- By Session tab ----
     with tab_sessions:
         grouped: dict[str, list[dict]] = {}
         for r in rows:
             grouped.setdefault(r["session_id"], []).append(r)
 
         for sid, msgs in grouped.items():
-            n          = len(msgs)
-            first_ts   = msgs[-1]["timestamp_utc"]
-            last_ts    = msgs[0]["timestamp_utc"]
-            total_tok  = sum(m["tokens_est"] or 0 for m in msgs)
-            uname      = msgs[0].get("username") or "—"
-            label = (
-                f"{uname}  ·  `{sid[:12]}…`  ·  {n} msgs  ·  "
-                f"{first_ts.strftime('%Y-%m-%d %H:%M') if first_ts else ''}"
-            )
+            n_msgs    = len(msgs)
+            first_ts  = msgs[-1]["timestamp_utc"]
+            last_ts   = msgs[0]["timestamp_utc"]
+            total_tok = sum(m["tokens_est"] or 0 for m in msgs)
+            uname     = msgs[0].get("username") or "—"
+            docs_list = msgs[0].get("documents") or []
+
+            date_str = first_ts.strftime("%Y-%m-%d") if first_ts else "—"
+            time_range = ""
+            if first_ts and last_ts:
+                time_range = f"{first_ts.strftime('%H:%M')} – {last_ts.strftime('%H:%M')}"
+
+            label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} messages  ·  {date_str}"
             with st.expander(label, expanded=False):
+                # Session metadata header
+                meta_parts = [
+                    f'<span><strong>User:</strong> {uname}</span>',
+                    f'<span><strong>Session:</strong> <span class="session-card-id">{sid}</span></span>',
+                ]
+                if time_range:
+                    meta_parts.append(f'<span><strong>Time:</strong> {time_range}</span>')
+                meta_parts.append(f'<span><strong>Tokens:</strong> ~{format_number(total_tok)}</span>')
+                if docs_list:
+                    doc_names = ", ".join(docs_list[:3])
+                    if len(docs_list) > 3:
+                        doc_names += f" +{len(docs_list) - 3} more"
+                    meta_parts.append(f'<span><strong>Docs:</strong> {doc_names}</span>')
                 st.markdown(
-                    f'<div class="msg-meta" style="justify-content:flex-start;gap:16px;margin-bottom:0.6rem;">'
-                    f'<span>User: <strong>{uname}</strong></span>'
-                    f'<span>Session: <code>{sid}</code></span>'
-                    f'<span>Start: {first_ts.strftime("%H:%M") if first_ts else "—"}</span>'
-                    f'<span>End: {last_ts.strftime("%H:%M") if last_ts else "—"}</span>'
-                    f'<span>~{format_number(total_tok)} tokens</span>'
+                    f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
+                    f'{"".join(meta_parts)}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+                # Chat replay
                 for m in reversed(msgs):
                     ts_str  = m["timestamp_utc"].strftime("%H:%M:%S") if m["timestamp_utc"] else ""
                     dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
                     tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-                    docs_str = ", ".join(m["documents"]) if m.get("documents") else ""
                     with st.chat_message(m["role"]):
                         st.markdown(m["content"])
-                        parts = [p for p in [ts_str, dur_str, tok_str] if p]
-                        if docs_str:
-                            parts.append(f"docs: {docs_str}")
-                        if parts:
+                        meta_items = [p for p in [ts_str, dur_str, tok_str] if p]
+                        if meta_items:
                             st.markdown(
                                 f'<div class="msg-meta">'
-                                f'{"".join(f"<span>{p}</span>" for p in parts)}'
+                                f'{"".join(f"<span>{p}</span>" for p in meta_items)}'
                                 f'</div>',
                                 unsafe_allow_html=True,
                             )
 
+    # ---- Flat Log tab ----
     with tab_flat:
         for m in rows:
-            role_label = "You" if m["role"] == "user" else "Assistant"
-            ts_str  = m["timestamp_utc"].strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
-            dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
-            tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-            uname   = m.get("username") or "—"
-            preview = m["content"][:200].replace("\n", " ")
-            if len(m["content"]) > 200:
+            role      = m["role"]
+            role_cls  = "role-user" if role == "user" else "role-assistant"
+            role_label = "User" if role == "user" else "Assistant"
+            ts_str    = m["timestamp_utc"].strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
+            dur_str   = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
+            tok_str   = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
+            uname     = m.get("username") or "—"
+            preview   = m["content"][:280].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
+            if len(m["content"]) > 280:
                 preview += " …"
+
+            meta_spans = "".join(
+                f"<span>{p}</span>" for p in [ts_str, dur_str, tok_str] if p
+            )
             st.markdown(
-                f'<div class="history-row">'
+                f'<div class="history-row {role_cls}">'
                 f'<div class="history-row-header">'
-                f'<span style="font-size:0.82rem;font-weight:600;">{role_label}</span>'
-                f'<span style="font-size:0.7rem;color:var(--text-muted);">'
-                f'{uname} &middot; <code>{m["session_id"][:14]}</code>'
-                f'</span>'
+                f'<div style="display:flex;align-items:center;gap:8px;">'
+                f'<span class="history-role-badge {role_cls}">{role_label}</span>'
+                f'<span style="font-size:0.78rem;font-weight:600;color:var(--text-primary);">{uname}</span>'
                 f'</div>'
-                f'<div style="font-size:0.85rem;color:var(--text-primary);margin-bottom:0.3rem;">{preview}</div>'
-                f'<div class="history-row-meta">'
-                f'<span>{ts_str}</span>'
-                f'{"<span>" + dur_str + "</span>" if dur_str else ""}'
-                f'{"<span>" + tok_str + "</span>" if tok_str else ""}'
+                f'<div class="history-row-ident">'
+                f'<span class="session-card-id">{m["session_id"][:16]}</span>'
                 f'</div>'
+                f'</div>'
+                f'<div class="history-content">{preview}</div>'
+                f'<div class="history-row-meta">{meta_spans}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
