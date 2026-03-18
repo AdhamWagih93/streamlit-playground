@@ -563,6 +563,13 @@ div[data-testid="stPopover"] > div {
     height: 1px;
     background: var(--border-light);
 }
+.chart-card .stDataFrame {
+    border: none !important;
+}
+.chart-card .stDataFrame [data-testid="stDataFrameResizable"] {
+    border: 1px solid var(--border-light) !important;
+    border-radius: var(--radius-sm) !important;
+}
 </style>
 """
 
@@ -878,6 +885,85 @@ def db_fetch_timeseries() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+
+
+def db_fetch_user_activity() -> list[dict]:
+    """Per-user aggregate stats for the user activity chart."""
+    conn = _get_live_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT
+                    COALESCE(NULLIF(username, ''), '(anonymous)') AS username,
+                    COUNT(*)                                      AS total_messages,
+                    COUNT(DISTINCT session_id)                    AS sessions,
+                    COUNT(*) FILTER (WHERE role = 'user')        AS user_msgs,
+                    COUNT(*) FILTER (WHERE role = 'assistant')   AS assistant_msgs,
+                    COALESCE(SUM(tokens_est), 0)                 AS tokens,
+                    MIN(timestamp_utc)                            AS first_active,
+                    MAX(timestamp_utc)                            AS last_active
+                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                GROUP BY COALESCE(NULLIF(username, ''), '(anonymous)')
+                ORDER BY total_messages DESC
+            """)
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def db_fetch_session_topics(limit: int = 50) -> list[dict]:
+    """First user message per session — used as a topic proxy."""
+    conn = _get_live_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT DISTINCT ON (session_id)
+                    session_id,
+                    COALESCE(NULLIF(username, ''), '(anonymous)') AS username,
+                    content,
+                    timestamp_utc
+                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                WHERE role = 'user'
+                ORDER BY session_id, timestamp_utc ASC
+                LIMIT %s
+            """, (limit,))
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def _extract_topic_keywords(topics: list[dict], top_n: int = 20) -> list[tuple[str, int]]:
+    """Simple keyword frequency from session-opening user messages."""
+    STOP = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+        "should", "may", "might", "must", "can", "could", "i", "me", "my",
+        "you", "your", "we", "our", "they", "them", "their", "he", "she",
+        "it", "its", "this", "that", "these", "those", "what", "which",
+        "who", "whom", "how", "when", "where", "why", "not", "no", "nor",
+        "and", "or", "but", "if", "then", "so", "as", "of", "in", "on",
+        "at", "to", "for", "with", "by", "from", "about", "into", "through",
+        "during", "before", "after", "above", "below", "up", "down", "out",
+        "off", "over", "under", "again", "further", "once", "here", "there",
+        "all", "each", "every", "both", "few", "more", "most", "other",
+        "some", "such", "only", "own", "same", "than", "too", "very",
+        "just", "because", "also", "any", "many", "much", "like", "get",
+        "got", "make", "know", "think", "want", "tell", "see", "go", "come",
+        "take", "give", "use", "find", "say", "said", "let", "need", "try",
+        "ask", "work", "call", "put", "keep", "still", "should", "could",
+        "hi", "hello", "please", "thanks", "thank", "hey", "ok", "okay",
+    }
+    freq: dict[str, int] = {}
+    for t in topics:
+        words = re.findall(r"[a-zA-Z]{3,}", t.get("content", "").lower())
+        for w in words:
+            if w not in STOP:
+                freq[w] = freq.get(w, 0) + 1
+    return sorted(freq.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
 
 # ---------------------------------------------------------------------------
@@ -1871,6 +1957,121 @@ def render_admin():
 
         except Exception:
             pass  # charts are best-effort; skip silently if pandas/data issue
+
+    # -- User activity & Topics --
+    user_rows = db_fetch_user_activity()
+    session_topics = db_fetch_session_topics()
+
+    if user_rows or session_topics:
+        try:
+            import pandas as pd
+
+            if user_rows:
+                st.markdown(
+                    '<div class="chart-section-divider"><span>User Activity</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+                ua1, ua2 = st.columns(2)
+
+                with ua1:
+                    st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="chart-card-title">Messages by User</div>',
+                        unsafe_allow_html=True,
+                    )
+                    udf = pd.DataFrame(user_rows)
+                    chart_udf = udf.set_index("username")[["user_msgs", "assistant_msgs"]].rename(
+                        columns={"user_msgs": "Sent", "assistant_msgs": "Received"}
+                    )
+                    st.bar_chart(chart_udf, color=["#4a90d9", "#2d8a4e"], horizontal=True, height=max(160, len(udf) * 38))
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with ua2:
+                    st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="chart-card-title">Tokens by User</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.bar_chart(
+                        udf.set_index("username")[["tokens"]].rename(columns={"tokens": "Tokens"}),
+                        color=["#4a90d9"],
+                        horizontal=True,
+                        height=max(160, len(udf) * 38),
+                    )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # User detail table
+                st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="chart-card-title">User Details</div>',
+                    unsafe_allow_html=True,
+                )
+                table_data = []
+                for u in user_rows:
+                    last_ts = u["last_active"]
+                    table_data.append({
+                        "User": u["username"],
+                        "Sessions": int(u["sessions"]),
+                        "Messages": int(u["total_messages"]),
+                        "Sent": int(u["user_msgs"]),
+                        "Received": int(u["assistant_msgs"]),
+                        "Tokens": format_number(int(u["tokens"])),
+                        "First Active": u["first_active"].strftime("%Y-%m-%d %H:%M") if u["first_active"] else "—",
+                        "Last Active": last_ts.strftime("%Y-%m-%d %H:%M") if last_ts else "—",
+                    })
+                st.dataframe(
+                    pd.DataFrame(table_data),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # Topic analysis
+            if session_topics:
+                st.markdown(
+                    '<div class="chart-section-divider"><span>Topics &amp; Keywords</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+                tp1, tp2 = st.columns(2)
+
+                with tp1:
+                    keywords = _extract_topic_keywords(session_topics, top_n=15)
+                    if keywords:
+                        st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                        st.markdown(
+                            '<div class="chart-card-title">Top Keywords (from user prompts)</div>',
+                            unsafe_allow_html=True,
+                        )
+                        kw_df = pd.DataFrame(keywords, columns=["Keyword", "Count"]).set_index("Keyword")
+                        st.bar_chart(kw_df, color=["#4a90d9"], horizontal=True, height=max(180, len(keywords) * 28))
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                with tp2:
+                    st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="chart-card-title">Session Openers (first question per session)</div>',
+                        unsafe_allow_html=True,
+                    )
+                    for t in sorted(session_topics, key=lambda x: x["timestamp_utc"] or datetime.min, reverse=True)[:15]:
+                        preview = t["content"][:120].replace("\n", " ").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        if len(t["content"]) > 120:
+                            preview += " …"
+                        ts_str = t["timestamp_utc"].strftime("%b %d, %H:%M") if t["timestamp_utc"] else ""
+                        st.markdown(
+                            f'<div style="padding:0.45rem 0;border-bottom:1px solid var(--border-light);">'
+                            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">'
+                            f'<span style="font-size:0.76rem;font-weight:600;color:var(--text-primary);">{t["username"]}</span>'
+                            f'<span style="font-size:0.68rem;color:var(--text-muted);">{ts_str}</span>'
+                            f'</div>'
+                            f'<div style="font-size:0.8rem;color:var(--text-secondary);line-height:1.45;">{preview}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown('</div>', unsafe_allow_html=True)
+        except Exception:
+            pass
 
     # -- Filter bar --
     sessions  = db_fetch_sessions()
