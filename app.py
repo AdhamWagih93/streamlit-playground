@@ -61,8 +61,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Configuration — set these once
 # ---------------------------------------------------------------------------
-OLLAMA_URL = "http://localhost:11434"
-MODEL = "llama3.2"
+OLLAMA_URL = "http://ef-nexus-03:8081"
+MODEL = "qwen3.5:9b"
 HISTORY_SCHEMA = "public"           # postgres schema
 HISTORY_TABLE  = "chatbot_history"  # postgres table name
 
@@ -618,9 +618,11 @@ def _get_db_config() -> Optional[dict]:
         return None
 
 
-@st.cache_resource(show_spinner=False)
-def _get_db_connection():
-    """Return a persistent psycopg2 connection (cached per app run)."""
+_db_conn = None  # module-level connection holder
+
+
+def _create_db_connection():
+    """Create a fresh psycopg2 connection."""
     if psycopg2 is None:
         return None
     config = _get_db_config()
@@ -637,26 +639,29 @@ def _get_db_connection():
         )
         conn.autocommit = True
         return conn
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[_create_db_connection] ERROR: {e}", file=sys.stderr)
         return None
 
 
 def _get_live_conn():
-    """Return a live, healthy connection — reconnecting if the cached one has gone stale."""
-    conn = _get_db_connection()
-    if conn is None:
-        return None
-    try:
-        if conn.closed:
-            raise Exception("closed")
-        # Lightweight ping to confirm the connection is alive
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-        return conn
-    except Exception:
-        # Invalidate the cache and create a fresh connection
-        _get_db_connection.clear()
-        return _get_db_connection()
+    """Return a live connection, reconnecting automatically if stale."""
+    global _db_conn
+    if _db_conn is not None:
+        try:
+            if not _db_conn.closed:
+                with _db_conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                return _db_conn
+        except Exception:
+            try:
+                _db_conn.close()
+            except Exception:
+                pass
+            _db_conn = None
+    _db_conn = _create_db_connection()
+    return _db_conn
 
 
 def db_ensure_table():
