@@ -467,7 +467,7 @@ def _get_db_connection():
 
 
 def db_ensure_table():
-    """Create the history table if it doesn't exist."""
+    """Create the history table if it doesn't exist, and migrate missing columns."""
     conn = _get_db_connection()
     if conn is None:
         return
@@ -477,7 +477,8 @@ def db_ensure_table():
                 CREATE TABLE IF NOT EXISTS {HISTORY_SCHEMA}.{HISTORY_TABLE} (
                     id              BIGSERIAL PRIMARY KEY,
                     session_id      TEXT        NOT NULL,
-                    role            TEXT        NOT NULL,       -- 'user' | 'assistant'
+                    username        TEXT,
+                    role            TEXT        NOT NULL,
                     content         TEXT        NOT NULL,
                     timestamp_utc   TIMESTAMPTZ NOT NULL DEFAULT now(),
                     duration_s      NUMERIC,
@@ -487,12 +488,19 @@ def db_ensure_table():
                 );
                 CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_session
                     ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (session_id, timestamp_utc);
+                CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_username
+                    ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (username);
+            """)
+            # Migration: add username column if upgrading from older schema
+            cur.execute(f"""
+                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    ADD COLUMN IF NOT EXISTS username TEXT;
             """)
     except Exception:
         pass
 
 
-def db_save_message(msg: dict, session_id: str, documents: list[str]):
+def db_save_message(msg: dict, session_id: str, username: str, documents: list[str]):
     """Persist a single message to postgres."""
     conn = _get_db_connection()
     if conn is None:
@@ -502,12 +510,13 @@ def db_save_message(msg: dict, session_id: str, documents: list[str]):
             cur.execute(
                 f"""
                 INSERT INTO {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    (session_id, role, content, timestamp_utc,
+                    (session_id, username, role, content, timestamp_utc,
                      duration_s, tokens_est, model, documents)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
+                    username or "",
                     msg["role"],
                     msg["content"],
                     datetime.utcnow(),
@@ -524,6 +533,7 @@ def db_save_message(msg: dict, session_id: str, documents: list[str]):
 def db_fetch_history(
     limit: int = 200,
     session_filter: Optional[str] = None,
+    username_filter: Optional[str] = None,
     role_filter: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
@@ -538,6 +548,9 @@ def db_fetch_history(
         if session_filter:
             clauses.append("session_id = %s")
             params.append(session_filter)
+        if username_filter:
+            clauses.append("username = %s")
+            params.append(username_filter)
         if role_filter and role_filter != "All":
             clauses.append("role = %s")
             params.append(role_filter.lower())
@@ -552,7 +565,7 @@ def db_fetch_history(
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 f"""
-                SELECT id, session_id, role, content, timestamp_utc,
+                SELECT id, session_id, username, role, content, timestamp_utc,
                        duration_s, tokens_est, model, documents
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where}
@@ -603,6 +616,7 @@ def db_fetch_sessions() -> list[dict]:
             cur.execute(f"""
                 SELECT
                     session_id,
+                    MAX(username)       AS username,
                     MIN(timestamp_utc)  AS started_at,
                     MAX(timestamp_utc)  AS last_at,
                     COUNT(*)            AS message_count,
@@ -616,6 +630,36 @@ def db_fetch_sessions() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+
+
+def db_fetch_usernames() -> list[str]:
+    """Return all distinct usernames for the filter dropdown."""
+    conn = _get_db_connection()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT DISTINCT username FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                WHERE username IS NOT NULL AND username != ''
+                ORDER BY username
+            """)
+            return [r[0] for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def db_clear_all() -> bool:
+    """Delete all rows from the history table. Returns True on success."""
+    conn = _get_db_connection()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"TRUNCATE TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}")
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1426,6 +1470,7 @@ def render_chat():
         }
         st.session_state.chat_messages.append(user_msg)
         db_save_message(user_msg, st.session_state.chat_session_id,
+                        st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -1476,6 +1521,7 @@ def render_chat():
 
         st.session_state.chat_messages.append(assistant_msg)
         db_save_message(assistant_msg, st.session_state.chat_session_id,
+                        st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
 
 
@@ -1483,7 +1529,7 @@ def render_chat():
 # Admin view
 # ---------------------------------------------------------------------------
 def render_admin():
-    """Full conversation history dashboard — visible to admins only."""
+    """Full conversation history dashboard — visible to admins only, in lobby only."""
     st.markdown(
         '<div class="admin-header">'
         '<h3>Conversation History</h3>'
@@ -1530,34 +1576,45 @@ def render_admin():
             f'<div class="msg-meta" style="justify-content:flex-start;gap:20px;margin:0.75rem 0;">'
             f'<span>Avg response: {format_duration(float(avg_dur))}</span>'
             f'<span>Max response: {format_duration(float(max_dur))}</span>'
-            f'<span>First message: {first_msg.strftime("%Y-%m-%d %H:%M") if first_msg else "—"}</span>'
-            f'<span>Last message: {last_msg.strftime("%Y-%m-%d %H:%M") if last_msg else "—"}</span>'
+            f'<span>First: {first_msg.strftime("%Y-%m-%d %H:%M") if first_msg else "—"}</span>'
+            f'<span>Last: {last_msg.strftime("%Y-%m-%d %H:%M") if last_msg else "—"}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # -- Filters --
-    sessions = db_fetch_sessions()
-    session_ids = ["All"] + [s["session_id"] for s in sessions]
+    # -- Filters row --
+    sessions  = db_fetch_sessions()
+    usernames = db_fetch_usernames()
 
-    fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1.2, 1.5, 1.5, 1])
+    session_options  = ["All"] + [s["session_id"] for s in sessions]
+    username_options = ["All"] + usernames
+
+    fc1, fc2, fc3, fc4, fc5, fc6 = st.columns([1.8, 1.4, 1.2, 1.4, 1.4, 1])
     with fc1:
-        sel_session = st.selectbox("Session", session_ids,
-                                   label_visibility="collapsed",
-                                   key="admin_session_filter")
+        sel_session = st.selectbox(
+            "Session", session_options,
+            format_func=lambda s: s if s == "All" else f"{s[:14]}…",
+            label_visibility="collapsed", key="admin_session_filter",
+        )
     with fc2:
-        sel_role = st.selectbox("Role", ["All", "User", "Assistant"],
-                                label_visibility="collapsed",
-                                key="admin_role_filter")
+        sel_username = st.selectbox(
+            "User", username_options,
+            label_visibility="collapsed", key="admin_username_filter",
+        )
     with fc3:
+        sel_role = st.selectbox(
+            "Role", ["All", "User", "Assistant"],
+            label_visibility="collapsed", key="admin_role_filter",
+        )
+    with fc4:
         date_from = st.date_input("From", value=None, key="admin_date_from",
                                   label_visibility="collapsed")
-    with fc4:
+    with fc5:
         date_to = st.date_input("To", value=None, key="admin_date_to",
                                 label_visibility="collapsed")
-    with fc5:
+    with fc6:
         if st.button("Refresh", use_container_width=True, key="admin_refresh"):
             st.rerun()
 
@@ -1565,10 +1622,29 @@ def render_admin():
     rows = db_fetch_history(
         limit=300,
         session_filter=None if sel_session == "All" else sel_session,
+        username_filter=None if sel_username == "All" else sel_username,
         role_filter=sel_role,
         date_from=datetime.combine(date_from, datetime.min.time()) if date_from else None,
         date_to=datetime.combine(date_to, datetime.max.time()) if date_to else None,
     )
+
+    # -- Clear all DB (with confirmation) --
+    with st.expander("Danger Zone", expanded=False):
+        st.warning("This will permanently delete **all** conversation history from the database.")
+        confirm = st.checkbox("I understand, delete all history", key="admin_clear_confirm")
+        if st.button(
+            "Clear All History",
+            disabled=not confirm,
+            use_container_width=True,
+            key="admin_clear_all",
+        ):
+            if db_clear_all():
+                st.success("All history deleted.")
+                st.rerun()
+            else:
+                st.error("Failed to delete history. Check DB connection.")
+
+    st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
     if not rows:
         st.caption("No messages found for the selected filters.")
@@ -1576,27 +1652,29 @@ def render_admin():
 
     st.caption(f"{len(rows)} message{'s' if len(rows) != 1 else ''} shown")
 
-    # -- Session-grouped view --
+    # -- Tabs --
     tab_sessions, tab_flat = st.tabs(["By Session", "Flat Log"])
 
     with tab_sessions:
-        # Group rows by session
         grouped: dict[str, list[dict]] = {}
         for r in rows:
             grouped.setdefault(r["session_id"], []).append(r)
 
         for sid, msgs in grouped.items():
-            n = len(msgs)
-            first_ts = msgs[-1]["timestamp_utc"]
-            last_ts  = msgs[0]["timestamp_utc"]
-            total_tok = sum(m["tokens_est"] or 0 for m in msgs)
-            with st.expander(
-                f"Session `{sid[:12]}…`  ·  {n} msgs  ·  "
-                f"{first_ts.strftime('%Y-%m-%d %H:%M') if first_ts else ''}",
-                expanded=False,
-            ):
+            n          = len(msgs)
+            first_ts   = msgs[-1]["timestamp_utc"]
+            last_ts    = msgs[0]["timestamp_utc"]
+            total_tok  = sum(m["tokens_est"] or 0 for m in msgs)
+            uname      = msgs[0].get("username") or "—"
+            label = (
+                f"{uname}  ·  `{sid[:12]}…`  ·  {n} msgs  ·  "
+                f"{first_ts.strftime('%Y-%m-%d %H:%M') if first_ts else ''}"
+            )
+            with st.expander(label, expanded=False):
                 st.markdown(
                     f'<div class="msg-meta" style="justify-content:flex-start;gap:16px;margin-bottom:0.6rem;">'
+                    f'<span>User: <strong>{uname}</strong></span>'
+                    f'<span>Session: <code>{sid}</code></span>'
                     f'<span>Start: {first_ts.strftime("%H:%M") if first_ts else "—"}</span>'
                     f'<span>End: {last_ts.strftime("%H:%M") if last_ts else "—"}</span>'
                     f'<span>~{format_number(total_tok)} tokens</span>'
@@ -1604,11 +1682,10 @@ def render_admin():
                     unsafe_allow_html=True,
                 )
                 for m in reversed(msgs):
-                    role_label = "You" if m["role"] == "user" else "Assistant"
-                    ts_str = m["timestamp_utc"].strftime("%H:%M:%S") if m["timestamp_utc"] else ""
+                    ts_str  = m["timestamp_utc"].strftime("%H:%M:%S") if m["timestamp_utc"] else ""
                     dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
                     tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-                    docs_str = (", ".join(m["documents"]) if m.get("documents") else "")
+                    docs_str = ", ".join(m["documents"]) if m.get("documents") else ""
                     with st.chat_message(m["role"]):
                         st.markdown(m["content"])
                         parts = [p for p in [ts_str, dur_str, tok_str] if p]
@@ -1616,7 +1693,9 @@ def render_admin():
                             parts.append(f"docs: {docs_str}")
                         if parts:
                             st.markdown(
-                                f'<div class="msg-meta">{"".join(f"<span>{p}</span>" for p in parts)}</div>',
+                                f'<div class="msg-meta">'
+                                f'{"".join(f"<span>{p}</span>" for p in parts)}'
+                                f'</div>',
                                 unsafe_allow_html=True,
                             )
 
@@ -1626,6 +1705,7 @@ def render_admin():
             ts_str  = m["timestamp_utc"].strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
             dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
             tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
+            uname   = m.get("username") or "—"
             preview = m["content"][:200].replace("\n", " ")
             if len(m["content"]) > 200:
                 preview += " …"
@@ -1633,7 +1713,9 @@ def render_admin():
                 f'<div class="history-row">'
                 f'<div class="history-row-header">'
                 f'<span style="font-size:0.82rem;font-weight:600;">{role_label}</span>'
-                f'<span style="font-size:0.7rem;color:var(--text-muted);">`{m["session_id"][:12]}`</span>'
+                f'<span style="font-size:0.7rem;color:var(--text-muted);">'
+                f'{uname} &middot; <code>{m["session_id"][:14]}</code>'
+                f'</span>'
                 f'</div>'
                 f'<div style="font-size:0.85rem;color:var(--text-primary);margin-bottom:0.3rem;">{preview}</div>'
                 f'<div class="history-row-meta">'
@@ -1667,9 +1749,6 @@ def main():
 
     render_toolbar()
     render_chat()
-
-    if is_admin:
-        render_admin()
 
 
 main()
