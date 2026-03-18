@@ -604,9 +604,27 @@ def _get_db_connection():
         return None
 
 
+def _get_live_conn():
+    """Return a live, healthy connection — reconnecting if the cached one has gone stale."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        if conn.closed:
+            raise Exception("closed")
+        # Lightweight ping to confirm the connection is alive
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return conn
+    except Exception:
+        # Invalidate the cache and create a fresh connection
+        _get_db_connection.clear()
+        return _get_db_connection()
+
+
 def db_ensure_table():
     """Create the history table if it doesn't exist, and migrate missing columns."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return
     try:
@@ -640,10 +658,11 @@ def db_ensure_table():
 
 def db_save_message(msg: dict, session_id: str, username: str, documents: list[str]):
     """Persist a single message to postgres."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return
     try:
+        db_ensure_table()  # ensure table exists before every write
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -664,8 +683,9 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                     documents or [],
                 ),
             )
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"[db_save_message] ERROR: {e}", file=sys.stderr)
 
 
 def db_fetch_history(
@@ -677,7 +697,7 @@ def db_fetch_history(
     date_to: Optional[datetime] = None,
 ) -> list[dict]:
     """Fetch conversation history rows for the admin view."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return []
     try:
@@ -719,7 +739,7 @@ def db_fetch_history(
 
 def db_fetch_stats() -> dict:
     """Aggregate stats for the admin dashboard."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return {}
     try:
@@ -746,7 +766,7 @@ def db_fetch_stats() -> dict:
 
 def db_fetch_sessions() -> list[dict]:
     """List all distinct sessions with summary."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return []
     try:
@@ -772,7 +792,7 @@ def db_fetch_sessions() -> list[dict]:
 
 def db_fetch_usernames() -> list[str]:
     """Return all distinct usernames for the filter dropdown."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return []
     try:
@@ -789,7 +809,7 @@ def db_fetch_usernames() -> list[str]:
 
 def db_clear_all() -> bool:
     """Delete all rows from the history table. Returns True on success."""
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         return False
     try:
@@ -1690,7 +1710,7 @@ def render_admin():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    conn = _get_db_connection()
+    conn = _get_live_conn()
     if conn is None:
         st.warning("Could not connect to the database. Check your Vault / DB configuration.")
         st.markdown('</div>', unsafe_allow_html=True)
