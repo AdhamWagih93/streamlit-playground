@@ -570,6 +570,53 @@ div[data-testid="stPopover"] > div {
     border: 1px solid var(--border-light) !important;
     border-radius: var(--radius-sm) !important;
 }
+
+/* ---------- Code mode ---------- */
+.code-output-panel {
+    background: var(--bg-card);
+    border: 2px solid var(--accent);
+    border-radius: var(--radius);
+    margin-top: 0.75rem;
+    overflow: hidden;
+}
+.code-output-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1rem;
+    background: var(--accent-subtle);
+    border-bottom: 1px solid rgba(74, 144, 217, 0.2);
+}
+.code-output-header span {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+}
+.code-output-body {
+    padding: 1rem;
+}
+.mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+.mode-pill.mode-chat {
+    background: rgba(45, 138, 78, 0.1);
+    color: var(--success);
+    border: 1px solid rgba(45, 138, 78, 0.25);
+}
+.mode-pill.mode-code {
+    background: rgba(74, 144, 217, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(74, 144, 217, 0.25);
+}
 </style>
 """
 
@@ -995,6 +1042,8 @@ def _init_state():
         "chat_messages": [],  # each: {role, content, timestamp, duration?, tokens?}
         "documents": {},      # name -> {content, word_count, token_count}
         "chat_active": False,
+        "code_mode": False,
+        "_generated_code": None,  # latest generated Streamlit code
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1427,6 +1476,89 @@ def build_system_prompt() -> str:
     return "\n".join(parts)
 
 
+def build_code_system_prompt() -> str:
+    """System prompt for Streamlit page-builder mode."""
+    username = st.session_state.get("username", "")
+    title = st.session_state.get("title", "")
+    user_ctx = ""
+    if username or title:
+        user_ctx = f"\nThe user is {username}" + (f", a {title}" if title else "") + ".\n"
+
+    doc_ctx = ""
+    if st.session_state.documents:
+        doc_ctx = "\nThe user has uploaded these documents whose data you can reference:\n"
+        for doc_name, doc_info in st.session_state.documents.items():
+            text = doc_info["content"][:20_000]
+            suffix = "... [truncated]" if len(doc_info["content"]) > 20_000 else ""
+            doc_ctx += f"### {doc_name}\n```\n{text}{suffix}\n```\n"
+
+    return f"""You are an expert Streamlit developer. Your ONLY job is to generate complete, runnable Streamlit Python code.
+{user_ctx}{doc_ctx}
+RULES — follow these strictly:
+1. Respond ONLY with a single Python code block (```python ... ```). No explanations before or after.
+2. The code will be executed inside an existing Streamlit page via exec(). Do NOT call st.set_page_config().
+3. Generate professional, production-grade UI: use st.columns, st.tabs, st.metric, st.expander, st.container, st.dataframe, charts (st.bar_chart, st.line_chart, st.area_chart, st.altair_chart), and custom CSS via st.markdown with unsafe_allow_html=True.
+4. Use a consistent, polished design language: clean spacing, subtle borders, card-style layouts, professional color palette.
+5. If the user asks about data from their uploaded documents, parse and visualize that data.
+6. Always include sample/mock data if the user's request requires data you don't have.
+7. Import any needed standard library or common packages (pandas, altair, datetime, random, math) at the top of the code block.
+8. The code must be self-contained — it will be exec'd as-is.
+9. Do NOT use st.set_page_config, st.sidebar, or st.cache_resource in the generated code.
+10. Make every page look stunning — this is a showcase of what Streamlit can do."""
+
+
+def _extract_code_block(text: str) -> Optional[str]:
+    """Extract the first Python code block from LLM output."""
+    # Try ```python ... ``` first
+    pattern = r"```python\s*\n(.*?)```"
+    m = re.search(pattern, text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Fallback: any ``` block
+    pattern = r"```\s*\n(.*?)```"
+    m = re.search(pattern, text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _execute_generated_code(code: str):
+    """Safely execute generated Streamlit code in a container."""
+    st.markdown(
+        '<div class="code-output-panel">'
+        '<div class="code-output-header"><span>Generated Page</span></div>'
+        '<div class="code-output-body">',
+        unsafe_allow_html=True,
+    )
+    try:
+        # Build a controlled exec environment
+        exec_globals = {"__builtins__": __builtins__}
+        exec_globals["st"] = st
+        exec_globals["pd"] = None
+        exec_globals["np"] = None
+        try:
+            import pandas as pd
+            exec_globals["pd"] = pd
+        except ImportError:
+            pass
+        try:
+            import numpy as np
+            exec_globals["np"] = np
+        except ImportError:
+            pass
+        try:
+            import altair as alt
+            exec_globals["alt"] = alt
+        except ImportError:
+            pass
+        exec(code, exec_globals)
+    except Exception as e:
+        st.error(f"Code execution error: {e}")
+        import traceback
+        st.code(traceback.format_exc(), language="python")
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
 # ---------------------------------------------------------------------------
 # Export conversation
 # ---------------------------------------------------------------------------
@@ -1674,19 +1806,33 @@ def render_toolbar():
     total_words = sum(d["word_count"] for d in st.session_state.documents.values())
     total_tokens = sum(d["token_count"] for d in st.session_state.documents.values())
 
-    c_brand, c_docs, c_actions, c_end = st.columns([3, 2, 2, 1.5])
+    code_mode = st.session_state.code_mode
+    c_brand, c_mode, c_docs, c_actions, c_end = st.columns([2.5, 1.5, 2, 2, 1.5])
 
     with c_brand:
         status_cls = "status-active" if online else "status-offline"
         status_txt = "Connected" if online else "Offline"
+        mode_cls = "mode-code" if code_mode else "mode-chat"
+        mode_txt = "Page Builder" if code_mode else "Chat"
         st.markdown(
             f'<div class="toolbar-row">'
             f'<span class="toolbar-brand">Document Chat</span> '
             f'<span class="status-badge {status_cls}">{status_txt}</span> '
-            f'<span class="toolbar-meta">{MODEL}</span>'
+            f'<span class="mode-pill {mode_cls}">{mode_txt}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
+
+    with c_mode:
+        if st.toggle("Page Builder", value=code_mode, key="code_mode_toggle",
+                      help="Switch to Streamlit page generation mode"):
+            if not st.session_state.code_mode:
+                st.session_state.code_mode = True
+                st.rerun()
+        else:
+            if st.session_state.code_mode:
+                st.session_state.code_mode = False
+                st.rerun()
 
     with c_docs:
         label = f"Documents ({doc_count})"
@@ -1894,13 +2040,22 @@ def _generate_greeting():
 def render_chat():
     doc_count = len(st.session_state.documents)
     username = st.session_state.get("username", "")
+    code_mode = st.session_state.code_mode
 
-    # Auto-generate personalized greeting on first load
+    # Auto-generate personalized greeting on first load (chat mode only)
     if not st.session_state.chat_messages:
-        if ollama_is_running():
+        if code_mode:
+            st.markdown(
+                '<div class="empty-state">'
+                '<h2>Page Builder Mode</h2>'
+                '<p>Describe the Streamlit page you want and I\'ll generate it live. '
+                'Try: "Build a sales dashboard with KPI cards and charts"</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        elif ollama_is_running():
             _generate_greeting()
         else:
-            # Fallback static greeting
             display_name = username if username else "there"
             greeting = f"Hello, {display_name}!"
             hint = (
@@ -1913,12 +2068,38 @@ def render_chat():
                 unsafe_allow_html=True,
             )
 
+    # Render conversation history
     for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            render_msg_meta(msg)
+        if msg["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(msg["content"])
+                render_msg_meta(msg)
+        else:
+            # In code mode, assistant messages may contain code blocks
+            extracted = _extract_code_block(msg["content"]) if code_mode else None
+            if extracted:
+                with st.chat_message("assistant"):
+                    st.markdown("Page generated successfully.")
+                    render_msg_meta(msg)
+                    with st.expander("View source code", expanded=False):
+                        st.code(extracted, language="python")
+            else:
+                with st.chat_message("assistant"):
+                    st.markdown(msg["content"])
+                    render_msg_meta(msg)
 
-    placeholder_text = "Ask about your documents..." if doc_count else "Ask me anything..."
+    # Render the latest generated page output (persisted across reruns)
+    if code_mode and st.session_state.get("_generated_code"):
+        _execute_generated_code(st.session_state["_generated_code"])
+
+    # Chat input
+    if code_mode:
+        placeholder_text = "Describe the page you want to build..."
+    elif doc_count:
+        placeholder_text = "Ask about your documents..."
+    else:
+        placeholder_text = "Ask me anything..."
+
     if prompt := st.chat_input(placeholder_text, key="chat_input"):
         if not ollama_is_running():
             st.error("Ollama is not reachable. Check the connection.")
@@ -1942,8 +2123,12 @@ def render_chat():
             st.markdown(prompt)
             render_msg_meta(user_msg)
 
-        # Build API messages (strip metadata)
-        system_msg = {"role": "system", "content": build_system_prompt()}
+        # Build API messages — use code prompt or chat prompt
+        if code_mode:
+            system_content = build_code_system_prompt()
+        else:
+            system_content = build_system_prompt()
+        system_msg = {"role": "system", "content": system_content}
         api_messages = [system_msg] + [
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.chat_messages
@@ -1989,6 +2174,15 @@ def render_chat():
         db_save_message(assistant_msg, st.session_state.chat_session_id,
                         st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
+
+        # In code mode, extract and execute the generated code
+        if code_mode:
+            extracted_code = _extract_code_block(full_response)
+            if extracted_code:
+                st.session_state["_generated_code"] = extracted_code
+                _execute_generated_code(extracted_code)
+            else:
+                st.warning("No code block found in the response. Try rephrasing your request.")
 
 
 # ---------------------------------------------------------------------------
