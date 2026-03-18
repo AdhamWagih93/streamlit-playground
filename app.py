@@ -528,6 +528,41 @@ div[data-testid="stPopover"] > div {
     gap: 14px;
     flex-wrap: wrap;
 }
+.chart-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem 0.5rem;
+    margin-bottom: 0.75rem;
+}
+.chart-card-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+.chart-section-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 1.25rem 0 0.75rem;
+}
+.chart-section-divider span {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.chart-section-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border-light);
+}
 </style>
 """
 
@@ -570,13 +605,8 @@ def _get_db_config() -> Optional[dict]:
     """Load DB config via VaultClient. Returns None if unavailable."""
     try:
         from utils.vault import VaultClient
-        postgres_env = os.environ.get("postgres_env", "dev")
         vc = VaultClient()
-        if postgres_env == "dev":
-            config = vc.read_all_nested_secrets("postgres", "dev")
-        else:
-            config = vc.read_all_nested_secrets("postgres")
-        return config
+        return vc.read_all_nested_secrets("postgres")
     except Exception:
         return None
 
@@ -629,6 +659,8 @@ def db_ensure_table():
         return
     try:
         with conn.cursor() as cur:
+            # Each statement must be executed separately — psycopg2 does not
+            # support multiple statements in a single execute() call.
             cur.execute(f"""
                 CREATE TABLE IF NOT EXISTS {HISTORY_SCHEMA}.{HISTORY_TABLE} (
                     id              BIGSERIAL PRIMARY KEY,
@@ -641,19 +673,23 @@ def db_ensure_table():
                     tokens_est      INTEGER,
                     model           TEXT,
                     documents       TEXT[]
-                );
-                CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_session
-                    ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (session_id, timestamp_utc);
-                CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_username
-                    ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (username);
+                )
             """)
-            # Migration: add username column if upgrading from older schema
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_session
+                    ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (session_id, timestamp_utc)
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_username
+                    ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (username)
+            """)
             cur.execute(f"""
                 ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    ADD COLUMN IF NOT EXISTS username TEXT;
+                    ADD COLUMN IF NOT EXISTS username TEXT
             """)
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"[db_ensure_table] ERROR: {e}", file=sys.stderr)
 
 
 def db_save_message(msg: dict, session_id: str, username: str, documents: list[str]):
@@ -662,7 +698,6 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
     if conn is None:
         return
     try:
-        db_ensure_table()  # ensure table exists before every write
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -818,6 +853,31 @@ def db_clear_all() -> bool:
         return True
     except Exception:
         return False
+
+
+def db_fetch_timeseries() -> list[dict]:
+    """Daily aggregates for charts: messages, sessions, tokens, avg response."""
+    conn = _get_live_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT
+                    DATE(timestamp_utc)                                          AS day,
+                    COUNT(*)                                                     AS messages,
+                    COUNT(DISTINCT session_id)                                   AS sessions,
+                    COUNT(*) FILTER (WHERE role = 'user')                       AS user_msgs,
+                    COUNT(*) FILTER (WHERE role = 'assistant')                  AS assistant_msgs,
+                    COALESCE(SUM(tokens_est), 0)                                AS tokens,
+                    COALESCE(AVG(duration_s) FILTER (WHERE role='assistant'), 0) AS avg_duration
+                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                GROUP BY DATE(timestamp_utc)
+                ORDER BY day
+            """)
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -1749,6 +1809,68 @@ def render_admin():
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+    # -- Charts --
+    ts_rows = db_fetch_timeseries()
+    if ts_rows:
+        try:
+            import pandas as pd
+            df = pd.DataFrame(ts_rows)
+            df["day"] = pd.to_datetime(df["day"])
+            df = df.sort_values("day")
+            df["avg_duration"] = df["avg_duration"].astype(float).round(2)
+            df["tokens"] = df["tokens"].astype(int)
+
+            st.markdown(
+                '<div class="chart-section-divider"><span>Usage Over Time</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            ch1, ch2 = st.columns(2)
+
+            with ch1:
+                st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                st.markdown('<div class="chart-card-title">Messages per Day</div>', unsafe_allow_html=True)
+                chart_df = df.set_index("day")[["user_msgs", "assistant_msgs"]].rename(
+                    columns={"user_msgs": "User", "assistant_msgs": "Assistant"}
+                )
+                st.bar_chart(chart_df, color=["#4a90d9", "#2d8a4e"], height=200)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with ch2:
+                st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                st.markdown('<div class="chart-card-title">Avg Response Time (s)</div>', unsafe_allow_html=True)
+                st.line_chart(
+                    df.set_index("day")[["avg_duration"]].rename(columns={"avg_duration": "Avg (s)"}),
+                    color=["#4a90d9"],
+                    height=200,
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            ch3, ch4 = st.columns(2)
+
+            with ch3:
+                st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                st.markdown('<div class="chart-card-title">Sessions per Day</div>', unsafe_allow_html=True)
+                st.bar_chart(
+                    df.set_index("day")[["sessions"]].rename(columns={"sessions": "Sessions"}),
+                    color=["#4a90d9"],
+                    height=180,
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with ch4:
+                st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+                st.markdown('<div class="chart-card-title">Tokens per Day (estimated)</div>', unsafe_allow_html=True)
+                st.area_chart(
+                    df.set_index("day")[["tokens"]].rename(columns={"tokens": "Tokens"}),
+                    color=["#4a90d9"],
+                    height=180,
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        except Exception:
+            pass  # charts are best-effort; skip silently if pandas/data issue
 
     # -- Filter bar --
     sessions  = db_fetch_sessions()
