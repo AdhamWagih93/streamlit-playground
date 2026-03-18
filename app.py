@@ -1228,6 +1228,60 @@ def _extract_doc_text_bruteforce(raw: bytes) -> str:
 # ---------------------------------------------------------------------------
 # Document parsing
 # ---------------------------------------------------------------------------
+def _extract_excel_text(raw: bytes, name: str) -> str:
+    """Extract text content from .xlsx / .xls files, one section per sheet."""
+    # .xlsx via openpyxl (already a dependency)
+    if name.endswith(".xlsx"):
+        if Workbook is None:
+            return "[ERROR] openpyxl is not installed. Run: pip install openpyxl"
+        from openpyxl import load_workbook
+        try:
+            wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+        except Exception as e:
+            return f"[ERROR] Cannot read .xlsx file: {e}"
+        sections = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(c) if c is not None else "" for c in row]
+                if any(c.strip() for c in cells):
+                    rows.append("\t".join(cells))
+            if rows:
+                # Build a readable header + rows representation
+                header = f"=== Sheet: {sheet_name} ({len(rows)} rows) ==="
+                sections.append(f"{header}\n" + "\n".join(rows))
+        wb.close()
+        if sections:
+            return "\n\n".join(sections)
+        return "[WARNING] Excel file has no data."
+
+    # .xls via xlrd (optional) or fallback message
+    if name.endswith(".xls"):
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=raw)
+            sections = []
+            for sheet in wb.sheets():
+                rows = []
+                for rx in range(sheet.nrows):
+                    cells = [str(sheet.cell_value(rx, cx)) for cx in range(sheet.ncols)]
+                    if any(c.strip() for c in cells):
+                        rows.append("\t".join(cells))
+                if rows:
+                    header = f"=== Sheet: {sheet.name} ({len(rows)} rows) ==="
+                    sections.append(f"{header}\n" + "\n".join(rows))
+            if sections:
+                return "\n\n".join(sections)
+            return "[WARNING] Excel file has no data."
+        except ImportError:
+            return "[ERROR] xlrd is not installed for .xls support. Run: pip install xlrd"
+        except Exception as e:
+            return f"[ERROR] Cannot read .xls file: {e}"
+
+    return "[ERROR] Unsupported Excel format."
+
+
 def extract_text(file) -> str:
     name = file.name.lower()
     file.seek(0)
@@ -1259,6 +1313,9 @@ def extract_text(file) -> str:
                 return "\n\n".join(pages)
             return "[WARNING] No text could be extracted from this PDF (it may be scanned/image-based)."
         return "[ERROR] No PDF library installed. Run: pip install pdfplumber"
+
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        return _extract_excel_text(raw, name)
 
     if name.endswith(".docx"):
         if DocxDocument is None:
@@ -1344,9 +1401,19 @@ def add_document(file):
 # Build system prompt with document context
 # ---------------------------------------------------------------------------
 def build_system_prompt() -> str:
+    username = st.session_state.get("username", "")
+    title = st.session_state.get("title", "")
     parts = [
-        "You are a helpful assistant. Answer the user's questions clearly and accurately.",
+        "You are a helpful, professional assistant. Answer the user's questions clearly and accurately.",
     ]
+    if username or title:
+        user_intro = "The user you are speaking with"
+        if username:
+            user_intro += f" is named {username}"
+        if title:
+            user_intro += f" and works as a {title}" if username else f" works as a {title}"
+        user_intro += ". Tailor your responses to be relevant to their role and expertise."
+        parts.append(user_intro)
     if st.session_state.documents:
         parts.append(
             "\nThe user has uploaded the following documents. "
@@ -1628,7 +1695,7 @@ def render_toolbar():
         with st.popover(label, use_container_width=True):
             st.markdown('<p class="panel-section-title">Upload files</p>', unsafe_allow_html=True)
             uploaded = st.file_uploader(
-                "Upload", type=["txt", "md", "pdf", "doc", "docx"],
+                "Upload", type=["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"],
                 accept_multiple_files=True, key="chat_doc_uploader",
                 label_visibility="collapsed",
             )
@@ -1646,7 +1713,7 @@ def render_toolbar():
                 for doc_name in list(st.session_state.documents.keys()):
                     doc_info = st.session_state.documents[doc_name]
                     ext = Path(doc_name).suffix.lower()
-                    icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘"}.get(ext, "📎")
+                    icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
 
                     dc1, dc2 = st.columns([5, 1])
                     with dc1:
@@ -1740,7 +1807,7 @@ def render_toolbar():
         chips_html = '<div class="doc-bar"><span class="doc-bar-label">Docs:</span>'
         for doc_name, doc_info in st.session_state.documents.items():
             ext = Path(doc_name).suffix.lower()
-            icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘"}.get(ext, "📎")
+            icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
             chips_html += (
                 f'<span class="doc-chip">{icon} {doc_name}'
                 f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">'
@@ -1755,30 +1822,104 @@ def render_toolbar():
 # ---------------------------------------------------------------------------
 # CHAT AREA
 # ---------------------------------------------------------------------------
-def render_chat():
+def _generate_greeting():
+    """Stream a personalized greeting from the LLM based on user identity."""
+    username = st.session_state.get("username", "")
+    title = st.session_state.get("title", "")
     doc_count = len(st.session_state.documents)
 
-    if not st.session_state.chat_messages:
-        greeting = "Ask me anything" if not doc_count else f"Ask about your {doc_count} document{'s' if doc_count != 1 else ''}"
-        hint = (
-            "Upload documents via the Documents button above, or just start a conversation."
-            if not doc_count
-            else "Your documents are loaded and ready. Start asking questions below."
-        )
-        st.markdown(
-            f'<div class="empty-state"><h2>{greeting}</h2><p>{hint}</p></div>',
+    system = build_system_prompt()
+    user_parts = []
+    if username:
+        user_parts.append(f"my name is {username}")
+    if title:
+        user_parts.append(f"I work as a {title}")
+    if doc_count:
+        doc_names = ", ".join(list(st.session_state.documents.keys())[:5])
+        user_parts.append(f"I have uploaded {doc_count} document(s): {doc_names}")
+
+    greeting_prompt = (
+        "Greet me briefly and warmly in 1-2 sentences. "
+        "Mention my name if you know it, acknowledge my role if you know it, "
+        "and mention my uploaded documents if any. "
+        "Then ask how you can help. Keep it concise and professional."
+    )
+    if user_parts:
+        greeting_prompt = f"Context: {', '.join(user_parts)}. " + greeting_prompt
+
+    api_messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": greeting_prompt},
+    ]
+
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        meta_placeholder = st.empty()
+        full_response = ""
+        t_start = time.time()
+        try:
+            for token in chat_stream(api_messages):
+                full_response += token
+                placeholder.markdown(full_response + "▌")
+            placeholder.markdown(full_response)
+        except Exception:
+            full_response = f"Hello{' ' + username if username else ''}! How can I help you today?"
+            placeholder.markdown(full_response)
+
+        duration = time.time() - t_start
+        resp_tokens = estimate_tokens(full_response)
+        resp_ts = datetime.now().strftime("%H:%M")
+        assistant_msg = {
+            "role": "assistant",
+            "content": full_response,
+            "timestamp": resp_ts,
+            "duration": duration,
+            "tokens": resp_tokens,
+        }
+        meta_placeholder.markdown(
+            f'<div class="msg-meta">'
+            f'<span>{resp_ts}</span>'
+            f'<span>{format_duration(duration)}</span>'
+            f'<span>~{format_number(resp_tokens)} tokens</span>'
+            f'</div>',
             unsafe_allow_html=True,
         )
+
+    st.session_state.chat_messages.append(assistant_msg)
+    db_save_message(assistant_msg, st.session_state.chat_session_id,
+                    st.session_state.get("username", ""),
+                    list(st.session_state.documents.keys()))
+
+
+def render_chat():
+    doc_count = len(st.session_state.documents)
+    username = st.session_state.get("username", "")
+
+    # Auto-generate personalized greeting on first load
+    if not st.session_state.chat_messages:
+        if ollama_is_running():
+            _generate_greeting()
+        else:
+            # Fallback static greeting
+            display_name = username if username else "there"
+            greeting = f"Hello, {display_name}!"
+            hint = (
+                "Upload documents via the Documents button above, or just start a conversation."
+                if not doc_count
+                else "Your documents are loaded and ready. Start asking questions below."
+            )
+            st.markdown(
+                f'<div class="empty-state"><h2>{greeting}</h2><p>{hint}</p></div>',
+                unsafe_allow_html=True,
+            )
 
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             render_msg_meta(msg)
 
-    if prompt := st.chat_input(
-        "Ask something..." if not doc_count else "Ask about your documents...",
-        key="chat_input",
-    ):
+    placeholder_text = "Ask about your documents..." if doc_count else "Ask me anything..."
+    if prompt := st.chat_input(placeholder_text, key="chat_input"):
         if not ollama_is_running():
             st.error("Ollama is not reachable. Check the connection.")
             return
