@@ -63,6 +63,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 OLLAMA_URL = "http://ef-nexus-03:8081"
 MODEL = "qwen3.5:9b"
+ENABLE_GREETING = False             # set True to auto-generate a personalized LLM greeting
 HISTORY_SCHEMA = "public"           # postgres schema
 HISTORY_TABLE  = "chatbot_history"  # postgres table name
 
@@ -1492,8 +1493,26 @@ def build_code_system_prompt() -> str:
             suffix = "... [truncated]" if len(doc_info["content"]) > 20_000 else ""
             doc_ctx += f"### {doc_name}\n```\n{text}{suffix}\n```\n"
 
+    current_code = st.session_state.get("_generated_code") or ""
+    code_ctx = ""
+    if current_code:
+        code_ctx = f"""
+
+CURRENT PAGE CODE (already running — the user wants to modify THIS page):
+```python
+{current_code}
+```
+
+EDITING RULES:
+- The user is asking you to edit the EXISTING page above.
+- You MUST return the COMPLETE updated code with the requested changes applied.
+- Do NOT generate a new page from scratch — modify the existing code.
+- Keep all parts the user did NOT mention unchanged.
+- Fix only what the user asks to fix. Do not refactor or restyle untouched sections.
+"""
+
     return f"""You are an expert Streamlit developer. Your ONLY job is to generate complete, runnable Streamlit Python code.
-{user_ctx}{doc_ctx}
+{user_ctx}{doc_ctx}{code_ctx}
 RULES — follow these strictly:
 1. Respond ONLY with a single Python code block (```python ... ```). No explanations before or after.
 2. The code will be executed inside an existing Streamlit page via exec(). Do NOT call st.set_page_config().
@@ -1504,7 +1523,8 @@ RULES — follow these strictly:
 7. Import any needed standard library or common packages (pandas, altair, datetime, random, math) at the top of the code block.
 8. The code must be self-contained — it will be exec'd as-is.
 9. Do NOT use st.set_page_config, st.sidebar, or st.cache_resource in the generated code.
-10. Make every page look stunning — this is a showcase of what Streamlit can do."""
+10. Make every page look stunning — this is a showcase of what Streamlit can do.
+11. ALWAYS return the FULL page code, even when making small edits. The output replaces the current page entirely."""
 
 
 def _extract_code_block(text: str) -> Optional[str]:
@@ -2053,7 +2073,7 @@ def render_chat():
                 '</div>',
                 unsafe_allow_html=True,
             )
-        elif ollama_is_running():
+        elif ENABLE_GREETING and ollama_is_running():
             _generate_greeting()
         else:
             display_name = username if username else "there"
@@ -2075,21 +2095,20 @@ def render_chat():
                 st.markdown(msg["content"])
                 render_msg_meta(msg)
         else:
-            # In code mode, assistant messages may contain code blocks
-            extracted = _extract_code_block(msg["content"]) if code_mode else None
-            if extracted:
+            if code_mode and _extract_code_block(msg["content"]):
+                # In code mode, show a short summary instead of the full code response
                 with st.chat_message("assistant"):
-                    st.markdown("Page generated successfully.")
+                    st.markdown("Page updated.")
                     render_msg_meta(msg)
-                    with st.expander("View source code", expanded=False):
-                        st.code(extracted, language="python")
             else:
                 with st.chat_message("assistant"):
                     st.markdown(msg["content"])
                     render_msg_meta(msg)
 
-    # Render the latest generated page output (persisted across reruns)
+    # Render the SINGLE generated page + source (only once, always the latest version)
     if code_mode and st.session_state.get("_generated_code"):
+        with st.expander("View / edit source code", expanded=False):
+            st.code(st.session_state["_generated_code"], language="python")
         _execute_generated_code(st.session_state["_generated_code"])
 
     # Chat input
@@ -2175,12 +2194,12 @@ def render_chat():
                         st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
 
-        # In code mode, extract and execute the generated code
+        # In code mode, extract code and update the single page
         if code_mode:
             extracted_code = _extract_code_block(full_response)
             if extracted_code:
                 st.session_state["_generated_code"] = extracted_code
-                _execute_generated_code(extracted_code)
+                st.rerun()  # rerun to render the updated page cleanly once
             else:
                 st.warning("No code block found in the response. Try rephrasing your request.")
 
