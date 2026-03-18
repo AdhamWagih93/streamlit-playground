@@ -608,21 +608,25 @@ def format_duration(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 # Database helpers
 # ---------------------------------------------------------------------------
+_db_config_cache: Optional[dict] = None
+
+
 def _get_db_config() -> Optional[dict]:
-    """Load DB config via VaultClient. Returns None if unavailable."""
+    """Load DB config via VaultClient. Cached after first successful call."""
+    global _db_config_cache
+    if _db_config_cache is not None:
+        return _db_config_cache
     try:
         from utils.vault import VaultClient
         vc = VaultClient()
-        return vc.read_all_nested_secrets("postgres")
+        _db_config_cache = vc.read_all_nested_secrets("postgres")
+        return _db_config_cache
     except Exception:
         return None
 
 
-_db_conn = None  # module-level connection holder
-
-
-def _create_db_connection():
-    """Create a fresh psycopg2 connection."""
+def _get_conn():
+    """Create a fresh psycopg2 connection with autocommit. Caller must close."""
     if psycopg2 is None:
         return None
     config = _get_db_config()
@@ -641,38 +645,17 @@ def _create_db_connection():
         return conn
     except Exception as e:
         import sys
-        print(f"[_create_db_connection] ERROR: {e}", file=sys.stderr)
+        print(f"[DB CONNECT] ERROR: {e}", file=sys.stderr)
         return None
-
-
-def _get_live_conn():
-    """Return a live connection, reconnecting automatically if stale."""
-    global _db_conn
-    if _db_conn is not None:
-        try:
-            if not _db_conn.closed:
-                with _db_conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                return _db_conn
-        except Exception:
-            try:
-                _db_conn.close()
-            except Exception:
-                pass
-            _db_conn = None
-    _db_conn = _create_db_connection()
-    return _db_conn
 
 
 def db_ensure_table():
     """Create the history table if it doesn't exist, and migrate missing columns."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return
     try:
         with conn.cursor() as cur:
-            # Each statement must be executed separately — psycopg2 does not
-            # support multiple statements in a single execute() call.
             cur.execute(f"""
                 CREATE TABLE IF NOT EXISTS {HISTORY_SCHEMA}.{HISTORY_TABLE} (
                     id              BIGSERIAL PRIMARY KEY,
@@ -702,12 +685,16 @@ def db_ensure_table():
     except Exception as e:
         import sys
         print(f"[db_ensure_table] ERROR: {e}", file=sys.stderr)
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_save_message(msg: dict, session_id: str, username: str, documents: list[str]):
     """Persist a single message to postgres."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
+        st.toast("DB: could not connect", icon="⚠️")
         return
     try:
         with conn.cursor() as cur:
@@ -733,6 +720,9 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
     except Exception as e:
         import sys
         print(f"[db_save_message] ERROR: {e}", file=sys.stderr)
+        st.toast(f"DB save error: {e}", icon="⚠️")
+    finally:
+        conn.close()
 
 
 def db_fetch_history(
@@ -744,7 +734,7 @@ def db_fetch_history(
     date_to: Optional[datetime] = None,
 ) -> list[dict]:
     """Fetch conversation history rows for the admin view."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return []
     try:
@@ -782,11 +772,14 @@ def db_fetch_history(
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_fetch_stats() -> dict:
     """Aggregate stats for the admin dashboard."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return {}
     try:
@@ -809,11 +802,14 @@ def db_fetch_stats() -> dict:
             return dict(cur.fetchone() or {})
     except Exception:
         return {}
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_fetch_sessions() -> list[dict]:
     """List all distinct sessions with summary."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return []
     try:
@@ -835,11 +831,14 @@ def db_fetch_sessions() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_fetch_usernames() -> list[str]:
     """Return all distinct usernames for the filter dropdown."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return []
     try:
@@ -852,11 +851,14 @@ def db_fetch_usernames() -> list[str]:
             return [r[0] for r in cur.fetchall()]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_clear_all() -> bool:
     """Delete all rows from the history table. Returns True on success."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return False
     try:
@@ -865,11 +867,14 @@ def db_clear_all() -> bool:
         return True
     except Exception:
         return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_fetch_timeseries() -> list[dict]:
     """Daily aggregates for charts: messages, sessions, tokens, avg response."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return []
     try:
@@ -890,11 +895,14 @@ def db_fetch_timeseries() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_fetch_user_activity() -> list[dict]:
     """Per-user aggregate stats for the user activity chart."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return []
     try:
@@ -916,11 +924,14 @@ def db_fetch_user_activity() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def db_fetch_session_topics(limit: int = 50) -> list[dict]:
     """First user message per session — used as a topic proxy."""
-    conn = _get_live_conn()
+    conn = _get_conn()
     if conn is None:
         return []
     try:
@@ -939,6 +950,9 @@ def db_fetch_session_topics(limit: int = 50) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def _extract_topic_keywords(topics: list[dict], top_n: int = 20) -> list[tuple[str, int]]:
@@ -1861,11 +1875,12 @@ def render_admin():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    conn = _get_live_conn()
-    if conn is None:
+    _test_conn = _get_conn()
+    if _test_conn is None:
         st.warning("Could not connect to the database. Check your Vault / DB configuration.")
         st.markdown('</div>', unsafe_allow_html=True)
         return
+    _test_conn.close()
 
     # -- Stats grid (6 cards) --
     stats = db_fetch_stats()
