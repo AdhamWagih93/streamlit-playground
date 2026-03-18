@@ -670,6 +670,11 @@ def db_ensure_table():
                     documents       TEXT[]
                 )
             """)
+            # Migration: add username column first (before creating indexes on it)
+            cur.execute(f"""
+                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    ADD COLUMN IF NOT EXISTS username TEXT
+            """)
             cur.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_session
                     ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (session_id, timestamp_utc)
@@ -677,10 +682,6 @@ def db_ensure_table():
             cur.execute(f"""
                 CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_username
                     ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (username)
-            """)
-            cur.execute(f"""
-                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    ADD COLUMN IF NOT EXISTS username TEXT
             """)
     except Exception as e:
         import sys
