@@ -2179,7 +2179,7 @@ def render_lobby():
                 '<span class="status-badge status-active">Available</span>',
                 unsafe_allow_html=True,
             )
-            st.caption("No prompts running — your next message will process immediately.")
+            #st.caption("No prompts running — your next message will process immediately.")
 
         st.write("")
         if st.button("Start Chat", use_container_width=True, key="start_chat", type="primary"):
@@ -2627,8 +2627,9 @@ def render_chat():
             for m in st.session_state.chat_messages
         ]
 
-        # Show queue bar while processing
-        st.markdown(
+        # Show queue bar while processing (clearable)
+        processing_bar = st.empty()
+        processing_bar.markdown(
             '<div class="queue-bar">Processing your prompt...</div>',
             unsafe_allow_html=True,
         )
@@ -2671,6 +2672,9 @@ def render_chat():
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+        # Clear the processing bar
+        processing_bar.empty()
 
         st.session_state.chat_messages.append(assistant_msg)
         db_save_message(assistant_msg, st.session_state.chat_session_id,
