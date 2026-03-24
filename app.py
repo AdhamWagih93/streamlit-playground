@@ -78,6 +78,36 @@ CHARS_PER_TOKEN_ESTIMATE = 4  # rough char-to-token ratio
 MAX_PREVIEW_LINES = 12        # collapse messages longer than this
 MAX_PREVIEW_CHARS = 500       # collapse messages longer than this
 
+# ---------------------------------------------------------------------------
+# Saved prompts — per role
+# Each role maps to a list of {"label": short name, "prompt": full text}
+# Users see prompts for ALL roles they have.
+# ---------------------------------------------------------------------------
+SAVED_PROMPTS: dict[str, list[dict[str, str]]] = {
+    "quality-control": [
+        {
+            "label": "Generate Test Cases",
+            "prompt": (
+                "You are an expert software testing analyst. "
+                "Write software testing at least 200 test cases for the attached document "
+                "for the positive and negative test cases in excel table format with columns: "
+                "Test Case ID, Requirement, Description, Expected Results, Actual Results, "
+                "Pass/Fail and Comments."
+            ),
+        },
+        {
+            "label": "Complete Remaining Test Cases",
+            "prompt": (
+                "You are an expert software testing analyst. "
+                "Check the attached document, and the attached test cases, then write "
+                "software testing for the remaining test cases — positive and negative — "
+                "in excel table format with columns: Test Case ID, Requirement, Description, "
+                "Expected Results, Actual Results, Pass/Fail and Comments."
+            ),
+        },
+    ],
+}
+
 
 # ---------------------------------------------------------------------------
 # Page-scoped CSS
@@ -264,6 +294,20 @@ div[data-testid="stPopover"] > div {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin-right: 4px;
+}
+
+/* ---------- Saved prompts ---------- */
+.saved-prompts-bar {
+    padding: 0.5rem 0;
+    margin-bottom: 0.25rem;
+}
+.saved-prompts-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
 }
 
 /* ---------- Admin queue monitor ---------- */
@@ -2618,6 +2662,35 @@ def render_chat():
         placeholder_text = "Ask me anything..."
 
     # ------------------------------------------------------------------
+    # Saved prompts — role-based quick actions
+    # ------------------------------------------------------------------
+    user_roles = st.session_state.get("roles", [])
+    available_prompts: list[tuple[str, str]] = []  # (label, prompt)
+    seen_labels: set[str] = set()
+    for role in user_roles:
+        for sp in SAVED_PROMPTS.get(role, []):
+            if sp["label"] not in seen_labels:
+                available_prompts.append((sp["label"], sp["prompt"]))
+                seen_labels.add(sp["label"])
+
+    if available_prompts and not code_mode:
+        st.markdown(
+            '<div class="saved-prompts-bar">'
+            '<div class="saved-prompts-label">Quick Prompts</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        sp_cols = st.columns(min(len(available_prompts), 4))
+        for i, (label, sp_text) in enumerate(available_prompts):
+            with sp_cols[i % len(sp_cols)]:
+                if st.button(label, key=f"sp_{i}", use_container_width=True):
+                    st.session_state["_saved_prompt_fire"] = sp_text
+                    st.rerun()
+
+    # Pick up a fired saved prompt (set on previous run)
+    fired_prompt = st.session_state.pop("_saved_prompt_fire", None)
+
+    # ------------------------------------------------------------------
     # Handle pending prompt waiting in queue
     # ------------------------------------------------------------------
     pending_pid = st.session_state.get("_pending_prompt_id")
@@ -2635,9 +2708,11 @@ def render_chat():
         # pos == 0 → it's our turn — fall through to process below
 
     # ------------------------------------------------------------------
-    # Chat input
+    # Chat input (typed or saved prompt)
     # ------------------------------------------------------------------
-    if prompt := st.chat_input(placeholder_text, key="chat_input"):
+    prompt = st.chat_input(placeholder_text, key="chat_input") or fired_prompt
+
+    if prompt:
         if not ollama_is_running():
             st.error("Ollama is not reachable. Check the connection.")
             return
