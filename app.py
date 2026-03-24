@@ -2148,7 +2148,6 @@ def render_lobby():
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown('<div class="lobby-card">', unsafe_allow_html=True)
         st.markdown("#### Chatbot Status")
 
         if online:
@@ -2589,6 +2588,11 @@ def render_chat():
         db_save_message(user_msg, st.session_state.chat_session_id,
                         st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
+
+        # Render user message immediately (conversation loop already ran above)
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            render_msg_meta(user_msg)
 
         # Enqueue the prompt
         username = st.session_state.get("username", "")
