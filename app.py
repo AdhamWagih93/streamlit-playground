@@ -77,12 +77,13 @@ MAX_PREVIEW_LINES = 12        # collapse messages longer than this
 MAX_PREVIEW_CHARS = 500       # collapse messages longer than this
 
 # ---------------------------------------------------------------------------
-# Saved prompts — per role
-# Each role maps to a list of {"label": short name, "prompt": full text}
-# Users see prompts for ALL roles they have.
+# Saved prompts — per team and per role
+# Each entry: {"label": short button name, "prompt": full text}
+# Users see prompts for all their teams (st.session_state.teams)
+# and all their roles (st.session_state.user_roles).
 # ---------------------------------------------------------------------------
-SAVED_PROMPTS: dict[str, list[dict[str, str]]] = {
-    "quality-control": [
+TEAM_PROMPTS: dict[str, list[dict[str, str]]] = {
+    "QC": [
         {
             "label": "Generate Test Cases",
             "prompt": (
@@ -104,6 +105,11 @@ SAVED_PROMPTS: dict[str, list[dict[str, str]]] = {
             ),
         },
     ],
+}
+
+ROLE_PROMPTS: dict[str, list[dict[str, str]]] = {
+    # Example:
+    # "admin": [{"label": "System Report", "prompt": "Generate a system health report..."}],
 }
 
 
@@ -2799,13 +2805,19 @@ def render_chat():
         placeholder_text = "Ask me anything..."
 
     # ------------------------------------------------------------------
-    # Saved prompts — role-based quick actions
+    # Saved prompts — team + role quick actions
     # ------------------------------------------------------------------
-    user_roles = st.session_state.get("roles", [])
+    user_teams = st.session_state.get("teams", [])
+    user_roles = st.session_state.get("user_roles", {})
     available_prompts: list[tuple[str, str]] = []  # (label, prompt)
     seen_labels: set[str] = set()
+    for team in user_teams:
+        for sp in TEAM_PROMPTS.get(team, []):
+            if sp["label"] not in seen_labels:
+                available_prompts.append((sp["label"], sp["prompt"]))
+                seen_labels.add(sp["label"])
     for role in user_roles:
-        for sp in SAVED_PROMPTS.get(role, []):
+        for sp in ROLE_PROMPTS.get(role, []):
             if sp["label"] not in seen_labels:
                 available_prompts.append((sp["label"], sp["prompt"]))
                 seen_labels.add(sp["label"])
