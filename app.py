@@ -13,10 +13,15 @@ import subprocess
 import tempfile
 import time
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from io import BytesIO
 from typing import Optional
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Python 3.8 fallback
 
 import requests
 import streamlit as st
@@ -73,6 +78,7 @@ PROMPT_TIMEOUT_S     = 120   # active prompt expires after 2 min (stale detectio
 QUEUE_WAIT_TIMEOUT_S = 300  # queued entries expire after 5 min
 QUEUE_TABLE          = "prompt_queue"  # postgres table for shared queue
 CHARS_PER_TOKEN_ESTIMATE = 4  # rough char-to-token ratio
+LOCAL_TZ = ZoneInfo("Africa/Cairo")
 MAX_PREVIEW_LINES = 12        # collapse messages longer than this
 MAX_PREVIEW_CHARS = 500       # collapse messages longer than this
 
@@ -841,6 +847,20 @@ def format_number(n: int) -> str:
     return str(n)
 
 
+def now_local() -> datetime:
+    """Return current time in LOCAL_TZ (Africa/Cairo)."""
+    return datetime.now(LOCAL_TZ)
+
+
+def to_local(dt: datetime) -> datetime:
+    """Convert a datetime to LOCAL_TZ. Handles naive (assumes UTC) and aware."""
+    if dt is None:
+        return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(LOCAL_TZ)
+
+
 def format_duration(seconds: float) -> str:
     if seconds < 1:
         return f"{seconds * 1000:.0f}ms"
@@ -957,7 +977,7 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                     username or "",
                     msg["role"],
                     msg["content"],
-                    datetime.utcnow(),
+                    now_local(),
                     msg.get("duration"),
                     msg.get("tokens"),
                     MODEL,
@@ -1317,14 +1337,6 @@ db_ensure_table()
 #                 heartbeat_at TIMESTAMPTZ)
 # Concurrency: LOCK TABLE ... IN EXCLUSIVE MODE inside transactions.
 # ---------------------------------------------------------------------------
-# Queue file schema:
-# {
-#   "active": {"prompt_id": str, "session_id": str, "username": str,
-#              "started_at": ISO str} | null,
-#   "queue": [{"prompt_id": str, "session_id": str, "username": str,
-#              "queued_at": ISO str}, ...]
-# }
-# ---------------------------------------------------------------------------
 
 def _ensure_queue_table():
     """Create the prompt_queue table if it doesn't exist."""
@@ -1455,29 +1467,22 @@ def prompt_enqueue(session_id: str, username: str) -> tuple[str, int]:
 
 def prompt_position(prompt_id: str) -> int:
     """Get queue position for a prompt_id.
-    0 = active, 1+ = waiting, -1 = not found (expired or done)."""
+    0 = active, 1+ = waiting, -1 = not found (expired or done).
+    Read-only — no exclusive lock."""
     conn = _get_conn()
     if conn is None:
         return -1
     try:
-        conn.autocommit = False
         with conn.cursor() as cur:
-            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
-            _queue_cleanup(cur)
-
-            # Check if active
             cur.execute(f"""
                 SELECT status FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
                 WHERE prompt_id = %s
             """, (prompt_id,))
             row = cur.fetchone()
             if row is None:
-                conn.commit()
                 return -1
             if row[0] == 'active':
-                conn.commit()
                 return 0
-
             # Waiting — get position
             cur.execute(f"""
                 SELECT COUNT(*) FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
@@ -1487,19 +1492,12 @@ def prompt_position(prompt_id: str) -> int:
                       WHERE prompt_id = %s
                   )
             """, (prompt_id,))
-            pos = cur.fetchone()[0]
-            conn.commit()
-            return pos
+            return cur.fetchone()[0]
     except Exception as e:
         import sys
         print(f"[prompt_position] ERROR: {e}", file=sys.stderr)
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return -1
     finally:
-        conn.autocommit = True
         conn.close()
 
 
@@ -1568,15 +1566,21 @@ def prompt_heartbeat(prompt_id: str):
 
 
 def prompt_queue_status() -> dict:
-    """Return the full queue state (for display). Anonymous — no usernames."""
+    """Return the full queue state (for display). Anonymous — no usernames.
+    Read-only — no exclusive lock, just reads current state."""
     conn = _get_conn()
     if conn is None:
         return {"active": None, "queue": []}
     try:
-        conn.autocommit = False
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
-            _queue_cleanup(cur)
+            # Lightweight cleanup: delete expired rows (autocommit handles it)
+            cur.execute(f"""
+                DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE (status = 'active'
+                       AND heartbeat_at < NOW() - INTERVAL '{PROMPT_TIMEOUT_S} seconds')
+                   OR (status = 'waiting'
+                       AND created_at < NOW() - INTERVAL '{QUEUE_WAIT_TIMEOUT_S} seconds')
+            """)
 
             cur.execute(f"""
                 SELECT prompt_id, session_id, status, created_at, heartbeat_at
@@ -1593,7 +1597,6 @@ def prompt_queue_status() -> dict:
                 ORDER BY created_at ASC
             """)
             waiting_rows = cur.fetchall()
-            conn.commit()
 
         active = None
         if active_row:
@@ -1614,13 +1617,8 @@ def prompt_queue_status() -> dict:
     except Exception as e:
         import sys
         print(f"[prompt_queue_status] ERROR: {e}", file=sys.stderr)
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return {"active": None, "queue": []}
     finally:
-        conn.autocommit = True
         conn.close()
 
 
@@ -2175,7 +2173,7 @@ def export_conversation_md() -> str:
     documents = dict(st.session_state.get("documents", {}))
 
     lines = [
-        f"# Chat Export — {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"# Chat Export — {now_local().strftime('%Y-%m-%d %H:%M')}",
         f"**Model:** {MODEL}",
         f"**Documents:** {', '.join(documents.keys()) or 'None'}",
         f"**Messages:** {len(messages)}",
@@ -2550,7 +2548,7 @@ def render_toolbar():
                 st.download_button(
                     "Markdown",
                     data=md_data,
-                    file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    file_name=f"chat_export_{now_local().strftime('%Y%m%d_%H%M%S')}.md",
                     mime="text/markdown",
                     use_container_width=True,
                     key="chat_export_md",
@@ -2560,7 +2558,7 @@ def render_toolbar():
                 st.download_button(
                     "Excel",
                     data=xlsx_data,
-                    file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    file_name=f"chat_export_{now_local().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                     key="chat_export_xlsx",
@@ -2657,7 +2655,7 @@ def _generate_greeting():
 
         duration = time.time() - t_start
         resp_tokens = estimate_tokens(full_response)
-        resp_ts = datetime.now().strftime("%H:%M")
+        resp_ts = now_local().strftime("%H:%M")
         assistant_msg = {
             "role": "assistant",
             "content": full_response,
@@ -2867,7 +2865,7 @@ def render_chat():
             return
 
         # Save user message immediately (visible in history)
-        user_ts = datetime.now().strftime("%H:%M")
+        user_ts = now_local().strftime("%H:%M")
         user_tokens = estimate_tokens(prompt)
         user_msg = {
             "role": "user",
@@ -2947,7 +2945,7 @@ def render_chat():
 
             duration = time.time() - t_start
             resp_tokens = estimate_tokens(full_response)
-            resp_ts = datetime.now().strftime("%H:%M")
+            resp_ts = now_local().strftime("%H:%M")
             assistant_msg = {
                 "role": "assistant",
                 "content": full_response,
@@ -3050,7 +3048,7 @@ def render_admin():
         if q_active:
             try:
                 started = datetime.fromisoformat(q_active["started_at"])
-                elapsed = int((datetime.now() - started).total_seconds())
+                elapsed = int((now_local() - to_local(started)).total_seconds())
                 time_str = f"started {elapsed}s ago"
             except Exception:
                 time_str = ""
@@ -3066,7 +3064,7 @@ def render_admin():
         for i, entry in enumerate(q_waiting):
             try:
                 queued = datetime.fromisoformat(entry["queued_at"])
-                wait = int((datetime.now() - queued).total_seconds())
+                wait = int((now_local() - to_local(queued)).total_seconds())
                 wait_str = f"waiting {wait}s"
             except Exception:
                 wait_str = ""
@@ -3109,15 +3107,14 @@ def render_admin():
         sel_role = st.selectbox("Role", ["All", "User", "Assistant"], key="admin_role_filter")
     with fc4:
         date_range_options = ["All Time", "Today", "1W", "1M", "1Y", "5Y"]
-        sel_date_range = st.segmented_control(
+        sel_date_range = st.selectbox(
             "Period", date_range_options,
-            default="All Time",
             key="admin_date_range",
         )
     st.markdown('</div>', unsafe_allow_html=True)
 
     # -- Resolve date range to from/to --
-    now = datetime.now()
+    now = now_local()
     date_range_map = {
         "Today": timedelta(days=1),
         "1W":    timedelta(weeks=1),
@@ -3165,9 +3162,9 @@ def render_admin():
         cs = st.columns(6)
         cards = [
             ("Sessions",       format_number(int(stats.get("total_sessions", 0))),
-             f"First: {first_msg.strftime('%b %d') if first_msg else '—'}"),
+             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}"),
             ("Total Messages", format_number(int(stats.get("total_messages", 0))),
-             f"Last: {last_msg.strftime('%b %d') if last_msg else '—'}"),
+             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}"),
             ("User",           format_number(int(stats.get("user_messages", 0))),
              "messages sent"),
             ("Assistant",      format_number(int(stats.get("assistant_messages", 0))),
@@ -3313,8 +3310,8 @@ def render_admin():
                         "Sent": int(u["user_msgs"]),
                         "Received": int(u["assistant_msgs"]),
                         "Tokens": format_number(int(u["tokens"])),
-                        "First Active": u["first_active"].strftime("%Y-%m-%d %H:%M") if u["first_active"] else "—",
-                        "Last Active": last_ts.strftime("%Y-%m-%d %H:%M") if last_ts else "—",
+                        "First Active": to_local(u["first_active"]).strftime("%Y-%m-%d %H:%M") if u["first_active"] else "—",
+                        "Last Active": to_local(last_ts).strftime("%Y-%m-%d %H:%M") if last_ts else "—",
                     })
                 st.dataframe(
                     pd.DataFrame(table_data),
@@ -3357,7 +3354,7 @@ def render_admin():
                         preview = t["content"][:120].replace("\n", " ").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                         if len(t["content"]) > 120:
                             preview += " …"
-                        ts_str = t["timestamp_utc"].strftime("%b %d, %H:%M") if t["timestamp_utc"] else ""
+                        ts_str = to_local(t["timestamp_utc"]).strftime("%b %d, %H:%M") if t["timestamp_utc"] else ""
                         st.markdown(
                             f'<div style="padding:0.45rem 0;border-bottom:1px solid var(--border-light);">'
                             f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">'
@@ -3444,10 +3441,10 @@ def render_admin():
             uname     = msgs[0].get("username") or "—"
             docs_list = msgs[0].get("documents") or []
 
-            date_str = first_ts.strftime("%Y-%m-%d") if first_ts else "—"
+            date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
             time_range = ""
             if first_ts and last_ts:
-                time_range = f"{first_ts.strftime('%H:%M')} – {last_ts.strftime('%H:%M')}"
+                time_range = f"{to_local(first_ts).strftime('%H:%M')} – {to_local(last_ts).strftime('%H:%M')}"
 
             label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} messages  ·  {date_str}"
             with st.expander(label, expanded=False):
@@ -3473,7 +3470,7 @@ def render_admin():
 
                 # Chat replay
                 for m in reversed(msgs):
-                    ts_str  = m["timestamp_utc"].strftime("%H:%M:%S") if m["timestamp_utc"] else ""
+                    ts_str  = to_local(m["timestamp_utc"]).strftime("%H:%M:%S") if m["timestamp_utc"] else ""
                     dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
                     tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
                     with st.chat_message(m["role"]):
@@ -3493,7 +3490,7 @@ def render_admin():
             role      = m["role"]
             role_cls  = "role-user" if role == "user" else "role-assistant"
             role_label = "User" if role == "user" else "Assistant"
-            ts_str    = m["timestamp_utc"].strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
+            ts_str    = to_local(m["timestamp_utc"]).strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
             dur_str   = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
             tok_str   = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
             uname     = m.get("username") or "—"
