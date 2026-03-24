@@ -2724,9 +2724,9 @@ def _render_chat_conversation():
 
     # Disclaimer
     st.markdown(
-        '<div style="text-align:center;padding:0.6rem 0 0.2rem;font-size:0.68rem;'
-        'color:var(--text-muted);letter-spacing:0.01em;">'
-        'Conversations are logged for quality and performance tracking.'
+        '<div style="text-align:center;padding:0.6rem 0 0.2rem;font-size:0.73rem;'
+        'color:#e67e22;font-weight:500;letter-spacing:0.01em;">'
+        'This chat is monitored — conversations are logged for quality assurance and performance tracking.'
         '</div>',
         unsafe_allow_html=True,
     )
