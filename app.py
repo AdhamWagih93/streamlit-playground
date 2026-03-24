@@ -909,12 +909,24 @@ def db_fetch_history(
             conn.close()
 
 
-def db_fetch_stats() -> dict:
-    """Aggregate stats for the admin dashboard."""
+def db_fetch_stats(
+    session_filter=None, username_filter=None, date_from=None, date_to=None,
+) -> dict:
+    """Aggregate stats for the admin dashboard, with optional filters."""
     conn = _get_conn()
     if conn is None:
         return {}
     try:
+        wheres, params = [], []
+        if session_filter:
+            wheres.append("session_id = %s"); params.append(session_filter)
+        if username_filter:
+            wheres.append("username = %s"); params.append(username_filter)
+        if date_from:
+            wheres.append("timestamp_utc >= %s"); params.append(date_from)
+        if date_to:
+            wheres.append("timestamp_utc <= %s"); params.append(date_to)
+        where_clause = (" WHERE " + " AND ".join(wheres)) if wheres else ""
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT
@@ -930,7 +942,8 @@ def db_fetch_stats() -> dict:
                     MIN(timestamp_utc)                             AS first_message,
                     MAX(timestamp_utc)                             AS last_message
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
-            """)
+                {where_clause}
+            """, params)
             return dict(cur.fetchone() or {})
     except Exception:
         return {}
@@ -1004,12 +1017,24 @@ def db_clear_all() -> bool:
             conn.close()
 
 
-def db_fetch_timeseries() -> list[dict]:
-    """Daily aggregates for charts: messages, sessions, tokens, avg response."""
+def db_fetch_timeseries(
+    session_filter=None, username_filter=None, date_from=None, date_to=None,
+) -> list[dict]:
+    """Daily aggregates for charts, with optional filters."""
     conn = _get_conn()
     if conn is None:
         return []
     try:
+        wheres, params = [], []
+        if session_filter:
+            wheres.append("session_id = %s"); params.append(session_filter)
+        if username_filter:
+            wheres.append("username = %s"); params.append(username_filter)
+        if date_from:
+            wheres.append("timestamp_utc >= %s"); params.append(date_from)
+        if date_to:
+            wheres.append("timestamp_utc <= %s"); params.append(date_to)
+        where_clause = (" WHERE " + " AND ".join(wheres)) if wheres else ""
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT
@@ -1021,9 +1046,10 @@ def db_fetch_timeseries() -> list[dict]:
                     COALESCE(SUM(tokens_est), 0)                                AS tokens,
                     COALESCE(AVG(duration_s) FILTER (WHERE role='assistant'), 0) AS avg_duration
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                {where_clause}
                 GROUP BY DATE(timestamp_utc)
                 ORDER BY day
-            """)
+            """, params)
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
@@ -1032,12 +1058,24 @@ def db_fetch_timeseries() -> list[dict]:
             conn.close()
 
 
-def db_fetch_user_activity() -> list[dict]:
-    """Per-user aggregate stats for the user activity chart."""
+def db_fetch_user_activity(
+    session_filter=None, username_filter=None, date_from=None, date_to=None,
+) -> list[dict]:
+    """Per-user aggregate stats, with optional filters."""
     conn = _get_conn()
     if conn is None:
         return []
     try:
+        wheres, params = [], []
+        if session_filter:
+            wheres.append("session_id = %s"); params.append(session_filter)
+        if username_filter:
+            wheres.append("username = %s"); params.append(username_filter)
+        if date_from:
+            wheres.append("timestamp_utc >= %s"); params.append(date_from)
+        if date_to:
+            wheres.append("timestamp_utc <= %s"); params.append(date_to)
+        where_clause = (" WHERE " + " AND ".join(wheres)) if wheres else ""
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT
@@ -1050,9 +1088,10 @@ def db_fetch_user_activity() -> list[dict]:
                     MIN(timestamp_utc)                            AS first_active,
                     MAX(timestamp_utc)                            AS last_active
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                {where_clause}
                 GROUP BY COALESCE(NULLIF(username, ''), '(anonymous)')
                 ORDER BY total_messages DESC
-            """)
+            """, params)
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
@@ -1061,12 +1100,27 @@ def db_fetch_user_activity() -> list[dict]:
             conn.close()
 
 
-def db_fetch_session_topics(limit: int = 50) -> list[dict]:
-    """First user message per session — used as a topic proxy."""
+def db_fetch_session_topics(
+    limit: int = 50,
+    session_filter=None, username_filter=None, date_from=None, date_to=None,
+) -> list[dict]:
+    """First user message per session, with optional filters."""
     conn = _get_conn()
     if conn is None:
         return []
     try:
+        wheres = ["role = 'user'"]
+        params: list = []
+        if session_filter:
+            wheres.append("session_id = %s"); params.append(session_filter)
+        if username_filter:
+            wheres.append("username = %s"); params.append(username_filter)
+        if date_from:
+            wheres.append("timestamp_utc >= %s"); params.append(date_from)
+        if date_to:
+            wheres.append("timestamp_utc <= %s"); params.append(date_to)
+        where_clause = " WHERE " + " AND ".join(wheres)
+        params.append(limit)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT DISTINCT ON (session_id)
@@ -1075,10 +1129,10 @@ def db_fetch_session_topics(limit: int = 50) -> list[dict]:
                     content,
                     timestamp_utc
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                WHERE role = 'user'
+                {where_clause}
                 ORDER BY session_id, timestamp_utc ASC
                 LIMIT %s
-            """, (limit,))
+            """, params)
             return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
@@ -2667,8 +2721,68 @@ def render_admin():
         return
     _test_conn.close()
 
-    # -- Stats grid (6 cards) --
-    stats = db_fetch_stats()
+    # ==========================================================
+    # FILTERS — up top so they control everything below
+    # ==========================================================
+    sessions  = db_fetch_sessions()
+    usernames = db_fetch_usernames()
+
+    session_options  = ["All sessions"] + [s["session_id"] for s in sessions]
+    username_options = ["All users"] + usernames
+
+    st.markdown(
+        '<div class="filter-bar">'
+        '<div class="filter-bar-label">Filters</div>',
+        unsafe_allow_html=True,
+    )
+    fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1.6, 1.2, 1.4, 1.4])
+    with fc1:
+        sel_session = st.selectbox(
+            "Session",
+            session_options,
+            format_func=lambda s: s if s == "All sessions" else f"{s[:18]}…",
+            key="admin_session_filter",
+        )
+    with fc2:
+        sel_username = st.selectbox("User", username_options, key="admin_username_filter")
+    with fc3:
+        sel_role = st.selectbox("Role", ["All", "User", "Assistant"], key="admin_role_filter")
+    with fc4:
+        date_from = st.date_input("From date", value=None, key="admin_date_from")
+    with fc5:
+        date_to = st.date_input("To date", value=None, key="admin_date_to")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # -- Resolve common filter kwargs --
+    f_session  = None if sel_session == "All sessions" else sel_session
+    f_username = None if sel_username == "All users" else sel_username
+    f_date_from = datetime.combine(date_from, datetime.min.time()) if date_from else None
+    f_date_to   = datetime.combine(date_to, datetime.max.time()) if date_to else None
+    fkw = dict(session_filter=f_session, username_filter=f_username,
+               date_from=f_date_from, date_to=f_date_to)
+
+    # Show active filter hint
+    active_filters = []
+    if f_session:
+        active_filters.append(f"session {f_session[:14]}…")
+    if f_username:
+        active_filters.append(f"user: {f_username}")
+    if date_from:
+        active_filters.append(f"from {date_from}")
+    if date_to:
+        active_filters.append(f"to {date_to}")
+    if active_filters:
+        st.markdown(
+            f'<div style="font-size:0.75rem;color:var(--accent);margin-bottom:0.5rem;">'
+            f'Showing filtered results: {" · ".join(active_filters)}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ==========================================================
+    # STATS GRID (6 cards) — filtered
+    # ==========================================================
+    stats = db_fetch_stats(**fkw)
     avg_dur   = float(stats.get("avg_duration_s") or 0)
     max_dur   = float(stats.get("max_duration_s") or 0)
     first_msg = stats.get("first_message")
@@ -2701,8 +2815,10 @@ def render_admin():
                     unsafe_allow_html=True,
                 )
 
-    # -- Charts --
-    ts_rows = db_fetch_timeseries()
+    # ==========================================================
+    # CHARTS — filtered
+    # ==========================================================
+    ts_rows = db_fetch_timeseries(**fkw)
     if ts_rows:
         try:
             import pandas as pd
@@ -2761,11 +2877,13 @@ def render_admin():
                 st.markdown('</div>', unsafe_allow_html=True)
 
         except Exception:
-            pass  # charts are best-effort; skip silently if pandas/data issue
+            pass
 
-    # -- User activity & Topics --
-    user_rows = db_fetch_user_activity()
-    session_topics = db_fetch_session_topics()
+    # ==========================================================
+    # USER ACTIVITY & TOPICS — filtered
+    # ==========================================================
+    user_rows = db_fetch_user_activity(**fkw)
+    session_topics = db_fetch_session_topics(**fkw)
 
     if user_rows or session_topics:
         try:
@@ -2849,7 +2967,10 @@ def render_admin():
                             '<div class="chart-card-title">Top Keywords (from user prompts)</div>',
                             unsafe_allow_html=True,
                         )
-                        kw_df = pd.DataFrame(keywords, columns=["Keyword", "Count"]).set_index("Keyword")
+                        # Sort by count descending so the chart renders highest first
+                        kw_df = pd.DataFrame(keywords, columns=["Keyword", "Count"])
+                        kw_df = kw_df.sort_values("Count", ascending=True)  # ascending for horizontal bar (top = highest)
+                        kw_df = kw_df.set_index("Keyword")
                         st.bar_chart(kw_df, color=["#4a90d9"], horizontal=True, height=max(180, len(keywords) * 28))
                         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2878,44 +2999,21 @@ def render_admin():
         except Exception:
             pass
 
-    # -- Filter bar --
-    sessions  = db_fetch_sessions()
-    usernames = db_fetch_usernames()
-
-    session_options  = ["All sessions"] + [s["session_id"] for s in sessions]
-    username_options = ["All users"] + usernames
-
+    # ==========================================================
+    # MESSAGE HISTORY — filtered
+    # ==========================================================
     st.markdown(
-        '<div class="filter-bar">'
-        '<div class="filter-bar-label">Filter history</div>',
+        '<div class="chart-section-divider"><span>Message History</span></div>',
         unsafe_allow_html=True,
     )
-    fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1.6, 1.2, 1.4, 1.4])
-    with fc1:
-        sel_session = st.selectbox(
-            "Session",
-            session_options,
-            format_func=lambda s: s if s == "All sessions" else f"{s[:18]}…",
-            key="admin_session_filter",
-        )
-    with fc2:
-        sel_username = st.selectbox("User", username_options, key="admin_username_filter")
-    with fc3:
-        sel_role = st.selectbox("Role", ["All", "User", "Assistant"], key="admin_role_filter")
-    with fc4:
-        date_from = st.date_input("From date", value=None, key="admin_date_from")
-    with fc5:
-        date_to = st.date_input("To date", value=None, key="admin_date_to")
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    # -- Fetch rows --
     rows = db_fetch_history(
         limit=500,
-        session_filter=None if sel_session == "All sessions" else sel_session,
-        username_filter=None if sel_username == "All users" else sel_username,
+        session_filter=f_session,
+        username_filter=f_username,
         role_filter=sel_role,
-        date_from=datetime.combine(date_from, datetime.min.time()) if date_from else None,
-        date_to=datetime.combine(date_to, datetime.max.time()) if date_to else None,
+        date_from=f_date_from,
+        date_to=f_date_to,
     )
 
     # -- Danger zone (admin only, behind flag) --
