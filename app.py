@@ -266,6 +266,73 @@ div[data-testid="stPopover"] > div {
     margin-right: 4px;
 }
 
+/* ---------- Admin queue monitor ---------- */
+.queue-monitor {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+}
+.queue-monitor-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.65rem;
+}
+.queue-monitor-title .qm-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    animation: qm-blink 1.5s ease-in-out infinite;
+}
+@keyframes qm-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+.queue-monitor-title .qm-dot-idle {
+    background: var(--text-muted);
+    animation: none;
+}
+.qm-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0.5rem 0.65rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: 0.35rem;
+    font-size: 0.8rem;
+}
+.qm-entry-active {
+    background: rgba(74, 144, 217, 0.08);
+    border: 1px solid rgba(74, 144, 217, 0.2);
+}
+.qm-entry-waiting {
+    background: rgba(184, 134, 11, 0.06);
+    border: 1px solid rgba(184, 134, 11, 0.15);
+}
+.qm-pos {
+    font-weight: 700;
+    font-size: 0.85rem;
+    min-width: 24px;
+    text-align: center;
+}
+.qm-pos-active { color: var(--accent); }
+.qm-pos-waiting { color: var(--warning); }
+.qm-user {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.qm-detail {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
 /* ---------- Prompt queue status ---------- */
 .queue-card {
     background: var(--bg-card);
@@ -2728,6 +2795,71 @@ def render_admin():
         st.markdown('</div>', unsafe_allow_html=True)
         return
     _test_conn.close()
+
+    # ==========================================================
+    # LIVE QUEUE MONITOR
+    # ==========================================================
+    q_data = prompt_queue_status()
+    q_active = q_data.get("active")
+    q_waiting = q_data.get("queue", [])
+
+    dot_cls = "qm-dot" if q_active else "qm-dot qm-dot-idle"
+    total_in_queue = (1 if q_active else 0) + len(q_waiting)
+    title_extra = f" — {total_in_queue} prompt{'s' if total_in_queue != 1 else ''}" if total_in_queue else " — idle"
+
+    st.markdown(
+        f'<div class="queue-monitor">'
+        f'<div class="queue-monitor-title">'
+        f'<span class="{dot_cls}"></span> Prompt Queue{title_extra}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not q_active and not q_waiting:
+        st.markdown(
+            '<div style="font-size:0.8rem;color:var(--text-muted);padding:0.25rem 0;">'
+            'No prompts in the queue — the model is available.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        if q_active:
+            who = q_active.get("username") or "anonymous"
+            sid = q_active.get("session_id", "")[:10]
+            try:
+                started = datetime.fromisoformat(q_active["started_at"])
+                elapsed = int((datetime.now() - started).total_seconds())
+                time_str = f"{elapsed}s ago"
+            except Exception:
+                time_str = ""
+            st.markdown(
+                f'<div class="qm-entry qm-entry-active">'
+                f'<span class="qm-pos qm-pos-active">NOW</span>'
+                f'<span class="qm-user">{who}</span>'
+                f'<span class="qm-detail">session {sid}… · started {time_str}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        for i, entry in enumerate(q_waiting):
+            who = entry.get("username") or "anonymous"
+            sid = entry.get("session_id", "")[:10]
+            try:
+                queued = datetime.fromisoformat(entry["queued_at"])
+                wait = int((datetime.now() - queued).total_seconds())
+                wait_str = f"waiting {wait}s"
+            except Exception:
+                wait_str = ""
+            st.markdown(
+                f'<div class="qm-entry qm-entry-waiting">'
+                f'<span class="qm-pos qm-pos-waiting">#{i + 1}</span>'
+                f'<span class="qm-user">{who}</span>'
+                f'<span class="qm-detail">session {sid}… · {wait_str}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # ==========================================================
     # FILTERS — up top so they control everything below
