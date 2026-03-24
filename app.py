@@ -6,6 +6,7 @@ Queue-based access: one user at a time.
 Designed as a page within a multi-page Streamlit app.
 """
 
+import fcntl
 import json
 import os
 import re
@@ -13,7 +14,6 @@ import subprocess
 import tempfile
 import time
 import hashlib
-import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from io import BytesIO
@@ -70,10 +70,13 @@ HISTORY_TABLE  = "chatbot_history"  # postgres table name
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-QUEUE_FILE = Path(__file__).parent / ".queue_lock.json"
-LOCK = threading.Lock()
-SESSION_TIMEOUT_SECONDS = 300
+PROMPT_QUEUE_FILE = Path(__file__).parent / ".prompt_queue.json"
+PROMPT_LOCK_FILE  = Path(__file__).parent / ".prompt_queue.lock"
+PROMPT_TIMEOUT_S  = 120   # active prompt expires after 2 min (stale detection)
+QUEUE_WAIT_TIMEOUT_S = 300  # queued entries expire after 5 min
 CHARS_PER_TOKEN_ESTIMATE = 4  # rough char-to-token ratio
+MAX_PREVIEW_LINES = 12        # collapse messages longer than this
+MAX_PREVIEW_CHARS = 500       # collapse messages longer than this
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +264,86 @@ div[data-testid="stPopover"] > div {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin-right: 4px;
+}
+
+/* ---------- Prompt queue status ---------- */
+.queue-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem 1.75rem;
+    text-align: center;
+    margin: 1rem auto;
+    max-width: 420px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    animation: queue-pulse 2s ease-in-out infinite;
+}
+@keyframes queue-pulse {
+    0%, 100% { border-color: var(--border); }
+    50% { border-color: var(--accent); }
+}
+.queue-card .queue-position {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.1;
+}
+.queue-card .queue-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+}
+.queue-card .queue-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.75rem;
+}
+.queue-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: rgba(74, 144, 217, 0.06);
+    border: 1px solid rgba(74, 144, 217, 0.15);
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    color: var(--accent);
+    font-weight: 500;
+}
+
+/* ---------- Collapsible message ---------- */
+.msg-truncated {
+    position: relative;
+}
+.msg-truncated::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2.5rem;
+    background: linear-gradient(transparent, var(--bg-card));
+    pointer-events: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+
+/* Code snippet expanders */
+.code-snippet-expander [data-testid="stExpander"] {
+    border: 1px solid var(--border-light) !important;
+    border-radius: var(--radius-sm) !important;
+    background: var(--bg-primary) !important;
+    margin: 0.35rem 0 !important;
+}
+.code-snippet-expander [data-testid="stExpander"] summary {
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    color: var(--text-secondary) !important;
+    padding: 0.45rem 0.75rem !important;
+}
+.code-snippet-expander [data-testid="stExpander"] summary:hover {
+    color: var(--accent) !important;
 }
 
 /* ---------- Message metadata ---------- */
@@ -1045,6 +1128,8 @@ def _init_state():
         "chat_active": False,
         "code_mode": False,
         "_generated_code": None,  # latest generated Streamlit code
+        "_pending_prompt": None,  # prompt text waiting in queue
+        "_pending_prompt_id": None,  # unique id for the queued prompt
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1055,55 +1140,178 @@ db_ensure_table()
 
 
 # ---------------------------------------------------------------------------
-# Queue / lock helpers
+# Prompt-level queue — file-based, cross-session safe via fcntl
 # ---------------------------------------------------------------------------
-def _read_lock() -> Optional[dict]:
-    if QUEUE_FILE.exists():
+# Queue file schema:
+# {
+#   "active": {"prompt_id": str, "session_id": str, "username": str,
+#              "started_at": ISO str} | null,
+#   "queue": [{"prompt_id": str, "session_id": str, "username": str,
+#              "queued_at": ISO str}, ...]
+# }
+# ---------------------------------------------------------------------------
+
+def _with_file_lock(fn):
+    """Execute *fn* while holding an exclusive file lock (cross-process safe)."""
+    PROMPT_LOCK_FILE.touch(exist_ok=True)
+    fd = open(PROMPT_LOCK_FILE, "r")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fn()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
+
+
+def _read_prompt_queue() -> dict:
+    """Read and clean the prompt queue, expiring stale entries."""
+    if not PROMPT_QUEUE_FILE.exists():
+        return {"active": None, "queue": []}
+    try:
+        data = json.loads(PROMPT_QUEUE_FILE.read_text())
+    except Exception:
+        return {"active": None, "queue": []}
+
+    now = datetime.now()
+    changed = False
+
+    # Expire stale active prompt
+    active = data.get("active")
+    if active:
         try:
-            data = json.loads(QUEUE_FILE.read_text())
-            last_active = datetime.fromisoformat(data.get("last_active", ""))
-            if datetime.now() - last_active > timedelta(seconds=SESSION_TIMEOUT_SECONDS):
-                QUEUE_FILE.unlink(missing_ok=True)
-                return None
-            return data
+            started = datetime.fromisoformat(active["started_at"])
+            if (now - started).total_seconds() > PROMPT_TIMEOUT_S:
+                data["active"] = None
+                changed = True
         except Exception:
-            QUEUE_FILE.unlink(missing_ok=True)
-    return None
+            data["active"] = None
+            changed = True
+
+    # Expire stale waiting entries
+    clean_queue = []
+    for entry in data.get("queue", []):
+        try:
+            queued = datetime.fromisoformat(entry["queued_at"])
+            if (now - queued).total_seconds() <= QUEUE_WAIT_TIMEOUT_S:
+                clean_queue.append(entry)
+            else:
+                changed = True
+        except Exception:
+            changed = True
+    data["queue"] = clean_queue
+
+    # Promote next in queue if active slot is empty
+    if data["active"] is None and data["queue"]:
+        nxt = data["queue"].pop(0)
+        data["active"] = {
+            "prompt_id": nxt["prompt_id"],
+            "session_id": nxt["session_id"],
+            "username": nxt["username"],
+            "started_at": now.isoformat(),
+        }
+        changed = True
+
+    if changed:
+        PROMPT_QUEUE_FILE.write_text(json.dumps(data))
+    return data
 
 
-def _write_lock(session_id: str):
-    QUEUE_FILE.write_text(json.dumps({
-        "session_id": session_id,
-        "last_active": datetime.now().isoformat(),
-    }))
+def _write_prompt_queue(data: dict):
+    PROMPT_QUEUE_FILE.write_text(json.dumps(data))
 
 
-def _release_lock(session_id: str):
-    lock = _read_lock()
-    if lock and lock["session_id"] == session_id:
-        QUEUE_FILE.unlink(missing_ok=True)
+def prompt_enqueue(session_id: str, username: str) -> tuple[str, int]:
+    """Add a prompt to the queue. Returns (prompt_id, position).
+    Position 0 = you are active right now. 1+ = waiting."""
+    prompt_id = hashlib.sha256(
+        f"{session_id}:{time.time()}:{os.getpid()}".encode()
+    ).hexdigest()[:16]
+
+    def _do():
+        data = _read_prompt_queue()
+        # If nothing active, go straight to processing
+        if data["active"] is None:
+            data["active"] = {
+                "prompt_id": prompt_id,
+                "session_id": session_id,
+                "username": username,
+                "started_at": datetime.now().isoformat(),
+            }
+            _write_prompt_queue(data)
+            return prompt_id, 0
+        # Already active — add to waiting queue
+        data["queue"].append({
+            "prompt_id": prompt_id,
+            "session_id": session_id,
+            "username": username,
+            "queued_at": datetime.now().isoformat(),
+        })
+        _write_prompt_queue(data)
+        return prompt_id, len(data["queue"])
+
+    return _with_file_lock(_do)
 
 
-def _heartbeat():
-    lock = _read_lock()
-    if lock and lock["session_id"] == st.session_state.chat_session_id:
-        _write_lock(st.session_state.chat_session_id)
+def prompt_position(prompt_id: str) -> int:
+    """Get queue position for a prompt_id.
+    0 = active, 1+ = waiting, -1 = not found (expired or done)."""
+    def _do():
+        data = _read_prompt_queue()
+        active = data.get("active")
+        if active and active["prompt_id"] == prompt_id:
+            return 0
+        for i, entry in enumerate(data.get("queue", [])):
+            if entry["prompt_id"] == prompt_id:
+                return i + 1
+        return -1
+    return _with_file_lock(_do)
 
 
-def acquire_or_check(session_id: str) -> tuple[bool, Optional[dict]]:
-    with LOCK:
-        current = _read_lock()
-        if current is None:
-            _write_lock(session_id)
-            return True, None
-        if current["session_id"] == session_id:
-            _write_lock(session_id)
-            return True, None
-        return False, current
+def prompt_release(prompt_id: str):
+    """Release the active slot after prompt processing is done."""
+    def _do():
+        data = _read_prompt_queue()
+        active = data.get("active")
+        if active and active["prompt_id"] == prompt_id:
+            data["active"] = None
+            # Promote next
+            now = datetime.now()
+            if data["queue"]:
+                nxt = data["queue"].pop(0)
+                data["active"] = {
+                    "prompt_id": nxt["prompt_id"],
+                    "session_id": nxt["session_id"],
+                    "username": nxt["username"],
+                    "started_at": now.isoformat(),
+                }
+            _write_prompt_queue(data)
+    _with_file_lock(_do)
 
 
-def is_queue_free() -> bool:
-    return _read_lock() is None
+def prompt_cancel(prompt_id: str):
+    """Remove a prompt from the queue (if user cancels while waiting)."""
+    def _do():
+        data = _read_prompt_queue()
+        data["queue"] = [e for e in data.get("queue", [])
+                         if e["prompt_id"] != prompt_id]
+        _write_prompt_queue(data)
+    _with_file_lock(_do)
+
+
+def prompt_heartbeat(prompt_id: str):
+    """Refresh the started_at timestamp for the active prompt (keep-alive)."""
+    def _do():
+        data = _read_prompt_queue()
+        active = data.get("active")
+        if active and active["prompt_id"] == prompt_id:
+            active["started_at"] = datetime.now().isoformat()
+            _write_prompt_queue(data)
+    _with_file_lock(_do)
+
+
+def prompt_queue_status() -> dict:
+    """Return the full queue state (for display)."""
+    return _with_file_lock(_read_prompt_queue)
 
 
 # ---------------------------------------------------------------------------
@@ -1804,6 +2012,56 @@ def export_conversation_xlsx() -> Optional[bytes]:
 
 
 # ---------------------------------------------------------------------------
+# Message content renderer — collapsible text & code snippets
+# ---------------------------------------------------------------------------
+_CODE_BLOCK_RE = re.compile(r'```(\w*)\n(.*?)```', re.DOTALL)
+
+
+def _render_collapsible_text(text: str, key: str):
+    """Render text with collapse if it exceeds preview thresholds."""
+    lines = text.split('\n')
+    is_long = len(lines) > MAX_PREVIEW_LINES or len(text) > MAX_PREVIEW_CHARS
+
+    if not is_long:
+        st.markdown(text)
+        return
+
+    # Build truncated preview
+    preview = '\n'.join(lines[:MAX_PREVIEW_LINES])
+    if len(preview) > MAX_PREVIEW_CHARS:
+        preview = preview[:MAX_PREVIEW_CHARS].rsplit(' ', 1)[0]
+
+    st.markdown(preview + " ...\n\n---")
+    with st.expander("Show full response", expanded=False):
+        st.markdown(text)
+
+
+def render_message_content(content: str, msg_key: str):
+    """Render a message with collapsible long text and hidden code snippets."""
+    # Extract code blocks
+    code_blocks: list[tuple[str, str]] = []
+    for match in _CODE_BLOCK_RE.finditer(content):
+        lang = match.group(1) or ''
+        code = match.group(2).rstrip()
+        code_blocks.append((lang, code))
+
+    # Text with code blocks removed
+    text_only = _CODE_BLOCK_RE.sub('', content).strip()
+    text_only = re.sub(r'\n{3,}', '\n\n', text_only)
+
+    # Render text portion (collapsible if long)
+    if text_only:
+        _render_collapsible_text(text_only, msg_key)
+
+    # Render each code block as a collapsible snippet with copy support
+    for i, (lang, code) in enumerate(code_blocks):
+        lines = code.count('\n') + 1
+        lang_label = lang if lang else "code"
+        with st.expander(f"`{lang_label}` — {lines} lines", expanded=False):
+            st.code(code, language=lang or None)
+
+
+# ---------------------------------------------------------------------------
 # Message metadata renderer
 # ---------------------------------------------------------------------------
 def render_msg_meta(msg: dict):
@@ -1829,8 +2087,10 @@ def render_lobby():
     st.markdown("## Document Chat")
     st.caption("Chat with your documents using local Ollama models")
 
-    free = is_queue_free()
     online = ollama_is_running()
+    q_status = prompt_queue_status()
+    active_prompt = q_status.get("active")
+    waiting_count = len(q_status.get("queue", []))
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -1851,31 +2111,30 @@ def render_lobby():
 
         st.write("")
 
-        if free:
+        # Show queue status info
+        if active_prompt:
+            who = active_prompt.get("username") or "Someone"
+            st.markdown(
+                f'<span class="status-badge status-busy">Processing</span> '
+                f'<span class="toolbar-meta">{who} has a prompt running</span>',
+                unsafe_allow_html=True,
+            )
+            if waiting_count:
+                st.caption(f"{waiting_count} prompt{'s' if waiting_count != 1 else ''} waiting in queue")
+        else:
             st.markdown(
                 '<span class="status-badge status-active">Available</span>',
                 unsafe_allow_html=True,
             )
-            st.caption("No one is using the chatbot right now.")
-            st.write("")
-            if st.button("Start Chat", use_container_width=True, key="start_chat", type="primary"):
-                st.session_state.chat_session_id = hashlib.sha256(
-                    f"{time.time()}".encode()
-                ).hexdigest()[:16]
-                st.session_state.chat_active = True
-                st.rerun()
-        else:
-            st.markdown(
-                '<span class="status-badge status-busy">In Use</span>',
-                unsafe_allow_html=True,
-            )
-            st.caption(
-                f"Someone is currently using the chatbot. "
-                f"Sessions auto-release after {SESSION_TIMEOUT_SECONDS // 60} minutes of inactivity."
-            )
-            st.write("")
-            if st.button("Refresh", use_container_width=True, key="lobby_refresh"):
-                st.rerun()
+            st.caption("No prompts running — your next message will process immediately.")
+
+        st.write("")
+        if st.button("Start Chat", use_container_width=True, key="start_chat", type="primary"):
+            st.session_state.chat_session_id = hashlib.sha256(
+                f"{time.time()}".encode()
+            ).hexdigest()[:16]
+            st.session_state.chat_active = True
+            st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1900,7 +2159,7 @@ def render_toolbar():
 
     col_idx = 0
 
-    # Brand
+    # Brand + queue status
     with cols[col_idx]:
         status_cls = "status-active" if online else "status-offline"
         status_txt = "Connected" if online else "Offline"
@@ -1911,6 +2170,12 @@ def render_toolbar():
         )
         if is_admin and code_mode:
             brand_parts += ' <span class="mode-pill mode-code">Page Builder</span>'
+        # Queue indicator
+        q_status = prompt_queue_status()
+        q_active = q_status.get("active")
+        q_waiting = len(q_status.get("queue", []))
+        if q_active:
+            brand_parts += f' <span class="status-badge status-busy">Queue: {q_waiting + 1}</span>'
         brand_parts += '</div>'
         st.markdown(brand_parts, unsafe_allow_html=True)
     col_idx += 1
@@ -1949,10 +2214,15 @@ def render_toolbar():
     # End session
     with cols[col_idx]:
         if st.button("End Session", use_container_width=True, key="chat_leave", type="primary"):
-            _release_lock(st.session_state.chat_session_id)
+            # Cancel any pending queued prompt
+            pid = st.session_state.get("_pending_prompt_id")
+            if pid:
+                prompt_cancel(pid)
             st.session_state.chat_active = False
             st.session_state.chat_messages = []
             st.session_state.documents = {}
+            st.session_state._pending_prompt = None
+            st.session_state._pending_prompt_id = None
             st.session_state.pop("_export_md", None)
             st.session_state.pop("_export_xlsx", None)
             st.rerun()
@@ -2128,10 +2398,10 @@ def _render_chat_conversation():
                 unsafe_allow_html=True,
             )
 
-    for msg in st.session_state.chat_messages:
+    for idx, msg in enumerate(st.session_state.chat_messages):
         if msg["role"] == "user":
             with st.chat_message("user"):
-                st.markdown(msg["content"])
+                render_message_content(msg["content"], f"usr_{idx}")
                 render_msg_meta(msg)
         else:
             if code_mode and _extract_code_block(msg["content"]):
@@ -2140,7 +2410,7 @@ def _render_chat_conversation():
                     render_msg_meta(msg)
             else:
                 with st.chat_message("assistant"):
-                    st.markdown(msg["content"])
+                    render_message_content(msg["content"], f"msg_{idx}")
                     render_msg_meta(msg)
 
 
@@ -2160,6 +2430,47 @@ def _render_generated_page():
     with st.expander("View source code", expanded=False):
         st.code(code, language="python")
     _execute_generated_code(code)
+
+
+def _render_queue_wait(position: int, prompt_id: str):
+    """Display a styled queue waiting card with position and auto-refresh."""
+    q_status = prompt_queue_status()
+    active = q_status.get("active")
+    active_user = (active.get("username") or "Someone") if active else "Someone"
+
+    ordinal = (
+        f"{position}st" if position == 1 else
+        f"{position}nd" if position == 2 else
+        f"{position}rd" if position == 3 else
+        f"{position}th"
+    )
+
+    st.markdown(
+        f'<div class="queue-card">'
+        f'<div class="queue-position">#{position}</div>'
+        f'<div class="queue-label">You are {ordinal} in line</div>'
+        f'<div class="queue-hint">'
+        f'{active_user} is currently processing a prompt. '
+        f'Your message will be sent automatically when it\'s your turn.'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    qc1, qc2, qc3 = st.columns([1, 1, 1])
+    with qc2:
+        if st.button("Cancel", use_container_width=True, key="cancel_queue"):
+            prompt_cancel(prompt_id)
+            # Remove the pending user message from chat
+            if st.session_state.chat_messages and st.session_state.chat_messages[-1]["role"] == "user":
+                st.session_state.chat_messages.pop()
+            st.session_state._pending_prompt = None
+            st.session_state._pending_prompt_id = None
+            st.rerun()
+
+    # Auto-refresh every 2 seconds to check queue
+    time.sleep(2)
+    st.rerun()
 
 
 def render_chat():
@@ -2186,13 +2497,32 @@ def render_chat():
     else:
         placeholder_text = "Ask me anything..."
 
+    # ------------------------------------------------------------------
+    # Handle pending prompt waiting in queue
+    # ------------------------------------------------------------------
+    pending_pid = st.session_state.get("_pending_prompt_id")
+    if pending_pid:
+        pos = prompt_position(pending_pid)
+        if pos > 0:
+            # Still waiting — show queue card and auto-refresh
+            _render_queue_wait(pos, pending_pid)
+            return
+        elif pos == -1:
+            # Expired / cancelled — clear pending state
+            st.session_state._pending_prompt = None
+            st.session_state._pending_prompt_id = None
+            pending_pid = None
+        # pos == 0 → it's our turn — fall through to process below
+
+    # ------------------------------------------------------------------
+    # Chat input
+    # ------------------------------------------------------------------
     if prompt := st.chat_input(placeholder_text, key="chat_input"):
         if not ollama_is_running():
             st.error("Ollama is not reachable. Check the connection.")
             return
 
-        _heartbeat()
-
+        # Save user message immediately (visible in history)
         user_ts = datetime.now().strftime("%H:%M")
         user_tokens = estimate_tokens(prompt)
         user_msg = {
@@ -2205,11 +2535,30 @@ def render_chat():
         db_save_message(user_msg, st.session_state.chat_session_id,
                         st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
-        with st.chat_message("user"):
-            st.markdown(prompt)
-            render_msg_meta(user_msg)
 
-        # Build API messages — use code prompt or chat prompt
+        # Enqueue the prompt
+        username = st.session_state.get("username", "")
+        pid, pos = prompt_enqueue(st.session_state.chat_session_id, username)
+
+        if pos > 0:
+            # Not our turn yet — save and rerun to show queue card
+            st.session_state._pending_prompt = prompt
+            st.session_state._pending_prompt_id = pid
+            st.rerun()
+            return
+        else:
+            # Our turn — save pid so we can release later, then process
+            st.session_state._pending_prompt = prompt
+            st.session_state._pending_prompt_id = pid
+
+    # ------------------------------------------------------------------
+    # Process the prompt (either fresh pos==0 or resumed from queue)
+    # ------------------------------------------------------------------
+    pending_prompt = st.session_state.get("_pending_prompt")
+    pending_prompt_id = st.session_state.get("_pending_prompt_id")
+
+    if pending_prompt and pending_prompt_id:
+        # Build API messages
         if code_mode:
             system_content = build_code_system_prompt()
         else:
@@ -2220,6 +2569,12 @@ def render_chat():
             for m in st.session_state.chat_messages
         ]
 
+        # Show queue bar while processing
+        st.markdown(
+            '<div class="queue-bar">Processing your prompt...</div>',
+            unsafe_allow_html=True,
+        )
+
         with st.chat_message("assistant"):
             placeholder = st.empty()
             meta_placeholder = st.empty()
@@ -2229,6 +2584,9 @@ def render_chat():
                 for token in chat_stream(api_messages):
                     full_response += token
                     placeholder.markdown(full_response + "▌")
+                    # Keep-alive heartbeat every ~10 tokens
+                    if len(full_response) % 40 == 0:
+                        prompt_heartbeat(pending_prompt_id)
                 placeholder.markdown(full_response)
             except requests.exceptions.ConnectionError:
                 full_response = "Connection to Ollama lost. Please check that it is running."
@@ -2261,12 +2619,17 @@ def render_chat():
                         st.session_state.get("username", ""),
                         list(st.session_state.documents.keys()))
 
+        # Release the queue slot
+        prompt_release(pending_prompt_id)
+        st.session_state._pending_prompt = None
+        st.session_state._pending_prompt_id = None
+
         # In code mode, extract code and update the single page
         if code_mode:
             extracted_code = _extract_code_block(full_response)
             if extracted_code:
                 st.session_state["_generated_code"] = extracted_code
-                st.rerun()  # rerun to render the updated page cleanly once
+                st.rerun()
             else:
                 st.warning("No code block found in the response. Try rephrasing your request.")
 
@@ -2704,13 +3067,6 @@ def main():
         render_lobby()
         if is_admin:
             render_admin()
-        return
-
-    acquired, lock_info = acquire_or_check(st.session_state.chat_session_id)
-
-    if not acquired:
-        st.session_state.chat_active = False
-        st.rerun()
         return
 
     render_toolbar()
