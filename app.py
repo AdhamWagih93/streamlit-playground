@@ -6,7 +6,6 @@ Queue-based access: one user at a time.
 Designed as a page within a multi-page Streamlit app.
 """
 
-import fcntl
 import json
 import os
 import re
@@ -70,10 +69,9 @@ HISTORY_TABLE  = "chatbot_history"  # postgres table name
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-PROMPT_QUEUE_FILE = Path(__file__).parent / ".prompt_queue.json"
-PROMPT_LOCK_FILE  = Path(__file__).parent / ".prompt_queue.lock"
-PROMPT_TIMEOUT_S  = 120   # active prompt expires after 2 min (stale detection)
+PROMPT_TIMEOUT_S     = 120   # active prompt expires after 2 min (stale detection)
 QUEUE_WAIT_TIMEOUT_S = 300  # queued entries expire after 5 min
+QUEUE_TABLE          = "prompt_queue"  # postgres table for shared queue
 CHARS_PER_TOKEN_ESTIMATE = 4  # rough char-to-token ratio
 MAX_PREVIEW_LINES = 12        # collapse messages longer than this
 MAX_PREVIEW_CHARS = 500       # collapse messages longer than this
@@ -1305,7 +1303,13 @@ db_ensure_table()
 
 
 # ---------------------------------------------------------------------------
-# Prompt-level queue — file-based, cross-session safe via fcntl
+# Prompt-level queue — DB-based, shared across all instances
+# ---------------------------------------------------------------------------
+# Schema:
+#   prompt_queue (id SERIAL, prompt_id TEXT UNIQUE, session_id TEXT,
+#                 status TEXT [active|waiting], created_at TIMESTAMPTZ,
+#                 heartbeat_at TIMESTAMPTZ)
+# Concurrency: LOCK TABLE ... IN EXCLUSIVE MODE inside transactions.
 # ---------------------------------------------------------------------------
 # Queue file schema:
 # {
@@ -1316,73 +1320,65 @@ db_ensure_table()
 # }
 # ---------------------------------------------------------------------------
 
-def _with_file_lock(fn):
-    """Execute *fn* while holding an exclusive file lock (cross-process safe)."""
-    PROMPT_LOCK_FILE.touch(exist_ok=True)
-    fd = open(PROMPT_LOCK_FILE, "r")
+def _ensure_queue_table():
+    """Create the prompt_queue table if it doesn't exist."""
+    conn = _get_conn()
+    if conn is None:
+        return
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        return fn()
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {HISTORY_SCHEMA}.{QUEUE_TABLE} (
+                    id          SERIAL PRIMARY KEY,
+                    prompt_id   TEXT NOT NULL UNIQUE,
+                    session_id  TEXT NOT NULL,
+                    status      TEXT NOT NULL DEFAULT 'waiting',
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{QUEUE_TABLE}_status
+                ON {HISTORY_SCHEMA}.{QUEUE_TABLE} (status, created_at)
+            """)
+    except Exception as e:
+        import sys
+        print(f"[_ensure_queue_table] ERROR: {e}", file=sys.stderr)
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
+        conn.close()
 
 
-def _read_prompt_queue() -> dict:
-    """Read and clean the prompt queue, expiring stale entries."""
-    if not PROMPT_QUEUE_FILE.exists():
-        return {"active": None, "queue": []}
-    try:
-        data = json.loads(PROMPT_QUEUE_FILE.read_text())
-    except Exception:
-        return {"active": None, "queue": []}
-
-    now = datetime.now()
-    changed = False
-
-    # Expire stale active prompt
-    active = data.get("active")
-    if active:
-        try:
-            started = datetime.fromisoformat(active["started_at"])
-            if (now - started).total_seconds() > PROMPT_TIMEOUT_S:
-                data["active"] = None
-                changed = True
-        except Exception:
-            data["active"] = None
-            changed = True
-
+def _queue_cleanup(cur):
+    """Expire stale entries and promote next. Must be called inside a transaction."""
+    tbl = f"{HISTORY_SCHEMA}.{QUEUE_TABLE}"
+    # Expire stale active prompts
+    cur.execute(f"""
+        DELETE FROM {tbl}
+        WHERE status = 'active'
+          AND heartbeat_at < NOW() - INTERVAL '{PROMPT_TIMEOUT_S} seconds'
+    """)
     # Expire stale waiting entries
-    clean_queue = []
-    for entry in data.get("queue", []):
-        try:
-            queued = datetime.fromisoformat(entry["queued_at"])
-            if (now - queued).total_seconds() <= QUEUE_WAIT_TIMEOUT_S:
-                clean_queue.append(entry)
-            else:
-                changed = True
-        except Exception:
-            changed = True
-    data["queue"] = clean_queue
-
-    # Promote next in queue if active slot is empty
-    if data["active"] is None and data["queue"]:
-        nxt = data["queue"].pop(0)
-        data["active"] = {
-            "prompt_id": nxt["prompt_id"],
-            "session_id": nxt["session_id"],
-            "username": nxt["username"],
-            "started_at": now.isoformat(),
-        }
-        changed = True
-
-    if changed:
-        PROMPT_QUEUE_FILE.write_text(json.dumps(data))
-    return data
-
-
-def _write_prompt_queue(data: dict):
-    PROMPT_QUEUE_FILE.write_text(json.dumps(data))
+    cur.execute(f"""
+        DELETE FROM {tbl}
+        WHERE status = 'waiting'
+          AND created_at < NOW() - INTERVAL '{QUEUE_WAIT_TIMEOUT_S} seconds'
+    """)
+    # Promote next waiting → active if no active exists
+    cur.execute(f"""
+        SELECT COUNT(*) FROM {tbl} WHERE status = 'active'
+    """)
+    active_count = cur.fetchone()[0]
+    if active_count == 0:
+        cur.execute(f"""
+            UPDATE {tbl}
+            SET status = 'active', heartbeat_at = NOW()
+            WHERE id = (
+                SELECT id FROM {tbl}
+                WHERE status = 'waiting'
+                ORDER BY created_at ASC
+                LIMIT 1
+            )
+        """)
 
 
 def prompt_enqueue(session_id: str, username: str) -> tuple[str, int]:
@@ -1392,91 +1388,237 @@ def prompt_enqueue(session_id: str, username: str) -> tuple[str, int]:
         f"{session_id}:{time.time()}:{os.getpid()}".encode()
     ).hexdigest()[:16]
 
-    def _do():
-        data = _read_prompt_queue()
-        # If nothing active, go straight to processing
-        if data["active"] is None:
-            data["active"] = {
-                "prompt_id": prompt_id,
-                "session_id": session_id,
-                "username": username,
-                "started_at": datetime.now().isoformat(),
-            }
-            _write_prompt_queue(data)
-            return prompt_id, 0
-        # Already active — add to waiting queue
-        data["queue"].append({
-            "prompt_id": prompt_id,
-            "session_id": session_id,
-            "username": username,
-            "queued_at": datetime.now().isoformat(),
-        })
-        _write_prompt_queue(data)
-        return prompt_id, len(data["queue"])
+    conn = _get_conn()
+    if conn is None:
+        return prompt_id, 0  # fallback: no DB → proceed without queue
 
-    return _with_file_lock(_do)
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            # Lock the table to prevent race conditions
+            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
+            _queue_cleanup(cur)
+
+            # Check if there's an active prompt
+            cur.execute(f"""
+                SELECT COUNT(*) FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE status = 'active'
+            """)
+            has_active = cur.fetchone()[0] > 0
+
+            if not has_active:
+                # Go straight to active
+                cur.execute(f"""
+                    INSERT INTO {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                        (prompt_id, session_id, status, created_at, heartbeat_at)
+                    VALUES (%s, %s, 'active', NOW(), NOW())
+                """, (prompt_id, session_id))
+                conn.commit()
+                return prompt_id, 0
+            else:
+                # Add to waiting queue
+                cur.execute(f"""
+                    INSERT INTO {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                        (prompt_id, session_id, status, created_at, heartbeat_at)
+                    VALUES (%s, %s, 'waiting', NOW(), NOW())
+                """, (prompt_id, session_id))
+                # Get position (count of waiting entries ahead of this one)
+                cur.execute(f"""
+                    SELECT COUNT(*) FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                    WHERE status = 'waiting' AND prompt_id != %s
+                      AND created_at <= (
+                          SELECT created_at FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                          WHERE prompt_id = %s
+                      )
+                """, (prompt_id, prompt_id))
+                pos = cur.fetchone()[0] + 1  # +1 because the active one is pos 0
+                conn.commit()
+                return prompt_id, pos
+    except Exception as e:
+        import sys
+        print(f"[prompt_enqueue] ERROR: {e}", file=sys.stderr)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return prompt_id, 0  # fallback
+    finally:
+        conn.autocommit = True
+        conn.close()
 
 
 def prompt_position(prompt_id: str) -> int:
     """Get queue position for a prompt_id.
     0 = active, 1+ = waiting, -1 = not found (expired or done)."""
-    def _do():
-        data = _read_prompt_queue()
-        active = data.get("active")
-        if active and active["prompt_id"] == prompt_id:
-            return 0
-        for i, entry in enumerate(data.get("queue", [])):
-            if entry["prompt_id"] == prompt_id:
-                return i + 1
+    conn = _get_conn()
+    if conn is None:
         return -1
-    return _with_file_lock(_do)
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
+            _queue_cleanup(cur)
+
+            # Check if active
+            cur.execute(f"""
+                SELECT status FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE prompt_id = %s
+            """, (prompt_id,))
+            row = cur.fetchone()
+            if row is None:
+                conn.commit()
+                return -1
+            if row[0] == 'active':
+                conn.commit()
+                return 0
+
+            # Waiting — get position
+            cur.execute(f"""
+                SELECT COUNT(*) FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE status = 'waiting'
+                  AND created_at <= (
+                      SELECT created_at FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                      WHERE prompt_id = %s
+                  )
+            """, (prompt_id,))
+            pos = cur.fetchone()[0]
+            conn.commit()
+            return pos
+    except Exception as e:
+        import sys
+        print(f"[prompt_position] ERROR: {e}", file=sys.stderr)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return -1
+    finally:
+        conn.autocommit = True
+        conn.close()
 
 
 def prompt_release(prompt_id: str):
     """Release the active slot after prompt processing is done."""
-    def _do():
-        data = _read_prompt_queue()
-        active = data.get("active")
-        if active and active["prompt_id"] == prompt_id:
-            data["active"] = None
-            # Promote next
-            now = datetime.now()
-            if data["queue"]:
-                nxt = data["queue"].pop(0)
-                data["active"] = {
-                    "prompt_id": nxt["prompt_id"],
-                    "session_id": nxt["session_id"],
-                    "username": nxt["username"],
-                    "started_at": now.isoformat(),
-                }
-            _write_prompt_queue(data)
-    _with_file_lock(_do)
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
+            cur.execute(f"""
+                DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE prompt_id = %s
+            """, (prompt_id,))
+            _queue_cleanup(cur)  # promotes next in line
+            conn.commit()
+    except Exception as e:
+        import sys
+        print(f"[prompt_release] ERROR: {e}", file=sys.stderr)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.autocommit = True
+        conn.close()
 
 
 def prompt_cancel(prompt_id: str):
     """Remove a prompt from the queue (if user cancels while waiting)."""
-    def _do():
-        data = _read_prompt_queue()
-        data["queue"] = [e for e in data.get("queue", [])
-                         if e["prompt_id"] != prompt_id]
-        _write_prompt_queue(data)
-    _with_file_lock(_do)
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE prompt_id = %s
+            """, (prompt_id,))
+    except Exception as e:
+        import sys
+        print(f"[prompt_cancel] ERROR: {e}", file=sys.stderr)
+    finally:
+        conn.close()
 
 
 def prompt_heartbeat(prompt_id: str):
-    """Refresh the started_at timestamp for the active prompt (keep-alive)."""
-    def _do():
-        data = _read_prompt_queue()
-        active = data.get("active")
-        if active and active["prompt_id"] == prompt_id:
-            active["started_at"] = datetime.now().isoformat()
-            _write_prompt_queue(data)
-    _with_file_lock(_do)
+    """Refresh the heartbeat timestamp for the active prompt (keep-alive)."""
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                SET heartbeat_at = NOW()
+                WHERE prompt_id = %s AND status = 'active'
+            """, (prompt_id,))
+    except Exception as e:
+        import sys
+        print(f"[prompt_heartbeat] ERROR: {e}", file=sys.stderr)
+    finally:
+        conn.close()
 
 
 def prompt_queue_status() -> dict:
-    """Return the full queue state (for display)."""
-    return _with_file_lock(_read_prompt_queue)
+    """Return the full queue state (for display). Anonymous — no usernames."""
+    conn = _get_conn()
+    if conn is None:
+        return {"active": None, "queue": []}
+    try:
+        conn.autocommit = False
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
+            _queue_cleanup(cur)
+
+            cur.execute(f"""
+                SELECT prompt_id, session_id, status, created_at, heartbeat_at
+                FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE status = 'active'
+                LIMIT 1
+            """)
+            active_row = cur.fetchone()
+
+            cur.execute(f"""
+                SELECT prompt_id, session_id, status, created_at, heartbeat_at
+                FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE status = 'waiting'
+                ORDER BY created_at ASC
+            """)
+            waiting_rows = cur.fetchall()
+            conn.commit()
+
+        active = None
+        if active_row:
+            active = {
+                "prompt_id": active_row["prompt_id"],
+                "session_id": active_row["session_id"],
+                "started_at": active_row["heartbeat_at"].isoformat()
+                    if active_row["heartbeat_at"] else active_row["created_at"].isoformat(),
+            }
+        queue = []
+        for w in waiting_rows:
+            queue.append({
+                "prompt_id": w["prompt_id"],
+                "session_id": w["session_id"],
+                "queued_at": w["created_at"].isoformat(),
+            })
+        return {"active": active, "queue": queue}
+    except Exception as e:
+        import sys
+        print(f"[prompt_queue_status] ERROR: {e}", file=sys.stderr)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"active": None, "queue": []}
+    finally:
+        conn.autocommit = True
+        conn.close()
+
+
+_ensure_queue_table()
 
 
 # ---------------------------------------------------------------------------
@@ -2277,10 +2419,9 @@ def render_lobby():
 
         # Show queue status info
         if active_prompt:
-            who = active_prompt.get("username") or "Someone"
             st.markdown(
-                f'<span class="status-badge status-busy">Processing</span> '
-                f'<span class="toolbar-meta">{who} has a prompt running</span>',
+                '<span class="status-badge status-busy">Processing</span> '
+                '<span class="toolbar-meta">A prompt is being processed</span>',
                 unsafe_allow_html=True,
             )
             if waiting_count:
@@ -2598,10 +2739,6 @@ def _render_generated_page():
 
 def _render_queue_wait(position: int, prompt_id: str):
     """Display a styled queue waiting card with position and auto-refresh."""
-    q_status = prompt_queue_status()
-    active = q_status.get("active")
-    active_user = (active.get("username") or "Someone") if active else "Someone"
-
     ordinal = (
         f"{position}st" if position == 1 else
         f"{position}nd" if position == 2 else
@@ -2614,7 +2751,7 @@ def _render_queue_wait(position: int, prompt_id: str):
         f'<div class="queue-position">#{position}</div>'
         f'<div class="queue-label">You are {ordinal} in line</div>'
         f'<div class="queue-hint">'
-        f'{active_user} is currently processing a prompt. '
+        f'Another prompt is currently being processed. '
         f'Your message will be sent automatically when it\'s your turn.'
         f'</div>'
         f'</div>',
@@ -2899,26 +3036,22 @@ def render_admin():
         )
     else:
         if q_active:
-            who = q_active.get("username") or "anonymous"
-            sid = q_active.get("session_id", "")[:10]
             try:
                 started = datetime.fromisoformat(q_active["started_at"])
                 elapsed = int((datetime.now() - started).total_seconds())
-                time_str = f"{elapsed}s ago"
+                time_str = f"started {elapsed}s ago"
             except Exception:
                 time_str = ""
             st.markdown(
                 f'<div class="qm-entry qm-entry-active">'
                 f'<span class="qm-pos qm-pos-active">NOW</span>'
-                f'<span class="qm-user">{who}</span>'
-                f'<span class="qm-detail">session {sid}… · started {time_str}</span>'
+                f'<span class="qm-user">Active prompt</span>'
+                f'<span class="qm-detail">{time_str}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
 
         for i, entry in enumerate(q_waiting):
-            who = entry.get("username") or "anonymous"
-            sid = entry.get("session_id", "")[:10]
             try:
                 queued = datetime.fromisoformat(entry["queued_at"])
                 wait = int((datetime.now() - queued).total_seconds())
@@ -2928,8 +3061,8 @@ def render_admin():
             st.markdown(
                 f'<div class="qm-entry qm-entry-waiting">'
                 f'<span class="qm-pos qm-pos-waiting">#{i + 1}</span>'
-                f'<span class="qm-user">{who}</span>'
-                f'<span class="qm-detail">session {sid}… · {wait_str}</span>'
+                f'<span class="qm-user">Queued prompt</span>'
+                f'<span class="qm-detail">{wait_str}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -2950,7 +3083,7 @@ def render_admin():
         '<div class="filter-bar-label">Filters</div>',
         unsafe_allow_html=True,
     )
-    fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1.6, 1.2, 1.4, 1.4])
+    fc1, fc2, fc3, fc4 = st.columns([2.2, 1.6, 1.2, 2.4])
     with fc1:
         sel_session = st.selectbox(
             "Session",
@@ -2963,16 +3096,31 @@ def render_admin():
     with fc3:
         sel_role = st.selectbox("Role", ["All", "User", "Assistant"], key="admin_role_filter")
     with fc4:
-        date_from = st.date_input("From date", value=None, key="admin_date_from")
-    with fc5:
-        date_to = st.date_input("To date", value=None, key="admin_date_to")
+        date_range_options = ["All Time", "Today", "1W", "1M", "1Y", "5Y"]
+        sel_date_range = st.segmented_control(
+            "Period", date_range_options,
+            default="All Time",
+            key="admin_date_range",
+        )
     st.markdown('</div>', unsafe_allow_html=True)
+
+    # -- Resolve date range to from/to --
+    now = datetime.now()
+    date_range_map = {
+        "Today": timedelta(days=1),
+        "1W":    timedelta(weeks=1),
+        "1M":    timedelta(days=30),
+        "1Y":    timedelta(days=365),
+        "5Y":    timedelta(days=365 * 5),
+    }
+    f_date_from = None
+    f_date_to = None
+    if sel_date_range and sel_date_range in date_range_map:
+        f_date_from = now - date_range_map[sel_date_range]
 
     # -- Resolve common filter kwargs --
     f_session  = None if sel_session == "All sessions" else sel_session
     f_username = None if sel_username == "All users" else sel_username
-    f_date_from = datetime.combine(date_from, datetime.min.time()) if date_from else None
-    f_date_to   = datetime.combine(date_to, datetime.max.time()) if date_to else None
     fkw = dict(session_filter=f_session, username_filter=f_username,
                date_from=f_date_from, date_to=f_date_to)
 
@@ -2982,10 +3130,8 @@ def render_admin():
         active_filters.append(f"session {f_session[:14]}…")
     if f_username:
         active_filters.append(f"user: {f_username}")
-    if date_from:
-        active_filters.append(f"from {date_from}")
-    if date_to:
-        active_filters.append(f"to {date_to}")
+    if sel_date_range and sel_date_range != "All Time":
+        active_filters.append(f"period: {sel_date_range}")
     if active_filters:
         st.markdown(
             f'<div style="font-size:0.75rem;color:var(--accent);margin-bottom:0.5rem;">'
