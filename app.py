@@ -63,7 +63,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 OLLAMA_URL = "http://ef-nexus-03:8081"
 MODEL = "qwen3.5:9b"
-ENABLE_GREETING = False             # set True to auto-generate a personalized LLM greeting
+ENABLE_DANGER_ZONE = False          # set True to show the "Clear All History" button in admin view
 HISTORY_SCHEMA = "public"           # postgres schema
 HISTORY_TABLE  = "chatbot_history"  # postgres table name
 
@@ -1453,17 +1453,31 @@ def add_document(file):
 def build_system_prompt() -> str:
     username = st.session_state.get("username", "")
     title = st.session_state.get("title", "")
+    teams = st.session_state.get("teams", [])
+    roles = st.session_state.get("roles", [])
     parts = [
         "You are a helpful, professional assistant. Answer the user's questions clearly and accurately.",
     ]
-    if username or title:
-        user_intro = "The user you are speaking with"
-        if username:
-            user_intro += f" is named {username}"
-        if title:
-            user_intro += f" and works as a {title}" if username else f" works as a {title}"
-        user_intro += ". Tailor your responses to be relevant to their role and expertise."
-        parts.append(user_intro)
+    user_details = []
+    if username:
+        user_details.append(f"Name: {username}")
+    if title:
+        user_details.append(f"Title: {title}")
+    if teams:
+        teams_str = ", ".join(teams) if isinstance(teams, list) else str(teams)
+        user_details.append(f"Teams: {teams_str}")
+    if roles:
+        roles_str = ", ".join(roles) if isinstance(roles, list) else str(roles)
+        user_details.append(f"Roles: {roles_str}")
+    if user_details:
+        parts.append(
+            "USER CONTEXT (internal — use to subtly tailor your responses):\n"
+            + "\n".join(f"- {d}" for d in user_details)
+            + "\n\nIMPORTANT: Do NOT mention these details explicitly in your responses "
+            "unless the user specifically asks about them. Use this context silently "
+            "to adjust the depth, terminology, and relevance of your answers to match "
+            "the user's expertise and organizational context."
+        )
     if st.session_state.documents:
         parts.append(
             "\nThe user has uploaded the following documents. "
@@ -1516,15 +1530,67 @@ EDITING RULES:
 RULES — follow these strictly:
 1. Respond ONLY with a single Python code block (```python ... ```). No explanations before or after.
 2. The code will be executed inside an existing Streamlit page via exec(). Do NOT call st.set_page_config().
-3. Generate professional, production-grade UI: use st.columns, st.tabs, st.metric, st.expander, st.container, st.dataframe, charts (st.bar_chart, st.line_chart, st.area_chart, st.altair_chart), and custom CSS via st.markdown with unsafe_allow_html=True.
-4. Use a consistent, polished design language: clean spacing, subtle borders, card-style layouts, professional color palette.
-5. If the user asks about data from their uploaded documents, parse and visualize that data.
-6. Always include sample/mock data if the user's request requires data you don't have.
-7. Import any needed standard library or common packages (pandas, altair, datetime, random, math) at the top of the code block.
-8. The code must be self-contained — it will be exec'd as-is.
-9. Do NOT use st.set_page_config, st.sidebar, or st.cache_resource in the generated code.
-10. Make every page look stunning — this is a showcase of what Streamlit can do.
-11. ALWAYS return the FULL page code, even when making small edits. The output replaces the current page entirely."""
+3. The code must be self-contained — it will be exec'd as-is.
+4. ALWAYS return the FULL page code, even when making small edits. The output replaces the current page entirely.
+5. Import all needed packages at the top of the code block: pandas, altair, datetime, random, math, etc.
+6. Do NOT use st.set_page_config, st.sidebar, st.cache_resource, or st.cache_data in the generated code.
+7. If the user asks about data from their uploaded documents, parse and visualize that data.
+8. Always include realistic sample/mock data if the user's request requires data you don't have.
+
+STREAMLIT BEST PRACTICES — follow these to produce clean, error-free, professional pages:
+
+Layout & Structure:
+- Use st.columns() for side-by-side layouts. Always unpack correctly: col1, col2 = st.columns(2). Never nest columns inside columns (Streamlit does not support it).
+- Use st.tabs() for multi-section pages. Unpack as: tab1, tab2 = st.tabs(["Tab A", "Tab B"]), then use `with tab1:`.
+- Use st.container() to group related elements. Use st.expander() for collapsible detail sections.
+- Place st.metric() inside columns for KPI card rows. Use the `delta` parameter for trend indicators.
+- Add vertical spacing with st.markdown("") or st.divider() — never st.write("").
+
+Data & DataFrames:
+- Always construct DataFrames with explicit column names: pd.DataFrame({{"Col": [...]}}).
+- Use st.dataframe(df, use_container_width=True, hide_index=True) for clean tables.
+- For editable tables use st.data_editor(). For static display prefer st.dataframe().
+- When showing metrics from a DataFrame, use .iloc[0] or .values[0] to extract scalars — never pass a Series to st.metric.
+
+Charts & Visualization:
+- For simple charts: st.bar_chart(), st.line_chart(), st.area_chart() accept DataFrames with index as x-axis.
+- For advanced charts: use altair (import altair as alt). Build with alt.Chart(df).mark_*().encode(). Always call .properties(height=N) to set chart height.
+- Set chart colors explicitly — do not rely on defaults. Use the `color` parameter in st.bar_chart/st.line_chart or alt.Color in altair.
+- For horizontal bars use `horizontal=True` parameter in st.bar_chart().
+
+Styling & UX:
+- Inject custom CSS via st.markdown('<style>...</style>', unsafe_allow_html=True) at the TOP of the code.
+- Use card-style layouts: white background, subtle border (1px solid #e0e0e0), border-radius 12px, padding 1rem, box-shadow for elevation.
+- Use a consistent color palette. Good defaults: primary #4a90d9, success #2d8a4e, warning #e6a817, danger #c0392b, background #f5f2eb, card #ffffff.
+- Add section headers with st.markdown("### Section Title") — not st.header() which is too large.
+- Use st.caption() for subtle secondary text. Use st.markdown() with unsafe_allow_html for fine-grained HTML.
+
+Forms & Input:
+- Group related inputs with st.form() and st.form_submit_button() to prevent constant reruns.
+- Use appropriate widgets: st.selectbox for <10 options, st.multiselect for multi-choice, st.slider for numeric ranges, st.date_input for dates.
+- Always provide sensible default values for all inputs.
+
+Common Pitfalls to AVOID:
+- NEVER use st.columns() inside st.columns() — it raises an error.
+- NEVER pass a list or Series where a scalar is expected (st.metric value, st.progress value).
+- NEVER call st.set_page_config() — the host page already called it.
+- NEVER use st.sidebar — this is rendered inside a page section.
+- NEVER use st.cache_resource or st.cache_data — the code is exec'd fresh each time.
+- NEVER use st.button() to toggle state — buttons only return True on the click rerun. Use st.toggle() or st.checkbox() for persistent state.
+- NEVER use f-strings inside st.markdown HTML with curly braces in CSS — escape them or use .format(). Example: use `st.markdown('<style>.card {{padding: 1rem}}</style>', unsafe_allow_html=True)` (double braces).
+- When using st.tabs(), always match the number of unpacked variables to the number of tab labels.
+- Always handle empty DataFrames gracefully — check `if not df.empty:` before charting or computing stats.
+- When building altair charts, always specify .encode(x=..., y=...) explicitly — never rely on altair to guess.
+- String concatenation in st.markdown: use + operator or .format(), not f-strings when the template contains literal CSS braces.
+
+Execution Safety:
+- The generated page must ONLY provide a UI — forms, inputs, buttons, visualizations.
+- NEVER execute actions automatically on page load (no API calls, no file writes, no database queries, no network requests, no subprocess calls that run on import).
+- All actions (data processing, calculations, API calls, file operations) must be gated behind a user-triggered event: a st.form_submit_button(), st.button(), or similar interactive widget.
+- Computed results, charts, and tables should only appear AFTER the user clicks a button or submits a form.
+- Use st.session_state to store results so they persist across reruns, but never auto-populate on first load.
+- NEVER use subprocess, os.system, requests, urllib, or any I/O module that executes on import.
+- Mock or simulate any external data — do not make real HTTP requests or database connections."""
 
 
 def _extract_code_block(text: str) -> Optional[str]:
@@ -1821,145 +1887,68 @@ def render_lobby():
 def render_toolbar():
     online = ollama_is_running()
     doc_count = len(st.session_state.documents)
-
-    # Total context stats
-    total_words = sum(d["word_count"] for d in st.session_state.documents.values())
+    is_admin = "admin" in st.session_state.get("user_roles", {})
     total_tokens = sum(d["token_count"] for d in st.session_state.documents.values())
-
     code_mode = st.session_state.code_mode
-    c_brand, c_mode, c_docs, c_actions, c_end = st.columns([2.5, 1.5, 2, 2, 1.5])
 
-    with c_brand:
+    # --- Top bar: brand + action buttons ---
+    cols = []
+    if is_admin:
+        cols = st.columns([3, 1.2, 1.2, 1.2, 1.2, 1.2])
+    else:
+        cols = st.columns([4, 1.2, 1.2, 1.2, 1.2])
+
+    col_idx = 0
+
+    # Brand
+    with cols[col_idx]:
         status_cls = "status-active" if online else "status-offline"
         status_txt = "Connected" if online else "Offline"
-        mode_cls = "mode-code" if code_mode else "mode-chat"
-        mode_txt = "Page Builder" if code_mode else "Chat"
-        st.markdown(
+        brand_parts = (
             f'<div class="toolbar-row">'
             f'<span class="toolbar-brand">Document Chat</span> '
-            f'<span class="status-badge {status_cls}">{status_txt}</span> '
-            f'<span class="mode-pill {mode_cls}">{mode_txt}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
+            f'<span class="status-badge {status_cls}">{status_txt}</span>'
         )
+        if is_admin and code_mode:
+            brand_parts += ' <span class="mode-pill mode-code">Page Builder</span>'
+        brand_parts += '</div>'
+        st.markdown(brand_parts, unsafe_allow_html=True)
+    col_idx += 1
 
-    with c_mode:
-        if st.toggle("Page Builder", value=code_mode, key="code_mode_toggle",
-                      help="Switch to Streamlit page generation mode"):
-            if not st.session_state.code_mode:
-                st.session_state.code_mode = True
-                st.rerun()
-        else:
-            if st.session_state.code_mode:
-                st.session_state.code_mode = False
-                st.rerun()
-
-    with c_docs:
-        label = f"Documents ({doc_count})"
-        if doc_count:
-            label += f" \u00b7 ~{format_number(total_tokens)} tok"
-        with st.popover(label, use_container_width=True):
-            st.markdown('<p class="panel-section-title">Upload files</p>', unsafe_allow_html=True)
-            uploaded = st.file_uploader(
-                "Upload", type=["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"],
-                accept_multiple_files=True, key="chat_doc_uploader",
-                label_visibility="collapsed",
-            )
-            if uploaded:
-                new_added = False
-                for f in uploaded:
-                    if add_document(f):
-                        new_added = True
-                if new_added:
+    # Page Builder toggle (admin only)
+    if is_admin:
+        with cols[col_idx]:
+            if st.toggle("Page Builder", value=code_mode, key="code_mode_toggle",
+                          help="Switch to Streamlit page generation mode"):
+                if not st.session_state.code_mode:
+                    st.session_state.code_mode = True
                     st.rerun()
+            else:
+                if st.session_state.code_mode:
+                    st.session_state.code_mode = False
+                    st.rerun()
+        col_idx += 1
 
-            if st.session_state.documents:
-                st.markdown('<hr class="divider">', unsafe_allow_html=True)
-                st.markdown('<p class="panel-section-title">Loaded documents</p>', unsafe_allow_html=True)
-                for doc_name in list(st.session_state.documents.keys()):
-                    doc_info = st.session_state.documents[doc_name]
-                    ext = Path(doc_name).suffix.lower()
-                    icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
+    # Clear conversation
+    with cols[col_idx]:
+        if st.button("Clear Chat", use_container_width=True, key="chat_clear"):
+            st.session_state.chat_messages = []
+            st.session_state.pop("_export_md", None)
+            st.session_state.pop("_export_xlsx", None)
+            st.rerun()
+    col_idx += 1
 
-                    dc1, dc2 = st.columns([5, 1])
-                    with dc1:
-                        st.markdown(f'<span class="doc-chip">{icon} {doc_name}</span>', unsafe_allow_html=True)
-                    with dc2:
-                        if st.button("✕", key=f"rm_{doc_name}", help=f"Remove {doc_name}"):
-                            del st.session_state.documents[doc_name]
-                            st.rerun()
+    # Export
+    with cols[col_idx]:
+        if st.button("Export", use_container_width=True, key="chat_prepare_export"):
+            st.session_state["_export_md"] = export_conversation_md()
+            st.session_state["_export_xlsx"] = export_conversation_xlsx()
+            st.rerun()
+    col_idx += 1
 
-                    # Preview card
-                    preview_text = doc_info["content"][:500]
-                    if len(doc_info["content"]) > 500:
-                        preview_text += " ..."
-                    # Escape HTML in preview
-                    preview_text = (
-                        preview_text
-                        .replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;")
-                    )
-                    st.markdown(
-                        f'<div class="doc-preview-card">'
-                        f'<div class="doc-preview-header">'
-                        f'<span class="doc-preview-name">{icon} Preview</span>'
-                        f'<div class="doc-preview-stats">'
-                        f'<span>{format_number(doc_info["word_count"])} words</span>'
-                        f'<span>~{format_number(doc_info["token_count"])} tokens</span>'
-                        f'</div>'
-                        f'</div>'
-                        f'<div class="doc-preview-body">{preview_text}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-    with c_actions:
-        with st.popover("Actions", use_container_width=True):
-            if st.button("Clear Conversation", use_container_width=True, key="chat_clear"):
-                st.session_state.chat_messages = []
-                st.session_state.pop("_export_md", None)
-                st.session_state.pop("_export_xlsx", None)
-                st.rerun()
-
-            st.markdown('<hr class="divider">', unsafe_allow_html=True)
-            st.markdown('<p class="panel-section-title">Export</p>', unsafe_allow_html=True)
-
-            # Prepare export on button click to avoid stale data
-            if st.button("Prepare Export", use_container_width=True, key="chat_prepare_export"):
-                st.session_state["_export_md"] = export_conversation_md()
-                st.session_state["_export_xlsx"] = export_conversation_xlsx()
-                st.rerun()
-
-            # Show download buttons only when export data is ready
-            md_data = st.session_state.get("_export_md")
-            xlsx_data = st.session_state.get("_export_xlsx")
-
-            if md_data:
-                st.download_button(
-                    "Download Markdown",
-                    data=md_data,
-                    file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                    mime="text/markdown",
-                    use_container_width=True,
-                    key="chat_export_md",
-                )
-            if xlsx_data:
-                st.download_button(
-                    "Download Excel",
-                    data=xlsx_data,
-                    file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="chat_export_xlsx",
-                )
-            elif Workbook is None and md_data:
-                st.caption("Install openpyxl for Excel export")
-            elif md_data and not xlsx_data:
-                st.caption("No messages to export")
-
-    with c_end:
-        if st.button("End Session", use_container_width=True, key="chat_leave"):
+    # End session
+    with cols[col_idx]:
+        if st.button("End Session", use_container_width=True, key="chat_leave", type="primary"):
             _release_lock(st.session_state.chat_session_id)
             st.session_state.chat_active = False
             st.session_state.chat_messages = []
@@ -1968,7 +1957,51 @@ def render_toolbar():
             st.session_state.pop("_export_xlsx", None)
             st.rerun()
 
-    # Document chips bar
+    # --- Download row (appears after Export is clicked) ---
+    md_data = st.session_state.get("_export_md")
+    xlsx_data = st.session_state.get("_export_xlsx")
+    if md_data or xlsx_data:
+        dl_cols = st.columns([3, 1.5, 1.5])
+        with dl_cols[0]:
+            st.caption(f"{len(st.session_state.chat_messages)} messages ready to download")
+        if md_data:
+            with dl_cols[1]:
+                st.download_button(
+                    "Markdown",
+                    data=md_data,
+                    file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key="chat_export_md",
+                )
+        if xlsx_data:
+            with dl_cols[2]:
+                st.download_button(
+                    "Excel",
+                    data=xlsx_data,
+                    file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="chat_export_xlsx",
+                )
+
+    # --- Upload row ---
+    uploaded = st.file_uploader(
+        "Upload documents",
+        type=["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"],
+        accept_multiple_files=True,
+        key="chat_doc_uploader",
+        label_visibility="collapsed",
+    )
+    if uploaded:
+        new_added = False
+        for f in uploaded:
+            if add_document(f):
+                new_added = True
+        if new_added:
+            st.rerun()
+
+    # --- Document chips bar with remove buttons ---
     if st.session_state.documents:
         chips_html = '<div class="doc-bar"><span class="doc-bar-label">Docs:</span>'
         for doc_name, doc_info in st.session_state.documents.items():
@@ -1977,10 +2010,19 @@ def render_toolbar():
             chips_html += (
                 f'<span class="doc-chip">{icon} {doc_name}'
                 f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">'
-                f'{format_number(doc_info["word_count"])}w</span></span>'
+                f'{format_number(doc_info["word_count"])}w · ~{format_number(doc_info["token_count"])}tok</span></span>'
             )
         chips_html += "</div>"
         st.markdown(chips_html, unsafe_allow_html=True)
+
+        # Remove buttons row
+        rm_cols = st.columns(len(st.session_state.documents))
+        for i, doc_name in enumerate(list(st.session_state.documents.keys())):
+            with rm_cols[i]:
+                if st.button(f"✕ {doc_name[:20]}", key=f"rm_{doc_name}",
+                             use_container_width=True, help=f"Remove {doc_name}"):
+                    del st.session_state.documents[doc_name]
+                    st.rerun()
 
     st.markdown('<hr class="divider" style="margin:0.25rem 0 0.5rem;">', unsafe_allow_html=True)
 
@@ -2057,12 +2099,12 @@ def _generate_greeting():
                     list(st.session_state.documents.keys()))
 
 
-def render_chat():
+def _render_chat_conversation():
+    """Render the conversation messages and empty state."""
     doc_count = len(st.session_state.documents)
     username = st.session_state.get("username", "")
     code_mode = st.session_state.code_mode
 
-    # Auto-generate personalized greeting on first load (chat mode only)
     if not st.session_state.chat_messages:
         if code_mode:
             st.markdown(
@@ -2073,8 +2115,6 @@ def render_chat():
                 '</div>',
                 unsafe_allow_html=True,
             )
-        elif ENABLE_GREETING and ollama_is_running():
-            _generate_greeting()
         else:
             display_name = username if username else "there"
             greeting = f"Hello, {display_name}!"
@@ -2088,7 +2128,6 @@ def render_chat():
                 unsafe_allow_html=True,
             )
 
-    # Render conversation history
     for msg in st.session_state.chat_messages:
         if msg["role"] == "user":
             with st.chat_message("user"):
@@ -2096,7 +2135,6 @@ def render_chat():
                 render_msg_meta(msg)
         else:
             if code_mode and _extract_code_block(msg["content"]):
-                # In code mode, show a short summary instead of the full code response
                 with st.chat_message("assistant"):
                     st.markdown("Page updated.")
                     render_msg_meta(msg)
@@ -2105,13 +2143,42 @@ def render_chat():
                     st.markdown(msg["content"])
                     render_msg_meta(msg)
 
-    # Render the SINGLE generated page + source (only once, always the latest version)
-    if code_mode and st.session_state.get("_generated_code"):
-        with st.expander("View / edit source code", expanded=False):
-            st.code(st.session_state["_generated_code"], language="python")
-        _execute_generated_code(st.session_state["_generated_code"])
 
-    # Chat input
+def _render_generated_page():
+    """Render the generated Streamlit page with source code viewer."""
+    code = st.session_state.get("_generated_code")
+    if not code:
+        st.markdown(
+            '<div class="empty-state">'
+            '<h2>No page generated yet</h2>'
+            '<p>Switch to the Chat tab and describe the page you want to build. '
+            'The generated page will appear here.</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+    with st.expander("View source code", expanded=False):
+        st.code(code, language="python")
+    _execute_generated_code(code)
+
+
+def render_chat():
+    doc_count = len(st.session_state.documents)
+    code_mode = st.session_state.code_mode
+    has_page = bool(st.session_state.get("_generated_code"))
+
+    # When in code mode, show Chat and Generated Page as separate tabs
+    if code_mode:
+        tab_labels = ["Chat", "Generated Page"]
+        tab_chat, tab_page = st.tabs(tab_labels)
+        with tab_chat:
+            _render_chat_conversation()
+        with tab_page:
+            _render_generated_page()
+    else:
+        _render_chat_conversation()
+
+    # Chat input (always visible below tabs)
     if code_mode:
         placeholder_text = "Describe the page you want to build..."
     elif doc_count:
@@ -2488,22 +2555,23 @@ def render_admin():
         date_to=datetime.combine(date_to, datetime.max.time()) if date_to else None,
     )
 
-    # -- Danger zone (admin only) --
-    with st.expander("Danger Zone", expanded=False):
-        st.warning("This will permanently delete **all** conversation history from the database.")
-        confirm = st.checkbox("I understand, delete all history", key="admin_clear_confirm")
-        if st.button(
-            "Clear All History",
-            disabled=not confirm,
-            use_container_width=True,
-            type="primary",
-            key="admin_clear_all",
-        ):
-            if db_clear_all():
-                st.success("All history deleted.")
-                st.rerun()
-            else:
-                st.error("Failed to delete history. Check DB connection.")
+    # -- Danger zone (admin only, behind flag) --
+    if ENABLE_DANGER_ZONE:
+        with st.expander("Danger Zone", expanded=False):
+            st.warning("This will permanently delete **all** conversation history from the database.")
+            confirm = st.checkbox("I understand, delete all history", key="admin_clear_confirm")
+            if st.button(
+                "Clear All History",
+                disabled=not confirm,
+                use_container_width=True,
+                type="primary",
+                key="admin_clear_all",
+            ):
+                if db_clear_all():
+                    st.success("All history deleted.")
+                    st.rerun()
+                else:
+                    st.error("Failed to delete history. Check DB connection.")
 
     # -- Result count --
     if not rows:
@@ -2627,6 +2695,10 @@ def render_admin():
 # ---------------------------------------------------------------------------
 def main():
     is_admin = "admin" in st.session_state.get("user_roles", {})
+
+    # Code mode is admin-only — force off for non-admins
+    if not is_admin and st.session_state.get("code_mode"):
+        st.session_state.code_mode = False
 
     if not st.session_state.chat_active:
         render_lobby()
