@@ -1,10 +1,11 @@
-"""VM Log Explorer - lightweight, read-only log monitoring over SSH."""
+"""VM Log Explorer - lightweight, read-only log monitoring across multiple VMs."""
 
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import paramiko
@@ -28,159 +29,143 @@ LOG_DIRS = [
 
 LOG_EXTENSIONS = ("*.log", "*.out", "*.err", "*.trace", "*.txt")
 
-# VMs to monitor - add/remove entries as needed.
-# Each entry: display name -> vault secret path (passed to VaultClient).
+# VMs: display name -> vault secret path
 VM_REGISTRY: Dict[str, str] = {
     "vm-asg-prod-01": "myvm",
     # "vm-asg-prod-02": "myvm2",
 }
 
 TAIL_LINES_OPTIONS = [50, 100, 200, 500, 1000]
-
-_PLOTLY_TEMPLATE = "plotly_white"
+_PLOTLY_TPL = "plotly_white"
 
 # ---------------------------------------------------------------------------
-# Custom CSS
+# CSS
 # ---------------------------------------------------------------------------
-_PAGE_CSS = """
+st.markdown("""
 <style>
 /* ---- Log Explorer ---- */
 
-.log-hero {
-    padding: 1.6rem 1.8rem 1rem;
-    border-radius: 20px;
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #0f4c75 100%);
-    color: #e2e8f0;
-    margin-bottom: 1.4rem;
-    position: relative;
-    overflow: hidden;
-}
-.log-hero::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at 85% 30%, rgba(56,189,248,0.12) 0%, transparent 60%),
-                radial-gradient(circle at 15% 80%, rgba(99,102,241,0.10) 0%, transparent 55%);
-    pointer-events: none;
-}
-.log-hero h2 {
-    margin: 0 0 .3rem;
-    font-size: 1.5rem;
-    font-weight: 800;
-    letter-spacing: .5px;
-    background: linear-gradient(120deg, #38bdf8, #818cf8, #34d399);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-}
-.log-hero p {
-    margin: 0;
-    font-size: .82rem;
-    color: #94a3b8;
-    line-height: 1.4;
-}
-
-/* KPI row */
-.log-kpi-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 14px;
-    margin-bottom: 1.2rem;
-}
-.log-kpi {
-    flex: 1 1 160px;
-    background: linear-gradient(155deg, #f8fafc, #eef3f9);
-    border: 1px solid #d0dce8;
-    border-radius: 16px;
-    padding: .9rem 1rem;
-    text-align: center;
-    box-shadow: 0 4px 14px -6px rgba(11,99,214,.18);
-    transition: transform .2s, box-shadow .2s;
-}
-.log-kpi:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px -8px rgba(11,99,214,.28);
-}
-.log-kpi-label {
-    font-size: .65rem;
-    font-weight: 700;
-    letter-spacing: .6px;
-    text-transform: uppercase;
-    color: #51658a;
-}
-.log-kpi-value {
-    font-size: 1.5rem;
-    font-weight: 800;
-    line-height: 1.1;
-    margin-top: 2px;
-    background: linear-gradient(120deg, #0b63d6, #6c5ce7);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-}
-
-/* File table card */
-.log-table-card {
-    background: linear-gradient(155deg, #ffffff, #f7fafd);
-    border: 1px solid #d0dce8;
-    border-radius: 18px;
-    padding: 1.1rem 1.2rem;
-    margin-bottom: 1.2rem;
-    box-shadow: 0 5px 20px -6px rgba(11,99,214,.16);
-}
-.log-table-card h3 {
-    margin: 0 0 .7rem;
-    font-size: 1rem;
-    color: #0b2140;
-}
-
-/* Tail viewer - terminal look */
-.log-tail-wrap {
-    background: #0f172a;
-    color: #e2e8f0;
-    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
-    font-size: .74rem;
-    line-height: 1.55;
-    padding: 1rem 1.2rem;
+/* Compact header bar */
+.log-header {
+    display: flex; align-items: center; gap: 14px;
+    padding: .7rem 1.1rem;
     border-radius: 14px;
-    max-height: 520px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
-    border: 1px solid #1e3a5f;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,.35);
+    background: linear-gradient(135deg, #0f172a, #1e3a5f);
+    margin-bottom: .9rem;
+}
+.log-header-icon {
+    font-size: 1.6rem; line-height: 1;
+}
+.log-header-text h2 {
+    margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: .4px;
+    background: linear-gradient(120deg, #38bdf8, #818cf8, #34d399);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.log-header-text p {
+    margin: 0; font-size: .7rem; color: #94a3b8; line-height: 1.3;
 }
 
-/* Search result snippet */
+/* KPI strip */
+.lx-kpi-strip {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: .9rem;
+}
+.lx-kpi {
+    flex: 1 1 120px;
+    background: linear-gradient(155deg, #f8fafc, #eef3f9);
+    border: 1px solid #d0dce8; border-radius: 12px;
+    padding: .55rem .7rem; text-align: center;
+    box-shadow: 0 3px 10px -4px rgba(11,99,214,.15);
+    transition: transform .18s, box-shadow .18s;
+}
+.lx-kpi:hover { transform: translateY(-1px); box-shadow: 0 6px 18px -6px rgba(11,99,214,.22); }
+.lx-kpi-label {
+    font-size: .58rem; font-weight: 700; letter-spacing: .5px;
+    text-transform: uppercase; color: #51658a;
+}
+.lx-kpi-value {
+    font-size: 1.25rem; font-weight: 800; line-height: 1.1; margin-top: 1px;
+    background: linear-gradient(120deg, #0b63d6, #6c5ce7);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* VM health cards */
+.lx-vm-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: .9rem; }
+.lx-vm-card {
+    flex: 1 1 200px;
+    background: linear-gradient(155deg, #fff, #f7fafd);
+    border: 1px solid #d0dce8; border-radius: 14px;
+    padding: .65rem .85rem;
+    box-shadow: 0 3px 12px -4px rgba(11,99,214,.12);
+    transition: transform .18s, box-shadow .18s;
+    cursor: default;
+}
+.lx-vm-card:hover { transform: translateY(-1px); box-shadow: 0 6px 20px -6px rgba(11,99,214,.22); }
+.lx-vm-name {
+    font-size: .78rem; font-weight: 700; color: #0b2140;
+    display: flex; align-items: center; gap: 6px;
+}
+.lx-vm-dot {
+    width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+    flex-shrink: 0;
+}
+.lx-vm-dot-ok { background: #22c55e; box-shadow: 0 0 4px rgba(34,197,94,.5); }
+.lx-vm-dot-err { background: #ef4444; box-shadow: 0 0 4px rgba(239,68,68,.5); }
+.lx-vm-stats {
+    display: flex; gap: 12px; margin-top: 4px;
+    font-size: .65rem; color: #64748b;
+}
+.lx-vm-stats span { white-space: nowrap; }
+.lx-vm-stats strong { color: #334155; }
+
+/* Terminal tail */
+.log-tail-wrap {
+    background: #0f172a; color: #e2e8f0;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: .72rem; line-height: 1.5;
+    padding: .8rem 1rem; border-radius: 12px;
+    max-height: 480px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all;
+    border: 1px solid #1e3a5f;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,.3);
+}
+
+/* Search hits */
 .log-search-hit {
-    background: #f8fafc;
-    border: 1px solid #d0dce8;
-    border-radius: 12px;
-    padding: .7rem .9rem;
-    margin-bottom: .6rem;
+    background: #f8fafc; border: 1px solid #d0dce8; border-radius: 10px;
+    padding: .5rem .7rem; margin-bottom: .45rem;
     font-family: "JetBrains Mono", monospace;
-    font-size: .73rem;
-    line-height: 1.5;
-    color: #334155;
-    white-space: pre-wrap;
-    word-break: break-all;
-    box-shadow: 0 2px 8px -4px rgba(0,0,0,.08);
+    font-size: .7rem; line-height: 1.45; color: #334155;
+    white-space: pre-wrap; word-break: break-all;
+    box-shadow: 0 1px 5px -2px rgba(0,0,0,.06);
 }
 .log-search-hit .hl {
-    background: #fef08a;
-    color: #713f12;
-    padding: 0 2px;
-    border-radius: 3px;
-    font-weight: 700;
+    background: #fef08a; color: #713f12;
+    padding: 0 2px; border-radius: 3px; font-weight: 700;
+}
+
+/* VM badge in search results */
+.lx-vm-badge {
+    display: inline-block;
+    background: linear-gradient(120deg, #0b63d6, #6c5ce7);
+    color: #fff; font-size: .55rem; font-weight: 700;
+    padding: 1px 7px; border-radius: 10px; letter-spacing: .4px;
+    margin-right: 4px; vertical-align: middle;
+}
+
+/* Compact popover trigger */
+.lx-info-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #e2e8f0; color: #475569;
+    font-size: .6rem; font-weight: 800; cursor: help;
+    vertical-align: middle; margin-left: 4px;
 }
 </style>
-"""
-
-st.markdown(_PAGE_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
-# Data class
+# Data
 # ---------------------------------------------------------------------------
 @dataclass
 class LogFile:
@@ -209,15 +194,22 @@ class LogFile:
         return f".{parts[1]}" if len(parts) == 2 else ""
 
 
+def _fmt_size(size_bytes: int) -> str:
+    b = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if b < 1024:
+            return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
+
 # ---------------------------------------------------------------------------
-# SSH helpers (all read-only, lightweight)
+# SSH (read-only, lightweight)
 # ---------------------------------------------------------------------------
-def _get_credentials(vault_key: str) -> tuple:
-    """Fetch SSH creds from Vault. Cached in session."""
+def _get_credentials(vault_key: str) -> Tuple[str, str]:
     cache_key = f"_vault_{vault_key}"
     if cache_key not in st.session_state:
         from utils.vault import VaultClient
-
         vc = VaultClient()
         config = vc.read_all_nested_secrets(vault_key)
         st.session_state[cache_key] = (config["username"], config["password"])
@@ -225,7 +217,6 @@ def _get_credentials(vault_key: str) -> tuple:
 
 
 def _ssh_exec(host: str, username: str, password: str, cmd: str, timeout: int = 15) -> str:
-    """Open a short-lived SSH connection, run a read-only command, return stdout."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -240,7 +231,6 @@ def _ssh_exec(host: str, username: str, password: str, cmd: str, timeout: int = 
 # Remote commands (read-only, bounded)
 # ---------------------------------------------------------------------------
 def _build_find_cmd() -> str:
-    """List log files with size + timestamp. Uses maxdepth 3 to stay fast."""
     ext_filters = " -o ".join(f'-name "{e}"' for e in LOG_EXTENSIONS)
     dir_list = " ".join(f'"{d}"' for d in LOG_DIRS)
     return (
@@ -259,17 +249,14 @@ def _parse_find_output(raw: str, vm: str) -> List[LogFile]:
             size = int(parts[0])
         except ValueError:
             continue
-        ts = parts[1]
         full_path = parts[2]
         idx = full_path.rfind("/")
         if idx == -1:
             continue
         results.append(LogFile(
-            vm=vm,
-            directory=full_path[: idx + 1],
-            filename=full_path[idx + 1 :],
-            size_bytes=size,
-            modified=ts,
+            vm=vm, directory=full_path[:idx + 1],
+            filename=full_path[idx + 1:],
+            size_bytes=size, modified=parts[1],
         ))
     return results
 
@@ -285,69 +272,58 @@ def _build_tail_cmd(filepath: str, lines: int = 100) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Cached inventory fetch
+# Cached multi-VM inventory
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_log_inventory(vm: str, vault_key: str) -> List[dict]:
-    user, pwd = _get_credentials(vault_key)
-    raw = _ssh_exec(vm, user, pwd, _build_find_cmd(), timeout=20)
-    return [lf.__dict__ for lf in _parse_find_output(raw, vm)]
+def _fetch_single_vm(vm: str, vault_key: str) -> Tuple[str, List[dict], Optional[str]]:
+    """Returns (vm_name, log_dicts, error_or_None)."""
+    try:
+        user, pwd = _get_credentials(vault_key)
+        raw = _ssh_exec(vm, user, pwd, _build_find_cmd(), timeout=20)
+        return vm, [lf.__dict__ for lf in _parse_find_output(raw, vm)], None
+    except Exception as exc:
+        return vm, [], str(exc)
+
+
+def fetch_all_inventories() -> Tuple[List[LogFile], Dict[str, Optional[str]]]:
+    """Fetch inventory from all VMs in parallel. Returns (all_logs, {vm: error})."""
+    all_logs: List[LogFile] = []
+    vm_errors: Dict[str, Optional[str]] = {}
+
+    # Parallel SSH to all VMs
+    with ThreadPoolExecutor(max_workers=min(len(VM_REGISTRY), 5)) as pool:
+        futures = {
+            pool.submit(_fetch_single_vm, vm, vkey): vm
+            for vm, vkey in VM_REGISTRY.items()
+        }
+        for fut in as_completed(futures):
+            vm_name, log_dicts, err = fut.result()
+            vm_errors[vm_name] = err
+            all_logs.extend(LogFile(**d) for d in log_dicts)
+
+    return all_logs, vm_errors
 
 
 # ---------------------------------------------------------------------------
-# Highlight helper
+# Helpers
 # ---------------------------------------------------------------------------
 def _highlight(text: str, pattern: str) -> str:
     if not pattern:
         return text
     safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     try:
-        escaped = re.escape(pattern)
-        return re.sub(f"({escaped})", r'<span class="hl">\1</span>', safe, flags=re.IGNORECASE)
+        return re.sub(f"({re.escape(pattern)})", r'<span class="hl">\1</span>', safe, flags=re.IGNORECASE)
     except re.error:
         return safe
 
 
-# ---------------------------------------------------------------------------
-# KPI row
-# ---------------------------------------------------------------------------
-def _render_kpi_row(total_files: int, total_size: int, largest: Optional[LogFile], dir_count: int):
-    size_label = LogFile(vm="", directory="", filename="", size_bytes=total_size, modified="").size_human
-    largest_label = f"{largest.filename} ({largest.size_human})" if largest else "N/A"
-    st.markdown(f"""
-    <div class="log-kpi-row">
-        <div class="log-kpi">
-            <div class="log-kpi-label">Total Log Files</div>
-            <div class="log-kpi-value">{total_files}</div>
-        </div>
-        <div class="log-kpi">
-            <div class="log-kpi-label">Total Size</div>
-            <div class="log-kpi-value">{size_label}</div>
-        </div>
-        <div class="log-kpi">
-            <div class="log-kpi-label">Directories</div>
-            <div class="log-kpi-value">{dir_count}</div>
-        </div>
-        <div class="log-kpi">
-            <div class="log-kpi-label">Largest File</div>
-            <div class="log-kpi-value" style="font-size:1rem;">{largest_label}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------------------
-# Plotly helper
-# ---------------------------------------------------------------------------
-def _style_fig(fig, *, height: int = 340):
+def _style_fig(fig, *, height: int = 320):
     fig.update_layout(
-        template=_PLOTLY_TEMPLATE,
-        height=height,
-        margin=dict(l=10, r=10, t=50, b=10),
-        font=dict(family="Inter, Segoe UI, Arial, sans-serif", size=13, color="#0f172a"),
-        title=dict(x=0.02, xanchor="left", font=dict(size=15)),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        template=_PLOTLY_TPL, height=height,
+        margin=dict(l=8, r=8, t=44, b=8),
+        font=dict(family="Inter, Segoe UI, sans-serif", size=12, color="#0f172a"),
+        title=dict(x=0.02, xanchor="left", font=dict(size=14)),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     try:
@@ -355,7 +331,7 @@ def _style_fig(fig, *, height: int = 340):
     except Exception:
         pass
     fig.update_xaxes(showgrid=False, zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(15,23,42,0.08)", zeroline=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(15,23,42,0.07)", zeroline=False)
     return fig
 
 
@@ -363,70 +339,98 @@ def _style_fig(fig, *, height: int = 340):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    # Hero banner
+    # ── Header (compact) ─────────────────────────────────────────────
     st.markdown("""
-    <div class="log-hero">
-        <h2>Log Explorer</h2>
-        <p>Lightweight, read-only log monitoring for Tibco ASG application servers.
-        Browse log inventories, visualize file sizes, search contents, and tail files on demand.</p>
+    <div class="log-header">
+        <div class="log-header-icon">\U0001f4dc</div>
+        <div class="log-header-text">
+            <h2>Log Explorer</h2>
+            <p>Read-only log monitoring across Tibco ASG servers</p>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # VM selector
-    vm_names = list(VM_REGISTRY.keys())
-    if not vm_names:
-        st.warning("No VMs configured. Add entries to `VM_REGISTRY` in this file.")
+    if not VM_REGISTRY:
+        st.warning("No VMs configured. Add entries to `VM_REGISTRY`.")
         return
 
-    selected_vm = st.selectbox("Target VM", vm_names, index=0)
-    vault_key = VM_REGISTRY[selected_vm]
+    # ── Fetch all VMs in parallel ────────────────────────────────────
+    with st.spinner("Scanning all VMs ..."):
+        all_logs, vm_errors = fetch_all_inventories()
 
-    # Fetch inventory
-    with st.spinner(f"Scanning log files on **{selected_vm}** ..."):
-        try:
-            raw_logs = fetch_log_inventory(selected_vm, vault_key)
-        except Exception as exc:
-            st.error(f"Failed to connect to {selected_vm}: {exc}")
-            return
+    # ── VM health overview cards ─────────────────────────────────────
+    vm_log_map: Dict[str, List[LogFile]] = {}
+    for lf in all_logs:
+        vm_log_map.setdefault(lf.vm, []).append(lf)
 
-    if not raw_logs:
-        st.info("No log files found in the configured directories.")
+    cards_html = '<div class="lx-vm-grid">'
+    for vm in VM_REGISTRY:
+        err = vm_errors.get(vm)
+        vm_logs = vm_log_map.get(vm, [])
+        dot_cls = "lx-vm-dot-err" if err else "lx-vm-dot-ok"
+        file_count = len(vm_logs)
+        total = sum(l.size_bytes for l in vm_logs)
+        status_text = f'<span style="color:#ef4444;font-size:.62rem;">{err[:40]}...</span>' if err else ""
+        cards_html += f"""
+        <div class="lx-vm-card">
+            <div class="lx-vm-name"><span class="lx-vm-dot {dot_cls}"></span>{vm}</div>
+            {status_text}
+            <div class="lx-vm-stats">
+                <span><strong>{file_count}</strong> files</span>
+                <span><strong>{_fmt_size(total)}</strong></span>
+                <span><strong>{len({l.directory for l in vm_logs})}</strong> dirs</span>
+            </div>
+        </div>"""
+    cards_html += "</div>"
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    if not all_logs:
+        st.info("No log files found across any VM.")
         return
 
-    logs = [LogFile(**d) for d in raw_logs]
+    # ── Aggregate KPIs ───────────────────────────────────────────────
+    total_size = sum(l.size_bytes for l in all_logs)
+    largest = max(all_logs, key=lambda l: l.size_bytes)
+    all_dirs = {l.directory for l in all_logs}
+    all_exts = sorted({l.extension for l in all_logs})
+    reachable = sum(1 for e in vm_errors.values() if e is None)
 
-    # KPIs
-    total_size = sum(lf.size_bytes for lf in logs)
-    largest = max(logs, key=lambda lf: lf.size_bytes)
-    dirs = {lf.directory for lf in logs}
-    _render_kpi_row(len(logs), total_size, largest, len(dirs))
+    st.markdown(f"""
+    <div class="lx-kpi-strip">
+        <div class="lx-kpi"><div class="lx-kpi-label">VMs Online</div><div class="lx-kpi-value">{reachable}/{len(VM_REGISTRY)}</div></div>
+        <div class="lx-kpi"><div class="lx-kpi-label">Total Files</div><div class="lx-kpi-value">{len(all_logs)}</div></div>
+        <div class="lx-kpi"><div class="lx-kpi-label">Total Size</div><div class="lx-kpi-value">{_fmt_size(total_size)}</div></div>
+        <div class="lx-kpi"><div class="lx-kpi-label">Directories</div><div class="lx-kpi-value">{len(all_dirs)}</div></div>
+        <div class="lx-kpi"><div class="lx-kpi-label">Largest</div><div class="lx-kpi-value" style="font-size:.85rem">{largest.filename}</div></div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Tabs
-    tab_browse, tab_charts, tab_search, tab_tail = st.tabs(
-        ["Browse Files", "Size Analysis", "Search Logs", "Tail File"]
-    )
+    # ── Tabs ─────────────────────────────────────────────────────────
+    tab_browse, tab_charts, tab_search, tab_tail = st.tabs([
+        "\U0001f4c2 Browse", "\U0001f4ca Analysis", "\U0001f50d Search", "\U0001f4df Tail",
+    ])
 
     # ── Browse ───────────────────────────────────────────────────────
     with tab_browse:
-        st.markdown('<div class="log-table-card">', unsafe_allow_html=True)
-        st.markdown("### Log File Inventory")
+        # Compact filter bar in columns
+        c1, c2, c3, c4 = st.columns([1.5, 1.5, 1, 1])
+        with c1:
+            sel_vms = st.multiselect("VM", sorted(VM_REGISTRY.keys()), default=sorted(VM_REGISTRY.keys()), key="b_vm")
+        with c2:
+            sel_dirs = st.multiselect("Directory", sorted(all_dirs), default=sorted(all_dirs), key="b_dir")
+        with c3:
+            sel_exts = st.multiselect("Extension", all_exts, default=all_exts, key="b_ext")
+        with c4:
+            sort_by = st.selectbox("Sort", ["Size \u2193", "Size \u2191", "Name", "Modified \u2193"], key="b_sort")
 
-        col_dir, col_ext, col_sort = st.columns([2, 1, 1])
-        all_dirs = sorted({lf.directory for lf in logs})
-        all_exts = sorted({lf.extension for lf in logs})
+        filtered = [
+            l for l in all_logs
+            if l.vm in sel_vms and l.directory in sel_dirs and l.extension in sel_exts
+        ]
 
-        with col_dir:
-            sel_dirs = st.multiselect("Directory", all_dirs, default=all_dirs, key="browse_dirs")
-        with col_ext:
-            sel_exts = st.multiselect("Extension", all_exts, default=all_exts, key="browse_exts")
-        with col_sort:
-            sort_by = st.selectbox("Sort by", ["Size (desc)", "Size (asc)", "Name", "Modified"], key="browse_sort")
-
-        filtered = [lf for lf in logs if lf.directory in sel_dirs and lf.extension in sel_exts]
-
-        if sort_by == "Size (desc)":
+        if sort_by == "Size \u2193":
             filtered.sort(key=lambda x: x.size_bytes, reverse=True)
-        elif sort_by == "Size (asc)":
+        elif sort_by == "Size \u2191":
             filtered.sort(key=lambda x: x.size_bytes)
         elif sort_by == "Name":
             filtered.sort(key=lambda x: x.filename.lower())
@@ -435,190 +439,224 @@ def main():
 
         if filtered:
             df = pd.DataFrame({
+                "VM": [f.vm for f in filtered],
                 "File": [f.filename for f in filtered],
                 "Directory": [f.directory for f in filtered],
                 "Size": [f.size_human for f in filtered],
+                "Bytes": [f.size_bytes for f in filtered],
                 "Modified": [f.modified for f in filtered],
                 "Ext": [f.extension for f in filtered],
             })
+
             st.dataframe(
-                df,
+                df[["VM", "File", "Directory", "Size", "Modified", "Ext"]],
                 use_container_width=True,
-                height=min(400, 40 + len(df) * 35),
+                height=min(420, 38 + len(df) * 35),
                 hide_index=True,
+                column_config={
+                    "VM": st.column_config.TextColumn(width="small"),
+                    "File": st.column_config.TextColumn(width="medium"),
+                    "Size": st.column_config.TextColumn(width="small"),
+                    "Modified": st.column_config.TextColumn(width="small"),
+                    "Ext": st.column_config.TextColumn(width="small"),
+                },
             )
-            st.caption(f"Showing {len(filtered)} of {len(logs)} files")
+            st.caption(f"{len(filtered)} / {len(all_logs)} files")
         else:
-            st.info("No files match the current filters.")
+            st.info("No files match filters.")
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── Charts ───────────────────────────────────────────────────────
+    # ── Analysis ─────────────────────────────────────────────────────
     with tab_charts:
-        st.markdown("### Size Analysis")
+        chart_col1, chart_col2 = st.columns(2)
 
-        # Treemap
-        tree_data = [{
-            "directory": lf.directory,
-            "file": lf.filename,
-            "size_mb": round(lf.size_bytes / (1024 * 1024), 3),
-            "size_bytes": lf.size_bytes,
-        } for lf in logs]
-        tree_df = pd.DataFrame(tree_data)
+        with chart_col1:
+            # Treemap: VM > dir > file
+            tree_df = pd.DataFrame([{
+                "vm": l.vm, "directory": l.directory, "file": l.filename,
+                "size_mb": round(l.size_bytes / 1048576, 3), "size_bytes": l.size_bytes,
+            } for l in all_logs])
+            fig_tree = px.treemap(
+                tree_df, path=["vm", "directory", "file"], values="size_bytes",
+                title="Size Treemap", color="size_mb", color_continuous_scale="Blues",
+            )
+            _style_fig(fig_tree, height=400)
+            fig_tree.update_layout(margin=dict(l=4, r=4, t=44, b=4))
+            st.plotly_chart(fig_tree, use_container_width=True)
 
-        fig_tree = px.treemap(
-            tree_df,
-            path=["directory", "file"],
-            values="size_bytes",
-            title="Log File Size Treemap",
-            color="size_mb",
-            color_continuous_scale="Blues",
-        )
-        _style_fig(fig_tree, height=440)
-        fig_tree.update_layout(margin=dict(l=5, r=5, t=50, b=5))
-        st.plotly_chart(fig_tree, use_container_width=True)
+        with chart_col2:
+            # Size per VM stacked bar
+            vm_ext_data = []
+            for l in all_logs:
+                vm_ext_data.append({"VM": l.vm, "Extension": l.extension or "(none)", "MB": l.size_bytes / 1048576})
+            vm_ext_df = pd.DataFrame(vm_ext_data).groupby(["VM", "Extension"], as_index=False)["MB"].sum()
+            fig_stack = px.bar(
+                vm_ext_df, x="VM", y="MB", color="Extension",
+                title="Size per VM by Extension",
+            )
+            _style_fig(fig_stack, height=400)
+            st.plotly_chart(fig_stack, use_container_width=True)
 
-        # Top 15 bar chart
-        top_n = sorted(logs, key=lambda x: x.size_bytes, reverse=True)[:15]
+        # Top files bar (full width, compact)
+        top_n = sorted(all_logs, key=lambda x: x.size_bytes, reverse=True)[:12]
         bar_df = pd.DataFrame({
-            "file": [f.filename for f in top_n],
-            "size_mb": [round(f.size_bytes / (1024 * 1024), 2) for f in top_n],
+            "label": [f"{f.vm}:{f.filename}" for f in top_n],
+            "MB": [round(f.size_bytes / 1048576, 2) for f in top_n],
         })
         fig_bar = px.bar(
-            bar_df, x="size_mb", y="file", orientation="h",
-            title="Top 15 Largest Log Files (MB)",
-            labels={"size_mb": "Size (MB)", "file": ""},
-            color="size_mb", color_continuous_scale="Viridis",
+            bar_df, x="MB", y="label", orientation="h",
+            title="Top 12 Largest Files",
+            color="MB", color_continuous_scale="Viridis",
         )
-        _style_fig(fig_bar, height=380)
-        fig_bar.update_layout(yaxis=dict(autorange="reversed"))
+        _style_fig(fig_bar, height=320)
+        fig_bar.update_layout(yaxis=dict(autorange="reversed"), showlegend=False)
         st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Extension pie
-        ext_sizes: Dict[str, int] = {}
-        for lf in logs:
-            ext_sizes[lf.extension or "(none)"] = ext_sizes.get(lf.extension or "(none)", 0) + lf.size_bytes
-        pie_df = pd.DataFrame({"extension": list(ext_sizes.keys()), "size_bytes": list(ext_sizes.values())})
-        fig_pie = px.pie(pie_df, names="extension", values="size_bytes", title="Size by Extension", hole=0.4)
-        _style_fig(fig_pie, height=340)
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    # ── Search ───────────────────────────────────────────────────────
+    # ── Search (cross-VM) ────────────────────────────────────────────
     with tab_search:
-        st.markdown("### Search Log Contents")
-        st.caption("Runs a lightweight `grep` on the remote VM (max 200 result lines, 50 per file).")
+        s_col1, s_col2, s_col3 = st.columns([2.5, 1.2, 1])
+        with s_col1:
+            search_pattern = st.text_input(
+                "Pattern", placeholder="ERROR|Exception|OOM|timeout",
+                key="s_pat", label_visibility="collapsed",
+            )
+        with s_col2:
+            scope_opts = ["All directories"] + sorted(all_dirs)
+            search_scope = st.selectbox("Scope", scope_opts, key="s_scope", label_visibility="collapsed")
+        with s_col3:
+            search_vms = st.multiselect("VMs", sorted(VM_REGISTRY.keys()), default=sorted(VM_REGISTRY.keys()), key="s_vm", label_visibility="collapsed")
 
-        col_pat, col_scope = st.columns([2, 1])
-        with col_pat:
-            search_pattern = st.text_input("Search pattern", placeholder="ERROR|Exception|timeout", key="search_pat")
-        with col_scope:
-            scope_options = ["All files"] + sorted({lf.directory for lf in logs})
-            search_scope = st.selectbox("Scope", scope_options, key="search_scope")
+        with st.popover("\u2139\ufe0f How search works"):
+            st.markdown(
+                "Runs `grep -inH -m 50` per file on each VM, capped at **200 lines** total per VM. "
+                "Pattern is case-insensitive. Results are streamed per VM in parallel.",
+                unsafe_allow_html=False,
+            )
 
-        if search_pattern:
-            target_files = [
-                lf.path for lf in logs
-                if search_scope == "All files" or lf.directory == search_scope
-            ]
-            if not target_files:
-                st.info("No files in the selected scope.")
+        if search_pattern and search_vms:
+            # Build per-VM file lists
+            vm_file_map: Dict[str, List[str]] = {}
+            for lf in all_logs:
+                if lf.vm not in search_vms:
+                    continue
+                if search_scope != "All directories" and lf.directory != search_scope:
+                    continue
+                vm_file_map.setdefault(lf.vm, []).append(lf.path)
+
+            if not vm_file_map:
+                st.info("No files in scope.")
             else:
-                with st.spinner("Searching ..."):
-                    try:
-                        user, pwd = _get_credentials(vault_key)
-                        raw_results = _ssh_exec(
-                            selected_vm, user, pwd,
-                            _build_grep_cmd(search_pattern, target_files),
-                            timeout=20,
-                        )
-                    except Exception as exc:
-                        st.error(f"Search failed: {exc}")
-                        raw_results = ""
+                with st.spinner("Searching across VMs ..."):
+                    all_results: Dict[str, str] = {}
+                    with ThreadPoolExecutor(max_workers=min(len(vm_file_map), 5)) as pool:
+                        futs = {}
+                        for vm, files in vm_file_map.items():
+                            vkey = VM_REGISTRY[vm]
+                            user, pwd = _get_credentials(vkey)
+                            cmd = _build_grep_cmd(search_pattern, files)
+                            futs[pool.submit(_ssh_exec, vm, user, pwd, cmd, 20)] = vm
+                        for fut in as_completed(futs):
+                            vm = futs[fut]
+                            try:
+                                all_results[vm] = fut.result()
+                            except Exception as exc:
+                                all_results[vm] = f"[ERROR] {exc}"
 
-                if raw_results.strip():
-                    lines = raw_results.strip().splitlines()
-                    st.success(f"Found {len(lines)} matching line(s)")
+                # Render grouped results
+                total_hits = 0
+                for vm in sorted(all_results):
+                    raw = all_results[vm]
+                    if not raw.strip() or raw.startswith("[ERROR]"):
+                        continue
+                    lines = raw.strip().splitlines()
+                    total_hits += len(lines)
 
+                    # Group by file
                     grouped: Dict[str, List[str]] = {}
                     for line in lines:
-                        colon_idx = line.find(":")
-                        if colon_idx > 0:
-                            grouped.setdefault(line[:colon_idx], []).append(line[colon_idx + 1:])
+                        ci = line.find(":")
+                        if ci > 0:
+                            grouped.setdefault(line[:ci], []).append(line[ci + 1:])
                         else:
                             grouped.setdefault("(unknown)", []).append(line)
 
                     for fpath, hits in grouped.items():
                         fname = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
-                        with st.expander(f"{fname} \u2014 {len(hits)} hit(s)", expanded=len(grouped) <= 3):
+                        with st.expander(f"{vm} \u2022 {fname} \u2014 {len(hits)} hit(s)"):
                             st.caption(fpath)
-                            for hit in hits:
+                            for hit in hits[:30]:  # cap display per file
                                 st.markdown(
                                     f'<div class="log-search-hit">{_highlight(hit, search_pattern)}</div>',
                                     unsafe_allow_html=True,
                                 )
+                            if len(hits) > 30:
+                                st.caption(f"... and {len(hits) - 30} more lines")
+
+                if total_hits:
+                    st.success(f"{total_hits} total match(es) across {len([v for v in all_results.values() if v.strip() and not v.startswith('[ERROR]')])} VM(s)")
                 else:
                     st.info("No matches found.")
 
+                # Show errors
+                for vm, raw in all_results.items():
+                    if raw.startswith("[ERROR]"):
+                        st.warning(f"{vm}: {raw}")
+
     # ── Tail ─────────────────────────────────────────────────────────
     with tab_tail:
-        st.markdown("### Tail Log File")
-        st.caption("Fetch the last N lines of a log file (read-only `tail`).")
+        t_c1, t_c2, t_c3 = st.columns([1, 2.5, .8])
+        with t_c1:
+            tail_vm = st.selectbox("VM", sorted(VM_REGISTRY.keys()), key="t_vm")
+        with t_c2:
+            vm_files = sorted({l.path for l in all_logs if l.vm == tail_vm})
+            tail_file = st.selectbox("File", vm_files if vm_files else ["(no files)"], key="t_file")
+        with t_c3:
+            tail_lines = st.selectbox("Lines", TAIL_LINES_OPTIONS, index=1, key="t_lines")
 
-        col_file, col_lines = st.columns([3, 1])
-        file_paths = sorted({lf.path for lf in logs})
+        tc1, tc2 = st.columns([1, 5])
+        with tc1:
+            do_tail = st.button("Fetch", type="primary", use_container_width=True)
+        with tc2:
+            with st.popover("\u2699\ufe0f Options"):
+                hl_pattern = st.text_input("Highlight pattern", placeholder="ERROR|WARN", key="t_hl")
+                auto_scroll = st.toggle("Auto-scroll to bottom", value=True, key="t_scroll")
 
-        with col_file:
-            tail_file = st.selectbox("File", file_paths, key="tail_file")
-        with col_lines:
-            tail_lines = st.selectbox("Lines", TAIL_LINES_OPTIONS, index=1, key="tail_lines")
-
-        do_tail = st.button("Fetch tail", type="primary")
-
-        if do_tail and tail_file:
-            with st.spinner(f"Tailing {tail_file} ({tail_lines} lines) ..."):
+        if do_tail and tail_file and tail_file != "(no files)":
+            with st.spinner(f"Tailing ..."):
                 try:
-                    user, pwd = _get_credentials(vault_key)
-                    tail_output = _ssh_exec(
-                        selected_vm, user, pwd,
-                        _build_tail_cmd(tail_file, tail_lines),
-                    )
+                    vkey = VM_REGISTRY[tail_vm]
+                    user, pwd = _get_credentials(vkey)
+                    tail_output = _ssh_exec(tail_vm, user, pwd, _build_tail_cmd(tail_file, tail_lines))
                 except Exception as exc:
                     st.error(f"Tail failed: {exc}")
                     tail_output = ""
 
             if tail_output:
-                hl_pattern = st.text_input("Highlight pattern (optional)", placeholder="ERROR|WARN", key="tail_hl")
-
                 if hl_pattern:
-                    rendered = "<br>".join(_highlight(line, hl_pattern) for line in tail_output.splitlines())
+                    rendered = "<br>".join(_highlight(ln, hl_pattern) for ln in tail_output.splitlines())
                 else:
-                    rendered = (
-                        tail_output
-                        .replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;")
-                    )
+                    rendered = (tail_output.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
                 st.markdown(f'<div class="log-tail-wrap">{rendered}</div>', unsafe_allow_html=True)
 
-                st.download_button(
-                    label="Download tail output",
-                    data=tail_output,
-                    file_name=f"tail_{tail_file.rsplit('/', 1)[-1]}",
-                    mime="text/plain",
-                )
+                dl_c1, dl_c2 = st.columns([1, 5])
+                with dl_c1:
+                    st.download_button(
+                        "Download", data=tail_output,
+                        file_name=f"tail_{tail_file.rsplit('/', 1)[-1]}",
+                        mime="text/plain", use_container_width=True,
+                    )
             else:
-                st.info("File is empty or could not be read.")
+                st.info("Empty or unreadable file.")
 
-    # Refresh
-    st.markdown("---")
-    col_r1, col_r2 = st.columns([1, 4])
-    with col_r1:
-        if st.button("Refresh inventory", use_container_width=True):
-            fetch_log_inventory.clear()
+    # ── Footer refresh ───────────────────────────────────────────────
+    st.divider()
+    fc1, fc2 = st.columns([1, 5])
+    with fc1:
+        if st.button("Refresh", use_container_width=True, help="Clear cache and rescan all VMs"):
+            _fetch_single_vm.clear()
             st.rerun()
-    with col_r2:
-        st.caption("Inventory cached for 2 min. Click refresh to force a rescan.")
+    with fc2:
+        st.caption("Inventory cached 2 min. All commands are read-only (`find`, `grep -m`, `tail`).")
 
 
 main()
