@@ -2722,14 +2722,6 @@ def _render_chat_conversation():
                     render_message_content(msg["content"], f"msg_{idx}")
                     render_msg_meta(msg)
 
-    # Disclaimer
-    st.markdown(
-        '<div style="text-align:center;padding:0.6rem 0 0.2rem;font-size:0.73rem;'
-        'color:#e67e22;font-weight:500;letter-spacing:0.01em;">'
-        'This chat is monitored — conversations are logged for quality assurance and performance tracking.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
 
 
 def _render_generated_page():
@@ -2802,6 +2794,15 @@ def render_chat():
             _render_generated_page()
     else:
         _render_chat_conversation()
+
+    # Disclaimer — always visible above chat input
+    st.markdown(
+        '<div style="text-align:center;padding:0.4rem 0;font-size:0.73rem;'
+        'color:#e67e22;font-weight:500;letter-spacing:0.01em;">'
+        'This chat is monitored — conversations are logged for quality assurance and performance tracking.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     # Chat input (always visible below tabs)
     if code_mode:
