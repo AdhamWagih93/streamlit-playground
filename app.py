@@ -952,6 +952,15 @@ def db_ensure_table():
                 CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_username
                     ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (username)
             """)
+            # Migration: add chat_mode and has_images columns
+            cur.execute(f"""
+                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    ADD COLUMN IF NOT EXISTS chat_mode TEXT DEFAULT 'normal'
+            """)
+            cur.execute(f"""
+                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    ADD COLUMN IF NOT EXISTS has_images BOOLEAN DEFAULT FALSE
+            """)
     except Exception as e:
         import sys
         print(f"[db_ensure_table] ERROR: {e}", file=sys.stderr)
@@ -960,7 +969,8 @@ def db_ensure_table():
             conn.close()
 
 
-def db_save_message(msg: dict, session_id: str, username: str, documents: list[str]):
+def db_save_message(msg: dict, session_id: str, username: str, documents: list[str],
+                    chat_mode: str = "normal", has_images: bool = False):
     """Persist a single message to postgres."""
     conn = _get_conn()
     if conn is None:
@@ -972,8 +982,8 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                 f"""
                 INSERT INTO {HISTORY_SCHEMA}.{HISTORY_TABLE}
                     (session_id, username, role, content, timestamp_utc,
-                     duration_s, tokens_est, model, documents)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     duration_s, tokens_est, model, documents, chat_mode, has_images)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
@@ -985,6 +995,8 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                     msg.get("tokens"),
                     MODEL,
                     documents or [],
+                    chat_mode,
+                    has_images,
                 ),
             )
     except Exception as e:
@@ -1031,7 +1043,8 @@ def db_fetch_history(
             cur.execute(
                 f"""
                 SELECT id, session_id, username, role, content, timestamp_utc,
-                       duration_s, tokens_est, model, documents
+                       duration_s, tokens_est, model, documents,
+                       chat_mode, has_images
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where}
                 ORDER BY timestamp_utc DESC
@@ -1106,7 +1119,13 @@ def db_fetch_sessions() -> list[dict]:
                     COUNT(*)            AS message_count,
                     SUM(tokens_est)     AS total_tokens,
                     AVG(duration_s)
-                        FILTER (WHERE role = 'assistant') AS avg_duration_s
+                        FILTER (WHERE role = 'assistant') AS avg_duration_s,
+                    COALESCE(
+                        MAX(chat_mode) FILTER (WHERE chat_mode IS NOT NULL AND chat_mode != 'normal'),
+                        'normal'
+                    ) AS chat_mode,
+                    BOOL_OR(COALESCE(has_images, FALSE)) AS has_images,
+                    BOOL_OR(documents IS NOT NULL AND array_length(documents, 1) > 0) AS has_documents
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 GROUP BY session_id
                 ORDER BY last_at DESC
@@ -2711,6 +2730,29 @@ def render_toolbar():
 # ---------------------------------------------------------------------------
 # CHAT AREA
 # ---------------------------------------------------------------------------
+def _current_chat_mode() -> str:
+    """Return the current chat mode string for DB logging."""
+    if st.session_state.get("code_mode"):
+        return "page_builder"
+    return "normal"
+
+
+def _current_has_images() -> bool:
+    """Return whether images are currently attached."""
+    return ENABLE_VISION and bool(st.session_state.get("images"))
+
+
+def _db_save_kwargs() -> dict:
+    """Common kwargs for db_save_message calls."""
+    return {
+        "session_id": st.session_state.chat_session_id,
+        "username": st.session_state.get("username", ""),
+        "documents": list(st.session_state.documents.keys()),
+        "chat_mode": _current_chat_mode(),
+        "has_images": _current_has_images(),
+    }
+
+
 def _generate_greeting():
     """Stream a personalized greeting from the LLM based on user identity."""
     username = st.session_state.get("username", "")
@@ -2775,9 +2817,7 @@ def _generate_greeting():
         )
 
     st.session_state.chat_messages.append(assistant_msg)
-    db_save_message(assistant_msg, st.session_state.chat_session_id,
-                    st.session_state.get("username", ""),
-                    list(st.session_state.documents.keys()))
+    db_save_message(assistant_msg, **_db_save_kwargs())
 
 
 def _render_chat_conversation():
@@ -3013,9 +3053,7 @@ def render_chat():
                 for n, info in st.session_state.images.items()
             ]
         st.session_state.chat_messages.append(user_msg)
-        db_save_message(user_msg, st.session_state.chat_session_id,
-                        st.session_state.get("username", ""),
-                        list(st.session_state.documents.keys()))
+        db_save_message(user_msg, **_db_save_kwargs())
 
         # Render user message immediately (conversation loop already ran above)
         with st.chat_message("user"):
@@ -3131,9 +3169,7 @@ def render_chat():
         processing_bar.empty()
 
         st.session_state.chat_messages.append(assistant_msg)
-        db_save_message(assistant_msg, st.session_state.chat_session_id,
-                        st.session_state.get("username", ""),
-                        list(st.session_state.documents.keys()))
+        db_save_message(assistant_msg, **_db_save_kwargs())
 
         # Release the queue slot
         prompt_release(pending_prompt_id)
@@ -3375,10 +3411,13 @@ def render_admin():
                 )
 
     # ==========================================================
-    # CHARTS — filtered
+    # CHARTS — filtered (fragment for independent re-rendering)
     # ==========================================================
-    ts_rows = db_fetch_timeseries(**fkw)
-    if ts_rows:
+    @st.fragment
+    def _admin_charts():
+        ts_rows = db_fetch_timeseries(**fkw)
+        if not ts_rows:
+            return
         try:
             import pandas as pd
             df = pd.DataFrame(ts_rows)
@@ -3393,7 +3432,6 @@ def render_admin():
             )
 
             ch1, ch2 = st.columns(2)
-
             with ch1:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Messages per Day</div>', unsafe_allow_html=True)
@@ -3402,49 +3440,47 @@ def render_admin():
                 )
                 st.bar_chart(chart_df, color=["#4a90d9", "#2d8a4e"], height=200)
                 st.markdown('</div>', unsafe_allow_html=True)
-
             with ch2:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Avg Response Time (s)</div>', unsafe_allow_html=True)
                 st.line_chart(
                     df.set_index("day")[["avg_duration"]].rename(columns={"avg_duration": "Avg (s)"}),
-                    color=["#4a90d9"],
-                    height=200,
+                    color=["#4a90d9"], height=200,
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
 
             ch3, ch4 = st.columns(2)
-
             with ch3:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Sessions per Day</div>', unsafe_allow_html=True)
                 st.bar_chart(
                     df.set_index("day")[["sessions"]].rename(columns={"sessions": "Sessions"}),
-                    color=["#4a90d9"],
-                    height=180,
+                    color=["#4a90d9"], height=180,
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
-
             with ch4:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Tokens per Day (estimated)</div>', unsafe_allow_html=True)
                 st.area_chart(
                     df.set_index("day")[["tokens"]].rename(columns={"tokens": "Tokens"}),
-                    color=["#4a90d9"],
-                    height=180,
+                    color=["#4a90d9"], height=180,
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
-
         except Exception:
             pass
 
-    # ==========================================================
-    # USER ACTIVITY & TOPICS — filtered
-    # ==========================================================
-    user_rows = db_fetch_user_activity(**fkw)
-    session_topics = db_fetch_session_topics(**fkw)
+    _admin_charts()
 
-    if user_rows or session_topics:
+    # ==========================================================
+    # USER ACTIVITY & TOPICS — filtered (fragment)
+    # ==========================================================
+    @st.fragment
+    def _admin_activity_topics():
+        user_rows = db_fetch_user_activity(**fkw)
+        session_topics = db_fetch_session_topics(**fkw)
+
+        if not user_rows and not session_topics:
+            return
         try:
             import pandas as pd
 
@@ -3453,45 +3489,30 @@ def render_admin():
                     '<div class="chart-section-divider"><span>User Activity</span></div>',
                     unsafe_allow_html=True,
                 )
-
                 ua1, ua2 = st.columns(2)
-
                 with ua1:
                     st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                    st.markdown(
-                        '<div class="chart-card-title">Messages by User</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown('<div class="chart-card-title">Messages by User</div>', unsafe_allow_html=True)
                     udf = pd.DataFrame(user_rows)
                     chart_udf = udf.set_index("username")[["user_msgs", "assistant_msgs"]].rename(
                         columns={"user_msgs": "Sent", "assistant_msgs": "Received"}
                     )
                     st.bar_chart(chart_udf, color=["#4a90d9", "#2d8a4e"], horizontal=True, height=max(160, len(udf) * 38))
                     st.markdown('</div>', unsafe_allow_html=True)
-
                 with ua2:
                     st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                    st.markdown(
-                        '<div class="chart-card-title">Tokens by User</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown('<div class="chart-card-title">Tokens by User</div>', unsafe_allow_html=True)
                     st.bar_chart(
                         udf.set_index("username")[["tokens"]].rename(columns={"tokens": "Tokens"}),
-                        color=["#4a90d9"],
-                        horizontal=True,
-                        height=max(160, len(udf) * 38),
+                        color=["#4a90d9"], horizontal=True, height=max(160, len(udf) * 38),
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 # User detail table
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                st.markdown(
-                    '<div class="chart-card-title">User Details</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown('<div class="chart-card-title">User Details</div>', unsafe_allow_html=True)
                 table_data = []
                 for u in user_rows:
-                    last_ts = u["last_active"]
                     table_data.append({
                         "User": u["username"],
                         "Sessions": int(u["sessions"]),
@@ -3500,45 +3521,30 @@ def render_admin():
                         "Received": int(u["assistant_msgs"]),
                         "Tokens": format_number(int(u["tokens"])),
                         "First Active": to_local(u["first_active"]).strftime("%Y-%m-%d %H:%M") if u["first_active"] else "—",
-                        "Last Active": to_local(last_ts).strftime("%Y-%m-%d %H:%M") if last_ts else "—",
+                        "Last Active": to_local(u["last_active"]).strftime("%Y-%m-%d %H:%M") if u["last_active"] else "—",
                     })
-                st.dataframe(
-                    pd.DataFrame(table_data),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # Topic analysis
             if session_topics:
                 st.markdown(
                     '<div class="chart-section-divider"><span>Topics &amp; Keywords</span></div>',
                     unsafe_allow_html=True,
                 )
-
                 tp1, tp2 = st.columns(2)
-
                 with tp1:
                     keywords = _extract_topic_keywords(session_topics, top_n=15)
                     if keywords:
                         st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                        st.markdown(
-                            '<div class="chart-card-title">Top Keywords (from user prompts)</div>',
-                            unsafe_allow_html=True,
-                        )
-                        # Sort by count descending so the chart renders highest first
+                        st.markdown('<div class="chart-card-title">Top Keywords (from user prompts)</div>', unsafe_allow_html=True)
                         kw_df = pd.DataFrame(keywords, columns=["Keyword", "Count"])
-                        kw_df = kw_df.sort_values("Count", ascending=True)  # ascending for horizontal bar (top = highest)
+                        kw_df = kw_df.sort_values("Count", ascending=True)
                         kw_df = kw_df.set_index("Keyword")
                         st.bar_chart(kw_df, color=["#4a90d9"], horizontal=True, height=max(180, len(keywords) * 28))
                         st.markdown('</div>', unsafe_allow_html=True)
-
                 with tp2:
                     st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                    st.markdown(
-                        '<div class="chart-card-title">Session Openers (first question per session)</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown('<div class="chart-card-title">Session Openers (first question per session)</div>', unsafe_allow_html=True)
                     for t in sorted(session_topics, key=lambda x: x["timestamp_utc"] or datetime.min, reverse=True)[:15]:
                         preview = t["content"][:120].replace("\n", " ").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                         if len(t["content"]) > 120:
@@ -3558,21 +3564,16 @@ def render_admin():
         except Exception:
             pass
 
+    _admin_activity_topics()
+
     # ==========================================================
-    # MESSAGE HISTORY — filtered
+    # MESSAGE HISTORY — only when filters are applied
     # ==========================================================
+    has_filter = bool(f_session or f_username or (sel_date_range and sel_date_range != "All Time"))
+
     st.markdown(
         '<div class="chart-section-divider"><span>Message History</span></div>',
         unsafe_allow_html=True,
-    )
-
-    rows = db_fetch_history(
-        limit=500,
-        session_filter=f_session,
-        username_filter=f_username,
-        role_filter=sel_role,
-        date_from=f_date_from,
-        date_to=f_date_to,
     )
 
     # -- Danger zone (admin only, behind flag) --
@@ -3593,119 +3594,182 @@ def render_admin():
                 else:
                     st.error("Failed to delete history. Check DB connection.")
 
-    # -- Result count --
-    if not rows:
+    if not has_filter:
         st.markdown(
             '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:0.85rem;">'
-            'No messages match the selected filters.'
+            'Select a session, user, or time period above to view message history.'
             '</div>',
             unsafe_allow_html=True,
         )
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    n_sessions = len({r["session_id"] for r in rows})
-    st.markdown(
-        f'<div class="stat-meta-row">'
-        f'<span><strong>{len(rows)}</strong> messages</span>'
-        f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    @st.fragment
+    def _admin_message_history():
+        rows = db_fetch_history(
+            limit=500,
+            session_filter=f_session,
+            username_filter=f_username,
+            role_filter=sel_role,
+            date_from=f_date_from,
+            date_to=f_date_to,
+        )
 
-    # -- Tabs --
-    tab_sessions, tab_flat = st.tabs(["By Session", "Flat Log"])
+        if not rows:
+            st.markdown(
+                '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:0.85rem;">'
+                'No messages match the selected filters.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            return
 
-    # ---- By Session tab ----
-    with tab_sessions:
-        grouped: dict[str, list[dict]] = {}
-        for r in rows:
-            grouped.setdefault(r["session_id"], []).append(r)
+        n_sessions = len({r["session_id"] for r in rows})
+        st.markdown(
+            f'<div class="stat-meta-row">'
+            f'<span><strong>{len(rows)}</strong> messages</span>'
+            f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-        for sid, msgs in grouped.items():
-            n_msgs    = len(msgs)
-            first_ts  = msgs[-1]["timestamp_utc"]
-            last_ts   = msgs[0]["timestamp_utc"]
-            total_tok = sum(m["tokens_est"] or 0 for m in msgs)
-            uname     = msgs[0].get("username") or "—"
-            docs_list = msgs[0].get("documents") or []
+        tab_sessions, tab_flat = st.tabs(["By Session", "Flat Log"])
 
-            date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
-            time_range = ""
-            if first_ts and last_ts:
-                time_range = f"{to_local(first_ts).strftime('%H:%M')} – {to_local(last_ts).strftime('%H:%M')}"
+        # ---- By Session tab ----
+        with tab_sessions:
+            grouped: dict[str, list[dict]] = {}
+            for r in rows:
+                grouped.setdefault(r["session_id"], []).append(r)
 
-            label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} messages  ·  {date_str}"
-            with st.expander(label, expanded=False):
-                # Session metadata header
-                meta_parts = [
-                    f'<span><strong>User:</strong> {uname}</span>',
-                    f'<span><strong>Session:</strong> <span class="session-card-id">{sid}</span></span>',
-                ]
-                if time_range:
-                    meta_parts.append(f'<span><strong>Time:</strong> {time_range}</span>')
-                meta_parts.append(f'<span><strong>Tokens:</strong> ~{format_number(total_tok)}</span>')
-                if docs_list:
-                    doc_names = ", ".join(docs_list[:3])
-                    if len(docs_list) > 3:
-                        doc_names += f" +{len(docs_list) - 3} more"
-                    meta_parts.append(f'<span><strong>Docs:</strong> {doc_names}</span>')
+            for sid, msgs in grouped.items():
+                n_msgs    = len(msgs)
+                first_ts  = msgs[-1]["timestamp_utc"]
+                last_ts   = msgs[0]["timestamp_utc"]
+                total_tok = sum(m["tokens_est"] or 0 for m in msgs)
+                uname     = msgs[0].get("username") or "—"
+                docs_list = msgs[0].get("documents") or []
+
+                # Detect mode and attachments from messages
+                session_mode = "normal"
+                session_has_images = False
+                session_has_docs = bool(docs_list)
+                for m in msgs:
+                    m_mode = m.get("chat_mode") or "normal"
+                    if m_mode != "normal":
+                        session_mode = m_mode
+                    if m.get("has_images"):
+                        session_has_images = True
+                    if m.get("documents") and len(m["documents"]) > 0:
+                        session_has_docs = True
+
+                date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
+                time_range = ""
+                if first_ts and last_ts:
+                    time_range = f"{to_local(first_ts).strftime('%H:%M')} – {to_local(last_ts).strftime('%H:%M')}"
+
+                # Build label with mode/attachment indicators
+                mode_tag = ""
+                if session_mode == "page_builder":
+                    mode_tag = " [Page Builder]"
+                elif session_mode == "agent":
+                    mode_tag = " [Agent]"
+                attach_tags = ""
+                if session_has_docs:
+                    attach_tags += " Docs"
+                if session_has_images:
+                    attach_tags += " Images"
+
+                label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} msgs  ·  {date_str}{mode_tag}{attach_tags}"
+                with st.expander(label, expanded=False):
+                    # Session metadata header
+                    meta_parts = [
+                        f'<span><strong>User:</strong> {uname}</span>',
+                        f'<span><strong>Session:</strong> <span class="session-card-id">{sid}</span></span>',
+                    ]
+                    if time_range:
+                        meta_parts.append(f'<span><strong>Time:</strong> {time_range}</span>')
+                    meta_parts.append(f'<span><strong>Tokens:</strong> ~{format_number(total_tok)}</span>')
+                    # Mode badge
+                    if session_mode == "page_builder":
+                        meta_parts.append('<span class="mode-pill mode-code">Page Builder</span>')
+                    elif session_mode == "agent":
+                        meta_parts.append('<span class="mode-pill mode-code" style="background:rgba(156,39,176,0.1);color:#9c27b0;border-color:rgba(156,39,176,0.25);">Agent</span>')
+                    # Attachment indicators
+                    if session_has_docs:
+                        doc_names = ", ".join(docs_list[:3]) if docs_list else ""
+                        if len(docs_list) > 3:
+                            doc_names += f" +{len(docs_list) - 3}"
+                        meta_parts.append(f'<span><strong>Docs:</strong> {doc_names}</span>')
+                    if session_has_images:
+                        meta_parts.append('<span><strong>Images:</strong> Yes</span>')
+                    st.markdown(
+                        f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
+                        f'{"".join(meta_parts)}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    # Chat replay
+                    for m in reversed(msgs):
+                        ts_str  = to_local(m["timestamp_utc"]).strftime("%H:%M:%S") if m["timestamp_utc"] else ""
+                        dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
+                        tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
+                        with st.chat_message(m["role"]):
+                            st.markdown(m["content"])
+                            meta_items = [p for p in [ts_str, dur_str, tok_str] if p]
+                            if meta_items:
+                                st.markdown(
+                                    f'<div class="msg-meta">'
+                                    f'{"".join(f"<span>{p}</span>" for p in meta_items)}'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+
+        # ---- Flat Log tab ----
+        with tab_flat:
+            for m in rows:
+                role      = m["role"]
+                role_cls  = "role-user" if role == "user" else "role-assistant"
+                role_label = "User" if role == "user" else "Assistant"
+                ts_str    = to_local(m["timestamp_utc"]).strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
+                dur_str   = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
+                tok_str   = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
+                uname     = m.get("username") or "—"
+                preview   = m["content"][:280].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
+                if len(m["content"]) > 280:
+                    preview += " …"
+
+                # Mode and attachment tags
+                m_mode = m.get("chat_mode") or "normal"
+                mode_badge = ""
+                if m_mode == "page_builder":
+                    mode_badge = '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(74,144,217,0.1);color:var(--accent);border:1px solid rgba(74,144,217,0.2);margin-left:6px;">PB</span>'
+                elif m_mode == "agent":
+                    mode_badge = '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(156,39,176,0.1);color:#9c27b0;border:1px solid rgba(156,39,176,0.2);margin-left:6px;">Agent</span>'
+                if m.get("has_images"):
+                    mode_badge += '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(184,134,11,0.08);color:var(--warning);border:1px solid rgba(184,134,11,0.15);margin-left:4px;">Img</span>'
+
+                meta_spans = "".join(
+                    f"<span>{p}</span>" for p in [ts_str, dur_str, tok_str] if p
+                )
                 st.markdown(
-                    f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
-                    f'{"".join(meta_parts)}'
+                    f'<div class="history-row {role_cls}">'
+                    f'<div class="history-row-header">'
+                    f'<div style="display:flex;align-items:center;gap:8px;">'
+                    f'<span class="history-role-badge {role_cls}">{role_label}</span>'
+                    f'<span style="font-size:0.78rem;font-weight:600;color:var(--text-primary);">{uname}{mode_badge}</span>'
+                    f'</div>'
+                    f'<div class="history-row-ident">'
+                    f'<span class="session-card-id">{m["session_id"][:16]}</span>'
+                    f'</div>'
+                    f'</div>'
+                    f'<div class="history-content">{preview}</div>'
+                    f'<div class="history-row-meta">{meta_spans}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-                # Chat replay
-                for m in reversed(msgs):
-                    ts_str  = to_local(m["timestamp_utc"]).strftime("%H:%M:%S") if m["timestamp_utc"] else ""
-                    dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
-                    tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-                    with st.chat_message(m["role"]):
-                        st.markdown(m["content"])
-                        meta_items = [p for p in [ts_str, dur_str, tok_str] if p]
-                        if meta_items:
-                            st.markdown(
-                                f'<div class="msg-meta">'
-                                f'{"".join(f"<span>{p}</span>" for p in meta_items)}'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-
-    # ---- Flat Log tab ----
-    with tab_flat:
-        for m in rows:
-            role      = m["role"]
-            role_cls  = "role-user" if role == "user" else "role-assistant"
-            role_label = "User" if role == "user" else "Assistant"
-            ts_str    = to_local(m["timestamp_utc"]).strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
-            dur_str   = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
-            tok_str   = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-            uname     = m.get("username") or "—"
-            preview   = m["content"][:280].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
-            if len(m["content"]) > 280:
-                preview += " …"
-
-            meta_spans = "".join(
-                f"<span>{p}</span>" for p in [ts_str, dur_str, tok_str] if p
-            )
-            st.markdown(
-                f'<div class="history-row {role_cls}">'
-                f'<div class="history-row-header">'
-                f'<div style="display:flex;align-items:center;gap:8px;">'
-                f'<span class="history-role-badge {role_cls}">{role_label}</span>'
-                f'<span style="font-size:0.78rem;font-weight:600;color:var(--text-primary);">{uname}</span>'
-                f'</div>'
-                f'<div class="history-row-ident">'
-                f'<span class="session-card-id">{m["session_id"][:16]}</span>'
-                f'</div>'
-                f'</div>'
-                f'<div class="history-content">{preview}</div>'
-                f'<div class="history-row-meta">{meta_spans}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+    _admin_message_history()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
