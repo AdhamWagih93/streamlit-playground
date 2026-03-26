@@ -1550,6 +1550,48 @@ def prompt_cancel(prompt_id: str):
         conn.close()
 
 
+def prompt_force_cancel(prompt_id: str):
+    """Admin force-cancel: delete any prompt (active or waiting) and promote next."""
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
+            cur.execute(f"""
+                DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
+                WHERE prompt_id = %s
+            """, (prompt_id,))
+            _queue_cleanup(cur)  # promotes next in line
+            conn.commit()
+    except Exception as e:
+        import sys
+        print(f"[prompt_force_cancel] ERROR: {e}", file=sys.stderr)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.autocommit = True
+        conn.close()
+
+
+def prompt_clear_all():
+    """Admin: flush the entire queue."""
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}")
+    except Exception as e:
+        import sys
+        print(f"[prompt_clear_all] ERROR: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+
+
 def prompt_heartbeat(prompt_id: str):
     """Refresh the heartbeat timestamp for the active prompt (keep-alive)."""
     conn = _get_conn()
@@ -2934,10 +2976,15 @@ def render_chat():
             _render_queue_wait(pos, pending_pid)
             return
         elif pos == -1:
-            # Expired / cancelled — clear pending state
+            # Expired / cancelled by admin — clear pending state
             st.session_state._pending_prompt = None
             st.session_state._pending_prompt_id = None
             pending_pid = None
+            # Remove the unanswered user message if it's the last one
+            if (st.session_state.chat_messages
+                    and st.session_state.chat_messages[-1]["role"] == "user"):
+                st.session_state.chat_messages.pop()
+            st.toast("Your prompt was cancelled or expired. Please try again.", icon="ℹ️")
         # pos == 0 → it's our turn — fall through to process below
 
     # ------------------------------------------------------------------
@@ -3147,13 +3194,21 @@ def render_admin():
     total_in_queue = (1 if q_active else 0) + len(q_waiting)
     title_extra = f" — {total_in_queue} prompt{'s' if total_in_queue != 1 else ''}" if total_in_queue else " — idle"
 
-    st.markdown(
-        f'<div class="queue-monitor">'
-        f'<div class="queue-monitor-title">'
-        f'<span class="{dot_cls}"></span> Prompt Queue{title_extra}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    qm_title_col, qm_action_col = st.columns([5, 1.5])
+    with qm_title_col:
+        st.markdown(
+            f'<div class="queue-monitor">'
+            f'<div class="queue-monitor-title">'
+            f'<span class="{dot_cls}"></span> Prompt Queue{title_extra}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with qm_action_col:
+        if total_in_queue > 0:
+            if st.button("Clear All", key="admin_clear_queue", type="secondary",
+                         use_container_width=True, help="Force-clear the entire queue"):
+                prompt_clear_all()
+                st.rerun()
 
     if not q_active and not q_waiting:
         st.markdown(
@@ -3170,14 +3225,22 @@ def render_admin():
                 time_str = f"started {elapsed}s ago"
             except Exception:
                 time_str = ""
-            st.markdown(
-                f'<div class="qm-entry qm-entry-active">'
-                f'<span class="qm-pos qm-pos-active">NOW</span>'
-                f'<span class="qm-user">Active prompt</span>'
-                f'<span class="qm-detail">{time_str}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            ac1, ac2 = st.columns([5, 1.5])
+            with ac1:
+                st.markdown(
+                    f'<div class="qm-entry qm-entry-active">'
+                    f'<span class="qm-pos qm-pos-active">NOW</span>'
+                    f'<span class="qm-user">Active prompt</span>'
+                    f'<span class="qm-detail">{time_str}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with ac2:
+                if st.button("Cancel", key=f"admin_cancel_{q_active['prompt_id']}",
+                             use_container_width=True, type="primary",
+                             help="Force-cancel this active prompt"):
+                    prompt_force_cancel(q_active["prompt_id"])
+                    st.rerun()
 
         for i, entry in enumerate(q_waiting):
             try:
@@ -3186,14 +3249,22 @@ def render_admin():
                 wait_str = f"waiting {wait}s"
             except Exception:
                 wait_str = ""
-            st.markdown(
-                f'<div class="qm-entry qm-entry-waiting">'
-                f'<span class="qm-pos qm-pos-waiting">#{i + 1}</span>'
-                f'<span class="qm-user">Queued prompt</span>'
-                f'<span class="qm-detail">{wait_str}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            wc1, wc2 = st.columns([5, 1.5])
+            with wc1:
+                st.markdown(
+                    f'<div class="qm-entry qm-entry-waiting">'
+                    f'<span class="qm-pos qm-pos-waiting">#{i + 1}</span>'
+                    f'<span class="qm-user">Queued prompt</span>'
+                    f'<span class="qm-detail">{wait_str}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with wc2:
+                if st.button("Cancel", key=f"admin_cancel_{entry['prompt_id']}",
+                             use_container_width=True,
+                             help="Remove this prompt from the queue"):
+                    prompt_force_cancel(entry["prompt_id"])
+                    st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
