@@ -6,6 +6,7 @@ Queue-based access: one user at a time.
 Designed as a page within a multi-page Streamlit app.
 """
 
+import base64
 import json
 import os
 import re
@@ -67,6 +68,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 OLLAMA_URL = "http://ef-nexus-03:8081"
 MODEL = "qwen3.5:9b"
+ENABLE_VISION = True                # set True to enable image upload (jpg, png, bmp)
+VISION_MODEL = "qwen2.5-vl:7b"     # model with vision support (qwen3.5 is text-only)
 ENABLE_DANGER_ZONE = False          # set True to show the "Clear All History" button in admin view
 HISTORY_SCHEMA = "public"           # postgres schema
 HISTORY_TABLE  = "chatbot_history"  # postgres table name
@@ -1314,6 +1317,7 @@ def _init_state():
         "chat_session_id": "",
         "chat_messages": [],  # each: {role, content, timestamp, duration?, tokens?}
         "documents": {},      # name -> {content, word_count, token_count}
+        "images": {},         # name -> {b64: str, mime: str}  (vision mode)
         "chat_active": False,
         "code_mode": False,
         "_generated_code": None,  # latest generated Streamlit code
@@ -1636,8 +1640,8 @@ def ollama_is_running() -> bool:
         return False
 
 
-def chat_stream(messages: list[dict]):
-    payload = {"model": MODEL, "messages": messages, "stream": True}
+def chat_stream(messages: list[dict], model: str | None = None):
+    payload = {"model": model or MODEL, "messages": messages, "stream": True}
     with requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120) as r:
         r.raise_for_status()
         for line in r.iter_lines():
@@ -2479,6 +2483,8 @@ def render_toolbar():
         )
         if is_admin and code_mode:
             brand_parts += ' <span class="mode-pill mode-code">Page Builder</span>'
+        if ENABLE_VISION and st.session_state.images:
+            brand_parts += f' <span class="status-badge status-active">Vision · {VISION_MODEL}</span>'
         # Queue indicator
         q_status = prompt_queue_status()
         q_active = q_status.get("active")
@@ -2530,6 +2536,7 @@ def render_toolbar():
             st.session_state.chat_active = False
             st.session_state.chat_messages = []
             st.session_state.documents = {}
+            st.session_state.images = {}
             st.session_state._pending_prompt = None
             st.session_state._pending_prompt_id = None
             st.session_state.pop("_export_md", None)
@@ -2565,9 +2572,12 @@ def render_toolbar():
                 )
 
     # --- Upload row ---
+    _upload_types = ["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"]
+    if ENABLE_VISION:
+        _upload_types += ["jpg", "jpeg", "png", "bmp"]
     uploaded = st.file_uploader(
-        "Upload documents",
-        type=["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"],
+        "Upload documents" + (" & images" if ENABLE_VISION else ""),
+        type=_upload_types,
         accept_multiple_files=True,
         key="chat_doc_uploader",
         label_visibility="collapsed",
@@ -2575,32 +2585,66 @@ def render_toolbar():
     if uploaded:
         new_added = False
         for f in uploaded:
-            if add_document(f):
-                new_added = True
+            ext = Path(f.name).suffix.lower()
+            if ext in (".jpg", ".jpeg", ".png", ".bmp") and ENABLE_VISION:
+                # Store image as base64 for vision API
+                if f.name not in st.session_state.images:
+                    raw = f.read()
+                    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                            "png": "image/png", "bmp": "image/bmp"}.get(ext.lstrip("."), "image/jpeg")
+                    st.session_state.images[f.name] = {
+                        "b64": base64.b64encode(raw).decode("utf-8"),
+                        "mime": mime,
+                        "size": len(raw),
+                    }
+                    new_added = True
+            else:
+                if add_document(f):
+                    new_added = True
         if new_added:
             st.rerun()
 
-    # --- Document chips bar with remove buttons ---
-    if st.session_state.documents:
-        chips_html = '<div class="doc-bar"><span class="doc-bar-label">Docs:</span>'
-        for doc_name, doc_info in st.session_state.documents.items():
-            ext = Path(doc_name).suffix.lower()
-            icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
-            chips_html += (
-                f'<span class="doc-chip">{icon} {doc_name}'
-                f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">'
-                f'{format_number(doc_info["word_count"])}w · ~{format_number(doc_info["token_count"])}tok</span></span>'
-            )
+    # --- Document & image chips bar with remove buttons ---
+    has_docs = bool(st.session_state.documents)
+    has_imgs = bool(st.session_state.images)
+    if has_docs or has_imgs:
+        chips_html = '<div class="doc-bar">'
+        if has_docs:
+            chips_html += '<span class="doc-bar-label">Docs:</span>'
+            for doc_name, doc_info in st.session_state.documents.items():
+                ext = Path(doc_name).suffix.lower()
+                icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
+                chips_html += (
+                    f'<span class="doc-chip">{icon} {doc_name}'
+                    f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">'
+                    f'{format_number(doc_info["word_count"])}w · ~{format_number(doc_info["token_count"])}tok</span></span>'
+                )
+        if has_imgs:
+            chips_html += '<span class="doc-bar-label" style="margin-left:8px;">Images:</span>'
+            for img_name, img_info in st.session_state.images.items():
+                size_kb = img_info["size"] / 1024
+                size_str = f"{size_kb:.0f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
+                chips_html += (
+                    f'<span class="doc-chip">🖼️ {img_name}'
+                    f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">{size_str}</span></span>'
+                )
         chips_html += "</div>"
         st.markdown(chips_html, unsafe_allow_html=True)
 
         # Remove buttons row
-        rm_cols = st.columns(len(st.session_state.documents))
-        for i, doc_name in enumerate(list(st.session_state.documents.keys())):
+        all_items = (
+            [(n, "doc") for n in st.session_state.documents]
+            + [(n, "img") for n in st.session_state.images]
+        )
+        rm_cols = st.columns(len(all_items))
+        for i, (name, kind) in enumerate(all_items):
             with rm_cols[i]:
-                if st.button(f"✕ {doc_name[:20]}", key=f"rm_{doc_name}",
-                             use_container_width=True, help=f"Remove {doc_name}"):
-                    del st.session_state.documents[doc_name]
+                if st.button(f"✕ {name[:20]}", key=f"rm_{kind}_{name}",
+                             use_container_width=True, help=f"Remove {name}"):
+                    if kind == "doc":
+                        del st.session_state.documents[name]
+                    else:
+                        del st.session_state.images[name]
                     st.rerun()
 
     st.markdown('<hr class="divider" style="margin:0.25rem 0 0.5rem;">', unsafe_allow_html=True)
@@ -2711,6 +2755,17 @@ def _render_chat_conversation():
         if msg["role"] == "user":
             with st.chat_message("user"):
                 render_message_content(msg["content"], f"usr_{idx}")
+                # Show attached image thumbnails
+                attached = msg.get("_images", [])
+                if attached:
+                    img_cols = st.columns(min(len(attached), 4))
+                    for j, img_data in enumerate(attached):
+                        with img_cols[j % len(img_cols)]:
+                            st.image(
+                                base64.b64decode(img_data["b64"]),
+                                caption=img_data.get("name", ""),
+                                use_container_width=True,
+                            )
                 render_msg_meta(msg)
         else:
             if code_mode and _extract_code_block(msg["content"]):
@@ -2805,8 +2860,13 @@ def render_chat():
     )
 
     # Chat input (always visible below tabs)
+    has_images = ENABLE_VISION and bool(st.session_state.images)
     if code_mode:
         placeholder_text = "Describe the page you want to build..."
+    elif has_images and doc_count:
+        placeholder_text = "Ask about your documents and images..."
+    elif has_images:
+        placeholder_text = "Ask about your images..."
     elif doc_count:
         placeholder_text = "Ask about your documents..."
     else:
@@ -2883,6 +2943,12 @@ def render_chat():
             "timestamp": user_ts,
             "tokens": user_tokens,
         }
+        # Attach images snapshot to message for re-rendering
+        if ENABLE_VISION and st.session_state.images:
+            user_msg["_images"] = [
+                {"name": n, "b64": info["b64"], "mime": info["mime"]}
+                for n, info in st.session_state.images.items()
+            ]
         st.session_state.chat_messages.append(user_msg)
         db_save_message(user_msg, st.session_state.chat_session_id,
                         st.session_state.get("username", ""),
@@ -2891,6 +2957,15 @@ def render_chat():
         # Render user message immediately (conversation loop already ran above)
         with st.chat_message("user"):
             st.markdown(prompt)
+            if user_msg.get("_images"):
+                img_cols = st.columns(min(len(user_msg["_images"]), 4))
+                for j, img_data in enumerate(user_msg["_images"]):
+                    with img_cols[j % len(img_cols)]:
+                        st.image(
+                            base64.b64decode(img_data["b64"]),
+                            caption=img_data.get("name", ""),
+                            use_container_width=True,
+                        )
             render_msg_meta(user_msg)
 
         # Enqueue the prompt
@@ -2921,10 +2996,21 @@ def render_chat():
         else:
             system_content = build_system_prompt()
         system_msg = {"role": "system", "content": system_content}
-        api_messages = [system_msg] + [
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.chat_messages
-        ]
+
+        # Determine if we should use vision model
+        use_vision = ENABLE_VISION and bool(st.session_state.images)
+        stream_model = VISION_MODEL if use_vision else None  # None = default MODEL
+
+        # Build conversation messages, attaching images to the latest user message
+        api_messages = [system_msg]
+        for i, m in enumerate(st.session_state.chat_messages):
+            msg_entry = {"role": m["role"], "content": m["content"]}
+            # Attach images to the last user message only
+            if use_vision and m["role"] == "user" and i == len(st.session_state.chat_messages) - 1:
+                msg_entry["images"] = [
+                    img["b64"] for img in st.session_state.images.values()
+                ]
+            api_messages.append(msg_entry)
 
         # Show queue bar while processing (clearable)
         processing_bar = st.empty()
@@ -2939,7 +3025,7 @@ def render_chat():
             full_response = ""
             t_start = time.time()
             try:
-                for token in chat_stream(api_messages):
+                for token in chat_stream(api_messages, model=stream_model):
                     full_response += token
                     placeholder.markdown(full_response + "▌")
                     # Keep-alive heartbeat every ~10 tokens
