@@ -1640,6 +1640,19 @@ def ollama_is_running() -> bool:
         return False
 
 
+def _ollama_model_exists(model_name: str) -> bool:
+    """Check if a specific model is available on the Ollama instance."""
+    try:
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        if r.status_code != 200:
+            return False
+        models = [m["name"] for m in r.json().get("models", [])]
+        # Match exact or without tag (e.g. "qwen2.5-vl:7b" matches "qwen2.5-vl:7b")
+        return model_name in models or any(m.startswith(model_name.split(":")[0] + ":") for m in models if model_name.split(":")[0] in m)
+    except Exception:
+        return False
+
+
 def chat_stream(messages: list[dict], model: str | None = None):
     payload = {"model": model or MODEL, "messages": messages, "stream": True}
     with requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120) as r:
@@ -2589,6 +2602,9 @@ def render_toolbar():
             if ext in (".jpg", ".jpeg", ".png", ".bmp") and ENABLE_VISION:
                 # Store image as base64 for vision API
                 if f.name not in st.session_state.images:
+                    if not hasattr(st.session_state, "_vision_model_warned") and not _ollama_model_exists(VISION_MODEL):
+                        st.toast(f"Vision model **{VISION_MODEL}** not found. Pull it with: `ollama pull {VISION_MODEL}`", icon="⚠️")
+                        st.session_state._vision_model_warned = True
                     raw = f.read()
                     mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
                             "png": "image/png", "bmp": "image/bmp"}.get(ext.lstrip("."), "image/jpeg")
@@ -2999,6 +3015,12 @@ def render_chat():
 
         # Determine if we should use vision model
         use_vision = ENABLE_VISION and bool(st.session_state.images)
+        if use_vision and not _ollama_model_exists(VISION_MODEL):
+            st.warning(
+                f"Vision model **{VISION_MODEL}** is not available on Ollama. "
+                f"Images will be ignored. Pull it with: `ollama pull {VISION_MODEL}`"
+            )
+            use_vision = False
         stream_model = VISION_MODEL if use_vision else None  # None = default MODEL
 
         # Build conversation messages, attaching images to the latest user message
