@@ -76,6 +76,7 @@ MODEL = "qwen3.5:9b"
 ENABLE_VISION = True                # set True to enable image upload (jpg, png, bmp)
 VISION_MODEL = "qwen2.5-vl:7b"     # model with vision support (qwen3.5 is text-only)
 ENABLE_DANGER_ZONE = False          # set True to show the "Clear All History" button in admin view
+ENABLE_INTENT_SCORING = True        # set True to enable LLM-based intent scoring + guardrails
 ENABLE_ERROR_ALERTS = True          # send email to DEVOPS on chat errors
 DEVOPS_EMAIL = "devops@example.com" # recipient(s) for error alerts (comma-separated)
 HISTORY_SCHEMA = "public"           # postgres schema
@@ -1069,6 +1070,46 @@ def db_update_intent_score(session_id: str, role: str, intent_score: int):
     except Exception as e:
         import sys
         print(f"[db_update_intent_score] ERROR: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def db_fetch_unscored_messages(limit: int = 200) -> list[dict]:
+    """Fetch user messages that have no intent_score, grouped by session."""
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT id, session_id, username, content, timestamp_utc
+                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                WHERE role = 'user' AND intent_score IS NULL
+                ORDER BY timestamp_utc DESC
+                LIMIT %s
+            """, (limit,))
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def db_set_intent_score(msg_id: int, score: int):
+    """Set intent_score on a specific message by id."""
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {HISTORY_SCHEMA}.{HISTORY_TABLE} SET intent_score = %s WHERE id = %s",
+                (score, msg_id),
+            )
+    except Exception as e:
+        import sys
+        print(f"[db_set_intent_score] ERROR: {e}", file=sys.stderr)
     finally:
         conn.close()
 
@@ -2833,26 +2874,31 @@ def _is_error_response(content: str) -> bool:
     return any(content.startswith(p) for p in _ERROR_PREFIXES)
 
 
-def _score_intent(prompt: str) -> int | None:
+def _score_intent(prompt: str, *,
+                   title: str | None = None,
+                   teams: list | None = None,
+                   roles: list | None = None) -> int | None:
     """Score how relevant a user prompt is to their role/title (0-100).
 
     Uses a separate, non-streaming LLM call with a focused system prompt.
     Returns an integer score or None if scoring fails.
+
+    When title/teams/roles are not passed explicitly, falls back to
+    st.session_state (live chat context).
     """
-    title = st.session_state.get("title", "")
-    teams = st.session_state.get("teams", [])
-    roles = st.session_state.get("roles", [])
-    username = st.session_state.get("username", "")
+    _title = title if title is not None else st.session_state.get("title", "")
+    _teams = teams if teams is not None else st.session_state.get("teams", [])
+    _roles = roles if roles is not None else st.session_state.get("roles", [])
 
     # Build context about the user's role
     role_parts = []
-    if title:
-        role_parts.append(f"Job Title: {title}")
-    if teams:
-        teams_str = ", ".join(teams) if isinstance(teams, list) else str(teams)
+    if _title:
+        role_parts.append(f"Job Title: {_title}")
+    if _teams:
+        teams_str = ", ".join(_teams) if isinstance(_teams, list) else str(_teams)
         role_parts.append(f"Teams: {teams_str}")
-    if roles:
-        roles_str = ", ".join(roles) if isinstance(roles, list) else str(roles)
+    if _roles:
+        roles_str = ", ".join(_roles) if isinstance(_roles, list) else str(_roles)
         role_parts.append(f"Roles: {roles_str}")
 
     if not role_parts:
@@ -3401,37 +3447,39 @@ def render_chat():
         )
 
         # --- Intent scoring (runs during "Processing" phase, invisible to user) ---
-        intent_score = _score_intent(pending_prompt)
-        if intent_score is not None:
-            # Persist score to the already-saved user message
-            db_update_intent_score(
-                st.session_state.chat_session_id, "user", intent_score,
-            )
-            # Also store in session for admin view consistency
-            for m in reversed(st.session_state.chat_messages):
-                if m["role"] == "user":
-                    m["intent_score"] = intent_score
-                    break
+        intent_score = None
+        if ENABLE_INTENT_SCORING:
+            intent_score = _score_intent(pending_prompt)
+            if intent_score is not None:
+                # Persist score to the already-saved user message
+                db_update_intent_score(
+                    st.session_state.chat_session_id, "user", intent_score,
+                )
+                # Also store in session for admin view consistency
+                for m in reversed(st.session_state.chat_messages):
+                    if m["role"] == "user":
+                        m["intent_score"] = intent_score
+                        break
 
-        # --- Hard refuse for extremely off-topic prompts ---
-        if intent_score is not None and intent_score < INTENT_REFUSE_THRESHOLD:
-            with st.chat_message("assistant"):
-                refuse_msg = _intent_refuse_message()
-                st.markdown(refuse_msg)
-            assistant_msg = {
-                "role": "assistant",
-                "content": refuse_msg,
-                "timestamp": now_local().strftime("%H:%M"),
-                "duration": 0,
-                "tokens": estimate_tokens(refuse_msg),
-            }
-            st.session_state.chat_messages.append(assistant_msg)
-            db_save_message(assistant_msg, **_db_save_kwargs())
-            processing_bar.empty()
-            prompt_release(pending_prompt_id)
-            st.session_state._pending_prompt = None
-            st.session_state._pending_prompt_id = None
-            return
+            # --- Hard refuse for extremely off-topic prompts ---
+            if intent_score is not None and intent_score < INTENT_REFUSE_THRESHOLD:
+                with st.chat_message("assistant"):
+                    refuse_msg = _intent_refuse_message()
+                    st.markdown(refuse_msg)
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": refuse_msg,
+                    "timestamp": now_local().strftime("%H:%M"),
+                    "duration": 0,
+                    "tokens": estimate_tokens(refuse_msg),
+                }
+                st.session_state.chat_messages.append(assistant_msg)
+                db_save_message(assistant_msg, **_db_save_kwargs())
+                processing_bar.empty()
+                prompt_release(pending_prompt_id)
+                st.session_state._pending_prompt = None
+                st.session_state._pending_prompt_id = None
+                return
 
         # Build API messages
         if code_mode:
@@ -4035,6 +4083,120 @@ def render_admin():
             pass
 
     _admin_activity_topics()
+
+    # ==========================================================
+    # INTENT ANALYSIS — admin tool for scoring unanalyzed prompts
+    # ==========================================================
+    @st.fragment
+    def _admin_intent_analysis():
+        unscored = db_fetch_unscored_messages(limit=500)
+        n_unscored = len(unscored)
+
+        # Group by session for display
+        unscored_sessions: dict[str, list[dict]] = {}
+        for row in unscored:
+            unscored_sessions.setdefault(row["session_id"], []).append(row)
+        n_sessions = len(unscored_sessions)
+
+        st.markdown(
+            '<div class="chart-section-divider"><span>Intent Analysis</span></div>',
+            unsafe_allow_html=True,
+        )
+
+        if n_unscored == 0:
+            st.markdown(
+                '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:0.85rem;">'
+                'All user prompts have been scored. No pending analysis.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            return
+
+        st.markdown(
+            f'<div class="stat-meta-row">'
+            f'<span><strong>{n_unscored}</strong> unscored prompts</span>'
+            f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Role context for scoring — admin can override
+        default_title = st.session_state.get("title", "")
+        default_teams = ", ".join(st.session_state.get("teams", []))
+        role_ctx = st.text_input(
+            "Role context for scoring (job title, teams — applies to all prompts in this batch)",
+            value=f"{default_title}{' · ' + default_teams if default_teams else ''}",
+            key="intent_role_ctx",
+        )
+
+        # Preview unscored sessions
+        with st.expander(f"Preview unscored sessions ({n_sessions})", expanded=False):
+            for sid, msgs in list(unscored_sessions.items())[:20]:
+                uname = msgs[0].get("username") or "—"
+                n = len(msgs)
+                preview = msgs[0]["content"][:120].replace("\n", " ")
+                st.markdown(
+                    f"**{uname}** · `{sid[:14]}…` · {n} msg{'s' if n != 1 else ''}\n\n"
+                    f"> {preview}{'…' if len(msgs[0]['content']) > 120 else ''}",
+                )
+
+        # Action buttons
+        col_a, col_b = st.columns(2)
+        with col_a:
+            run_all = st.button(
+                f"Analyze all {n_unscored} prompts",
+                type="primary",
+                use_container_width=True,
+                key="intent_run_all",
+            )
+        with col_b:
+            run_session_filter = f_session  # from the admin filters above
+            run_filtered = st.button(
+                f"Analyze filtered session only",
+                disabled=not f_session,
+                use_container_width=True,
+                key="intent_run_filtered",
+            )
+
+        msgs_to_score = []
+        if run_all:
+            msgs_to_score = unscored
+        elif run_filtered and f_session:
+            msgs_to_score = [m for m in unscored if m["session_id"] == f_session]
+
+        if msgs_to_score:
+            # Parse role context
+            parts = [p.strip() for p in role_ctx.split("·") if p.strip()]
+            ctx_title = parts[0] if parts else ""
+            ctx_teams = [t.strip() for t in parts[1].split(",") if t.strip()] if len(parts) > 1 else []
+
+            progress = st.progress(0, text="Scoring prompts...")
+            scored = 0
+            failed = 0
+            for idx, msg in enumerate(msgs_to_score):
+                score = _score_intent(
+                    msg["content"],
+                    title=ctx_title,
+                    teams=ctx_teams,
+                    roles=[],
+                )
+                if score is not None:
+                    db_set_intent_score(msg["id"], score)
+                    scored += 1
+                else:
+                    failed += 1
+                progress.progress(
+                    (idx + 1) / len(msgs_to_score),
+                    text=f"Scored {scored}/{idx + 1} prompts...",
+                )
+            progress.empty()
+            if failed:
+                st.warning(f"Scored **{scored}** prompts. **{failed}** could not be scored (no role context or LLM error).")
+            else:
+                st.success(f"Scored **{scored}** prompts successfully.")
+            st.rerun()
+
+    _admin_intent_analysis()
 
     # ==========================================================
     # MESSAGE HISTORY — only when filters are applied
