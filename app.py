@@ -1047,6 +1047,32 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
         conn.close()
 
 
+def db_update_intent_score(session_id: str, role: str, intent_score: int):
+    """Update intent_score on the most recent message for a session+role."""
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                SET intent_score = %s
+                WHERE id = (
+                    SELECT id FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    WHERE session_id = %s AND role = %s
+                    ORDER BY timestamp_utc DESC LIMIT 1
+                )
+                """,
+                (intent_score, session_id, role),
+            )
+    except Exception as e:
+        import sys
+        print(f"[db_update_intent_score] ERROR: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+
+
 def db_fetch_history(
     limit: int = 200,
     session_filter: Optional[str] = None,
@@ -2516,17 +2542,6 @@ def render_msg_meta(msg: dict):
     tokens = msg.get("tokens")
     if tokens is not None:
         parts.append(f"<span>~{format_number(tokens)} tokens</span>")
-    score = msg.get("intent_score")
-    if score is not None:
-        score_color = (
-            "#2d8a4e" if score >= 70 else
-            "#b8860b" if score >= 40 else
-            "#dc3545"
-        )
-        parts.append(
-            f'<span style="color:{score_color};font-weight:600;">'
-            f'Intent: {score}/100</span>'
-        )
     if parts:
         st.markdown(f'<div class="msg-meta">{"".join(parts)}</div>', unsafe_allow_html=True)
 
@@ -2886,6 +2901,60 @@ Respond with ONLY a single integer between 0 and 100. No explanation, no text, j
         import sys
         print(f"[_score_intent] Scoring failed: {e}", file=sys.stderr)
         return None
+
+
+# -- Intent thresholds for LLM guardrails --
+INTENT_REFUSE_THRESHOLD  = 15   # hard refuse — do not call LLM at all
+INTENT_REDIRECT_THRESHOLD = 40  # inject a firm redirect into the system prompt
+INTENT_NUDGE_THRESHOLD    = 70  # inject a gentle nudge to stay on topic
+
+
+def _build_intent_guardrail(score: int) -> str:
+    """Return extra system-prompt text based on the intent score."""
+    title = st.session_state.get("title", "")
+    teams = st.session_state.get("teams", [])
+    role_desc = title or "their professional role"
+    teams_str = ", ".join(teams) if isinstance(teams, list) and teams else ""
+
+    if score < INTENT_REDIRECT_THRESHOLD:
+        return (
+            "\n\n--- IMPORTANT GUARDRAIL ---\n"
+            f"The user's latest message has been scored as largely off-topic "
+            f"(relevance {score}/100) relative to their role as {role_desc}"
+            f"{f' on the {teams_str} team(s)' if teams_str else ''}.\n"
+            "You MUST:\n"
+            "1. Politely but firmly decline to answer the off-topic request.\n"
+            "2. Briefly explain that this chatbot is intended for work-related tasks "
+            f"aligned with the user's responsibilities as {role_desc}.\n"
+            "3. Suggest they rephrase their question in a work-relevant context, "
+            "or offer to help with something related to their role.\n"
+            "Do NOT provide the off-topic answer. Keep your response short and professional."
+        )
+
+    if score < INTENT_NUDGE_THRESHOLD:
+        return (
+            "\n\n--- GUIDANCE ---\n"
+            f"The user's latest message is only partially related to their role as {role_desc} "
+            f"(relevance {score}/100). "
+            "Answer their question helpfully, but naturally steer the conversation back toward "
+            "topics relevant to their professional responsibilities. "
+            "You may add a brief, friendly note suggesting how this topic could connect to their work."
+        )
+
+    return ""
+
+
+def _intent_refuse_message() -> str:
+    """Build the refusal message shown when intent score is below the refuse threshold."""
+    title = st.session_state.get("title", "")
+    role_desc = f"your role as **{title}**" if title else "your professional responsibilities"
+    return (
+        "I appreciate your message, but this request falls outside the scope of "
+        f"{role_desc}. This chatbot is designed to assist with work-related tasks "
+        "and questions aligned with your position.\n\n"
+        "Could you rephrase your question in a work-related context? "
+        "I'm happy to help with anything relevant to your responsibilities."
+    )
 
 
 def _send_error_alert(session_id: str, username: str, error_content: str, prompt: str):
@@ -3284,13 +3353,9 @@ def render_chat():
                 {"name": n, "b64": info["b64"], "mime": info["mime"]}
                 for n, info in st.session_state.images.items()
             ]
-        # Score prompt relevance to user's role (non-blocking, separate LLM call)
-        intent_score = _score_intent(prompt)
-        if intent_score is not None:
-            user_msg["intent_score"] = intent_score
 
         st.session_state.chat_messages.append(user_msg)
-        db_save_message(user_msg, **_db_save_kwargs(), intent_score=intent_score)
+        db_save_message(user_msg, **_db_save_kwargs())
 
         # Render user message immediately (conversation loop already ran above)
         with st.chat_message("user"):
@@ -3328,11 +3393,56 @@ def render_chat():
     pending_prompt_id = st.session_state.get("_pending_prompt_id")
 
     if pending_prompt and pending_prompt_id:
+        # Show queue bar while processing (clearable)
+        processing_bar = st.empty()
+        processing_bar.markdown(
+            '<div class="queue-bar">Processing your prompt...</div>',
+            unsafe_allow_html=True,
+        )
+
+        # --- Intent scoring (runs during "Processing" phase, invisible to user) ---
+        intent_score = _score_intent(pending_prompt)
+        if intent_score is not None:
+            # Persist score to the already-saved user message
+            db_update_intent_score(
+                st.session_state.chat_session_id, "user", intent_score,
+            )
+            # Also store in session for admin view consistency
+            for m in reversed(st.session_state.chat_messages):
+                if m["role"] == "user":
+                    m["intent_score"] = intent_score
+                    break
+
+        # --- Hard refuse for extremely off-topic prompts ---
+        if intent_score is not None and intent_score < INTENT_REFUSE_THRESHOLD:
+            with st.chat_message("assistant"):
+                refuse_msg = _intent_refuse_message()
+                st.markdown(refuse_msg)
+            assistant_msg = {
+                "role": "assistant",
+                "content": refuse_msg,
+                "timestamp": now_local().strftime("%H:%M"),
+                "duration": 0,
+                "tokens": estimate_tokens(refuse_msg),
+            }
+            st.session_state.chat_messages.append(assistant_msg)
+            db_save_message(assistant_msg, **_db_save_kwargs())
+            processing_bar.empty()
+            prompt_release(pending_prompt_id)
+            st.session_state._pending_prompt = None
+            st.session_state._pending_prompt_id = None
+            return
+
         # Build API messages
         if code_mode:
             system_content = build_code_system_prompt()
         else:
             system_content = build_system_prompt()
+
+        # Inject intent guardrail into system prompt
+        if intent_score is not None:
+            system_content += _build_intent_guardrail(intent_score)
+
         system_msg = {"role": "system", "content": system_content}
 
         # Determine if we should use vision model
@@ -3355,13 +3465,6 @@ def render_chat():
                     img["b64"] for img in st.session_state.images.values()
                 ]
             api_messages.append(msg_entry)
-
-        # Show queue bar while processing (clearable)
-        processing_bar = st.empty()
-        processing_bar.markdown(
-            '<div class="queue-bar">Processing your prompt...</div>',
-            unsafe_allow_html=True,
-        )
 
         with st.chat_message("assistant"):
             placeholder = st.empty()
