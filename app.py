@@ -63,7 +63,7 @@ except ImportError:
     psycopg2 = None
 
 try:
-    from send_email import send_email
+    from utils.mail import send_email
 except ImportError:
     send_email = None
 
@@ -993,6 +993,10 @@ def db_ensure_table():
                 ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
                     ADD COLUMN IF NOT EXISTS has_error BOOLEAN DEFAULT FALSE
             """)
+            cur.execute(f"""
+                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    ADD COLUMN IF NOT EXISTS intent_score INTEGER
+            """)
     except Exception as e:
         import sys
         print(f"[db_ensure_table] ERROR: {e}", file=sys.stderr)
@@ -1003,7 +1007,7 @@ def db_ensure_table():
 
 def db_save_message(msg: dict, session_id: str, username: str, documents: list[str],
                     chat_mode: str = "normal", has_images: bool = False,
-                    has_error: bool = False):
+                    has_error: bool = False, intent_score: int | None = None):
     """Persist a single message to postgres."""
     conn = _get_conn()
     if conn is None:
@@ -1016,8 +1020,8 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                 INSERT INTO {HISTORY_SCHEMA}.{HISTORY_TABLE}
                     (session_id, username, role, content, timestamp_utc,
                      duration_s, tokens_est, model, documents, chat_mode, has_images,
-                     has_error)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     has_error, intent_score)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
@@ -1032,6 +1036,7 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                     chat_mode,
                     has_images,
                     has_error,
+                    intent_score,
                 ),
             )
     except Exception as e:
@@ -1079,7 +1084,7 @@ def db_fetch_history(
                 f"""
                 SELECT id, session_id, username, role, content, timestamp_utc,
                        duration_s, tokens_est, model, documents,
-                       chat_mode, has_images, has_error
+                       chat_mode, has_images, has_error, intent_score
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where}
                 ORDER BY timestamp_utc DESC
@@ -1127,7 +1132,15 @@ def db_fetch_stats(
                         FILTER (WHERE role = 'assistant'), 0)      AS max_duration_s,
                     MIN(timestamp_utc)                             AS first_message,
                     MAX(timestamp_utc)                             AS last_message,
-                    COUNT(*) FILTER (WHERE has_error = TRUE)       AS error_count
+                    COUNT(*) FILTER (WHERE has_error = TRUE)       AS error_count,
+                    ROUND(AVG(intent_score) FILTER (WHERE intent_score IS NOT NULL))::INT
+                                                                   AS avg_intent_score,
+                    MIN(intent_score) FILTER (WHERE intent_score IS NOT NULL)
+                                                                   AS min_intent_score,
+                    MAX(intent_score) FILTER (WHERE intent_score IS NOT NULL)
+                                                                   AS max_intent_score,
+                    COUNT(*) FILTER (WHERE intent_score IS NOT NULL)
+                                                                   AS scored_prompts
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where_clause}
             """, params)
@@ -1162,7 +1175,8 @@ def db_fetch_sessions() -> list[dict]:
                     ) AS chat_mode,
                     BOOL_OR(COALESCE(has_images, FALSE)) AS has_images,
                     BOOL_OR(documents IS NOT NULL AND array_length(documents, 1) > 0) AS has_documents,
-                    BOOL_OR(COALESCE(has_error, FALSE)) AS has_error
+                    BOOL_OR(COALESCE(has_error, FALSE)) AS has_error,
+                    ROUND(AVG(intent_score) FILTER (WHERE intent_score IS NOT NULL))::INT AS avg_intent_score
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 GROUP BY session_id
                 ORDER BY last_at DESC
@@ -2502,6 +2516,17 @@ def render_msg_meta(msg: dict):
     tokens = msg.get("tokens")
     if tokens is not None:
         parts.append(f"<span>~{format_number(tokens)} tokens</span>")
+    score = msg.get("intent_score")
+    if score is not None:
+        score_color = (
+            "#2d8a4e" if score >= 70 else
+            "#b8860b" if score >= 40 else
+            "#dc3545"
+        )
+        parts.append(
+            f'<span style="color:{score_color};font-weight:600;">'
+            f'Intent: {score}/100</span>'
+        )
     if parts:
         st.markdown(f'<div class="msg-meta">{"".join(parts)}</div>', unsafe_allow_html=True)
 
@@ -2594,7 +2619,7 @@ def render_toolbar():
         )
         if is_admin and code_mode:
             brand_parts += ' <span class="mode-pill mode-code">Page Builder</span>'
-        if ENABLE_VISION and st.session_state.images:
+        if _vision_enabled() and st.session_state.images:
             brand_parts += f' <span class="status-badge status-active">Vision · {VISION_MODEL}</span>'
         # Queue indicator
         q_status = prompt_queue_status()
@@ -2684,10 +2709,11 @@ def render_toolbar():
 
     # --- Upload row ---
     _upload_types = ["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"]
-    if ENABLE_VISION:
+    _vis = _vision_enabled()
+    if _vis:
         _upload_types += ["jpg", "jpeg", "png", "bmp"]
     uploaded = st.file_uploader(
-        "Upload documents" + (" & images" if ENABLE_VISION else ""),
+        "Upload documents" + (" & images" if _vis else ""),
         type=_upload_types,
         accept_multiple_files=True,
         key="chat_doc_uploader",
@@ -2697,7 +2723,7 @@ def render_toolbar():
         new_added = False
         for f in uploaded:
             ext = Path(f.name).suffix.lower()
-            if ext in (".jpg", ".jpeg", ".png", ".bmp") and ENABLE_VISION:
+            if ext in (".jpg", ".jpeg", ".png", ".bmp") and _vis:
                 # Store image as base64 for vision API
                 if f.name not in st.session_state.images:
                     if not hasattr(st.session_state, "_vision_model_warned") and not _ollama_model_exists(VISION_MODEL):
@@ -2774,9 +2800,14 @@ def _current_chat_mode() -> str:
     return "normal"
 
 
+def _vision_enabled() -> bool:
+    """Vision is available only to admins when the feature flag is on."""
+    return ENABLE_VISION and "admin" in st.session_state.get("user_roles", {})
+
+
 def _current_has_images() -> bool:
     """Return whether images are currently attached."""
-    return ENABLE_VISION and bool(st.session_state.get("images"))
+    return _vision_enabled() and bool(st.session_state.get("images"))
 
 
 _ERROR_PREFIXES = ("Error:", "Connection to Ollama lost", "[ERROR]")
@@ -2785,6 +2816,76 @@ _ERROR_PREFIXES = ("Error:", "Connection to Ollama lost", "[ERROR]")
 def _is_error_response(content: str) -> bool:
     """Return True if an assistant response indicates an error."""
     return any(content.startswith(p) for p in _ERROR_PREFIXES)
+
+
+def _score_intent(prompt: str) -> int | None:
+    """Score how relevant a user prompt is to their role/title (0-100).
+
+    Uses a separate, non-streaming LLM call with a focused system prompt.
+    Returns an integer score or None if scoring fails.
+    """
+    title = st.session_state.get("title", "")
+    teams = st.session_state.get("teams", [])
+    roles = st.session_state.get("roles", [])
+    username = st.session_state.get("username", "")
+
+    # Build context about the user's role
+    role_parts = []
+    if title:
+        role_parts.append(f"Job Title: {title}")
+    if teams:
+        teams_str = ", ".join(teams) if isinstance(teams, list) else str(teams)
+        role_parts.append(f"Teams: {teams_str}")
+    if roles:
+        roles_str = ", ".join(roles) if isinstance(roles, list) else str(roles)
+        role_parts.append(f"Roles: {roles_str}")
+
+    if not role_parts:
+        return None  # cannot score without role context
+
+    role_context = "\n".join(role_parts)
+
+    scoring_prompt = f"""\
+You are an intent relevance scorer. Given a user's company role and their prompt to a chatbot, score how relevant and in-scope the prompt is to their professional responsibilities.
+
+USER PROFILE:
+{role_context}
+
+SCORING GUIDELINES:
+- 90-100: Directly related to their job function, team responsibilities, or daily work tasks
+- 70-89: Related to their professional domain or adjacent work topics
+- 50-69: General professional/workplace query, loosely related to their role
+- 30-49: General knowledge question, not specific to their role but potentially useful at work
+- 10-29: Personal or off-topic query, unrelated to their professional role
+- 0-9: Completely irrelevant, inappropriate, or spam
+
+USER PROMPT:
+{prompt[:1000]}
+
+Respond with ONLY a single integer between 0 and 100. No explanation, no text, just the number."""
+
+    try:
+        payload = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": "You output only a single integer."},
+                {"role": "user", "content": scoring_prompt},
+            ],
+            "stream": False,
+        }
+        r = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=(5, 30))
+        r.raise_for_status()
+        content = r.json().get("message", {}).get("content", "").strip()
+        # Extract the first integer found in the response
+        match = re.search(r"\b(\d{1,3})\b", content)
+        if match:
+            score = int(match.group(1))
+            return max(0, min(100, score))
+        return None
+    except Exception as e:
+        import sys
+        print(f"[_score_intent] Scoring failed: {e}", file=sys.stderr)
+        return None
 
 
 def _send_error_alert(session_id: str, username: str, error_content: str, prompt: str):
@@ -3089,7 +3190,7 @@ def render_chat():
     )
 
     # Chat input (always visible below tabs)
-    has_images = ENABLE_VISION and bool(st.session_state.images)
+    has_images = _vision_enabled() and bool(st.session_state.images)
     if code_mode:
         placeholder_text = "Describe the page you want to build..."
     elif has_images and doc_count:
@@ -3178,13 +3279,18 @@ def render_chat():
             "tokens": user_tokens,
         }
         # Attach images snapshot to message for re-rendering
-        if ENABLE_VISION and st.session_state.images:
+        if _vision_enabled() and st.session_state.images:
             user_msg["_images"] = [
                 {"name": n, "b64": info["b64"], "mime": info["mime"]}
                 for n, info in st.session_state.images.items()
             ]
+        # Score prompt relevance to user's role (non-blocking, separate LLM call)
+        intent_score = _score_intent(prompt)
+        if intent_score is not None:
+            user_msg["intent_score"] = intent_score
+
         st.session_state.chat_messages.append(user_msg)
-        db_save_message(user_msg, **_db_save_kwargs())
+        db_save_message(user_msg, **_db_save_kwargs(), intent_score=intent_score)
 
         # Render user message immediately (conversation loop already ran above)
         with st.chat_message("user"):
@@ -3230,7 +3336,7 @@ def render_chat():
         system_msg = {"role": "system", "content": system_content}
 
         # Determine if we should use vision model
-        use_vision = ENABLE_VISION and bool(st.session_state.images)
+        use_vision = _vision_enabled() and bool(st.session_state.images)
         if use_vision and not _ollama_model_exists(VISION_MODEL):
             st.warning(
                 f"Vision model **{VISION_MODEL}** is not available on Ollama. "
@@ -3324,6 +3430,63 @@ def render_chat():
                 st.rerun()
             else:
                 st.warning("No code block found in the response. Try rephrasing your request.")
+
+
+def _render_intent_distribution(fkw: dict):
+    """Render a compact horizontal bar showing intent score distribution."""
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        wheres, params = [], []
+        if fkw.get("session_filter"):
+            wheres.append("session_id = %s"); params.append(fkw["session_filter"])
+        if fkw.get("username_filter"):
+            wheres.append("username = %s"); params.append(fkw["username_filter"])
+        if fkw.get("date_from"):
+            wheres.append("timestamp_utc >= %s"); params.append(fkw["date_from"])
+        if fkw.get("date_to"):
+            wheres.append("timestamp_utc <= %s"); params.append(fkw["date_to"])
+        wheres.append("intent_score IS NOT NULL")
+        where_clause = " WHERE " + " AND ".join(wheres)
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE intent_score >= 70) AS high,
+                    COUNT(*) FILTER (WHERE intent_score >= 40 AND intent_score < 70) AS medium,
+                    COUNT(*) FILTER (WHERE intent_score < 40) AS low,
+                    COUNT(*) AS total
+                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                {where_clause}
+            """, params)
+            row = cur.fetchone()
+        if not row or row[3] == 0:
+            return
+        high, med, low, total = row
+        h_pct = round(high / total * 100)
+        m_pct = round(med / total * 100)
+        l_pct = round(low / total * 100)
+        st.markdown(
+            f'<div class="stat-card">'
+            f'<div class="stat-label" style="margin-bottom:8px;">Intent Distribution</div>'
+            f'<div style="display:flex;height:18px;border-radius:9px;overflow:hidden;width:100%;">'
+            f'<div style="width:{h_pct}%;background:#2d8a4e;" title="High ({high})"></div>'
+            f'<div style="width:{m_pct}%;background:#b8860b;" title="Medium ({med})"></div>'
+            f'<div style="width:{l_pct}%;background:#dc3545;" title="Low ({low})"></div>'
+            f'</div>'
+            f'<div class="stat-sub" style="margin-top:6px;">'
+            f'<span style="color:#2d8a4e;">High {high}</span> · '
+            f'<span style="color:#b8860b;">Med {med}</span> · '
+            f'<span style="color:#dc3545;">Low {low}</span>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -3525,42 +3688,94 @@ def render_admin():
 
     if stats:
         error_count = int(stats.get("error_count") or 0)
-        cs = st.columns(7)
+        avg_intent = stats.get("avg_intent_score")
+        min_intent = stats.get("min_intent_score")
+        max_intent = stats.get("max_intent_score")
+        scored_n   = int(stats.get("scored_prompts") or 0)
+
+        # Row 1: core stats (6 cards)
+        cs = st.columns(6)
         cards = [
             ("Sessions",       format_number(int(stats.get("total_sessions", 0))),
-             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}",
-             False),
+             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}"),
             ("Total Messages", format_number(int(stats.get("total_messages", 0))),
-             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}",
-             False),
+             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}"),
             ("User",           format_number(int(stats.get("user_messages", 0))),
-             "messages sent", False),
+             "messages sent"),
             ("Assistant",      format_number(int(stats.get("assistant_messages", 0))),
-             "responses given", False),
+             "responses given"),
             ("Avg Response",   format_duration(avg_dur),
-             f"Max: {format_duration(max_dur)}", False),
+             f"Max: {format_duration(max_dur)}"),
             ("Total Tokens",   format_number(int(stats.get("total_tokens", 0))),
-             "estimated", False),
-            ("Errors",         format_number(error_count),
-             "error responses", True),
+             "estimated"),
         ]
-        for col, (label, value, sub, is_error) in zip(cs, cards):
+        for col, (label, value, sub) in zip(cs, cards):
             with col:
-                error_style = (
-                    'border:1px solid rgba(220,53,69,0.35);background:rgba(220,53,69,0.06);'
-                    if is_error and error_count > 0 else ""
-                )
-                value_color = (
-                    'color:#dc3545;' if is_error and error_count > 0 else ""
-                )
                 st.markdown(
-                    f'<div class="stat-card" style="{error_style}">'
-                    f'<div class="stat-value" style="{value_color}">{value}</div>'
+                    f'<div class="stat-card">'
+                    f'<div class="stat-value">{value}</div>'
                     f'<div class="stat-label">{label}</div>'
                     f'<div class="stat-sub">{sub}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+        # Row 2: intent score + errors (2 highlighted cards)
+        ci1, ci2, ci3 = st.columns([2, 2, 1])
+        with ci1:
+            if avg_intent is not None:
+                intent_val = int(avg_intent)
+                intent_color = (
+                    "#2d8a4e" if intent_val >= 70 else
+                    "#b8860b" if intent_val >= 40 else
+                    "#dc3545"
+                )
+                intent_border = (
+                    "rgba(45,138,78,0.35)" if intent_val >= 70 else
+                    "rgba(184,134,11,0.35)" if intent_val >= 40 else
+                    "rgba(220,53,69,0.35)"
+                )
+                intent_bg = (
+                    "rgba(45,138,78,0.06)" if intent_val >= 70 else
+                    "rgba(184,134,11,0.06)" if intent_val >= 40 else
+                    "rgba(220,53,69,0.06)"
+                )
+                range_str = f"Range: {min_intent} – {max_intent}" if min_intent is not None else ""
+                st.markdown(
+                    f'<div class="stat-card" style="border:1px solid {intent_border};background:{intent_bg};">'
+                    f'<div class="stat-value" style="color:{intent_color};">{intent_val}/100</div>'
+                    f'<div class="stat-label">Avg Intent Score</div>'
+                    f'<div class="stat-sub">{scored_n} scored prompts · {range_str}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    '<div class="stat-card">'
+                    '<div class="stat-value" style="color:var(--text-muted);">—</div>'
+                    '<div class="stat-label">Avg Intent Score</div>'
+                    '<div class="stat-sub">No scored prompts yet</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+        with ci2:
+            # Intent score distribution bar
+            if scored_n > 0:
+                _render_intent_distribution(fkw)
+        with ci3:
+            error_style = (
+                'border:1px solid rgba(220,53,69,0.35);background:rgba(220,53,69,0.06);'
+                if error_count > 0 else ""
+            )
+            error_val_color = 'color:#dc3545;' if error_count > 0 else ""
+            st.markdown(
+                f'<div class="stat-card" style="{error_style}">'
+                f'<div class="stat-value" style="{error_val_color}">{format_number(error_count)}</div>'
+                f'<div class="stat-label">Errors</div>'
+                f'<div class="stat-sub">error responses</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     # ==========================================================
     # CHARTS — filtered (fragment for independent re-rendering)
@@ -3806,6 +4021,7 @@ def render_admin():
                 session_has_images = False
                 session_has_docs = bool(docs_list)
                 session_has_error = False
+                intent_scores = []
                 for m in msgs:
                     m_mode = m.get("chat_mode") or "normal"
                     if m_mode != "normal":
@@ -3816,6 +4032,9 @@ def render_admin():
                         session_has_docs = True
                     if m.get("has_error"):
                         session_has_error = True
+                    if m.get("intent_score") is not None:
+                        intent_scores.append(m["intent_score"])
+                session_avg_intent = round(sum(intent_scores) / len(intent_scores)) if intent_scores else None
 
                 date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
                 time_range = ""
@@ -3834,8 +4053,9 @@ def render_admin():
                 if session_has_images:
                     attach_tags += " Images"
                 error_tag = " ⚠ ERROR" if session_has_error else ""
+                intent_tag = f" [{session_avg_intent}/100]" if session_avg_intent is not None else ""
 
-                label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} msgs  ·  {date_str}{mode_tag}{attach_tags}{error_tag}"
+                label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} msgs  ·  {date_str}{mode_tag}{attach_tags}{error_tag}{intent_tag}"
                 with st.expander(label, expanded=False):
                     # Session metadata header
                     meta_parts = [
@@ -3860,6 +4080,26 @@ def render_admin():
                         meta_parts.append('<span><strong>Images:</strong> Yes</span>')
                     if session_has_error:
                         meta_parts.append('<span class="mode-pill mode-error">Error</span>')
+                    if session_avg_intent is not None:
+                        _ic = (
+                            "#2d8a4e" if session_avg_intent >= 70 else
+                            "#b8860b" if session_avg_intent >= 40 else
+                            "#dc3545"
+                        )
+                        _ibg = (
+                            "rgba(45,138,78,0.1)" if session_avg_intent >= 70 else
+                            "rgba(184,134,11,0.1)" if session_avg_intent >= 40 else
+                            "rgba(220,53,69,0.1)"
+                        )
+                        _ibr = (
+                            "rgba(45,138,78,0.25)" if session_avg_intent >= 70 else
+                            "rgba(184,134,11,0.25)" if session_avg_intent >= 40 else
+                            "rgba(220,53,69,0.25)"
+                        )
+                        meta_parts.append(
+                            f'<span class="mode-pill" style="background:{_ibg};color:{_ic};border:1px solid {_ibr};">'
+                            f'Intent: {session_avg_intent}/100</span>'
+                        )
                     st.markdown(
                         f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
                         f'{"".join(meta_parts)}'
@@ -3875,10 +4115,21 @@ def render_admin():
                         with st.chat_message(m["role"]):
                             st.markdown(m["content"])
                             meta_items = [p for p in [ts_str, dur_str, tok_str] if p]
+                            m_score = m.get("intent_score")
+                            if m_score is not None:
+                                sc = (
+                                    "#2d8a4e" if m_score >= 70 else
+                                    "#b8860b" if m_score >= 40 else
+                                    "#dc3545"
+                                )
+                                meta_items.append(
+                                    f'<span style="color:{sc};font-weight:600;">'
+                                    f'Intent: {m_score}/100</span>'
+                                )
                             if meta_items:
                                 st.markdown(
                                     f'<div class="msg-meta">'
-                                    f'{"".join(f"<span>{p}</span>" for p in meta_items)}'
+                                    f'{"".join(f"<span>{p}</span>" if not p.startswith("<span") else p for p in meta_items)}'
                                     f'</div>',
                                     unsafe_allow_html=True,
                                 )
@@ -3908,6 +4159,23 @@ def render_admin():
                     mode_badge += '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(184,134,11,0.08);color:var(--warning);border:1px solid rgba(184,134,11,0.15);margin-left:4px;">Img</span>'
                 if m.get("has_error"):
                     mode_badge += '<span class="error-badge" style="margin-left:4px;">Error</span>'
+                flat_intent = m.get("intent_score")
+                if flat_intent is not None:
+                    _fic = (
+                        "#2d8a4e" if flat_intent >= 70 else
+                        "#b8860b" if flat_intent >= 40 else
+                        "#dc3545"
+                    )
+                    _fibg = (
+                        "rgba(45,138,78,0.1)" if flat_intent >= 70 else
+                        "rgba(184,134,11,0.1)" if flat_intent >= 40 else
+                        "rgba(220,53,69,0.1)"
+                    )
+                    mode_badge += (
+                        f'<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;'
+                        f'background:{_fibg};color:{_fic};border:1px solid {_fic}22;'
+                        f'margin-left:4px;font-weight:600;">{flat_intent}/100</span>'
+                    )
 
                 row_error_cls = " has-error" if m.get("has_error") else ""
                 meta_spans = "".join(
