@@ -62,6 +62,11 @@ try:
 except ImportError:
     psycopg2 = None
 
+try:
+    from send_email import send_email
+except ImportError:
+    send_email = None
+
 
 # ---------------------------------------------------------------------------
 # Configuration — set these once
@@ -71,6 +76,8 @@ MODEL = "qwen3.5:9b"
 ENABLE_VISION = True                # set True to enable image upload (jpg, png, bmp)
 VISION_MODEL = "qwen2.5-vl:7b"     # model with vision support (qwen3.5 is text-only)
 ENABLE_DANGER_ZONE = False          # set True to show the "Clear All History" button in admin view
+ENABLE_ERROR_ALERTS = True          # send email to DEVOPS on chat errors
+DEVOPS_EMAIL = "devops@example.com" # recipient(s) for error alerts (comma-separated)
 HISTORY_SCHEMA = "public"           # postgres schema
 HISTORY_TABLE  = "chatbot_history"  # postgres table name
 
@@ -825,6 +832,27 @@ div[data-testid="stPopover"] > div {
     color: var(--accent);
     border: 1px solid rgba(74, 144, 217, 0.25);
 }
+.mode-pill.mode-error {
+    background: rgba(220, 53, 69, 0.1);
+    color: #dc3545;
+    border: 1px solid rgba(220, 53, 69, 0.25);
+}
+.history-row.has-error {
+    border-left: 3px solid #dc3545;
+    background: rgba(220, 53, 69, 0.04);
+}
+.error-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(220, 53, 69, 0.1);
+    color: #dc3545;
+    border: 1px solid rgba(220, 53, 69, 0.2);
+    font-weight: 600;
+}
 </style>
 """
 
@@ -961,6 +989,10 @@ def db_ensure_table():
                 ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
                     ADD COLUMN IF NOT EXISTS has_images BOOLEAN DEFAULT FALSE
             """)
+            cur.execute(f"""
+                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
+                    ADD COLUMN IF NOT EXISTS has_error BOOLEAN DEFAULT FALSE
+            """)
     except Exception as e:
         import sys
         print(f"[db_ensure_table] ERROR: {e}", file=sys.stderr)
@@ -970,7 +1002,8 @@ def db_ensure_table():
 
 
 def db_save_message(msg: dict, session_id: str, username: str, documents: list[str],
-                    chat_mode: str = "normal", has_images: bool = False):
+                    chat_mode: str = "normal", has_images: bool = False,
+                    has_error: bool = False):
     """Persist a single message to postgres."""
     conn = _get_conn()
     if conn is None:
@@ -982,8 +1015,9 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                 f"""
                 INSERT INTO {HISTORY_SCHEMA}.{HISTORY_TABLE}
                     (session_id, username, role, content, timestamp_utc,
-                     duration_s, tokens_est, model, documents, chat_mode, has_images)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     duration_s, tokens_est, model, documents, chat_mode, has_images,
+                     has_error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
@@ -997,6 +1031,7 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                     documents or [],
                     chat_mode,
                     has_images,
+                    has_error,
                 ),
             )
     except Exception as e:
@@ -1044,7 +1079,7 @@ def db_fetch_history(
                 f"""
                 SELECT id, session_id, username, role, content, timestamp_utc,
                        duration_s, tokens_est, model, documents,
-                       chat_mode, has_images
+                       chat_mode, has_images, has_error
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where}
                 ORDER BY timestamp_utc DESC
@@ -1091,7 +1126,8 @@ def db_fetch_stats(
                     COALESCE(MAX(duration_s)
                         FILTER (WHERE role = 'assistant'), 0)      AS max_duration_s,
                     MIN(timestamp_utc)                             AS first_message,
-                    MAX(timestamp_utc)                             AS last_message
+                    MAX(timestamp_utc)                             AS last_message,
+                    COUNT(*) FILTER (WHERE has_error = TRUE)       AS error_count
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where_clause}
             """, params)
@@ -1125,7 +1161,8 @@ def db_fetch_sessions() -> list[dict]:
                         'normal'
                     ) AS chat_mode,
                     BOOL_OR(COALESCE(has_images, FALSE)) AS has_images,
-                    BOOL_OR(documents IS NOT NULL AND array_length(documents, 1) > 0) AS has_documents
+                    BOOL_OR(documents IS NOT NULL AND array_length(documents, 1) > 0) AS has_documents,
+                    BOOL_OR(COALESCE(has_error, FALSE)) AS has_error
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 GROUP BY session_id
                 ORDER BY last_at DESC
@@ -1716,7 +1753,7 @@ def _ollama_model_exists(model_name: str) -> bool:
 
 def chat_stream(messages: list[dict], model: str | None = None):
     payload = {"model": model or MODEL, "messages": messages, "stream": True}
-    with requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120) as r:
+    with requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=(10, 300)) as r:
         r.raise_for_status()
         for line in r.iter_lines():
             if line:
@@ -2742,6 +2779,100 @@ def _current_has_images() -> bool:
     return ENABLE_VISION and bool(st.session_state.get("images"))
 
 
+_ERROR_PREFIXES = ("Error:", "Connection to Ollama lost", "[ERROR]")
+
+
+def _is_error_response(content: str) -> bool:
+    """Return True if an assistant response indicates an error."""
+    return any(content.startswith(p) for p in _ERROR_PREFIXES)
+
+
+def _send_error_alert(session_id: str, username: str, error_content: str, prompt: str):
+    """Send a professional HTML error alert email to DEVOPS."""
+    if not ENABLE_ERROR_ALERTS or send_email is None or not DEVOPS_EMAIL:
+        return
+    try:
+        ts = now_local().strftime("%Y-%m-%d %H:%M:%S %Z")
+        safe_error = (
+            error_content[:1000]
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        safe_prompt = (
+            prompt[:500]
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        chat_mode = _current_chat_mode()
+        mode_label = {"page_builder": "Page Builder", "agent": "Agent"}.get(chat_mode, "Normal Chat")
+        has_images = _current_has_images()
+        doc_names = ", ".join(list(st.session_state.documents.keys())[:5]) or "None"
+
+        html_body = f"""\
+<html>
+<head>
+<style>
+  body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background: #f4f5f7; }}
+  .container {{ max-width: 640px; margin: 24px auto; background: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }}
+  .header {{ background: linear-gradient(135deg, #dc3545 0%, #a71d2a 100%); padding: 28px 32px; }}
+  .header h1 {{ color: #ffffff; font-size: 20px; margin: 0 0 4px; font-weight: 600; }}
+  .header p {{ color: rgba(255,255,255,0.85); font-size: 13px; margin: 0; }}
+  .body {{ padding: 28px 32px; }}
+  .section-title {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #6c757d; margin: 0 0 10px; }}
+  .detail-table {{ width: 100%; border-collapse: collapse; margin-bottom: 24px; }}
+  .detail-table td {{ padding: 9px 12px; font-size: 13.5px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }}
+  .detail-table td:first-child {{ font-weight: 600; color: #495057; width: 130px; white-space: nowrap; }}
+  .detail-table td:last-child {{ color: #212529; }}
+  .error-box {{ background: #fff5f5; border: 1px solid #f5c6cb; border-left: 4px solid #dc3545; border-radius: 6px; padding: 16px 18px; margin-bottom: 24px; }}
+  .error-box pre {{ margin: 0; font-family: 'Consolas', 'Courier New', monospace; font-size: 12.5px; color: #721c24; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }}
+  .prompt-box {{ background: #f8f9fa; border: 1px solid #e9ecef; border-left: 4px solid #6c757d; border-radius: 6px; padding: 16px 18px; margin-bottom: 24px; }}
+  .prompt-box pre {{ margin: 0; font-family: 'Consolas', 'Courier New', monospace; font-size: 12.5px; color: #495057; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }}
+  .footer {{ padding: 18px 32px; background: #f8f9fa; border-top: 1px solid #e9ecef; text-align: center; }}
+  .footer p {{ margin: 0; font-size: 11.5px; color: #868e96; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }}
+  .badge-mode {{ background: rgba(74,144,217,0.1); color: #4a90d9; border: 1px solid rgba(74,144,217,0.2); }}
+  .badge-img {{ background: rgba(184,134,11,0.08); color: #b8860b; border: 1px solid rgba(184,134,11,0.15); }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Chatbot Error Alert</h1>
+    <p>An error occurred during a chat session on the Ollama Document Chatbot.</p>
+  </div>
+  <div class="body">
+    <p class="section-title">Session Details</p>
+    <table class="detail-table">
+      <tr><td>Timestamp</td><td>{ts}</td></tr>
+      <tr><td>User</td><td>{username or '—'}</td></tr>
+      <tr><td>Session ID</td><td><code>{session_id}</code></td></tr>
+      <tr><td>Mode</td><td><span class="badge badge-mode">{mode_label}</span></td></tr>
+      <tr><td>Model</td><td>{MODEL}</td></tr>
+      <tr><td>Documents</td><td>{doc_names}</td></tr>
+      <tr><td>Images Attached</td><td>{'Yes' if has_images else 'No'}</td></tr>
+    </table>
+
+    <p class="section-title">User Prompt</p>
+    <div class="prompt-box"><pre>{safe_prompt}</pre></div>
+
+    <p class="section-title">Error Response</p>
+    <div class="error-box"><pre>{safe_error}</pre></div>
+  </div>
+  <div class="footer">
+    <p>This is an automated alert from the Ollama Document Chatbot &middot; {OLLAMA_URL}</p>
+  </div>
+</div>
+</body>
+</html>"""
+
+        send_email(
+            subject=f"[Chatbot Error] {error_content[:80]}",
+            message_body=html_body,
+            to_email=DEVOPS_EMAIL,
+        )
+    except Exception as e:
+        import sys
+        print(f"[_send_error_alert] Failed to send email: {e}", file=sys.stderr)
+
+
 def _db_save_kwargs() -> dict:
     """Common kwargs for db_save_message calls."""
     return {
@@ -3168,8 +3299,17 @@ def render_chat():
         # Clear the processing bar
         processing_bar.empty()
 
+        is_error = _is_error_response(full_response)
         st.session_state.chat_messages.append(assistant_msg)
-        db_save_message(assistant_msg, **_db_save_kwargs())
+        db_save_message(assistant_msg, **_db_save_kwargs(), has_error=is_error)
+
+        if is_error:
+            _send_error_alert(
+                session_id=st.session_state.chat_session_id,
+                username=st.session_state.get("username", ""),
+                error_content=full_response,
+                prompt=pending_prompt,
+            )
 
         # Release the queue slot
         prompt_release(pending_prompt_id)
@@ -3384,26 +3524,38 @@ def render_admin():
     last_msg  = stats.get("last_message")
 
     if stats:
-        cs = st.columns(6)
+        error_count = int(stats.get("error_count") or 0)
+        cs = st.columns(7)
         cards = [
             ("Sessions",       format_number(int(stats.get("total_sessions", 0))),
-             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}"),
+             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}",
+             False),
             ("Total Messages", format_number(int(stats.get("total_messages", 0))),
-             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}"),
+             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}",
+             False),
             ("User",           format_number(int(stats.get("user_messages", 0))),
-             "messages sent"),
+             "messages sent", False),
             ("Assistant",      format_number(int(stats.get("assistant_messages", 0))),
-             "responses given"),
+             "responses given", False),
             ("Avg Response",   format_duration(avg_dur),
-             f"Max: {format_duration(max_dur)}"),
+             f"Max: {format_duration(max_dur)}", False),
             ("Total Tokens",   format_number(int(stats.get("total_tokens", 0))),
-             "estimated"),
+             "estimated", False),
+            ("Errors",         format_number(error_count),
+             "error responses", True),
         ]
-        for col, (label, value, sub) in zip(cs, cards):
+        for col, (label, value, sub, is_error) in zip(cs, cards):
             with col:
+                error_style = (
+                    'border:1px solid rgba(220,53,69,0.35);background:rgba(220,53,69,0.06);'
+                    if is_error and error_count > 0 else ""
+                )
+                value_color = (
+                    'color:#dc3545;' if is_error and error_count > 0 else ""
+                )
                 st.markdown(
-                    f'<div class="stat-card">'
-                    f'<div class="stat-value">{value}</div>'
+                    f'<div class="stat-card" style="{error_style}">'
+                    f'<div class="stat-value" style="{value_color}">{value}</div>'
                     f'<div class="stat-label">{label}</div>'
                     f'<div class="stat-sub">{sub}</div>'
                     f'</div>',
@@ -3649,10 +3801,11 @@ def render_admin():
                 uname     = msgs[0].get("username") or "—"
                 docs_list = msgs[0].get("documents") or []
 
-                # Detect mode and attachments from messages
+                # Detect mode, attachments, and errors from messages
                 session_mode = "normal"
                 session_has_images = False
                 session_has_docs = bool(docs_list)
+                session_has_error = False
                 for m in msgs:
                     m_mode = m.get("chat_mode") or "normal"
                     if m_mode != "normal":
@@ -3661,6 +3814,8 @@ def render_admin():
                         session_has_images = True
                     if m.get("documents") and len(m["documents"]) > 0:
                         session_has_docs = True
+                    if m.get("has_error"):
+                        session_has_error = True
 
                 date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
                 time_range = ""
@@ -3678,8 +3833,9 @@ def render_admin():
                     attach_tags += " Docs"
                 if session_has_images:
                     attach_tags += " Images"
+                error_tag = " ⚠ ERROR" if session_has_error else ""
 
-                label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} msgs  ·  {date_str}{mode_tag}{attach_tags}"
+                label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} msgs  ·  {date_str}{mode_tag}{attach_tags}{error_tag}"
                 with st.expander(label, expanded=False):
                     # Session metadata header
                     meta_parts = [
@@ -3702,6 +3858,8 @@ def render_admin():
                         meta_parts.append(f'<span><strong>Docs:</strong> {doc_names}</span>')
                     if session_has_images:
                         meta_parts.append('<span><strong>Images:</strong> Yes</span>')
+                    if session_has_error:
+                        meta_parts.append('<span class="mode-pill mode-error">Error</span>')
                     st.markdown(
                         f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
                         f'{"".join(meta_parts)}'
@@ -3748,12 +3906,15 @@ def render_admin():
                     mode_badge = '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(156,39,176,0.1);color:#9c27b0;border:1px solid rgba(156,39,176,0.2);margin-left:6px;">Agent</span>'
                 if m.get("has_images"):
                     mode_badge += '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(184,134,11,0.08);color:var(--warning);border:1px solid rgba(184,134,11,0.15);margin-left:4px;">Img</span>'
+                if m.get("has_error"):
+                    mode_badge += '<span class="error-badge" style="margin-left:4px;">Error</span>'
 
+                row_error_cls = " has-error" if m.get("has_error") else ""
                 meta_spans = "".join(
                     f"<span>{p}</span>" for p in [ts_str, dur_str, tok_str] if p
                 )
                 st.markdown(
-                    f'<div class="history-row {role_cls}">'
+                    f'<div class="history-row {role_cls}{row_error_cls}">'
                     f'<div class="history-row-header">'
                     f'<div style="display:flex;align-items:center;gap:8px;">'
                     f'<span class="history-role-badge {role_cls}">{role_label}</span>'
