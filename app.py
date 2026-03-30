@@ -74,7 +74,7 @@ except ImportError:
 OLLAMA_URL = "http://ef-nexus-03:8081"
 MODEL = "qwen3.5:9b"
 ENABLE_VISION = True                # set True to enable image upload (jpg, png, bmp)
-VISION_MODEL = "qwen2.5-vl:7b"     # model with vision support (qwen3.5 is text-only)
+VISION_MODEL = "qwen3-vl:4b"        # model with vision support (qwen3.5 is text-only)
 ENABLE_DANGER_ZONE = False          # set True to show the "Clear All History" button in admin view
 ENABLE_INTENT_SCORING = True        # set True to enable LLM-based intent scoring + guardrails
 ENABLE_ERROR_ALERTS = True          # send email to DEVOPS on chat errors
@@ -1190,16 +1190,42 @@ def db_fetch_stats(
                 SELECT
                     COUNT(*)                                        AS total_messages,
                     COUNT(DISTINCT session_id)                      AS total_sessions,
+                    COUNT(DISTINCT username) FILTER (WHERE username IS NOT NULL AND username != '')
+                                                                   AS unique_users,
                     COUNT(*) FILTER (WHERE role = 'user')          AS user_messages,
                     COUNT(*) FILTER (WHERE role = 'assistant')     AS assistant_messages,
                     COALESCE(SUM(tokens_est), 0)                   AS total_tokens,
+                    COALESCE(SUM(tokens_est) FILTER (WHERE role = 'user'), 0)
+                                                                   AS user_tokens,
+                    COALESCE(SUM(tokens_est) FILTER (WHERE role = 'assistant'), 0)
+                                                                   AS assistant_tokens,
                     COALESCE(AVG(duration_s)
                         FILTER (WHERE role = 'assistant'), 0)      AS avg_duration_s,
                     COALESCE(MAX(duration_s)
                         FILTER (WHERE role = 'assistant'), 0)      AS max_duration_s,
+                    COALESCE(
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_s)
+                        FILTER (WHERE role = 'assistant' AND duration_s IS NOT NULL), 0
+                    )                                              AS median_duration_s,
+                    COALESCE(
+                        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_s)
+                        FILTER (WHERE role = 'assistant' AND duration_s IS NOT NULL), 0
+                    )                                              AS p95_duration_s,
+                    COUNT(*) FILTER (WHERE role = 'assistant' AND duration_s <= 5)
+                                                                   AS fast_responses,
+                    COUNT(*) FILTER (WHERE role = 'assistant' AND duration_s > 5 AND duration_s <= 15)
+                                                                   AS normal_responses,
+                    COUNT(*) FILTER (WHERE role = 'assistant' AND duration_s > 15)
+                                                                   AS slow_responses,
                     MIN(timestamp_utc)                             AS first_message,
                     MAX(timestamp_utc)                             AS last_message,
                     COUNT(*) FILTER (WHERE has_error = TRUE)       AS error_count,
+                    COUNT(*) FILTER (WHERE chat_mode = 'page_builder')
+                                                                   AS page_builder_msgs,
+                    COUNT(*) FILTER (WHERE COALESCE(has_images, FALSE) = TRUE)
+                                                                   AS vision_msgs,
+                    COUNT(*) FILTER (WHERE documents IS NOT NULL AND array_length(documents, 1) > 0)
+                                                                   AS doc_msgs,
                     ROUND(AVG(intent_score) FILTER (WHERE intent_score IS NOT NULL))::INT
                                                                    AS avg_intent_score,
                     MIN(intent_score) FILTER (WHERE intent_score IS NOT NULL)
@@ -3618,18 +3644,16 @@ def _render_intent_distribution(fkw: dict):
         m_pct = round(med / total * 100)
         l_pct = round(low / total * 100)
         st.markdown(
-            f'<div class="stat-card">'
-            f'<div class="stat-label" style="margin-bottom:8px;">Intent Distribution</div>'
-            f'<div style="display:flex;height:18px;border-radius:9px;overflow:hidden;width:100%;">'
+            f'<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;width:100%;'
+            f'background:rgba(128,128,128,0.1);">'
             f'<div style="width:{h_pct}%;background:#2d8a4e;" title="High ({high})"></div>'
             f'<div style="width:{m_pct}%;background:#b8860b;" title="Medium ({med})"></div>'
             f'<div style="width:{l_pct}%;background:#dc3545;" title="Low ({low})"></div>'
             f'</div>'
             f'<div class="stat-sub" style="margin-top:6px;">'
-            f'<span style="color:#2d8a4e;">High {high}</span> · '
-            f'<span style="color:#b8860b;">Med {med}</span> · '
-            f'<span style="color:#dc3545;">Low {low}</span>'
-            f'</div>'
+            f'<span style="color:#2d8a4e;">High {h_pct}%</span> · '
+            f'<span style="color:#b8860b;">Med {m_pct}%</span> · '
+            f'<span style="color:#dc3545;">Low {l_pct}%</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -3838,42 +3862,156 @@ def render_admin():
     last_msg  = stats.get("last_message")
 
     if stats:
+        total_msgs  = int(stats.get("total_messages") or 0)
+        total_sess  = int(stats.get("total_sessions") or 0)
+        unique_users = int(stats.get("unique_users") or 0)
+        user_msgs   = int(stats.get("user_messages") or 0)
+        asst_msgs   = int(stats.get("assistant_messages") or 0)
+        total_tok   = int(stats.get("total_tokens") or 0)
+        user_tok    = int(stats.get("user_tokens") or 0)
+        asst_tok    = int(stats.get("assistant_tokens") or 0)
         error_count = int(stats.get("error_count") or 0)
-        avg_intent = stats.get("avg_intent_score")
-        min_intent = stats.get("min_intent_score")
-        max_intent = stats.get("max_intent_score")
-        scored_n   = int(stats.get("scored_prompts") or 0)
+        median_dur  = float(stats.get("median_duration_s") or 0)
+        p95_dur     = float(stats.get("p95_duration_s") or 0)
+        fast_n      = int(stats.get("fast_responses") or 0)
+        normal_n    = int(stats.get("normal_responses") or 0)
+        slow_n      = int(stats.get("slow_responses") or 0)
+        pb_msgs     = int(stats.get("page_builder_msgs") or 0)
+        vis_msgs    = int(stats.get("vision_msgs") or 0)
+        doc_msgs    = int(stats.get("doc_msgs") or 0)
+        avg_intent  = stats.get("avg_intent_score")
+        min_intent  = stats.get("min_intent_score")
+        max_intent  = stats.get("max_intent_score")
+        scored_n    = int(stats.get("scored_prompts") or 0)
 
-        # Row 1: core stats (6 cards)
-        cs = st.columns(6)
-        cards = [
-            ("Sessions",       format_number(int(stats.get("total_sessions", 0))),
-             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}"),
-            ("Total Messages", format_number(int(stats.get("total_messages", 0))),
-             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}"),
-            ("User",           format_number(int(stats.get("user_messages", 0))),
-             "messages sent"),
-            ("Assistant",      format_number(int(stats.get("assistant_messages", 0))),
-             "responses given"),
-            ("Avg Response",   format_duration(avg_dur),
-             f"Max: {format_duration(max_dur)}"),
-            ("Total Tokens",   format_number(int(stats.get("total_tokens", 0))),
-             "estimated"),
-        ]
-        for col, (label, value, sub) in zip(cs, cards):
-            with col:
-                st.markdown(
-                    f'<div class="stat-card">'
-                    f'<div class="stat-value">{value}</div>'
-                    f'<div class="stat-label">{label}</div>'
-                    f'<div class="stat-sub">{sub}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+        msgs_per_session = round(total_msgs / total_sess, 1) if total_sess else 0
+        error_rate = round(error_count / asst_msgs * 100, 1) if asst_msgs else 0
+        user_pct = round(user_msgs / total_msgs * 100) if total_msgs else 0
+        asst_pct = 100 - user_pct if total_msgs else 0
 
-        # Row 2: intent score + errors (2 highlighted cards)
-        ci1, ci2, ci3 = st.columns([2, 2, 1])
-        with ci1:
+        def _bar_html(segments: list[tuple[float, str, str]], height: int = 14) -> str:
+            """Build a horizontal stacked bar from (pct, color, label) tuples."""
+            parts = []
+            for pct, color, _label in segments:
+                if pct > 0:
+                    parts.append(
+                        f'<div style="width:{pct}%;background:{color};height:{height}px;" '
+                        f'title="{_label} ({pct}%)"></div>'
+                    )
+            return (
+                f'<div style="display:flex;border-radius:{height // 2}px;overflow:hidden;'
+                f'width:100%;background:rgba(128,128,128,0.1);">{"".join(parts)}</div>'
+            )
+
+        # ── Row 1: headline KPIs ──
+        k1, k2, k3, k4 = st.columns(4)
+        with k1:
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<div class="stat-value">{format_number(total_sess)}</div>'
+                f'<div class="stat-label">Sessions</div>'
+                f'<div class="stat-sub">{unique_users} user{"s" if unique_users != 1 else ""} · '
+                f'{msgs_per_session} msgs/session</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with k2:
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<div class="stat-value">{format_number(total_msgs)}</div>'
+                f'<div class="stat-label">Total Messages</div>'
+                f'<div class="stat-sub" style="margin-bottom:6px;">'
+                f'User {user_pct}% · Assistant {asst_pct}%</div>'
+                f'{_bar_html([(user_pct, "#4a90d9", "User"), (asst_pct, "#2d8a4e", "Assistant")])}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with k3:
+            user_tok_pct = round(user_tok / total_tok * 100) if total_tok else 0
+            asst_tok_pct = 100 - user_tok_pct if total_tok else 0
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<div class="stat-value">{format_number(total_tok)}</div>'
+                f'<div class="stat-label">Total Tokens</div>'
+                f'<div class="stat-sub" style="margin-bottom:6px;">'
+                f'User {user_tok_pct}% · Assistant {asst_tok_pct}%</div>'
+                f'{_bar_html([(user_tok_pct, "#4a90d9", "User"), (asst_tok_pct, "#2d8a4e", "Assistant")])}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with k4:
+            first_str = to_local(first_msg).strftime('%b %d, %Y') if first_msg else '—'
+            last_str  = to_local(last_msg).strftime('%b %d, %Y') if last_msg else '—'
+            span_days = (last_msg - first_msg).days if first_msg and last_msg else 0
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<div class="stat-value">{span_days}d</div>'
+                f'<div class="stat-label">Active Span</div>'
+                f'<div class="stat-sub">{first_str} — {last_str}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Row 2: response performance ──
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            # Response time breakdown
+            resp_total = fast_n + normal_n + slow_n
+            fast_pct   = round(fast_n / resp_total * 100) if resp_total else 0
+            normal_pct = round(normal_n / resp_total * 100) if resp_total else 0
+            slow_pct   = 100 - fast_pct - normal_pct if resp_total else 0
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<div class="stat-label" style="margin-bottom:4px;">Response Time</div>'
+                f'<div class="stat-sub" style="margin-bottom:8px;">'
+                f'Median <strong>{format_duration(median_dur)}</strong> · '
+                f'P95 <strong>{format_duration(p95_dur)}</strong> · '
+                f'Max <strong>{format_duration(max_dur)}</strong></div>'
+                f'{_bar_html([(fast_pct, "#2d8a4e", "Fast ≤5s"), (normal_pct, "#b8860b", "Normal 5-15s"), (slow_pct, "#dc3545", "Slow >15s")])}'
+                f'<div class="stat-sub" style="margin-top:6px;">'
+                f'<span style="color:#2d8a4e;">≤5s {fast_pct}%</span> · '
+                f'<span style="color:#b8860b;">5-15s {normal_pct}%</span> · '
+                f'<span style="color:#dc3545;">>15s {slow_pct}%</span>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with p2:
+            # Error rate + feature usage
+            err_ok_pct = 100 - round(error_rate)
+            err_pct_bar = round(error_rate)
+            normal_chat = total_msgs - pb_msgs - vis_msgs - doc_msgs
+            if normal_chat < 0:
+                normal_chat = 0
+            feat_total = max(total_msgs, 1)
+            chat_pct = round(normal_chat / feat_total * 100)
+            pb_pct   = round(pb_msgs / feat_total * 100)
+            doc_pct  = round(doc_msgs / feat_total * 100)
+            vis_pct  = round(vis_msgs / feat_total * 100)
+            # Ensure they sum to ~100
+            remainder = 100 - chat_pct - pb_pct - doc_pct - vis_pct
+            chat_pct += remainder
+
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<div class="stat-label" style="margin-bottom:4px;">Reliability & Usage</div>'
+                f'<div class="stat-sub" style="margin-bottom:6px;">'
+                f'Error rate: <strong style="color:{"#dc3545" if error_rate > 5 else "#2d8a4e"}">'
+                f'{error_rate}%</strong> ({error_count} of {asst_msgs} responses)</div>'
+                f'{_bar_html([(err_ok_pct, "#2d8a4e", "Success"), (err_pct_bar, "#dc3545", "Errors")])}'
+                f'<div class="stat-sub" style="margin-top:10px;margin-bottom:6px;">Feature usage</div>'
+                f'{_bar_html([(chat_pct, "#6c757d", "Chat"), (pb_pct, "#4a90d9", "Page Builder"), (doc_pct, "#b8860b", "Docs"), (vis_pct, "#9c27b0", "Vision")])}'
+                f'<div class="stat-sub" style="margin-top:6px;">'
+                f'<span style="color:#6c757d;">Chat {chat_pct}%</span> · '
+                f'<span style="color:#4a90d9;">PB {pb_pct}%</span> · '
+                f'<span style="color:#b8860b;">Docs {doc_pct}%</span> · '
+                f'<span style="color:#9c27b0;">Vision {vis_pct}%</span>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with p3:
+            # Intent score
             if avg_intent is not None:
                 intent_val = int(avg_intent)
                 intent_color = (
@@ -3881,52 +4019,27 @@ def render_admin():
                     "#b8860b" if intent_val >= 40 else
                     "#dc3545"
                 )
-                intent_border = (
-                    "rgba(45,138,78,0.35)" if intent_val >= 70 else
-                    "rgba(184,134,11,0.35)" if intent_val >= 40 else
-                    "rgba(220,53,69,0.35)"
-                )
-                intent_bg = (
-                    "rgba(45,138,78,0.06)" if intent_val >= 70 else
-                    "rgba(184,134,11,0.06)" if intent_val >= 40 else
-                    "rgba(220,53,69,0.06)"
-                )
                 range_str = f"Range: {min_intent} – {max_intent}" if min_intent is not None else ""
                 st.markdown(
-                    f'<div class="stat-card" style="border:1px solid {intent_border};background:{intent_bg};">'
-                    f'<div class="stat-value" style="color:{intent_color};">{intent_val}/100</div>'
-                    f'<div class="stat-label">Avg Intent Score</div>'
-                    f'<div class="stat-sub">{scored_n} scored prompts · {range_str}</div>'
-                    f'</div>',
+                    f'<div class="stat-card">'
+                    f'<div class="stat-label" style="margin-bottom:4px;">Intent Relevance</div>'
+                    f'<div class="stat-value" style="color:{intent_color};font-size:1.8rem;">'
+                    f'{intent_val}/100</div>'
+                    f'<div class="stat-sub" style="margin-bottom:8px;">'
+                    f'{scored_n} scored · {range_str}</div>',
                     unsafe_allow_html=True,
                 )
+                _render_intent_distribution(fkw)
+                st.markdown('</div>', unsafe_allow_html=True)
             else:
                 st.markdown(
                     '<div class="stat-card">'
-                    '<div class="stat-value" style="color:var(--text-muted);">—</div>'
-                    '<div class="stat-label">Avg Intent Score</div>'
+                    '<div class="stat-label" style="margin-bottom:4px;">Intent Relevance</div>'
+                    '<div class="stat-value" style="color:var(--text-muted);font-size:1.8rem;">—</div>'
                     '<div class="stat-sub">No scored prompts yet</div>'
                     '</div>',
                     unsafe_allow_html=True,
                 )
-        with ci2:
-            # Intent score distribution bar
-            if scored_n > 0:
-                _render_intent_distribution(fkw)
-        with ci3:
-            error_style = (
-                'border:1px solid rgba(220,53,69,0.35);background:rgba(220,53,69,0.06);'
-                if error_count > 0 else ""
-            )
-            error_val_color = 'color:#dc3545;' if error_count > 0 else ""
-            st.markdown(
-                f'<div class="stat-card" style="{error_style}">'
-                f'<div class="stat-value" style="{error_val_color}">{format_number(error_count)}</div>'
-                f'<div class="stat-label">Errors</div>'
-                f'<div class="stat-sub">error responses</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
 
     # ==========================================================
     # CHARTS — filtered (fragment for independent re-rendering)
