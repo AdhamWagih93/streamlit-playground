@@ -1209,6 +1209,10 @@ if _tick_evts:
 # ALERTS — compact chips, vivid colors
 # =============================================================================
 
+# _lc_classified is populated later in the lifecycle section; pre-init so
+# alert popovers that reference it don't raise NameError on first render.
+_lc_classified: dict[str, str] = {}
+
 alerts: list[tuple[str, str, str, str]] = []  # (severity, icon, title, detail)
 
 # 1) Approvals pending > 24h
