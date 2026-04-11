@@ -33,6 +33,7 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 # -----------------------------------------------------------------------------
@@ -232,31 +233,42 @@ h1, h2, h3, h4 {
 }
 .section .hint { font-size: .78rem; color: #64748b; }
 
-/* -------- Alert ribbon -------- */
+/* -------- Alert ribbon — vivid, solid icon chips -------- */
 .alert {
-    padding: 11px 15px; border-radius: 10px; margin-bottom: 8px;
-    border-left: 3px solid #d97706;
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 7px;
+    border-left: 4px solid #d97706;
     background: #fffbeb;
-    font-size: .90rem;
+    font-size: .88rem;
     display: flex; align-items: center; gap: 12px;
     color: #1e293b;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 .alert .icon {
-    width: 26px; height: 26px; border-radius: 7px;
+    width: 28px; height: 28px; border-radius: 7px;
     display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: .85rem; flex-shrink: 0;
-    background: #fef3c7; color: #92400e;
+    font-weight: 800; font-size: .82rem; flex-shrink: 0;
+    /* default: amber solid */
+    background: #d97706 !important; color: #ffffff !important;
 }
-.alert.danger  { border-color: #dc2626 !important; background: #fff1f2 !important; }
-.alert.danger .icon { background: #fee2e2 !important; color: #991b1b !important; }
-.alert.info    { border-color: #2563eb !important; background: #eff6ff !important; }
-.alert.info .icon { background: #dbeafe !important; color: #1e40af !important; }
-.alert.success { border-color: #059669 !important; background: #f0fdf4 !important; }
-.alert.success .icon { background: #dcfce7 !important; color: #065f46 !important; }
-.alert.warning { border-color: #d97706 !important; background: #fffbeb !important; }
-.alert.warning .icon { background: #fef3c7 !important; color: #92400e !important; }
-.alert b { font-weight: 650; color: #0f172a !important; }
-.alert .sub { font-size: .82rem; color: #475569 !important; margin-left: 6px; }
+/* danger — vivid red */
+.alert.danger  { border-left-color: #dc2626 !important; background: #fff1f2 !important; }
+.alert.danger .icon { background: #dc2626 !important; color: #ffffff !important; }
+.alert.danger b  { color: #7f1d1d !important; }
+/* warning — vivid amber */
+.alert.warning { border-left-color: #d97706 !important; background: #fffbeb !important; }
+.alert.warning .icon { background: #d97706 !important; color: #ffffff !important; }
+.alert.warning b { color: #78350f !important; }
+/* info — vivid blue */
+.alert.info    { border-left-color: #2563eb !important; background: #eff6ff !important; }
+.alert.info .icon { background: #2563eb !important; color: #ffffff !important; }
+.alert.info b  { color: #1e3a8a !important; }
+/* success — vivid green */
+.alert.success { border-left-color: #16a34a !important; background: #f0fdf4 !important; }
+.alert.success .icon { background: #16a34a !important; color: #ffffff !important; }
+.alert.success b { color: #14532d !important; }
+/* shared text */
+.alert b   { font-weight: 700; }
+.alert .sub { font-size: .82rem; color: #475569 !important; margin-left: 4px; }
 
 /* -------- Insight / learn panel -------- */
 .learn {
@@ -343,30 +355,26 @@ footer, #MainMenu, header[data-testid="stHeader"] { visibility: hidden; }
 .kpi .value      { color: #0f172a !important; }
 .kpi .label      { color: #64748b !important; }
 
-/* Alert ribbon — force border, background AND text color */
-.alert          { color: #e2e8f0 !important; }
-.alert b        { color: #f1f5f9 !important; }
-.alert .sub     { color: #cbd5e1 !important; }
+/* Alert ribbon — enforce vivid solid icons + saturated backgrounds */
+.alert          { color: #1e293b !important; }
+.alert b        { font-weight: 700 !important; }
+.alert .sub     { color: #475569 !important; }
 
-.alert.success       { border-left-color: #10b981 !important;
-                       background: linear-gradient(90deg, rgba(16,185,129,0.14), rgba(16,185,129,0.03)) !important; }
-.alert.success .icon { background: rgba(16,185,129,0.28) !important; color: #6ee7b7 !important; }
-.alert.success b     { color: #a7f3d0 !important; }
+.alert.success       { border-left-color: #16a34a !important; background: #f0fdf4 !important; }
+.alert.success .icon { background: #16a34a !important; color: #ffffff !important; }
+.alert.success b     { color: #14532d !important; }
 
-.alert.danger        { border-left-color: #f43f5e !important;
-                       background: linear-gradient(90deg, rgba(244,63,94,0.16), rgba(244,63,94,0.03)) !important; }
-.alert.danger .icon  { background: rgba(244,63,94,0.28) !important; color: #fecdd3 !important; }
-.alert.danger b      { color: #fecaca !important; }
+.alert.danger        { border-left-color: #dc2626 !important; background: #fff1f2 !important; }
+.alert.danger .icon  { background: #dc2626 !important; color: #ffffff !important; }
+.alert.danger b      { color: #7f1d1d !important; }
 
-.alert.warning       { border-left-color: #f59e0b !important;
-                       background: linear-gradient(90deg, rgba(245,158,11,0.14), rgba(245,158,11,0.03)) !important; }
-.alert.warning .icon { background: rgba(245,158,11,0.28) !important; color: #fde68a !important; }
-.alert.warning b     { color: #fde68a !important; }
+.alert.warning       { border-left-color: #d97706 !important; background: #fffbeb !important; }
+.alert.warning .icon { background: #d97706 !important; color: #ffffff !important; }
+.alert.warning b     { color: #78350f !important; }
 
-.alert.info          { border-left-color: #60a5fa !important;
-                       background: linear-gradient(90deg, rgba(96,165,250,0.14), rgba(96,165,250,0.03)) !important; }
-.alert.info .icon    { background: rgba(96,165,250,0.28) !important; color: #bfdbfe !important; }
-.alert.info b        { color: #bfdbfe !important; }
+.alert.info          { border-left-color: #2563eb !important; background: #eff6ff !important; }
+.alert.info .icon    { background: #2563eb !important; color: #ffffff !important; }
+.alert.info b        { color: #1e3a8a !important; }
 
 /* Pills */
 .pill.green { background: rgba(16,185,129,.16) !important;  color: #6ee7b7 !important; border-color: rgba(16,185,129,.32) !important; }
@@ -574,7 +582,8 @@ def age_hours(value: Any, reference: datetime | None = None) -> int | None:
     ts = parse_dt(value)
     if ts is None:
         return None
-    ref = pd.Timestamp(reference or datetime.now(timezone.utc), tz="UTC")
+    _ref = reference or datetime.now(timezone.utc)
+    ref = pd.Timestamp(_ref) if _ref.tzinfo is not None else pd.Timestamp(_ref, tz="UTC")
     try:
         return max(0, int((ref - ts).total_seconds() / 3600))
     except Exception:
@@ -639,31 +648,7 @@ def range_filter(field: str, start: datetime, end: datetime) -> dict:
 
 
 # =============================================================================
-# HERO HEADER
-# =============================================================================
-
-st.markdown(
-    f"""
-    <div class="hero">
-        <div class="eyebrow"><span class="dot"></span> LIVE · PRODUCTION CLUSTER</div>
-        <h1>CI/CD Platform Command Center</h1>
-        <div class="subtitle">
-            A single pane of glass correlating builds, deployments, requests,
-            commits, releases and tickets across the DevOps platform.
-        </div>
-        <div class="meta">
-            <span>Refreshed · <b>{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC</b></span>
-            <span>Cache TTL · <b>{CACHE_TTL // 60} min</b></span>
-            <span>Indices tracked · <b>{len(IDX)}</b></span>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# =============================================================================
-# COMMAND BAR — inline controls replace the sidebar
+# COMMAND BAR — title inline with controls, no separate hero block
 # =============================================================================
 
 # Populate dropdowns from the inventory — composite_terms already uses the
@@ -688,32 +673,35 @@ def _load_inventory_choices() -> tuple[list[str], list[str]]:
 _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
-cb = st.columns([2, 2, 2, 1.2, 1.2])
+# Title + controls in one row
+cb = st.columns([2.2, 1.8, 1.8, 1.8, 0.9, 0.9])
 
 with cb[0]:
-    preset = st.selectbox(
-        "Time window", list(PRESETS.keys()), index=3,
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:10px;padding-top:6px;">'
+        '<span style="width:8px;height:8px;border-radius:50%;background:#10b981;'
+        'box-shadow:0 0 6px #10b981;display:inline-block;flex-shrink:0;"></span>'
+        '<span style="font-size:1.1rem;font-weight:700;color:#0f172a;letter-spacing:-0.01em;">'
+        'CI/CD Command Center</span></div>',
+        unsafe_allow_html=True,
     )
 
 with cb[1]:
-    company_pick = st.selectbox(
-        "Company scope", [_ALL] + _all_companies, index=0,
-    )
-    company_filter = "" if company_pick == _ALL else company_pick
+    preset = st.selectbox("Window", list(PRESETS.keys()), index=3, label_visibility="collapsed")
 
 with cb[2]:
-    project_pick = st.selectbox(
-        "Project scope", [_ALL] + _all_projects, index=0,
-    )
-    project_filter = "" if project_pick == _ALL else project_pick
+    company_pick = st.selectbox("Company", [_ALL] + _all_companies, index=0, label_visibility="collapsed")
+    company_filter = "" if company_pick == _ALL else company_pick
 
 with cb[3]:
-    st.markdown('<div class="cmdbar-label">Auto-refresh</div>', unsafe_allow_html=True)
-    auto_refresh = st.toggle("60s", value=False, label_visibility="collapsed")
+    project_pick = st.selectbox("Project", [_ALL] + _all_projects, index=0, label_visibility="collapsed")
+    project_filter = "" if project_pick == _ALL else project_pick
 
 with cb[4]:
-    st.markdown('<div class="cmdbar-label">&nbsp;</div>', unsafe_allow_html=True)
-    if st.button("↻  Clear cache", use_container_width=True):
+    auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s")
+
+with cb[5]:
+    if st.button("↻", help="Clear cache & reload", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -737,9 +725,7 @@ now_utc     = datetime.now(timezone.utc)
 pending_window_start = now_utc - timedelta(days=30)
 
 st.caption(
-    f"Showing **{start_dt:%Y-%m-%d %H:%M}** → **{end_dt:%Y-%m-%d %H:%M}** UTC "
-    f"· histogram bucket **{interval}** "
-    f"· compared against the equivalent prior window"
+    f"{start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M} UTC  ·  bucket {interval}  ·  vs prior equal window  ·  {now_utc:%H:%M} UTC"
 )
 
 
@@ -891,110 +877,10 @@ dormant_pct = (1 - active_projs / inv_count) * 100 if inv_count else 0
 
 
 # =============================================================================
-# SECTION 1 — EXECUTIVE KPIs
+# KPIs  (2 rows × 4)
 # =============================================================================
 
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Executive KPIs</h2><span class="badge">DORA + Volume</span></div>'
-    '<span class="hint">values vs prior equal window</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-# Row 1 — four DORA-flavored cards (the headline story)
-r1 = st.columns(4)
-d, dn = fmt_delta(prd_deploys, count_with_range(
-    IDX["deployments"], "startdate", prior_start, prior_end,
-    extra=[{"term": {"environment": "prd"}}],
-))
-kpi_block(
-    r1[0], "Deployment frequency",
-    f"{deploy_freq_per_day:.1f} <span style='font-size:.95rem;color:#94a3b8;'>/ day</span>",
-    d, dn,
-    "DORA · prod deploys / day in window",
-)
-kpi_block(
-    r1[1], "Change failure rate",
-    f"{cfr:.1f}%",
-    f"{prd_fail} failed / {prd_deploys} prod" if prd_deploys else "no prod deploys",
-    "dn" if cfr > 15 else ("up" if prd_deploys else "flat"),
-    "DORA · failed prod deploys / prod deploys",
-)
-kpi_block(
-    r1[2], "Build success",
-    f"{success_rate:.1f}%",
-    f"{builds_fail:,} failed" if builds_fail else "all green",
-    "dn" if builds_fail else "up",
-    "(builds − failed) / builds",
-)
-kpi_block(
-    r1[3], "Platform health",
-    f"{active_projs}/{inv_count}" if inv_count else "—",
-    f"{100 - dormant_pct:.0f}% active" if inv_count else "",
-    "up" if dormant_pct < 30 else ("dn" if dormant_pct > 60 else "flat"),
-    "active / inventory",
-)
-
-# Row 2 — volume row
-r2 = st.columns(4)
-d, dn = fmt_delta(builds_now, builds_prev)
-kpi_block(r2[0], "Builds", f"{builds_now:,}", d, dn, "ef-cicd-builds")
-d, dn = fmt_delta(deploys_now, deploys_prev)
-kpi_block(r2[1], "Deployments", f"{deploys_now:,}", d, dn, "all environments")
-d, dn = fmt_delta(commits_now, commits_prev)
-kpi_block(r2[2], "Commits", f"{commits_now:,}", d, dn, "ef-git-commits")
-d, dn = fmt_delta(rel_now, rel_prev)
-kpi_block(r2[3], "Releases", f"{rel_now:,}", d, dn, "qc → uat promotions")
-
-# Row 3 — queues / inventory row
-r3 = st.columns(4)
-d, dn = fmt_delta(reqs_now, reqs_prev)
-kpi_block(r3[0], "Requests", f"{reqs_now:,}", d, dn, "ef-devops-requests")
-kpi_block(
-    r3[1], "Pending approvals", f"{pending_now:,}",
-    "needs action" if pending_now else "clear",
-    "dn" if pending_now else "up",
-    "Pending in last 30 days",
-)
-kpi_block(r3[2], "Open JIRA", f"{open_jira:,}", "all-time open", "flat", "ef-bs-jira-issues")
-kpi_block(
-    r3[3], "Dormant projects",
-    f"{dormant_pct:.0f}%" if inv_count else "—",
-    f"{inv_count - active_projs:,} no activity" if inv_count else "",
-    "dn" if dormant_pct > 40 else "flat",
-    "(inventory − active) / inventory",
-)
-
-
-# =============================================================================
-# SECTION 1b — TREND INSIGHTS (WoW / MoM / YoY)
-# =============================================================================
-# Independent of the user-selected time window: always shows rolling
-# 7d / 30d / 365d against the equivalent immediately-prior period. This gives
-# the supervisor a consistent macro view regardless of what they're drilling
-# into above.
-
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Trend insights</h2><span class="badge">WoW · MoM · YoY</span></div>'
-    '<span class="hint">rolling periods vs prior equal period</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="learn">'
-    '<b>How to read this:</b> each cell shows the count for the rolling period '
-    '(last 7 / 30 / 365 days) followed by the percentage change versus the '
-    '<i>immediately prior</i> equivalent period (the 7 days before the last 7, '
-    'and so on). Green = up, red = down — <i>direction only</i>, read the metric '
-    'before judging sentiment (more failures is not good).'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-
+# Helper functions for WoW/MoM/YoY (used inside the trend popover below)
 def _trend_count(
     index: str, date_field: str, cur_start: datetime, cur_end: datetime,
     prev_start: datetime, prev_end: datetime,
@@ -1006,7 +892,6 @@ def _trend_count(
 
 
 def _cell(cur: int, prev: int) -> str:
-    """Render a compact "value · delta%" HTML cell."""
     if prev == 0 and cur == 0:
         return '<span style="color:#94a3b8;">—</span>'
     if prev == 0:
@@ -1022,86 +907,99 @@ def _cell(cur: int, prev: int) -> str:
     )
 
 
-# Windows — relative to "now" so this section is stable regardless of the
-# command-bar selection above.
 _periods: list[tuple[str, timedelta]] = [
-    ("WoW (7d)",   timedelta(days=7)),
-    ("MoM (30d)",  timedelta(days=30)),
+    ("WoW (7d)", timedelta(days=7)),
+    ("MoM (30d)", timedelta(days=30)),
     ("YoY (365d)", timedelta(days=365)),
 ]
 
+
 def _trend_windows(td: timedelta) -> tuple[datetime, datetime, datetime, datetime]:
-    cur_end   = now_utc
-    cur_start = cur_end - td
-    prev_end  = cur_start
+    cur_end    = now_utc
+    cur_start  = cur_end - td
+    prev_end   = cur_start
     prev_start = prev_end - td
     return cur_start, cur_end, prev_start, prev_end
 
 
-# Metric definitions — (label, index, date_field, extra filters, good_direction)
-_metrics = [
-    ("Builds",             IDX["builds"],       "startdate",   None),
-    ("Build failures",     IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}]),
-    ("Deployments (all)",  IDX["deployments"],  "startdate",   None),
-    ("Prod deployments",   IDX["deployments"],  "startdate",   [{"term":  {"environment": "prd"}}]),
-    ("Prod failures",      IDX["deployments"],  "startdate",   [{"term":  {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}]),
-    ("Commits",            IDX["commits"],      "commitdate",  None),
-    ("Releases",           IDX["releases"],     "releasedate", None),
-    ("Requests",           IDX["requests"],     "RequestDate", None),
+_trend_metrics = [
+    ("Builds",            IDX["builds"],       "startdate",   None),
+    ("Build failures",    IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}]),
+    ("Deployments",       IDX["deployments"],  "startdate",   None),
+    ("Prod deployments",  IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}]),
+    ("Prod failures",     IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}]),
+    ("Commits",           IDX["commits"],      "commitdate",  None),
+    ("Releases",          IDX["releases"],     "releasedate", None),
+    ("Requests",          IDX["requests"],     "RequestDate", None),
 ]
 
-trend_rows = []
-for label, idx, dfield, extra in _metrics:
-    row: dict[str, Any] = {"Metric": label}
-    for period_label, td in _periods:
-        cs, ce, ps, pe = _trend_windows(td)
-        cur, prev = _trend_count(idx, dfield, cs, ce, ps, pe, extra=extra)
-        row[period_label] = _cell(cur, prev)
-    trend_rows.append(row)
+# Row 1 — DORA headline (4 cards)
+r1 = st.columns(4)
+d, dn = fmt_delta(prd_deploys, count_with_range(
+    IDX["deployments"], "startdate", prior_start, prior_end,
+    extra=[{"term": {"environment": "prd"}}],
+))
+kpi_block(r1[0], "Deploy freq", f"{deploy_freq_per_day:.1f}/day", d, dn, "Prod deploys / day")
+kpi_block(r1[1], "Change fail rate", f"{cfr:.1f}%",
+    f"{prd_fail} / {prd_deploys} prod" if prd_deploys else "no prod deploys",
+    "dn" if cfr > 15 else ("up" if prd_deploys else "flat"), "DORA · failed prod / prod deploys")
+kpi_block(r1[2], "Build success", f"{success_rate:.1f}%",
+    f"{builds_fail:,} failed" if builds_fail else "all green",
+    "dn" if builds_fail else "up", "(builds − failed) / builds")
+kpi_block(r1[3], "Platform health",
+    f"{active_projs}/{inv_count}" if inv_count else "—",
+    f"{100 - dormant_pct:.0f}% active" if inv_count else "",
+    "up" if dormant_pct < 30 else ("dn" if dormant_pct > 60 else "flat"), "active / inventory")
 
-# Render as a styled HTML table (st.dataframe would strip the HTML).
-headers = ["Metric"] + [p[0] for p in _periods]
-html = [
-    '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;'
-    'padding:6px 4px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.06);">',
-    '<table style="width:100%;border-collapse:collapse;font-size:.90rem;">',
-    '<thead><tr>',
-]
-for i, h in enumerate(headers):
-    align = "left" if i == 0 else "right"
-    html.append(
-        f'<th style="text-align:{align};padding:12px 18px;color:#64748b;'
-        f'font-size:.70rem;letter-spacing:.10em;text-transform:uppercase;'
-        f'font-weight:600;border-bottom:1px solid #e2e8f0;background:#f8fafc;">{h}</th>'
-    )
-html.append('</tr></thead><tbody>')
+# Row 2 — volume (4 cards) + trend popover trigger at end
+r2c = st.columns([1, 1, 1, 1, 1.6])
+d, dn = fmt_delta(builds_now, builds_prev)
+kpi_block(r2c[0], "Builds", f"{builds_now:,}", d, dn)
+d, dn = fmt_delta(commits_now, commits_prev)
+kpi_block(r2c[1], "Commits", f"{commits_now:,}", d, dn)
+kpi_block(r2c[2], "Pending", f"{pending_now:,}",
+    "needs action" if pending_now else "clear",
+    "dn" if pending_now else "up", "Pending approvals (last 30d)")
+kpi_block(r2c[3], "Open JIRA", f"{open_jira:,}", "all-time", "flat")
 
-for row in trend_rows:
-    html.append('<tr style="transition:background .12s;">')
-    html.append(
-        f'<td style="padding:12px 18px;color:#1e293b;font-weight:500;border-bottom:1px solid #f1f5f9;">{row["Metric"]}</td>'
-    )
-    for period_label, _ in _periods:
-        html.append(
-            f'<td style="text-align:right;padding:12px 18px;font-variant-numeric:tabular-nums;'
-            f'border-bottom:1px solid #f1f5f9;color:#0f172a;">{row[period_label]}</td>'
-        )
-    html.append('</tr>')
-html.append('</tbody></table></div>')
-st.markdown("".join(html), unsafe_allow_html=True)
+with r2c[4]:
+    with st.popover("📈  WoW / MoM / YoY trends", use_container_width=True):
+        st.markdown("**Rolling period comparisons** — independent of the window selector above")
+        _trend_rows = []
+        for _lbl, _idx, _df, _ex in _trend_metrics:
+            _row: dict[str, Any] = {"Metric": _lbl}
+            for _pl, _td in _periods:
+                _cs, _ce, _ps, _pe = _trend_windows(_td)
+                _cur, _prev = _trend_count(_idx, _df, _cs, _ce, _ps, _pe, extra=_ex)
+                _row[_pl] = _cell(_cur, _prev)
+            _trend_rows.append(_row)
+        _hdrs = ["Metric"] + [p[0] for p in _periods]
+        _html = [
+            '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">',
+            '<table style="width:100%;border-collapse:collapse;font-size:.88rem;">',
+            '<thead><tr>',
+        ]
+        for _i, _h in enumerate(_hdrs):
+            _align = "left" if _i == 0 else "right"
+            _html.append(
+                f'<th style="text-align:{_align};padding:10px 14px;color:#64748b;font-size:.68rem;'
+                f'letter-spacing:.10em;text-transform:uppercase;font-weight:600;'
+                f'border-bottom:1px solid #e2e8f0;background:#f8fafc;">{_h}</th>'
+            )
+        _html.append('</tr></thead><tbody>')
+        for _row in _trend_rows:
+            _html.append('<tr>')
+            _html.append(f'<td style="padding:9px 14px;color:#1e293b;font-weight:500;border-bottom:1px solid #f1f5f9;">{_row["Metric"]}</td>')
+            for _pl, _ in _periods:
+                _html.append(f'<td style="text-align:right;padding:9px 14px;font-variant-numeric:tabular-nums;border-bottom:1px solid #f1f5f9;">{_row[_pl]}</td>')
+            _html.append('</tr>')
+        _html.append('</tbody></table></div>')
+        st.markdown("".join(_html), unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION 2 — ALERT RIBBON
+# ALERTS — compact chips, vivid colors
 # =============================================================================
-
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Actionable alerts</h2><span class="badge">Live triage</span></div>'
-    '<span class="hint">curated, high-signal conditions</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
 
 alerts: list[tuple[str, str, str, str]] = []  # (severity, icon, title, detail)
 
@@ -1319,20 +1217,8 @@ with _ap[0]:
 
 st.markdown(
     '<div class="section">'
-    '<div class="title-wrap"><h2>Cross-index insights</h2><span class="badge">Joined signals</span></div>'
-    '<span class="hint">correlating inventory × builds × deploys × jira × requests</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="learn">'
-    '<b>How to read this:</b> Each panel joins at least two indices. '
-    'The <b>Delivery funnel</b> tracks attrition from code change to production. '
-    'The <b>Project health scoreboard</b> aggregates every signal on a per-project basis so '
-    'you can spot the worst-off projects at a glance. The <b>Risk spotlight</b> flags '
-    'projects that fail multiple hygiene checks simultaneously. '
-    'Use the <b>Project deep dive</b> popover for a full cross-index report on any single project.'
+    '<div class="title-wrap"><h2>Project landscape</h2><span class="badge">Inventory × Activity</span></div>'
+    '<span class="hint">active · at-risk · archival candidates — joined across all indices</span>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -1537,6 +1423,427 @@ with pop_cols[1]:
             st.dataframe(_df, use_container_width=True, hide_index=True, height=440)
         else:
             inline_note("No commits in the selected window.", "info")
+
+# ---------------------------------------------------------------------------
+# Project landscape treemap — active vs dormant vs archival, health-colored
+# ---------------------------------------------------------------------------
+_tm_ninety = now_utc - timedelta(days=90)
+_tm_act_query = {"bool": {"filter": [range_filter("startdate", _tm_ninety, now_utc)] + scope_filters()}}
+_tm_active_map = composite_terms(IDX["builds"], "project", _tm_act_query)
+
+_tm_inv_query = {"bool": {"filter": scope_filters_inv()}} if scope_filters_inv() else {"match_all": {}}
+_tm_inv_map   = composite_terms(IDX["inventory"], "project.keyword", _tm_inv_query)
+
+# For top active projects pull fail counts too
+_tm_body = {
+    "query": {"bool": {"filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()}},
+    "aggs": {
+        "projs": {
+            "terms": {"field": "project", "size": 200},
+            "aggs": {"fails": {"filter": {"terms": {"status": FAILED_STATUSES}}}},
+        }
+    },
+}
+_tm_res  = es_search(IDX["builds"], _tm_body)
+_tm_fail_map = {
+    b["key"]: b.get("fails", {}).get("doc_count", 0)
+    for b in bucket_rows(_tm_res, "projs")
+}
+_jira_map_tm = {b["key"]: b["doc_count"] for b in bucket_rows(
+    es_search(IDX["jira"], {
+        "query": {"bool": {"filter": scope_filters(), "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
+        "aggs": {"projs": {"terms": {"field": "project", "size": 500}}},
+    }),
+    "projs",
+)}
+
+_tm_rows = []
+_all_proj_names = set(_tm_inv_map.keys()) | set(_tm_active_map.keys())
+for _p in _all_proj_names:
+    _builds_90 = _tm_active_map.get(_p, 0)
+    _in_inv    = _p in _tm_inv_map
+    _fails     = _tm_fail_map.get(_p, 0)
+    _builds_w  = sum(1 for b in bucket_rows(_tm_res, "projs") if b["key"] == _p and b["doc_count"] > 0) or _builds_90
+    _jira_open = _jira_map_tm.get(_p, 0)
+
+    if _builds_90 == 0 and _in_inv:
+        _status = "Archival candidate"
+    elif _builds_90 > 0:
+        _succ_pct = (_builds_90 - _fails) / _builds_90 * 100 if _builds_90 else 100
+        _status = "Active · healthy" if _succ_pct >= 80 else "Active · at-risk"
+    else:
+        _status = "Unknown"
+
+    # Health score 0-100 for color scale
+    _score = min(100, max(0, int(
+        ((_builds_90 - _fails) / _builds_90 * 100 if _builds_90 else 50)
+        - _jira_open * 1.5
+    )))
+    _tm_rows.append({
+        "project": _p,
+        "builds_90d": max(_builds_90, 1),
+        "status": _status,
+        "score": _score,
+        "fails": _fails,
+        "open_jira": _jira_open,
+    })
+
+if _tm_rows:
+    _df_tm = pd.DataFrame(_tm_rows)
+    _color_map = {
+        "Active · healthy":   "#16a34a",
+        "Active · at-risk":   "#d97706",
+        "Archival candidate": "#94a3b8",
+        "Unknown":            "#cbd5e1",
+    }
+    _tm_fig = px.treemap(
+        _df_tm,
+        path=["status", "project"],
+        values="builds_90d",
+        color="status",
+        color_discrete_map=_color_map,
+        custom_data=["fails", "open_jira", "score"],
+        title="Project landscape · last 90 days  (size = build count, color = health status)",
+    )
+    _tm_fig.update_traces(
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            "Builds (90d): %{value}<br>"
+            "Failures: %{customdata[0]}<br>"
+            "Open JIRA: %{customdata[1]}<br>"
+            "Health score: %{customdata[2]}/100"
+            "<extra></extra>"
+        ),
+        textinfo="label+value",
+        insidetextfont=dict(size=11, color="white"),
+    )
+    _tm_fig.update_layout(
+        height=340,
+        margin=dict(l=0, r=0, t=36, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#374151", family="Inter, sans-serif"),
+    )
+    st.plotly_chart(_tm_fig, use_container_width=True)
+
+    # Archival candidates inline (compact)
+    _archival = _df_tm[_df_tm["status"] == "Archival candidate"].sort_values("project")
+    if not _archival.empty:
+        _arc_cols = st.columns([3, 1])
+        with _arc_cols[0]:
+            st.markdown(
+                f'<div class="alert warning" style="margin-bottom:4px;">'
+                f'<div class="icon">⚠</div>'
+                f'<div><b>{len(_archival)} archival candidates</b>'
+                f'<span class="sub">— no builds in 90 days, still in inventory</span></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with _arc_cols[1]:
+            with st.popover("View list", use_container_width=True):
+                st.markdown("**Projects with no builds in 90 days**")
+                _arc_display = _archival[["project", "open_jira"]].copy()
+                _arc_display.columns = ["Project", "Open JIRA"]
+                st.dataframe(_arc_display, use_container_width=True, hide_index=True, height=400)
+                st.caption(f"{len(_archival)} candidates — review for archival or decommission.")
+else:
+    inline_note("No project data available.", "info")
+
+# =============================================================================
+# APP LIFECYCLE — pipeline stage funnel per project + bottleneck finder
+# =============================================================================
+
+st.markdown(
+    '<div class="section">'
+    '<div class="title-wrap">'
+    '  <h2>App lifecycle &amp; bottlenecks</h2>'
+    '  <span class="badge">per-project pipeline</span>'
+    '</div>'
+    '<span class="hint">where does each project stall between commit → build → deploy → release?</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _lifecycle_data(
+    s: str, e: str, company: str, project: str
+) -> dict:
+    """
+    Returns a dict with keys:
+      projects  — list[str]  all projects seen across any stage
+      stages    — dict[stage_name -> dict[project -> count]]
+      sankey    — dict with lists: labels, source, target, value, color
+    """
+    _s = datetime.fromisoformat(s)
+    _e = datetime.fromisoformat(e)
+
+    _scope: list[dict] = []
+    if company:
+        _scope.append({"term": {"company.keyword": company}})
+    if project:
+        _scope.append({"term": {"project": project}})
+
+    def _agg_by_project(index: str, date_field: str,
+                        extra_filters: list[dict] | None = None,
+                        page_size: int = 500) -> dict[str, int]:
+        _f = [range_filter(date_field, _s, _e)] + _scope + (extra_filters or [])
+        return composite_terms(index, "project.keyword", {"bool": {"filter": _f}}, page_size)
+
+    def _agg_by_app(index: str, date_field: str,
+                    extra_filters: list[dict] | None = None,
+                    page_size: int = 500) -> dict[str, int]:
+        """Releases index uses `application` not `project`."""
+        _f = [range_filter(date_field, _s, _e)] + _scope + (extra_filters or [])
+        return composite_terms(index, "application.keyword", {"bool": {"filter": _f}}, page_size)
+
+    commits_by_proj    = _agg_by_project(IDX["commits"],     "commitdate")
+    builds_by_proj     = _agg_by_project(IDX["builds"],      "startdate")
+    build_ok_by_proj   = _agg_by_project(IDX["builds"],      "startdate",
+                             [{"terms": {"status": ["SUCCESS", "SUCCEEDED", "success"]}}])
+    dep_dev_by_proj    = _agg_by_project(IDX["deployments"], "startdate", [{"term": {"environment": "dev"}}])
+    dep_qc_by_proj     = _agg_by_project(IDX["deployments"], "startdate", [{"term": {"environment": "qc"}}])
+    dep_uat_by_proj    = _agg_by_project(IDX["deployments"], "startdate", [{"term": {"environment": "uat"}}])
+    dep_prd_by_proj    = _agg_by_project(IDX["deployments"], "startdate", [{"term": {"environment": "prd"}}])
+    releases_by_proj   = _agg_by_app(IDX["releases"],        "releasedate")
+
+    # Merge all project keys
+    all_projects = sorted(
+        set(commits_by_proj) | set(builds_by_proj) | set(dep_dev_by_proj)
+        | set(dep_qc_by_proj) | set(dep_uat_by_proj) | set(dep_prd_by_proj)
+        | set(releases_by_proj)
+    )
+
+    stage_maps = {
+        "Commits":        commits_by_proj,
+        "Builds":         builds_by_proj,
+        "Build OK":       build_ok_by_proj,
+        "Deploy Dev":     dep_dev_by_proj,
+        "Deploy QC":      dep_qc_by_proj,
+        "Deploy UAT":     dep_uat_by_proj,
+        "Deploy PRD":     dep_prd_by_proj,
+        "Releases":       releases_by_proj,
+    }
+
+    # ── Sankey aggregate ──────────────────────────────────────────────────
+    STAGE_ORDER = ["Commits", "Builds", "Build OK", "Deploy Dev",
+                   "Deploy QC", "Deploy UAT", "Deploy PRD", "Releases"]
+    stage_totals = {s: sum(stage_maps[s].values()) for s in STAGE_ORDER}
+
+    # Build Sankey edges: consecutive pairs with non-zero flow
+    sk_labels = list(STAGE_ORDER)
+    sk_source, sk_target, sk_value, sk_colors = [], [], [], []
+    STAGE_COLORS = ["#6366f1","#3b82f6","#10b981","#0ea5e9",
+                    "#8b5cf6","#f59e0b","#ef4444","#ec4899"]
+    for i in range(len(STAGE_ORDER) - 1):
+        a, b = STAGE_ORDER[i], STAGE_ORDER[i + 1]
+        flow = min(stage_totals[a], stage_totals[b])
+        if flow > 0:
+            sk_source.append(i)
+            sk_target.append(i + 1)
+            sk_value.append(flow)
+            sk_colors.append(STAGE_COLORS[i] + "88")  # semi-transparent
+
+    return {
+        "projects":   all_projects,
+        "stage_maps": stage_maps,
+        "stage_order": STAGE_ORDER,
+        "sankey": {
+            "labels":  sk_labels,
+            "source":  sk_source,
+            "target":  sk_target,
+            "value":   sk_value,
+            "colors":  sk_colors,
+            "node_colors": STAGE_COLORS,
+            "totals":  stage_totals,
+        },
+    }
+
+
+_lc = _lifecycle_data(
+    start_dt.isoformat(), end_dt.isoformat(),
+    company_filter or "", project_filter or "",
+)
+_stage_maps  = _lc["stage_maps"]
+_stage_order = _lc["stage_order"]
+_lc_projects = _lc["projects"]
+_sk          = _lc["sankey"]
+
+# ── Row 1: Sankey + bottleneck table ────────────────────────────────────────
+_lc_col1, _lc_col2 = st.columns([1.6, 1])
+
+with _lc_col1:
+    if _sk["source"]:
+        _sk_fig = go.Figure(go.Sankey(
+            arrangement="snap",
+            node=dict(
+                pad=18,
+                thickness=22,
+                line=dict(color="#e2e8f0", width=0.5),
+                label=_sk["labels"],
+                color=_sk["node_colors"],
+                hovertemplate="<b>%{label}</b><br>Volume: %{value:,}<extra></extra>",
+            ),
+            link=dict(
+                source=_sk["source"],
+                target=_sk["target"],
+                value=_sk["value"],
+                color=_sk["colors"],
+                hovertemplate=(
+                    "%{source.label} → %{target.label}<br>"
+                    "Flow: %{value:,}<extra></extra>"
+                ),
+            ),
+        ))
+        _sk_fig.update_layout(
+            title=dict(
+                text="Pipeline flow · aggregate volume through each stage",
+                font=dict(size=13, color="#1e293b"),
+                x=0,
+            ),
+            font=dict(size=11, color="#334155", family="inherit"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=36, b=0),
+            height=300,
+        )
+        st.plotly_chart(_sk_fig, use_container_width=True)
+    else:
+        inline_note("Not enough cross-stage data to build the flow diagram.", "info")
+
+with _lc_col2:
+    # ── Bottleneck finder: largest relative drop between consecutive stages
+    _bn_rows = []
+    _totals = _sk["totals"]
+    for _i in range(len(_stage_order) - 1):
+        _a, _b = _stage_order[_i], _stage_order[_i + 1]
+        _va, _vb = _totals[_a], _totals[_b]
+        if _va > 0:
+            _drop = (_va - _vb) / _va * 100
+            _bn_rows.append({"Transition": f"{_a} → {_b}",
+                             "In": _va, "Out": _vb, "Drop %": round(_drop, 1)})
+    if _bn_rows:
+        _bn_df = pd.DataFrame(_bn_rows).sort_values("Drop %", ascending=False)
+
+        def _color_drop(val: float) -> str:
+            if val >= 70: return "background:#fff1f2;color:#991b1b;font-weight:700"
+            if val >= 40: return "background:#fffbeb;color:#92400e;font-weight:600"
+            return "color:#166534"
+
+        st.markdown(
+            '<p style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:0 0 6px">'
+            'Stage drop-off · biggest leaks first</p>',
+            unsafe_allow_html=True,
+        )
+        _bn_html_rows = []
+        for _, _r in _bn_df.iterrows():
+            _style = _color_drop(_r["Drop %"])
+            _bar_w = max(4, int(_r["Drop %"]))
+            _bn_html_rows.append(
+                f'<tr>'
+                f'<td style="font-size:0.78rem;color:#334155;padding:5px 4px">{_r["Transition"]}</td>'
+                f'<td style="font-size:0.78rem;color:#475569;text-align:right;padding:5px 4px">'
+                f'{int(_r["In"]):,} → {int(_r["Out"]):,}</td>'
+                f'<td style="padding:5px 4px;min-width:120px">'
+                f'<div style="display:flex;align-items:center;gap:6px">'
+                f'<div style="width:{_bar_w}px;height:8px;border-radius:4px;'
+                f'background:{"#dc2626" if _r["Drop %"]>=70 else "#d97706" if _r["Drop %"]>=40 else "#16a34a"}'
+                f'"></div>'
+                f'<span style="{_style};font-size:0.78rem">{_r["Drop %"]:.1f}%</span>'
+                f'</div></td>'
+                f'</tr>'
+            )
+        st.markdown(
+            '<table style="width:100%;border-collapse:collapse;font-family:inherit">'
+            '<thead><tr style="border-bottom:2px solid #e2e8f0">'
+            '<th style="font-size:0.72rem;color:#64748b;padding:4px;text-align:left">STAGE</th>'
+            '<th style="font-size:0.72rem;color:#64748b;padding:4px;text-align:right">VOLUME</th>'
+            '<th style="font-size:0.72rem;color:#64748b;padding:4px">DROP</th>'
+            '</tr></thead><tbody>' + "".join(_bn_html_rows) + "</tbody></table>",
+            unsafe_allow_html=True,
+        )
+    else:
+        inline_note("No stage data to compare.", "info")
+
+# ── Row 2: per-project heatmap ──────────────────────────────────────────────
+if _lc_projects:
+    # Limit to top-N projects by total activity to keep heatmap readable
+    _proj_activity = {
+        p: sum(_stage_maps[s].get(p, 0) for s in _stage_order)
+        for p in _lc_projects
+    }
+    _top_projects = sorted(_proj_activity, key=_proj_activity.get, reverse=True)[:30]  # type: ignore[arg-type]
+
+    # Build matrix: rows=projects, cols=stages, cell=conversion rate vs commits (or raw count)
+    _hm_z, _hm_text, _hm_customdata = [], [], []
+    for _p in _top_projects:
+        _row_z, _row_text, _row_cd = [], [], []
+        _commits = _stage_maps["Commits"].get(_p, 0)
+        _ref = _commits if _commits else None  # conversion base
+        for _s in _stage_order:
+            _v = _stage_maps[_s].get(_p, 0)
+            if _ref and _s != "Commits":
+                _rate = min(100, _v / _ref * 100)
+            elif _s == "Commits":
+                _rate = 100.0 if _v else 0.0
+            else:
+                _rate = 0.0 if _v == 0 else 50.0  # some activity but no commit baseline
+            _row_z.append(_rate)
+            _row_text.append(f"{_v:,}")
+            _row_cd.append(_v)
+        _hm_z.append(_row_z)
+        _hm_text.append(_row_text)
+        _hm_customdata.append(_row_cd)
+
+    _hm_fig = go.Figure(go.Heatmap(
+        z=_hm_z,
+        x=_stage_order,
+        y=_top_projects,
+        text=_hm_text,
+        texttemplate="%{text}",
+        textfont=dict(size=10),
+        colorscale=[
+            [0.0,  "#fef2f2"],
+            [0.15, "#fca5a5"],
+            [0.35, "#fb923c"],
+            [0.6,  "#facc15"],
+            [0.8,  "#86efac"],
+            [1.0,  "#16a34a"],
+        ],
+        zmin=0, zmax=100,
+        colorbar=dict(
+            title=dict(text="Conv. %", side="right", font=dict(size=11)),
+            thickness=12,
+            len=0.9,
+            tickfont=dict(size=10),
+        ),
+        hovertemplate=(
+            "<b>%{y}</b> · %{x}<br>"
+            "Count: %{text}<br>"
+            "Conv. rate: %{z:.1f}%<extra></extra>"
+        ),
+    ))
+    _hm_fig.update_layout(
+        title=dict(
+            text="Per-project pipeline conversion (% of commits that reached each stage)",
+            font=dict(size=13, color="#1e293b"),
+            x=0,
+        ),
+        xaxis=dict(side="top", tickfont=dict(size=11, color="#334155"),
+                   showgrid=False, zeroline=False),
+        yaxis=dict(tickfont=dict(size=10, color="#334155"), autorange="reversed",
+                   showgrid=False, zeroline=False),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=60, t=60, b=0),
+        height=max(280, len(_top_projects) * 28),
+        font=dict(family="inherit"),
+    )
+    st.plotly_chart(_hm_fig, use_container_width=True)
+    st.caption(
+        "Green = healthy conversion · Red = stage not reached. "
+        "A column that's all-red is the pipeline bottleneck for those projects. "
+        f"Showing top {len(_top_projects)} projects by total activity."
+    )
 
 ci1, ci2 = st.columns([1.1, 2])
 
@@ -2216,190 +2523,178 @@ with wp_bot[2]:
 
 
 # =============================================================================
-# SECTION 6 — LATEST ACTIVITY FEED
+# SECTION 6 — EVENT LOG (on-demand)
 # =============================================================================
 
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Latest activity</h2><span class="badge">What changed</span></div>'
-    '<span class="hint">newest events across deployments, releases and commits</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
+_el_c1, _el_c2, _el_c3, _el_c4 = st.columns([3, 1.2, 1.2, 1.2])
+with _el_c1:
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:10px;padding:6px 0">'
+        '<span style="font-size:1.05rem;font-weight:700;color:#1e293b">Event log</span>'
+        '<span style="font-size:0.72rem;background:#e2e8f0;color:#475569;'
+        'border-radius:12px;padding:2px 10px;font-weight:600">on demand</span>'
+        '<span style="font-size:0.8rem;color:#94a3b8">deployments · releases · commits — newest first</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-nw1, nw2, nw3 = st.columns(3)
+# --- filter controls always visible so the log opens pre-filtered ----------
+with _el_c2:
+    _el_type = st.selectbox(
+        "Type", ["All", "Deployments", "Releases", "Commits"], key="el_type"
+    )
+with _el_c3:
+    _el_env = st.selectbox(
+        "Env", ["(all)", "prd", "uat", "qc", "dev"], key="el_env"
+    )
+with _el_c4:
+    _el_limit = st.selectbox(
+        "Show", [50, 100, 250], key="el_limit"
+    )
 
-with nw1:
-    st.markdown("**Latest production deployments**")
-    body = {
-        "query": {
-            "bool": {
-                "filter": [{"term": {"environment": "prd"}}] + scope_filters()
-            }
-        },
-        "sort": [{"startdate": "desc"}],
+with st.popover("Open event log", use_container_width=True):
+    # ── helpers ──────────────────────────────────────────────────────────────
+    _TYPE_BADGE = {
+        "deploy":  ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">DEPLOY</span>'),
+        "release": ('<span style="background:#fce7f3;color:#9d174d;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">RELEASE</span>'),
+        "commit":  ('<span style="background:#dcfce7;color:#166534;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">COMMIT</span>'),
     }
-    res = es_search(IDX["deployments"], body, size=8)
-    hits = res.get("hits", {}).get("hits", [])
-    if hits:
-        rows = []
-        for h in hits:
-            s = h["_source"]
-            rows.append({
-                "Project": s.get("project"),
-                "Version": s.get("codeversion"),
-                "Status":  s.get("status"),
-                "When":    fmt_dt(s.get("startdate"), "%m-%d %H:%M"),
-            })
-        st.dataframe(
-            pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
-        )
-    else:
-        inline_note("No production deployments recorded.", "info")
+    _STATUS_CHIP = {
+        "SUCCESS": ('<span style="background:#16a34a;color:#fff;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">OK</span>'),
+        "FAILED":  ('<span style="background:#dc2626;color:#fff;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">FAIL</span>'),
+        "RUNNING": ('<span style="background:#d97706;color:#fff;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">RUN</span>'),
+    }
 
-    with st.popover("View more · filter prod deploys", use_container_width=True):
-        _pd_env = st.selectbox(
-            "Environment", ["prd", "uat", "qc", "dev", "(all)"],
-            index=0, key="nw_dep_env",
-        )
-        _pd_st = st.selectbox(
-            "Status", ["Any", "SUCCESS", "FAILED"],
-            index=0, key="nw_dep_status",
-        )
-        _f: list[dict] = list(scope_filters())
-        if _pd_env != "(all)":
-            _f.append({"term": {"environment": _pd_env}})
-        if _pd_st == "FAILED":
-            _f.append({"terms": {"status": FAILED_STATUSES}})
-        elif _pd_st != "Any":
-            _f.append({"term": {"status": _pd_st}})
-        _r = es_search(
+    def _status_chip(raw: str | None) -> str:
+        if raw is None:
+            return ""
+        up = (raw or "").upper()
+        if up in _STATUS_CHIP:
+            return _STATUS_CHIP[up]
+        if any(f in up for f in ("FAIL", "ERROR", "ABORT")):
+            return _STATUS_CHIP["FAILED"]
+        if up in ("SUCCESS", "PASSED", "OK"):
+            return _STATUS_CHIP["SUCCESS"]
+        return (f'<span style="background:#e2e8f0;color:#334155;border-radius:4px;'
+                f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
+
+    events: list[dict] = []
+
+    # ── deployments ──────────────────────────────────────────────────────────
+    if _el_type in ("All", "Deployments"):
+        _dep_f = list(scope_filters())
+        if _el_env != "(all)":
+            _dep_f.append({"term": {"environment": _el_env}})
+        _dep_r = es_search(
             IDX["deployments"],
-            {"query": {"bool": {"filter": _f}} if _f else {"match_all": {}},
+            {"query": {"bool": {"filter": _dep_f}} if _dep_f else {"match_all": {}},
              "sort": [{"startdate": "desc"}]},
-            size=100,
+            size=int(_el_limit),
         )
-        _hits = _r.get("hits", {}).get("hits", [])
-        if _hits:
-            _rows = [
-                {
-                    "When":    fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
-                    "Project": h["_source"].get("project"),
-                    "Env":     h["_source"].get("environment"),
-                    "Version": h["_source"].get("codeversion"),
-                    "Status":  h["_source"].get("status"),
-                }
-                for h in _hits
-            ]
-            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
-        else:
-            inline_note("No deployments match.", "info")
-
-with nw2:
-    st.markdown("**Latest releases (qc → uat)**")
-    body = {
-        "query": {"bool": {"filter": scope_filters()}} if scope_filters()
-                 else {"match_all": {}},
-        "sort": [{"releasedate": "desc"}],
-    }
-    res = es_search(IDX["releases"], body, size=8)
-    hits = res.get("hits", {}).get("hits", [])
-    if hits:
-        rows = []
-        for h in hits:
-            s = h["_source"]
-            rows.append({
-                "App":     s.get("application"),
-                "Version": s.get("codeversion"),
-                "RLM":     s.get("RLM_STATUS"),
-                "When":    fmt_dt(s.get("releasedate"), "%m-%d %H:%M"),
+        for _h in _dep_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _ts = parse_dt(_s.get("startdate"))
+            events.append({
+                "_ts":    _ts,
+                "type":   "deploy",
+                "When":   fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                "Who":    _s.get("project", ""),
+                "Detail": f'{_s.get("environment","?")} · v{_s.get("codeversion","")}',
+                "Status": _s.get("status", ""),
+                "Extra":  _s.get("triggeredby", ""),
             })
-        st.dataframe(
-            pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
-        )
-    else:
-        inline_note("No releases found.", "info")
 
-    with st.popover("View more · last 100 releases", use_container_width=True):
-        _rr = es_search(
+    # ── releases ─────────────────────────────────────────────────────────────
+    if _el_type in ("All", "Releases"):
+        _rel_f = list(scope_filters())
+        _rel_r = es_search(
             IDX["releases"],
-            {"query": {"bool": {"filter": scope_filters()}} if scope_filters() else {"match_all": {}},
+            {"query": {"bool": {"filter": _rel_f}} if _rel_f else {"match_all": {}},
              "sort": [{"releasedate": "desc"}]},
-            size=100,
+            size=int(_el_limit),
         )
-        _hits = _rr.get("hits", {}).get("hits", [])
-        if _hits:
-            _rows = [
-                {
-                    "When":    fmt_dt(h["_source"].get("releasedate"), "%Y-%m-%d %H:%M"),
-                    "App":     h["_source"].get("application"),
-                    "Version": h["_source"].get("codeversion"),
-                    "RLM":     h["_source"].get("RLM_STATUS"),
-                }
-                for h in _hits
-            ]
-            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
-        else:
-            inline_note("No releases.", "info")
-
-with nw3:
-    st.markdown("**Latest commits**")
-    body = {
-        "query": {
-            "bool": {
-                "filter": [range_filter("commitdate", start_dt, end_dt)] + scope_filters()
-            }
-        },
-        "sort": [{"commitdate": "desc"}],
-    }
-    res = es_search(IDX["commits"], body, size=8)
-    hits = res.get("hits", {}).get("hits", [])
-    if hits:
-        rows = []
-        for h in hits:
-            s = h["_source"]
-            rows.append({
-                "Repo":   s.get("repository"),
-                "Branch": s.get("branch"),
-                "Author": s.get("authorname"),
-                "When":   fmt_dt(s.get("commitdate"), "%m-%d %H:%M"),
+        for _h in _rel_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _ts = parse_dt(_s.get("releasedate"))
+            events.append({
+                "_ts":    _ts,
+                "type":   "release",
+                "When":   fmt_dt(_s.get("releasedate"), "%Y-%m-%d %H:%M"),
+                "Who":    _s.get("application", ""),
+                "Detail": f'v{_s.get("codeversion","")} → RLM: {_s.get("RLM_STATUS","")}',
+                "Status": _s.get("RLM_STATUS", ""),
+                "Extra":  "",
             })
-        st.dataframe(
-            pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
-        )
-    else:
-        inline_note("No commits in window.", "info")
 
-    with st.popover("View more · filter commits", use_container_width=True):
-        _cw2 = st.selectbox(
-            "Window", ["Last 24 hours", "Last 7 days", "Last 30 days"],
-            index=1, key="nw_commit_w",
-        )
-        _cd2 = {"Last 24 hours": timedelta(days=1),
-                "Last 7 days":  timedelta(days=7),
-                "Last 30 days": timedelta(days=30)}[_cw2]
-        _cs2, _ce2 = now_utc - _cd2, now_utc
-        _cr2 = es_search(
+    # ── commits ──────────────────────────────────────────────────────────────
+    if _el_type in ("All", "Commits"):
+        _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(scope_filters())
+        _com_r = es_search(
             IDX["commits"],
-            {"query": {"bool": {"filter": [range_filter("commitdate", _cs2, _ce2)] + scope_filters()}},
+            {"query": {"bool": {"filter": _com_f}},
              "sort": [{"commitdate": "desc"}]},
-            size=100,
+            size=int(_el_limit),
         )
-        _hits = _cr2.get("hits", {}).get("hits", [])
-        if _hits:
-            _rows = [
-                {
-                    "When":    fmt_dt(h["_source"].get("commitdate"), "%Y-%m-%d %H:%M"),
-                    "Author":  h["_source"].get("authorname"),
-                    "Project": h["_source"].get("project"),
-                    "Branch":  h["_source"].get("branch"),
-                    "Repo":    h["_source"].get("repository"),
-                }
-                for h in _hits
-            ]
-            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
-        else:
-            inline_note("No commits in window.", "info")
+        for _h in _com_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _ts = parse_dt(_s.get("commitdate"))
+            events.append({
+                "_ts":    _ts,
+                "type":   "commit",
+                "When":   fmt_dt(_s.get("commitdate"), "%Y-%m-%d %H:%M"),
+                "Who":    _s.get("project", _s.get("repository", "")),
+                "Detail": f'{_s.get("branch","")} · {_s.get("authorname","")}',
+                "Status": "",
+                "Extra":  (_s.get("commitmessage") or "")[:80],
+            })
+
+    # ── sort & render ─────────────────────────────────────────────────────────
+    events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
+    events = events[:int(_el_limit)]
+
+    if not events:
+        inline_note("No events match the current filters.", "info")
+    else:
+        # Render as a styled HTML table for density + badges
+        _rows_html = []
+        for ev in events:
+            _rows_html.append(
+                f"<tr>"
+                f'<td style="white-space:nowrap;color:#64748b;font-size:0.78rem">{ev["When"]}</td>'
+                f'<td style="padding:0 6px">{_TYPE_BADGE[ev["type"]]}</td>'
+                f'<td style="font-weight:600;color:#1e293b;font-size:0.82rem">{ev["Who"]}</td>'
+                f'<td style="color:#475569;font-size:0.8rem">{ev["Detail"]}</td>'
+                f'<td style="padding:0 6px">{_status_chip(ev["Status"])}</td>'
+                f'<td style="color:#94a3b8;font-size:0.75rem;max-width:260px;'
+                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{ev["Extra"]}</td>'
+                f"</tr>"
+            )
+        _table_html = (
+            '<div style="overflow-y:auto;max-height:72vh">'
+            '<table style="width:100%;border-collapse:collapse;font-family:inherit">'
+            '<thead><tr style="border-bottom:2px solid #e2e8f0;text-align:left">'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">TIME</th>'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">TYPE</th>'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">PROJECT</th>'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">DETAIL</th>'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">STATUS</th>'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">NOTE</th>'
+            '</tr></thead>'
+            '<tbody>' + "".join(_rows_html) + "</tbody>"
+            "</table></div>"
+        )
+        st.markdown(
+            f'<p style="font-size:0.8rem;color:#64748b;margin:0 0 8px">'
+            f'Showing {len(events)} events · sorted newest first</p>'
+            + _table_html,
+            unsafe_allow_html=True,
+        )
 
 
 # =============================================================================
