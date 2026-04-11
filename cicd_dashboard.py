@@ -763,8 +763,6 @@ with _cb1[5]:
         st.rerun()
 
 # ── Row 2: time window segmented button group ────────────────────────────────
-_tw_cols = st.columns(len(_PRESET_GROUPS) + [0.01])  # 3 groups + spacer
-
 _TW_LABELS = list(PRESETS.keys())
 _preset_default_idx = _TW_LABELS.index("7d")
 
