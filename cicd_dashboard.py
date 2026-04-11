@@ -484,6 +484,53 @@ COMPOSITE_PAGE = 1000      # buckets pulled per request
 COMPOSITE_MAX_PAGES = 200  # safety brake: 200 × 1000 = 200k keys max
 
 
+def composite_unique_versions(
+    index: str,
+    field: str,
+    query: dict,
+    page_size: int = COMPOSITE_PAGE,
+) -> dict[str, int]:
+    """Like composite_terms but counts distinct ``codeversion`` values per key.
+
+    Returns ``{key: unique_codeversion_count}`` — eliminates re-deployments /
+    re-builds of the same version so the lifecycle funnel reflects real
+    progression of code rather than repeated CI runs.
+    """
+    result: dict[str, int] = {}
+    after: dict | None = None
+    for _ in range(COMPOSITE_MAX_PAGES):
+        comp: dict[str, Any] = {
+            "size": page_size,
+            "sources": [{"k": {"terms": {"field": field}}}],
+        }
+        if after:
+            comp["after"] = after
+        body = {
+            "query": query,
+            "aggs": {
+                "groups": {
+                    "composite": comp,
+                    "aggs": {
+                        "uv": {"cardinality": {"field": "codeversion"}}
+                    },
+                }
+            },
+        }
+        res = es_search(index, body, size=0)
+        groups = res.get("aggregations", {}).get("groups", {}) or {}
+        buckets = groups.get("buckets", []) or []
+        if not buckets:
+            break
+        for b in buckets:
+            key = b.get("key", {}).get("k")
+            if key is not None:
+                result[key] = int(b.get("uv", {}).get("value", 0) or 0)
+        after = groups.get("after_key")
+        if not after:
+            break
+    return result
+
+
 def composite_terms(
     index: str,
     field: str,
@@ -667,18 +714,19 @@ def inline_note(text: str, kind: str = "info", container: Any = None) -> None:
 # =============================================================================
 
 PRESETS: dict[str, timedelta | None] = {
-    "1h":     timedelta(hours=1),
-    "6h":     timedelta(hours=6),
-    "12h":    timedelta(hours=12),
-    "1d":     timedelta(days=1),
-    "3d":     timedelta(days=3),
-    "7d":     timedelta(days=7),
-    "14d":    timedelta(days=14),
-    "30d":    timedelta(days=30),
-    "90d":    timedelta(days=90),
-    "180d":   timedelta(days=180),
-    "1y":     timedelta(days=365),
-    "Custom": None,
+    "1h":       timedelta(hours=1),
+    "6h":       timedelta(hours=6),
+    "12h":      timedelta(hours=12),
+    "1d":       timedelta(days=1),
+    "3d":       timedelta(days=3),
+    "7d":       timedelta(days=7),
+    "14d":      timedelta(days=14),
+    "30d":      timedelta(days=30),
+    "90d":      timedelta(days=90),
+    "180d":     timedelta(days=180),
+    "1y":       timedelta(days=365),
+    "All-time": None,   # no lower bound — ES will scan all docs
+    "Custom":   None,
 }
 
 _PRESET_GROUPS = [
@@ -843,7 +891,7 @@ preset = st.radio(
     key="time_preset",
 )
 
-# Custom range — revealed only when needed
+# Custom range or All-time — revealed only when needed
 if preset == "Custom":
     dr = st.columns([1, 1, 4])
     today = datetime.now(timezone.utc).date()
@@ -851,6 +899,9 @@ if preset == "Custom":
     d_end   = dr[1].date_input("To",   today)
     start_dt = datetime.combine(d_start, datetime.min.time(), tzinfo=timezone.utc)
     end_dt   = datetime.combine(d_end,   datetime.max.time(), tzinfo=timezone.utc)
+elif preset == "All-time":
+    end_dt   = datetime.now(timezone.utc)
+    start_dt = datetime(2000, 1, 1, tzinfo=timezone.utc)   # epoch-like lower bound
 else:
     end_dt   = datetime.now(timezone.utc)
     start_dt = end_dt - PRESETS[preset]  # type: ignore[operator]
@@ -862,9 +913,9 @@ interval    = pick_interval(delta)
 now_utc     = datetime.now(timezone.utc)
 pending_window_start = now_utc - timedelta(days=30)
 
+_window_label = "All-time" if preset == "All-time" else f"{start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M} UTC"
 st.caption(
-    f"{start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M} UTC  ·  "
-    f"bucket {interval}  ·  vs prior equal window  ·  {now_utc:%H:%M} UTC"
+    f"{_window_label}  ·  bucket {interval}  ·  vs prior equal window  ·  {now_utc:%H:%M} UTC"
     + ("  ·  ⊘ azure_sql excluded" if exclude_svc else "")
 )
 
@@ -1672,21 +1723,16 @@ with pop_cols[1]:
             inline_note("No commits in the selected window.", "info")
 
 # ---------------------------------------------------------------------------
-# Project landscape treemap — active vs dormant vs archival, health-colored
+# Project landscape treemap — ALL-TIME data (ignores time filter)
+# Hierarchy: status → project → application
+# "project" field in builds == application name; inventory gives us the
+# parent project grouping via project.keyword → application.keyword mapping.
 # ---------------------------------------------------------------------------
-_tm_ninety = now_utc - timedelta(days=90)
-_tm_act_query = {"bool": {"filter": [range_filter("startdate", _tm_ninety, now_utc)] + scope_filters()}}
-_tm_active_map = composite_terms(IDX["builds"], "project", _tm_act_query)
 
-# Inventory has one document PER APPLICATION — aggregate to get
-# both project→application mapping and the set of known projects
+# ── Inventory: project → [applications] mapping (all-time, scope-filtered) ──
 _tm_inv_query = {"bool": {"filter": scope_filters_inv()}} if scope_filters_inv() else {"match_all": {}}
-# application.keyword = the application; project.keyword = its parent project
-_tm_inv_app_map = composite_terms(IDX["inventory"], "application.keyword", _tm_inv_query)  # app → count
-_tm_inv_map     = composite_terms(IDX["inventory"], "project.keyword",     _tm_inv_query)  # project → app_count
+_tm_inv_map   = composite_terms(IDX["inventory"], "project.keyword", _tm_inv_query)
 
-# project → app list mapping (from builds, since builds carry the application context via project field)
-# We use the builds agg to get projects; for application sub-grouping we query inventory
 _tm_proj_to_apps: dict[str, list[str]] = {}
 _inv_app_res = es_search(
     IDX["inventory"],
@@ -1695,80 +1741,87 @@ _inv_app_res = es_search(
         "aggs": {
             "projs": {
                 "terms": {"field": "project.keyword", "size": 500},
-                "aggs": {
-                    "apps": {"terms": {"field": "application.keyword", "size": 100}}
-                },
+                "aggs": {"apps": {"terms": {"field": "application.keyword", "size": 200}}},
             }
         },
     },
 )
 for _pb in bucket_rows(_inv_app_res, "projs"):
-    _proj_name = _pb["key"]
-    _apps_list = [_ab["key"] for _ab in (_pb.get("apps", {}).get("buckets") or [])]
-    _tm_proj_to_apps[_proj_name] = _apps_list
+    _tm_proj_to_apps[_pb["key"]] = [
+        _ab["key"] for _ab in (_pb.get("apps", {}).get("buckets") or [])
+    ]
 
-# Build/fail counts per project
-_tm_body = {
-    "query": {"bool": {"filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()}},
-    "aggs": {
-        "projs": {
-            "terms": {"field": "project", "size": 500},
-            "aggs": {"fails": {"filter": {"terms": {"status": FAILED_STATUSES}}}},
-        }
-    },
-}
-_tm_res  = es_search(IDX["builds"], _tm_body)
-_tm_fail_map = {
-    b["key"]: b.get("fails", {}).get("doc_count", 0)
-    for b in bucket_rows(_tm_res, "projs")
-}
+# application → parent_project reverse lookup (from inventory)
+_app_to_parent: dict[str, str] = {}
+for _parent, _apps in _tm_proj_to_apps.items():
+    for _app in _apps:
+        _app_to_parent[_app] = _parent
+
+# ── All-time builds per application (NOT time-filtered) ─────────────────────
+_tm_scope_only = {"bool": {"filter": scope_filters()}} if scope_filters() else {"match_all": {}}
+_tm_active_map  = composite_terms(IDX["builds"],      "project",  _tm_scope_only)  # app → build_count
+_tm_prd_map     = composite_terms(                                                  # app → prd_deploy_count
+    IDX["deployments"], "project",
+    {"bool": {"filter": [{"term": {"environment": "prd"}}] + scope_filters()}} if scope_filters()
+    else {"bool": {"filter": [{"term": {"environment": "prd"}}]}},
+)
+# Unique versions built all-time per application
+_tm_uv_map = composite_unique_versions(IDX["builds"], "project", _tm_scope_only)
+
+# All-time fails per application
+_tm_fail_res = es_search(IDX["builds"], {
+    "query": _tm_scope_only,
+    "aggs": {"apps": {"terms": {"field": "project", "size": 500},
+                      "aggs": {"fails": {"filter": {"terms": {"status": FAILED_STATUSES}}}}}},
+})
+_tm_fail_map = {b["key"]: b.get("fails", {}).get("doc_count", 0) for b in bucket_rows(_tm_fail_res, "apps")}
+
+# Open JIRA per application
 _jira_map_tm = {b["key"]: b["doc_count"] for b in bucket_rows(
     es_search(IDX["jira"], {
         "query": {"bool": {"filter": scope_filters(), "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
-        "aggs": {"projs": {"terms": {"field": "project", "size": 500}}},
-    }),
-    "projs",
+        "aggs": {"apps": {"terms": {"field": "project", "size": 500}}},
+    }), "apps",
 )}
-# PRD deployments per project (to mark live)
-_tm_prd_map = composite_terms(
-    IDX["deployments"], "project",
-    {"bool": {"filter": [range_filter("startdate", _tm_ninety, now_utc),
-                         {"term": {"environment": "prd"}}] + scope_filters()}},
-)
+
+# ── Build per-application rows for the treemap ──────────────────────────────
+_all_apps = set(_tm_active_map) | set(_tm_prd_map) | {
+    app for apps in _tm_proj_to_apps.values() for app in apps
+}
 
 _tm_rows = []
-_all_proj_names = set(_tm_inv_map.keys()) | set(_tm_active_map.keys())
-for _p in _all_proj_names:
-    _builds_90 = _tm_active_map.get(_p, 0)
-    _in_inv    = _p in _tm_inv_map
-    _fails     = _tm_fail_map.get(_p, 0)
-    _jira_open = _jira_map_tm.get(_p, 0)
-    _in_prd    = _tm_prd_map.get(_p, 0) > 0
-    _app_count = len(_tm_proj_to_apps.get(_p, [])) or 1  # fallback 1
+for _app in _all_apps:
+    _builds_all = _tm_active_map.get(_app, 0)
+    _uv         = _tm_uv_map.get(_app, 0)
+    _in_inv     = _app in _app_to_parent or any(_app in apps for apps in _tm_proj_to_apps.values())
+    _fails      = _tm_fail_map.get(_app, 0)
+    _jira_open  = _jira_map_tm.get(_app, 0)
+    _in_prd     = _tm_prd_map.get(_app, 0) > 0
+    _parent     = _app_to_parent.get(_app, "(ungrouped)")
 
-    if _builds_90 == 0 and _in_inv:
+    if _builds_all == 0 and _in_inv:
         _status = "Archival candidate"
-    elif _builds_90 > 0 and _in_prd:
-        _succ_pct = (_builds_90 - _fails) / _builds_90 * 100 if _builds_90 else 100
+    elif _builds_all > 0 and _in_prd:
+        _succ_pct = (_builds_all - _fails) / _builds_all * 100 if _builds_all else 100
         _status = "Live · healthy" if _succ_pct >= 80 else "Live · at-risk"
-    elif _builds_90 > 0:
+    elif _builds_all > 0:
         _status = "Building · not in PRD"
     else:
         _status = "Unknown"
 
     _score = min(100, max(0, int(
-        ((_builds_90 - _fails) / _builds_90 * 100 if _builds_90 else 50)
-        - _jira_open * 1.5
+        ((_builds_all - _fails) / _builds_all * 100 if _builds_all else 50) - _jira_open * 1.5
     )))
     _tm_rows.append({
-        "project":    _p,
-        "app_count":  _app_count,
-        "builds_90d": max(_builds_90, 1),
-        "status":     _status,
-        "score":      _score,
-        "fails":      _fails,
-        "open_jira":  _jira_open,
-        "live":       "Yes" if _in_prd else "No",
+        "application": _app,
+        "project":     _parent,
+        "builds":      max(_builds_all, 1),
+        "uniq_ver":    _uv,
+        "status":      _status,
+        "score":       _score,
+        "fails":       _fails,
+        "open_jira":   _jira_open,
+        "live":        "Yes" if _in_prd else "No",
     })
 
 if _tm_rows:
@@ -1780,38 +1833,39 @@ if _tm_rows:
         "Archival candidate":    "#94a3b8",
         "Unknown":               "#cbd5e1",
     }
+    # Treemap: status → project → application  (3-level hierarchy)
     _tm_fig = px.treemap(
         _df_tm,
-        path=["status", "project"],
-        values="builds_90d",
+        path=["status", "project", "application"],
+        values="builds",
         color="status",
         color_discrete_map=_color_map,
-        custom_data=["fails", "open_jira", "score", "app_count", "live"],
-        title="Project landscape · last 90 days  (size = build count · color = status)",
+        custom_data=["fails", "open_jira", "score", "uniq_ver", "live"],
+        title="Application landscape · all-time  (size = total builds · color = live/dormant status)",
     )
     _tm_fig.update_traces(
         hovertemplate=(
             "<b>%{label}</b><br>"
-            "Builds (90d): %{value:,}<br>"
-            "Applications: %{customdata[3]}<br>"
+            "Builds (all-time): %{value:,}<br>"
+            "Unique versions: %{customdata[3]}<br>"
             "Failures: %{customdata[0]}<br>"
             "Open JIRA: %{customdata[1]}<br>"
             "Health score: %{customdata[2]}/100<br>"
-            "In PRD: %{customdata[4]}"
+            "Live (in PRD): %{customdata[4]}"
             "<extra></extra>"
         ),
         textinfo="label+value",
         insidetextfont=dict(size=11, color="white"),
     )
     _tm_fig.update_layout(
-        height=360,
+        height=420,
         margin=dict(l=0, r=0, t=36, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#374151", family="Inter, sans-serif"),
     )
     st.plotly_chart(_tm_fig, use_container_width=True)
 
-    # Compact status summary beneath treemap
+    # Status summary pills
     _status_counts = _df_tm["status"].value_counts().to_dict()
     _pills = ""
     for _s, _c_clr in _color_map.items():
@@ -1826,28 +1880,27 @@ if _tm_rows:
             )
     st.markdown(f'<div style="margin-top:4px">{_pills}</div>', unsafe_allow_html=True)
 
-    # Archival candidates inline (compact)
-    _archival = _df_tm[_df_tm["status"] == "Archival candidate"].sort_values("project")
+    # Archival candidates alert
+    _archival = _df_tm[_df_tm["status"] == "Archival candidate"].sort_values("application")
     if not _archival.empty:
         _arc_cols = st.columns([3, 1])
         with _arc_cols[0]:
             st.markdown(
                 f'<div class="alert warning" style="margin-bottom:4px;">'
                 f'<div class="icon">⚠</div>'
-                f'<div><b>{len(_archival)} archival candidates</b>'
-                f'<span class="sub">— no builds in 90 days, still in inventory</span></div>'
+                f'<div><b>{len(_archival)} archival candidate(s)</b>'
+                f'<span class="sub">— in inventory but no builds ever recorded</span></div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
         with _arc_cols[1]:
             with st.popover("View list", use_container_width=True):
-                st.markdown("**Projects with no builds in 90 days**")
-                _arc_display = _archival[["project", "app_count", "open_jira"]].copy()
-                _arc_display.columns = ["Project", "Applications", "Open JIRA"]
-                st.dataframe(_arc_display, use_container_width=True, hide_index=True, height=400)
-                st.caption(f"{len(_archival)} candidates — review for archival or decommission.")
+                st.markdown("**Applications with no builds — archival candidates**")
+                _arc_d = _archival[["project", "application", "open_jira"]].copy()
+                _arc_d.columns = ["Project", "Application", "Open JIRA"]
+                st.dataframe(_arc_d, use_container_width=True, hide_index=True, height=400)
 else:
-    inline_note("No project data available.", "info")
+    inline_note("No application data available.", "info")
 
 # =============================================================================
 # APP LIFECYCLE — pipeline stage funnel per project + bottleneck finder
@@ -1857,9 +1910,9 @@ st.markdown(
     '<div class="section">'
     '<div class="title-wrap">'
     '  <h2>App lifecycle &amp; bottlenecks</h2>'
-    '  <span class="badge">Build → Dev → QC → UAT → PRD</span>'
+    '  <span class="badge">Build → Dev → QC → Release → UAT → PRD</span>'
     '</div>'
-    '<span class="hint">where does each project stall, which are live, which are dormant and why</span>'
+    '<span class="hint">unique versions per application at each stage — where does each application stall?</span>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -1897,24 +1950,19 @@ def _lifecycle_data(
         _scope.append({"term": {"project": project}})
     # service-account exclusion applies to commits only (handled in callers)
 
-    def _by_proj(index: str, date_field: str,
-                 extra: list[dict] | None = None) -> dict[str, int]:
+    def _uv_by_app(index: str, date_field: str,
+                   app_field: str = "project",
+                   extra: list[dict] | None = None) -> dict[str, int]:
+        """Unique codeversion count per application — eliminates re-runs."""
         _f = [range_filter(date_field, _s, _e)] + _scope + (extra or [])
-        # Use "project" (direct field) — avoids keyword sub-field mapping issues
-        return composite_terms(index, "project", {"bool": {"filter": _f}})
+        return composite_unique_versions(index, app_field, {"bool": {"filter": _f}})
 
-    def _by_app(index: str, date_field: str,
-                extra: list[dict] | None = None) -> dict[str, int]:
-        """Releases use `application` as project identifier."""
-        _f = [range_filter(date_field, _s, _e)] + _scope + (extra or [])
-        return composite_terms(index, "application", {"bool": {"filter": _f}})
-
-    builds_by_proj  = _by_proj(IDX["builds"],      "startdate")
-    dep_dev_by_proj = _by_proj(IDX["deployments"],  "startdate", [{"term": {"environment": "dev"}}])
-    dep_qc_by_proj  = _by_proj(IDX["deployments"],  "startdate", [{"term": {"environment": "qc"}}])
-    rel_by_proj     = _by_app(IDX["releases"],       "releasedate")   # after QC, before UAT
-    dep_uat_by_proj = _by_proj(IDX["deployments"],  "startdate", [{"term": {"environment": "uat"}}])
-    dep_prd_by_proj = _by_proj(IDX["deployments"],  "startdate", [{"term": {"environment": "prd"}}])
+    builds_by_proj  = _uv_by_app(IDX["builds"],      "startdate")
+    dep_dev_by_proj = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "dev"}}])
+    dep_qc_by_proj  = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "qc"}}])
+    rel_by_proj     = _uv_by_app(IDX["releases"],      "releasedate", app_field="application")
+    dep_uat_by_proj = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "uat"}}])
+    dep_prd_by_proj = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "prd"}}])
 
     stage_maps = {
         "Builds":      builds_by_proj,
@@ -2079,37 +2127,35 @@ st.markdown(
 )
 
 # Classify each project into one of 5 buckets:
-#   Live           → has PRD deployments in window
-#   Stuck in UAT   → UAT deploys but no PRD  (dead in operations)
-#   Dead in QC     → QC deploys but no UAT   (stuck in quality)
-#   Dead in Dev    → builds but no dev deploy (dead in development)
-#   Dark           → in inventory but no builds at all (archival candidate)
+# Classify each APPLICATION (not project) through the pipeline.
+# _lc_projects contains application names (the "project" field in builds/deploys).
+# _app_to_parent maps application → parent project from inventory.
 
-_inv_projects = set(_tm_inv_map.keys()) if "_tm_inv_map" in dir() else set()
+_inv_apps = set(_app_to_parent.keys()) if "_app_to_parent" in dir() else set()
 
 _lc_classified: dict[str, str] = {}
-for _p in _lc_projects:
-    _b   = _stage_maps["Builds"].get(_p, 0)
-    _dev = _stage_maps["Deploy Dev"].get(_p, 0)
-    _qc  = _stage_maps["Deploy QC"].get(_p, 0)
-    _rel = _stage_maps["Release"].get(_p, 0)
-    _uat = _stage_maps["Deploy UAT"].get(_p, 0)
-    _prd = _stage_maps["Deploy PRD"].get(_p, 0)
+for _app in _lc_projects:
+    _b   = _stage_maps["Builds"].get(_app, 0)
+    _dev = _stage_maps["Deploy Dev"].get(_app, 0)
+    _qc  = _stage_maps["Deploy QC"].get(_app, 0)
+    _rel = _stage_maps["Release"].get(_app, 0)
+    _uat = _stage_maps["Deploy UAT"].get(_app, 0)
+    _prd = _stage_maps["Deploy PRD"].get(_app, 0)
     if _prd > 0:
-        _lc_classified[_p] = "Live (in PRD)"
+        _lc_classified[_app] = "Live (in PRD)"
     elif _uat > 0:
-        _lc_classified[_p] = "Stuck in UAT"
+        _lc_classified[_app] = "Stuck in UAT"
     elif _rel > 0 or _qc > 0:
-        _lc_classified[_p] = "Dead in Quality"
+        _lc_classified[_app] = "Dead in Quality"
     elif _b > 0:
-        _lc_classified[_p] = "Dead in Dev"
+        _lc_classified[_app] = "Dead in Dev"
     else:
-        _lc_classified[_p] = "Dark"
+        _lc_classified[_app] = "Dark"
 
-# Also add inventory-only projects not seen in any pipeline stage
-for _p in _inv_projects:
-    if _p not in _lc_classified:
-        _lc_classified[_p] = "Dark"
+# Inventory-only applications with no pipeline activity
+for _app in _inv_apps:
+    if _app not in _lc_classified:
+        _lc_classified[_app] = "Dark"
 
 _STATUS_ORDER = ["Live (in PRD)", "Stuck in UAT", "Dead in Quality", "Dead in Dev", "Dark"]
 _STATUS_COLORS_MAP = {
@@ -2128,9 +2174,9 @@ _STATUS_ICONS = {
 }
 _STATUS_DESC = {
     "Live (in PRD)":   "has PRD deployments in window — actively in production",
-    "Stuck in UAT":    "UAT deploys exist but nothing reached PRD — blocked before release",
-    "Dead in Quality": "builds reached QC but no UAT promotion — quality gate holding",
-    "Dead in Dev":     "has builds but nothing deployed even to dev — build-only, never shipped",
+    "Stuck in UAT":    "UAT deployments exist but nothing reached PRD — blocked before ops",
+    "Dead in Quality": "reached QC/release but no UAT — quality gate is holding",
+    "Dead in Dev":     "has builds but never deployed anywhere — dev-only loop",
     "Dark":            "no builds in window — archival candidate or genuinely inactive",
 }
 
@@ -2161,57 +2207,59 @@ if _total_classified:
     _pill_html += "</div>"
     st.markdown(_pill_html, unsafe_allow_html=True)
 
-# Alert rows for the non-live categories
+# Alert rows with per-application breakdown
 for _s, _desc in [
-    ("Stuck in UAT",    "project(s) have UAT deploys but never reached PRD — check release gates"),
-    ("Dead in Quality", "project(s) reached QC but never promoted to UAT — quality gate blocking"),
-    ("Dead in Dev",     "project(s) have builds but were never deployed anywhere — dev-only loop"),
-    ("Dark",            "project(s) have no builds in window — review for archival"),
+    ("Stuck in UAT",    "application(s) have UAT deploys but never reached PRD"),
+    ("Dead in Quality", "application(s) reached QC/release but were never promoted to UAT"),
+    ("Dead in Dev",     "application(s) have builds but were never deployed anywhere"),
+    ("Dark",            "application(s) have no builds in window — review for archival"),
 ]:
     _n = _counts[_s]
     if _n == 0:
         continue
     _kind = "warning" if _s in ("Stuck in UAT", "Dead in Quality") else "danger" if _s == "Dead in Dev" else "info"
-    _proj_list = sorted(p for p, v in _lc_classified.items() if v == _s)
-    _preview = ", ".join(_proj_list[:5]) + (f" +{len(_proj_list)-5} more" if len(_proj_list) > 5 else "")
+    _app_list = sorted(a for a, v in _lc_classified.items() if v == _s)
+    _preview = ", ".join(_app_list[:5]) + (f" +{len(_app_list)-5} more" if len(_app_list) > 5 else "")
     _a_col1, _a_col2 = st.columns([4, 1])
     with _a_col1:
         inline_note(f"{_n} {_desc}  ·  {_preview}", _kind)
     with _a_col2:
         with st.popover("View all", use_container_width=True):
-            st.markdown(f"**{_s}** — {_desc}")
-            st.markdown(f"_{_STATUS_DESC[_s]}_")
+            st.markdown(f"**{_s}** — {_STATUS_DESC[_s]}")
             _pl_df = pd.DataFrame([{
-                "Project": _p,
-                "Builds": _stage_maps["Builds"].get(_p, 0),
-                "Dev": _stage_maps["Deploy Dev"].get(_p, 0),
-                "QC": _stage_maps["Deploy QC"].get(_p, 0),
-                "UAT": _stage_maps["Deploy UAT"].get(_p, 0),
-                "PRD": _stage_maps["Deploy PRD"].get(_p, 0),
-            } for _p in _proj_list])
+                "Application": _a,
+                "Project":     _app_to_parent.get(_a, "—") if "_app_to_parent" in dir() else "—",
+                "Builds":      _stage_maps["Builds"].get(_a, 0),
+                "Dev":         _stage_maps["Deploy Dev"].get(_a, 0),
+                "QC":          _stage_maps["Deploy QC"].get(_a, 0),
+                "Release":     _stage_maps["Release"].get(_a, 0),
+                "UAT":         _stage_maps["Deploy UAT"].get(_a, 0),
+                "PRD":         _stage_maps["Deploy PRD"].get(_a, 0),
+            } for _a in _app_list])
             st.dataframe(_pl_df, use_container_width=True, hide_index=True)
 
-# ── Row 3: Per-project pipeline heatmap ─────────────────────────────────────
+# ── Row 3: Per-application pipeline heatmap ──────────────────────────────────
 if _lc_projects:
-    _proj_activity = {
-        p: sum(_stage_maps[s].get(p, 0) for s in _LC_STAGES)
-        for p in _lc_projects
+    _app_activity = {
+        a: sum(_stage_maps[s].get(a, 0) for s in _LC_STAGES)
+        for a in _lc_projects
     }
-    _top_projects = sorted(_proj_activity, key=_proj_activity.get, reverse=True)[:35]  # type: ignore[arg-type]
+    _top_apps = sorted(_app_activity, key=_app_activity.get, reverse=True)[:35]  # type: ignore[arg-type]
 
-    # Y-axis label includes status icon
+    # Y-axis: "icon AppName [Project]"
     _y_labels = [
-        f"{_STATUS_ICONS.get(_lc_classified.get(p,'Dark'), '○')} {p}"
-        for p in _top_projects
+        f"{_STATUS_ICONS.get(_lc_classified.get(a,'Dark'), '○')} {a}"
+        + (f" [{_app_to_parent[a]}]" if "_app_to_parent" in dir() and a in _app_to_parent else "")
+        for a in _top_apps
     ]
 
     _hm_z, _hm_text = [], []
-    for _p in _top_projects:
+    for _a in _top_apps:
         _row_z, _row_text = [], []
-        _builds = _stage_maps["Builds"].get(_p, 0)
+        _builds = _stage_maps["Builds"].get(_a, 0)
         _ref = _builds if _builds else 1
         for _s in _LC_STAGES:
-            _v = _stage_maps[_s].get(_p, 0)
+            _v = _stage_maps[_s].get(_a, 0)
             _rate = min(100.0, _v / _ref * 100) if _s != "Builds" else (100.0 if _v else 0.0)
             _row_z.append(_rate)
             _row_text.append(str(_v) if _v else "—")
@@ -2242,12 +2290,12 @@ if _lc_projects:
         ),
         hovertemplate=(
             "<b>%{y}</b><br>Stage: %{x}<br>"
-            "Count: %{text}<br>Conv: %{z:.1f}%<extra></extra>"
+            "Unique versions: %{text}<br>Conv: %{z:.1f}%<extra></extra>"
         ),
     ))
     _hm_fig.update_layout(
         title=dict(
-            text="Pipeline conversion per project · % of builds that reached each stage",
+            text="Pipeline conversion per application · % of built versions that reached each stage",
             font=dict(size=13, color="#1e293b"), x=0,
         ),
         xaxis=dict(
@@ -2261,7 +2309,7 @@ if _lc_projects:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=70, t=56, b=0),
-        height=max(300, len(_top_projects) * 26),
+        height=max(300, len(_top_apps) * 26),
         font=dict(family="inherit"),
     )
     st.plotly_chart(_hm_fig, use_container_width=True)
