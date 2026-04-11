@@ -84,6 +84,10 @@ FAILED_STATUSES = ["FAILED", "FAILURE", "Failed", "failed"]
 CLOSED_JIRA = ["Done", "Closed", "Resolved", "Cancelled", "Rejected"]
 PENDING_STATUSES = ["Pending", "PENDING", "pending"]
 
+# Projects permanently excluded from all views (test/noise projects)
+EXCLUDED_PROJECTS = ["MAIKA_RegTst"]
+SVC_ACCOUNT = "azure_sql"
+
 
 # =============================================================================
 # PAGE CONFIG & CUSTOM THEME
@@ -658,6 +662,28 @@ def parse_dt(value: Any) -> "pd.Timestamp | None":
         except Exception:
             pass
 
+    # ── 6. Try common non-ISO strptime patterns ───────────────────────────────
+    for _fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f%z",   # with ms + tz offset
+        "%Y-%m-%dT%H:%M:%S%z",       # no ms + tz offset
+        "%Y-%m-%d %H:%M:%S",         # space-separated naive
+        "%d/%m/%Y %H:%M:%S",         # DD/MM/YYYY
+        "%m/%d/%Y %H:%M:%S",         # MM/DD/YYYY
+        "%d-%b-%Y %H:%M:%S",         # DD-Mon-YYYY
+    ):
+        try:
+            from datetime import datetime as _dt
+            return _to_utc(pd.Timestamp(_dt.strptime(s, _fmt)))
+        except Exception:
+            pass
+
+    # ── 7. dateutil catch-all — handles almost any human-readable format ──────
+    try:
+        from dateutil import parser as _dup  # type: ignore[import]
+        return _to_utc(pd.Timestamp(_dup.parse(s)))
+    except Exception:
+        pass
+
     return None
 
 
@@ -844,7 +870,7 @@ with _cb1[4]:
     exclude_svc = st.toggle(
         "Excl. svc",
         value=True,
-        help="Exclude service account 'azure_sql' from commit counts",
+        help="Exclude service account 'azure_sql' from all commit displays",
         key="exclude_svc",
     )
 
@@ -921,20 +947,26 @@ st.caption(
 
 
 def scope_filters() -> list[dict]:
+    """Base filters for operational indices (builds, deployments, commits, etc.)."""
     fs: list[dict] = []
     if company_filter:
         fs.append({"term": {"company.keyword": company_filter}})
     if project_filter:
         fs.append({"term": {"project": project_filter}})
+    # Always exclude noise/test projects
+    fs.append({"bool": {"must_not": [{"terms": {"project": EXCLUDED_PROJECTS}}]}})
     return fs
 
 
 def scope_filters_inv() -> list[dict]:
+    """Filters for the inventory index (uses .keyword sub-fields)."""
     fs: list[dict] = []
     if company_filter:
         fs.append({"term": {"company.keyword": company_filter}})
     if project_filter:
         fs.append({"term": {"project.keyword": project_filter}})
+    # Always exclude noise/test projects
+    fs.append({"bool": {"must_not": [{"terms": {"project.keyword": EXCLUDED_PROJECTS}}]}})
     return fs
 
 
@@ -942,8 +974,29 @@ def commit_scope_filters() -> list[dict]:
     """scope_filters() + optional service-account exclusion for commit queries."""
     fs = list(scope_filters())
     if exclude_svc:
-        fs.append({"bool": {"must_not": [{"term": {"authorname": "azure_sql"}}]}})
+        fs.append({"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}})
     return fs
+
+
+def build_scope_filters() -> list[dict]:
+    """scope_filters() + release-branch only (production pipeline builds)."""
+    return scope_filters() + [{"term": {"branch": "release"}}]
+
+
+def deploy_scope_filters() -> list[dict]:
+    """scope_filters() + exclude pre-release/test versions (codeversion 0.*)."""
+    return scope_filters() + [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]
+
+
+def idx_scope(index: str) -> list[dict]:
+    """Return the appropriate scope filters for the given index."""
+    if index == IDX["builds"]:
+        return build_scope_filters()
+    if index == IDX["deployments"]:
+        return deploy_scope_filters()
+    if index == IDX["commits"]:
+        return commit_scope_filters()
+    return scope_filters()
 
 
 # =============================================================================
@@ -980,7 +1033,8 @@ def count_with_range(
     extra: list[dict] | None = None,
     use_commit_scope: bool = False,
 ) -> int:
-    base = commit_scope_filters() if use_commit_scope else scope_filters()
+    # use_commit_scope overrides auto-detection (for backward compat)
+    base = commit_scope_filters() if use_commit_scope else idx_scope(index)
     filters = [range_filter(field, s, e)] + base + (extra or [])
     return es_count(index, {"query": {"bool": {"filter": filters}}})
 
@@ -1014,21 +1068,101 @@ days_in_window = max(delta.total_seconds() / 86400, 1/24)
 deploy_freq_per_day = prd_deploys / days_in_window
 
 # -- Requests ----------------------------------------------------------------
+# Unified function that merges ef-devops-requests + ef-cicd-approval (legacy).
+# ef-devops-requests: Status, RequestDate, RequestNumber, RequestType, Requester, RequesterTeam, application
+# ef-cicd-approval:   status (lower), RequestDate or Created or SubmittedDate, id/ApprovalId, Type
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_unified_pending(window_start_iso: str, window_end_iso: str) -> list[dict]:
+    """Return normalised pending request dicts from both request indices."""
+    _w0 = datetime.fromisoformat(window_start_iso)
+    _w1 = datetime.fromisoformat(window_end_iso)
+    _results: list[dict] = []
+
+    # ── ef-devops-requests ──────────────────────────────────────────────────
+    _r1 = es_search(IDX["requests"], {
+        "query": {"bool": {"filter": [
+            range_filter("RequestDate", _w0, _w1),
+            {"terms": {"Status": PENDING_STATUSES}},
+        ]}},
+        "sort": [{"RequestDate": "asc"}],
+    }, size=200)
+    for _h in _r1.get("hits", {}).get("hits", []):
+        _s = _h["_source"]
+        _results.append({
+            "_idx":    "requests",
+            "#":       _s.get("RequestNumber") or _s.get("id") or _h.get("_id"),
+            "Type":    _s.get("RequestType") or _s.get("Type") or "—",
+            "Requester": _s.get("Requester") or _s.get("requestedBy") or "—",
+            "Team":    _s.get("RequesterTeam") or "—",
+            "Application": _s.get("application") or _s.get("project") or "—",
+            "Date":    _s.get("RequestDate") or "",
+            "Age (h)": None,  # filled below
+        })
+
+    # ── ef-cicd-approval (legacy) ───────────────────────────────────────────
+    # Try multiple date field names; pending states may differ
+    _APPR_DATE_FIELDS = ["RequestDate", "Created", "CreatedDate", "SubmittedDate", "created", "date"]
+    _APPR_STATUS_FIELDS = ["Status", "status", "ApprovalStatus"]
+    _APPR_PENDING = PENDING_STATUSES + ["OPEN", "open", "Open", "NEW", "new", "New",
+                                         "WAITING", "waiting", "Waiting"]
+    for _df in _APPR_DATE_FIELDS:
+        try:
+            _r2 = es_search(IDX["approval"], {
+                "query": {"bool": {"must_not": [{"terms": {"status": ["CLOSED", "APPROVED", "REJECTED",
+                                                                        "Approved", "Rejected",
+                                                                        "closed", "approved", "rejected"]}}]}},
+                "sort": [{_df: "asc"}],
+            }, size=200)
+            if _r2.get("hits", {}).get("total", {}).get("value", 0) or _r2.get("hits", {}).get("hits"):
+                for _h in _r2.get("hits", {}).get("hits", []):
+                    _s = _h["_source"]
+                    _st_val = next((_s.get(f) for f in _APPR_STATUS_FIELDS if _s.get(f)), "")
+                    if str(_st_val).upper() in [p.upper() for p in _APPR_PENDING]:
+                        _date_val = next((_s.get(f) for f in _APPR_DATE_FIELDS if _s.get(f)), "")
+                        _ts = parse_dt(_date_val)
+                        if _ts is None or not (_w0.replace(tzinfo=_w0.tzinfo or timezone.utc) <= _ts <= _w1.replace(tzinfo=_w1.tzinfo or timezone.utc)):
+                            continue
+                        _results.append({
+                            "_idx":    "approval",
+                            "#":       _s.get("ApprovalId") or _s.get("RequestNumber") or _s.get("id") or _h.get("_id"),
+                            "Type":    _s.get("ApprovalType") or _s.get("RequestType") or _s.get("Type") or "approval",
+                            "Requester": _s.get("RequestedBy") or _s.get("Requester") or _s.get("requestedBy") or "—",
+                            "Team":    _s.get("Team") or _s.get("RequesterTeam") or "—",
+                            "Application": _s.get("application") or _s.get("project") or "—",
+                            "Date":    _date_val,
+                            "Age (h)": None,
+                        })
+                break  # found working date field — stop trying
+        except Exception:
+            continue
+
+    # Fill Age (h)
+    _now_ref = datetime.now(timezone.utc)
+    for _item in _results:
+        _item["Age (h)"] = age_hours(_item["Date"], _now_ref) or 0
+
+    return _results
+
+
+def pending_unified_counts() -> dict[str, int]:
+    """Return {application: pending_count} across both request indices."""
+    _rows = _fetch_unified_pending(
+        pending_window_start.isoformat(), now_utc.isoformat()
+    )
+    _counts: dict[str, int] = {}
+    for _r in _rows:
+        _a = _r.get("Application") or "—"
+        _counts[_a] = _counts.get(_a, 0) + 1
+    return _counts
+
+
 reqs_now  = count_with_range(IDX["requests"], "RequestDate", start_dt, end_dt)
 reqs_prev = count_with_range(IDX["requests"], "RequestDate", prior_start, prior_end)
-pending_now = es_count(
-    IDX["requests"],
-    {
-        "query": {
-            "bool": {
-                "filter": [
-                    range_filter("RequestDate", pending_window_start, now_utc),
-                    {"terms": {"Status": PENDING_STATUSES}},
-                ]
-            }
-        }
-    },
+_all_pending = _fetch_unified_pending(
+    pending_window_start.isoformat(), now_utc.isoformat()
 )
+pending_now = len(_all_pending)
 
 # -- Commits (respects service-account exclusion toggle) ---------------------
 commits_now  = count_with_range(IDX["commits"], "commitdate", start_dt, end_dt,     use_commit_scope=True)
@@ -1064,7 +1198,7 @@ active_res = es_search(
     {
         "query": {
             "bool": {
-                "filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+                "filter": [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()
             }
         },
         "aggs": {"apps": {"cardinality": {"field": "application"}}},
@@ -1124,14 +1258,14 @@ def _trend_windows(td: timedelta) -> tuple[datetime, datetime, datetime, datetim
 
 
 _trend_metrics = [
-    ("Builds",            IDX["builds"],       "startdate",   None),
-    ("Build failures",    IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}]),
-    ("Deployments",       IDX["deployments"],  "startdate",   None),
-    ("Prod deployments",  IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}]),
-    ("Prod failures",     IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}]),
-    ("Commits",           IDX["commits"],      "commitdate",  None),
-    ("Releases",          IDX["releases"],     "releasedate", None),
-    ("Requests",          IDX["requests"],     "RequestDate", None),
+    ("Builds",            IDX["builds"],       "startdate",   None,   False),
+    ("Build failures",    IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}], False),
+    ("Deployments",       IDX["deployments"],  "startdate",   None,   False),
+    ("Prod deployments",  IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}], False),
+    ("Prod failures",     IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}], False),
+    ("Commits",           IDX["commits"],      "commitdate",  None,   True),   # use commit scope
+    ("Releases",          IDX["releases"],     "releasedate", None,   False),
+    ("Requests",          IDX["requests"],     "RequestDate", None,   False),
 ]
 
 # Row 1 — DORA headline (4 cards)
@@ -1167,11 +1301,12 @@ with r2c[4]:
     with st.popover("📈  WoW / MoM / YoY trends", use_container_width=True):
         st.markdown("**Rolling period comparisons** — independent of the window selector above")
         _trend_rows = []
-        for _lbl, _idx, _df, _ex in _trend_metrics:
+        for _lbl, _idx, _df, _ex, _use_cs in _trend_metrics:
             _row: dict[str, Any] = {"Metric": _lbl}
             for _pl, _td in _periods:
                 _cs, _ce, _ps, _pe = _trend_windows(_td)
-                _cur, _prev = _trend_count(_idx, _df, _cs, _ce, _ps, _pe, extra=_ex)
+                _cur  = count_with_range(_idx, _df, _cs, _ce, extra=_ex, use_commit_scope=_use_cs)
+                _prev = count_with_range(_idx, _df, _ps, _pe, extra=_ex, use_commit_scope=_use_cs)
                 _row[_pl] = _cell(_cur, _prev)
             _trend_rows.append(_row)
         _hdrs = ["Metric"] + [p[0] for p in _periods]
@@ -1211,12 +1346,13 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
     _win = _now - timedelta(hours=48)
     _evts: list[dict] = []
 
+    _deploy_extra = [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]
     # Prod deploys
     _r = _run_search(IDX["deployments"], json.dumps({
         "query": {"bool": {"filter": [
             range_filter("startdate", _win, _now),
             {"term": {"environment": "prd"}},
-        ] + _sf}},
+        ] + _sf + _deploy_extra}},
         "sort": [{"startdate": "desc"}], "track_total_hits": True,
     }, default=str, sort_keys=True), 6)
     for _h in _r.get("hits", {}).get("hits", []):
@@ -1225,7 +1361,7 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
         _evts.append({
             "ts": parse_dt(_s.get("startdate")),
             "type": "prd-deploy",
-            "label": f'PRD deploy · {_s.get("project","")} v{_s.get("codeversion","")}',
+            "label": f'PRD deploy · {_s.get("application") or _s.get("project","")} v{_s.get("codeversion","")}',
             "ok": _ok,
         })
 
@@ -1243,12 +1379,13 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
             "ok": True,
         })
 
-    # Failed builds
+    _build_extra = [{"term": {"branch": "release"}}]
+    # Failed builds (release branch only)
     _r = _run_search(IDX["builds"], json.dumps({
         "query": {"bool": {"filter": [
             range_filter("startdate", _win, _now),
             {"terms": {"status": FAILED_STATUSES}},
-        ] + _sf}},
+        ] + _sf + _build_extra}},
         "sort": [{"startdate": "desc"}], "track_total_hits": True,
     }, default=str, sort_keys=True), 4)
     for _h in _r.get("hits", {}).get("hits", []):
@@ -1256,7 +1393,7 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
         _evts.append({
             "ts": parse_dt(_s.get("startdate")),
             "type": "fail",
-            "label": f'Build failed · {_s.get("project","")} {_s.get("branch","")}',
+            "label": f'Build failed · {_s.get("application") or _s.get("project","")} {_s.get("branch","")}',
             "ok": False,
         })
 
@@ -1321,7 +1458,10 @@ stuck_body = {
         }
     }
 }
-stuck = es_count(IDX["requests"], stuck_body)
+stuck = sum(
+    1 for r in _all_pending
+    if (r.get("Age (h)") or 0) >= 24
+)
 if stuck:
     alerts.append((
         "danger", "!",
@@ -1407,16 +1547,16 @@ else:
                 st.markdown(f"**{_title}**")
                 # Route by severity/content
                 if "approval" in _title.lower() or "pending" in _title.lower():
-                    _ar = es_search(IDX["requests"], {**stuck_body, "sort": [{"RequestDate": "asc"}]}, size=100)
-                    _ah = _ar.get("hits", {}).get("hits", [])
-                    if _ah:
+                    _stuck_rows = [r for r in _all_pending if (r.get("Age (h)") or 0) >= 24]
+                    if _stuck_rows:
                         st.dataframe(pd.DataFrame([{
-                            "#": h["_source"].get("RequestNumber"),
-                            "Type": h["_source"].get("RequestType"),
-                            "Requester": h["_source"].get("Requester"),
-                            "Team": h["_source"].get("RequesterTeam"),
-                            "Age (h)": age_hours(h["_source"].get("RequestDate"), now_utc),
-                        } for h in _ah]), use_container_width=True, hide_index=True, height=420)
+                            "#":           r["#"],
+                            "Type":        r["Type"],
+                            "Requester":   r["Requester"],
+                            "Application": r["Application"],
+                            "Age (h)":     r["Age (h)"],
+                            "Queue":       r["_idx"],
+                        } for r in _stuck_rows]), use_container_width=True, hide_index=True, height=420)
                     else:
                         inline_note("No stuck approvals.", "success")
 
@@ -1426,7 +1566,7 @@ else:
                             range_filter("startdate", start_dt, end_dt),
                             {"term": {"environment": "prd"}},
                             {"terms": {"status": FAILED_STATUSES}},
-                        ] + scope_filters()}},
+                        ] + deploy_scope_filters()}},
                         "sort": [{"startdate": "desc"}]}, size=100)
                     _ah = _ar.get("hits", {}).get("hits", [])
                     if _ah:
@@ -1445,7 +1585,7 @@ else:
                         "query": {"bool": {"filter": [
                             range_filter("startdate", start_dt, end_dt),
                             {"terms": {"status": FAILED_STATUSES}},
-                        ] + scope_filters()}},
+                        ] + build_scope_filters()}},
                         "sort": [{"startdate": "desc"}]}, size=100)
                     _ah = _ar.get("hits", {}).get("hits", [])
                     if _ah:
@@ -1502,8 +1642,12 @@ else:
                         inline_note("No commits.", "info")
 
                 else:
-                    # Generic: dormant applications
-                    _dormant_list = sorted(p for p, v in _lc_classified.items() if v in ("Dark", "Dead in Dev"))[:50]
+                    # Dormant applications: in inventory but no builds in this window
+                    _dorm_inv_q = {"bool": {"filter": scope_filters_inv()}} if scope_filters_inv() else {"match_all": {}}
+                    _dorm_inv   = set(composite_terms(IDX["inventory"], "application.keyword", _dorm_inv_q).keys())
+                    _dorm_act_q = {"bool": {"filter": [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()}}
+                    _dorm_act   = set(composite_terms(IDX["builds"], "application", _dorm_act_q).keys())
+                    _dormant_list = sorted(_dorm_inv - _dorm_act)[:50]
                     if _dormant_list:
                         st.dataframe(pd.DataFrame({"Application": _dormant_list}),
                                      use_container_width=True, hide_index=True)
@@ -1551,16 +1695,18 @@ with pop_cols[0]:
         _dd_start = _dd_end - _dd_delta
 
         if _dd_proj and _dd_proj != "(no projects found)":
-            _pf = [{"term": {"project": _dd_proj}}]
+            _pf     = [{"term": {"project": _dd_proj}}]
+            _pf_b   = _pf + [{"term": {"branch": "release"}}]                                           # build filter
+            _pf_d   = _pf + [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]               # deploy filter
             _pf_inv = [{"term": {"project.keyword": _dd_proj}}]
 
             # Aggregate per-project stats across all indices
-            _b_all   = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}}})
-            _b_fail  = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"terms": {"status": FAILED_STATUSES}}] + _pf}}})
-            _d_all   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}}})
-            _d_prd   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}] + _pf}}})
-            _d_fail  = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}] + _pf}}})
-            _c_all   = es_count(IDX["commits"], {"query": {"bool": {"filter": [range_filter("commitdate", _dd_start, _dd_end)] + _pf}}})
+            _b_all   = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_b}}})
+            _b_fail  = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"terms": {"status": FAILED_STATUSES}}] + _pf_b}}})
+            _d_all   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_d}}})
+            _d_prd   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}] + _pf_d}}})
+            _d_fail  = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}] + _pf_d}}})
+            _c_all   = es_count(IDX["commits"], {"query": {"bool": {"filter": [range_filter("commitdate", _dd_start, _dd_end)] + _pf + ([{"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}}] if exclude_svc else [])}}})
             _r_pend  = es_count(IDX["requests"], {"query": {"bool": {"filter": [range_filter("RequestDate", pending_window_start, now_utc), {"terms": {"Status": PENDING_STATUSES}}] + _pf}}})
             _j_open  = es_count(IDX["jira"], {"query": {"bool": {"filter": _pf, "must_not": [{"terms": {"status": CLOSED_JIRA}}]}}})
             _succ    = ((_b_all - _b_fail) / _b_all * 100) if _b_all else 0.0
@@ -1587,7 +1733,7 @@ with pop_cols[0]:
             with dd_tabs[0]:
                 _r = es_search(
                     IDX["builds"],
-                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}},
+                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_b}},
                      "sort": [{"startdate": "desc"}]},
                     size=50,
                 )
@@ -1610,7 +1756,7 @@ with pop_cols[0]:
             with dd_tabs[1]:
                 _r = es_search(
                     IDX["deployments"],
-                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}},
+                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_d}},
                      "sort": [{"startdate": "desc"}]},
                     size=50,
                 )
@@ -1653,9 +1799,12 @@ with pop_cols[0]:
                     inline_note("No open JIRA for this project.", "success")
 
             with dd_tabs[3]:
+                _dd_commit_f = [range_filter("commitdate", _dd_start, _dd_end)] + _pf
+                if exclude_svc:
+                    _dd_commit_f.append({"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}})
                 _r = es_search(
                     IDX["commits"],
-                    {"query": {"bool": {"filter": [range_filter("commitdate", _dd_start, _dd_end)] + _pf}},
+                    {"query": {"bool": {"filter": _dd_commit_f}},
                      "sort": [{"commitdate": "desc"}]},
                     size=50,
                 )
@@ -1692,10 +1841,13 @@ with pop_cols[1]:
         _cw = st.selectbox("Window", ["Last 7 days", "Last 30 days", "Last 90 days"], index=1, key="dd_cw")
         _cd = {"Last 7 days": timedelta(days=7), "Last 30 days": timedelta(days=30), "Last 90 days": timedelta(days=90)}[_cw]
         _cs, _ce = now_utc - _cd, now_utc
+        _cdr_f = [range_filter("commitdate", _cs, _ce)]
+        if exclude_svc:
+            _cdr_f.append({"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}})
         _cr = es_search(
             IDX["commits"],
             {
-                "query": {"bool": {"filter": [range_filter("commitdate", _cs, _ce)]}},
+                "query": {"bool": {"filter": _cdr_f}},
                 "aggs": {
                     "top": {
                         "terms": {"field": "authorname", "size": 30},
@@ -1759,32 +1911,40 @@ for _parent, _apps in _tm_proj_to_apps.items():
     for _app in _apps:
         _app_to_parent[_app] = _parent
 
-# ── All-time builds per application (NOT time-filtered) ─────────────────────
-_tm_scope_only = {"bool": {"filter": scope_filters()}} if scope_filters() else {"match_all": {}}
-_tm_active_map  = composite_terms(IDX["builds"],      "project",  _tm_scope_only)  # app → build_count
-_tm_prd_map     = composite_terms(                                                  # app → prd_deploy_count
-    IDX["deployments"], "project",
-    {"bool": {"filter": [{"term": {"environment": "prd"}}] + scope_filters()}} if scope_filters()
-    else {"bool": {"filter": [{"term": {"environment": "prd"}}]}},
-)
+# ── All-time activity per application (NOT time-filtered) ───────────────────
+# Use "application" field in operational indices (inventory is the master reference).
+_tm_build_q   = {"bool": {"filter": build_scope_filters()}} if build_scope_filters() else {"match_all": {}}
+_tm_deploy_prd_q = {"bool": {"filter": [{"term": {"environment": "prd"}}] + deploy_scope_filters()}}
+_tm_active_map = composite_terms(IDX["builds"], "application", _tm_build_q)            # app → build_count
+_tm_prd_map    = composite_terms(IDX["deployments"], "application", _tm_deploy_prd_q)  # app → prd_deploy_count
 # Unique versions built all-time per application
-_tm_uv_map = composite_unique_versions(IDX["builds"], "project", _tm_scope_only)
+_tm_uv_map = composite_unique_versions(IDX["builds"], "application", _tm_build_q)
 
 # All-time fails per application
 _tm_fail_res = es_search(IDX["builds"], {
-    "query": _tm_scope_only,
-    "aggs": {"apps": {"terms": {"field": "project", "size": 500},
+    "query": _tm_build_q,
+    "aggs": {"apps": {"terms": {"field": "application", "size": 500},
                       "aggs": {"fails": {"filter": {"terms": {"status": FAILED_STATUSES}}}}}},
 })
 _tm_fail_map = {b["key"]: b.get("fails", {}).get("doc_count", 0) for b in bucket_rows(_tm_fail_res, "apps")}
 
-# Open JIRA per application
-_jira_map_tm = {b["key"]: b["doc_count"] for b in bucket_rows(
+# Open JIRA per application (JIRA uses "project" field — map via inventory lookup)
+_jira_proj_map = {b["key"]: b["doc_count"] for b in bucket_rows(
     es_search(IDX["jira"], {
-        "query": {"bool": {"filter": scope_filters(), "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
+        "query": {"bool": {"filter": scope_filters_inv(), "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
         "aggs": {"apps": {"terms": {"field": "project", "size": 500}}},
     }), "apps",
 )}
+# Distribute JIRA counts down to applications via the inventory hierarchy
+_jira_map_tm: dict[str, int] = {}
+for _jp, _jcnt in _jira_proj_map.items():
+    _japps = _tm_proj_to_apps.get(_jp, [])
+    if _japps:
+        _per_app = max(1, _jcnt // len(_japps))
+        for _ja in _japps:
+            _jira_map_tm[_ja] = _jira_map_tm.get(_ja, 0) + _per_app
+    else:
+        _jira_map_tm[_jp] = _jira_map_tm.get(_jp, 0) + _jcnt
 
 # ── Build per-application rows for the treemap ──────────────────────────────
 _all_apps = set(_tm_active_map) | set(_tm_prd_map) | {
@@ -1952,19 +2112,24 @@ def _lifecycle_data(
         _scope.append({"term": {"project": project}})
     # service-account exclusion applies to commits only (handled in callers)
 
+    _build_f   = _scope + [{"term": {"branch": "release"}}]
+    _deploy_f  = _scope + [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]
+
     def _uv_by_app(index: str, date_field: str,
                    app_field: str = "application",
-                   extra: list[dict] | None = None) -> dict[str, int]:
+                   extra: list[dict] | None = None,
+                   base_scope: list[dict] | None = None) -> dict[str, int]:
         """Unique codeversion count per application — eliminates re-runs."""
-        _f = [range_filter(date_field, _s, _e)] + _scope + (extra or [])
+        _base = base_scope if base_scope is not None else _scope
+        _f = [range_filter(date_field, _s, _e)] + _base + (extra or [])
         return composite_unique_versions(index, app_field, {"bool": {"filter": _f}})
 
-    builds_by_app  = _uv_by_app(IDX["builds"],      "startdate")
-    dep_dev_by_app = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "dev"}}])
-    dep_qc_by_app  = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "qc"}}])
+    builds_by_app  = _uv_by_app(IDX["builds"],      "startdate",   base_scope=_build_f)
+    dep_dev_by_app = _uv_by_app(IDX["deployments"],  "startdate",  extra=[{"term": {"environment": "dev"}}], base_scope=_deploy_f)
+    dep_qc_by_app  = _uv_by_app(IDX["deployments"],  "startdate",  extra=[{"term": {"environment": "qc"}}],  base_scope=_deploy_f)
     rel_by_app     = _uv_by_app(IDX["releases"],      "releasedate", app_field="application")
-    dep_uat_by_app = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "uat"}}])
-    dep_prd_by_app = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "prd"}}])
+    dep_uat_by_app = _uv_by_app(IDX["deployments"],  "startdate",  extra=[{"term": {"environment": "uat"}}], base_scope=_deploy_f)
+    dep_prd_by_app = _uv_by_app(IDX["deployments"],  "startdate",  extra=[{"term": {"environment": "prd"}}], base_scope=_deploy_f)
 
     stage_maps = {
         "Builds":      builds_by_app,
@@ -2364,7 +2529,7 @@ with ci2:
     body_b = {
         "query": {
             "bool": {
-                "filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+                "filter": [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()
             }
         },
         "aggs": {
@@ -2385,7 +2550,7 @@ with ci2:
                 "filter": [
                     range_filter("startdate", start_dt, end_dt),
                     {"term": {"environment": "prd"}},
-                ] + scope_filters()
+                ] + deploy_scope_filters()
             }
         },
         "aggs": {"apps": {"terms": {"field": "application", "size": 200}}},
@@ -2393,33 +2558,32 @@ with ci2:
     res_d = es_search(IDX["deployments"], body_d)
     prd_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_d, "apps")}
 
-    # JIRA open — per application
+    # JIRA open — per application (via project field, distributed to apps via inventory)
     body_j = {
         "query": {
             "bool": {
-                "filter": scope_filters(),
+                "filter": scope_filters_inv(),
                 "must_not": [{"terms": {"status": CLOSED_JIRA}}],
             }
         },
-        "aggs": {"apps": {"terms": {"field": "application", "size": 500}}},
+        "aggs": {"apps": {"terms": {"field": "project", "size": 500}}},
     }
     res_j = es_search(IDX["jira"], body_j)
-    jira_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_j, "apps")}
+    _jira_proj_raw = {b["key"]: b["doc_count"] for b in bucket_rows(res_j, "apps")}
+    # Distribute to apps via inventory hierarchy
+    jira_map: dict[str, int] = {}
+    for _jp2, _jcnt2 in _jira_proj_raw.items():
+        _japps2 = _tm_proj_to_apps.get(_jp2, [])
+        if _japps2:
+            _per = max(1, _jcnt2 // len(_japps2))
+            for _ja2 in _japps2:
+                jira_map[_ja2] = jira_map.get(_ja2, 0) + _per
+        else:
+            jira_map[_jp2] = jira_map.get(_jp2, 0) + _jcnt2
 
-    # Pending requests — per application (best effort — falls back to 0 if field missing)
-    body_r = {
-        "query": {
-            "bool": {
-                "filter": [
-                    range_filter("RequestDate", pending_window_start, now_utc),
-                    {"terms": {"Status": PENDING_STATUSES}},
-                ]
-            }
-        },
-        "aggs": {"apps": {"terms": {"field": "application", "size": 500}}},
-    }
-    res_r = es_search(IDX["requests"], body_r)
-    pend_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_r, "apps")}
+    # Pending requests — per application (unified across both request indices)
+    _pend_agg = pending_unified_counts()  # defined below
+    pend_map = _pend_agg
 
     rows = []
     for bk in bucket_rows(res_b, "apps")[:15]:
@@ -2558,7 +2722,7 @@ with _pa_pop[0]:
             "Status filter", ["Any", "SUCCESS", "FAILED", "ABORTED", "RUNNING"],
             index=0, key="raw_builds_status",
         )
-        _filter: list[dict] = [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+        _filter: list[dict] = [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()
         if _st == "FAILED":
             _filter.append({"terms": {"status": FAILED_STATUSES}})
         elif _st != "Any":
@@ -2597,7 +2761,7 @@ with _pa_pop[1]:
             "Status filter", ["Any", "SUCCESS", "FAILED"],
             index=0, key="raw_dep_status",
         )
-        _filter = [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+        _filter = [range_filter("startdate", start_dt, end_dt)] + deploy_scope_filters()
         if _env != "Any":
             _filter.append({"term": {"environment": _env}})
         if _dst == "FAILED":
@@ -2634,7 +2798,7 @@ with tab_builds:
     body = {
         "query": {
             "bool": {
-                "filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+                "filter": [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()
             }
         },
         "aggs": {
@@ -2647,7 +2811,7 @@ with tab_builds:
                 "aggs": {"by_status": {"terms": {"field": "status", "size": 10}}},
             },
             "top_apps": {"terms": {"field": "application", "size": 10}},
-            "by_tech":      {"terms": {"field": "technology", "size": 10}},
+            "by_tech":  {"terms": {"field": "technology", "size": 10}},
         },
     }
     res = es_search(IDX["builds"], body)
@@ -2720,7 +2884,7 @@ with tab_deploys:
     body = {
         "query": {
             "bool": {
-                "filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+                "filter": [range_filter("startdate", start_dt, end_dt)] + deploy_scope_filters()
             }
         },
         "aggs": {
@@ -2804,34 +2968,26 @@ st.markdown(
 
 wp_top = st.columns(3)
 
-# ---- Pending requests ------------------------------------------------------
+# ---- Pending requests (unified: ef-devops-requests + ef-cicd-approval) ------
 with wp_top[0]:
-    st.markdown("**Pending approval requests**")
-    body = {
-        "query": {
-            "bool": {
-                "filter": [
-                    range_filter("RequestDate", pending_window_start, now_utc),
-                    {"terms": {"Status": PENDING_STATUSES}},
-                ]
-            }
-        },
-        "sort": [{"RequestDate": "asc"}],
-    }
-    res = es_search(IDX["requests"], body, size=12)
-    hits = res.get("hits", {}).get("hits", [])
-    if hits:
-        recs = []
-        for h in hits:
-            s = h.get("_source", {})
-            recs.append({
-                "#":         s.get("RequestNumber"),
-                "Type":      s.get("RequestType"),
-                "Requester": s.get("Requester"),
-                "Age (h)":   age_hours(s.get("RequestDate"), now_utc),
-            })
+    st.markdown("**Pending approval requests** — all queues")
+    _pend_rows = _all_pending[:12]  # already fetched above
+    if _pend_rows:
         st.dataframe(
-            pd.DataFrame(recs), use_container_width=True, hide_index=True, height=320
+            pd.DataFrame([{
+                "#":           r["#"],
+                "Type":        r["Type"],
+                "Requester":   r["Requester"],
+                "Application": r["Application"],
+                "Age (h)":     r["Age (h)"],
+            } for r in _pend_rows]),
+            use_container_width=True, hide_index=True, height=320,
+        )
+        _appr_cnt = sum(1 for r in _all_pending if r["_idx"] == "approval")
+        _req_cnt  = sum(1 for r in _all_pending if r["_idx"] == "requests")
+        st.caption(
+            f"Total pending: **{len(_all_pending)}**  "
+            f"({_req_cnt} from requests queue · {_appr_cnt} from approval queue)"
         )
     else:
         inline_note("No pending requests.", "success")
@@ -2842,7 +2998,7 @@ with wp_top[1]:
     body = {
         "query": {
             "bool": {
-                "filter": [range_filter("commitdate", start_dt, end_dt)] + scope_filters()
+                "filter": [range_filter("commitdate", start_dt, end_dt)] + commit_scope_filters()
             }
         },
         "aggs": {
@@ -2917,7 +3073,7 @@ with wp_bot[0]:
 
     act_query = {
         "bool": {
-            "filter": [range_filter("startdate", ninety_ago, now_utc)] + scope_filters()
+            "filter": [range_filter("startdate", ninety_ago, now_utc)] + build_scope_filters()
         }
     }
     active_apps_90 = set(composite_terms(IDX["builds"], "application", act_query).keys())
@@ -2934,35 +3090,20 @@ with wp_bot[0]:
     else:
         inline_note("No dormant applications detected.", "success")
 
-# Requests stuck > 7d
+# Requests stuck > 7d (both queues)
 with wp_bot[1]:
-    st.markdown("**Requests stuck > 7 days**")
-    week_ago = now_utc - timedelta(days=7)
-    body = {
-        "query": {
-            "bool": {
-                "filter": [
-                    {"range": {"RequestDate": {"lte": week_ago.isoformat(),
-                                               "gte": (now_utc - timedelta(days=120)).isoformat()}}},
-                    {"terms": {"Status": PENDING_STATUSES + ["InProgress", "IN_PROGRESS"]}},
-                ]
-            }
-        },
-        "sort": [{"RequestDate": "asc"}],
-    }
-    res = es_search(IDX["requests"], body, size=12)
-    hits = res.get("hits", {}).get("hits", [])
-    if hits:
-        rows = []
-        for h in hits:
-            s = h["_source"]
-            rows.append({
-                "#":       s.get("RequestNumber"),
-                "Type":    s.get("RequestType"),
-                "Age (d)": age_days(s.get("RequestDate"), now_utc),
-            })
+    st.markdown("**Requests stuck > 7 days** — both queues")
+    _stuck7 = [r for r in _all_pending if (r.get("Age (h)") or 0) >= 7 * 24]
+    if _stuck7:
         st.dataframe(
-            pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260
+            pd.DataFrame([{
+                "#":           r["#"],
+                "Type":        r["Type"],
+                "Application": r["Application"],
+                "Age (d)":     (r.get("Age (h)") or 0) // 24,
+                "Queue":       r["_idx"],
+            } for r in _stuck7[:12]]),
+            use_container_width=True, hide_index=True, height=260,
         )
     else:
         inline_note("No long-running requests.", "success")
@@ -3065,7 +3206,7 @@ with st.popover("Open event log", use_container_width=True):
 
     # ── deployments ──────────────────────────────────────────────────────────
     if _el_type in ("All", "Deployments"):
-        _dep_f = list(scope_filters())
+        _dep_f = list(deploy_scope_filters())
         if _el_env != "(all)":
             _dep_f.append({"term": {"environment": _el_env}})
         _dep_r = es_search(
@@ -3111,7 +3252,7 @@ with st.popover("Open event log", use_container_width=True):
 
     # ── commits ──────────────────────────────────────────────────────────────
     if _el_type in ("All", "Commits"):
-        _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(scope_filters())
+        _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(commit_scope_filters())
         _com_r = es_search(
             IDX["commits"],
             {"query": {"bool": {"filter": _com_f}},
