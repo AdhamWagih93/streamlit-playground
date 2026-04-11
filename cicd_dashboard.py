@@ -172,43 +172,43 @@ h1, h2, h3, h4 {
     font-weight: 600; margin-bottom: 4px;
 }
 
-/* -------- KPI cards -------- */
+/* -------- KPI cards — light-theme-safe -------- */
 .kpi {
-    background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%);
-    border: 1px solid rgba(148,163,184,0.12);
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
     border-radius: 14px;
     padding: 18px 22px;
     height: 100%;
-    backdrop-filter: blur(8px);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);
     transition: all .18s ease;
     position: relative;
     overflow: hidden;
 }
 .kpi::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(167,139,250,0.6), transparent);
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, #a78bfa, #60a5fa);
     opacity: 0; transition: opacity .18s ease;
 }
 .kpi:hover {
     transform: translateY(-2px);
-    border-color: rgba(167,139,250,0.45);
-    box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+    border-color: #a78bfa;
+    box-shadow: 0 4px 20px rgba(167,139,250,0.18), 0 1px 4px rgba(0,0,0,0.06);
 }
 .kpi:hover::before { opacity: 1; }
 .kpi .label {
     font-size: .70rem; text-transform: uppercase; letter-spacing: .10em;
-    color: #94a3b8; font-weight: 600;
+    color: #64748b; font-weight: 600;
     display: flex; align-items: center; gap: 6px;
 }
 .kpi .value {
     font-size: 2.05rem; font-weight: 700; line-height: 1.1; margin-top: 6px;
-    color: #f1f5f9;
+    color: #0f172a;
     font-variant-numeric: tabular-nums;
 }
 .kpi .delta { font-size: .80rem; margin-top: 6px; font-weight: 500; }
-.kpi .delta.up   { color: #34d399; }
-.kpi .delta.dn   { color: #fb7185; }
-.kpi .delta.flat { color: #94a3b8; }
+.kpi .delta.up   { color: #059669 !important; }
+.kpi .delta.dn   { color: #dc2626 !important; }
+.kpi .delta.flat { color: #94a3b8 !important; }
 .kpi .delta .arrow { display: inline-block; margin-right: 3px; }
 
 /* -------- Section headers -------- */
@@ -216,98 +216,102 @@ h1, h2, h3, h4 {
     margin-top: 34px; margin-bottom: 10px;
     display: flex; align-items: center; justify-content: space-between;
     padding-bottom: 10px;
-    border-bottom: 1px solid rgba(148,163,184,0.12);
+    border-bottom: 2px solid #e2e8f0;
 }
 .section .title-wrap { display: flex; align-items: center; gap: 12px; }
 .section h2 {
     margin: 0; font-size: 1.18rem; font-weight: 650;
-    color: #f1f5f9;
+    color: #0f172a;
 }
 .section .badge {
     font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
     padding: 3px 9px; border-radius: 6px;
-    background: rgba(167,139,250,0.12);
-    color: #c4b5fd; font-weight: 600;
-    border: 1px solid rgba(167,139,250,0.25);
+    background: #ede9fe;
+    color: #6d28d9; font-weight: 600;
+    border: 1px solid #ddd6fe;
 }
-.section .hint { font-size: .78rem; color: #94a3b8; }
+.section .hint { font-size: .78rem; color: #64748b; }
 
 /* -------- Alert ribbon -------- */
 .alert {
     padding: 11px 15px; border-radius: 10px; margin-bottom: 8px;
-    border-left: 3px solid #f59e0b;
-    background: linear-gradient(90deg, rgba(245,158,11,0.12), rgba(245,158,11,0.03));
+    border-left: 3px solid #d97706;
+    background: #fffbeb;
     font-size: .90rem;
     display: flex; align-items: center; gap: 12px;
+    color: #1e293b;
 }
 .alert .icon {
     width: 26px; height: 26px; border-radius: 7px;
     display: flex; align-items: center; justify-content: center;
     font-weight: 700; font-size: .85rem; flex-shrink: 0;
+    background: #fef3c7; color: #92400e;
 }
-.alert.danger  { border-color: #f43f5e; background: linear-gradient(90deg, rgba(244,63,94,0.14), rgba(244,63,94,0.03)); }
-.alert.danger .icon { background: rgba(244,63,94,0.25); color: #fda4af; }
-.alert.info    { border-color: #60a5fa; background: linear-gradient(90deg, rgba(96,165,250,0.12), rgba(96,165,250,0.03)); }
-.alert.info .icon { background: rgba(96,165,250,0.25); color: #93c5fd; }
-.alert.success { border-color: #10b981; background: linear-gradient(90deg, rgba(16,185,129,0.12), rgba(16,185,129,0.03)); }
-.alert.success .icon { background: rgba(16,185,129,0.25); color: #6ee7b7; }
-.alert.warning .icon { background: rgba(245,158,11,0.25); color: #fcd34d; }
-.alert b { font-weight: 650; color: #f1f5f9; }
-.alert .sub { opacity: 0.78; font-size: .82rem; color: #cbd5e1; margin-left: 6px; }
+.alert.danger  { border-color: #dc2626 !important; background: #fff1f2 !important; }
+.alert.danger .icon { background: #fee2e2 !important; color: #991b1b !important; }
+.alert.info    { border-color: #2563eb !important; background: #eff6ff !important; }
+.alert.info .icon { background: #dbeafe !important; color: #1e40af !important; }
+.alert.success { border-color: #059669 !important; background: #f0fdf4 !important; }
+.alert.success .icon { background: #dcfce7 !important; color: #065f46 !important; }
+.alert.warning { border-color: #d97706 !important; background: #fffbeb !important; }
+.alert.warning .icon { background: #fef3c7 !important; color: #92400e !important; }
+.alert b { font-weight: 650; color: #0f172a !important; }
+.alert .sub { font-size: .82rem; color: #475569 !important; margin-left: 6px; }
 
 /* -------- Insight / learn panel -------- */
 .learn {
-    background: linear-gradient(90deg, rgba(167,139,250,0.08), rgba(167,139,250,0.02));
-    border-left: 3px solid #a78bfa;
+    background: #f5f3ff;
+    border-left: 3px solid #7c3aed;
     border-radius: 10px;
     padding: 11px 16px;
-    font-size: .86rem; color: #cbd5e1;
+    font-size: .86rem; color: #374151;
     margin: 4px 0 18px 0;
 }
-.learn b { color: #f1f5f9; }
+.learn b { color: #1e293b; }
 
 /* -------- Funnel visual -------- */
 .funnel-wrap {
-    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
-    border: 1px solid rgba(148,163,184,0.12);
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
     border-radius: 14px;
     padding: 20px 24px;
     height: 100%;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 .funnel-stage {
     display: flex; justify-content: space-between; align-items: baseline;
     padding: 10px 0;
-    border-bottom: 1px dashed rgba(148,163,184,0.12);
+    border-bottom: 1px dashed #e2e8f0;
 }
 .funnel-stage:last-child { border-bottom: none; }
-.funnel-stage .name { color: #cbd5e1; font-size: .90rem; font-weight: 500; }
+.funnel-stage .name { color: #374151; font-size: .90rem; font-weight: 500; }
 .funnel-stage .value {
-    font-size: 1.35rem; font-weight: 700; color: #f1f5f9;
+    font-size: 1.35rem; font-weight: 700; color: #0f172a;
     font-variant-numeric: tabular-nums;
 }
-.funnel-stage .conv { font-size: .75rem; color: #94a3b8; margin-left: 8px; }
+.funnel-stage .conv { font-size: .75rem; color: #64748b; margin-left: 8px; }
 .funnel-bar {
     height: 6px; border-radius: 3px; margin-top: 6px;
-    background: linear-gradient(90deg, #a78bfa, #60a5fa);
-    opacity: 0.85;
+    background: linear-gradient(90deg, #7c3aed, #2563eb);
+    opacity: 0.75;
 }
 
 /* -------- Pills -------- */
 .pill {
     display: inline-block;
-    background: rgba(148,163,184,0.10);
-    color: #e2e8f0;
+    background: #f1f5f9;
+    color: #334155;
     font-size: .70rem;
     padding: 3px 10px;
     border-radius: 999px;
     margin-right: 6px;
     font-weight: 500;
-    border: 1px solid rgba(148,163,184,0.18);
+    border: 1px solid #e2e8f0;
 }
-.pill.green { background: rgba(16,185,129,.14);  color: #6ee7b7; border-color: rgba(16,185,129,.28); }
-.pill.red   { background: rgba(244,63,94,.14);   color: #fda4af; border-color: rgba(244,63,94,.28); }
-.pill.amber { background: rgba(245,158,11,.14);  color: #fcd34d; border-color: rgba(245,158,11,.28); }
-.pill.blue  { background: rgba(96,165,250,.14);  color: #93c5fd; border-color: rgba(96,165,250,.28); }
+.pill.green { background: #dcfce7 !important;  color: #065f46 !important; border-color: #86efac !important; }
+.pill.red   { background: #fee2e2 !important;  color: #991b1b !important; border-color: #fca5a5 !important; }
+.pill.amber { background: #fef3c7 !important;  color: #92400e !important; border-color: #fcd34d !important; }
+.pill.blue  { background: #dbeafe !important;  color: #1e40af !important; border-color: #93c5fd !important; }
 
 /* -------- Streamlit widget overrides -------- */
 div[data-testid="stSelectbox"] label,
@@ -316,7 +320,7 @@ div[data-testid="stDateInput"] label {
     font-size: .70rem !important;
     text-transform: uppercase;
     letter-spacing: .10em;
-    color: #94a3b8 !important;
+    color: #64748b !important;
     font-weight: 600 !important;
 }
 .stDataFrame { border-radius: 10px; overflow: hidden; }
@@ -333,11 +337,11 @@ footer, #MainMenu, header[data-testid="stHeader"] { visibility: hidden; }
  * =============================================================== */
 
 /* KPI deltas */
-.kpi .delta.up   { color: #34d399 !important; }
-.kpi .delta.dn   { color: #fb7185 !important; }
+.kpi .delta.up   { color: #059669 !important; }
+.kpi .delta.dn   { color: #dc2626 !important; }
 .kpi .delta.flat { color: #94a3b8 !important; }
-.kpi .value      { color: #f1f5f9 !important; }
-.kpi .label      { color: #94a3b8 !important; }
+.kpi .value      { color: #0f172a !important; }
+.kpi .label      { color: #64748b !important; }
 
 /* Alert ribbon — force border, background AND text color */
 .alert          { color: #e2e8f0 !important; }
@@ -375,40 +379,40 @@ footer, #MainMenu, header[data-testid="stHeader"] { visibility: hidden; }
 div[data-testid="stAlert"][data-baseweb="notification"] { border-radius: 10px !important; }
 div[data-testid="stAlertContentSuccess"],
 div[data-baseweb="notification"][kind="positive"] {
-    background: rgba(16,185,129,0.12) !important;
-    border: 1px solid rgba(16,185,129,0.35) !important;
-    color: #a7f3d0 !important;
+    background: #f0fdf4 !important;
+    border: 1px solid #86efac !important;
+    color: #065f46 !important;
 }
 div[data-testid="stAlertContentInfo"],
 div[data-baseweb="notification"][kind="info"] {
-    background: rgba(96,165,250,0.12) !important;
-    border: 1px solid rgba(96,165,250,0.35) !important;
-    color: #bfdbfe !important;
+    background: #eff6ff !important;
+    border: 1px solid #93c5fd !important;
+    color: #1e40af !important;
 }
 div[data-testid="stAlertContentWarning"],
 div[data-baseweb="notification"][kind="warning"] {
-    background: rgba(245,158,11,0.12) !important;
-    border: 1px solid rgba(245,158,11,0.35) !important;
-    color: #fde68a !important;
+    background: #fffbeb !important;
+    border: 1px solid #fcd34d !important;
+    color: #92400e !important;
 }
 div[data-testid="stAlertContentError"],
 div[data-baseweb="notification"][kind="negative"] {
-    background: rgba(244,63,94,0.12) !important;
-    border: 1px solid rgba(244,63,94,0.35) !important;
-    color: #fecaca !important;
+    background: #fff1f2 !important;
+    border: 1px solid #fca5a5 !important;
+    color: #991b1b !important;
 }
 
 /* Popover trigger buttons */
 div[data-testid="stPopover"] button {
-    background: linear-gradient(180deg, rgba(167,139,250,0.16), rgba(167,139,250,0.06)) !important;
-    border: 1px solid rgba(167,139,250,0.35) !important;
-    color: #c4b5fd !important;
+    background: #f5f3ff !important;
+    border: 1px solid #ddd6fe !important;
+    color: #6d28d9 !important;
     font-weight: 500 !important;
 }
 div[data-testid="stPopover"] button:hover {
-    background: linear-gradient(180deg, rgba(167,139,250,0.25), rgba(167,139,250,0.10)) !important;
-    border-color: rgba(167,139,250,0.55) !important;
-    color: #e9d5ff !important;
+    background: #ede9fe !important;
+    border-color: #a78bfa !important;
+    color: #4c1d95 !important;
 }
 </style>
 """
@@ -514,6 +518,73 @@ def composite_terms(
         if not after:
             break
     return result
+
+
+# =============================================================================
+# DATE HELPERS
+# =============================================================================
+# Elasticsearch returns dates in multiple formats depending on the index mapping:
+#   • ISO 8601 with UTC offset   →  "2024-01-15T12:30:00.000Z"
+#   • ISO 8601 without offset    →  "2024-01-15T12:30:00.000"  (treat as UTC)
+#   • ISO 8601 with +00:00       →  "2024-01-15T12:30:00+00:00"
+#   • Epoch milliseconds (int)   →  1705318200000
+#   • Epoch milliseconds (str)   →  "1705318200000"
+#   • Empty string / None        →  (treated as missing)
+#
+# Mixing any of the above with tz-aware ``now_utc`` when computing age deltas
+# raises TypeError.  All callers go through ``parse_dt`` which always returns
+# a tz-aware UTC Timestamp or None.
+
+def parse_dt(value: Any) -> "pd.Timestamp | None":
+    """Parse a date value from Elasticsearch into a tz-aware UTC Timestamp.
+
+    Handles ISO strings (with or without timezone), epoch milliseconds as int
+    or str, and any other value that pandas can interpret.  Always returns UTC.
+    Returns ``None`` on any failure or if the input is empty/None.
+    """
+    if value is None:
+        return None
+    try:
+        # Numeric epoch-ms (ES sometimes stores as int or numeric string)
+        if isinstance(value, (int, float)):
+            return pd.Timestamp(value, unit="ms", tz="UTC")
+        s = str(value).strip()
+        if not s:
+            return None
+        if s.isdigit() or (s.lstrip("-").isdigit()):
+            return pd.Timestamp(int(s), unit="ms", tz="UTC")
+        # pandas handles ISO8601, RFC822, and many other text formats
+        ts = pd.to_datetime(s, utc=True)   # utc=True converts any offset to UTC
+        if ts.tzinfo is None:
+            # Fallback: pandas failed to attach tz — assume UTC
+            ts = ts.tz_localize("UTC")
+        return ts
+    except Exception:
+        return None
+
+
+def fmt_dt(value: Any, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Parse and format a date value; returns "" on failure."""
+    ts = parse_dt(value)
+    return ts.strftime(fmt) if ts is not None else ""
+
+
+def age_hours(value: Any, reference: datetime | None = None) -> int | None:
+    """Return elapsed hours between *value* and *reference* (defaults to now UTC)."""
+    ts = parse_dt(value)
+    if ts is None:
+        return None
+    ref = pd.Timestamp(reference or datetime.now(timezone.utc), tz="UTC")
+    try:
+        return max(0, int((ref - ts).total_seconds() / 3600))
+    except Exception:
+        return None
+
+
+def age_days(value: Any, reference: datetime | None = None) -> int | None:
+    """Return elapsed days between *value* and *reference* (defaults to now UTC)."""
+    h = age_hours(value, reference)
+    return h // 24 if h is not None else None
 
 
 # =============================================================================
@@ -937,16 +1008,16 @@ def _trend_count(
 def _cell(cur: int, prev: int) -> str:
     """Render a compact "value · delta%" HTML cell."""
     if prev == 0 and cur == 0:
-        return '<span style="color:#64748b;">—</span>'
+        return '<span style="color:#94a3b8;">—</span>'
     if prev == 0:
-        return f'<b style="color:#f1f5f9;">{cur:,}</b> <span style="color:#34d399;">new</span>'
+        return f'<b style="color:#0f172a;">{cur:,}</b> <span style="color:#059669;">new</span>'
     diff = cur - prev
     pct  = diff / prev * 100
-    direction = "#34d399" if diff > 0 else ("#fb7185" if diff < 0 else "#94a3b8")
+    direction = "#059669" if diff > 0 else ("#dc2626" if diff < 0 else "#94a3b8")
     arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "→")
     sign = "+" if diff >= 0 else ""
     return (
-        f'<b style="color:#f1f5f9;">{cur:,}</b> '
+        f'<b style="color:#0f172a;">{cur:,}</b> '
         f'<span style="color:{direction};font-size:.80rem;"> {arrow} {sign}{pct:.1f}%</span>'
     )
 
@@ -991,29 +1062,29 @@ for label, idx, dfield, extra in _metrics:
 # Render as a styled HTML table (st.dataframe would strip the HTML).
 headers = ["Metric"] + [p[0] for p in _periods]
 html = [
-    '<div style="background:linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01));'
-    'border:1px solid rgba(148,163,184,0.12);border-radius:14px;padding:6px 4px;overflow:hidden;">',
+    '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;'
+    'padding:6px 4px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.06);">',
     '<table style="width:100%;border-collapse:collapse;font-size:.90rem;">',
     '<thead><tr>',
 ]
 for i, h in enumerate(headers):
     align = "left" if i == 0 else "right"
     html.append(
-        f'<th style="text-align:{align};padding:12px 18px;color:#94a3b8;'
+        f'<th style="text-align:{align};padding:12px 18px;color:#64748b;'
         f'font-size:.70rem;letter-spacing:.10em;text-transform:uppercase;'
-        f'font-weight:600;border-bottom:1px solid rgba(148,163,184,0.12);">{h}</th>'
+        f'font-weight:600;border-bottom:1px solid #e2e8f0;background:#f8fafc;">{h}</th>'
     )
 html.append('</tr></thead><tbody>')
 
 for row in trend_rows:
-    html.append('<tr>')
+    html.append('<tr style="transition:background .12s;">')
     html.append(
-        f'<td style="padding:12px 18px;color:#e2e8f0;border-bottom:1px solid rgba(148,163,184,0.06);">{row["Metric"]}</td>'
+        f'<td style="padding:12px 18px;color:#1e293b;font-weight:500;border-bottom:1px solid #f1f5f9;">{row["Metric"]}</td>'
     )
     for period_label, _ in _periods:
         html.append(
             f'<td style="text-align:right;padding:12px 18px;font-variant-numeric:tabular-nums;'
-            f'border-bottom:1px solid rgba(148,163,184,0.06);">{row[period_label]}</td>'
+            f'border-bottom:1px solid #f1f5f9;color:#0f172a;">{row[period_label]}</td>'
         )
     html.append('</tr>')
 html.append('</tbody></table></div>')
@@ -1156,8 +1227,7 @@ with _ap[0]:
                         "Type":      h["_source"].get("RequestType"),
                         "Requester": h["_source"].get("Requester"),
                         "Team":      h["_source"].get("RequesterTeam"),
-                        "Age (h)":   (int((now_utc - pd.to_datetime(h["_source"].get("RequestDate"))).total_seconds() / 3600)
-                                      if h["_source"].get("RequestDate") else None),
+                        "Age (h)":   age_hours(h["_source"].get("RequestDate"), now_utc),
                     }
                     for h in _hits
                 ]
@@ -1180,8 +1250,7 @@ with _ap[0]:
             if _hits:
                 _rows = [
                     {
-                        "When":    (pd.to_datetime(h["_source"].get("startdate")).strftime("%Y-%m-%d %H:%M")
-                                    if h["_source"].get("startdate") else ""),
+                        "When":    fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
                         "Project": h["_source"].get("project"),
                         "Version": h["_source"].get("codeversion"),
                         "Status":  h["_source"].get("status"),
@@ -1209,8 +1278,7 @@ with _ap[0]:
                         "Priority": h["_source"].get("priority"),
                         "Status":   h["_source"].get("status"),
                         "Assignee": h["_source"].get("assignee"),
-                        "Updated":  (pd.to_datetime(h["_source"].get("updated")).strftime("%Y-%m-%d")
-                                     if h["_source"].get("updated") else ""),
+                        "Updated":  fmt_dt(h["_source"].get("updated"), "%Y-%m-%d"),
                     }
                     for h in _hits
                 ]
@@ -1232,8 +1300,7 @@ with _ap[0]:
             if _hits:
                 _rows = [
                     {
-                        "When":    (pd.to_datetime(h["_source"].get("startdate")).strftime("%Y-%m-%d %H:%M")
-                                    if h["_source"].get("startdate") else ""),
+                        "When":    fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
                         "Project": h["_source"].get("project"),
                         "Branch":  h["_source"].get("branch"),
                         "Version": h["_source"].get("codeversion"),
@@ -1340,18 +1407,16 @@ with pop_cols[0]:
                 )
                 _hits = _r.get("hits", {}).get("hits", [])
                 if _hits:
-                    _rows = []
-                    for _h in _hits:
-                        _s = _h.get("_source", {})
-                        _when = ""
-                        if _s.get("startdate"):
-                            try: _when = pd.to_datetime(_s["startdate"]).strftime("%Y-%m-%d %H:%M")
-                            except Exception: pass
-                        _rows.append({
-                            "When": _when, "Branch": _s.get("branch"),
-                            "Version": _s.get("codeversion"), "Status": _s.get("status"),
-                            "Tech": _s.get("technology"),
-                        })
+                    _rows = [
+                        {
+                            "When":    fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                            "Branch":  _s.get("branch"),
+                            "Version": _s.get("codeversion"),
+                            "Status":  _s.get("status"),
+                            "Tech":    _s.get("technology"),
+                        }
+                        for _h in _hits for _s in [_h.get("_source", {})]
+                    ]
                     st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
                 else:
                     inline_note("No builds in window.", "info")
@@ -1365,17 +1430,15 @@ with pop_cols[0]:
                 )
                 _hits = _r.get("hits", {}).get("hits", [])
                 if _hits:
-                    _rows = []
-                    for _h in _hits:
-                        _s = _h.get("_source", {})
-                        _when = ""
-                        if _s.get("startdate"):
-                            try: _when = pd.to_datetime(_s["startdate"]).strftime("%Y-%m-%d %H:%M")
-                            except Exception: pass
-                        _rows.append({
-                            "When": _when, "Env": _s.get("environment"),
-                            "Version": _s.get("codeversion"), "Status": _s.get("status"),
-                        })
+                    _rows = [
+                        {
+                            "When":    fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                            "Env":     _s.get("environment"),
+                            "Version": _s.get("codeversion"),
+                            "Status":  _s.get("status"),
+                        }
+                        for _h in _hits for _s in [_h.get("_source", {})]
+                    ]
                     st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
                 else:
                     inline_note("No deployments in window.", "info")
@@ -1389,14 +1452,16 @@ with pop_cols[0]:
                 )
                 _hits = _r.get("hits", {}).get("hits", [])
                 if _hits:
-                    _rows = []
-                    for _h in _hits:
-                        _s = _h.get("_source", {})
-                        _rows.append({
-                            "Key": _s.get("issuekey"), "Priority": _s.get("priority"),
-                            "Status": _s.get("status"), "Assignee": _s.get("assignee"),
-                            "Summary": (_s.get("summary") or "")[:80],
-                        })
+                    _rows = [
+                        {
+                            "Key":      _s.get("issuekey"),
+                            "Priority": _s.get("priority"),
+                            "Status":   _s.get("status"),
+                            "Assignee": _s.get("assignee"),
+                            "Summary":  (_s.get("summary") or "")[:80],
+                        }
+                        for _h in _hits for _s in [_h.get("_source", {})]
+                    ]
                     st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
                 else:
                     inline_note("No open JIRA for this project.", "success")
@@ -1410,17 +1475,15 @@ with pop_cols[0]:
                 )
                 _hits = _r.get("hits", {}).get("hits", [])
                 if _hits:
-                    _rows = []
-                    for _h in _hits:
-                        _s = _h.get("_source", {})
-                        _when = ""
-                        if _s.get("commitdate"):
-                            try: _when = pd.to_datetime(_s["commitdate"]).strftime("%Y-%m-%d %H:%M")
-                            except Exception: pass
-                        _rows.append({
-                            "When": _when, "Author": _s.get("authorname"),
-                            "Branch": _s.get("branch"), "Repo": _s.get("repository"),
-                        })
+                    _rows = [
+                        {
+                            "When":   fmt_dt(_s.get("commitdate"), "%Y-%m-%d %H:%M"),
+                            "Author": _s.get("authorname"),
+                            "Branch": _s.get("branch"),
+                            "Repo":   _s.get("repository"),
+                        }
+                        for _h in _hits for _s in [_h.get("_source", {})]
+                    ]
                     st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
                 else:
                     inline_note("No commits in window.", "info")
@@ -1585,7 +1648,7 @@ with ci2:
         last = bk.get("last", {}).get("value_as_string") or ""
         if last:
             try:
-                last = pd.to_datetime(last).strftime("%m-%d %H:%M")
+                last = fmt_dt(last, "%m-%d %H:%M")
             except Exception:
                 pass
         # Composite health score (0-100). Higher is better.
@@ -1725,18 +1788,17 @@ with _pa_pop[0]:
         )
         _hits = _r.get("hits", {}).get("hits", [])
         if _hits:
-            _rows = []
-            for _h in _hits:
-                _s = _h.get("_source", {})
-                _when = ""
-                if _s.get("startdate"):
-                    try: _when = pd.to_datetime(_s["startdate"]).strftime("%m-%d %H:%M")
-                    except Exception: pass
-                _rows.append({
-                    "When": _when, "Project": _s.get("project"),
-                    "Branch": _s.get("branch"), "Status": _s.get("status"),
-                    "Version": _s.get("codeversion"), "Tech": _s.get("technology"),
-                })
+            _rows = [
+                {
+                    "When":    fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
+                    "Project": _s.get("project"),
+                    "Branch":  _s.get("branch"),
+                    "Status":  _s.get("status"),
+                    "Version": _s.get("codeversion"),
+                    "Tech":    _s.get("technology"),
+                }
+                for _h in _hits for _s in [_h.get("_source", {})]
+            ]
             st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
             st.caption(f"Showing {len(_rows)} of up to 200 most recent builds.")
         else:
@@ -1766,18 +1828,16 @@ with _pa_pop[1]:
         )
         _hits = _r.get("hits", {}).get("hits", [])
         if _hits:
-            _rows = []
-            for _h in _hits:
-                _s = _h.get("_source", {})
-                _when = ""
-                if _s.get("startdate"):
-                    try: _when = pd.to_datetime(_s["startdate"]).strftime("%m-%d %H:%M")
-                    except Exception: pass
-                _rows.append({
-                    "When": _when, "Project": _s.get("project"),
-                    "Env": _s.get("environment"), "Status": _s.get("status"),
+            _rows = [
+                {
+                    "When":    fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
+                    "Project": _s.get("project"),
+                    "Env":     _s.get("environment"),
+                    "Status":  _s.get("status"),
                     "Version": _s.get("codeversion"),
-                })
+                }
+                for _h in _hits for _s in [_h.get("_source", {})]
+            ]
             st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
             st.caption(f"Showing {len(_rows)} of up to 200 most recent deployments.")
         else:
@@ -1820,7 +1880,7 @@ with tab_builds:
     c1, c2 = st.columns([2, 1])
     df_tl = pd.DataFrame(rows)
     if not df_tl.empty:
-        df_tl["time"] = pd.to_datetime(df_tl["time"])
+        df_tl["time"] = pd.to_datetime(df_tl["time"], utc=True)
         fig = px.bar(
             df_tl, x="time", y="count", color="status",
             color_discrete_map=STATUS_COLORS,
@@ -1832,9 +1892,9 @@ with tab_builds:
             paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", y=-0.22),
             margin=dict(l=0, r=0, t=40, b=0),
-            font=dict(color="#cbd5e1", family="Inter, sans-serif"),
-            xaxis=dict(gridcolor="rgba(148,163,184,0.08)"),
-            yaxis=dict(gridcolor="rgba(148,163,184,0.08)"),
+            font=dict(color="#374151", family="Inter, sans-serif"),
+            xaxis=dict(gridcolor="#e5e7eb"),
+            yaxis=dict(gridcolor="#e5e7eb"),
         )
         c1.plotly_chart(fig, use_container_width=True)
     else:
@@ -1855,9 +1915,9 @@ with tab_builds:
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=0, r=0, t=40, b=0),
-            font=dict(color="#cbd5e1", family="Inter, sans-serif"),
-            xaxis=dict(gridcolor="rgba(148,163,184,0.08)"),
-            yaxis=dict(gridcolor="rgba(148,163,184,0.08)"),
+            font=dict(color="#374151", family="Inter, sans-serif"),
+            xaxis=dict(gridcolor="#e5e7eb"),
+            yaxis=dict(gridcolor="#e5e7eb"),
         )
         c2.plotly_chart(fig2, use_container_width=True)
     else:
@@ -1910,7 +1970,7 @@ with tab_deploys:
             })
     df_tl = pd.DataFrame(rows)
     if not df_tl.empty:
-        df_tl["time"] = pd.to_datetime(df_tl["time"])
+        df_tl["time"] = pd.to_datetime(df_tl["time"], utc=True)
         fig = px.area(
             df_tl, x="time", y="count", color="environment",
             title=f"Deployments over time ({interval} buckets)",
@@ -1921,9 +1981,9 @@ with tab_deploys:
             paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", y=-0.22),
             margin=dict(l=0, r=0, t=40, b=0),
-            font=dict(color="#cbd5e1", family="Inter, sans-serif"),
-            xaxis=dict(gridcolor="rgba(148,163,184,0.08)"),
-            yaxis=dict(gridcolor="rgba(148,163,184,0.08)"),
+            font=dict(color="#374151", family="Inter, sans-serif"),
+            xaxis=dict(gridcolor="#e5e7eb"),
+            yaxis=dict(gridcolor="#e5e7eb"),
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -1980,18 +2040,11 @@ with wp_top[0]:
         recs = []
         for h in hits:
             s = h.get("_source", {})
-            rd = s.get("RequestDate")
-            age_h = None
-            if rd:
-                try:
-                    age_h = int((now_utc - pd.to_datetime(rd)).total_seconds() / 3600)
-                except Exception:
-                    age_h = None
             recs.append({
                 "#":         s.get("RequestNumber"),
                 "Type":      s.get("RequestType"),
                 "Requester": s.get("Requester"),
-                "Age (h)":   age_h,
+                "Age (h)":   age_hours(s.get("RequestDate"), now_utc),
             })
         st.dataframe(
             pd.DataFrame(recs), use_container_width=True, hide_index=True, height=320
@@ -2119,16 +2172,10 @@ with wp_bot[1]:
         rows = []
         for h in hits:
             s = h["_source"]
-            age_d = None
-            if s.get("RequestDate"):
-                try:
-                    age_d = (now_utc - pd.to_datetime(s["RequestDate"])).days
-                except Exception:
-                    age_d = None
             rows.append({
                 "#":       s.get("RequestNumber"),
                 "Type":    s.get("RequestType"),
-                "Age (d)": age_d,
+                "Age (d)": age_days(s.get("RequestDate"), now_utc),
             })
         st.dataframe(
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260
@@ -2198,17 +2245,11 @@ with nw1:
         rows = []
         for h in hits:
             s = h["_source"]
-            when = ""
-            if s.get("startdate"):
-                try:
-                    when = pd.to_datetime(s["startdate"]).strftime("%m-%d %H:%M")
-                except Exception:
-                    pass
             rows.append({
                 "Project": s.get("project"),
                 "Version": s.get("codeversion"),
                 "Status":  s.get("status"),
-                "When":    when,
+                "When":    fmt_dt(s.get("startdate"), "%m-%d %H:%M"),
             })
         st.dataframe(
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
@@ -2242,8 +2283,7 @@ with nw1:
         if _hits:
             _rows = [
                 {
-                    "When":    (pd.to_datetime(h["_source"].get("startdate")).strftime("%Y-%m-%d %H:%M")
-                                if h["_source"].get("startdate") else ""),
+                    "When":    fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
                     "Project": h["_source"].get("project"),
                     "Env":     h["_source"].get("environment"),
                     "Version": h["_source"].get("codeversion"),
@@ -2268,17 +2308,11 @@ with nw2:
         rows = []
         for h in hits:
             s = h["_source"]
-            when = ""
-            if s.get("releasedate"):
-                try:
-                    when = pd.to_datetime(s["releasedate"]).strftime("%m-%d %H:%M")
-                except Exception:
-                    pass
             rows.append({
                 "App":     s.get("application"),
                 "Version": s.get("codeversion"),
                 "RLM":     s.get("RLM_STATUS"),
-                "When":    when,
+                "When":    fmt_dt(s.get("releasedate"), "%m-%d %H:%M"),
             })
         st.dataframe(
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
@@ -2297,8 +2331,7 @@ with nw2:
         if _hits:
             _rows = [
                 {
-                    "When":    (pd.to_datetime(h["_source"].get("releasedate")).strftime("%Y-%m-%d %H:%M")
-                                if h["_source"].get("releasedate") else ""),
+                    "When":    fmt_dt(h["_source"].get("releasedate"), "%Y-%m-%d %H:%M"),
                     "App":     h["_source"].get("application"),
                     "Version": h["_source"].get("codeversion"),
                     "RLM":     h["_source"].get("RLM_STATUS"),
@@ -2325,17 +2358,11 @@ with nw3:
         rows = []
         for h in hits:
             s = h["_source"]
-            when = ""
-            if s.get("commitdate"):
-                try:
-                    when = pd.to_datetime(s["commitdate"]).strftime("%m-%d %H:%M")
-                except Exception:
-                    pass
             rows.append({
                 "Repo":   s.get("repository"),
                 "Branch": s.get("branch"),
                 "Author": s.get("authorname"),
-                "When":   when,
+                "When":   fmt_dt(s.get("commitdate"), "%m-%d %H:%M"),
             })
         st.dataframe(
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
@@ -2362,12 +2389,11 @@ with nw3:
         if _hits:
             _rows = [
                 {
-                    "When":   (pd.to_datetime(h["_source"].get("commitdate")).strftime("%Y-%m-%d %H:%M")
-                               if h["_source"].get("commitdate") else ""),
-                    "Author": h["_source"].get("authorname"),
+                    "When":    fmt_dt(h["_source"].get("commitdate"), "%Y-%m-%d %H:%M"),
+                    "Author":  h["_source"].get("authorname"),
                     "Project": h["_source"].get("project"),
-                    "Branch": h["_source"].get("branch"),
-                    "Repo":   h["_source"].get("repository"),
+                    "Branch":  h["_source"].get("branch"),
+                    "Repo":    h["_source"].get("repository"),
                 }
                 for h in _hits
             ]
