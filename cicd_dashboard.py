@@ -38,7 +38,7 @@ import streamlit as st
 # -----------------------------------------------------------------------------
 # Elasticsearch client
 # -----------------------------------------------------------------------------
-from utils.elasticsearch_client import es_prd  # type: ignore  # noqa: F401
+from utils.elasticsearch import es_prd  # type: ignore  # noqa: F401
 
 
 # =============================================================================
@@ -323,6 +323,93 @@ div[data-testid="stDateInput"] label {
 
 /* -------- Hide Streamlit chrome -------- */
 footer, #MainMenu, header[data-testid="stHeader"] { visibility: hidden; }
+
+/* =============================================================== *
+ *  COLOR FIDELITY OVERRIDES                                        *
+ *  A custom Streamlit theme can clobber reds / greens via base     *
+ *  color variables and .stAlert defaults. Everything below is      *
+ *  forced with !important so our palette wins regardless of what   *
+ *  config.toml declares.                                           *
+ * =============================================================== */
+
+/* KPI deltas */
+.kpi .delta.up   { color: #34d399 !important; }
+.kpi .delta.dn   { color: #fb7185 !important; }
+.kpi .delta.flat { color: #94a3b8 !important; }
+.kpi .value      { color: #f1f5f9 !important; }
+.kpi .label      { color: #94a3b8 !important; }
+
+/* Alert ribbon — force border, background AND text color */
+.alert          { color: #e2e8f0 !important; }
+.alert b        { color: #f1f5f9 !important; }
+.alert .sub     { color: #cbd5e1 !important; }
+
+.alert.success       { border-left-color: #10b981 !important;
+                       background: linear-gradient(90deg, rgba(16,185,129,0.14), rgba(16,185,129,0.03)) !important; }
+.alert.success .icon { background: rgba(16,185,129,0.28) !important; color: #6ee7b7 !important; }
+.alert.success b     { color: #a7f3d0 !important; }
+
+.alert.danger        { border-left-color: #f43f5e !important;
+                       background: linear-gradient(90deg, rgba(244,63,94,0.16), rgba(244,63,94,0.03)) !important; }
+.alert.danger .icon  { background: rgba(244,63,94,0.28) !important; color: #fecdd3 !important; }
+.alert.danger b      { color: #fecaca !important; }
+
+.alert.warning       { border-left-color: #f59e0b !important;
+                       background: linear-gradient(90deg, rgba(245,158,11,0.14), rgba(245,158,11,0.03)) !important; }
+.alert.warning .icon { background: rgba(245,158,11,0.28) !important; color: #fde68a !important; }
+.alert.warning b     { color: #fde68a !important; }
+
+.alert.info          { border-left-color: #60a5fa !important;
+                       background: linear-gradient(90deg, rgba(96,165,250,0.14), rgba(96,165,250,0.03)) !important; }
+.alert.info .icon    { background: rgba(96,165,250,0.28) !important; color: #bfdbfe !important; }
+.alert.info b        { color: #bfdbfe !important; }
+
+/* Pills */
+.pill.green { background: rgba(16,185,129,.16) !important;  color: #6ee7b7 !important; border-color: rgba(16,185,129,.32) !important; }
+.pill.red   { background: rgba(244,63,94,.16) !important;   color: #fda4af !important; border-color: rgba(244,63,94,.32) !important; }
+.pill.amber { background: rgba(245,158,11,.16) !important;  color: #fcd34d !important; border-color: rgba(245,158,11,.32) !important; }
+.pill.blue  { background: rgba(96,165,250,.16) !important;  color: #93c5fd !important; border-color: rgba(96,165,250,.32) !important; }
+
+/* Neutralize Streamlit's own st.success / st.info / st.warning / st.error
+   — the theme often remaps their accent colors. We repaint them to match. */
+div[data-testid="stAlert"][data-baseweb="notification"] { border-radius: 10px !important; }
+div[data-testid="stAlertContentSuccess"],
+div[data-baseweb="notification"][kind="positive"] {
+    background: rgba(16,185,129,0.12) !important;
+    border: 1px solid rgba(16,185,129,0.35) !important;
+    color: #a7f3d0 !important;
+}
+div[data-testid="stAlertContentInfo"],
+div[data-baseweb="notification"][kind="info"] {
+    background: rgba(96,165,250,0.12) !important;
+    border: 1px solid rgba(96,165,250,0.35) !important;
+    color: #bfdbfe !important;
+}
+div[data-testid="stAlertContentWarning"],
+div[data-baseweb="notification"][kind="warning"] {
+    background: rgba(245,158,11,0.12) !important;
+    border: 1px solid rgba(245,158,11,0.35) !important;
+    color: #fde68a !important;
+}
+div[data-testid="stAlertContentError"],
+div[data-baseweb="notification"][kind="negative"] {
+    background: rgba(244,63,94,0.12) !important;
+    border: 1px solid rgba(244,63,94,0.35) !important;
+    color: #fecaca !important;
+}
+
+/* Popover trigger buttons */
+div[data-testid="stPopover"] button {
+    background: linear-gradient(180deg, rgba(167,139,250,0.16), rgba(167,139,250,0.06)) !important;
+    border: 1px solid rgba(167,139,250,0.35) !important;
+    color: #c4b5fd !important;
+    font-weight: 500 !important;
+}
+div[data-testid="stPopover"] button:hover {
+    background: linear-gradient(180deg, rgba(167,139,250,0.25), rgba(167,139,250,0.10)) !important;
+    border-color: rgba(167,139,250,0.55) !important;
+    color: #e9d5ff !important;
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -430,6 +517,29 @@ def composite_terms(
 
 
 # =============================================================================
+# UI HELPERS
+# =============================================================================
+
+def inline_note(text: str, kind: str = "info", container: Any = None) -> None:
+    """Render a themed inline note (immune to the user's custom theme).
+
+    Replaces ``st.info`` / ``st.success`` / ``st.warning`` which some custom
+    themes repaint with their own accent — we want the dashboard's reds and
+    greens to render consistently regardless of ``config.toml``.
+    """
+    icons = {"info": "i", "success": "✓", "warning": "!", "danger": "✕"}
+    kind = kind if kind in icons else "info"
+    target = container if container is not None else st
+    target.markdown(
+        f'<div class="alert {kind}">'
+        f'  <div class="icon">{icons[kind]}</div>'
+        f'  <div><b>{text}</b></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# =============================================================================
 # TIME WINDOW
 # =============================================================================
 
@@ -485,6 +595,28 @@ st.markdown(
 # COMMAND BAR — inline controls replace the sidebar
 # =============================================================================
 
+# Populate dropdowns from the inventory — composite_terms already uses the
+# cached ES layer, so this is a single cold hit at startup then free for 5 min.
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_inventory_choices() -> tuple[list[str], list[str]]:
+    try:
+        companies = sorted(
+            composite_terms(IDX["inventory"], "company.keyword", {"match_all": {}}).keys()
+        )
+    except Exception:
+        companies = []
+    try:
+        projects = sorted(
+            composite_terms(IDX["inventory"], "project.keyword", {"match_all": {}}).keys()
+        )
+    except Exception:
+        projects = []
+    return companies, projects
+
+
+_all_companies, _all_projects = _load_inventory_choices()
+_ALL = "— All —"
+
 cb = st.columns([2, 2, 2, 1.2, 1.2])
 
 with cb[0]:
@@ -493,14 +625,16 @@ with cb[0]:
     )
 
 with cb[1]:
-    company_filter = st.text_input(
-        "Company scope", value="", placeholder="e.g. acme — optional"
-    ).strip()
+    company_pick = st.selectbox(
+        "Company scope", [_ALL] + _all_companies, index=0,
+    )
+    company_filter = "" if company_pick == _ALL else company_pick
 
 with cb[2]:
-    project_filter = st.text_input(
-        "Project scope", value="", placeholder="e.g. payments — optional"
-    ).strip()
+    project_pick = st.selectbox(
+        "Project scope", [_ALL] + _all_projects, index=0,
+    )
+    project_filter = "" if project_pick == _ALL else project_pick
 
 with cb[3]:
     st.markdown('<div class="cmdbar-label">Auto-refresh</div>', unsafe_allow_html=True)
@@ -993,6 +1127,124 @@ else:
             unsafe_allow_html=True,
         )
 
+# ---- Alert drill-down popover ---------------------------------------------
+_ap = st.columns([1.2, 4])
+with _ap[0]:
+    with st.popover("🔬  Drill into alerts", use_container_width=True):
+        _which = st.selectbox(
+            "Alert category",
+            [
+                "Stuck approvals (>24h)",
+                "Failed prod deploys",
+                "Aged open JIRA (>30d)",
+                "Build failures in window",
+            ],
+            index=0,
+            key="alert_drill",
+        )
+        if _which == "Stuck approvals (>24h)":
+            _r = es_search(
+                IDX["requests"],
+                {**stuck_body, "sort": [{"RequestDate": "asc"}]},
+                size=100,
+            )
+            _hits = _r.get("hits", {}).get("hits", [])
+            if _hits:
+                _rows = [
+                    {
+                        "#":         h["_source"].get("RequestNumber"),
+                        "Type":      h["_source"].get("RequestType"),
+                        "Requester": h["_source"].get("Requester"),
+                        "Team":      h["_source"].get("RequesterTeam"),
+                        "Age (h)":   (int((now_utc - pd.to_datetime(h["_source"].get("RequestDate"))).total_seconds() / 3600)
+                                      if h["_source"].get("RequestDate") else None),
+                    }
+                    for h in _hits
+                ]
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=440)
+            else:
+                inline_note("No stuck approvals.", "success")
+
+        elif _which == "Failed prod deploys":
+            _r = es_search(
+                IDX["deployments"],
+                {"query": {"bool": {"filter": [
+                    range_filter("startdate", start_dt, end_dt),
+                    {"term": {"environment": "prd"}},
+                    {"terms": {"status": FAILED_STATUSES}},
+                ] + scope_filters()}},
+                 "sort": [{"startdate": "desc"}]},
+                size=100,
+            )
+            _hits = _r.get("hits", {}).get("hits", [])
+            if _hits:
+                _rows = [
+                    {
+                        "When":    (pd.to_datetime(h["_source"].get("startdate")).strftime("%Y-%m-%d %H:%M")
+                                    if h["_source"].get("startdate") else ""),
+                        "Project": h["_source"].get("project"),
+                        "Version": h["_source"].get("codeversion"),
+                        "Status":  h["_source"].get("status"),
+                    }
+                    for h in _hits
+                ]
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=440)
+            else:
+                inline_note("No failed prod deploys.", "success")
+
+        elif _which == "Aged open JIRA (>30d)":
+            _r = es_search(
+                IDX["jira"],
+                {"query": {"bool": {
+                    "filter": [{"range": {"updated": {"lte": (now_utc - timedelta(days=30)).isoformat()}}}] + scope_filters(),
+                    "must_not": [{"terms": {"status": CLOSED_JIRA}}],
+                }}, "sort": [{"updated": "asc"}]},
+                size=100,
+            )
+            _hits = _r.get("hits", {}).get("hits", [])
+            if _hits:
+                _rows = [
+                    {
+                        "Key":      h["_source"].get("issuekey"),
+                        "Priority": h["_source"].get("priority"),
+                        "Status":   h["_source"].get("status"),
+                        "Assignee": h["_source"].get("assignee"),
+                        "Updated":  (pd.to_datetime(h["_source"].get("updated")).strftime("%Y-%m-%d")
+                                     if h["_source"].get("updated") else ""),
+                    }
+                    for h in _hits
+                ]
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=440)
+            else:
+                inline_note("No aged JIRA.", "success")
+
+        else:  # Build failures in window
+            _r = es_search(
+                IDX["builds"],
+                {"query": {"bool": {"filter": [
+                    range_filter("startdate", start_dt, end_dt),
+                    {"terms": {"status": FAILED_STATUSES}},
+                ] + scope_filters()}},
+                 "sort": [{"startdate": "desc"}]},
+                size=100,
+            )
+            _hits = _r.get("hits", {}).get("hits", [])
+            if _hits:
+                _rows = [
+                    {
+                        "When":    (pd.to_datetime(h["_source"].get("startdate")).strftime("%Y-%m-%d %H:%M")
+                                    if h["_source"].get("startdate") else ""),
+                        "Project": h["_source"].get("project"),
+                        "Branch":  h["_source"].get("branch"),
+                        "Version": h["_source"].get("codeversion"),
+                        "Tech":    h["_source"].get("technology"),
+                    }
+                    for h in _hits
+                ]
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=440)
+            else:
+                inline_note("No build failures.", "success")
+
 
 # =============================================================================
 # SECTION 3 — CROSS-INDEX INSIGHTS
@@ -1012,10 +1264,216 @@ st.markdown(
     'The <b>Delivery funnel</b> tracks attrition from code change to production. '
     'The <b>Project health scoreboard</b> aggregates every signal on a per-project basis so '
     'you can spot the worst-off projects at a glance. The <b>Risk spotlight</b> flags '
-    'projects that fail multiple hygiene checks simultaneously.'
+    'projects that fail multiple hygiene checks simultaneously. '
+    'Use the <b>Project deep dive</b> popover for a full cross-index report on any single project.'
     '</div>',
     unsafe_allow_html=True,
 )
+
+# ---------------------------------------------------------------------------
+# Project deep-dive popover — pick a project and see every cross-index signal
+# ---------------------------------------------------------------------------
+pop_cols = st.columns([1, 1, 4])
+with pop_cols[0]:
+    with st.popover("🔎  Project deep dive", use_container_width=True):
+        st.markdown("**Inspect a single project across every index**")
+        _dd_proj = st.selectbox(
+            "Project",
+            _all_projects if _all_projects else ["(no projects found)"],
+            key="dd_project",
+        )
+        _dd_window = st.selectbox(
+            "Window",
+            ["Last 7 days", "Last 30 days", "Last 90 days", "Last 365 days"],
+            index=1,
+            key="dd_window",
+        )
+        _dd_delta = {
+            "Last 7 days":   timedelta(days=7),
+            "Last 30 days":  timedelta(days=30),
+            "Last 90 days":  timedelta(days=90),
+            "Last 365 days": timedelta(days=365),
+        }[_dd_window]
+        _dd_end   = now_utc
+        _dd_start = _dd_end - _dd_delta
+
+        if _dd_proj and _dd_proj != "(no projects found)":
+            _pf = [{"term": {"project": _dd_proj}}]
+            _pf_inv = [{"term": {"project.keyword": _dd_proj}}]
+
+            # Aggregate per-project stats across all indices
+            _b_all   = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}}})
+            _b_fail  = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"terms": {"status": FAILED_STATUSES}}] + _pf}}})
+            _d_all   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}}})
+            _d_prd   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}] + _pf}}})
+            _d_fail  = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}] + _pf}}})
+            _c_all   = es_count(IDX["commits"], {"query": {"bool": {"filter": [range_filter("commitdate", _dd_start, _dd_end)] + _pf}}})
+            _r_pend  = es_count(IDX["requests"], {"query": {"bool": {"filter": [range_filter("RequestDate", pending_window_start, now_utc), {"terms": {"Status": PENDING_STATUSES}}] + _pf}}})
+            _j_open  = es_count(IDX["jira"], {"query": {"bool": {"filter": _pf, "must_not": [{"terms": {"status": CLOSED_JIRA}}]}}})
+            _succ    = ((_b_all - _b_fail) / _b_all * 100) if _b_all else 0.0
+            _cfr     = (_d_fail / _d_prd * 100) if _d_prd else 0.0
+
+            # Pills summary
+            st.markdown(
+                f"""
+                <div style="margin:6px 0 10px 0;">
+                    <span class="pill blue">{_b_all:,} builds</span>
+                    <span class="pill {'green' if _succ >= 80 else 'red'}">{_succ:.0f}% success</span>
+                    <span class="pill blue">{_d_all:,} deploys</span>
+                    <span class="pill {'red' if _cfr > 15 else 'green'}">{_cfr:.0f}% CFR</span>
+                    <span class="pill blue">{_c_all:,} commits</span>
+                    <span class="pill {'amber' if _r_pend else 'green'}">{_r_pend} pending req</span>
+                    <span class="pill {'amber' if _j_open else 'green'}">{_j_open} open JIRA</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            dd_tabs = st.tabs(["Recent builds", "Recent deploys", "Open JIRA", "Recent commits", "Inventory"])
+
+            with dd_tabs[0]:
+                _r = es_search(
+                    IDX["builds"],
+                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}},
+                     "sort": [{"startdate": "desc"}]},
+                    size=50,
+                )
+                _hits = _r.get("hits", {}).get("hits", [])
+                if _hits:
+                    _rows = []
+                    for _h in _hits:
+                        _s = _h.get("_source", {})
+                        _when = ""
+                        if _s.get("startdate"):
+                            try: _when = pd.to_datetime(_s["startdate"]).strftime("%Y-%m-%d %H:%M")
+                            except Exception: pass
+                        _rows.append({
+                            "When": _when, "Branch": _s.get("branch"),
+                            "Version": _s.get("codeversion"), "Status": _s.get("status"),
+                            "Tech": _s.get("technology"),
+                        })
+                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
+                else:
+                    inline_note("No builds in window.", "info")
+
+            with dd_tabs[1]:
+                _r = es_search(
+                    IDX["deployments"],
+                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf}},
+                     "sort": [{"startdate": "desc"}]},
+                    size=50,
+                )
+                _hits = _r.get("hits", {}).get("hits", [])
+                if _hits:
+                    _rows = []
+                    for _h in _hits:
+                        _s = _h.get("_source", {})
+                        _when = ""
+                        if _s.get("startdate"):
+                            try: _when = pd.to_datetime(_s["startdate"]).strftime("%Y-%m-%d %H:%M")
+                            except Exception: pass
+                        _rows.append({
+                            "When": _when, "Env": _s.get("environment"),
+                            "Version": _s.get("codeversion"), "Status": _s.get("status"),
+                        })
+                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
+                else:
+                    inline_note("No deployments in window.", "info")
+
+            with dd_tabs[2]:
+                _r = es_search(
+                    IDX["jira"],
+                    {"query": {"bool": {"filter": _pf, "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
+                     "sort": [{"priority": "asc"}]},
+                    size=50,
+                )
+                _hits = _r.get("hits", {}).get("hits", [])
+                if _hits:
+                    _rows = []
+                    for _h in _hits:
+                        _s = _h.get("_source", {})
+                        _rows.append({
+                            "Key": _s.get("issuekey"), "Priority": _s.get("priority"),
+                            "Status": _s.get("status"), "Assignee": _s.get("assignee"),
+                            "Summary": (_s.get("summary") or "")[:80],
+                        })
+                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
+                else:
+                    inline_note("No open JIRA for this project.", "success")
+
+            with dd_tabs[3]:
+                _r = es_search(
+                    IDX["commits"],
+                    {"query": {"bool": {"filter": [range_filter("commitdate", _dd_start, _dd_end)] + _pf}},
+                     "sort": [{"commitdate": "desc"}]},
+                    size=50,
+                )
+                _hits = _r.get("hits", {}).get("hits", [])
+                if _hits:
+                    _rows = []
+                    for _h in _hits:
+                        _s = _h.get("_source", {})
+                        _when = ""
+                        if _s.get("commitdate"):
+                            try: _when = pd.to_datetime(_s["commitdate"]).strftime("%Y-%m-%d %H:%M")
+                            except Exception: pass
+                        _rows.append({
+                            "When": _when, "Author": _s.get("authorname"),
+                            "Branch": _s.get("branch"), "Repo": _s.get("repository"),
+                        })
+                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
+                else:
+                    inline_note("No commits in window.", "info")
+
+            with dd_tabs[4]:
+                _r = es_search(
+                    IDX["inventory"],
+                    {"query": {"bool": {"filter": _pf_inv}}},
+                    size=5,
+                )
+                _hits = _r.get("hits", {}).get("hits", [])
+                if _hits:
+                    st.json(_hits[0].get("_source", {}), expanded=False)
+                else:
+                    inline_note("Project not found in inventory.", "info")
+
+with pop_cols[1]:
+    with st.popover("👤  Committer deep dive", use_container_width=True):
+        st.markdown("**Committer activity across the window**")
+        _cw = st.selectbox("Window", ["Last 7 days", "Last 30 days", "Last 90 days"], index=1, key="dd_cw")
+        _cd = {"Last 7 days": timedelta(days=7), "Last 30 days": timedelta(days=30), "Last 90 days": timedelta(days=90)}[_cw]
+        _cs, _ce = now_utc - _cd, now_utc
+        _cr = es_search(
+            IDX["commits"],
+            {
+                "query": {"bool": {"filter": [range_filter("commitdate", _cs, _ce)]}},
+                "aggs": {
+                    "top": {
+                        "terms": {"field": "authorname", "size": 30},
+                        "aggs": {
+                            "ins": {"sum": {"field": "insertedlines"}},
+                            "dlt": {"sum": {"field": "deletedlines"}},
+                            "projs": {"cardinality": {"field": "project"}},
+                        },
+                    }
+                },
+            },
+        )
+        _buckets = bucket_rows(_cr, "top")
+        if _buckets:
+            _df = pd.DataFrame([
+                {
+                    "Author":   b["key"],
+                    "Commits":  b["doc_count"],
+                    "Lines +":  int(b.get("ins", {}).get("value", 0) or 0),
+                    "Lines −":  int(b.get("dlt", {}).get("value", 0) or 0),
+                    "Projects": int(b.get("projs", {}).get("value", 0) or 0),
+                }
+                for b in _buckets
+            ])
+            st.dataframe(_df, use_container_width=True, hide_index=True, height=440)
+        else:
+            inline_note("No commits in the selected window.", "info")
 
 ci1, ci2 = st.columns([1.1, 2])
 
@@ -1170,7 +1628,7 @@ with ci2:
             "clamped 0–100. Lowest scores first."
         )
     else:
-        st.info("No build activity in window.")
+        inline_note("No build activity in window.", "info")
 
 # ---- Risk spotlight — projects failing multiple hygiene checks -----------
 st.markdown(
@@ -1232,7 +1690,7 @@ try:
             unsafe_allow_html=True,
         )
 except Exception as exc:
-    st.info(f"Risk spotlight unavailable: {exc}")
+    inline_note(f"Risk spotlight unavailable: {exc}", "info")
 
 
 # =============================================================================
@@ -1246,6 +1704,84 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
+
+# --- Raw-data popover: filtered list of last N pipeline executions ---------
+_pa_pop = st.columns([1.2, 1.2, 3])
+with _pa_pop[0]:
+    with st.popover("📄  Raw builds (last 200)", use_container_width=True):
+        _st = st.selectbox(
+            "Status filter", ["Any", "SUCCESS", "FAILED", "ABORTED", "RUNNING"],
+            index=0, key="raw_builds_status",
+        )
+        _filter: list[dict] = [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+        if _st == "FAILED":
+            _filter.append({"terms": {"status": FAILED_STATUSES}})
+        elif _st != "Any":
+            _filter.append({"term": {"status": _st}})
+        _r = es_search(
+            IDX["builds"],
+            {"query": {"bool": {"filter": _filter}}, "sort": [{"startdate": "desc"}]},
+            size=200,
+        )
+        _hits = _r.get("hits", {}).get("hits", [])
+        if _hits:
+            _rows = []
+            for _h in _hits:
+                _s = _h.get("_source", {})
+                _when = ""
+                if _s.get("startdate"):
+                    try: _when = pd.to_datetime(_s["startdate"]).strftime("%m-%d %H:%M")
+                    except Exception: pass
+                _rows.append({
+                    "When": _when, "Project": _s.get("project"),
+                    "Branch": _s.get("branch"), "Status": _s.get("status"),
+                    "Version": _s.get("codeversion"), "Tech": _s.get("technology"),
+                })
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
+            st.caption(f"Showing {len(_rows)} of up to 200 most recent builds.")
+        else:
+            inline_note("No builds match the filter.", "info")
+
+with _pa_pop[1]:
+    with st.popover("📄  Raw deployments (last 200)", use_container_width=True):
+        _env = st.selectbox(
+            "Environment filter", ["Any", "prd", "uat", "qc", "dev"],
+            index=0, key="raw_dep_env",
+        )
+        _dst = st.selectbox(
+            "Status filter", ["Any", "SUCCESS", "FAILED"],
+            index=0, key="raw_dep_status",
+        )
+        _filter = [range_filter("startdate", start_dt, end_dt)] + scope_filters()
+        if _env != "Any":
+            _filter.append({"term": {"environment": _env}})
+        if _dst == "FAILED":
+            _filter.append({"terms": {"status": FAILED_STATUSES}})
+        elif _dst != "Any":
+            _filter.append({"term": {"status": _dst}})
+        _r = es_search(
+            IDX["deployments"],
+            {"query": {"bool": {"filter": _filter}}, "sort": [{"startdate": "desc"}]},
+            size=200,
+        )
+        _hits = _r.get("hits", {}).get("hits", [])
+        if _hits:
+            _rows = []
+            for _h in _hits:
+                _s = _h.get("_source", {})
+                _when = ""
+                if _s.get("startdate"):
+                    try: _when = pd.to_datetime(_s["startdate"]).strftime("%m-%d %H:%M")
+                    except Exception: pass
+                _rows.append({
+                    "When": _when, "Project": _s.get("project"),
+                    "Env": _s.get("environment"), "Status": _s.get("status"),
+                    "Version": _s.get("codeversion"),
+                })
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
+            st.caption(f"Showing {len(_rows)} of up to 200 most recent deployments.")
+        else:
+            inline_note("No deployments match the filter.", "info")
 
 tab_builds, tab_deploys = st.tabs(["  Builds  ", "  Deployments  "])
 
@@ -1302,7 +1838,7 @@ with tab_builds:
         )
         c1.plotly_chart(fig, use_container_width=True)
     else:
-        c1.info("No builds in this window.")
+        inline_note("No builds in this window.", "info", c1)
 
     tops = bucket_rows(res, "top_projects")
     if tops:
@@ -1325,7 +1861,7 @@ with tab_builds:
         )
         c2.plotly_chart(fig2, use_container_width=True)
     else:
-        c2.info("No project data.")
+        inline_note("No project data.", "info", c2)
 
     tech = bucket_rows(res, "by_tech")
     if tech:
@@ -1391,7 +1927,7 @@ with tab_deploys:
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No deployments in this window.")
+        inline_note("No deployments in this window.", "info")
 
     env_rows = []
     for eb in bucket_rows(res, "by_env_status"):
@@ -1461,7 +1997,7 @@ with wp_top[0]:
             pd.DataFrame(recs), use_container_width=True, hide_index=True, height=320
         )
     else:
-        st.success("No pending requests.")
+        inline_note("No pending requests.", "success")
 
 # ---- Top committers --------------------------------------------------------
 with wp_top[1]:
@@ -1492,7 +2028,7 @@ with wp_top[1]:
         ])
         st.dataframe(df, use_container_width=True, hide_index=True, height=320)
     else:
-        st.info("No commits in window.")
+        inline_note("No commits in window.", "info")
 
 # ---- Open JIRA by priority -------------------------------------------------
 with wp_top[2]:
@@ -1526,7 +2062,7 @@ with wp_top[2]:
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.success("No open JIRA issues.")
+        inline_note("No open JIRA issues.", "success")
 
 # ---- Hygiene row -----------------------------------------------------------
 wp_bot = st.columns(3)
@@ -1559,7 +2095,7 @@ with wp_bot[0]:
             f"Found **{len(dormant):,}** dormant. Candidates for archival."
         )
     else:
-        st.success("No dormant projects detected.")
+        inline_note("No dormant projects detected.", "success")
 
 # Requests stuck > 7d
 with wp_bot[1]:
@@ -1598,7 +2134,7 @@ with wp_bot[1]:
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260
         )
     else:
-        st.success("No long-running requests.")
+        inline_note("No long-running requests.", "success")
 
 # Aged JIRA issues
 with wp_bot[2]:
@@ -1629,7 +2165,7 @@ with wp_bot[2]:
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260
         )
     else:
-        st.success("No aged tickets.")
+        inline_note("No aged tickets.", "success")
 
 
 # =============================================================================
@@ -1678,7 +2214,46 @@ with nw1:
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
         )
     else:
-        st.info("No production deployments recorded.")
+        inline_note("No production deployments recorded.", "info")
+
+    with st.popover("View more · filter prod deploys", use_container_width=True):
+        _pd_env = st.selectbox(
+            "Environment", ["prd", "uat", "qc", "dev", "(all)"],
+            index=0, key="nw_dep_env",
+        )
+        _pd_st = st.selectbox(
+            "Status", ["Any", "SUCCESS", "FAILED"],
+            index=0, key="nw_dep_status",
+        )
+        _f: list[dict] = list(scope_filters())
+        if _pd_env != "(all)":
+            _f.append({"term": {"environment": _pd_env}})
+        if _pd_st == "FAILED":
+            _f.append({"terms": {"status": FAILED_STATUSES}})
+        elif _pd_st != "Any":
+            _f.append({"term": {"status": _pd_st}})
+        _r = es_search(
+            IDX["deployments"],
+            {"query": {"bool": {"filter": _f}} if _f else {"match_all": {}},
+             "sort": [{"startdate": "desc"}]},
+            size=100,
+        )
+        _hits = _r.get("hits", {}).get("hits", [])
+        if _hits:
+            _rows = [
+                {
+                    "When":    (pd.to_datetime(h["_source"].get("startdate")).strftime("%Y-%m-%d %H:%M")
+                                if h["_source"].get("startdate") else ""),
+                    "Project": h["_source"].get("project"),
+                    "Env":     h["_source"].get("environment"),
+                    "Version": h["_source"].get("codeversion"),
+                    "Status":  h["_source"].get("status"),
+                }
+                for h in _hits
+            ]
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
+        else:
+            inline_note("No deployments match.", "info")
 
 with nw2:
     st.markdown("**Latest releases (qc → uat)**")
@@ -1709,7 +2284,30 @@ with nw2:
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
         )
     else:
-        st.info("No releases found.")
+        inline_note("No releases found.", "info")
+
+    with st.popover("View more · last 100 releases", use_container_width=True):
+        _rr = es_search(
+            IDX["releases"],
+            {"query": {"bool": {"filter": scope_filters()}} if scope_filters() else {"match_all": {}},
+             "sort": [{"releasedate": "desc"}]},
+            size=100,
+        )
+        _hits = _rr.get("hits", {}).get("hits", [])
+        if _hits:
+            _rows = [
+                {
+                    "When":    (pd.to_datetime(h["_source"].get("releasedate")).strftime("%Y-%m-%d %H:%M")
+                                if h["_source"].get("releasedate") else ""),
+                    "App":     h["_source"].get("application"),
+                    "Version": h["_source"].get("codeversion"),
+                    "RLM":     h["_source"].get("RLM_STATUS"),
+                }
+                for h in _hits
+            ]
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
+        else:
+            inline_note("No releases.", "info")
 
 with nw3:
     st.markdown("**Latest commits**")
@@ -1743,7 +2341,39 @@ with nw3:
             pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320
         )
     else:
-        st.info("No commits in window.")
+        inline_note("No commits in window.", "info")
+
+    with st.popover("View more · filter commits", use_container_width=True):
+        _cw2 = st.selectbox(
+            "Window", ["Last 24 hours", "Last 7 days", "Last 30 days"],
+            index=1, key="nw_commit_w",
+        )
+        _cd2 = {"Last 24 hours": timedelta(days=1),
+                "Last 7 days":  timedelta(days=7),
+                "Last 30 days": timedelta(days=30)}[_cw2]
+        _cs2, _ce2 = now_utc - _cd2, now_utc
+        _cr2 = es_search(
+            IDX["commits"],
+            {"query": {"bool": {"filter": [range_filter("commitdate", _cs2, _ce2)] + scope_filters()}},
+             "sort": [{"commitdate": "desc"}]},
+            size=100,
+        )
+        _hits = _cr2.get("hits", {}).get("hits", [])
+        if _hits:
+            _rows = [
+                {
+                    "When":   (pd.to_datetime(h["_source"].get("commitdate")).strftime("%Y-%m-%d %H:%M")
+                               if h["_source"].get("commitdate") else ""),
+                    "Author": h["_source"].get("authorname"),
+                    "Project": h["_source"].get("project"),
+                    "Branch": h["_source"].get("branch"),
+                    "Repo":   h["_source"].get("repository"),
+                }
+                for h in _hits
+            ]
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=500)
+        else:
+            inline_note("No commits in window.", "info")
 
 
 # =============================================================================
