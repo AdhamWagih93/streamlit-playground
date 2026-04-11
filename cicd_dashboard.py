@@ -547,29 +547,71 @@ def composite_terms(
 def parse_dt(value: Any) -> "pd.Timestamp | None":
     """Parse a date value from Elasticsearch into a tz-aware UTC Timestamp.
 
-    Handles ISO strings (with or without timezone), epoch milliseconds as int
-    or str, and any other value that pandas can interpret.  Always returns UTC.
-    Returns ``None`` on any failure or if the input is empty/None.
+    Tries multiple strategies in order so that every common ES date format
+    succeeds rather than silently returning None:
+
+    1. Numeric (int/float) → epoch-milliseconds.  If the value looks like
+       epoch-seconds (≤ 13 digits, < 1e11) we also try that unit.
+    2. All-digit string → same epoch-ms / epoch-s logic.
+    3. String with pd.to_datetime(utc=True) — works for tz-aware ISO strings.
+    4. String with pd.to_datetime() (no utc flag) then manual tz_localize /
+       tz_convert — handles naive ISO strings that pandas 2.x rejects with
+       utc=True.
+    5. Explicit ISO 8601 stripping of the trailing 'Z' for environments where
+       pandas still chokes on that suffix.
     """
     if value is None:
         return None
-    try:
-        # Numeric epoch-ms (ES sometimes stores as int or numeric string)
-        if isinstance(value, (int, float)):
-            return pd.Timestamp(value, unit="ms", tz="UTC")
-        s = str(value).strip()
-        if not s:
-            return None
-        if s.isdigit() or (s.lstrip("-").isdigit()):
-            return pd.Timestamp(int(s), unit="ms", tz="UTC")
-        # pandas handles ISO8601, RFC822, and many other text formats
-        ts = pd.to_datetime(s, utc=True)   # utc=True converts any offset to UTC
+
+    def _to_utc(ts: "pd.Timestamp") -> "pd.Timestamp":
         if ts.tzinfo is None:
-            # Fallback: pandas failed to attach tz — assume UTC
-            ts = ts.tz_localize("UTC")
-        return ts
-    except Exception:
+            return ts.tz_localize("UTC")
+        return ts.tz_convert("UTC")
+
+    # ── 1. Numeric ────────────────────────────────────────────────────────────
+    if isinstance(value, (int, float)):
+        n = float(value)
+        # Epoch-seconds if small enough (before year 5138 in ms = 1e11 ms)
+        unit = "s" if n < 1e11 else "ms"
+        try:
+            return pd.Timestamp(int(n), unit=unit, tz="UTC")
+        except Exception:
+            pass
+
+    s = str(value).strip()
+    if not s or s.lower() in ("none", "null", "nan", "-"):
         return None
+
+    # ── 2. All-digit string ───────────────────────────────────────────────────
+    if s.lstrip("-").isdigit():
+        n = int(s)
+        unit = "s" if abs(n) < 1e11 else "ms"
+        try:
+            return pd.Timestamp(n, unit=unit, tz="UTC")
+        except Exception:
+            pass
+
+    # ── 3. pd.to_datetime with utc=True (tz-aware strings, e.g. "…Z") ────────
+    try:
+        return _to_utc(pd.to_datetime(s, utc=True))
+    except Exception:
+        pass
+
+    # ── 4. pd.to_datetime without utc flag, then localise ────────────────────
+    try:
+        return _to_utc(pd.to_datetime(s))
+    except Exception:
+        pass
+
+    # ── 5. Strip trailing Z and retry (some older ES mappings) ───────────────
+    if s.endswith("Z"):
+        try:
+            ts = pd.to_datetime(s[:-1])
+            return _to_utc(ts)
+        except Exception:
+            pass
+
+    return None
 
 
 def fmt_dt(value: Any, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -1919,6 +1961,12 @@ with _lc_col1:
         _sk_node_colors = _LC_COLORS + ["#fca5a5"]
         _DROP_NODE = len(_LC_STAGES)
 
+        def _hex_rgba(hex6: str, alpha: float = 0.55) -> str:
+            """Convert '#rrggbb' + alpha float → 'rgba(r,g,b,a)' for Plotly."""
+            h = hex6.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return f"rgba({r},{g},{b},{alpha})"
+
         _sk_source, _sk_target, _sk_value, _sk_link_colors = [], [], [], []
 
         for _i, _st in enumerate(_LC_STAGES):
@@ -1933,12 +1981,12 @@ with _lc_col1:
                     _sk_source.append(_i)
                     _sk_target.append(_i + 1)
                     _sk_value.append(_passed)
-                    _sk_link_colors.append(_LC_COLORS[_i] + "99")
+                    _sk_link_colors.append(_hex_rgba(_LC_COLORS[_i]))
                 if _dropped > 0:
                     _sk_source.append(_i)
                     _sk_target.append(_DROP_NODE)
                     _sk_value.append(_dropped)
-                    _sk_link_colors.append("#fca5a599")
+                    _sk_link_colors.append(_hex_rgba("#fca5a5", 0.7))
             # last stage: all go to "in production"
         if _sk_source:
             _sk_fig = go.Figure(go.Sankey(
