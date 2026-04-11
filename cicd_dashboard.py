@@ -1058,7 +1058,7 @@ inv_count = es_count(
     else {"query": {"match_all": {}}},
 )
 
-# Active projects in window (via cardinality on builds)
+# Active applications in window (via cardinality on builds.application)
 active_res = es_search(
     IDX["builds"],
     {
@@ -1067,12 +1067,12 @@ active_res = es_search(
                 "filter": [range_filter("startdate", start_dt, end_dt)] + scope_filters()
             }
         },
-        "aggs": {"projects": {"cardinality": {"field": "project"}}},
+        "aggs": {"apps": {"cardinality": {"field": "application"}}},
     },
     size=0,
 )
 active_projs = int(
-    active_res.get("aggregations", {}).get("projects", {}).get("value", 0) or 0
+    active_res.get("aggregations", {}).get("apps", {}).get("value", 0) or 0
 )
 dormant_pct = (1 - active_projs / inv_count) * 100 if inv_count else 0
 
@@ -1378,7 +1378,7 @@ if commits_prev >= 20 and commits_now > 3 * commits_prev:
 if inv_count and dormant_pct > 40:
     alerts.append((
         "info", "◌",
-        f"{dormant_pct:.0f}% of inventory projects had no builds in the window",
+        f"{dormant_pct:.0f}% of inventory applications had no builds in the window",
         "Review the Operational hygiene section for cleanup candidates.",
     ))
 
@@ -1431,10 +1431,11 @@ else:
                     _ah = _ar.get("hits", {}).get("hits", [])
                     if _ah:
                         st.dataframe(pd.DataFrame([{
-                            "When": fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
-                            "Project": h["_source"].get("project"),
-                            "Version": h["_source"].get("codeversion"),
-                            "Status": h["_source"].get("status"),
+                            "When":        fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
+                            "Application": h["_source"].get("application") or h["_source"].get("project"),
+                            "Project":     h["_source"].get("project"),
+                            "Version":     h["_source"].get("codeversion"),
+                            "Status":      h["_source"].get("status"),
                         } for h in _ah]), use_container_width=True, hide_index=True, height=420)
                     else:
                         inline_note("No failed PRD deploys.", "success")
@@ -1449,11 +1450,12 @@ else:
                     _ah = _ar.get("hits", {}).get("hits", [])
                     if _ah:
                         st.dataframe(pd.DataFrame([{
-                            "When": fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
-                            "Project": h["_source"].get("project"),
-                            "Branch": h["_source"].get("branch"),
-                            "Version": h["_source"].get("codeversion"),
-                            "Tech": h["_source"].get("technology"),
+                            "When":        fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
+                            "Application": h["_source"].get("application") or h["_source"].get("project"),
+                            "Project":     h["_source"].get("project"),
+                            "Branch":      h["_source"].get("branch"),
+                            "Version":     h["_source"].get("codeversion"),
+                            "Tech":        h["_source"].get("technology"),
                         } for h in _ah]), use_container_width=True, hide_index=True, height=420)
                     else:
                         inline_note("No build failures.", "success")
@@ -1486,10 +1488,10 @@ else:
                     _ah = _ar.get("hits", {}).get("hits", [])
                     if _ah:
                         st.dataframe(pd.DataFrame([{
-                            "When": fmt_dt(h["_source"].get("commitdate"), "%Y-%m-%d %H:%M"),
-                            "Author": h["_source"].get("authorname"),
+                            "When":    fmt_dt(h["_source"].get("commitdate"), "%Y-%m-%d %H:%M"),
+                            "Author":  h["_source"].get("authorname"),
                             "Project": h["_source"].get("project"),
-                            "Branch": h["_source"].get("branch"),
+                            "Branch":  h["_source"].get("branch"),
                         } for h in _ah]), use_container_width=True, hide_index=True, height=360)
                         _top_auth = bucket_rows(_ar, "authors")
                         if _top_auth:
@@ -1500,13 +1502,13 @@ else:
                         inline_note("No commits.", "info")
 
                 else:
-                    # Generic: dormant projects
+                    # Generic: dormant applications
                     _dormant_list = sorted(p for p, v in _lc_classified.items() if v in ("Dark", "Dead in Dev"))[:50]
                     if _dormant_list:
-                        st.dataframe(pd.DataFrame({"Project": _dormant_list}),
+                        st.dataframe(pd.DataFrame({"Application": _dormant_list}),
                                      use_container_width=True, hide_index=True)
                     else:
-                        inline_note("No dormant projects in window.", "info")
+                        inline_note("No dormant applications in window.", "info")
 
 
 # =============================================================================
@@ -1934,11 +1936,11 @@ def _lifecycle_data(
     excl_svc: bool,
 ) -> dict:
     """
-    Per-stage counts (Builds → Deploy Dev → QC → UAT → PRD) aggregated
-    by project.  Returns:
-      stage_maps  — dict[stage -> dict[project -> count]]
-      projects    — sorted list of all projects seen
-      totals      — dict[stage -> int]  aggregate across all projects
+    Per-stage unique-version counts (Builds → Deploy Dev → QC → Release → UAT → PRD)
+    aggregated by application.  Returns:
+      stage_maps    — dict[stage -> dict[application -> count]]
+      applications  — sorted list of all application names seen
+      totals        — dict[stage -> int]  aggregate across all applications
     """
     _s = datetime.fromisoformat(s)
     _e = datetime.fromisoformat(e)
@@ -1951,39 +1953,39 @@ def _lifecycle_data(
     # service-account exclusion applies to commits only (handled in callers)
 
     def _uv_by_app(index: str, date_field: str,
-                   app_field: str = "project",
+                   app_field: str = "application",
                    extra: list[dict] | None = None) -> dict[str, int]:
         """Unique codeversion count per application — eliminates re-runs."""
         _f = [range_filter(date_field, _s, _e)] + _scope + (extra or [])
         return composite_unique_versions(index, app_field, {"bool": {"filter": _f}})
 
-    builds_by_proj  = _uv_by_app(IDX["builds"],      "startdate")
-    dep_dev_by_proj = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "dev"}}])
-    dep_qc_by_proj  = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "qc"}}])
-    rel_by_proj     = _uv_by_app(IDX["releases"],      "releasedate", app_field="application")
-    dep_uat_by_proj = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "uat"}}])
-    dep_prd_by_proj = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "prd"}}])
+    builds_by_app  = _uv_by_app(IDX["builds"],      "startdate")
+    dep_dev_by_app = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "dev"}}])
+    dep_qc_by_app  = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "qc"}}])
+    rel_by_app     = _uv_by_app(IDX["releases"],      "releasedate", app_field="application")
+    dep_uat_by_app = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "uat"}}])
+    dep_prd_by_app = _uv_by_app(IDX["deployments"],  "startdate", extra=[{"term": {"environment": "prd"}}])
 
     stage_maps = {
-        "Builds":      builds_by_proj,
-        "Deploy Dev":  dep_dev_by_proj,
-        "Deploy QC":   dep_qc_by_proj,
-        "Release":     rel_by_proj,
-        "Deploy UAT":  dep_uat_by_proj,
-        "Deploy PRD":  dep_prd_by_proj,
+        "Builds":      builds_by_app,
+        "Deploy Dev":  dep_dev_by_app,
+        "Deploy QC":   dep_qc_by_app,
+        "Release":     rel_by_app,
+        "Deploy UAT":  dep_uat_by_app,
+        "Deploy PRD":  dep_prd_by_app,
     }
 
-    all_projects = sorted(
-        set(builds_by_proj) | set(dep_dev_by_proj) | set(dep_qc_by_proj)
-        | set(rel_by_proj) | set(dep_uat_by_proj) | set(dep_prd_by_proj)
+    all_apps = sorted(
+        set(builds_by_app) | set(dep_dev_by_app) | set(dep_qc_by_app)
+        | set(rel_by_app) | set(dep_uat_by_app) | set(dep_prd_by_app)
     )
 
     totals = {st_: sum(stage_maps[st_].values()) for st_ in _LC_STAGES}
 
     return {
-        "stage_maps":  stage_maps,
-        "projects":    all_projects,
-        "totals":      totals,
+        "stage_maps":    stage_maps,
+        "applications":  all_apps,
+        "totals":        totals,
     }
 
 
@@ -1993,7 +1995,7 @@ _lc = _lifecycle_data(
     excl_svc=exclude_svc,
 )
 _stage_maps  = _lc["stage_maps"]
-_lc_projects = _lc["projects"]
+_lc_apps     = _lc["applications"]
 _lc_totals   = _lc["totals"]
 
 
@@ -2127,14 +2129,14 @@ st.markdown(
 )
 
 # Classify each project into one of 5 buckets:
-# Classify each APPLICATION (not project) through the pipeline.
-# _lc_projects contains application names (the "project" field in builds/deploys).
+# Classify each application through the pipeline.
+# _lc_apps contains application names keyed from the "application" field.
 # _app_to_parent maps application → parent project from inventory.
 
 _inv_apps = set(_app_to_parent.keys()) if "_app_to_parent" in dir() else set()
 
 _lc_classified: dict[str, str] = {}
-for _app in _lc_projects:
+for _app in _lc_apps:
     _b   = _stage_maps["Builds"].get(_app, 0)
     _dev = _stage_maps["Deploy Dev"].get(_app, 0)
     _qc  = _stage_maps["Deploy QC"].get(_app, 0)
@@ -2239,10 +2241,10 @@ for _s, _desc in [
             st.dataframe(_pl_df, use_container_width=True, hide_index=True)
 
 # ── Row 3: Per-application pipeline heatmap ──────────────────────────────────
-if _lc_projects:
+if _lc_apps:
     _app_activity = {
         a: sum(_stage_maps[s].get(a, 0) for s in _LC_STAGES)
-        for a in _lc_projects
+        for a in _lc_apps
     }
     _top_apps = sorted(_app_activity, key=_app_activity.get, reverse=True)[:35]  # type: ignore[arg-type]
 
@@ -2315,7 +2317,7 @@ if _lc_projects:
     st.plotly_chart(_hm_fig, use_container_width=True)
     st.caption(
         f"✓ = Live in PRD  ·  ⏸ = Stuck in UAT  ·  ⚗ = Dead in QC  ·  ⚠ = Dead in Dev  ·  ○ = Dark  "
-        f"·  Showing top {len(_top_projects)} by build volume  ·  color = % of builds that reached each stage"
+        f"·  Showing top {len(_top_apps)} by build volume  ·  color = % of builds that reached each stage"
     )
 
 ci1, ci2 = st.columns([1.1, 2])
@@ -2356,9 +2358,9 @@ with ci1:
 
 # ---- Project health scoreboard --------------------------------------------
 with ci2:
-    st.markdown("**Project health scoreboard** — top 15 most active projects, joined across indices")
+    st.markdown("**Application health scoreboard** — top 15 most active applications, joined across indices")
 
-    # Pull per-project builds with success/fail breakdown, and per-project deploys
+    # Pull per-application builds with success/fail breakdown, and per-application deploys
     body_b = {
         "query": {
             "bool": {
@@ -2366,8 +2368,8 @@ with ci2:
             }
         },
         "aggs": {
-            "projs": {
-                "terms": {"field": "project", "size": 50},
+            "apps": {
+                "terms": {"field": "application", "size": 50},
                 "aggs": {
                     "fails": {"filter": {"terms": {"status": FAILED_STATUSES}}},
                     "last":  {"max": {"field": "startdate"}},
@@ -2386,12 +2388,12 @@ with ci2:
                 ] + scope_filters()
             }
         },
-        "aggs": {"projs": {"terms": {"field": "project", "size": 200}}},
+        "aggs": {"apps": {"terms": {"field": "application", "size": 200}}},
     }
     res_d = es_search(IDX["deployments"], body_d)
-    prd_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_d, "projs")}
+    prd_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_d, "apps")}
 
-    # JIRA open — per project
+    # JIRA open — per application
     body_j = {
         "query": {
             "bool": {
@@ -2399,12 +2401,12 @@ with ci2:
                 "must_not": [{"terms": {"status": CLOSED_JIRA}}],
             }
         },
-        "aggs": {"projs": {"terms": {"field": "project", "size": 500}}},
+        "aggs": {"apps": {"terms": {"field": "application", "size": 500}}},
     }
     res_j = es_search(IDX["jira"], body_j)
-    jira_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_j, "projs")}
+    jira_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_j, "apps")}
 
-    # Pending requests — per project (best effort — falls back to 0 if field missing)
+    # Pending requests — per application (best effort — falls back to 0 if field missing)
     body_r = {
         "query": {
             "bool": {
@@ -2414,14 +2416,14 @@ with ci2:
                 ]
             }
         },
-        "aggs": {"projs": {"terms": {"field": "project", "size": 500}}},
+        "aggs": {"apps": {"terms": {"field": "application", "size": 500}}},
     }
     res_r = es_search(IDX["requests"], body_r)
-    pend_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_r, "projs")}
+    pend_map = {b["key"]: b["doc_count"] for b in bucket_rows(res_r, "apps")}
 
     rows = []
-    for bk in bucket_rows(res_b, "projs")[:15]:
-        proj = bk["key"]
+    for bk in bucket_rows(res_b, "apps")[:15]:
+        app = bk["key"]
         total = bk["doc_count"]
         fails = bk.get("fails", {}).get("doc_count", 0)
         succ_pct = (total - fails) / total * 100 if total else 0
@@ -2433,19 +2435,19 @@ with ci2:
                 pass
         # Composite health score (0-100). Higher is better.
         score = succ_pct
-        score -= min(jira_map.get(proj, 0), 20) * 1.5  # jira drag
-        score -= min(pend_map.get(proj, 0), 10) * 3    # pending requests drag
+        score -= min(jira_map.get(app, 0), 20) * 1.5  # jira drag
+        score -= min(pend_map.get(app, 0), 10) * 3    # pending requests drag
         score = max(0, min(100, int(round(score))))
         rows.append({
-            "Project":  proj,
-            "Builds":   total,
-            "Fails":    fails,
-            "Succ %":   f"{succ_pct:.0f}%",
-            "Prod dep": prd_map.get(proj, 0),
-            "Open JIRA": jira_map.get(proj, 0),
-            "Pending req": pend_map.get(proj, 0),
-            "Last build": last,
-            "Score":    score,
+            "Application": app,
+            "Builds":      total,
+            "Fails":       fails,
+            "Succ %":      f"{succ_pct:.0f}%",
+            "Prod dep":    prd_map.get(app, 0),
+            "Open JIRA":   jira_map.get(app, 0),
+            "Pending req": pend_map.get(app, 0),
+            "Last build":  last,
+            "Score":       score,
         })
 
     if rows:
@@ -2476,7 +2478,7 @@ with ci2:
 # ---- Risk spotlight — projects failing multiple hygiene checks -----------
 st.markdown(
     '<div style="margin-top:18px;font-size:.95rem;color:#e2e8f0;font-weight:600;">'
-    '⚠ Risk spotlight — projects failing multiple signals simultaneously'
+    '⚠ Risk spotlight — applications failing multiple signals simultaneously'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -2484,9 +2486,9 @@ st.markdown(
 # Reuse the maps from above (if present) to flag cross-signal risk.
 try:
     risk_rows = []
-    _all_projs = set(prd_map) | set(jira_map) | set(pend_map)
-    for bk in bucket_rows(res_b, "projs"):
-        _all_projs.add(bk["key"])
+    _all_apps_risk = set(prd_map) | set(jira_map) | set(pend_map)
+    for bk in bucket_rows(res_b, "apps"):
+        _all_apps_risk.add(bk["key"])
 
     # Build a quick lookup for build stats
     build_stats = {
@@ -2494,13 +2496,13 @@ try:
             bk["doc_count"],
             bk.get("fails", {}).get("doc_count", 0),
         )
-        for bk in bucket_rows(res_b, "projs")
+        for bk in bucket_rows(res_b, "apps")
     }
-    for proj in _all_projs:
-        builds_t, fails_t = build_stats.get(proj, (0, 0))
-        oj   = jira_map.get(proj, 0)
-        pr   = pend_map.get(proj, 0)
-        pd_d = prd_map.get(proj, 0)
+    for app in _all_apps_risk:
+        builds_t, fails_t = build_stats.get(app, (0, 0))
+        oj   = jira_map.get(app, 0)
+        pr   = pend_map.get(app, 0)
+        pd_d = prd_map.get(app, 0)
         flags = []
         if builds_t and fails_t / max(builds_t, 1) > 0.2: flags.append("build-fail>20%")
         if oj >= 5:  flags.append(f"{oj} open JIRA")
@@ -2509,12 +2511,12 @@ try:
             flags.append("prod + failing")
         if len(flags) >= 2:
             risk_rows.append({
-                "Project": proj,
-                "Signals": " · ".join(flags),
-                "Builds":  builds_t,
-                "Fails":   fails_t,
-                "JIRA":    oj,
-                "Pending": pr,
+                "Application": app,
+                "Signals":     " · ".join(flags),
+                "Builds":      builds_t,
+                "Fails":       fails_t,
+                "JIRA":        oj,
+                "Pending":     pr,
             })
     if risk_rows:
         st.dataframe(
@@ -2527,7 +2529,7 @@ try:
         st.markdown(
             '<div class="alert success">'
             '<div class="icon">✓</div>'
-            '<div><b>No projects trigger multiple risk signals.</b>'
+            '<div><b>No applications trigger multiple risk signals.</b>'
             '<span class="sub">Cross-signal hygiene is healthy.</span></div>'
             '</div>',
             unsafe_allow_html=True,
@@ -2570,12 +2572,13 @@ with _pa_pop[0]:
         if _hits:
             _rows = [
                 {
-                    "When":    fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
-                    "Project": _s.get("project"),
-                    "Branch":  _s.get("branch"),
-                    "Status":  _s.get("status"),
-                    "Version": _s.get("codeversion"),
-                    "Tech":    _s.get("technology"),
+                    "When":        fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
+                    "Application": _s.get("application") or _s.get("project"),
+                    "Project":     _s.get("project"),
+                    "Branch":      _s.get("branch"),
+                    "Status":      _s.get("status"),
+                    "Version":     _s.get("codeversion"),
+                    "Tech":        _s.get("technology"),
                 }
                 for _h in _hits for _s in [_h.get("_source", {})]
             ]
@@ -2610,11 +2613,12 @@ with _pa_pop[1]:
         if _hits:
             _rows = [
                 {
-                    "When":    fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
-                    "Project": _s.get("project"),
-                    "Env":     _s.get("environment"),
-                    "Status":  _s.get("status"),
-                    "Version": _s.get("codeversion"),
+                    "When":        fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
+                    "Application": _s.get("application") or _s.get("project"),
+                    "Project":     _s.get("project"),
+                    "Env":         _s.get("environment"),
+                    "Status":      _s.get("status"),
+                    "Version":     _s.get("codeversion"),
                 }
                 for _h in _hits for _s in [_h.get("_source", {})]
             ]
@@ -2642,7 +2646,7 @@ with tab_builds:
                 },
                 "aggs": {"by_status": {"terms": {"field": "status", "size": 10}}},
             },
-            "top_projects": {"terms": {"field": "project", "size": 10}},
+            "top_apps": {"terms": {"field": "application", "size": 10}},
             "by_tech":      {"terms": {"field": "technology", "size": 10}},
         },
     }
@@ -2680,14 +2684,14 @@ with tab_builds:
     else:
         inline_note("No builds in this window.", "info", c1)
 
-    tops = bucket_rows(res, "top_projects")
+    tops = bucket_rows(res, "top_apps")
     if tops:
         df_top = pd.DataFrame(
-            [{"project": b["key"], "builds": b["doc_count"]} for b in tops]
+            [{"application": b["key"], "builds": b["doc_count"]} for b in tops]
         ).sort_values("builds")
         fig2 = px.bar(
-            df_top, x="builds", y="project", orientation="h",
-            title="Top projects by build count",
+            df_top, x="builds", y="application", orientation="h",
+            title="Top applications by build count",
             color_discrete_sequence=[C_ACCENT],
         )
         fig2.update_layout(
@@ -2701,7 +2705,7 @@ with tab_builds:
         )
         c2.plotly_chart(fig2, use_container_width=True)
     else:
-        inline_note("No project data.", "info", c2)
+        inline_note("No application data.", "info", c2)
 
     tech = bucket_rows(res, "by_tech")
     if tech:
@@ -2900,35 +2904,35 @@ with wp_top[2]:
 # ---- Hygiene row -----------------------------------------------------------
 wp_bot = st.columns(3)
 
-# Dormant projects — cross-joins inventory × builds (composite-paginated → exhaustive)
+# Dormant applications — cross-joins inventory × builds (composite-paginated → exhaustive)
 with wp_bot[0]:
-    st.markdown("**Dormant projects** — no builds in 90 days")
+    st.markdown("**Dormant applications** — no builds in 90 days")
     ninety_ago = now_utc - timedelta(days=90)
 
     inv_query = (
         {"bool": {"filter": scope_filters_inv()}}
         if scope_filters_inv() else {"match_all": {}}
     )
-    inv_projs = set(composite_terms(IDX["inventory"], "project.keyword", inv_query).keys())
+    inv_apps_90 = set(composite_terms(IDX["inventory"], "application.keyword", inv_query).keys())
 
     act_query = {
         "bool": {
             "filter": [range_filter("startdate", ninety_ago, now_utc)] + scope_filters()
         }
     }
-    active = set(composite_terms(IDX["builds"], "project", act_query).keys())
+    active_apps_90 = set(composite_terms(IDX["builds"], "application", act_query).keys())
 
-    dormant = sorted(inv_projs - active)
-    if dormant:
+    dormant_apps = sorted(inv_apps_90 - active_apps_90)
+    if dormant_apps:
         st.dataframe(
-            pd.DataFrame({"project": dormant[:50]}),
+            pd.DataFrame({"Application": dormant_apps[:50]}),
             use_container_width=True, hide_index=True, height=260,
         )
         st.caption(
-            f"Found **{len(dormant):,}** dormant. Candidates for archival."
+            f"Found **{len(dormant_apps):,}** dormant. Candidates for archival."
         )
     else:
-        inline_note("No dormant projects detected.", "success")
+        inline_note("No dormant applications detected.", "success")
 
 # Requests stuck > 7d
 with wp_bot[1]:
@@ -3077,8 +3081,8 @@ with st.popover("Open event log", use_container_width=True):
                 "_ts":    _ts,
                 "type":   "deploy",
                 "When":   fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
-                "Who":    _s.get("project", ""),
-                "Detail": f'{_s.get("environment","?")} · v{_s.get("codeversion","")}',
+                "Who":    _s.get("application") or _s.get("project", ""),
+                "Detail": f'{_s.get("environment","?")} · v{_s.get("codeversion","")} [{_s.get("project","")}]',
                 "Status": _s.get("status", ""),
                 "Extra":  _s.get("triggeredby", ""),
             })
@@ -3121,7 +3125,7 @@ with st.popover("Open event log", use_container_width=True):
                 "_ts":    _ts,
                 "type":   "commit",
                 "When":   fmt_dt(_s.get("commitdate"), "%Y-%m-%d %H:%M"),
-                "Who":    _s.get("project", _s.get("repository", "")),
+                "Who":    _s.get("project", _s.get("repository", "")),  # commits use project (parent)
                 "Detail": f'{_s.get("branch","")} · {_s.get("authorname","")}',
                 "Status": "",
                 "Extra":  (_s.get("commitmessage") or "")[:80],
@@ -3154,7 +3158,7 @@ with st.popover("Open event log", use_container_width=True):
             '<thead><tr style="border-bottom:2px solid #e2e8f0;text-align:left">'
             '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">TIME</th>'
             '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">TYPE</th>'
-            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">PROJECT</th>'
+            '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">APPLICATION / PROJECT</th>'
             '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">DETAIL</th>'
             '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">STATUS</th>'
             '<th style="padding:6px 4px;color:#64748b;font-size:0.75rem;font-weight:600">NOTE</th>'
@@ -3211,9 +3215,9 @@ returns the next version to stamp on a build.
 * **Deployment frequency** — prod deploys / days-in-window.
 * **Change failure rate** — `prd_fail / prd_deploys`.
 * **Build success %** — `(builds − failed) / builds`.
-* **Platform health** — `active / inventory`, where *active* is `cardinality(project)`
+* **Platform health** — `active / inventory`, where *active* is `cardinality(application)`
   on `ef-cicd-builds` within the window.
-* **Project health score** — `build_success − (open_jira × 1.5) − (pending_req × 3)`,
+* **Application health score** — `build_success − (open_jira × 1.5) − (pending_req × 3)`,
   clamped 0–100. Lower is worse.
 * **Period-over-period delta** — same query on the immediately prior equal window.
         """
