@@ -337,8 +337,9 @@ div[data-testid="stDateInput"] label {
 }
 .stDataFrame { border-radius: 10px; overflow: hidden; }
 
-/* -------- Hide Streamlit chrome -------- */
-footer, #MainMenu, header[data-testid="stHeader"] { visibility: hidden; }
+/* -------- Hide Streamlit chrome — keep header bar visible but unused -------- */
+footer, #MainMenu { visibility: hidden; }
+/* header stays visible — do NOT hide header[data-testid="stHeader"] */
 
 /* =============================================================== *
  *  COLOR FIDELITY OVERRIDES                                        *
@@ -1305,7 +1306,7 @@ else:
                 unsafe_allow_html=True,
             )
         with _al_c2:
-            with st.popover("View", use_container_width=True, key=f"al_pop_{_ai}"):
+            with st.popover(f"View [{_ai+1}]", use_container_width=True):
                 st.markdown(f"**{_title}**")
                 # Route by severity/content
                 if "approval" in _title.lower() or "pending" in _title.lower():
