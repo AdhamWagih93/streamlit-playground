@@ -113,63 +113,6 @@ h1, h2, h3, h4 {
     font-feature-settings: "ss01", "cv11";
 }
 
-/* -------- Hero header -------- */
-.hero {
-    background:
-        radial-gradient(1200px 300px at 10% -20%, rgba(124,92,255,0.35), transparent 60%),
-        radial-gradient(800px 300px at 100% 0%, rgba(244,63,94,0.25), transparent 55%),
-        linear-gradient(135deg, #0b1220 0%, #111827 55%, #1e1b4b 100%);
-    padding: 30px 38px;
-    border-radius: 20px;
-    margin-bottom: 18px;
-    color: #fff;
-    border: 1px solid rgba(148,163,184,0.12);
-    box-shadow: 0 18px 60px rgba(0,0,0,0.45);
-    position: relative;
-    overflow: hidden;
-}
-.hero::before {
-    content: ''; position: absolute; inset: 0;
-    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><circle cx='1' cy='1' r='1' fill='white' fill-opacity='0.025'/></svg>");
-}
-.hero .eyebrow {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-size: .72rem; letter-spacing: .18em; text-transform: uppercase;
-    color: #c4b5fd; font-weight: 600;
-    padding: 5px 12px;
-    background: rgba(167,139,250,0.10);
-    border: 1px solid rgba(167,139,250,0.25);
-    border-radius: 999px;
-}
-.hero .eyebrow .dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #10b981;
-    box-shadow: 0 0 12px #10b981;
-    animation: pulse 2.2s ease-in-out infinite;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.35; }
-}
-.hero h1 {
-    margin: 14px 0 6px 0;
-    font-size: 2.25rem;
-    font-weight: 700;
-    color: #f8fafc;
-    position: relative;
-}
-.hero .subtitle {
-    color: #cbd5e1; opacity: 0.9;
-    font-size: 1.02rem; max-width: 780px;
-    position: relative;
-}
-.hero .meta {
-    margin-top: 18px; font-size: .82rem;
-    color: #94a3b8; position: relative;
-    display: flex; flex-wrap: wrap; gap: 18px;
-}
-.hero .meta b { color: #e2e8f0; }
-
 /* -------- Command bar -------- */
 .cmdbar-label {
     font-size: .70rem; letter-spacing: .12em;
@@ -428,120 +371,6 @@ div[data-testid="stPopover"] button:hover {
     color: #4c1d95 !important;
 }
 
-/* -------- Hero v2 — slim, full-width status bar -------- */
-.hero2 {
-    background:
-        radial-gradient(900px 220px at 8% -20%, rgba(124,92,255,0.42), transparent 60%),
-        radial-gradient(700px 220px at 100% 0%, rgba(244,63,94,0.30), transparent 55%),
-        linear-gradient(135deg, #0b1220 0%, #111827 55%, #1e1b4b 100%);
-    padding: 22px 30px 20px;
-    border-radius: 18px;
-    margin: 4px 0 16px 0;
-    color: #f8fafc;
-    border: 1px solid rgba(148,163,184,0.14);
-    box-shadow: 0 14px 50px rgba(0,0,0,0.42);
-    position: relative;
-    overflow: hidden;
-}
-.hero2::before {
-    content: ''; position: absolute; inset: 0;
-    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><circle cx='1' cy='1' r='1' fill='white' fill-opacity='0.025'/></svg>");
-    pointer-events: none;
-}
-.hero2 .row { display:flex; align-items:center; justify-content:space-between; gap:24px; flex-wrap:wrap; position:relative; }
-.hero2 .brand { display:flex; align-items:center; gap:14px; }
-.hero2 .logo {
-    width: 38px; height: 38px; border-radius: 10px;
-    background: linear-gradient(135deg,#a78bfa,#60a5fa);
-    display: flex; align-items:center; justify-content:center;
-    color:#fff; font-weight:800; font-size:1.05rem;
-    box-shadow: 0 4px 14px rgba(124,92,255,0.4);
-    flex-shrink: 0;
-}
-.hero2 h1 {
-    margin: 0;
-    font-size: 1.55rem;
-    font-weight: 700;
-    color: #f8fafc;
-    letter-spacing: -0.018em;
-}
-.hero2 .eyebrow {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-size: .65rem; letter-spacing: .18em; text-transform: uppercase;
-    color: #c4b5fd; font-weight: 700;
-    padding: 3px 10px;
-    background: rgba(167,139,250,0.10);
-    border: 1px solid rgba(167,139,250,0.30);
-    border-radius: 999px;
-    margin-bottom: 4px;
-}
-.hero2 .eyebrow .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: #10b981;
-    box-shadow: 0 0 10px #10b981;
-    animation: pulse 2.2s ease-in-out infinite;
-}
-.hero2 .stats { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-.hero2 .stat {
-    display: flex; flex-direction: column;
-    padding: 4px 16px;
-    border-left: 1px solid rgba(148,163,184,0.20);
-    min-width: 84px;
-}
-.hero2 .stat:first-child { border-left: none; padding-left: 0; }
-.hero2 .stat .lbl {
-    font-size: .62rem; text-transform: uppercase; letter-spacing: .12em;
-    color: #94a3b8; font-weight: 600;
-}
-.hero2 .stat .val {
-    font-size: 1.25rem; font-weight: 700; color: #f8fafc;
-    font-variant-numeric: tabular-nums;
-    margin-top: 2px;
-}
-.hero2 .stat .val.ok    { color: #34d399; }
-.hero2 .stat .val.warn  { color: #fcd34d; }
-.hero2 .stat .val.crit  { color: #fb7185; }
-.hero2 .scope {
-    margin-top: 14px; padding-top: 12px;
-    border-top: 1px dashed rgba(148,163,184,0.18);
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    position: relative;
-    font-size: .76rem;
-}
-.hero2 .scope-label {
-    color: #94a3b8; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .10em; font-size: .62rem;
-}
-.hero2 .scope-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 12px;
-    background: rgba(148,163,184,0.10);
-    border: 1px solid rgba(148,163,184,0.22);
-    border-radius: 999px;
-    color: #e2e8f0; font-weight: 500;
-}
-.hero2 .scope-pill b { color: #fff; font-weight: 700; }
-.hero2 .scope-pill.active {
-    background: rgba(167,139,250,0.18);
-    border-color: rgba(167,139,250,0.40);
-    color: #ddd6fe;
-}
-.hero2 .scope-pill.warn {
-    background: rgba(245,158,11,0.16);
-    border-color: rgba(245,158,11,0.36);
-    color: #fcd34d;
-}
-.hero2 .scope-pill.crit {
-    background: rgba(244,63,94,0.18);
-    border-color: rgba(244,63,94,0.42);
-    color: #fda4af;
-}
-.hero2 .scope-pill.ok {
-    background: rgba(16,185,129,0.16);
-    border-color: rgba(16,185,129,0.36);
-    color: #6ee7b7;
-}
-
 /* -------- Section nav chip strip -------- */
 .navchips {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -586,9 +415,6 @@ div[data-testid="stPopover"] button:hover {
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-# Hero placeholder — filled later once we know the alert count + headline metrics.
-_hero_ph = st.container()
 
 
 # =============================================================================
@@ -958,10 +784,20 @@ def _load_inventory_choices() -> tuple[list[str], list[str]]:
 _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
-# ── Row 1: company/project visual selectors + toggles ───────────────────────
-_cb1 = st.columns([2.2, 2.2, 0.7, 0.8, 0.6])
+# ── Row 1: title + company/project visual selectors + toggles ───────────────
+_cb1 = st.columns([1.8, 2, 2, 0.7, 0.7, 0.7])
 
 with _cb1[0]:
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:8px;padding-top:8px;">'
+        '<span style="width:8px;height:8px;border-radius:50%;background:#10b981;'
+        'box-shadow:0 0 6px #10b981;display:inline-block;flex-shrink:0;"></span>'
+        '<span style="font-size:1.05rem;font-weight:700;color:#0f172a;letter-spacing:-0.01em;">'
+        'CI/CD Command Center</span></div>',
+        unsafe_allow_html=True,
+    )
+
+with _cb1[1]:
     _company_options = [_ALL] + _all_companies
     _co_idx = st.session_state.get("_co_idx", 0)
     company_pick = st.selectbox(
@@ -984,7 +820,7 @@ with _cb1[0]:
         )
         st.markdown(f'<div style="line-height:1.6">{_badge_co}</div>', unsafe_allow_html=True)
 
-with _cb1[1]:
+with _cb1[2]:
     # Filter projects by chosen company using inventory
     if company_filter:
         _proj_options = [_ALL] + [
@@ -1012,10 +848,10 @@ with _cb1[1]:
         )
         st.markdown(f'<div style="line-height:1.6">{_badge_pr}</div>', unsafe_allow_html=True)
 
-with _cb1[2]:
+with _cb1[3]:
     auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
 
-with _cb1[3]:
+with _cb1[4]:
     exclude_svc = st.toggle(
         "Excl. svc",
         value=True,
@@ -1023,7 +859,7 @@ with _cb1[3]:
         key="exclude_svc",
     )
 
-with _cb1[4]:
+with _cb1[5]:
     if st.button("↻", help="Clear cache & reload", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -1089,7 +925,10 @@ now_utc     = datetime.now(timezone.utc)
 pending_window_start = now_utc - timedelta(days=30)
 
 _window_label = "All-time" if preset == "All-time" else f"{start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M} UTC"
-# (window summary + scope is rendered inside the hero header above the page.)
+st.caption(
+    f"{_window_label}  ·  bucket {interval}  ·  vs prior equal window  ·  {now_utc:%H:%M} UTC"
+    + ("  ·  ⊘ azure_sql excluded" if exclude_svc else "")
+)
 
 
 def scope_filters() -> list[dict]:
@@ -1720,73 +1559,6 @@ if inv_count and dormant_pct > 40:
         "Review the Operational hygiene section for cleanup candidates.",
     ))
 
-# ── Fill the hero header now that we have headline metrics + alert counts ────
-_n_danger  = sum(1 for a in alerts if a[0] == "danger")
-_n_warning = sum(1 for a in alerts if a[0] == "warning")
-_n_info    = sum(1 for a in alerts if a[0] == "info")
-_alert_cls = "crit" if _n_danger else ("warn" if _n_warning else "ok")
-
-_scope_pills = []
-_scope_pills.append(
-    f'<span class="scope-pill active">'
-    f'<b>{company_filter or "All companies"}</b></span>'
-)
-_scope_pills.append(
-    f'<span class="scope-pill active">'
-    f'<b>{project_filter or "All projects"}</b></span>'
-)
-_scope_pills.append(
-    f'<span class="scope-pill">{_window_label}</span>'
-)
-if exclude_svc:
-    _scope_pills.append(
-        '<span class="scope-pill">svc excluded</span>'
-    )
-
-with _hero_ph:
-    st.markdown(
-        f'<div class="hero2">'
-        f'  <div class="row">'
-        f'    <div class="brand">'
-        f'      <div class="logo">CC</div>'
-        f'      <div>'
-        f'        <div class="eyebrow"><span class="dot"></span> LIVE</div>'
-        f'        <h1>CI/CD Command Center</h1>'
-        f'      </div>'
-        f'    </div>'
-        f'    <div class="stats">'
-        f'      <div class="stat">'
-        f'        <span class="lbl">Alerts</span>'
-        f'        <span class="val {_alert_cls}">{len(alerts)}</span>'
-        f'      </div>'
-        f'      <div class="stat">'
-        f'        <span class="lbl">Active apps</span>'
-        f'        <span class="val">{active_projs}/{inv_count}</span>'
-        f'      </div>'
-        f'      <div class="stat">'
-        f'        <span class="lbl">Deploy freq</span>'
-        f'        <span class="val">{deploy_freq_per_day:.1f}/d</span>'
-        f'      </div>'
-        f'      <div class="stat">'
-        f'        <span class="lbl">CFR</span>'
-        f'        <span class="val {"crit" if cfr > 15 else "ok"}">{cfr:.1f}%</span>'
-        f'      </div>'
-        f'      <div class="stat">'
-        f'        <span class="lbl">Pending</span>'
-        f'        <span class="val {"warn" if pending_now else "ok"}">{pending_now}</span>'
-        f'      </div>'
-        f'    </div>'
-        f'  </div>'
-        f'  <div class="scope">'
-        f'    <span class="scope-label">Scope</span>'
-        + "".join(_scope_pills) +
-        f'    <span class="scope-pill" style="margin-left:auto">bucket {interval} &middot; {now_utc:%H:%M} UTC</span>'
-        f'  </div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-
 # Render the alerts ribbon into the placeholder above the KPIs so the most
 # actionable items are always at the top of the page.
 with _alerts_ph:
@@ -1867,7 +1639,7 @@ with _alerts_ph:
                                 "Project":     h["_source"].get("project"),
                                 "Branch":      h["_source"].get("branch"),
                                 "Version":     h["_source"].get("codeversion"),
-                                "Tech":        h["_source"].get("technology"),
+                                "Build tech":  h["_source"].get("technology"),
                             } for h in _ah]), use_container_width=True, hide_index=True, height=420)
                         else:
                             inline_note("No build failures.", "success")
@@ -2014,11 +1786,11 @@ with pop_cols[0]:
                 if _hits:
                     _rows = [
                         {
-                            "When":    fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
-                            "Branch":  _s.get("branch"),
-                            "Version": _s.get("codeversion"),
-                            "Status":  _s.get("status"),
-                            "Tech":    _s.get("technology"),
+                            "When":       fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                            "Branch":     _s.get("branch"),
+                            "Version":    _s.get("codeversion"),
+                            "Status":     _s.get("status"),
+                            "Build tech": _s.get("technology"),
                         }
                         for _h in _hits for _s in [_h.get("_source", {})]
                     ]
@@ -2037,10 +1809,11 @@ with pop_cols[0]:
                 if _hits:
                     _rows = [
                         {
-                            "When":    fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
-                            "Env":     _s.get("environment"),
-                            "Version": _s.get("codeversion"),
-                            "Status":  _s.get("status"),
+                            "When":        fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                            "Env":         _s.get("environment"),
+                            "Version":     _s.get("codeversion"),
+                            "Status":      _s.get("status"),
+                            "Deploy tech": _s.get("technology"),
                         }
                         for _h in _hits for _s in [_h.get("_source", {})]
                     ]
@@ -2184,6 +1957,34 @@ for _parent, _apps in _tm_proj_to_apps.items():
     for _app in _apps:
         _app_to_parent[_app] = _parent
 
+# application → (build_technology, deploy_technology) from inventory
+_app_build_tech: dict[str, str] = {}
+_app_deploy_tech: dict[str, str] = {}
+_inv_tech_res = es_search(
+    IDX["inventory"],
+    {
+        "query": _tm_inv_query,
+        "aggs": {
+            "apps": {
+                "terms": {"field": "application.keyword", "size": 1000},
+                "aggs": {
+                    "bt": {"terms": {"field": "build_technology.keyword", "size": 1}},
+                    "dt": {"terms": {"field": "deploy_technology.keyword", "size": 1}},
+                },
+            }
+        },
+    },
+)
+for _tb in bucket_rows(_inv_tech_res, "apps"):
+    _app_name = _tb["key"]
+    _bt_bkts = _tb.get("bt", {}).get("buckets") or []
+    _dt_bkts = _tb.get("dt", {}).get("buckets") or []
+    if _bt_bkts:
+        _app_build_tech[_app_name] = _bt_bkts[0]["key"]
+    if _dt_bkts:
+        _app_deploy_tech[_app_name] = _dt_bkts[0]["key"]
+
+
 # ── All-time activity per application (NOT time-filtered) ───────────────────
 # Use "application" field in operational indices (inventory is the master reference).
 _tm_build_q   = {"bool": {"filter": build_scope_filters()}} if build_scope_filters() else {"match_all": {}}
@@ -2248,15 +2049,17 @@ for _app in _all_apps:
         ((_builds_all - _fails) / _builds_all * 100 if _builds_all else 50) - _jira_open * 1.5
     )))
     _tm_rows.append({
-        "application": _app,
-        "project":     _parent,
-        "builds":      max(_builds_all, 1),
-        "uniq_ver":    _uv,
-        "status":      _status,
-        "score":       _score,
-        "fails":       _fails,
-        "open_jira":   _jira_open,
-        "live":        "Yes" if _in_prd else "No",
+        "application":      _app,
+        "project":          _parent,
+        "builds":           max(_builds_all, 1),
+        "uniq_ver":         _uv,
+        "status":           _status,
+        "score":            _score,
+        "fails":            _fails,
+        "open_jira":        _jira_open,
+        "live":             "Yes" if _in_prd else "No",
+        "build_tech":       _app_build_tech.get(_app, "—"),
+        "deploy_tech":      _app_deploy_tech.get(_app, "—"),
     })
 
 if _tm_rows:
@@ -2275,7 +2078,7 @@ if _tm_rows:
         values="builds",
         color="status",
         color_discrete_map=_color_map,
-        custom_data=["fails", "open_jira", "score", "uniq_ver", "live"],
+        custom_data=["fails", "open_jira", "score", "uniq_ver", "live", "deploy_tech", "build_tech"],
         title="Application landscape · all-time  (size = total builds · color = live/dormant status)",
     )
     _tm_fig.update_traces(
@@ -2286,7 +2089,9 @@ if _tm_rows:
             "Failures: %{customdata[0]}<br>"
             "Open JIRA: %{customdata[1]}<br>"
             "Health score: %{customdata[2]}/100<br>"
-            "Live (in PRD): %{customdata[4]}"
+            "Live (in PRD): %{customdata[4]}<br>"
+            "Deploy tech: %{customdata[5]}<br>"
+            "Build tech: %{customdata[6]}"
             "<extra></extra>"
         ),
         textinfo="label+value",
@@ -2331,8 +2136,8 @@ if _tm_rows:
         with _arc_cols[1]:
             with st.popover("View list", use_container_width=True):
                 st.markdown("**Applications with no builds — archival candidates**")
-                _arc_d = _archival[["project", "application", "open_jira"]].copy()
-                _arc_d.columns = ["Project", "Application", "Open JIRA"]
+                _arc_d = _archival[["project", "application", "deploy_tech", "build_tech", "open_jira"]].copy()
+                _arc_d.columns = ["Project", "Application", "Deploy tech", "Build tech", "Open JIRA"]
                 st.dataframe(_arc_d, use_container_width=True, hide_index=True, height=400)
 else:
     inline_note("No application data available.", "info")
@@ -2572,7 +2377,7 @@ st.markdown(
 # _lc_apps contains application names keyed from the "application" field.
 # _app_to_parent maps application → parent project from inventory.
 
-_inv_apps = set(_app_to_parent.keys()) if "_app_to_parent" in dir() else set()
+_inv_apps = set(_app_to_parent.keys())
 
 _lc_classified: dict[str, str] = {}
 for _app in _lc_apps:
@@ -2669,7 +2474,8 @@ for _s, _desc in [
             st.markdown(f"**{_s}** — {_STATUS_DESC[_s]}")
             _pl_df = pd.DataFrame([{
                 "Application": _a,
-                "Project":     _app_to_parent.get(_a, "—") if "_app_to_parent" in dir() else "—",
+                "Project":     _app_to_parent.get(_a, "—"),
+                "Deploy tech": _app_deploy_tech.get(_a, "—"),
                 "Builds":      _stage_maps["Builds"].get(_a, 0),
                 "Dev":         _stage_maps["Deploy Dev"].get(_a, 0),
                 "QC":          _stage_maps["Deploy QC"].get(_a, 0),
@@ -2690,7 +2496,7 @@ if _lc_apps:
     # Y-axis: "icon AppName [Project]"
     _y_labels = [
         f"{_STATUS_ICONS.get(_lc_classified.get(a,'Dark'), '○')} {a}"
-        + (f" [{_app_to_parent[a]}]" if "_app_to_parent" in dir() and a in _app_to_parent else "")
+        + (f" [{_app_to_parent[a]}]" if a in _app_to_parent else "")
         for a in _top_apps
     ]
 
@@ -2877,15 +2683,18 @@ with ci2:
         score -= min(pend_map.get(app, 0), 10) * 3    # pending requests drag
         score = max(0, min(100, int(round(score))))
         rows.append({
-            "Application": app,
-            "Builds":      total,
-            "Fails":       fails,
-            "Succ %":      f"{succ_pct:.0f}%",
-            "Prod dep":    prd_map.get(app, 0),
-            "Open JIRA":   jira_map.get(app, 0),
-            "Pending req": pend_map.get(app, 0),
-            "Last build":  last,
-            "Score":       score,
+            "Application":  app,
+            "Project":      _app_to_parent.get(app, "—"),
+            "Deploy tech":  _app_deploy_tech.get(app, "—"),
+            "Build tech":   _app_build_tech.get(app, "—"),
+            "Builds":       total,
+            "Fails":        fails,
+            "Succ %":       f"{succ_pct:.0f}%",
+            "Prod dep":     prd_map.get(app, 0),
+            "Open JIRA":    jira_map.get(app, 0),
+            "Pending req":  pend_map.get(app, 0),
+            "Last build":   last,
+            "Score":        score,
         })
 
     if rows:
@@ -2949,12 +2758,14 @@ try:
             flags.append("prod + failing")
         if len(flags) >= 2:
             risk_rows.append({
-                "Application": app,
-                "Signals":     " · ".join(flags),
-                "Builds":      builds_t,
-                "Fails":       fails_t,
-                "JIRA":        oj,
-                "Pending":     pr,
+                "Application":  app,
+                "Project":      _app_to_parent.get(app, "—"),
+                "Deploy tech":  _app_deploy_tech.get(app, "—"),
+                "Signals":      " · ".join(flags),
+                "Builds":       builds_t,
+                "Fails":        fails_t,
+                "JIRA":         oj,
+                "Pending":      pr,
             })
     if risk_rows:
         st.dataframe(
@@ -3017,7 +2828,7 @@ with _pa_pop[0]:
                     "Branch":      _s.get("branch"),
                     "Status":      _s.get("status"),
                     "Version":     _s.get("codeversion"),
-                    "Tech":        _s.get("technology"),
+                    "Build tech":  _s.get("technology"),
                 }
                 for _h in _hits for _s in [_h.get("_source", {})]
             ]
@@ -3058,6 +2869,7 @@ with _pa_pop[1]:
                     "Env":         _s.get("environment"),
                     "Status":      _s.get("status"),
                     "Version":     _s.get("codeversion"),
+                    "Deploy tech": _s.get("technology"),
                 }
                 for _h in _hits for _s in [_h.get("_source", {})]
             ]
@@ -3126,10 +2938,17 @@ with tab_builds:
     tops = bucket_rows(res, "top_apps")
     if tops:
         df_top = pd.DataFrame(
-            [{"application": b["key"], "builds": b["doc_count"]} for b in tops]
+            [{"application": b["key"],
+              "project": _app_to_parent.get(b["key"], "—"),
+              "builds": b["doc_count"]} for b in tops]
         ).sort_values("builds")
+        # Y-axis label: "app [project]"
+        df_top["label"] = df_top.apply(
+            lambda r: f'{r["application"]} [{r["project"]}]' if r["project"] != "—" else r["application"],
+            axis=1,
+        )
         fig2 = px.bar(
-            df_top, x="builds", y="application", orientation="h",
+            df_top, x="builds", y="label", orientation="h",
             title="Top applications by build count",
             color_discrete_sequence=[C_ACCENT],
         )
@@ -3149,9 +2968,9 @@ with tab_builds:
     tech = bucket_rows(res, "by_tech")
     if tech:
         df_tech = pd.DataFrame(
-            [{"technology": b["key"], "builds": b["doc_count"]} for b in tech]
+            [{"build_technology": b["key"], "builds": b["doc_count"]} for b in tech]
         )
-        st.markdown("**By technology**")
+        st.markdown("**By build technology**")
         st.dataframe(df_tech, use_container_width=True, hide_index=True)
 
 # ---- Deployments tab -------------------------------------------------------
@@ -3179,6 +2998,7 @@ with tab_deploys:
                 "terms": {"field": "environment", "size": 10},
                 "aggs": {"avg": {"avg": {"field": "hq_image_duration"}}},
             },
+            "by_tech": {"terms": {"field": "technology", "size": 15}},
         },
     }
     res = es_search(IDX["deployments"], body)
@@ -3227,6 +3047,14 @@ with tab_deploys:
     if env_rows:
         st.markdown("**Per-environment health**")
         st.dataframe(pd.DataFrame(env_rows), use_container_width=True, hide_index=True)
+
+    dep_tech = bucket_rows(res, "by_tech")
+    if dep_tech:
+        df_dep_tech = pd.DataFrame(
+            [{"deploy_technology": b["key"], "deployments": b["doc_count"]} for b in dep_tech]
+        )
+        st.markdown("**By deploy technology**")
+        st.dataframe(df_dep_tech, use_container_width=True, hide_index=True)
 
 
 # =============================================================================
@@ -3596,15 +3424,17 @@ with st.popover("Open event log", use_container_width=True):
 with st.expander("📖  Field guide · index reference · KPI formulas"):
     st.markdown(
         """
-**ef-devops-inventory** — single source of truth for every project on the
-CI/CD platform. Used as a lookup when enriching other events.
+**ef-devops-inventory** — single source of truth for every application on the
+CI/CD platform. Each document represents one application; `project.keyword`
+names the parent project. Key fields: `build_technology`, `deploy_technology`.
 
 **ef-cicd-builds** — one document per CI build (Jenkins / GitHub Actions run).
-Important fields: `status`, `duration`, `branch`, `codeversion`, `technology`,
-`startdate`, `enddate`.
+Important fields: `status`, `duration`, `branch`, `codeversion`, `technology`
+(= inventory `build_technology`), `startdate`, `enddate`.
 
 **ef-cicd-deployments** — one document per deployment attempt to an environment
-(`dev`, `qc`, `uat`, `prd`). Production deployments drive DORA metrics here.
+(`dev`, `qc`, `uat`, `prd`). `technology` field = inventory `deploy_technology`.
+Production deployments drive DORA metrics here.
 
 **ef-cicd-releases** — promotes a version from `qc` to `uat`. Tracks the RLM
 status used by the release-management tooling.
