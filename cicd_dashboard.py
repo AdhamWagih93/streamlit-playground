@@ -427,9 +427,168 @@ div[data-testid="stPopover"] button:hover {
     border-color: #a78bfa !important;
     color: #4c1d95 !important;
 }
+
+/* -------- Hero v2 — slim, full-width status bar -------- */
+.hero2 {
+    background:
+        radial-gradient(900px 220px at 8% -20%, rgba(124,92,255,0.42), transparent 60%),
+        radial-gradient(700px 220px at 100% 0%, rgba(244,63,94,0.30), transparent 55%),
+        linear-gradient(135deg, #0b1220 0%, #111827 55%, #1e1b4b 100%);
+    padding: 22px 30px 20px;
+    border-radius: 18px;
+    margin: 4px 0 16px 0;
+    color: #f8fafc;
+    border: 1px solid rgba(148,163,184,0.14);
+    box-shadow: 0 14px 50px rgba(0,0,0,0.42);
+    position: relative;
+    overflow: hidden;
+}
+.hero2::before {
+    content: ''; position: absolute; inset: 0;
+    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><circle cx='1' cy='1' r='1' fill='white' fill-opacity='0.025'/></svg>");
+    pointer-events: none;
+}
+.hero2 .row { display:flex; align-items:center; justify-content:space-between; gap:24px; flex-wrap:wrap; position:relative; }
+.hero2 .brand { display:flex; align-items:center; gap:14px; }
+.hero2 .logo {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(135deg,#a78bfa,#60a5fa);
+    display: flex; align-items:center; justify-content:center;
+    color:#fff; font-weight:800; font-size:1.05rem;
+    box-shadow: 0 4px 14px rgba(124,92,255,0.4);
+    flex-shrink: 0;
+}
+.hero2 h1 {
+    margin: 0;
+    font-size: 1.55rem;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: -0.018em;
+}
+.hero2 .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: .65rem; letter-spacing: .18em; text-transform: uppercase;
+    color: #c4b5fd; font-weight: 700;
+    padding: 3px 10px;
+    background: rgba(167,139,250,0.10);
+    border: 1px solid rgba(167,139,250,0.30);
+    border-radius: 999px;
+    margin-bottom: 4px;
+}
+.hero2 .eyebrow .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 10px #10b981;
+    animation: pulse 2.2s ease-in-out infinite;
+}
+.hero2 .stats { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.hero2 .stat {
+    display: flex; flex-direction: column;
+    padding: 4px 16px;
+    border-left: 1px solid rgba(148,163,184,0.20);
+    min-width: 84px;
+}
+.hero2 .stat:first-child { border-left: none; padding-left: 0; }
+.hero2 .stat .lbl {
+    font-size: .62rem; text-transform: uppercase; letter-spacing: .12em;
+    color: #94a3b8; font-weight: 600;
+}
+.hero2 .stat .val {
+    font-size: 1.25rem; font-weight: 700; color: #f8fafc;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+}
+.hero2 .stat .val.ok    { color: #34d399; }
+.hero2 .stat .val.warn  { color: #fcd34d; }
+.hero2 .stat .val.crit  { color: #fb7185; }
+.hero2 .scope {
+    margin-top: 14px; padding-top: 12px;
+    border-top: 1px dashed rgba(148,163,184,0.18);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    position: relative;
+    font-size: .76rem;
+}
+.hero2 .scope-label {
+    color: #94a3b8; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .10em; font-size: .62rem;
+}
+.hero2 .scope-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 12px;
+    background: rgba(148,163,184,0.10);
+    border: 1px solid rgba(148,163,184,0.22);
+    border-radius: 999px;
+    color: #e2e8f0; font-weight: 500;
+}
+.hero2 .scope-pill b { color: #fff; font-weight: 700; }
+.hero2 .scope-pill.active {
+    background: rgba(167,139,250,0.18);
+    border-color: rgba(167,139,250,0.40);
+    color: #ddd6fe;
+}
+.hero2 .scope-pill.warn {
+    background: rgba(245,158,11,0.16);
+    border-color: rgba(245,158,11,0.36);
+    color: #fcd34d;
+}
+.hero2 .scope-pill.crit {
+    background: rgba(244,63,94,0.18);
+    border-color: rgba(244,63,94,0.42);
+    color: #fda4af;
+}
+.hero2 .scope-pill.ok {
+    background: rgba(16,185,129,0.16);
+    border-color: rgba(16,185,129,0.36);
+    color: #6ee7b7;
+}
+
+/* -------- Section nav chip strip -------- */
+.navchips {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 12px 0 14px;
+    margin: 6px 0 10px;
+    border-top: 1px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+}
+.navchips .navlbl {
+    font-size: .62rem; text-transform: uppercase; letter-spacing: .12em;
+    color: #94a3b8; font-weight: 700; margin-right: 4px;
+}
+.navchips a {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 13px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    font-size: .76rem; font-weight: 600;
+    color: #475569 !important;
+    text-decoration: none !important;
+    transition: all .14s ease;
+}
+.navchips a:hover {
+    background: #ede9fe;
+    border-color: #a78bfa;
+    color: #6d28d9 !important;
+    transform: translateY(-1px);
+}
+.navchips a .num {
+    background: #e2e8f0; color: #475569;
+    font-size: .68rem; padding: 0 6px; border-radius: 999px;
+    font-weight: 700;
+}
+.navchips a.crit { background: #fff1f2; border-color: #fca5a5; color: #991b1b !important; }
+.navchips a.crit .num { background: #dc2626; color: #fff; }
+.navchips a.warn { background: #fffbeb; border-color: #fcd34d; color: #92400e !important; }
+.navchips a.warn .num { background: #d97706; color: #fff; }
+
+/* -------- Anchor scroll offset (so sticky bars don't cover the heading) -------- */
+.anchor { display: block; position: relative; top: -12px; visibility: hidden; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+# Hero placeholder — filled later once we know the alert count + headline metrics.
+_hero_ph = st.container()
 
 
 # =============================================================================
@@ -799,20 +958,10 @@ def _load_inventory_choices() -> tuple[list[str], list[str]]:
 _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
-# ── Row 1: title + company/project visual selectors + toggles ───────────────
-_cb1 = st.columns([1.8, 2, 2, 0.7, 0.7, 0.7])
+# ── Row 1: company/project visual selectors + toggles ───────────────────────
+_cb1 = st.columns([2.2, 2.2, 0.7, 0.8, 0.6])
 
 with _cb1[0]:
-    st.markdown(
-        '<div style="display:flex;align-items:center;gap:8px;padding-top:8px;">'
-        '<span style="width:8px;height:8px;border-radius:50%;background:#10b981;'
-        'box-shadow:0 0 6px #10b981;display:inline-block;flex-shrink:0;"></span>'
-        '<span style="font-size:1.05rem;font-weight:700;color:#0f172a;letter-spacing:-0.01em;">'
-        'CI/CD Command Center</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with _cb1[1]:
     _company_options = [_ALL] + _all_companies
     _co_idx = st.session_state.get("_co_idx", 0)
     company_pick = st.selectbox(
@@ -835,7 +984,7 @@ with _cb1[1]:
         )
         st.markdown(f'<div style="line-height:1.6">{_badge_co}</div>', unsafe_allow_html=True)
 
-with _cb1[2]:
+with _cb1[1]:
     # Filter projects by chosen company using inventory
     if company_filter:
         _proj_options = [_ALL] + [
@@ -863,10 +1012,10 @@ with _cb1[2]:
         )
         st.markdown(f'<div style="line-height:1.6">{_badge_pr}</div>', unsafe_allow_html=True)
 
-with _cb1[3]:
+with _cb1[2]:
     auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
 
-with _cb1[4]:
+with _cb1[3]:
     exclude_svc = st.toggle(
         "Excl. svc",
         value=True,
@@ -874,7 +1023,7 @@ with _cb1[4]:
         key="exclude_svc",
     )
 
-with _cb1[5]:
+with _cb1[4]:
     if st.button("↻", help="Clear cache & reload", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -940,10 +1089,7 @@ now_utc     = datetime.now(timezone.utc)
 pending_window_start = now_utc - timedelta(days=30)
 
 _window_label = "All-time" if preset == "All-time" else f"{start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M} UTC"
-st.caption(
-    f"{_window_label}  ·  bucket {interval}  ·  vs prior equal window  ·  {now_utc:%H:%M} UTC"
-    + ("  ·  ⊘ azure_sql excluded" if exclude_svc else "")
-)
+# (window summary + scope is rendered inside the hero header above the page.)
 
 
 def scope_filters() -> list[dict]:
@@ -1211,9 +1357,18 @@ active_projs = int(
 dormant_pct = (1 - active_projs / inv_count) * 100 if inv_count else 0
 
 
+# Placeholder for alerts ribbon — actually filled by the ALERTS block further
+# down, but rendered at THIS position in the page (above KPIs) so the most
+# actionable items always sit at the top of the viewport.
+_alerts_ph = st.container()
+
+
 # =============================================================================
 # KPIs  (2 rows × 4)
 # =============================================================================
+
+# Anchor for in-page navigation
+st.markdown('<a class="anchor" id="sec-kpis"></a>', unsafe_allow_html=True)
 
 # Helper functions for WoW/MoM/YoY (used inside the trend popover below)
 def _trend_count(
@@ -1333,6 +1488,33 @@ with r2c[4]:
         st.markdown("".join(_html), unsafe_allow_html=True)
 
 
+# ── Contextual digest — one-liner translating the numbers into meaning ──────
+_stuck_count_early = sum(1 for r in _all_pending if (r.get("Age (h)") or 0) >= 24)
+_digest_parts: list[str] = []
+if prd_fail:
+    _digest_parts.append(f"<b>{prd_fail}</b> prod deploy failure(s) need attention")
+if _stuck_count_early:
+    _digest_parts.append(f"<b>{_stuck_count_early}</b> approval(s) stuck > 24h")
+if builds_now and success_rate < 80:
+    _digest_parts.append(f"build success rate <b>{success_rate:.0f}%</b> (below 80%)")
+if not _digest_parts and builds_now:
+    # positive summary
+    if success_rate >= 95:
+        _digest_parts.append(f"build pipeline healthy at <b>{success_rate:.0f}%</b> success")
+    if deploy_freq_per_day >= 1:
+        _digest_parts.append(f"shipping <b>{deploy_freq_per_day:.1f}</b> prod deploys / day")
+    if not pending_now:
+        _digest_parts.append("no pending approvals")
+if _digest_parts:
+    _has_issues = bool(prd_fail or _stuck_count_early)
+    st.markdown(
+        f'<div class="learn">'
+        f'  <b>TL;DR</b> &mdash; {" &middot; ".join(_digest_parts)}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # =============================================================================
 # EVENT TICKER — subtle always-visible live feed at top of content
 # =============================================================================
@@ -1435,6 +1617,22 @@ if _tick_evts:
     )
 
 
+# ── Section navigation — quick-jump chip strip ─────────────────────────────
+st.markdown(
+    '<div class="navchips">'
+    '  <span class="navlbl">Jump to</span>'
+    '  <a href="#sec-alerts">Alerts</a>'
+    '  <a href="#sec-kpis">KPIs</a>'
+    '  <a href="#sec-landscape">Landscape</a>'
+    '  <a href="#sec-lifecycle">Lifecycle</a>'
+    '  <a href="#sec-pipeline">Pipeline</a>'
+    '  <a href="#sec-workflow">Workflow</a>'
+    '  <a href="#sec-eventlog">Event log</a>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+
 # =============================================================================
 # ALERTS — compact chips, vivid colors
 # =============================================================================
@@ -1522,147 +1720,222 @@ if inv_count and dormant_pct > 40:
         "Review the Operational hygiene section for cleanup candidates.",
     ))
 
-if not alerts:
+# ── Fill the hero header now that we have headline metrics + alert counts ────
+_n_danger  = sum(1 for a in alerts if a[0] == "danger")
+_n_warning = sum(1 for a in alerts if a[0] == "warning")
+_n_info    = sum(1 for a in alerts if a[0] == "info")
+_alert_cls = "crit" if _n_danger else ("warn" if _n_warning else "ok")
+
+_scope_pills = []
+_scope_pills.append(
+    f'<span class="scope-pill active">'
+    f'<b>{company_filter or "All companies"}</b></span>'
+)
+_scope_pills.append(
+    f'<span class="scope-pill active">'
+    f'<b>{project_filter or "All projects"}</b></span>'
+)
+_scope_pills.append(
+    f'<span class="scope-pill">{_window_label}</span>'
+)
+if exclude_svc:
+    _scope_pills.append(
+        '<span class="scope-pill">svc excluded</span>'
+    )
+
+with _hero_ph:
     st.markdown(
-        '<div class="alert success">'
-        '<div class="icon">✓</div>'
-        '<div><b>All clear.</b><span class="sub">No actionable alerts in the current window.</span></div>'
-        '</div>',
+        f'<div class="hero2">'
+        f'  <div class="row">'
+        f'    <div class="brand">'
+        f'      <div class="logo">CC</div>'
+        f'      <div>'
+        f'        <div class="eyebrow"><span class="dot"></span> LIVE</div>'
+        f'        <h1>CI/CD Command Center</h1>'
+        f'      </div>'
+        f'    </div>'
+        f'    <div class="stats">'
+        f'      <div class="stat">'
+        f'        <span class="lbl">Alerts</span>'
+        f'        <span class="val {_alert_cls}">{len(alerts)}</span>'
+        f'      </div>'
+        f'      <div class="stat">'
+        f'        <span class="lbl">Active apps</span>'
+        f'        <span class="val">{active_projs}/{inv_count}</span>'
+        f'      </div>'
+        f'      <div class="stat">'
+        f'        <span class="lbl">Deploy freq</span>'
+        f'        <span class="val">{deploy_freq_per_day:.1f}/d</span>'
+        f'      </div>'
+        f'      <div class="stat">'
+        f'        <span class="lbl">CFR</span>'
+        f'        <span class="val {"crit" if cfr > 15 else "ok"}">{cfr:.1f}%</span>'
+        f'      </div>'
+        f'      <div class="stat">'
+        f'        <span class="lbl">Pending</span>'
+        f'        <span class="val {"warn" if pending_now else "ok"}">{pending_now}</span>'
+        f'      </div>'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="scope">'
+        f'    <span class="scope-label">Scope</span>'
+        + "".join(_scope_pills) +
+        f'    <span class="scope-pill" style="margin-left:auto">bucket {interval} &middot; {now_utc:%H:%M} UTC</span>'
+        f'  </div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
-else:
-    # Each alert has an inline "View" popover that routes straight to the breakdown
-    for _ai, (_sev, _icon, _title, _detail) in enumerate(alerts):
-        _al_c1, _al_c2 = st.columns([5, 0.9])
-        with _al_c1:
-            st.markdown(
-                f'<div class="alert {_sev}" style="margin-bottom:4px">'
-                f'  <div class="icon">{_icon}</div>'
-                f'  <div><b>{_title}</b><span class="sub"> — {_detail}</span></div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        with _al_c2:
-            with st.popover(f"View [{_ai+1}]", use_container_width=True):
-                st.markdown(f"**{_title}**")
-                # Route by severity/content
-                if "approval" in _title.lower() or "pending" in _title.lower():
-                    _stuck_rows = [r for r in _all_pending if (r.get("Age (h)") or 0) >= 24]
-                    if _stuck_rows:
-                        st.dataframe(pd.DataFrame([{
-                            "#":           r["#"],
-                            "Type":        r["Type"],
-                            "Requester":   r["Requester"],
-                            "Application": r["Application"],
-                            "Age (h)":     r["Age (h)"],
-                            "Queue":       r["_idx"],
-                        } for r in _stuck_rows]), use_container_width=True, hide_index=True, height=420)
-                    else:
-                        inline_note("No stuck approvals.", "success")
 
-                elif "production deployment" in _title.lower():
-                    _ar = es_search(IDX["deployments"], {
-                        "query": {"bool": {"filter": [
-                            range_filter("startdate", start_dt, end_dt),
-                            {"term": {"environment": "prd"}},
-                            {"terms": {"status": FAILED_STATUSES}},
-                        ] + deploy_scope_filters()}},
-                        "sort": [{"startdate": "desc"}]}, size=100)
-                    _ah = _ar.get("hits", {}).get("hits", [])
-                    if _ah:
-                        st.dataframe(pd.DataFrame([{
-                            "When":        fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
-                            "Application": h["_source"].get("application") or h["_source"].get("project"),
-                            "Project":     h["_source"].get("project"),
-                            "Version":     h["_source"].get("codeversion"),
-                            "Status":      h["_source"].get("status"),
-                        } for h in _ah]), use_container_width=True, hide_index=True, height=420)
-                    else:
-                        inline_note("No failed PRD deploys.", "success")
 
-                elif "build success" in _title.lower() or "build failure" in _title.lower():
-                    _ar = es_search(IDX["builds"], {
-                        "query": {"bool": {"filter": [
-                            range_filter("startdate", start_dt, end_dt),
-                            {"terms": {"status": FAILED_STATUSES}},
-                        ] + build_scope_filters()}},
-                        "sort": [{"startdate": "desc"}]}, size=100)
-                    _ah = _ar.get("hits", {}).get("hits", [])
-                    if _ah:
-                        st.dataframe(pd.DataFrame([{
-                            "When":        fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
-                            "Application": h["_source"].get("application") or h["_source"].get("project"),
-                            "Project":     h["_source"].get("project"),
-                            "Branch":      h["_source"].get("branch"),
-                            "Version":     h["_source"].get("codeversion"),
-                            "Tech":        h["_source"].get("technology"),
-                        } for h in _ah]), use_container_width=True, hide_index=True, height=420)
-                    else:
-                        inline_note("No build failures.", "success")
+# Render the alerts ribbon into the placeholder above the KPIs so the most
+# actionable items are always at the top of the page.
+with _alerts_ph:
+    st.markdown('<a class="anchor" id="sec-alerts"></a>', unsafe_allow_html=True)
+    if not alerts:
+        st.markdown(
+            '<div class="alert success">'
+            '<div class="icon">✓</div>'
+            '<div><b>All clear.</b><span class="sub">No actionable alerts in the current window.</span></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        # Sort by severity so danger items always render first
+        _sev_order = {"danger": 0, "warning": 1, "info": 2, "success": 3}
+        _sorted_alerts = sorted(alerts, key=lambda a: _sev_order.get(a[0], 9))
+        # Each alert has an inline "View" popover that routes straight to the breakdown
+        for _ai, (_sev, _icon, _title, _detail) in enumerate(_sorted_alerts):
+            _al_c1, _al_c2 = st.columns([5, 0.9])
+            with _al_c1:
+                st.markdown(
+                    f'<div class="alert {_sev}" style="margin-bottom:4px">'
+                    f'  <div class="icon">{_icon}</div>'
+                    f'  <div><b>{_title}</b><span class="sub"> — {_detail}</span></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _al_c2:
+                with st.popover(f"View [{_ai+1}]", use_container_width=True):
+                    st.markdown(f"**{_title}**")
+                    # Route by severity/content
+                    if "approval" in _title.lower() or "pending" in _title.lower():
+                        _stuck_rows = [r for r in _all_pending if (r.get("Age (h)") or 0) >= 24]
+                        if _stuck_rows:
+                            st.dataframe(pd.DataFrame([{
+                                "#":           r["#"],
+                                "Type":        r["Type"],
+                                "Requester":   r["Requester"],
+                                "Application": r["Application"],
+                                "Age (h)":     r["Age (h)"],
+                                "Queue":       r["_idx"],
+                            } for r in _stuck_rows]), use_container_width=True, hide_index=True, height=420)
+                        else:
+                            inline_note("No stuck approvals.", "success")
 
-                elif "jira" in _title.lower():
-                    _ar = es_search(IDX["jira"], {
-                        "query": {"bool": {
-                            "filter": [{"range": {"updated": {"lte": (now_utc - timedelta(days=30)).isoformat()}}}] + scope_filters(),
-                            "must_not": [{"terms": {"status": CLOSED_JIRA}}],
-                        }}, "sort": [{"updated": "asc"}]}, size=100)
-                    _ah = _ar.get("hits", {}).get("hits", [])
-                    if _ah:
-                        st.dataframe(pd.DataFrame([{
-                            "Key": h["_source"].get("issuekey"),
-                            "Priority": h["_source"].get("priority"),
-                            "Status": h["_source"].get("status"),
-                            "Assignee": h["_source"].get("assignee"),
-                            "Updated": fmt_dt(h["_source"].get("updated"), "%Y-%m-%d"),
-                        } for h in _ah]), use_container_width=True, hide_index=True, height=420)
-                    else:
-                        inline_note("No aged JIRA.", "success")
+                    elif "production deployment" in _title.lower():
+                        _ar = es_search(IDX["deployments"], {
+                            "query": {"bool": {"filter": [
+                                range_filter("startdate", start_dt, end_dt),
+                                {"term": {"environment": "prd"}},
+                                {"terms": {"status": FAILED_STATUSES}},
+                            ] + deploy_scope_filters()}},
+                            "sort": [{"startdate": "desc"}]}, size=100)
+                        _ah = _ar.get("hits", {}).get("hits", [])
+                        if _ah:
+                            st.dataframe(pd.DataFrame([{
+                                "When":        fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
+                                "Application": h["_source"].get("application") or h["_source"].get("project"),
+                                "Project":     h["_source"].get("project"),
+                                "Version":     h["_source"].get("codeversion"),
+                                "Status":      h["_source"].get("status"),
+                            } for h in _ah]), use_container_width=True, hide_index=True, height=420)
+                        else:
+                            inline_note("No failed PRD deploys.", "success")
 
-                elif "commit" in _title.lower():
-                    _ar = es_search(IDX["commits"], {
-                        "query": {"bool": {"filter": [
-                            range_filter("commitdate", start_dt, end_dt),
-                        ] + commit_scope_filters()}},
-                        "aggs": {"authors": {"terms": {"field": "authorname", "size": 20}}},
-                        "sort": [{"commitdate": "desc"}]}, size=30)
-                    _ah = _ar.get("hits", {}).get("hits", [])
-                    if _ah:
-                        st.dataframe(pd.DataFrame([{
-                            "When":    fmt_dt(h["_source"].get("commitdate"), "%Y-%m-%d %H:%M"),
-                            "Author":  h["_source"].get("authorname"),
-                            "Project": h["_source"].get("project"),
-                            "Branch":  h["_source"].get("branch"),
-                        } for h in _ah]), use_container_width=True, hide_index=True, height=360)
-                        _top_auth = bucket_rows(_ar, "authors")
-                        if _top_auth:
-                            st.caption("Top contributors: " + ", ".join(
-                                f"{b['key']} ({b['doc_count']})" for b in _top_auth[:5]
-                            ))
-                    else:
-                        inline_note("No commits.", "info")
+                    elif "build success" in _title.lower() or "build failure" in _title.lower():
+                        _ar = es_search(IDX["builds"], {
+                            "query": {"bool": {"filter": [
+                                range_filter("startdate", start_dt, end_dt),
+                                {"terms": {"status": FAILED_STATUSES}},
+                            ] + build_scope_filters()}},
+                            "sort": [{"startdate": "desc"}]}, size=100)
+                        _ah = _ar.get("hits", {}).get("hits", [])
+                        if _ah:
+                            st.dataframe(pd.DataFrame([{
+                                "When":        fmt_dt(h["_source"].get("startdate"), "%Y-%m-%d %H:%M"),
+                                "Application": h["_source"].get("application") or h["_source"].get("project"),
+                                "Project":     h["_source"].get("project"),
+                                "Branch":      h["_source"].get("branch"),
+                                "Version":     h["_source"].get("codeversion"),
+                                "Tech":        h["_source"].get("technology"),
+                            } for h in _ah]), use_container_width=True, hide_index=True, height=420)
+                        else:
+                            inline_note("No build failures.", "success")
 
-                else:
-                    # Dormant applications: in inventory but no builds in this window
-                    _dorm_inv_q = {"bool": {"filter": scope_filters_inv()}} if scope_filters_inv() else {"match_all": {}}
-                    _dorm_inv   = set(composite_terms(IDX["inventory"], "application.keyword", _dorm_inv_q).keys())
-                    _dorm_act_q = {"bool": {"filter": [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()}}
-                    _dorm_act   = set(composite_terms(IDX["builds"], "application", _dorm_act_q).keys())
-                    _dormant_list = sorted(_dorm_inv - _dorm_act)[:50]
-                    if _dormant_list:
-                        st.dataframe(pd.DataFrame({"Application": _dormant_list}),
-                                     use_container_width=True, hide_index=True)
+                    elif "jira" in _title.lower():
+                        _ar = es_search(IDX["jira"], {
+                            "query": {"bool": {
+                                "filter": [{"range": {"updated": {"lte": (now_utc - timedelta(days=30)).isoformat()}}}] + scope_filters(),
+                                "must_not": [{"terms": {"status": CLOSED_JIRA}}],
+                            }}, "sort": [{"updated": "asc"}]}, size=100)
+                        _ah = _ar.get("hits", {}).get("hits", [])
+                        if _ah:
+                            st.dataframe(pd.DataFrame([{
+                                "Key": h["_source"].get("issuekey"),
+                                "Priority": h["_source"].get("priority"),
+                                "Status": h["_source"].get("status"),
+                                "Assignee": h["_source"].get("assignee"),
+                                "Updated": fmt_dt(h["_source"].get("updated"), "%Y-%m-%d"),
+                            } for h in _ah]), use_container_width=True, hide_index=True, height=420)
+                        else:
+                            inline_note("No aged JIRA.", "success")
+
+                    elif "commit" in _title.lower():
+                        _ar = es_search(IDX["commits"], {
+                            "query": {"bool": {"filter": [
+                                range_filter("commitdate", start_dt, end_dt),
+                            ] + commit_scope_filters()}},
+                            "aggs": {"authors": {"terms": {"field": "authorname", "size": 20}}},
+                            "sort": [{"commitdate": "desc"}]}, size=30)
+                        _ah = _ar.get("hits", {}).get("hits", [])
+                        if _ah:
+                            st.dataframe(pd.DataFrame([{
+                                "When":    fmt_dt(h["_source"].get("commitdate"), "%Y-%m-%d %H:%M"),
+                                "Author":  h["_source"].get("authorname"),
+                                "Project": h["_source"].get("project"),
+                                "Branch":  h["_source"].get("branch"),
+                            } for h in _ah]), use_container_width=True, hide_index=True, height=360)
+                            _top_auth = bucket_rows(_ar, "authors")
+                            if _top_auth:
+                                st.caption("Top contributors: " + ", ".join(
+                                    f"{b['key']} ({b['doc_count']})" for b in _top_auth[:5]
+                                ))
+                        else:
+                            inline_note("No commits.", "info")
+
                     else:
-                        inline_note("No dormant applications in window.", "info")
+                        # Dormant applications: in inventory but no builds in this window
+                        _dorm_inv_q = {"bool": {"filter": scope_filters_inv()}} if scope_filters_inv() else {"match_all": {}}
+                        _dorm_inv   = set(composite_terms(IDX["inventory"], "application.keyword", _dorm_inv_q).keys())
+                        _dorm_act_q = {"bool": {"filter": [range_filter("startdate", start_dt, end_dt)] + build_scope_filters()}}
+                        _dorm_act   = set(composite_terms(IDX["builds"], "application", _dorm_act_q).keys())
+                        _dormant_list = sorted(_dorm_inv - _dorm_act)[:50]
+                        if _dormant_list:
+                            st.dataframe(pd.DataFrame({"Application": _dormant_list}),
+                                         use_container_width=True, hide_index=True)
+                        else:
+                            inline_note("No dormant applications in window.", "info")
 
 
 # =============================================================================
 # SECTION 3 — CROSS-INDEX INSIGHTS
 # =============================================================================
 
+st.markdown('<a class="anchor" id="sec-landscape"></a>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section">'
-    '<div class="title-wrap"><h2>Project landscape</h2><span class="badge">Inventory × Activity</span></div>'
-    '<span class="hint">active · at-risk · archival candidates — joined across all indices</span>'
+    '<div class="title-wrap"><h2>Project landscape</h2><span class="badge">Inventory x Activity</span></div>'
+    '<span class="hint">active / at-risk / archival candidates &mdash; joined across all indices</span>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -2068,13 +2341,14 @@ else:
 # APP LIFECYCLE — pipeline stage funnel per project + bottleneck finder
 # =============================================================================
 
+st.markdown('<a class="anchor" id="sec-lifecycle"></a>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section">'
     '<div class="title-wrap">'
     '  <h2>App lifecycle &amp; bottlenecks</h2>'
-    '  <span class="badge">Build → Dev → QC → Release → UAT → PRD</span>'
+    '  <span class="badge">Build &rarr; Dev &rarr; QC &rarr; Release &rarr; UAT &rarr; PRD</span>'
     '</div>'
-    '<span class="hint">unique versions per application at each stage — where does each application stall?</span>'
+    '<span class="hint">unique versions per application at each stage &mdash; where does each application stall?</span>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -2706,6 +2980,7 @@ except Exception as exc:
 # SECTION 4 — PIPELINE ACTIVITY
 # =============================================================================
 
+st.markdown('<a class="anchor" id="sec-pipeline"></a>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section">'
     '<div class="title-wrap"><h2>Pipeline activity</h2><span class="badge">Time series</span></div>'
@@ -2958,9 +3233,10 @@ with tab_deploys:
 # SECTION 5 — WORKFLOW PULSE + OPERATIONAL HYGIENE (consolidated)
 # =============================================================================
 
+st.markdown('<a class="anchor" id="sec-workflow"></a>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section">'
-    '<div class="title-wrap"><h2>Workflow pulse &amp; hygiene</h2><span class="badge">Who · What · Aging</span></div>'
+    '<div class="title-wrap"><h2>Workflow pulse &amp; hygiene</h2><span class="badge">Who &middot; What &middot; Aging</span></div>'
     '<span class="hint">live queues and cleanup candidates</span>'
     '</div>',
     unsafe_allow_html=True,
@@ -3144,28 +3420,26 @@ with wp_bot[2]:
 # SECTION 6 — EVENT LOG (on-demand)
 # =============================================================================
 
-_el_c1, _el_c2, _el_c3, _el_c4 = st.columns([3, 1.2, 1.2, 1.2])
-with _el_c1:
-    st.markdown(
-        '<div style="display:flex;align-items:center;gap:10px;padding:6px 0">'
-        '<span style="font-size:1.05rem;font-weight:700;color:#1e293b">Event log</span>'
-        '<span style="font-size:0.72rem;background:#e2e8f0;color:#475569;'
-        'border-radius:12px;padding:2px 10px;font-weight:600">on demand</span>'
-        '<span style="font-size:0.8rem;color:#94a3b8">deployments · releases · commits — newest first</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section">'
+    '<div class="title-wrap"><h2>Event log</h2><span class="badge">On demand</span></div>'
+    '<span class="hint">deployments &middot; releases &middot; commits &mdash; newest first</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+_el_c1, _el_c2, _el_c3 = st.columns([1.2, 1.2, 1.2])
 
 # --- filter controls always visible so the log opens pre-filtered ----------
-with _el_c2:
+with _el_c1:
     _el_type = st.selectbox(
         "Type", ["All", "Deployments", "Releases", "Commits"], key="el_type"
     )
-with _el_c3:
+with _el_c2:
     _el_env = st.selectbox(
         "Env", ["(all)", "prd", "uat", "qc", "dev"], key="el_env"
     )
-with _el_c4:
+with _el_c3:
     _el_limit = st.selectbox(
         "Show", [50, 100, 250], key="el_limit"
     )
