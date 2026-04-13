@@ -61,13 +61,13 @@ IDX = {
 CACHE_TTL = 300  # seconds — 5 minutes balances freshness vs cluster load
 ES_TIMEOUT = 60  # seconds for individual search calls
 
-# Mission Control palette — warm amber / cyan accents on dark charcoal
-C_SUCCESS = "#34d399"
-C_DANGER  = "#f87171"
-C_WARN    = "#f59e0b"
-C_INFO    = "#60a5fa"
-C_ACCENT  = "#f59e0b"
-C_MUTED   = "#5a6178"
+# Bright vivid palette — high contrast on white
+C_SUCCESS = "#059669"
+C_DANGER  = "#dc2626"
+C_WARN    = "#d97706"
+C_INFO    = "#2563eb"
+C_ACCENT  = "#4f46e5"
+C_MUTED   = "#8890a4"
 
 STATUS_COLORS = {
     "SUCCESS":    C_SUCCESS, "SUCCEEDED": C_SUCCESS, "Success":   C_SUCCESS,
@@ -101,479 +101,445 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
-
-/* -------- CSS custom properties — Mission Control palette -------- */
+/* -------- CSS custom properties — Bright ops palette -------- */
 :root {
-    --mc-bg:        #0f1117;
-    --mc-surface:   #181b24;
-    --mc-surface2:  #1e2230;
-    --mc-border:    #2a2f3e;
-    --mc-border-hi: #3d4459;
-    --mc-text:      #e8eaf0;
-    --mc-text-dim:  #8b92a8;
-    --mc-text-mute: #5a6178;
-    --mc-amber:     #f59e0b;
-    --mc-amber-dim: #b45309;
-    --mc-amber-bg:  rgba(245,158,11,.08);
-    --mc-green:     #34d399;
-    --mc-green-bg:  rgba(52,211,153,.08);
-    --mc-red:       #f87171;
-    --mc-red-bg:    rgba(248,113,113,.08);
-    --mc-blue:      #60a5fa;
-    --mc-blue-bg:   rgba(96,165,250,.08);
-    --mc-cyan:      #22d3ee;
-    --mc-mono:      'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-    --mc-sans:      'DM Sans', 'Nunito Sans', system-ui, sans-serif;
+    --cc-surface:   #ffffff;
+    --cc-surface2:  #f7f8fb;
+    --cc-border:    #e3e6ee;
+    --cc-border-hi: #c7cce0;
+    --cc-text:      #1a1d2e;
+    --cc-text-dim:  #4a5068;
+    --cc-text-mute: #8890a4;
+    --cc-accent:    #4f46e5;
+    --cc-accent-lt: #eef2ff;
+    --cc-accent-bg: rgba(79,70,229,.06);
+    --cc-teal:      #0d9488;
+    --cc-teal-lt:   #ccfbf1;
+    --cc-teal-bg:   rgba(13,148,136,.07);
+    --cc-green:     #059669;
+    --cc-green-lt:  #d1fae5;
+    --cc-green-bg:  rgba(5,150,105,.07);
+    --cc-red:       #dc2626;
+    --cc-red-lt:    #fee2e2;
+    --cc-red-bg:    rgba(220,38,38,.06);
+    --cc-amber:     #d97706;
+    --cc-amber-lt:  #fef3c7;
+    --cc-amber-bg:  rgba(217,119,6,.06);
+    --cc-blue:      #2563eb;
+    --cc-blue-lt:   #dbeafe;
+    --cc-blue-bg:   rgba(37,99,235,.06);
+    --cc-mono:      'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    --cc-sans:      system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
-/* -------- Layout -------- */
+/* -------- Layout — page content only, no sidebar/header overrides -------- */
 .main .block-container {
     padding-top: 1.4rem;
     padding-bottom: 3rem;
     max-width: 1680px;
 }
-.main, [data-testid="stAppViewContainer"],
-[data-testid="stApp"],
-[data-testid="stHeader"],
-section[data-testid="stSidebar"],
-.stApp {
-    background-color: var(--mc-bg) !important;
-    color: var(--mc-text) !important;
-}
-h1, h2, h3, h4 {
-    font-family: var(--mc-sans);
-    letter-spacing: -0.025em;
-    color: var(--mc-text) !important;
-}
-p, span, div, label, li {
-    font-family: var(--mc-sans);
-}
-
-/* -------- Scanline overlay — subtle CRT feel -------- */
-.main .block-container::before {
-    content: '';
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(0,0,0,0.03) 2px,
-        rgba(0,0,0,0.03) 4px
-    );
-    pointer-events: none;
-    z-index: 9999;
-}
 
 /* -------- Command bar -------- */
 .cmdbar-label {
-    font-size: .65rem; letter-spacing: .14em;
-    text-transform: uppercase; color: var(--mc-text-mute);
+    font-size: .68rem; letter-spacing: .10em;
+    text-transform: uppercase; color: var(--cc-text-mute);
     font-weight: 600; margin-bottom: 4px;
-    font-family: var(--mc-mono);
 }
 
-/* -------- KPI cards — dark surface with amber glow -------- */
+/* -------- KPI cards — bright, vivid top accent stripe -------- */
 .kpi {
-    background: var(--mc-surface);
-    border: 1px solid var(--mc-border);
-    border-radius: 8px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
     padding: 18px 22px;
     height: 100%;
-    box-shadow: 0 0 1px rgba(245,158,11,0.1), 0 2px 8px rgba(0,0,0,0.3);
-    transition: all .22s cubic-bezier(.4,0,.2,1);
+    box-shadow: 0 1px 3px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.03);
+    transition: all .2s cubic-bezier(.4,0,.2,1);
     position: relative;
     overflow: hidden;
 }
 .kpi::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, var(--mc-amber), var(--mc-cyan));
-    opacity: 0; transition: opacity .22s ease;
-}
-.kpi::after {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-    background: radial-gradient(ellipse at top left, rgba(245,158,11,0.04), transparent 70%);
-    pointer-events: none;
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--cc-accent), var(--cc-teal));
+    opacity: 0; transition: opacity .2s ease;
 }
 .kpi:hover {
     transform: translateY(-2px);
-    border-color: var(--mc-amber-dim);
-    box-shadow: 0 0 20px rgba(245,158,11,0.12), 0 4px 16px rgba(0,0,0,0.4);
+    border-color: var(--cc-accent);
+    box-shadow: 0 4px 20px rgba(79,70,229,.12), 0 1px 3px rgba(0,0,0,.04);
 }
 .kpi:hover::before { opacity: 1; }
 .kpi .label {
-    font-size: .62rem; text-transform: uppercase; letter-spacing: .14em;
-    color: var(--mc-text-mute); font-weight: 600;
+    font-size: .68rem; text-transform: uppercase; letter-spacing: .10em;
+    color: var(--cc-text-mute); font-weight: 600;
     display: flex; align-items: center; gap: 6px;
-    font-family: var(--mc-mono);
 }
 .kpi .value {
     font-size: 2.05rem; font-weight: 700; line-height: 1.1; margin-top: 6px;
-    color: var(--mc-text) !important;
+    color: var(--cc-text) !important;
     font-variant-numeric: tabular-nums;
-    font-family: var(--mc-mono);
+    font-family: var(--cc-mono);
 }
-.kpi .delta {
-    font-size: .78rem; margin-top: 6px; font-weight: 500;
-    font-family: var(--mc-mono);
-}
-.kpi .delta.up   { color: var(--mc-green) !important; }
-.kpi .delta.dn   { color: var(--mc-red) !important; }
-.kpi .delta.flat { color: var(--mc-text-mute) !important; }
+.kpi .delta { font-size: .80rem; margin-top: 6px; font-weight: 500; }
+.kpi .delta.up   { color: var(--cc-green) !important; }
+.kpi .delta.dn   { color: var(--cc-red) !important; }
+.kpi .delta.flat { color: var(--cc-text-mute) !important; }
 .kpi .delta .arrow { display: inline-block; margin-right: 3px; }
 
-/* -------- Section headers — industrial divider -------- */
+/* -------- Section headers — colored left accent -------- */
 .section {
-    margin-top: 38px; margin-bottom: 12px;
+    margin-top: 34px; margin-bottom: 10px;
     display: flex; align-items: center; justify-content: space-between;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--mc-border);
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--cc-border);
     position: relative;
 }
 .section::after {
-    content: ''; position: absolute; bottom: -1px; left: 0; width: 60px; height: 2px;
-    background: var(--mc-amber);
+    content: ''; position: absolute; bottom: -2px; left: 0; width: 48px; height: 2px;
+    background: var(--cc-accent);
 }
 .section .title-wrap { display: flex; align-items: center; gap: 12px; }
 .section h2 {
-    margin: 0; font-size: 1.1rem; font-weight: 700;
-    color: var(--mc-text) !important;
-    font-family: var(--mc-mono);
-    text-transform: uppercase;
-    letter-spacing: .06em;
+    margin: 0; font-size: 1.15rem; font-weight: 700;
+    color: var(--cc-text) !important;
+    letter-spacing: -0.01em;
 }
 .section .badge {
-    font-size: .60rem; letter-spacing: .14em; text-transform: uppercase;
-    padding: 3px 10px; border-radius: 4px;
-    background: var(--mc-amber-bg);
-    color: var(--mc-amber); font-weight: 700;
-    border: 1px solid rgba(245,158,11,.25);
-    font-family: var(--mc-mono);
+    font-size: .66rem; letter-spacing: .10em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 6px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent); font-weight: 700;
+    border: 1px solid rgba(79,70,229,.18);
 }
-.section .hint {
-    font-size: .75rem; color: var(--mc-text-mute);
-    font-family: var(--mc-mono);
-}
+.section .hint { font-size: .78rem; color: var(--cc-text-mute); }
 
-/* -------- Alert ribbon — dark variant with glowing left bar -------- */
+/* -------- Alert ribbon -------- */
 .alert {
-    padding: 10px 14px; border-radius: 6px; margin-bottom: 7px;
-    border-left: 3px solid var(--mc-amber);
-    background: var(--mc-surface);
-    font-size: .86rem;
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 7px;
+    border-left: 4px solid var(--cc-amber);
+    background: var(--cc-amber-lt);
+    font-size: .88rem;
     display: flex; align-items: center; gap: 12px;
-    color: var(--mc-text);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    color: var(--cc-text);
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
 }
 .alert .icon {
-    width: 28px; height: 28px; border-radius: 5px;
+    width: 28px; height: 28px; border-radius: 7px;
     display: flex; align-items: center; justify-content: center;
     font-weight: 800; font-size: .82rem; flex-shrink: 0;
-    background: var(--mc-amber) !important; color: #000 !important;
-    font-family: var(--mc-mono);
+    background: var(--cc-amber) !important; color: #fff !important;
 }
 /* danger */
-.alert.danger  { border-left-color: var(--mc-red) !important; background: var(--mc-red-bg) !important; }
-.alert.danger .icon { background: var(--mc-red) !important; color: #000 !important; }
-.alert.danger b  { color: var(--mc-red) !important; }
+.alert.danger  { border-left-color: var(--cc-red) !important; background: var(--cc-red-lt) !important; }
+.alert.danger .icon { background: var(--cc-red) !important; color: #fff !important; }
+.alert.danger b  { color: #991b1b !important; }
 /* warning */
-.alert.warning { border-left-color: var(--mc-amber) !important; background: var(--mc-amber-bg) !important; }
-.alert.warning .icon { background: var(--mc-amber) !important; color: #000 !important; }
-.alert.warning b { color: var(--mc-amber) !important; }
+.alert.warning { border-left-color: var(--cc-amber) !important; background: var(--cc-amber-lt) !important; }
+.alert.warning .icon { background: var(--cc-amber) !important; color: #fff !important; }
+.alert.warning b { color: #92400e !important; }
 /* info */
-.alert.info    { border-left-color: var(--mc-blue) !important; background: var(--mc-blue-bg) !important; }
-.alert.info .icon { background: var(--mc-blue) !important; color: #000 !important; }
-.alert.info b  { color: var(--mc-blue) !important; }
+.alert.info    { border-left-color: var(--cc-blue) !important; background: var(--cc-blue-lt) !important; }
+.alert.info .icon { background: var(--cc-blue) !important; color: #fff !important; }
+.alert.info b  { color: #1e40af !important; }
 /* success */
-.alert.success { border-left-color: var(--mc-green) !important; background: var(--mc-green-bg) !important; }
-.alert.success .icon { background: var(--mc-green) !important; color: #000 !important; }
-.alert.success b { color: var(--mc-green) !important; }
+.alert.success { border-left-color: var(--cc-green) !important; background: var(--cc-green-lt) !important; }
+.alert.success .icon { background: var(--cc-green) !important; color: #fff !important; }
+.alert.success b { color: #065f46 !important; }
 /* shared */
 .alert b   { font-weight: 700; }
-.alert .sub { font-size: .80rem; color: var(--mc-text-dim) !important; margin-left: 4px; }
+.alert .sub { font-size: .82rem; color: var(--cc-text-dim) !important; margin-left: 4px; }
 
 /* -------- Insight / learn panel -------- */
 .learn {
-    background: var(--mc-surface2);
-    border-left: 3px solid var(--mc-amber);
-    border-radius: 6px;
+    background: var(--cc-accent-lt);
+    border-left: 3px solid var(--cc-accent);
+    border-radius: 10px;
     padding: 11px 16px;
-    font-size: .84rem; color: var(--mc-text-dim);
+    font-size: .86rem; color: var(--cc-text-dim);
     margin: 4px 0 18px 0;
-    font-family: var(--mc-sans);
 }
-.learn b { color: var(--mc-text); }
+.learn b { color: var(--cc-text); }
 
 /* -------- Funnel visual -------- */
 .funnel-wrap {
-    background: var(--mc-surface);
-    border: 1px solid var(--mc-border);
-    border-radius: 8px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
     padding: 20px 24px;
     height: 100%;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
 }
 .funnel-stage {
     display: flex; justify-content: space-between; align-items: baseline;
     padding: 10px 0;
-    border-bottom: 1px solid var(--mc-border);
+    border-bottom: 1px dashed var(--cc-border);
 }
 .funnel-stage:last-child { border-bottom: none; }
-.funnel-stage .name {
-    color: var(--mc-text-dim); font-size: .85rem; font-weight: 500;
-    font-family: var(--mc-sans);
-}
+.funnel-stage .name { color: var(--cc-text-dim); font-size: .90rem; font-weight: 500; }
 .funnel-stage .value {
-    font-size: 1.35rem; font-weight: 700; color: var(--mc-text);
+    font-size: 1.35rem; font-weight: 700; color: var(--cc-text);
     font-variant-numeric: tabular-nums;
-    font-family: var(--mc-mono);
+    font-family: var(--cc-mono);
 }
-.funnel-stage .conv {
-    font-size: .72rem; color: var(--mc-text-mute); margin-left: 8px;
-    font-family: var(--mc-mono);
-}
+.funnel-stage .conv { font-size: .75rem; color: var(--cc-text-mute); margin-left: 8px; }
 .funnel-bar {
-    height: 4px; border-radius: 2px; margin-top: 6px;
-    background: linear-gradient(90deg, var(--mc-amber), var(--mc-cyan));
-    opacity: 0.6;
+    height: 6px; border-radius: 3px; margin-top: 6px;
+    background: linear-gradient(90deg, var(--cc-accent), var(--cc-teal));
+    opacity: 0.7;
 }
 
 /* -------- Pills -------- */
 .pill {
     display: inline-block;
-    background: var(--mc-surface2);
-    color: var(--mc-text-dim);
-    font-size: .68rem;
+    background: var(--cc-surface2);
+    color: var(--cc-text-dim);
+    font-size: .70rem;
     padding: 3px 10px;
-    border-radius: 4px;
+    border-radius: 999px;
     margin-right: 6px;
-    font-weight: 600;
-    border: 1px solid var(--mc-border);
-    font-family: var(--mc-mono);
+    font-weight: 500;
+    border: 1px solid var(--cc-border);
 }
-.pill.green { background: var(--mc-green-bg) !important;  color: var(--mc-green) !important; border-color: rgba(52,211,153,.3) !important; }
-.pill.red   { background: var(--mc-red-bg) !important;    color: var(--mc-red) !important;   border-color: rgba(248,113,113,.3) !important; }
-.pill.amber { background: var(--mc-amber-bg) !important;  color: var(--mc-amber) !important; border-color: rgba(245,158,11,.3) !important; }
-.pill.blue  { background: var(--mc-blue-bg) !important;   color: var(--mc-blue) !important;  border-color: rgba(96,165,250,.3) !important; }
+.pill.green { background: var(--cc-green-lt) !important;  color: var(--cc-green) !important; border-color: rgba(5,150,105,.25) !important; }
+.pill.red   { background: var(--cc-red-lt) !important;    color: var(--cc-red) !important;   border-color: rgba(220,38,38,.25) !important; }
+.pill.amber { background: var(--cc-amber-lt) !important;  color: var(--cc-amber) !important; border-color: rgba(217,119,6,.25) !important; }
+.pill.blue  { background: var(--cc-blue-lt) !important;   color: var(--cc-blue) !important;  border-color: rgba(37,99,235,.25) !important; }
 
-/* -------- Streamlit widget overrides — dark -------- */
+/* -------- Streamlit widget label overrides -------- */
 div[data-testid="stSelectbox"] label,
 div[data-testid="stTextInput"] label,
 div[data-testid="stDateInput"] label {
-    font-size: .62rem !important;
+    font-size: .70rem !important;
     text-transform: uppercase;
-    letter-spacing: .12em;
-    color: var(--mc-text-mute) !important;
+    letter-spacing: .10em;
+    color: var(--cc-text-mute) !important;
     font-weight: 600 !important;
-    font-family: var(--mc-mono) !important;
 }
-div[data-testid="stSelectbox"] [data-baseweb="select"],
-div[data-testid="stTextInput"] input {
-    background-color: var(--mc-surface) !important;
-    border-color: var(--mc-border) !important;
-    color: var(--mc-text) !important;
-}
-.stDataFrame {
-    border-radius: 6px; overflow: hidden;
-    border: 1px solid var(--mc-border) !important;
-}
+.stDataFrame { border-radius: 10px; overflow: hidden; }
 
-/* -------- Hide Streamlit chrome -------- */
-footer, #MainMenu { visibility: hidden; }
-
-/* -------- Streamlit toggle / button overrides -------- */
-div[data-testid="stCheckbox"] label span,
-.stToggle label span {
-    color: var(--mc-text-dim) !important;
-}
-button[kind="secondary"], button[kind="primary"] {
-    background: var(--mc-surface2) !important;
-    border: 1px solid var(--mc-border) !important;
-    color: var(--mc-text) !important;
-}
-button[kind="secondary"]:hover, button[kind="primary"]:hover {
-    border-color: var(--mc-amber) !important;
-    color: var(--mc-amber) !important;
-}
+/* -------- Hide Streamlit footer -------- */
+footer { visibility: hidden; }
 
 /* =============================================================== *
- *  COLOR FIDELITY OVERRIDES — forced with !important               *
+ *  COLOR FIDELITY OVERRIDES                                        *
  * =============================================================== */
 
 /* KPI deltas */
-.kpi .delta.up   { color: var(--mc-green) !important; }
-.kpi .delta.dn   { color: var(--mc-red) !important; }
-.kpi .delta.flat { color: var(--mc-text-mute) !important; }
-.kpi .value      { color: var(--mc-text) !important; }
-.kpi .label      { color: var(--mc-text-mute) !important; }
+.kpi .delta.up   { color: var(--cc-green) !important; }
+.kpi .delta.dn   { color: var(--cc-red) !important; }
+.kpi .delta.flat { color: var(--cc-text-mute) !important; }
+.kpi .value      { color: var(--cc-text) !important; }
+.kpi .label      { color: var(--cc-text-mute) !important; }
 
 /* Alert ribbon */
-.alert          { color: var(--mc-text) !important; }
+.alert          { color: var(--cc-text) !important; }
 .alert b        { font-weight: 700 !important; }
-.alert .sub     { color: var(--mc-text-dim) !important; }
+.alert .sub     { color: var(--cc-text-dim) !important; }
 
-.alert.success       { border-left-color: var(--mc-green) !important; background: var(--mc-green-bg) !important; }
-.alert.success .icon { background: var(--mc-green) !important; color: #000 !important; }
-.alert.success b     { color: var(--mc-green) !important; }
+.alert.success       { border-left-color: var(--cc-green) !important; background: var(--cc-green-lt) !important; }
+.alert.success .icon { background: var(--cc-green) !important; color: #fff !important; }
+.alert.success b     { color: #065f46 !important; }
 
-.alert.danger        { border-left-color: var(--mc-red) !important; background: var(--mc-red-bg) !important; }
-.alert.danger .icon  { background: var(--mc-red) !important; color: #000 !important; }
-.alert.danger b      { color: var(--mc-red) !important; }
+.alert.danger        { border-left-color: var(--cc-red) !important; background: var(--cc-red-lt) !important; }
+.alert.danger .icon  { background: var(--cc-red) !important; color: #fff !important; }
+.alert.danger b      { color: #991b1b !important; }
 
-.alert.warning       { border-left-color: var(--mc-amber) !important; background: var(--mc-amber-bg) !important; }
-.alert.warning .icon { background: var(--mc-amber) !important; color: #000 !important; }
-.alert.warning b     { color: var(--mc-amber) !important; }
+.alert.warning       { border-left-color: var(--cc-amber) !important; background: var(--cc-amber-lt) !important; }
+.alert.warning .icon { background: var(--cc-amber) !important; color: #fff !important; }
+.alert.warning b     { color: #92400e !important; }
 
-.alert.info          { border-left-color: var(--mc-blue) !important; background: var(--mc-blue-bg) !important; }
-.alert.info .icon    { background: var(--mc-blue) !important; color: #000 !important; }
-.alert.info b        { color: var(--mc-blue) !important; }
+.alert.info          { border-left-color: var(--cc-blue) !important; background: var(--cc-blue-lt) !important; }
+.alert.info .icon    { background: var(--cc-blue) !important; color: #fff !important; }
+.alert.info b        { color: #1e40af !important; }
 
 /* Pills */
-.pill.green { background: var(--mc-green-bg) !important;  color: var(--mc-green) !important; border-color: rgba(52,211,153,.3) !important; }
-.pill.red   { background: var(--mc-red-bg) !important;    color: var(--mc-red) !important;   border-color: rgba(248,113,113,.3) !important; }
-.pill.amber { background: var(--mc-amber-bg) !important;  color: var(--mc-amber) !important; border-color: rgba(245,158,11,.3) !important; }
-.pill.blue  { background: var(--mc-blue-bg) !important;   color: var(--mc-blue) !important;  border-color: rgba(96,165,250,.3) !important; }
+.pill.green { background: var(--cc-green-lt) !important;  color: var(--cc-green) !important; border-color: rgba(5,150,105,.25) !important; }
+.pill.red   { background: var(--cc-red-lt) !important;    color: var(--cc-red) !important;   border-color: rgba(220,38,38,.25) !important; }
+.pill.amber { background: var(--cc-amber-lt) !important;  color: var(--cc-amber) !important; border-color: rgba(217,119,6,.25) !important; }
+.pill.blue  { background: var(--cc-blue-lt) !important;   color: var(--cc-blue) !important;  border-color: rgba(37,99,235,.25) !important; }
 
 /* Streamlit native alerts */
-div[data-testid="stAlert"][data-baseweb="notification"] { border-radius: 6px !important; }
+div[data-testid="stAlert"][data-baseweb="notification"] { border-radius: 10px !important; }
 div[data-testid="stAlertContentSuccess"],
 div[data-baseweb="notification"][kind="positive"] {
-    background: var(--mc-green-bg) !important;
-    border: 1px solid rgba(52,211,153,.3) !important;
-    color: var(--mc-green) !important;
+    background: var(--cc-green-lt) !important;
+    border: 1px solid rgba(5,150,105,.25) !important;
+    color: #065f46 !important;
 }
 div[data-testid="stAlertContentInfo"],
 div[data-baseweb="notification"][kind="info"] {
-    background: var(--mc-blue-bg) !important;
-    border: 1px solid rgba(96,165,250,.3) !important;
-    color: var(--mc-blue) !important;
+    background: var(--cc-blue-lt) !important;
+    border: 1px solid rgba(37,99,235,.25) !important;
+    color: #1e40af !important;
 }
 div[data-testid="stAlertContentWarning"],
 div[data-baseweb="notification"][kind="warning"] {
-    background: var(--mc-amber-bg) !important;
-    border: 1px solid rgba(245,158,11,.3) !important;
-    color: var(--mc-amber) !important;
+    background: var(--cc-amber-lt) !important;
+    border: 1px solid rgba(217,119,6,.25) !important;
+    color: #92400e !important;
 }
 div[data-testid="stAlertContentError"],
 div[data-baseweb="notification"][kind="negative"] {
-    background: var(--mc-red-bg) !important;
-    border: 1px solid rgba(248,113,113,.3) !important;
-    color: var(--mc-red) !important;
+    background: var(--cc-red-lt) !important;
+    border: 1px solid rgba(220,38,38,.25) !important;
+    color: #991b1b !important;
 }
 
 /* Popover trigger buttons */
 div[data-testid="stPopover"] button {
-    background: var(--mc-surface2) !important;
-    border: 1px solid var(--mc-border) !important;
-    color: var(--mc-amber) !important;
+    background: var(--cc-accent-lt) !important;
+    border: 1px solid rgba(79,70,229,.18) !important;
+    color: var(--cc-accent) !important;
     font-weight: 600 !important;
-    font-family: var(--mc-mono) !important;
-    font-size: .78rem !important;
 }
 div[data-testid="stPopover"] button:hover {
-    background: var(--mc-amber-bg) !important;
-    border-color: var(--mc-amber) !important;
-    color: var(--mc-amber) !important;
+    background: rgba(79,70,229,.12) !important;
+    border-color: var(--cc-accent) !important;
 }
 
 /* -------- Section nav chip strip -------- */
 .navchips {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 12px 0 14px;
     margin: 6px 0 10px;
-    border-top: 1px solid var(--mc-border);
-    border-bottom: 1px solid var(--mc-border);
+    border-top: 1px solid var(--cc-border);
+    border-bottom: 1px solid var(--cc-border);
 }
 .navchips .navlbl {
-    font-size: .58rem; text-transform: uppercase; letter-spacing: .16em;
-    color: var(--mc-text-mute); font-weight: 700; margin-right: 6px;
-    font-family: var(--mc-mono);
+    font-size: .62rem; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--cc-text-mute); font-weight: 700; margin-right: 4px;
 }
 .navchips a {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 12px;
-    background: var(--mc-surface);
-    border: 1px solid var(--mc-border);
-    border-radius: 4px;
-    font-size: .72rem; font-weight: 600;
-    color: var(--mc-text-dim) !important;
+    padding: 5px 13px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 999px;
+    font-size: .76rem; font-weight: 600;
+    color: var(--cc-text-dim) !important;
     text-decoration: none !important;
-    transition: all .16s cubic-bezier(.4,0,.2,1);
-    font-family: var(--mc-mono);
+    transition: all .14s ease;
 }
 .navchips a:hover {
-    background: var(--mc-amber-bg);
-    border-color: var(--mc-amber);
-    color: var(--mc-amber) !important;
+    background: var(--cc-accent-lt);
+    border-color: var(--cc-accent);
+    color: var(--cc-accent) !important;
     transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(245,158,11,.15);
 }
 .navchips a .num {
-    background: var(--mc-surface2); color: var(--mc-text-dim);
-    font-size: .64rem; padding: 0 6px; border-radius: 3px;
+    background: var(--cc-surface2); color: var(--cc-text-dim);
+    font-size: .68rem; padding: 0 6px; border-radius: 999px;
     font-weight: 700;
 }
-.navchips a.crit { background: var(--mc-red-bg); border-color: rgba(248,113,113,.4); color: var(--mc-red) !important; }
-.navchips a.crit .num { background: var(--mc-red); color: #000; }
-.navchips a.warn { background: var(--mc-amber-bg); border-color: rgba(245,158,11,.4); color: var(--mc-amber) !important; }
-.navchips a.warn .num { background: var(--mc-amber); color: #000; }
+.navchips a.crit { background: var(--cc-red-lt); border-color: rgba(220,38,38,.35); color: var(--cc-red) !important; }
+.navchips a.crit .num { background: var(--cc-red); color: #fff; }
+.navchips a.warn { background: var(--cc-amber-lt); border-color: rgba(217,119,6,.35); color: var(--cc-amber) !important; }
+.navchips a.warn .num { background: var(--cc-amber); color: #fff; }
 
 /* -------- Anchor scroll offset -------- */
 .anchor { display: block; position: relative; top: -12px; visibility: hidden; }
 
-/* -------- Streamlit tab overrides — dark -------- */
-button[data-baseweb="tab"] {
-    color: var(--mc-text-dim) !important;
-    font-family: var(--mc-mono) !important;
-    font-size: .78rem !important;
-}
-button[data-baseweb="tab"][aria-selected="true"] {
-    color: var(--mc-amber) !important;
-    border-bottom-color: var(--mc-amber) !important;
-}
-div[data-baseweb="tab-panel"] {
-    background: transparent !important;
-}
-
-/* -------- Streamlit expander — dark -------- */
-details[data-testid="stExpander"] {
-    background: var(--mc-surface) !important;
-    border: 1px solid var(--mc-border) !important;
-    border-radius: 6px !important;
-}
-details[data-testid="stExpander"] summary span {
-    color: var(--mc-text) !important;
-}
-
-/* -------- Streamlit caption text -------- */
-.stCaption, [data-testid="stCaptionContainer"] {
-    color: var(--mc-text-mute) !important;
-    font-family: var(--mc-mono) !important;
-    font-size: .72rem !important;
-}
-
-/* -------- Streamlit markdown text defaults -------- */
-.stMarkdown, .stMarkdown p, [data-testid="stMarkdownContainer"] p {
-    color: var(--mc-text-dim) !important;
-}
-.stMarkdown strong, [data-testid="stMarkdownContainer"] strong {
-    color: var(--mc-text) !important;
-}
-
-/* -------- Metric widget -------- */
-[data-testid="stMetricValue"] {
-    color: var(--mc-text) !important;
-    font-family: var(--mc-mono) !important;
-}
-[data-testid="stMetricLabel"] {
-    color: var(--mc-text-mute) !important;
-    font-family: var(--mc-mono) !important;
-}
-
 /* -------- Pulse animation for status dot -------- */
-@keyframes mc-pulse {
-    0%, 100% { box-shadow: 0 0 4px var(--mc-amber); }
-    50%      { box-shadow: 0 0 12px var(--mc-amber), 0 0 24px rgba(245,158,11,0.3); }
+@keyframes cc-pulse {
+    0%, 100% { box-shadow: 0 0 4px var(--cc-green); }
+    50%      { box-shadow: 0 0 10px var(--cc-green), 0 0 20px rgba(5,150,105,0.25); }
+}
+
+/* -------- HUD: Health ring (SVG-based circular progress) -------- */
+.hud-ring {
+    display: flex; align-items: center; gap: 16px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.hud-ring svg { flex-shrink: 0; }
+.hud-ring .score-value {
+    font-size: 1.7rem; font-weight: 800; font-family: var(--cc-mono);
+    color: var(--cc-text);
+}
+.hud-ring .score-label {
+    font-size: .70rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--cc-text-mute); font-weight: 600; margin-top: 2px;
+}
+
+/* -------- HUD: Stat bar (mini KPI row inside a card) -------- */
+.hud-stat {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--cc-border);
+}
+.hud-stat:last-child { border-bottom: none; }
+.hud-stat .stat-icon {
+    width: 24px; height: 24px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .72rem; font-weight: 700;
+}
+.hud-stat .stat-label {
+    flex: 1; font-size: .80rem; color: var(--cc-text-dim);
+}
+.hud-stat .stat-val {
+    font-size: .95rem; font-weight: 700; color: var(--cc-text);
+    font-family: var(--cc-mono); font-variant-numeric: tabular-nums;
+}
+
+/* -------- HUD: Streak counter -------- */
+.hud-streak {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: .78rem; font-weight: 700;
+    background: var(--cc-green-lt);
+    color: var(--cc-green);
+    border: 1px solid rgba(5,150,105,.2);
+}
+.hud-streak.warn { background: var(--cc-amber-lt); color: var(--cc-amber); border-color: rgba(217,119,6,.2); }
+.hud-streak.bad  { background: var(--cc-red-lt);   color: var(--cc-red);   border-color: rgba(220,38,38,.2); }
+
+/* -------- HUD: XP / progress bar -------- */
+.hud-xp {
+    height: 8px; border-radius: 4px; overflow: hidden;
+    background: var(--cc-surface2);
+}
+.hud-xp .fill {
+    height: 100%; border-radius: 4px;
+    transition: width .4s ease;
+}
+
+/* -------- HUD: Role mission card -------- */
+.hud-mission {
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.hud-mission .mission-title {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--cc-text-mute); font-weight: 700; margin-bottom: 10px;
+}
+
+/* -------- HUD: Quest / action item -------- */
+.hud-quest {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; margin-bottom: 6px;
+    border-radius: 8px;
+    background: var(--cc-surface2);
+    border-left: 3px solid var(--cc-border);
+    transition: all .15s ease;
+}
+.hud-quest:hover { border-left-color: var(--cc-accent); background: var(--cc-accent-lt); }
+.hud-quest .quest-prio {
+    width: 22px; height: 22px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .65rem; font-weight: 800; color: #fff;
+}
+.hud-quest .quest-text { flex: 1; font-size: .82rem; color: var(--cc-text-dim); }
+.hud-quest .quest-text b { color: var(--cc-text); }
+.hud-quest .quest-val {
+    font-size: .85rem; font-weight: 700; font-family: var(--cc-mono);
+    color: var(--cc-text);
 }
 </style>
 """
@@ -927,6 +893,18 @@ def range_filter(field: str, start: datetime, end: datetime) -> dict:
 # COMMAND BAR
 # =============================================================================
 
+ROLES = ["Admin", "Developer", "QC", "Operator"]
+ROLE_ICONS = {"Admin": "🛡", "Developer": "⌨", "QC": "🔬", "Operator": "🚀"}
+ROLE_COLORS = {"Admin": "#4f46e5", "Developer": "#2563eb", "QC": "#7c3aed", "Operator": "#059669"}
+# Map role → inventory team field(s) used to filter projects
+ROLE_TEAM_FIELDS: dict[str, list[str]] = {
+    "Admin":     [],                                          # sees everything
+    "Developer": ["dev_team.keyword"],
+    "QC":        ["qc_team.keyword"],
+    "Operator":  ["uat_team.keyword", "prd_team.keyword"],    # usually both
+}
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _load_inventory_choices() -> tuple[list[str], list[str]]:
     try:
@@ -944,91 +922,156 @@ def _load_inventory_choices() -> tuple[list[str], list[str]]:
     return companies, projects
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_teams_for_role(role: str) -> list[str]:
+    """Return sorted unique team names for the given role from inventory."""
+    fields = ROLE_TEAM_FIELDS.get(role, [])
+    if not fields:
+        return []
+    teams: set[str] = set()
+    for f in fields:
+        try:
+            teams.update(composite_terms(IDX["inventory"], f, {"match_all": {}}).keys())
+        except Exception:
+            pass
+    return sorted(t for t in teams if t)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_team_applications(role: str, team: str) -> list[str]:
+    """Return list of application names assigned to this team for this role."""
+    fields = ROLE_TEAM_FIELDS.get(role, [])
+    if not fields or not team:
+        return []
+    # OR across the role's team fields (Operator has uat_team + prd_team)
+    should_clauses = [{"term": {f: team}} for f in fields]
+    query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
+    try:
+        return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
+    except Exception:
+        return []
+
+
 _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
-# ── Row 1: title + company/project visual selectors + toggles ───────────────
-_cb1 = st.columns([1.8, 2, 2, 0.7, 0.7, 0.7])
+# ── Detect role & teams from session state (set by the parent multipage app) ─
+_session_roles: list[str] = st.session_state.get("roles") or []
+_session_teams: list[str] = st.session_state.get("teams") or []
+
+# Map session roles to our 4 canonical roles (case-insensitive partial match)
+_ROLE_ALIASES: dict[str, str] = {
+    "admin": "Admin", "devops": "Admin", "administrator": "Admin",
+    "developer": "Developer", "dev": "Developer",
+    "qc": "QC", "quality": "QC", "quality-control": "QC", "quality_control": "QC",
+    "operator": "Operator", "ops": "Operator", "operations": "Operator",
+}
+_detected_roles: list[str] = []
+for _sr in _session_roles:
+    _norm = _sr.strip().lower().replace(" ", "_").replace("-", "_")
+    if _norm in _ROLE_ALIASES:
+        _detected_roles.append(_ROLE_ALIASES[_norm])
+    elif _sr in ROLES:
+        _detected_roles.append(_sr)
+# Deduplicate while preserving order
+_detected_roles = list(dict.fromkeys(_detected_roles)) or ["Admin"]  # fallback
+
+
+# ── Row 1: role view + team + company/project + controls ─────────────────────
+_cb1 = st.columns([1.2, 1.2, 1.5, 1.5, 0.6, 0.6, 0.6])
 
 with _cb1[0]:
-    st.markdown(
-        '<div style="display:flex;align-items:center;gap:10px;padding-top:8px;">'
-        '<span style="width:8px;height:8px;border-radius:50%;background:var(--mc-amber);'
-        'animation:mc-pulse 2.5s ease-in-out infinite;display:inline-block;flex-shrink:0;"></span>'
-        '<span style="font-size:.95rem;font-weight:700;color:var(--mc-text);letter-spacing:.04em;'
-        'font-family:var(--mc-mono);text-transform:uppercase;">'
-        'CI/CD Command Center</span></div>',
-        unsafe_allow_html=True,
-    )
+    # If user has multiple roles, let them pick; otherwise show the one they have
+    if len(_detected_roles) > 1:
+        role_pick = st.selectbox("View as", _detected_roles, index=0, key="role_pick",
+                                 help="Switch between your assigned role views")
+    else:
+        role_pick = _detected_roles[0]
+        st.markdown(f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                    f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Role</div>'
+                    f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
+                    f'{ROLE_ICONS[role_pick]} {role_pick}</div>', unsafe_allow_html=True)
 
 with _cb1[1]:
-    _company_options = [_ALL] + _all_companies
-    _co_idx = st.session_state.get("_co_idx", 0)
-    company_pick = st.selectbox(
-        "Company",
-        _company_options,
-        index=_co_idx,
-        key="company_pick",
-        help=f"{len(_all_companies)} companies in inventory",
-    )
-    company_filter = "" if company_pick == _ALL else company_pick
-    # Visual badge row beneath
-    if _all_companies:
-        _badge_co = "".join(
-            f'<span style="display:inline-block;margin:2px 3px 0 0;padding:1px 8px;'
-            f'border-radius:3px;font-size:0.65rem;font-weight:600;cursor:pointer;'
-            f'font-family:var(--mc-mono);'
-            f'background:{"rgba(245,158,11,.1)" if company_pick==c else "var(--mc-surface2)"};'
-            f'color:{"var(--mc-amber)" if company_pick==c else "var(--mc-text-dim)"};'
-            f'border:1px solid {"rgba(245,158,11,.35)" if company_pick==c else "var(--mc-border)"}">{c}</span>'
-            for c in _all_companies[:8]
-        )
-        st.markdown(f'<div style="line-height:1.6">{_badge_co}</div>', unsafe_allow_html=True)
+    # Teams come from session state; for non-Admin roles we filter by team
+    if _session_teams and role_pick != "Admin":
+        if len(_session_teams) > 1:
+            team_pick = st.selectbox("Team", _session_teams, index=0, key="team_pick")
+        else:
+            team_pick = _session_teams[0]
+            st.markdown(f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                        f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
+                        f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
+                        f'{team_pick}</div>', unsafe_allow_html=True)
+        team_filter = team_pick
+    elif role_pick == "Admin" and _session_teams:
+        # Admin can optionally scope to a team
+        team_pick = st.selectbox("Team", [_ALL] + _session_teams, index=0, key="team_pick",
+                                 help="Admin: optionally filter to a specific team")
+        team_filter = "" if team_pick == _ALL else team_pick
+    else:
+        team_filter = ""
+        st.markdown('<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                    'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
+                    '<div style="font-size:.90rem;color:var(--cc-text-mute)">All teams</div>',
+                    unsafe_allow_html=True)
+
+# Resolve team → application list for scope filtering
+if team_filter:
+    # When Admin scopes to a team, query all team fields (any role assignment counts)
+    _team_role_for_query = role_pick if role_pick != "Admin" else "Admin"
+    _team_apps: list[str] = _load_team_applications(role_pick, team_filter) if role_pick != "Admin" else []
+    if role_pick == "Admin" and team_filter:
+        # Admin + team selected: find apps where this team appears in ANY team field
+        _admin_team_apps: set[str] = set()
+        for _r in ["Developer", "QC", "Operator"]:
+            _admin_team_apps.update(_load_team_applications(_r, team_filter))
+        _team_apps = sorted(_admin_team_apps)
+else:
+    _team_apps = []  # no team-based restriction
 
 with _cb1[2]:
-    # Filter projects by chosen company using inventory
-    if company_filter:
-        _proj_options = [_ALL] + [
-            p for p in _all_projects
-            # keep all — inventory may not have perfect company→project join at this point
-        ]
-    else:
-        _proj_options = [_ALL] + _all_projects
-    project_pick = st.selectbox(
-        "Project",
-        _proj_options,
-        index=0,
-        key="project_pick",
-        help=f"{len(_all_projects)} projects in inventory",
-    )
-    project_filter = "" if project_pick == _ALL else project_pick
-    if _all_projects:
-        _badge_pr = "".join(
-            f'<span style="display:inline-block;margin:2px 3px 0 0;padding:1px 8px;'
-            f'border-radius:3px;font-size:0.65rem;font-weight:600;'
-            f'font-family:var(--mc-mono);'
-            f'background:{"rgba(245,158,11,.1)" if project_pick==p else "var(--mc-surface2)"};'
-            f'color:{"var(--mc-amber)" if project_pick==p else "var(--mc-text-dim)"};'
-            f'border:1px solid {"rgba(245,158,11,.35)" if project_pick==p else "var(--mc-border)"}">{p}</span>'
-            for p in _all_projects[:6]
-        )
-        st.markdown(f'<div style="line-height:1.6">{_badge_pr}</div>', unsafe_allow_html=True)
+    _company_options = [_ALL] + _all_companies
+    company_pick = st.selectbox("Company", _company_options, index=0, key="company_pick",
+                                help=f"{len(_all_companies)} companies in inventory")
+    company_filter = "" if company_pick == _ALL else company_pick
 
 with _cb1[3]:
-    auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
+    _proj_options = [_ALL] + _all_projects
+    project_pick = st.selectbox("Project", _proj_options, index=0, key="project_pick",
+                                help=f"{len(_all_projects)} projects in inventory")
+    project_filter = "" if project_pick == _ALL else project_pick
 
 with _cb1[4]:
-    exclude_svc = st.toggle(
-        "Excl. svc",
-        value=True,
-        help="Exclude service account 'azure_sql' from all commit displays",
-        key="exclude_svc",
-    )
+    auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
 
 with _cb1[5]:
+    exclude_svc = st.toggle("Excl. svc", value=True,
+                            help="Exclude service account 'azure_sql' from all commit displays",
+                            key="exclude_svc")
+
+with _cb1[6]:
     if st.button("↻", help="Clear cache & reload", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+
+# ── Role HUD banner ──────────────────────────────────────────────────────────
+_role_clr = ROLE_COLORS[role_pick]
+_role_icon = ROLE_ICONS[role_pick]
+_team_label = f" · {team_filter}" if team_filter else ""
+_apps_label = f"{len(_team_apps)} applications" if _team_apps else "all applications"
+st.markdown(
+    f'<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;margin:2px 0 6px;'
+    f'border-radius:10px;border:1px solid {_role_clr}20;'
+    f'background:linear-gradient(90deg,{_role_clr}08,transparent 60%);">'
+    f'<span style="font-size:1.3rem">{_role_icon}</span>'
+    f'<span style="font-size:.95rem;font-weight:700;color:{_role_clr}">{role_pick}</span>'
+    f'<span style="font-size:.82rem;color:var(--cc-text-dim)">{_team_label}</span>'
+    f'<span style="margin-left:auto;font-size:.72rem;color:var(--cc-text-mute)">'
+    f'{_apps_label}</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 
 # ── Row 2: time window segmented button group ────────────────────────────────
 _TW_LABELS = list(PRESETS.keys())
@@ -1039,28 +1082,27 @@ st.markdown("""
 <style>
 div[data-testid="stRadio"] > div { flex-wrap: wrap; gap: 4px; }
 div[data-testid="stRadio"] label {
-    background: var(--mc-surface) !important;
-    border: 1px solid var(--mc-border) !important;
-    border-radius: 4px !important;
+    background: var(--cc-surface2) !important;
+    border: 1px solid var(--cc-border) !important;
+    border-radius: 8px !important;
     padding: 4px 12px !important;
-    font-size: 0.72rem !important;
+    font-size: 0.78rem !important;
     font-weight: 600 !important;
-    color: var(--mc-text-dim) !important;
+    color: var(--cc-text-dim) !important;
     cursor: pointer !important;
-    transition: all .14s cubic-bezier(.4,0,.2,1);
-    font-family: var(--mc-mono) !important;
+    transition: all .12s ease;
 }
 div[data-testid="stRadio"] label:has(input:checked) {
-    background: var(--mc-amber-bg) !important;
-    border-color: var(--mc-amber) !important;
-    color: var(--mc-amber) !important;
+    background: var(--cc-accent-lt) !important;
+    border-color: var(--cc-accent) !important;
+    color: var(--cc-accent) !important;
 }
 div[data-testid="stRadio"] label:hover {
-    border-color: var(--mc-border-hi) !important;
-    color: var(--mc-text) !important;
+    border-color: var(--cc-border-hi) !important;
+    color: var(--cc-text) !important;
 }
 div[data-testid="stRadio"] label span { display: none !important; }
-div[data-testid="stRadio"] label p { margin: 0 !important; font-size: 0.72rem !important; }
+div[data-testid="stRadio"] label p { margin: 0 !important; font-size: 0.78rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1109,6 +1151,9 @@ def scope_filters() -> list[dict]:
         fs.append({"term": {"company.keyword": company_filter}})
     if project_filter:
         fs.append({"term": {"project": project_filter}})
+    # Team-based application restriction
+    if _team_apps:
+        fs.append({"terms": {"application": _team_apps}})
     # Always exclude noise/test projects
     fs.append({"bool": {"must_not": [{"terms": {"project": EXCLUDED_PROJECTS}}]}})
     return fs
@@ -1121,6 +1166,9 @@ def scope_filters_inv() -> list[dict]:
         fs.append({"term": {"company.keyword": company_filter}})
     if project_filter:
         fs.append({"term": {"project.keyword": project_filter}})
+    # Team-based application restriction
+    if _team_apps:
+        fs.append({"terms": {"application.keyword": _team_apps}})
     # Always exclude noise/test projects
     fs.append({"bool": {"must_not": [{"terms": {"project.keyword": EXCLUDED_PROJECTS}}]}})
     return fs
@@ -1230,7 +1278,17 @@ deploy_freq_per_day = prd_deploys / days_in_window
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_unified_pending(window_start_iso: str, window_end_iso: str) -> list[dict]:
-    """Return normalised pending request dicts from both request indices."""
+    """Return normalised pending request dicts from both request indices.
+
+    ef-cicd-approval uses a ``stage`` field to distinguish document types:
+      - ``build``              → running build pipeline
+      - ``<env>``              → running deployment on environment <env>
+      - ``request_deploy_<env>`` → pending deployment request for <env>
+      - ``request_promote``    → pending release request (QC management approval)
+
+    Only ``request_deploy_*`` and ``request_promote`` are pending requests;
+    ``build`` and bare env names are running pipelines (not actionable queue items).
+    """
     _w0 = datetime.fromisoformat(window_start_iso)
     _w1 = datetime.fromisoformat(window_end_iso)
     _results: list[dict] = []
@@ -1249,6 +1307,7 @@ def _fetch_unified_pending(window_start_iso: str, window_end_iso: str) -> list[d
             "_idx":    "requests",
             "#":       _s.get("RequestNumber") or _s.get("id") or _h.get("_id"),
             "Type":    _s.get("RequestType") or _s.get("Type") or "—",
+            "Stage":   "—",
             "Requester": _s.get("Requester") or _s.get("requestedBy") or "—",
             "Team":    _s.get("RequesterTeam") or "—",
             "Application": _s.get("application") or _s.get("project") or "—",
@@ -1256,48 +1315,83 @@ def _fetch_unified_pending(window_start_iso: str, window_end_iso: str) -> list[d
             "Age (h)": None,  # filled below
         })
 
-    # ── ef-cicd-approval (legacy) ───────────────────────────────────────────
-    # Try multiple date field names; pending states may differ
-    _APPR_DATE_FIELDS = ["RequestDate", "Created", "CreatedDate", "SubmittedDate", "created", "date"]
-    _APPR_STATUS_FIELDS = ["Status", "status", "ApprovalStatus"]
-    _APPR_PENDING = PENDING_STATUSES + ["OPEN", "open", "Open", "NEW", "new", "New",
-                                         "WAITING", "waiting", "Waiting"]
-    for _df in _APPR_DATE_FIELDS:
-        try:
-            _r2 = es_search(IDX["approval"], {
-                "query": {"bool": {"must_not": [{"terms": {"status": ["CLOSED", "APPROVED", "REJECTED",
-                                                                        "Approved", "Rejected",
-                                                                        "closed", "approved", "rejected"]}}]}},
-                "sort": [{_df: "asc"}],
-            }, size=200)
-            if _r2.get("hits", {}).get("total", {}).get("value", 0) or _r2.get("hits", {}).get("hits"):
-                for _h in _r2.get("hits", {}).get("hits", []):
-                    _s = _h["_source"]
-                    _st_val = next((_s.get(f) for f in _APPR_STATUS_FIELDS if _s.get(f)), "")
-                    if str(_st_val).upper() in [p.upper() for p in _APPR_PENDING]:
-                        _date_val = next((_s.get(f) for f in _APPR_DATE_FIELDS if _s.get(f)), "")
-                        _ts = parse_dt(_date_val)
-                        if _ts is None or not (_w0.replace(tzinfo=_w0.tzinfo or timezone.utc) <= _ts <= _w1.replace(tzinfo=_w1.tzinfo or timezone.utc)):
-                            continue
-                        _results.append({
-                            "_idx":    "approval",
-                            "#":       _s.get("ApprovalId") or _s.get("RequestNumber") or _s.get("id") or _h.get("_id"),
-                            "Type":    _s.get("ApprovalType") or _s.get("RequestType") or _s.get("Type") or "approval",
-                            "Requester": _s.get("RequestedBy") or _s.get("Requester") or _s.get("requestedBy") or "—",
-                            "Team":    _s.get("Team") or _s.get("RequesterTeam") or "—",
-                            "Application": _s.get("application") or _s.get("project") or "—",
-                            "Date":    _date_val,
-                            "Age (h)": None,
-                        })
-                break  # found working date field — stop trying
-        except Exception:
-            continue
+    # ── ef-cicd-approval — use the stage field ─────────────────────────────
+    # Pending requests have stage matching request_deploy_* or request_promote.
+    _r2 = es_search(IDX["approval"], {
+        "query": {"bool": {"filter": [
+            {"bool": {"should": [
+                {"prefix": {"stage": "request_deploy_"}},
+                {"term": {"stage": "request_promote"}},
+            ], "minimum_should_match": 1}},
+        ]}},
+        "sort": [{"RequestDate": {"order": "asc", "unmapped_type": "date"}}],
+    }, size=200)
+    for _h in _r2.get("hits", {}).get("hits", []):
+        _s = _h["_source"]
+        _stage = _s.get("stage") or "—"
+        # Derive a human-readable type from the stage
+        if _stage == "request_promote":
+            _type_label = "Release request"
+        elif _stage.startswith("request_deploy_"):
+            _env = _stage.replace("request_deploy_", "")
+            _type_label = f"Deploy request ({_env})"
+        else:
+            _type_label = _s.get("ApprovalType") or _s.get("Type") or "approval"
+        _date_val = (_s.get("RequestDate") or _s.get("Created")
+                     or _s.get("CreatedDate") or _s.get("SubmittedDate") or "")
+        _results.append({
+            "_idx":    "approval",
+            "#":       _s.get("ApprovalId") or _s.get("RequestNumber") or _s.get("id") or _h.get("_id"),
+            "Type":    _type_label,
+            "Stage":   _stage,
+            "Requester": _s.get("RequestedBy") or _s.get("Requester") or _s.get("requestedBy") or "—",
+            "Team":    _s.get("Team") or _s.get("RequesterTeam") or "—",
+            "Application": _s.get("application") or _s.get("project") or "—",
+            "Date":    _date_val,
+            "Age (h)": None,
+        })
 
     # Fill Age (h)
     _now_ref = datetime.now(timezone.utc)
     for _item in _results:
         _item["Age (h)"] = age_hours(_item["Date"], _now_ref) or 0
 
+    return _results
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_running_pipelines() -> list[dict]:
+    """Return currently running build/deployment pipelines from ef-cicd-approval.
+
+    Running pipelines have ``stage`` = ``build`` (running build) or a bare
+    environment name like ``dev``, ``qc``, ``uat``, ``prd`` (running deployment).
+    """
+    _results: list[dict] = []
+    # stage values for running pipelines: "build" or any env name (not prefixed with "request_")
+    _r = es_search(IDX["approval"], {
+        "query": {"bool": {
+            "filter": [{"exists": {"field": "stage"}}],
+            "must_not": [
+                {"prefix": {"stage": "request_"}},
+            ],
+        }},
+        "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}],
+    }, size=100)
+    for _h in _r.get("hits", {}).get("hits", []):
+        _s = _h["_source"]
+        _stage = _s.get("stage") or "—"
+        if _stage == "build":
+            _type_label = "Running build"
+        else:
+            _type_label = f"Running deploy ({_stage})"
+        _results.append({
+            "_idx":       "approval",
+            "#":          _s.get("ApprovalId") or _s.get("id") or _h.get("_id"),
+            "Type":       _type_label,
+            "Stage":      _stage,
+            "Application": _s.get("application") or _s.get("project") or "—",
+            "Date":       _s.get("RequestDate") or _s.get("Created") or "",
+        })
     return _results
 
 
@@ -1374,6 +1468,138 @@ _alerts_ph = st.container()
 
 
 # =============================================================================
+# HUD — Gamified team health panel
+# =============================================================================
+
+def _svg_ring(score: float, color: str, size: int = 64) -> str:
+    """Return an SVG circular progress ring for the given score (0-100)."""
+    r = (size - 6) // 2
+    circ = 2 * 3.14159 * r
+    offset = circ * (1 - score / 100)
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+        f'<circle cx="{size//2}" cy="{size//2}" r="{r}" fill="none" stroke="var(--cc-border)" stroke-width="5"/>'
+        f'<circle cx="{size//2}" cy="{size//2}" r="{r}" fill="none" stroke="{color}" stroke-width="5"'
+        f' stroke-linecap="round" stroke-dasharray="{circ:.1f}" stroke-dashoffset="{offset:.1f}"'
+        f' transform="rotate(-90 {size//2} {size//2})"'
+        f' style="transition:stroke-dashoffset .6s ease"/>'
+        f'</svg>'
+    )
+
+
+# Compute team health score (composite: build success 40%, CFR 30%, queue health 30%)
+_health_build = min(success_rate, 100)
+_health_cfr = max(0, 100 - cfr * 5)  # 0% CFR = 100, 20% CFR = 0
+_health_queue = 100 if not pending_now else max(0, 100 - pending_now * 15)
+_health_score = int(_health_build * 0.4 + _health_cfr * 0.3 + _health_queue * 0.3)
+_health_color = "var(--cc-green)" if _health_score >= 75 else ("var(--cc-amber)" if _health_score >= 50 else "var(--cc-red)")
+
+# Streak: consecutive days with at least one successful build
+_streak_days = 0
+if builds_now > builds_fail:
+    _streak_days = min(int(days_in_window), 30)  # simplified estimate
+
+# Velocity: deployments per day
+_velocity = deploy_freq_per_day
+
+# Role-specific quest items
+_quests: list[tuple[str, str, str, str]] = []  # (priority_color, icon, text, value)
+
+if role_pick == "Admin":
+    if builds_fail:
+        _quests.append((C_DANGER, "!", f"<b>{builds_fail}</b> build failures to investigate", f"{builds_fail}"))
+    if pending_now:
+        _quests.append((C_WARN, "⏳", f"<b>{pending_now}</b> requests awaiting approval", f"{pending_now}"))
+    _inv_total = count_with_range(IDX["inventory"], "startdate", start_dt, end_dt) if False else inv_count
+    _quests.append((C_INFO, "📋", f"<b>{inv_count}</b> inventory pipelines, <b>{active_projs}</b> active", ""))
+elif role_pick == "Developer":
+    if builds_fail:
+        _quests.append((C_DANGER, "🔴", f"<b>{builds_fail}</b> failed builds need fixing", f"{builds_fail}"))
+    _quests.append((C_SUCCESS if success_rate >= 90 else C_WARN, "🏗",
+                    f"Build success rate: <b>{success_rate:.0f}%</b>", f"{success_rate:.0f}%"))
+    _quests.append((C_INFO, "📦", f"<b>{commits_now:,}</b> commits pushed this window", f"{commits_now:,}"))
+elif role_pick == "QC":
+    # QC cares about release requests (stage=request_promote)
+    _qc_pending = sum(1 for r in _all_pending
+                       if (r.get("Stage") or "") == "request_promote")
+    if _qc_pending:
+        _quests.append((C_WARN, "🔬", f"<b>{_qc_pending}</b> release requests awaiting QC approval", f"{_qc_pending}"))
+    _quests.append((C_INFO, "📊", f"<b>{deploys_now:,}</b> total deployments this window", f"{deploys_now:,}"))
+    _quests.append((C_SUCCESS, "✓", f"Change failure rate: <b>{cfr:.1f}%</b>",
+                    f"{cfr:.1f}%"))
+elif role_pick == "Operator":
+    # Operator cares about deployment requests (stage=request_deploy_*)
+    _ops_pending = sum(1 for r in _all_pending
+                        if (r.get("Stage") or "").startswith("request_deploy_"))
+    if _ops_pending:
+        _quests.append((C_WARN, "🚀", f"<b>{_ops_pending}</b> deployment requests pending", f"{_ops_pending}"))
+    _quests.append((C_SUCCESS, "🎯", f"<b>{prd_deploys}</b> prod deploys ({deploy_freq_per_day:.1f}/day)",
+                    f"{prd_deploys}"))
+    if prd_fail:
+        _quests.append((C_DANGER, "💥", f"<b>{prd_fail}</b> prod deploy failures", f"{prd_fail}"))
+
+# ── Render HUD ────────────────────────────────────────────────────────────────
+_hud_c1, _hud_c2, _hud_c3 = st.columns([1, 1.5, 2])
+
+with _hud_c1:
+    _ring_svg = _svg_ring(_health_score, _health_color, 80)
+    st.markdown(
+        f'<div class="hud-ring">'
+        f'  {_ring_svg}'
+        f'  <div>'
+        f'    <div class="score-value">{_health_score}</div>'
+        f'    <div class="score-label">Team health</div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+with _hud_c2:
+    _streak_cls = "" if _streak_days >= 3 else ("warn" if _streak_days >= 1 else "bad")
+    st.markdown(
+        f'<div class="hud-mission">'
+        f'  <div class="mission-title">Streaks &amp; velocity</div>'
+        f'  <div class="hud-stat">'
+        f'    <div class="stat-icon" style="background:var(--cc-green-lt);color:var(--cc-green)">🔥</div>'
+        f'    <div class="stat-label">Build streak</div>'
+        f'    <div class="stat-val">{_streak_days}d</div>'
+        f'  </div>'
+        f'  <div class="hud-stat">'
+        f'    <div class="stat-icon" style="background:var(--cc-blue-lt);color:var(--cc-blue)">⚡</div>'
+        f'    <div class="stat-label">Deploy velocity</div>'
+        f'    <div class="stat-val">{_velocity:.1f}/d</div>'
+        f'  </div>'
+        f'  <div class="hud-stat">'
+        f'    <div class="stat-icon" style="background:var(--cc-accent-lt);color:var(--cc-accent)">📈</div>'
+        f'    <div class="stat-label">Build success</div>'
+        f'    <div class="stat-val">{success_rate:.0f}%</div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+with _hud_c3:
+    _quest_html = ""
+    for _q_color, _q_icon, _q_text, _q_val in _quests[:5]:
+        _quest_html += (
+            f'<div class="hud-quest">'
+            f'  <div class="quest-prio" style="background:{_q_color}">{_q_icon}</div>'
+            f'  <div class="quest-text">{_q_text}</div>'
+            f'  <div class="quest-val">{_q_val}</div>'
+            f'</div>'
+        )
+    if not _quest_html:
+        _quest_html = '<div style="font-size:.85rem;color:var(--cc-text-mute);padding:12px 0">All clear — no action items</div>'
+    st.markdown(
+        f'<div class="hud-mission">'
+        f'  <div class="mission-title">{ROLE_ICONS[role_pick]} {role_pick} missions</div>'
+        f'  {_quest_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# =============================================================================
 # KPIs  (2 rows × 4)
 # =============================================================================
 
@@ -1393,17 +1619,17 @@ def _trend_count(
 
 def _cell(cur: int, prev: int) -> str:
     if prev == 0 and cur == 0:
-        return '<span style="color:var(--mc-text-mute);">—</span>'
+        return '<span style="color:var(--cc-text-mute);">—</span>'
     if prev == 0:
-        return f'<b style="color:var(--mc-text);">{cur:,}</b> <span style="color:var(--mc-green);">new</span>'
+        return f'<b style="color:var(--cc-text);">{cur:,}</b> <span style="color:var(--cc-green);">new</span>'
     diff = cur - prev
     pct  = diff / prev * 100
-    direction = "var(--mc-green)" if diff > 0 else ("var(--mc-red)" if diff < 0 else "var(--mc-text-mute)")
+    direction = "var(--cc-green)" if diff > 0 else ("var(--cc-red)" if diff < 0 else "var(--cc-text-mute)")
     arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "→")
     sign = "+" if diff >= 0 else ""
     return (
-        f'<b style="color:var(--mc-text);">{cur:,}</b> '
-        f'<span style="color:{direction};font-size:.78rem;font-family:var(--mc-mono);"> {arrow} {sign}{pct:.1f}%</span>'
+        f'<b style="color:var(--cc-text);">{cur:,}</b> '
+        f'<span style="color:{direction};font-size:.80rem;"> {arrow} {sign}{pct:.1f}%</span>'
     )
 
 
@@ -1476,23 +1702,23 @@ with r2c[4]:
             _trend_rows.append(_row)
         _hdrs = ["Metric"] + [p[0] for p in _periods]
         _html = [
-            '<div style="background:var(--mc-surface);border:1px solid var(--mc-border);border-radius:6px;overflow:hidden;">',
-            '<table style="width:100%;border-collapse:collapse;font-size:.84rem;font-family:var(--mc-mono);">',
+            '<div style="background:var(--cc-surface);border:1px solid var(--cc-border);border-radius:10px;overflow:hidden;">',
+            '<table style="width:100%;border-collapse:collapse;font-size:.88rem;">',
             '<thead><tr>',
         ]
         for _i, _h in enumerate(_hdrs):
             _align = "left" if _i == 0 else "right"
             _html.append(
-                f'<th style="text-align:{_align};padding:10px 14px;color:var(--mc-text-mute);font-size:.62rem;'
-                f'letter-spacing:.12em;text-transform:uppercase;font-weight:600;'
-                f'border-bottom:1px solid var(--mc-border);background:var(--mc-surface2);">{_h}</th>'
+                f'<th style="text-align:{_align};padding:10px 14px;color:var(--cc-text-mute);font-size:.68rem;'
+                f'letter-spacing:.10em;text-transform:uppercase;font-weight:600;'
+                f'border-bottom:1px solid var(--cc-border);background:var(--cc-surface2);">{_h}</th>'
             )
         _html.append('</tr></thead><tbody>')
         for _row in _trend_rows:
             _html.append('<tr>')
-            _html.append(f'<td style="padding:9px 14px;color:var(--mc-text);font-weight:500;border-bottom:1px solid var(--mc-border);">{_row["Metric"]}</td>')
+            _html.append(f'<td style="padding:9px 14px;color:var(--cc-text);font-weight:500;border-bottom:1px solid var(--cc-border);">{_row["Metric"]}</td>')
             for _pl, _ in _periods:
-                _html.append(f'<td style="text-align:right;padding:9px 14px;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--mc-border);">{_row[_pl]}</td>')
+                _html.append(f'<td style="text-align:right;padding:9px 14px;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--cc-border);">{_row[_pl]}</td>')
             _html.append('</tr>')
         _html.append('</tbody></table></div>')
         st.markdown("".join(_html), unsafe_allow_html=True)
@@ -1598,49 +1824,73 @@ _tick_evts = _ticker_events(_tick_scope, exclude_svc)
 
 if _tick_evts:
     _TYPE_CHIP = {
-        "prd-deploy": ("PRD", "#34d399", "rgba(52,211,153,.12)"),
-        "release":    ("REL", "#f59e0b", "rgba(245,158,11,.12)"),
-        "fail":       ("FAIL", "#f87171", "rgba(248,113,113,.12)"),
+        "prd-deploy": ("PRD", "#059669", "#d1fae5"),
+        "release":    ("REL", "#4f46e5", "#eef2ff"),
+        "fail":       ("FAIL", "#dc2626", "#fee2e2"),
     }
     _ticker_html_items = []
     for _te in _tick_evts:
-        _ch_lbl, _ch_clr, _ch_bg = _TYPE_CHIP.get(_te["type"], ("EVT", "#5a6178", "var(--mc-surface)"))
+        _ch_lbl, _ch_clr, _ch_bg = _TYPE_CHIP.get(_te["type"], ("EVT", "#8890a4", "#f7f8fb"))
         _age_h = age_hours(_te["ts"]) or 0
         _age_str = f"{_age_h}h ago" if _age_h < 24 else f"{_age_h//24}d ago"
-        _item_bg = "rgba(248,113,113,.06)" if not _te["ok"] else "var(--mc-surface)"
+        _item_bg = "#fee2e2" if not _te["ok"] else "#f7f8fb"
         _ticker_html_items.append(
             f'<span style="display:inline-flex;align-items:center;gap:6px;'
             f'padding:3px 10px 3px 4px;margin:0 6px 0 0;'
-            f'background:{_item_bg};border:1px solid var(--mc-border);border-radius:4px;'
-            f'white-space:nowrap;font-size:0.70rem;font-family:var(--mc-mono);">'
-            f'  <span style="background:{_ch_clr};color:#000;font-size:0.60rem;font-weight:700;'
-            f'  padding:1px 6px;border-radius:3px">{_ch_lbl}</span>'
-            f'  <span style="color:var(--mc-text-dim)">{_te["label"]}</span>'
-            f'  <span style="color:var(--mc-text-mute)">{_age_str}</span>'
+            f'background:{_item_bg};border:1px solid var(--cc-border);border-radius:20px;'
+            f'white-space:nowrap;font-size:0.73rem;">'
+            f'  <span style="background:{_ch_clr};color:#fff;font-size:0.63rem;font-weight:700;'
+            f'  padding:1px 6px;border-radius:999px">{_ch_lbl}</span>'
+            f'  <span style="color:var(--cc-text-dim)">{_te["label"]}</span>'
+            f'  <span style="color:var(--cc-text-mute)">{_age_str}</span>'
             f'</span>'
         )
     st.markdown(
         '<div style="overflow-x:auto;white-space:nowrap;padding:6px 0 8px;'
-        'border-bottom:1px solid var(--mc-border);margin-bottom:8px">'
+        'border-bottom:1px solid var(--cc-border);margin-bottom:8px">'
         + "".join(_ticker_html_items) + "</div>",
         unsafe_allow_html=True,
     )
 
 
-# ── Section navigation — quick-jump chip strip ─────────────────────────────
-st.markdown(
-    '<div class="navchips">'
-    '  <span class="navlbl">Jump to</span>'
-    '  <a href="#sec-alerts">Alerts</a>'
-    '  <a href="#sec-kpis">KPIs</a>'
-    '  <a href="#sec-landscape">Landscape</a>'
-    '  <a href="#sec-lifecycle">Lifecycle</a>'
-    '  <a href="#sec-pipeline">Pipeline</a>'
-    '  <a href="#sec-workflow">Workflow</a>'
-    '  <a href="#sec-eventlog">Event log</a>'
-    '</div>',
-    unsafe_allow_html=True,
-)
+# ── Role-based section visibility ──────────────────────────────────────────
+# Each role sees a curated subset of sections to reduce noise and focus on
+# what matters for their function.
+_ROLE_SECTIONS: dict[str, set[str]] = {
+    "Admin":     {"alerts", "landscape", "lifecycle", "pipeline", "workflow", "eventlog"},
+    "Developer": {"alerts", "pipeline", "landscape", "eventlog"},
+    "QC":        {"alerts", "lifecycle", "workflow", "eventlog"},
+    "Operator":  {"alerts", "workflow", "pipeline", "eventlog"},
+}
+_visible = _ROLE_SECTIONS.get(role_pick, _ROLE_SECTIONS["Admin"])
+
+# Admin can optionally view as another role
+if role_pick == "Admin":
+    _admin_view = st.session_state.get("admin_role_view", "Admin")
+    if _admin_view != "Admin" and _admin_view in _ROLE_SECTIONS:
+        _visible = _ROLE_SECTIONS[_admin_view]
+
+def _show(section: str) -> bool:
+    """Return True if the current role should see this section."""
+    return section in _visible
+
+# ── Section navigation — quick-jump chip strip (role-aware) ────────────────
+_nav_items = [("Alerts", "#sec-alerts", "alerts")]
+if _show("landscape"):
+    _nav_items.append(("Landscape", "#sec-landscape", "landscape"))
+if _show("lifecycle"):
+    _nav_items.append(("Lifecycle", "#sec-lifecycle", "lifecycle"))
+if _show("pipeline"):
+    _nav_items.append(("Pipeline", "#sec-pipeline", "pipeline"))
+if _show("workflow"):
+    _nav_items.append(("Workflow", "#sec-workflow", "workflow"))
+_nav_items.append(("Event log", "#sec-eventlog", "eventlog"))
+
+_nav_html = '<div class="navchips"><span class="navlbl">Jump to</span>'
+for _nl, _nh, _ in _nav_items:
+    _nav_html += f'<a href="{_nh}">{_nl}</a>'
+_nav_html += '</div>'
+st.markdown(_nav_html, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -1871,17 +2121,20 @@ with _alerts_ph:
 
 
 # =============================================================================
-# SECTION 3 — CROSS-INDEX INSIGHTS
+# SECTION 3 — CROSS-INDEX INSIGHTS  (Admin, Developer)
 # =============================================================================
 
+_show_landscape = _show("landscape")
+
 st.markdown('<a class="anchor" id="sec-landscape"></a>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Project landscape</h2><span class="badge">Inventory x Activity</span></div>'
-    '<span class="hint">active / at-risk / archival candidates &mdash; joined across all indices</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
+if _show_landscape:
+    st.markdown(
+        '<div class="section">'
+        '<div class="title-wrap"><h2>Project landscape</h2><span class="badge">Inventory x Activity</span></div>'
+        '<span class="hint">active / at-risk / archival candidates &mdash; joined across all indices</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Project deep-dive popover — pick a project and see every cross-index signal
@@ -2239,8 +2492,8 @@ if _tm_rows:
         "Live · healthy":        "#059669",
         "Live · at-risk":        "#d97706",
         "Building · not in PRD": "#2563eb",
-        "Archival candidate":    "#4b5563",
-        "Unknown":               "#374151",
+        "Archival candidate":    "#9ca3af",
+        "Unknown":               "#d1d5db",
     }
     # Treemap: status → project → application  (3-level hierarchy)
     _tm_fig = px.treemap(
@@ -2272,7 +2525,7 @@ if _tm_rows:
         height=420,
         margin=dict(l=0, r=0, t=36, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#8b92a8", family="JetBrains Mono, monospace"),
+        font=dict(color="#4a5068", family="system-ui, sans-serif"),
     )
     st.plotly_chart(_tm_fig, use_container_width=True)
 
@@ -2284,8 +2537,8 @@ if _tm_rows:
         if _n:
             _pills += (
                 f'<span style="display:inline-flex;align-items:center;gap:5px;'
-                f'margin:0 6px 4px 0;padding:3px 10px;border-radius:4px;'
-                f'font-size:0.68rem;font-weight:600;font-family:var(--mc-mono);'
+                f'margin:0 6px 4px 0;padding:3px 10px;border-radius:999px;'
+                f'font-size:0.73rem;font-weight:600;'
                 f'background:{_c_clr}18;color:{_c_clr};border:1px solid {_c_clr}40">'
                 f'{_n} {_s}</span>'
             )
@@ -2336,7 +2589,7 @@ st.markdown(
 _LC_STAGES   = ["Builds", "Deploy Dev", "Deploy QC", "Release", "Deploy UAT", "Deploy PRD"]
 _LC_COLORS   = ["#6366f1", "#0ea5e9", "#8b5cf6", "#ec4899", "#f59e0b", "#16a34a"]
 # "dropout" node color — neutral gray
-_LC_DROPOUT  = "#2a2f3e"
+_LC_DROPOUT  = "#e3e6ee"
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -2459,7 +2712,7 @@ with _lc_col1:
                 node=dict(
                     pad=20,
                     thickness=24,
-                    line=dict(color="#2a2f3e", width=0.5),
+                    line=dict(color="#e3e6ee", width=0.5),
                     label=_sk_labels,
                     color=_sk_node_colors,
                     hovertemplate="<b>%{label}</b><br>Volume: %{value:,}<extra></extra>",
@@ -2475,9 +2728,9 @@ with _lc_col1:
             _sk_fig.update_layout(
                 title=dict(
                     text="Pipeline flow · Build → Dev → QC → UAT → PRD  (red = dropped at stage)",
-                    font=dict(size=13, color="#e8eaf0"), x=0,
+                    font=dict(size=13, color="#1a1d2e"), x=0,
                 ),
-                font=dict(size=11, color="#8b92a8", family="JetBrains Mono, monospace"),
+                font=dict(size=11, color="#4a5068", family="system-ui, sans-serif"),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=0, r=0, t=40, b=0),
@@ -2500,34 +2753,33 @@ with _lc_col2:
 
     if _bn_rows:
         st.markdown(
-            '<p style="font-size:0.78rem;font-weight:700;color:var(--mc-text);margin:4px 0 8px;'
-            'font-family:var(--mc-mono);text-transform:uppercase;letter-spacing:.04em">'
+            '<p style="font-size:0.82rem;font-weight:700;color:var(--cc-text);margin:4px 0 8px">'
             'Stage conversion — biggest bottlenecks first</p>',
             unsafe_allow_html=True,
         )
         _bn_html = []
         for _r in sorted(_bn_rows, key=lambda x: x["Drop"], reverse=True):
             _d = _r["Drop"]
-            _bg = "rgba(248,113,113,.12)" if _d >= 70 else "rgba(245,158,11,.12)" if _d >= 40 else "rgba(52,211,153,.12)"
-            _fg = "var(--mc-red)" if _d >= 70 else "var(--mc-amber)" if _d >= 40 else "var(--mc-green)"
-            _bar_bg = "#f87171" if _d >= 70 else "#f59e0b" if _d >= 40 else "#34d399"
+            _bg = "#fee2e2" if _d >= 70 else "#fef3c7" if _d >= 40 else "#d1fae5"
+            _fg = "#991b1b" if _d >= 70 else "#92400e" if _d >= 40 else "#065f46"
+            _bar_bg = "#dc2626" if _d >= 70 else "#d97706" if _d >= 40 else "#059669"
             _bar_w = max(3, int(_d * 0.9))
             _rate_w = max(3, int((100 - _d) * 0.9))
             _bn_html.append(
                 f'<div style="margin-bottom:8px">'
                 f'  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">'
-                f'    <span style="font-size:0.74rem;color:var(--mc-text-dim);font-weight:600;font-family:var(--mc-mono)">{_r["Stage"]}</span>'
-                f'    <span style="font-size:0.72rem;color:var(--mc-text-mute);font-family:var(--mc-mono)">'
+                f'    <span style="font-size:0.77rem;color:var(--cc-text-dim);font-weight:600">{_r["Stage"]}</span>'
+                f'    <span style="font-size:0.75rem;color:var(--cc-text-mute)">'
                 f'      {int(_r["In"]):,} → {int(_r["Out"]):,}'
                 f'    </span>'
                 f'  </div>'
-                f'  <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--mc-surface2)">'
-                f'    <div style="width:{_rate_w}%;background:{_bar_bg};opacity:0.7"></div>'
-                f'    <div style="width:{_bar_w}%;background:rgba(248,113,113,.4)"></div>'
+                f'  <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--cc-surface2)">'
+                f'    <div style="width:{_rate_w}%;background:{_bar_bg};opacity:0.8"></div>'
+                f'    <div style="width:{_bar_w}%;background:#fca5a5"></div>'
                 f'  </div>'
                 f'  <div style="margin-top:2px;text-align:right">'
-                f'    <span style="font-size:0.70rem;font-weight:700;color:{_fg};'
-                f'    background:{_bg};padding:1px 6px;border-radius:3px;font-family:var(--mc-mono)">'
+                f'    <span style="font-size:0.73rem;font-weight:700;color:{_fg};'
+                f'    background:{_bg};padding:1px 6px;border-radius:4px">'
                 f'    {_d:.1f}% dropped</span>'
                 f'  </div>'
                 f'</div>'
@@ -2539,8 +2791,7 @@ with _lc_col2:
 
 # ── Row 2: Live / Dormant classification + per-project heatmap ──────────────
 st.markdown(
-    '<p style="font-size:0.78rem;font-weight:700;color:var(--mc-text);margin:18px 0 4px;'
-    'font-family:var(--mc-mono);text-transform:uppercase;letter-spacing:.04em">'
+    '<p style="font-size:0.85rem;font-weight:700;color:var(--cc-text);margin:18px 0 4px">'
     'Project status — live vs dormant (classified by pipeline position)</p>',
     unsafe_allow_html=True,
 )
@@ -2578,11 +2829,11 @@ for _app in _inv_apps:
 
 _STATUS_ORDER = ["Live (in PRD)", "Stuck in UAT", "Dead in Quality", "Dead in Dev", "Dark"]
 _STATUS_COLORS_MAP = {
-    "Live (in PRD)":   "#34d399",
-    "Stuck in UAT":    "#f59e0b",
-    "Dead in Quality": "#a78bfa",
-    "Dead in Dev":     "#f87171",
-    "Dark":            "#5a6178",
+    "Live (in PRD)":   "#059669",
+    "Stuck in UAT":    "#d97706",
+    "Dead in Quality": "#7c3aed",
+    "Dead in Dev":     "#dc2626",
+    "Dark":            "#9ca3af",
 }
 _STATUS_ICONS = {
     "Live (in PRD)":   "✓",
@@ -2613,14 +2864,14 @@ if _total_classified:
         _pct = _c / _total_classified * 100
         _pill_html += (
             f'<div style="display:flex;align-items:center;gap:6px;'
-            f'background:var(--mc-surface);border:1px solid var(--mc-border);border-left:3px solid {_col};'
-            f'border-radius:6px;padding:6px 12px;" title="{_STATUS_DESC[_s]}">'
+            f'background:var(--cc-surface);border:1px solid var(--cc-border);border-left:3px solid {_col};'
+            f'border-radius:8px;padding:6px 12px;" title="{_STATUS_DESC[_s]}">'
             f'  <span style="font-size:1rem;font-weight:700;color:{_col}">{_STATUS_ICONS[_s]}</span>'
             f'  <div>'
-            f'    <div style="font-size:1.0rem;font-weight:700;color:var(--mc-text);line-height:1;font-family:var(--mc-mono)">{_c}</div>'
-            f'    <div style="font-size:0.65rem;color:var(--mc-text-dim);font-weight:600;font-family:var(--mc-mono)">{_s}</div>'
+            f'    <div style="font-size:1.0rem;font-weight:700;color:var(--cc-text);line-height:1;font-family:var(--cc-mono)">{_c}</div>'
+            f'    <div style="font-size:0.68rem;color:var(--cc-text-dim);font-weight:600">{_s}</div>'
             f'  </div>'
-            f'  <div style="font-size:0.70rem;color:var(--mc-text-mute);margin-left:4px;font-family:var(--mc-mono)">{_pct:.0f}%</div>'
+            f'  <div style="font-size:0.72rem;color:var(--cc-text-mute);margin-left:4px">{_pct:.0f}%</div>'
             f'</div>'
         )
     _pill_html += "</div>"
@@ -2694,18 +2945,18 @@ if _lc_apps:
         texttemplate="%{text}",
         textfont=dict(size=10),
         colorscale=[
-            [0.0,  "#1e2230"],
-            [0.15, "#7f1d1d"],
-            [0.35, "#b45309"],
-            [0.6,  "#a16207"],
-            [0.8,  "#065f46"],
-            [1.0,  "#34d399"],
+            [0.0,  "#fef2f2"],
+            [0.15, "#fca5a5"],
+            [0.35, "#fb923c"],
+            [0.6,  "#facc15"],
+            [0.8,  "#86efac"],
+            [1.0,  "#059669"],
         ],
         zmin=0, zmax=100,
         colorbar=dict(
-            title=dict(text="% of builds", side="right", font=dict(size=11, color="#5a6178")),
+            title=dict(text="% of builds", side="right", font=dict(size=11, color="#8890a4")),
             thickness=12, len=0.85,
-            tickfont=dict(size=10, color="#5a6178"),
+            tickfont=dict(size=10, color="#8890a4"),
             outlinewidth=0,
         ),
         hovertemplate=(
@@ -2716,21 +2967,21 @@ if _lc_apps:
     _hm_fig.update_layout(
         title=dict(
             text="Pipeline conversion per application · % of built versions that reached each stage",
-            font=dict(size=13, color="#e8eaf0"), x=0,
+            font=dict(size=13, color="#1a1d2e"), x=0,
         ),
         xaxis=dict(
-            side="top", tickfont=dict(size=12, color="#8b92a8", family="JetBrains Mono, monospace"),
+            side="top", tickfont=dict(size=12, color="#4a5068", family="system-ui, sans-serif"),
             showgrid=False, zeroline=False,
         ),
         yaxis=dict(
-            tickfont=dict(size=10, color="#8b92a8", family="JetBrains Mono, monospace"),
+            tickfont=dict(size=10, color="#4a5068", family="system-ui, sans-serif"),
             autorange="reversed", showgrid=False, zeroline=False,
         ),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=70, t=56, b=0),
         height=max(300, len(_top_apps) * 26),
-        font=dict(family="JetBrains Mono, monospace", color="#8b92a8"),
+        font=dict(family="system-ui, sans-serif", color="#4a5068"),
     )
     st.plotly_chart(_hm_fig, use_container_width=True)
     st.caption(
@@ -2744,10 +2995,8 @@ ci1, ci2 = st.columns([1.1, 2])
 with ci1:
     st.markdown(
         '<div class="funnel-wrap">'
-        '<div style="font-size:.85rem;color:var(--mc-text);font-weight:700;margin-bottom:4px;'
-        'font-family:var(--mc-mono);text-transform:uppercase;letter-spacing:.06em;">Delivery funnel</div>'
-        '<div style="font-size:.72rem;color:var(--mc-text-mute);margin-bottom:14px;'
-        'font-family:var(--mc-mono);">code → build → prod deploy in window</div>',
+        '<div style="font-size:.95rem;color:var(--cc-text);font-weight:600;margin-bottom:4px;">Delivery funnel</div>'
+        '<div style="font-size:.78rem;color:var(--cc-text-mute);margin-bottom:14px;">code → build → prod deploy in window</div>',
         unsafe_allow_html=True,
     )
 
@@ -2899,8 +3148,7 @@ with ci2:
 
 # ---- Risk spotlight — projects failing multiple hygiene checks -----------
 st.markdown(
-    '<div style="margin-top:18px;font-size:.82rem;color:var(--mc-amber);font-weight:700;'
-    'font-family:var(--mc-mono);text-transform:uppercase;letter-spacing:.04em;">'
+    '<div style="margin-top:18px;font-size:.95rem;color:var(--cc-text);font-weight:600;">'
     '⚠ Risk spotlight — applications failing multiple signals simultaneously'
     '</div>',
     unsafe_allow_html=True,
@@ -3103,9 +3351,9 @@ with tab_builds:
             paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", y=-0.22),
             margin=dict(l=0, r=0, t=40, b=0),
-            font=dict(color="#8b92a8", family="JetBrains Mono, monospace"),
-            xaxis=dict(gridcolor="#2a2f3e"),
-            yaxis=dict(gridcolor="#2a2f3e"),
+            font=dict(color="#4a5068", family="system-ui, sans-serif"),
+            xaxis=dict(gridcolor="#e3e6ee"),
+            yaxis=dict(gridcolor="#e3e6ee"),
         )
         c1.plotly_chart(fig, use_container_width=True)
     else:
@@ -3133,9 +3381,9 @@ with tab_builds:
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=0, r=0, t=40, b=0),
-            font=dict(color="#8b92a8", family="JetBrains Mono, monospace"),
-            xaxis=dict(gridcolor="#2a2f3e"),
-            yaxis=dict(gridcolor="#2a2f3e"),
+            font=dict(color="#4a5068", family="system-ui, sans-serif"),
+            xaxis=dict(gridcolor="#e3e6ee"),
+            yaxis=dict(gridcolor="#e3e6ee"),
         )
         c2.plotly_chart(fig2, use_container_width=True)
     else:
@@ -3200,9 +3448,9 @@ with tab_deploys:
             paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", y=-0.22),
             margin=dict(l=0, r=0, t=40, b=0),
-            font=dict(color="#8b92a8", family="JetBrains Mono, monospace"),
-            xaxis=dict(gridcolor="#2a2f3e"),
-            yaxis=dict(gridcolor="#2a2f3e"),
+            font=dict(color="#4a5068", family="system-ui, sans-serif"),
+            xaxis=dict(gridcolor="#e3e6ee"),
+            yaxis=dict(gridcolor="#e3e6ee"),
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -3323,14 +3571,14 @@ with wp_top[2]:
         )
         fig = px.pie(
             df, names="Priority", values="Count", hole=0.62,
-            color_discrete_sequence=["#f87171", "#f59e0b", "#22d3ee", "#60a5fa", "#34d399"],
+            color_discrete_sequence=["#dc2626", "#d97706", "#0d9488", "#2563eb", "#059669"],
         )
         fig.update_layout(
             height=320,
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=0, r=0, t=10, b=0),
-            font=dict(color="#8b92a8", family="JetBrains Mono, monospace"),
+            font=dict(color="#4a5068", family="system-ui, sans-serif"),
             legend=dict(orientation="v", x=1.02, y=0.5),
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -3451,20 +3699,20 @@ with _el_c3:
 with st.popover("Open event log", use_container_width=True):
     # ── helpers ──────────────────────────────────────────────────────────────
     _TYPE_BADGE = {
-        "deploy":  ('<span style="background:rgba(96,165,250,.15);color:#60a5fa;border-radius:3px;'
-                    'padding:1px 7px;font-size:0.68rem;font-weight:700;font-family:var(--mc-mono)">DEPLOY</span>'),
-        "release": ('<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;'
-                    'padding:1px 7px;font-size:0.68rem;font-weight:700;font-family:var(--mc-mono)">RELEASE</span>'),
-        "commit":  ('<span style="background:rgba(52,211,153,.15);color:#34d399;border-radius:3px;'
-                    'padding:1px 7px;font-size:0.68rem;font-weight:700;font-family:var(--mc-mono)">COMMIT</span>'),
+        "deploy":  ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">DEPLOY</span>'),
+        "release": ('<span style="background:#eef2ff;color:#4f46e5;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">RELEASE</span>'),
+        "commit":  ('<span style="background:#d1fae5;color:#065f46;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">COMMIT</span>'),
     }
     _STATUS_CHIP = {
-        "SUCCESS": ('<span style="background:rgba(52,211,153,.2);color:#34d399;border-radius:3px;'
-                    'padding:1px 7px;font-size:0.68rem;font-weight:700;font-family:var(--mc-mono)">OK</span>'),
-        "FAILED":  ('<span style="background:rgba(248,113,113,.2);color:#f87171;border-radius:3px;'
-                    'padding:1px 7px;font-size:0.68rem;font-weight:700;font-family:var(--mc-mono)">FAIL</span>'),
-        "RUNNING": ('<span style="background:rgba(245,158,11,.2);color:#f59e0b;border-radius:3px;'
-                    'padding:1px 7px;font-size:0.68rem;font-weight:700;font-family:var(--mc-mono)">RUN</span>'),
+        "SUCCESS": ('<span style="background:#059669;color:#fff;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">OK</span>'),
+        "FAILED":  ('<span style="background:#dc2626;color:#fff;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">FAIL</span>'),
+        "RUNNING": ('<span style="background:#d97706;color:#fff;border-radius:4px;'
+                    'padding:1px 7px;font-size:0.72rem;font-weight:700">RUN</span>'),
     }
 
     def _status_chip(raw: str | None) -> str:
@@ -3477,8 +3725,8 @@ with st.popover("Open event log", use_container_width=True):
             return _STATUS_CHIP["FAILED"]
         if up in ("SUCCESS", "PASSED", "OK"):
             return _STATUS_CHIP["SUCCESS"]
-        return (f'<span style="background:var(--mc-surface2);color:var(--mc-text-dim);border-radius:3px;'
-                f'padding:1px 7px;font-size:0.70rem;font-weight:600;font-family:var(--mc-mono)">{raw}</span>')
+        return (f'<span style="background:var(--cc-surface2);color:var(--cc-text-dim);border-radius:4px;'
+                f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
 
     events: list[dict] = []
 
@@ -3561,32 +3809,32 @@ with st.popover("Open event log", use_container_width=True):
         _rows_html = []
         for ev in events:
             _rows_html.append(
-                f'<tr style="border-bottom:1px solid var(--mc-border)">'
-                f'<td style="white-space:nowrap;color:var(--mc-text-mute);font-size:0.74rem;font-family:var(--mc-mono)">{ev["When"]}</td>'
+                f"<tr>"
+                f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem">{ev["When"]}</td>'
                 f'<td style="padding:0 6px">{_TYPE_BADGE[ev["type"]]}</td>'
-                f'<td style="font-weight:600;color:var(--mc-text);font-size:0.80rem">{ev["Who"]}</td>'
-                f'<td style="color:var(--mc-text-dim);font-size:0.78rem">{ev["Detail"]}</td>'
+                f'<td style="font-weight:600;color:var(--cc-text);font-size:0.82rem">{ev["Who"]}</td>'
+                f'<td style="color:var(--cc-text-dim);font-size:0.8rem">{ev["Detail"]}</td>'
                 f'<td style="padding:0 6px">{_status_chip(ev["Status"])}</td>'
-                f'<td style="color:var(--mc-text-mute);font-size:0.72rem;max-width:260px;'
-                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mc-mono)">{ev["Extra"]}</td>'
+                f'<td style="color:var(--cc-text-mute);font-size:0.75rem;max-width:260px;'
+                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{ev["Extra"]}</td>'
                 f"</tr>"
             )
         _table_html = (
             '<div style="overflow-y:auto;max-height:72vh">'
-            '<table style="width:100%;border-collapse:collapse;font-family:var(--mc-sans)">'
-            '<thead><tr style="border-bottom:1px solid var(--mc-amber);text-align:left">'
-            '<th style="padding:6px 4px;color:var(--mc-text-mute);font-size:0.65rem;font-weight:700;font-family:var(--mc-mono);letter-spacing:.1em">TIME</th>'
-            '<th style="padding:6px 4px;color:var(--mc-text-mute);font-size:0.65rem;font-weight:700;font-family:var(--mc-mono);letter-spacing:.1em">TYPE</th>'
-            '<th style="padding:6px 4px;color:var(--mc-text-mute);font-size:0.65rem;font-weight:700;font-family:var(--mc-mono);letter-spacing:.1em">APPLICATION / PROJECT</th>'
-            '<th style="padding:6px 4px;color:var(--mc-text-mute);font-size:0.65rem;font-weight:700;font-family:var(--mc-mono);letter-spacing:.1em">DETAIL</th>'
-            '<th style="padding:6px 4px;color:var(--mc-text-mute);font-size:0.65rem;font-weight:700;font-family:var(--mc-mono);letter-spacing:.1em">STATUS</th>'
-            '<th style="padding:6px 4px;color:var(--mc-text-mute);font-size:0.65rem;font-weight:700;font-family:var(--mc-mono);letter-spacing:.1em">NOTE</th>'
+            '<table style="width:100%;border-collapse:collapse;font-family:inherit">'
+            '<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left">'
+            '<th style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.75rem;font-weight:600">TIME</th>'
+            '<th style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.75rem;font-weight:600">TYPE</th>'
+            '<th style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.75rem;font-weight:600">APPLICATION / PROJECT</th>'
+            '<th style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.75rem;font-weight:600">DETAIL</th>'
+            '<th style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.75rem;font-weight:600">STATUS</th>'
+            '<th style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.75rem;font-weight:600">NOTE</th>'
             '</tr></thead>'
             '<tbody>' + "".join(_rows_html) + "</tbody>"
             "</table></div>"
         )
         st.markdown(
-            f'<p style="font-size:0.76rem;color:var(--mc-text-mute);margin:0 0 8px;font-family:var(--mc-mono)">'
+            f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
             f'Showing {len(events)} events · sorted newest first</p>'
             + _table_html,
             unsafe_allow_html=True,
