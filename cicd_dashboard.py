@@ -602,15 +602,23 @@ COMPOSITE_PAGE = 1000      # buckets pulled per request
 COMPOSITE_MAX_PAGES = 200  # safety brake: 200 × 1000 = 200k keys max
 
 
+# Painless script for composite artifact identity (company/project/application/codeversion)
+_ARTIFACT_SCRIPT = (
+    "def _f(f) { return doc.containsKey(f) && doc[f].size() > 0 ? doc[f].value : '' } "
+    "return _f('company.keyword') + '/' + _f('project') + '/' + _f('application') + '/' + _f('codeversion')"
+)
+
+
 def composite_unique_versions(
     index: str,
     field: str,
     query: dict,
     page_size: int = COMPOSITE_PAGE,
 ) -> dict[str, int]:
-    """Like composite_terms but counts distinct ``codeversion`` values per key.
+    """Like composite_terms but counts distinct artifacts per key.
 
-    Returns ``{key: unique_codeversion_count}`` — eliminates re-deployments /
+    An artifact = unique company/project/application/codeversion combination.
+    Returns ``{key: unique_artifact_count}`` — eliminates re-deployments /
     re-builds of the same version so the lifecycle funnel reflects real
     progression of code rather than repeated CI runs.
     """
@@ -629,7 +637,9 @@ def composite_unique_versions(
                 "groups": {
                     "composite": comp,
                     "aggs": {
-                        "uv": {"cardinality": {"field": "codeversion"}}
+                        "uv": {"cardinality": {
+                            "script": {"source": _ARTIFACT_SCRIPT, "lang": "painless"},
+                        }}
                     },
                 }
             },
@@ -805,6 +815,25 @@ def fmt_dt(value: Any, fmt: str = "%Y-%m-%d %H:%M") -> str:
     """Parse and format a date value; returns "" on failure."""
     ts = parse_dt(value)
     return ts.strftime(fmt) if ts is not None else ""
+
+
+# Date field candidates per index family — ES source field names can vary
+_DATE_CANDIDATES = {
+    "build":   ["startdate", "StartDate", "start_date", "created", "timestamp", "@timestamp"],
+    "deploy":  ["startdate", "StartDate", "start_date", "created", "timestamp", "@timestamp"],
+    "release": ["releasedate", "ReleaseDate", "release_date", "created", "timestamp", "@timestamp"],
+    "commit":  ["commitdate", "CommitDate", "commit_date", "created", "timestamp", "@timestamp"],
+    "request": ["RequestDate", "requestdate", "request_date", "Created", "CreatedDate", "timestamp", "@timestamp"],
+}
+
+
+def _pick_date(source: dict, family: str) -> Any:
+    """Return the first non-None date value from ``source`` for the given index family."""
+    for fname in _DATE_CANDIDATES.get(family, ["timestamp", "@timestamp"]):
+        v = source.get(fname)
+        if v is not None:
+            return v
+    return None
 
 
 def age_hours(value: Any, reference: datetime | None = None) -> int | None:
@@ -1055,6 +1084,32 @@ with _cb1[6]:
         st.cache_data.clear()
         st.rerun()
 
+# ── Role-scoped visibility flags — relied on by KPI row + section skips ────
+_ROLE_SHOWS_JIRA: dict[str, bool] = {
+    "Admin": True, "Developer": True, "QC": True, "Operator": False,
+}
+_ROLE_SHOWS_BUILDS: dict[str, bool] = {
+    "Admin": True, "Developer": True, "QC": False, "Operator": False,
+}
+_ROLE_EVENT_TYPES: dict[str, list[str]] = {
+    "Admin":     ["Builds", "Deployments", "Releases", "Requests", "Commits"],
+    "Developer": ["Builds", "Commits", "Requests"],
+    "QC":        ["Deployments", "Releases", "Requests"],
+    "Operator":  ["Deployments", "Releases", "Requests"],
+}
+_ROLE_ENVS: dict[str, list[str]] = {
+    "Admin":     ["prd", "uat", "qc", "dev"],
+    "Developer": ["dev", "qc", "uat", "prd"],
+    "QC":        ["qc"],
+    "Operator":  ["uat", "prd"],
+}
+_ROLE_APPROVAL_STAGES: dict[str, list[str]] = {
+    "Admin":     [],
+    "Developer": ["build"],
+    "QC":        ["qc", "request_deploy_qc", "request_promote"],
+    "Operator":  ["uat", "prd", "request_deploy_uat", "request_deploy_prd"],
+}
+
 # ── Role HUD banner ──────────────────────────────────────────────────────────
 _role_clr = ROLE_COLORS[role_pick]
 _role_icon = ROLE_ICONS[role_pick]
@@ -1256,12 +1311,14 @@ def unique_versions_in_range(
     extra: list[dict] | None = None,
     scope: list[dict] | None = None,
 ) -> int:
-    """Count distinct ``codeversion`` values (artifacts) within a time window."""
+    """Count distinct artifacts (company/project/application/codeversion) in a window."""
     base = scope if scope is not None else idx_scope(index)
     filters = [range_filter(date_field, s, e)] + base + (extra or [])
     res = es_search(index, {
         "query": {"bool": {"filter": filters}},
-        "aggs": {"uv": {"cardinality": {"field": "codeversion"}}},
+        "aggs": {"uv": {"cardinality": {
+            "script": {"source": _ARTIFACT_SCRIPT, "lang": "painless"},
+        }}},
     }, size=0)
     return int(res.get("aggregations", {}).get("uv", {}).get("value", 0) or 0)
 
@@ -1742,16 +1799,42 @@ kpi_block(r1[4], "Build success", f"{success_rate:.1f}%",
     f"{builds_fail:,} failed of {builds_now:,}" if builds_fail else "all green",
     "dn" if builds_fail else "up", "(builds − failed) / builds")
 
-# Row 2 — volume + health (5 cards) + trend popover
+# Row 2 — volume + health (5 cards) + trend popover, role-tailored
 r2c = st.columns([1, 1, 1, 1, 1, 1.4])
-d, dn = fmt_delta(builds_now, builds_prev)
-kpi_block(r2c[0], "Builds", f"{builds_now:,}", d, dn)
-d, dn = fmt_delta(commits_now, commits_prev)
-kpi_block(r2c[1], "Commits", f"{commits_now:,}", d, dn)
+
+# Slot 0: Builds (Developer/Admin) or PRD deploys (Operator) or QC deploys (QC)
+if _ROLE_SHOWS_BUILDS.get(role_pick, True):
+    d, dn = fmt_delta(builds_now, builds_prev)
+    kpi_block(r2c[0], "Builds", f"{builds_now:,}", d, dn)
+elif role_pick == "Operator":
+    d, dn = fmt_delta(art_dep_prd, art_dep_prd_prev)
+    kpi_block(r2c[0], "PRD artifacts", f"{art_dep_prd:,}", d, dn,
+              "Unique artifacts deployed to PRD")
+else:  # QC
+    kpi_block(r2c[0], "QC artifacts", f"{art_dep_qc:,}", "this window", "flat",
+              "Unique artifacts deployed to QC")
+
+# Slot 1: Commits (Developer/Admin) or Releases (QC/Operator)
+if role_pick in ("Admin", "Developer"):
+    d, dn = fmt_delta(commits_now, commits_prev)
+    kpi_block(r2c[1], "Commits", f"{commits_now:,}", d, dn)
+else:
+    kpi_block(r2c[1], "Releases", f"{rel_now:,}",
+              f"{rel_now - rel_prev:+d} vs prior" if rel_prev else "this window",
+              "up" if rel_now >= rel_prev else "dn")
+
+# Slot 2: Pending — always relevant (role-scoped queue shown in Workflow section)
 kpi_block(r2c[2], "Pending", f"{pending_now:,}",
     "needs action" if pending_now else "clear",
     "dn" if pending_now else "up", "Pending approvals (last 30d)")
-kpi_block(r2c[3], "Open JIRA", f"{open_jira:,}", "all-time", "flat")
+
+# Slot 3: JIRA (Admin/Dev/QC) or Deploy freq-focused metric (Operator)
+if _ROLE_SHOWS_JIRA.get(role_pick, True):
+    kpi_block(r2c[3], "Open JIRA", f"{open_jira:,}", "all-time", "flat")
+else:
+    kpi_block(r2c[3], "UAT artifacts", f"{art_dep_uat:,}", "this window", "flat",
+              "Unique artifacts deployed to UAT")
+
 kpi_block(r2c[4], "Platform health",
     f"{active_projs}/{inv_count}" if inv_count else "—",
     f"{100 - dormant_pct:.0f}% active" if inv_count else "",
@@ -1850,7 +1933,7 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
         _s = _h["_source"]
         _ok = (_s.get("status") or "").upper() not in ("FAILED", "FAILURE", "FAILED")
         _evts.append({
-            "ts": parse_dt(_s.get("startdate")),
+            "ts": parse_dt(_pick_date(_s, "deploy")),
             "type": "prd-deploy",
             "label": f'PRD deploy · {_s.get("application") or _s.get("project","")} v{_s.get("codeversion","")}',
             "ok": _ok,
@@ -1864,7 +1947,7 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
     for _h in _r.get("hits", {}).get("hits", []):
         _s = _h["_source"]
         _evts.append({
-            "ts": parse_dt(_s.get("releasedate")),
+            "ts": parse_dt(_pick_date(_s, "release")),
             "type": "release",
             "label": f'Release · {_s.get("application","")} v{_s.get("codeversion","")}',
             "ok": True,
@@ -1882,7 +1965,7 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
     for _h in _r.get("hits", {}).get("hits", []):
         _s = _h["_source"]
         _evts.append({
-            "ts": parse_dt(_s.get("startdate")),
+            "ts": parse_dt(_pick_date(_s, "build")),
             "type": "fail",
             "label": f'Build failed · {_s.get("application") or _s.get("project","")} {_s.get("branch","")}',
             "ok": False,
@@ -1927,26 +2010,54 @@ if _tick_evts:
 
 
 # ── Role-based section emphasis ────────────────────────────────────────────
-# All sections render for every role (data is already team-scoped via _team_apps),
-# but nav chips highlight the sections most relevant to each role, and section
-# headers show role-specific context.
+# Each role sees only the sections relevant to them. Admin sees everything.
+# Priority order matters: used for nav chip ordering too.
 _ROLE_PRIORITY_SECTIONS: dict[str, list[str]] = {
     "Admin":     ["alerts", "landscape", "lifecycle", "pipeline", "workflow", "eventlog"],
-    "Developer": ["alerts", "pipeline", "landscape", "lifecycle", "workflow", "eventlog"],
-    "QC":        ["alerts", "workflow", "lifecycle", "pipeline", "landscape", "eventlog"],
-    "Operator":  ["alerts", "workflow", "pipeline", "lifecycle", "landscape", "eventlog"],
+    "Developer": ["alerts", "pipeline", "lifecycle", "workflow", "eventlog"],
+    "QC":        ["alerts", "workflow", "lifecycle", "pipeline", "eventlog"],
+    "Operator":  ["alerts", "workflow", "pipeline", "lifecycle", "eventlog"],
 }
-_visible = set(_ROLE_PRIORITY_SECTIONS.get(role_pick, _ROLE_PRIORITY_SECTIONS["Admin"]))
-
-# Admin can optionally view as another role
+# Effective role for rendering — Admin can view-as another role
+_effective_role = role_pick
 if role_pick == "Admin":
     _admin_view = st.session_state.get("admin_role_view", "Admin")
     if _admin_view != "Admin" and _admin_view in _ROLE_PRIORITY_SECTIONS:
-        _visible = set(_ROLE_PRIORITY_SECTIONS[_admin_view])
+        _effective_role = _admin_view
+
+_visible = set(_ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"]))
+
 
 def _show(section: str) -> bool:
     """Return True if the current role should see this section."""
     return section in _visible
+
+
+# ── Role-scoped event type / env / stage helpers ──────────────────────────
+# The dicts themselves (_ROLE_EVENT_TYPES, _ROLE_ENVS, _ROLE_APPROVAL_STAGES,
+# _ROLE_SHOWS_JIRA, _ROLE_SHOWS_BUILDS) are defined near the top of the page
+# so the KPI row can use them.
+
+
+def _role_allows_type(t: str) -> bool:
+    return t in _ROLE_EVENT_TYPES.get(_effective_role, _ROLE_EVENT_TYPES["Admin"])
+
+
+def _role_allows_env(env: str) -> bool:
+    return env in _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
+
+
+def _role_stage_filter() -> dict | None:
+    """Return an ES filter that restricts approval stages to the role's scope,
+    or None for Admin (no restriction).
+    """
+    stages = _ROLE_APPROVAL_STAGES.get(_effective_role, [])
+    if not stages:
+        return None
+    shoulds: list[dict] = []
+    for s in stages:
+        shoulds.append({"prefix": {"stage": s}})
+    return {"bool": {"should": shoulds, "minimum_should_match": 1}}
 
 # Role-specific nav chip labels
 _NAV_LABELS: dict[str, dict[str, str]] = {
@@ -1956,7 +2067,7 @@ _NAV_LABELS: dict[str, dict[str, str]] = {
 }
 _rl = _NAV_LABELS.get(role_pick, {})
 
-# ── Section navigation — quick-jump chip strip (role-ordered) ──────────────
+# ── Section navigation — quick-jump chip strip (role-ordered, role-filtered) ─
 _all_nav = [
     ("alerts", "Alerts", "#sec-alerts"),
     ("landscape", _rl.get("landscape", "Landscape"), "#sec-landscape"),
@@ -1965,9 +2076,12 @@ _all_nav = [
     ("workflow", _rl.get("workflow", "Workflow"), "#sec-workflow"),
     ("eventlog", "Event log", "#sec-eventlog"),
 ]
-# Order by role priority
-_priority_order = _ROLE_PRIORITY_SECTIONS.get(role_pick, _ROLE_PRIORITY_SECTIONS["Admin"])
-_ordered_nav = sorted(_all_nav, key=lambda x: _priority_order.index(x[0]) if x[0] in _priority_order else 99)
+# Filter to visible sections only, then order by role priority
+_priority_order = _ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"])
+_ordered_nav = sorted(
+    [n for n in _all_nav if _show(n[0])],
+    key=lambda x: _priority_order.index(x[0]) if x[0] in _priority_order else 99,
+)
 
 _nav_html = '<div class="navchips"><span class="navlbl">Jump to</span>'
 for _sec_id, _nl, _nh in _ordered_nav:
@@ -2293,7 +2407,7 @@ with pop_cols[0]:
                 if _hits:
                     _rows = [
                         {
-                            "When":       fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                            "When":       fmt_dt(_pick_date(_s, "build"), "%Y-%m-%d %H:%M"),
                             "Branch":     _s.get("branch"),
                             "Version":    _s.get("codeversion"),
                             "Status":     _s.get("status"),
@@ -2316,7 +2430,7 @@ with pop_cols[0]:
                 if _hits:
                     _rows = [
                         {
-                            "When":        fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
+                            "When":        fmt_dt(_pick_date(_s, "deploy"), "%Y-%m-%d %H:%M"),
                             "Env":         _s.get("environment"),
                             "Version":     _s.get("codeversion"),
                             "Status":      _s.get("status"),
@@ -2365,7 +2479,7 @@ with pop_cols[0]:
                 if _hits:
                     _rows = [
                         {
-                            "When":   fmt_dt(_s.get("commitdate"), "%Y-%m-%d %H:%M"),
+                            "When":   fmt_dt(_pick_date(_s, "commit"), "%Y-%m-%d %H:%M"),
                             "Author": _s.get("authorname"),
                             "Branch": _s.get("branch"),
                             "Repo":   _s.get("repository"),
@@ -3354,7 +3468,7 @@ with _pa_pop[0]:
         if _hits:
             _rows = [
                 {
-                    "When":        fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
+                    "When":        fmt_dt(_pick_date(_s, "build"), "%m-%d %H:%M"),
                     "Application": _s.get("application") or _s.get("project"),
                     "Project":     _s.get("project"),
                     "Branch":      _s.get("branch"),
@@ -3395,7 +3509,7 @@ with _pa_pop[1]:
         if _hits:
             _rows = [
                 {
-                    "When":        fmt_dt(_s.get("startdate"), "%m-%d %H:%M"),
+                    "When":        fmt_dt(_pick_date(_s, "deploy"), "%m-%d %H:%M"),
                     "Application": _s.get("application") or _s.get("project"),
                     "Project":     _s.get("project"),
                     "Env":         _s.get("environment"),
@@ -3620,15 +3734,17 @@ _running_pipelines = _fetch_running_pipelines()
 
 wp_top = st.columns(3)
 
-# ---- Pending requests — role-contextualized ----------------------------------
-with wp_top[0]:
-    if role_pick == "Operator":
+
+# ---- Pending requests — role-contextualized (fragment for independent rerun) -
+@st.fragment
+def _render_pending_queue() -> None:
+    if _effective_role == "Operator":
         st.markdown(f"**🚀 Deployment requests** — {len(_pending_deploy_reqs)} pending")
         _pend_rows = _pending_deploy_reqs[:12]
-    elif role_pick == "QC":
+    elif _effective_role == "QC":
         st.markdown(f"**🔬 Release requests** — {len(_pending_release_reqs)} pending")
         _pend_rows = _pending_release_reqs[:12]
-    elif role_pick == "Developer":
+    elif _effective_role == "Developer":
         st.markdown(f"**⌨ Pending requests** — {len(_pending_other) + len(_pending_deploy_reqs)} items")
         _pend_rows = (_pending_other + _pending_deploy_reqs)[:12]
     else:  # Admin — all queues
@@ -3666,6 +3782,10 @@ with wp_top[0]:
                 } for r in _running_pipelines[:20]]),
                 use_container_width=True, hide_index=True, height=360,
             )
+
+
+with wp_top[0]:
+    _render_pending_queue()
 
 # ---- Top committers --------------------------------------------------------
 with wp_top[1]:
@@ -3786,66 +3906,57 @@ with st.expander("🧹 Operational hygiene — dormant apps, stuck requests, age
         else:
             inline_note("No long-running requests.", "success")
 
-    # Aged JIRA issues
+    # Aged JIRA issues — hidden for Operator role (not relevant)
     with wp_bot[2]:
-        st.markdown("**Aged open JIRA** — created > 90 days ago")
-        body = {
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"range": {"created": {"lte": (now_utc - timedelta(days=90)).isoformat()}}}
-                    ] + scope_filters(),
-                    "must_not": [{"terms": {"status": CLOSED_JIRA}}],
-                }
-            },
-            "sort": [{"created": "asc"}],
-        }
-        res = es_search(IDX["jira"], body, size=12)
-        hits = res.get("hits", {}).get("hits", [])
-        if hits:
-            rows = []
-            for h in hits:
-                s = h["_source"]
-                rows.append({
-                    "Key":      s.get("issuekey"),
-                    "Priority": s.get("priority"),
-                    "Assignee": s.get("assignee"),
-                })
-            st.dataframe(
-                pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260
-            )
+        if _ROLE_SHOWS_JIRA.get(_effective_role, True):
+            st.markdown("**Aged open JIRA** — created > 90 days ago")
+            body = {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"range": {"created": {"lte": (now_utc - timedelta(days=90)).isoformat()}}}
+                        ] + scope_filters(),
+                        "must_not": [{"terms": {"status": CLOSED_JIRA}}],
+                    }
+                },
+                "sort": [{"created": "asc"}],
+            }
+            res = es_search(IDX["jira"], body, size=12)
+            hits = res.get("hits", {}).get("hits", [])
+            if hits:
+                rows = []
+                for h in hits:
+                    s = h["_source"]
+                    rows.append({
+                        "Key":      s.get("issuekey"),
+                        "Priority": s.get("priority"),
+                        "Assignee": s.get("assignee"),
+                    })
+                st.dataframe(
+                    pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260
+                )
+            else:
+                inline_note("No aged tickets.", "success")
         else:
-            inline_note("No aged tickets.", "success")
+            # Operator: replace JIRA with a deployment-focused summary
+            st.markdown("**🚀 Recent PRD activity** — last 7d")
+            _prd7 = es_count(IDX["deployments"], {"query": {"bool": {"filter": [
+                range_filter("startdate", now_utc - timedelta(days=7), now_utc),
+                {"term": {"environment": "prd"}},
+            ] + scope_filters()}}})
+            _uat7 = es_count(IDX["deployments"], {"query": {"bool": {"filter": [
+                range_filter("startdate", now_utc - timedelta(days=7), now_utc),
+                {"term": {"environment": "uat"}},
+            ] + scope_filters()}}})
+            st.metric("PRD deploys (7d)", f"{_prd7:,}")
+            st.metric("UAT deploys (7d)", f"{_uat7:,}")
 
 
 # =============================================================================
-# SECTION 6 — EVENT LOG (inline, all event types)
+# SECTION 6 — EVENT LOG (inline, all event types, role-filtered, fragment)
 # =============================================================================
 
-st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Event log</h2><span class="badge">Live</span></div>'
-    '<span class="hint">builds &middot; deployments &middot; releases &middot; requests &middot; commits &mdash; newest first</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-_el_c1, _el_c2, _el_c3 = st.columns([1.5, 1.2, 1.2])
-
-with _el_c1:
-    _el_type = st.selectbox(
-        "Type", ["All", "Builds", "Deployments", "Releases", "Requests", "Commits"], key="el_type"
-    )
-with _el_c2:
-    _el_env = st.selectbox(
-        "Env", ["(all)", "prd", "uat", "qc", "dev"], key="el_env"
-    )
-with _el_c3:
-    _el_limit = st.selectbox(
-        "Show", [50, 100, 250], key="el_limit"
-    )
-
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── styling helpers — module-level so the fragment re-uses them cheaply ────
 _TYPE_BADGE = {
     "build":   ('<span style="background:#eef2ff;color:#6366f1;border-radius:4px;'
                 'padding:1px 7px;font-size:0.72rem;font-weight:700">BUILD</span>'),
@@ -3886,164 +3997,209 @@ def _status_chip(raw: str | None) -> str:
             f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
 
 
-events: list[dict] = []
+@st.fragment
+def _render_event_log() -> None:
+    """Inline event log — role-scoped types/envs/stages. Reruns independently."""
+    # Role-allowed event type options
+    _allowed_types = _ROLE_EVENT_TYPES.get(_effective_role, _ROLE_EVENT_TYPES["Admin"])
+    _type_options = ["All"] + _allowed_types
+    _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
+    _env_options = ["(all)"] + _allowed_envs
 
-# ── builds ──────────────────────────────────────────────────────────────────
-if _el_type in ("All", "Builds"):
-    _bld_f = [range_filter("startdate", start_dt, end_dt)] + list(build_scope_filters())
-    _bld_r = es_search(
-        IDX["builds"],
-        {"query": {"bool": {"filter": _bld_f}},
-         "sort": [{"startdate": "desc"}]},
-        size=int(_el_limit),
-    )
-    for _h in _bld_r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ts = parse_dt(_s.get("startdate"))
-        events.append({
-            "_ts":     _ts,
-            "type":    "build",
-            "When":    fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
-            "Who":     _s.get("application") or _s.get("project", ""),
-            "Version": _s.get("codeversion", ""),
-            "Detail":  f'{_s.get("branch","")} · {_s.get("technology","")}',
-            "Status":  _s.get("status", ""),
-            "Extra":   _s.get("project", ""),
-        })
-
-# ── deployments ─────────────────────────────────────────────────────────────
-if _el_type in ("All", "Deployments"):
-    _dep_f = [range_filter("startdate", start_dt, end_dt)] + list(deploy_scope_filters())
-    if _el_env != "(all)":
-        _dep_f.append({"term": {"environment": _el_env}})
-    _dep_r = es_search(
-        IDX["deployments"],
-        {"query": {"bool": {"filter": _dep_f}},
-         "sort": [{"startdate": "desc"}]},
-        size=int(_el_limit),
-    )
-    for _h in _dep_r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ts = parse_dt(_s.get("startdate"))
-        events.append({
-            "_ts":     _ts,
-            "type":    "deploy",
-            "When":    fmt_dt(_s.get("startdate"), "%Y-%m-%d %H:%M"),
-            "Who":     _s.get("application") or _s.get("project", ""),
-            "Version": _s.get("codeversion", ""),
-            "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")} [{_s.get("project","")}]',
-            "Status":  _s.get("status", ""),
-            "Extra":   _s.get("triggeredby", ""),
-        })
-
-# ── releases ────────────────────────────────────────────────────────────────
-if _el_type in ("All", "Releases"):
-    _rel_f = [range_filter("releasedate", start_dt, end_dt)] + list(scope_filters())
-    _rel_r = es_search(
-        IDX["releases"],
-        {"query": {"bool": {"filter": _rel_f}},
-         "sort": [{"releasedate": "desc"}]},
-        size=int(_el_limit),
-    )
-    for _h in _rel_r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ts = parse_dt(_s.get("releasedate"))
-        events.append({
-            "_ts":     _ts,
-            "type":    "release",
-            "When":    fmt_dt(_s.get("releasedate"), "%Y-%m-%d %H:%M"),
-            "Who":     _s.get("application", ""),
-            "Version": _s.get("codeversion", ""),
-            "Detail":  f'RLM: {_s.get("RLM_STATUS","")}',
-            "Status":  _s.get("RLM_STATUS", ""),
-            "Extra":   "",
-        })
-
-# ── requests / approvals ───────────────────────────────────────────────────
-if _el_type in ("All", "Requests"):
-    # ef-devops-requests
-    _rq_f = [range_filter("RequestDate", start_dt, end_dt)] + list(scope_filters())
-    _rq_r = es_search(
-        IDX["requests"],
-        {"query": {"bool": {"filter": _rq_f}},
-         "sort": [{"RequestDate": "desc"}]},
-        size=int(_el_limit),
-    )
-    for _h in _rq_r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ts = parse_dt(_s.get("RequestDate"))
-        events.append({
-            "_ts":     _ts,
-            "type":    "request",
-            "When":    fmt_dt(_s.get("RequestDate"), "%Y-%m-%d %H:%M"),
-            "Who":     _s.get("application") or _s.get("project", ""),
-            "Version": _s.get("codeversion", ""),
-            "Detail":  f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
-            "Status":  _s.get("Status", ""),
-            "Extra":   _s.get("RequestNumber") or _s.get("id") or "",
-        })
-    # ef-cicd-approval (stage-based)
-    _ap_r = es_search(
-        IDX["approval"],
-        {"query": {"bool": {"filter": [{"exists": {"field": "stage"}}]}},
-         "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
-        size=int(_el_limit),
-    )
-    for _h in _ap_r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ts = parse_dt(_s.get("RequestDate") or _s.get("Created") or _s.get("CreatedDate"))
-        _stage = _s.get("stage") or ""
-        if _stage == "build":
-            _detail = "Running build"
-        elif _stage.startswith("request_deploy_"):
-            _detail = f'Deploy request ({_stage.replace("request_deploy_", "")})'
-        elif _stage == "request_promote":
-            _detail = "Release request (promote)"
-        elif _stage:
-            _detail = f'Running deploy ({_stage})'
+    _el_c1, _el_c2, _el_c3 = st.columns([1.5, 1.2, 1.2])
+    with _el_c1:
+        el_type = st.selectbox("Type", _type_options, key="el_type_v2")
+    with _el_c2:
+        # QC role only has one env — show it read-only
+        if len(_env_options) == 2:
+            el_env = _env_options[1]
+            st.markdown(
+                f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Env</div>'
+                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text);'
+                f'text-transform:uppercase">{el_env}</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            _detail = _s.get("ApprovalType") or ""
-        events.append({
-            "_ts":     _ts,
-            "type":    "request",
-            "When":    fmt_dt(_ts, "%Y-%m-%d %H:%M") if _ts else "—",
-            "Who":     _s.get("application") or _s.get("project", ""),
-            "Version": _s.get("codeversion", ""),
-            "Detail":  f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
-            "Status":  _stage,
-            "Extra":   _s.get("ApprovalId") or _s.get("id") or "",
-        })
+            el_env = st.selectbox("Env", _env_options, key="el_env_v2")
+    with _el_c3:
+        el_limit = st.selectbox("Show", [50, 100, 250], key="el_limit_v2")
 
-# ── commits ─────────────────────────────────────────────────────────────────
-if _el_type in ("All", "Commits"):
-    _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(commit_scope_filters())
-    _com_r = es_search(
-        IDX["commits"],
-        {"query": {"bool": {"filter": _com_f}},
-         "sort": [{"commitdate": "desc"}]},
-        size=int(_el_limit),
-    )
-    for _h in _com_r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ts = parse_dt(_s.get("commitdate"))
-        events.append({
-            "_ts":     _ts,
-            "type":    "commit",
-            "When":    fmt_dt(_s.get("commitdate"), "%Y-%m-%d %H:%M"),
-            "Who":     _s.get("project", _s.get("repository", "")),
-            "Version": "",
-            "Detail":  f'{_s.get("branch","")} · {_s.get("authorname","")}',
-            "Status":  "",
-            "Extra":   (_s.get("commitmessage") or "")[:80],
-        })
+    events: list[dict] = []
 
-# ── sort & render inline ────────────────────────────────────────────────────
-events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
-events = events[:int(_el_limit)]
+    # ── builds (Developer/Admin) ────────────────────────────────────────────
+    if el_type in ("All", "Builds") and _role_allows_type("Builds"):
+        _bld_f = [range_filter("startdate", start_dt, end_dt)] + list(scope_filters())
+        _bld_r = es_search(
+            IDX["builds"],
+            {"query": {"bool": {"filter": _bld_f}},
+             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _bld_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _dv = _pick_date(_s, "build")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "build",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_s.get("branch","")} · {_s.get("technology","")}',
+                "Status":  _s.get("status", ""),
+                "Extra":   _s.get("project", ""),
+            })
 
-if not events:
-    inline_note("No events match the current filters.", "info")
-else:
+    # ── deployments (role-filtered env) ─────────────────────────────────────
+    if el_type in ("All", "Deployments") and _role_allows_type("Deployments"):
+        _dep_f = [range_filter("startdate", start_dt, end_dt)] + list(scope_filters())
+        if el_env != "(all)":
+            _dep_f.append({"term": {"environment": el_env}})
+        else:
+            # Restrict to role-allowed envs
+            _dep_f.append({"terms": {"environment": _allowed_envs}})
+        _dep_r = es_search(
+            IDX["deployments"],
+            {"query": {"bool": {"filter": _dep_f}},
+             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _dep_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _dv = _pick_date(_s, "deploy")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "deploy",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")} [{_s.get("project","")}]',
+                "Status":  _s.get("status", ""),
+                "Extra":   _s.get("triggeredby", ""),
+            })
+
+    # ── releases ────────────────────────────────────────────────────────────
+    if el_type in ("All", "Releases") and _role_allows_type("Releases"):
+        _rel_f = [range_filter("releasedate", start_dt, end_dt)] + list(scope_filters())
+        _rel_r = es_search(
+            IDX["releases"],
+            {"query": {"bool": {"filter": _rel_f}},
+             "sort": [{"releasedate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _rel_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _dv = _pick_date(_s, "release")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "release",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'RLM: {_s.get("RLM_STATUS","")}',
+                "Status":  _s.get("RLM_STATUS", ""),
+                "Extra":   "",
+            })
+
+    # ── requests / approvals (role-filtered by stage) ───────────────────────
+    if el_type in ("All", "Requests") and _role_allows_type("Requests"):
+        # ef-devops-requests
+        _rq_f = [range_filter("RequestDate", start_dt, end_dt)] + list(scope_filters())
+        _rq_r = es_search(
+            IDX["requests"],
+            {"query": {"bool": {"filter": _rq_f}},
+             "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _rq_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            # Role-filter by target environment if applicable
+            _rq_env = (_s.get("TargetEnvironment") or _s.get("environment") or "").lower()
+            if _rq_env and not _role_allows_env(_rq_env):
+                continue
+            _dv = _pick_date(_s, "request")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "request",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
+                "Status":  _s.get("Status", ""),
+                "Extra":   _s.get("RequestNumber") or _s.get("id") or "",
+            })
+        # ef-cicd-approval (stage-based, role-scoped)
+        _ap_f: list[dict] = list(scope_filters())
+        _ap_f.append({"bool": {"should": [
+            range_filter("RequestDate", start_dt, end_dt),
+            range_filter("Created", start_dt, end_dt),
+            range_filter("CreatedDate", start_dt, end_dt),
+        ], "minimum_should_match": 1}})
+        _rsf = _role_stage_filter()
+        if _rsf is not None:
+            _ap_f.append(_rsf)
+        _ap_r = es_search(
+            IDX["approval"],
+            {"query": {"bool": {"filter": _ap_f}},
+             "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _ap_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _dv = _pick_date(_s, "request")
+            _stage = _s.get("stage") or ""
+            if _stage == "build":
+                _detail = "Running build"
+            elif _stage.startswith("request_deploy_"):
+                _detail = f'Deploy request ({_stage.replace("request_deploy_", "")})'
+            elif _stage == "request_promote":
+                _detail = "Release request (promote)"
+            elif _stage:
+                _detail = f'Running deploy ({_stage})'
+            else:
+                _detail = _s.get("ApprovalType") or ""
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "request",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
+                "Status":  _stage or _s.get("Status", ""),
+                "Extra":   _s.get("ApprovalId") or _s.get("id") or "",
+            })
+
+    # ── commits (Developer/Admin) ───────────────────────────────────────────
+    if el_type in ("All", "Commits") and _role_allows_type("Commits"):
+        _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(commit_scope_filters())
+        _com_r = es_search(
+            IDX["commits"],
+            {"query": {"bool": {"filter": _com_f}},
+             "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _com_r.get("hits", {}).get("hits", []):
+            _s = _h["_source"]
+            _dv = _pick_date(_s, "commit")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "commit",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("project", _s.get("repository", "")),
+                "Version": "",
+                "Detail":  f'{_s.get("branch","")} · {_s.get("authorname","")}',
+                "Status":  "",
+                "Extra":   (_s.get("commitmessage") or "")[:80],
+            })
+
+    # ── sort & render inline ────────────────────────────────────────────────
+    events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
+    events = events[:int(el_limit)]
+
+    if not events:
+        inline_note("No events match the current filters.", "info")
+        return
+
     _rows_html = []
     for ev in events:
         _ver_cell = (
@@ -4079,17 +4235,38 @@ else:
         '<tbody>' + "".join(_rows_html) + "</tbody>"
         "</table></div>"
     )
-    # Count by type
-    _type_counts = {}
+    _type_counts: dict[str, int] = {}
     for ev in events:
         _type_counts[ev["type"]] = _type_counts.get(ev["type"], 0) + 1
-    _type_summary = " · ".join(f"{_type_counts.get(t, 0)} {t}s" for t in ["build", "deploy", "release", "request", "commit"] if _type_counts.get(t, 0))
+    _type_summary = " · ".join(
+        f"{_type_counts.get(t, 0)} {t}s"
+        for t in ["build", "deploy", "release", "request", "commit"]
+        if _type_counts.get(t, 0)
+    )
     st.markdown(
         f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
         f'Showing {len(events)} events · {_type_summary} · sorted newest first</p>'
         + _table_html,
         unsafe_allow_html=True,
     )
+
+
+if _show("eventlog"):
+    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+    _el_hint = {
+        "Admin": "builds · deployments · releases · requests · commits",
+        "Developer": "your builds, commits, and build-stage requests",
+        "QC": "QC deployments, release requests, and releases",
+        "Operator": "UAT/PRD deployments, deploy requests, and releases",
+    }.get(_effective_role, "all event types")
+    st.markdown(
+        f'<div class="section">'
+        f'<div class="title-wrap"><h2>Event log</h2><span class="badge">{ROLE_ICONS[_effective_role]} Live · {_effective_role}</span></div>'
+        f'<span class="hint">{_el_hint} &mdash; newest first</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    _render_event_log()
 
 
 # =============================================================================
