@@ -1030,6 +1030,24 @@ def _load_team_applications(role: str, team: str) -> list[str]:
         return []
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str]:
+    """Return inventory projects where the role's team field(s) match any of ``teams``.
+
+    Developer → ``dev_team``; QC → ``qc_team``; Operator → ``uat_team``/``prd_team``.
+    Admin (or an empty team list) returns an empty list to signal "no scoping".
+    """
+    fields = ROLE_TEAM_FIELDS.get(role, [])
+    if not fields or not teams:
+        return []
+    should = [{"terms": {f: list(teams)}} for f in fields]
+    query = {"bool": {"should": should, "minimum_should_match": 1}}
+    try:
+        return sorted(composite_terms(IDX["inventory"], "project.keyword", query).keys())
+    except Exception:
+        return []
+
+
 _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
@@ -1070,55 +1088,114 @@ with _cb1[0]:
                     f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
                     f'{ROLE_ICONS[role_pick]} {role_pick}</div>', unsafe_allow_html=True)
 
+_ALL_MY_TEAMS = "— All my teams —"
+
 with _cb1[1]:
-    # Teams come from session state; for non-Admin roles we filter by team
-    if _session_teams and role_pick != "Admin":
-        if len(_session_teams) > 1:
-            team_pick = st.selectbox("Team", _session_teams, index=0, key="team_pick")
-        else:
-            team_pick = _session_teams[0]
-            st.markdown(f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                        f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
-                        f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
-                        f'{team_pick}</div>', unsafe_allow_html=True)
-        team_filter = team_pick
-    elif role_pick == "Admin" and _session_teams:
-        # Admin can optionally scope to a team
-        team_pick = st.selectbox("Team", [_ALL] + _session_teams, index=0, key="team_pick",
+    # Teams come from session state; for non-Admin roles the user is confined
+    # to their session teams. Admin may optionally scope to any inventory team.
+    if role_pick == "Admin":
+        _admin_teams = _session_teams or _load_teams_for_role("Admin")
+        team_pick = st.selectbox("Team", [_ALL] + _admin_teams, index=0, key="team_pick",
                                  help="Admin: optionally filter to a specific team")
         team_filter = "" if team_pick == _ALL else team_pick
+        _active_teams: list[str] = [team_filter] if team_filter else []
+    elif _session_teams:
+        if len(_session_teams) > 1:
+            team_pick = st.selectbox(
+                "Team", [_ALL_MY_TEAMS] + _session_teams, index=0, key="team_pick",
+                help="Scope to a single team, or leave on 'all my teams' for a union view",
+            )
+            if team_pick == _ALL_MY_TEAMS:
+                team_filter = ""                        # union of all session teams
+                _active_teams = list(_session_teams)
+            else:
+                team_filter = team_pick
+                _active_teams = [team_pick]
+        else:
+            # Exactly one team → auto-selected, rendered read-only
+            team_pick = _session_teams[0]
+            st.markdown(
+                f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
+                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
+                f'{team_pick}</div>',
+                unsafe_allow_html=True,
+            )
+            team_filter = team_pick
+            _active_teams = [team_pick]
     else:
+        # Non-Admin with no session teams — render informational placeholder.
         team_filter = ""
+        _active_teams = []
         st.markdown('<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
                     'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
-                    '<div style="font-size:.90rem;color:var(--cc-text-mute)">All teams</div>',
+                    '<div style="font-size:.90rem;color:var(--cc-text-mute)">No team assigned</div>',
                     unsafe_allow_html=True)
 
 # Resolve team → application list for scope filtering
 if team_filter:
     # When Admin scopes to a team, query all team fields (any role assignment counts)
-    _team_role_for_query = role_pick if role_pick != "Admin" else "Admin"
-    _team_apps: list[str] = _load_team_applications(role_pick, team_filter) if role_pick != "Admin" else []
-    if role_pick == "Admin" and team_filter:
-        # Admin + team selected: find apps where this team appears in ANY team field
+    if role_pick == "Admin":
         _admin_team_apps: set[str] = set()
         for _r in ["Developer", "QC", "Operator"]:
             _admin_team_apps.update(_load_team_applications(_r, team_filter))
         _team_apps = sorted(_admin_team_apps)
+    else:
+        _team_apps = _load_team_applications(role_pick, team_filter)
+elif role_pick != "Admin" and _active_teams:
+    # Non-admin "all my teams" — union across every session team
+    _union: set[str] = set()
+    for _t in _active_teams:
+        _union.update(_load_team_applications(role_pick, _t))
+    _team_apps = sorted(_union)
 else:
     _team_apps = []  # no team-based restriction
 
 with _cb1[2]:
-    _company_options = [_ALL] + _all_companies
-    company_pick = st.selectbox("Company", _company_options, index=0, key="company_pick",
-                                help=f"{len(_all_companies)} companies in inventory")
-    company_filter = "" if company_pick == _ALL else company_pick
+    # Company selector is Admin-only. Non-admins are confined to whatever
+    # companies their team assignment covers — no company toggle shown.
+    if role_pick == "Admin":
+        _company_options = [_ALL] + _all_companies
+        company_pick = st.selectbox(
+            "Company", _company_options, index=0, key="company_pick",
+            help=f"{len(_all_companies)} companies in inventory",
+        )
+        company_filter = "" if company_pick == _ALL else company_pick
+    else:
+        company_filter = ""
+        st.markdown(
+            '<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+            'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Company</div>'
+            '<div style="font-size:.90rem;color:var(--cc-text-mute)">Scoped by team</div>',
+            unsafe_allow_html=True,
+        )
 
 with _cb1[3]:
-    _proj_options = [_ALL] + _all_projects
-    project_pick = st.selectbox("Project", _proj_options, index=0, key="project_pick",
-                                help=f"{len(_all_projects)} projects in inventory")
+    # Project options are filtered to the role's team assignment via inventory.
+    if role_pick == "Admin":
+        _proj_scoped = _all_projects
+        _proj_help = f"{len(_all_projects)} projects in inventory"
+    elif _active_teams:
+        _proj_scoped = _load_projects_for_role_teams(role_pick, tuple(_active_teams))
+        _proj_help = (
+            f"{len(_proj_scoped)} project(s) where {role_pick.lower()} team ∈ "
+            f"{', '.join(_active_teams)}"
+        )
+    else:
+        _proj_scoped = []
+        _proj_help = "No projects visible — no team assigned"
+    _proj_options = [_ALL] + _proj_scoped
+    project_pick = st.selectbox(
+        "Project", _proj_options, index=0, key="project_pick", help=_proj_help,
+    )
     project_filter = "" if project_pick == _ALL else project_pick
+
+# For non-admin roles with no specific project picked, restrict queries to the
+# role's visible projects (covers indices like ef-cicd-approval that may not
+# have an `application` field available for the team-apps filter).
+_scoped_projects: list[str] = (
+    _proj_scoped if (role_pick != "Admin" and not project_filter) else []
+)
 
 with _cb1[4]:
     auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
@@ -1270,6 +1347,9 @@ def scope_filters() -> list[dict]:
         fs.append({"term": {"company.keyword": company_filter}})
     if project_filter:
         fs.append({"term": {"project": project_filter}})
+    elif _scoped_projects:
+        # Non-admin roles with no specific project → confine to role's visible set
+        fs.append({"terms": {"project": _scoped_projects}})
     # Team-based application restriction
     if _team_apps:
         fs.append({"terms": {"application": _team_apps}})
@@ -1285,6 +1365,8 @@ def scope_filters_inv() -> list[dict]:
         fs.append({"term": {"company.keyword": company_filter}})
     if project_filter:
         fs.append({"term": {"project.keyword": project_filter}})
+    elif _scoped_projects:
+        fs.append({"terms": {"project.keyword": _scoped_projects}})
     # Team-based application restriction
     if _team_apps:
         fs.append({"terms": {"application.keyword": _team_apps}})
@@ -2296,6 +2378,14 @@ def _render_event_log() -> None:
         for _h in _rel_r.get("hits", {}).get("hits", []):
             _s = _h.get("_source", {})
             _dv = _hit_date(_h, "release")
+            _rlm_status = _s.get("RLM_STATUS") or ""
+            # When RLM_STATUS is "No error", surface the RLM value itself;
+            # otherwise show the RLM_STATUS text as the detail.
+            _rlm_detail = (
+                (_s.get("RLM") or "")
+                if _rlm_status.strip().lower() == "no error"
+                else _rlm_status
+            )
             events.append({
                 "_ts":     parse_dt(_dv),
                 "type":    "release",
@@ -2303,8 +2393,9 @@ def _render_event_log() -> None:
                 "Who":     _s.get("application", ""),
                 "Project": _s.get("project", ""),
                 "Version": _s.get("codeversion", ""),
-                "Detail":  f'RLM: {_s.get("RLM_STATUS","")}',
-                "Status":  _s.get("RLM_STATUS", ""),
+                "Detail":  f'RLM: {_rlm_detail}' if _rlm_detail else "",
+                # Releases are historical artifacts — always rendered OK.
+                "Status":  "SUCCESS",
                 "Extra":   "",
             })
 
@@ -2403,7 +2494,8 @@ def _render_event_log() -> None:
                     f'{_s.get("branch","")} · {_s.get("authorname","")}'
                     + (f' — {_cmsg_first}' if _cmsg_first else "")
                 ),
-                "Status":  "",
+                # Commits are recorded events — always rendered OK.
+                "Status":  "SUCCESS",
                 "Extra":   _cmsg_first,
             })
 
