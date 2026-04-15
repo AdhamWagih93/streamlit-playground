@@ -549,6 +549,146 @@ div[data-testid="stPopover"] button:hover {
     font-size: .85rem; font-weight: 700; font-family: var(--cc-mono);
     color: var(--cc-text);
 }
+
+/* -------- Event-log application popover — native [popover] API -------- */
+.el-app-trigger {
+    all: unset;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--cc-text);
+    font-size: 0.82rem;
+    border-bottom: 1px dashed var(--cc-text-mute);
+    padding: 0 2px;
+    transition: color .12s, border-color .12s;
+}
+.el-app-trigger:hover {
+    color: var(--cc-accent);
+    border-bottom-color: var(--cc-accent);
+}
+.el-app-trigger:focus-visible {
+    outline: 2px solid var(--cc-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* Native popover element — unaffected by parent overflow:hidden */
+.el-app-pop {
+    /* start with no box defaults from UA */
+    border: none;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    /* visible styling */
+    width: min(420px, 92vw);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow:
+        0 1px 2px rgba(26, 29, 46, .05),
+        0 20px 50px -10px rgba(26, 29, 46, .25),
+        0 0 0 1px rgba(79, 70, 229, .08);
+    color: var(--cc-text);
+    font-family: var(--cc-sans);
+    /* subtle fade-in */
+    animation: el-pop-in .18s ease-out;
+}
+.el-app-pop::backdrop {
+    background: rgba(26, 29, 46, 0.28);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+}
+@keyframes el-pop-in {
+    from { opacity: 0; transform: translateY(6px) scale(.98); }
+    to   { opacity: 1; transform: translateY(0)  scale(1); }
+}
+.el-app-pop .ap-head {
+    position: relative;
+    padding: 18px 20px 14px;
+    background:
+        radial-gradient(120% 120% at 0% 0%, rgba(79,70,229,.14), transparent 60%),
+        linear-gradient(135deg, #ffffff, #fafbff);
+    border-bottom: 1px solid var(--cc-border);
+    display: flex; align-items: center; gap: 12px;
+}
+.el-app-pop .ap-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--cc-accent), #7c3aed);
+    color: #fff; font-size: 1.1rem;
+    box-shadow: 0 6px 16px -4px rgba(79, 70, 229, .4);
+    flex-shrink: 0;
+}
+.el-app-pop .ap-title-wrap { flex: 1; min-width: 0; }
+.el-app-pop .ap-kicker {
+    font-size: .64rem; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--cc-accent);
+}
+.el-app-pop .ap-title {
+    font-size: 1.02rem; font-weight: 700; color: var(--cc-text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-top: 1px;
+}
+.el-app-pop .ap-close {
+    all: unset; cursor: pointer;
+    width: 28px; height: 28px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--cc-text-mute); font-size: 1.3rem; line-height: 1;
+    transition: background .12s, color .12s;
+}
+.el-app-pop .ap-close:hover {
+    background: var(--cc-surface2); color: var(--cc-red);
+}
+.el-app-pop .ap-body {
+    background: var(--cc-surface);
+    padding: 14px 18px 18px;
+    display: grid;
+    grid-template-columns: minmax(120px, max-content) 1fr;
+    gap: 10px 16px;
+    font-size: .85rem;
+}
+.el-app-pop .ap-section {
+    grid-column: 1 / -1;
+    font-size: .64rem; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--cc-text-mute);
+    margin: 6px 0 -2px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.el-app-pop .ap-section:first-child { margin-top: 0; }
+.el-app-pop .ap-k {
+    color: var(--cc-text-mute);
+    font-size: .74rem; font-weight: 600; letter-spacing: .04em;
+    padding-top: 2px;
+}
+.el-app-pop .ap-v {
+    color: var(--cc-text);
+    font-family: var(--cc-mono);
+    font-size: .78rem;
+    word-break: break-word;
+}
+.el-app-pop .ap-v.empty {
+    color: var(--cc-text-mute);
+    font-family: var(--cc-sans);
+    font-style: italic;
+}
+.el-app-pop .ap-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    border-radius: 5px;
+    font-family: var(--cc-mono);
+    font-size: .72rem;
+    font-weight: 600;
+}
+.el-app-pop .ap-foot {
+    background: var(--cc-surface2);
+    padding: 8px 18px;
+    font-size: .68rem;
+    color: var(--cc-text-mute);
+    border-top: 1px solid var(--cc-border);
+    text-align: right;
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -1028,6 +1168,60 @@ def _load_team_applications(role: str, team: str) -> list[str]:
         return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
     except Exception:
         return []
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_inventory_details(apps: tuple[str, ...]) -> dict[str, dict]:
+    """Batch-fetch inventory records for the given applications.
+
+    Returns ``{application_name: {build_technology, deploy_technology,
+    deploy_platform, build_image_name, build_image_tag, deploy_image_name,
+    deploy_image_tag, company, project}}``. Missing fields are omitted.
+    """
+    if not apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["inventory"],
+            {
+                "query": {"terms": {"application.keyword": list(apps)}},
+                "_source": [
+                    "application", "company", "project",
+                    "build_technology", "deploy_technology", "deploy_platform",
+                    "build_image", "deploy_image",
+                    "build_image.name", "build_image.tag",
+                    "deploy_image.name", "deploy_image.tag",
+                ],
+            },
+            size=len(apps),
+        )
+    except Exception:
+        return {}
+    out: dict[str, dict] = {}
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        _app = _s.get("application")
+        if not _app:
+            continue
+        _bi = _s.get("build_image") or {}
+        _di = _s.get("deploy_image") or {}
+        # ES may index either nested or flattened — fall back gracefully
+        _bi_name = (_bi.get("name") if isinstance(_bi, dict) else None) or _s.get("build_image.name", "")
+        _bi_tag  = (_bi.get("tag")  if isinstance(_bi, dict) else None) or _s.get("build_image.tag", "")
+        _di_name = (_di.get("name") if isinstance(_di, dict) else None) or _s.get("deploy_image.name", "")
+        _di_tag  = (_di.get("tag")  if isinstance(_di, dict) else None) or _s.get("deploy_image.tag", "")
+        out[_app] = {
+            "company":            _s.get("company", ""),
+            "project":            _s.get("project", ""),
+            "build_technology":   _s.get("build_technology", ""),
+            "deploy_technology":  _s.get("deploy_technology", ""),
+            "deploy_platform":    _s.get("deploy_platform", ""),
+            "build_image_name":   _bi_name or "",
+            "build_image_tag":    _bi_tag  or "",
+            "deploy_image_name":  _di_name or "",
+            "deploy_image_tag":   _di_tag  or "",
+        }
+    return out
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -2507,6 +2701,38 @@ def _render_event_log() -> None:
         inline_note("No events match the current filters.", "info")
         return
 
+    # Collect unique application names from build/deploy/release events (only
+    # these carry reliable inventory identity) and fetch their inventory cards.
+    _pop_apps = sorted({
+        ev["Who"] for ev in events
+        if ev["type"] in ("build", "deploy", "release") and ev.get("Who")
+    })
+    _inv_map = _fetch_inventory_details(tuple(_pop_apps)) if _pop_apps else {}
+
+    def _pop_id(app: str) -> str:
+        """Deterministic DOM id for an application popover."""
+        return "el-app-pop-" + "".join(
+            c.lower() if c.isalnum() else "-" for c in app
+        )[:80]
+
+    def _app_cell(ev: dict) -> str:
+        """Render the Application column — clickable popover trigger when we
+        have inventory data for it; otherwise plain text."""
+        _name = ev.get("Who") or ""
+        if not _name:
+            return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        if ev["type"] in ("build", "deploy", "release") and _name in _inv_map:
+            return (
+                f'<button type="button" class="el-app-trigger" '
+                f'popovertarget="{_pop_id(_name)}" '
+                f'title="Click for inventory details">{_name}</button>'
+            )
+        # No inventory / non-inspectable event type → plain label
+        return (
+            f'<span style="font-weight:600;color:var(--cc-text);'
+            f'font-size:0.82rem">{_name}</span>'
+        )
+
     _rows_html = []
     for ev in events:
         _ver_cell = (
@@ -2523,13 +2749,56 @@ def _render_event_log() -> None:
             f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
             f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
             f'<td style="padding:5px 4px">{_proj_cell}</td>'
-            f'<td style="font-weight:600;color:var(--cc-text);font-size:0.82rem;padding:5px 4px">{ev["Who"]}</td>'
+            f'<td style="padding:5px 4px">{_app_cell(ev)}</td>'
             f'<td style="padding:5px 4px">{_ver_cell}</td>'
             f'<td style="color:var(--cc-text-dim);font-size:0.8rem;padding:5px 4px">{ev["Detail"]}</td>'
             f'<td style="padding:5px 6px">{_status_chip(ev["Status"])}</td>'
             f'<td style="color:var(--cc-text-mute);font-size:0.75rem;max-width:220px;'
             f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 4px">{ev["Extra"]}</td>'
             f"</tr>"
+        )
+
+    # Build popover HTML once per unique application
+    def _v(val: str) -> str:
+        return (f'<span class="ap-v">{val}</span>'
+                if val else '<span class="ap-v empty">—</span>')
+
+    def _chip(val: str) -> str:
+        return (f'<span class="ap-v"><span class="ap-chip">{val}</span></span>'
+                if val else '<span class="ap-v empty">—</span>')
+
+    _popovers_html: list[str] = []
+    for _app in _pop_apps:
+        _inv = _inv_map.get(_app)
+        if not _inv:
+            continue
+        _pid = _pop_id(_app)
+        _popovers_html.append(
+            f'<div id="{_pid}" popover="auto" class="el-app-pop">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">◆</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Application</div>'
+            f'      <div class="ap-title">{_app}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_pid}" popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    <div class="ap-section">Identity</div>'
+            f'    <span class="ap-k">Project</span>{_v(_inv.get("project", ""))}'
+            f'    <span class="ap-k">Company</span>{_v(_inv.get("company", ""))}'
+            f'    <div class="ap-section">Build</div>'
+            f'    <span class="ap-k">Technology</span>{_chip(_inv.get("build_technology", ""))}'
+            f'    <span class="ap-k">Image name</span>{_v(_inv.get("build_image_name", ""))}'
+            f'    <span class="ap-k">Image tag</span>{_v(_inv.get("build_image_tag", ""))}'
+            f'    <div class="ap-section">Deploy</div>'
+            f'    <span class="ap-k">Technology</span>{_chip(_inv.get("deploy_technology", ""))}'
+            f'    <span class="ap-k">Platform</span>{_chip(_inv.get("deploy_platform", ""))}'
+            f'    <span class="ap-k">Image name</span>{_v(_inv.get("deploy_image_name", ""))}'
+            f'    <span class="ap-k">Image tag</span>{_v(_inv.get("deploy_image_tag", ""))}'
+            f'  </div>'
+            f'  <div class="ap-foot">Source: ef-devops-inventory · click outside to dismiss</div>'
+            f'</div>'
         )
     _th_style = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
     _table_html = (
@@ -2558,8 +2827,10 @@ def _render_event_log() -> None:
     )
     st.markdown(
         f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
-        f'Showing {len(events)} events · {_type_summary} · sorted newest first</p>'
-        + _table_html,
+        f'Showing {len(events)} events · {_type_summary} · sorted newest first · '
+        f'<span style="color:var(--cc-accent)">click application names to inspect</span></p>'
+        + _table_html
+        + "".join(_popovers_html),
         unsafe_allow_html=True,
     )
 
