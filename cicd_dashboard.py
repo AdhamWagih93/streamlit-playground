@@ -2388,6 +2388,8 @@ def _render_event_log() -> None:
         for _h in _com_r.get("hits", {}).get("hits", []):
             _s = _h.get("_source", {})
             _dv = _hit_date(_h, "commit")
+            _cmsg = (_s.get("commitmessage") or "").strip().splitlines()
+            _cmsg_first = _cmsg[0] if _cmsg else ""
             events.append({
                 "_ts":     parse_dt(_dv),
                 "type":    "commit",
@@ -2397,9 +2399,12 @@ def _render_event_log() -> None:
                 "Who":     _s.get("repository", ""),
                 "Project": _s.get("project", ""),
                 "Version": "",
-                "Detail":  f'{_s.get("branch","")} · {_s.get("authorname","")}',
+                "Detail":  (
+                    f'{_s.get("branch","")} · {_s.get("authorname","")}'
+                    + (f' — {_cmsg_first}' if _cmsg_first else "")
+                ),
                 "Status":  "",
-                "Extra":   (_s.get("commitmessage") or "")[:80],
+                "Extra":   _cmsg_first,
             })
 
     # ── sort & render inline ────────────────────────────────────────────────
