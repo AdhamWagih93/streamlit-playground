@@ -836,6 +836,36 @@ def _pick_date(source: dict, family: str) -> Any:
     return None
 
 
+def _hit_date(hit: dict, family: str) -> Any:
+    """Best-effort date extraction from an ES hit.
+
+    Prefers the ``sort`` value (epoch-ms when sorted by a date field — always
+    parseable), then falls back to ``_pick_date`` on ``_source``, then scans
+    every ``_source`` value for anything that looks like a date.
+    """
+    # 1. Sort value — ES returns epoch-ms for date sorts, guaranteed parseable
+    sort_vals = hit.get("sort")
+    if isinstance(sort_vals, list) and sort_vals:
+        sv = sort_vals[0]
+        # Skip ES sentinel for missing values (max long)
+        if isinstance(sv, (int, float)) and sv not in (9223372036854775807, -9223372036854775808):
+            return sv
+    src = hit.get("_source", {}) or {}
+    # 2. Known candidate fields
+    v = _pick_date(src, family)
+    if v is not None:
+        return v
+    # 3. Last-ditch scan: any ISO-8601-looking string or epoch-ms in the source
+    for key, val in src.items():
+        if val is None:
+            continue
+        if isinstance(val, (int, float)) and 1e9 < val < 4e12:
+            return val  # plausible epoch-s or epoch-ms
+        if isinstance(val, str) and len(val) >= 10 and val[0:4].isdigit() and val[4] == "-":
+            return val
+    return None
+
+
 def age_hours(value: Any, reference: datetime | None = None) -> int | None:
     """Return elapsed hours between *value* and *reference* (defaults to now UTC)."""
     ts = parse_dt(value)
@@ -2013,10 +2043,10 @@ if _tick_evts:
 # Each role sees only the sections relevant to them. Admin sees everything.
 # Priority order matters: used for nav chip ordering too.
 _ROLE_PRIORITY_SECTIONS: dict[str, list[str]] = {
-    "Admin":     ["alerts", "landscape", "lifecycle", "pipeline", "workflow", "eventlog"],
-    "Developer": ["alerts", "pipeline", "lifecycle", "workflow", "eventlog"],
-    "QC":        ["alerts", "workflow", "lifecycle", "pipeline", "eventlog"],
-    "Operator":  ["alerts", "workflow", "pipeline", "lifecycle", "eventlog"],
+    "Admin":     ["eventlog", "alerts", "landscape", "lifecycle", "pipeline", "workflow"],
+    "Developer": ["eventlog", "alerts", "pipeline", "lifecycle", "workflow"],
+    "QC":        ["eventlog", "alerts", "workflow", "lifecycle", "pipeline"],
+    "Operator":  ["eventlog", "alerts", "workflow", "pipeline", "lifecycle"],
 }
 # Effective role for rendering — Admin can view-as another role
 _effective_role = role_pick
@@ -2091,6 +2121,330 @@ for _sec_id, _nl, _nh in _ordered_nav:
     _nav_html += f'<a href="{_nh}"{_extra_cls}>{_nl}</a>'
 _nav_html += '</div>'
 st.markdown(_nav_html, unsafe_allow_html=True)
+
+
+# =============================================================================
+# EVENT LOG — TOP OF PAGE — fragment, auto-refresh every 60s, expandable
+# =============================================================================
+
+# ── styling helpers — module-level so the fragment re-uses them cheaply ────
+_TYPE_BADGE = {
+    "build":   ('<span style="background:#eef2ff;color:#6366f1;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">BUILD</span>'),
+    "deploy":  ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">DEPLOY</span>'),
+    "release": ('<span style="background:#fce7f3;color:#be185d;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">RELEASE</span>'),
+    "request": ('<span style="background:#fef3c7;color:#92400e;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">REQUEST</span>'),
+    "commit":  ('<span style="background:#d1fae5;color:#065f46;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">COMMIT</span>'),
+}
+_STATUS_CHIP = {
+    "SUCCESS": ('<span style="background:#059669;color:#fff;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">OK</span>'),
+    "FAILED":  ('<span style="background:#dc2626;color:#fff;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">FAIL</span>'),
+    "RUNNING": ('<span style="background:#d97706;color:#fff;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">RUN</span>'),
+    "PENDING": ('<span style="background:#d97706;color:#fff;border-radius:4px;'
+                'padding:1px 7px;font-size:0.72rem;font-weight:700">PEND</span>'),
+}
+
+
+def _status_chip(raw: str | None) -> str:
+    if raw is None or raw == "":
+        return ""
+    up = (raw or "").upper()
+    if up in _STATUS_CHIP:
+        return _STATUS_CHIP[up]
+    if any(f in up for f in ("FAIL", "ERROR", "ABORT")):
+        return _STATUS_CHIP["FAILED"]
+    if up in ("SUCCESS", "SUCCEEDED", "PASSED", "OK", "APPROVED"):
+        return _STATUS_CHIP["SUCCESS"]
+    if up in ("PENDING", "WAITING", "OPEN", "NEW"):
+        return _STATUS_CHIP["PENDING"]
+    return (f'<span style="background:var(--cc-surface2);color:var(--cc-text-dim);border-radius:4px;'
+            f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
+
+
+@st.fragment(run_every="60s")
+def _render_event_log() -> None:
+    """Inline event log — role-scoped, auto-refreshes every 60s independently."""
+    # Role-allowed event type options
+    _allowed_types = _ROLE_EVENT_TYPES.get(_effective_role, _ROLE_EVENT_TYPES["Admin"])
+    _type_options = ["All"] + _allowed_types
+    _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
+    _env_options = ["(all)"] + _allowed_envs
+
+    _el_c1, _el_c2, _el_c3, _el_c4 = st.columns([1.5, 1.2, 1.2, 1.2])
+    with _el_c1:
+        el_type = st.selectbox("Type", _type_options, key="el_type_v2")
+    with _el_c2:
+        # QC role only has one env — show it read-only
+        if len(_env_options) == 2:
+            el_env = _env_options[1]
+            st.markdown(
+                f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Env</div>'
+                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text);'
+                f'text-transform:uppercase">{el_env}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            el_env = st.selectbox("Env", _env_options, key="el_env_v2")
+    with _el_c3:
+        el_limit = st.selectbox("Show", [50, 100, 250], key="el_limit_v2")
+    with _el_c4:
+        st.markdown(
+            f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+            f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Last refresh</div>'
+            f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
+            f'{datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC · auto every 60s</div>',
+            unsafe_allow_html=True,
+        )
+
+    events: list[dict] = []
+
+    # ── builds (Developer/Admin) ────────────────────────────────────────────
+    if el_type in ("All", "Builds") and _role_allows_type("Builds"):
+        _bld_f = [range_filter("startdate", start_dt, end_dt)] + list(scope_filters())
+        _bld_r = es_search(
+            IDX["builds"],
+            {"query": {"bool": {"filter": _bld_f}},
+             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _bld_r.get("hits", {}).get("hits", []):
+            _s = _h.get("_source", {})
+            _dv = _hit_date(_h, "build")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "build",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_s.get("branch","")} · {_s.get("technology","")}',
+                "Status":  _s.get("status", ""),
+                "Extra":   _s.get("project", ""),
+            })
+
+    # ── deployments (role-filtered env) ─────────────────────────────────────
+    if el_type in ("All", "Deployments") and _role_allows_type("Deployments"):
+        _dep_f = [range_filter("startdate", start_dt, end_dt)] + list(scope_filters())
+        if el_env != "(all)":
+            _dep_f.append({"term": {"environment": el_env}})
+        else:
+            _dep_f.append({"terms": {"environment": _allowed_envs}})
+        _dep_r = es_search(
+            IDX["deployments"],
+            {"query": {"bool": {"filter": _dep_f}},
+             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _dep_r.get("hits", {}).get("hits", []):
+            _s = _h.get("_source", {})
+            _dv = _hit_date(_h, "deploy")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "deploy",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")} [{_s.get("project","")}]',
+                "Status":  _s.get("status", ""),
+                "Extra":   _s.get("triggeredby", ""),
+            })
+
+    # ── releases ────────────────────────────────────────────────────────────
+    if el_type in ("All", "Releases") and _role_allows_type("Releases"):
+        _rel_f = [range_filter("releasedate", start_dt, end_dt)] + list(scope_filters())
+        _rel_r = es_search(
+            IDX["releases"],
+            {"query": {"bool": {"filter": _rel_f}},
+             "sort": [{"releasedate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _rel_r.get("hits", {}).get("hits", []):
+            _s = _h.get("_source", {})
+            _dv = _hit_date(_h, "release")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "release",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'RLM: {_s.get("RLM_STATUS","")}',
+                "Status":  _s.get("RLM_STATUS", ""),
+                "Extra":   "",
+            })
+
+    # ── requests / approvals (role-filtered by stage) ───────────────────────
+    if el_type in ("All", "Requests") and _role_allows_type("Requests"):
+        _rq_f = [range_filter("RequestDate", start_dt, end_dt)] + list(scope_filters())
+        _rq_r = es_search(
+            IDX["requests"],
+            {"query": {"bool": {"filter": _rq_f}},
+             "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _rq_r.get("hits", {}).get("hits", []):
+            _s = _h.get("_source", {})
+            _rq_env = (_s.get("TargetEnvironment") or _s.get("environment") or "").lower()
+            if _rq_env and not _role_allows_env(_rq_env):
+                continue
+            _dv = _hit_date(_h, "request")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "request",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
+                "Status":  _s.get("Status", ""),
+                "Extra":   _s.get("RequestNumber") or _s.get("id") or "",
+            })
+        # ef-cicd-approval (stage-based, role-scoped)
+        _ap_f: list[dict] = list(scope_filters())
+        _ap_f.append({"bool": {"should": [
+            range_filter("RequestDate", start_dt, end_dt),
+            range_filter("Created", start_dt, end_dt),
+            range_filter("CreatedDate", start_dt, end_dt),
+        ], "minimum_should_match": 1}})
+        _rsf = _role_stage_filter()
+        if _rsf is not None:
+            _ap_f.append(_rsf)
+        _ap_r = es_search(
+            IDX["approval"],
+            {"query": {"bool": {"filter": _ap_f}},
+             "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _ap_r.get("hits", {}).get("hits", []):
+            _s = _h.get("_source", {})
+            _dv = _hit_date(_h, "request")
+            _stage = _s.get("stage") or ""
+            if _stage == "build":
+                _detail = "Running build"
+            elif _stage.startswith("request_deploy_"):
+                _detail = f'Deploy request ({_stage.replace("request_deploy_", "")})'
+            elif _stage == "request_promote":
+                _detail = "Release request (promote)"
+            elif _stage:
+                _detail = f'Running deploy ({_stage})'
+            else:
+                _detail = _s.get("ApprovalType") or ""
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "request",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("application") or _s.get("project", ""),
+                "Version": _s.get("codeversion", ""),
+                "Detail":  f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
+                "Status":  _stage or _s.get("Status", ""),
+                "Extra":   _s.get("ApprovalId") or _s.get("id") or "",
+            })
+
+    # ── commits (Developer/Admin) ───────────────────────────────────────────
+    if el_type in ("All", "Commits") and _role_allows_type("Commits"):
+        _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(commit_scope_filters())
+        _com_r = es_search(
+            IDX["commits"],
+            {"query": {"bool": {"filter": _com_f}},
+             "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}]},
+            size=int(el_limit),
+        )
+        for _h in _com_r.get("hits", {}).get("hits", []):
+            _s = _h.get("_source", {})
+            _dv = _hit_date(_h, "commit")
+            events.append({
+                "_ts":     parse_dt(_dv),
+                "type":    "commit",
+                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":     _s.get("project", _s.get("repository", "")),
+                "Version": "",
+                "Detail":  f'{_s.get("branch","")} · {_s.get("authorname","")}',
+                "Status":  "",
+                "Extra":   (_s.get("commitmessage") or "")[:80],
+            })
+
+    # ── sort & render inline ────────────────────────────────────────────────
+    events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
+    events = events[:int(el_limit)]
+
+    if not events:
+        inline_note("No events match the current filters.", "info")
+        return
+
+    _rows_html = []
+    for ev in events:
+        _ver_cell = (
+            f'<span style="font-family:var(--cc-mono);font-size:0.73rem;color:var(--cc-accent);'
+            f'background:var(--cc-accent-lt);padding:1px 6px;border-radius:4px">{ev["Version"]}</span>'
+            if ev.get("Version") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        )
+        _rows_html.append(
+            f"<tr>"
+            f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
+            f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
+            f'<td style="font-weight:600;color:var(--cc-text);font-size:0.82rem;padding:5px 4px">{ev["Who"]}</td>'
+            f'<td style="padding:5px 4px">{_ver_cell}</td>'
+            f'<td style="color:var(--cc-text-dim);font-size:0.8rem;padding:5px 4px">{ev["Detail"]}</td>'
+            f'<td style="padding:5px 6px">{_status_chip(ev["Status"])}</td>'
+            f'<td style="color:var(--cc-text-mute);font-size:0.75rem;max-width:220px;'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 4px">{ev["Extra"]}</td>'
+            f"</tr>"
+        )
+    _th_style = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
+    _table_html = (
+        '<div style="overflow-y:auto;max-height:60vh;border:1px solid var(--cc-border);border-radius:10px">'
+        '<table style="width:100%;border-collapse:collapse;font-family:inherit">'
+        f'<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left;background:var(--cc-surface2)">'
+        f'<th {_th_style}>Time</th>'
+        f'<th {_th_style}>Type</th>'
+        f'<th {_th_style}>Application</th>'
+        f'<th {_th_style}>Artifact</th>'
+        f'<th {_th_style}>Detail</th>'
+        f'<th {_th_style}>Status</th>'
+        f'<th {_th_style}>Note</th>'
+        f'</tr></thead>'
+        '<tbody>' + "".join(_rows_html) + "</tbody>"
+        "</table></div>"
+    )
+    _type_counts: dict[str, int] = {}
+    for ev in events:
+        _type_counts[ev["type"]] = _type_counts.get(ev["type"], 0) + 1
+    _type_summary = " · ".join(
+        f"{_type_counts.get(t, 0)} {t}s"
+        for t in ["build", "deploy", "release", "request", "commit"]
+        if _type_counts.get(t, 0)
+    )
+    st.markdown(
+        f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
+        f'Showing {len(events)} events · {_type_summary} · sorted newest first</p>'
+        + _table_html,
+        unsafe_allow_html=True,
+    )
+
+
+if _show("eventlog"):
+    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+    _el_hint = {
+        "Admin": "builds · deployments · releases · requests · commits",
+        "Developer": "your builds, commits, and build-stage requests",
+        "QC": "QC deployments, release requests, and releases",
+        "Operator": "UAT/PRD deployments, deploy requests, and releases",
+    }.get(_effective_role, "all event types")
+    st.markdown(
+        f'<div class="section">'
+        f'<div class="title-wrap"><h2>Event log</h2>'
+        f'<span class="badge">{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}</span></div>'
+        f'<span class="hint">{_el_hint} &mdash; newest first · auto-refreshes every minute</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("Event log (expand / collapse)", expanded=True):
+        _render_event_log()
 
 
 # =============================================================================
@@ -3950,323 +4304,6 @@ with st.expander("🧹 Operational hygiene — dormant apps, stuck requests, age
             ] + scope_filters()}}})
             st.metric("PRD deploys (7d)", f"{_prd7:,}")
             st.metric("UAT deploys (7d)", f"{_uat7:,}")
-
-
-# =============================================================================
-# SECTION 6 — EVENT LOG (inline, all event types, role-filtered, fragment)
-# =============================================================================
-
-# ── styling helpers — module-level so the fragment re-uses them cheaply ────
-_TYPE_BADGE = {
-    "build":   ('<span style="background:#eef2ff;color:#6366f1;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">BUILD</span>'),
-    "deploy":  ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">DEPLOY</span>'),
-    "release": ('<span style="background:#fce7f3;color:#be185d;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">RELEASE</span>'),
-    "request": ('<span style="background:#fef3c7;color:#92400e;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">REQUEST</span>'),
-    "commit":  ('<span style="background:#d1fae5;color:#065f46;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">COMMIT</span>'),
-}
-_STATUS_CHIP = {
-    "SUCCESS": ('<span style="background:#059669;color:#fff;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">OK</span>'),
-    "FAILED":  ('<span style="background:#dc2626;color:#fff;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">FAIL</span>'),
-    "RUNNING": ('<span style="background:#d97706;color:#fff;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">RUN</span>'),
-    "PENDING": ('<span style="background:#d97706;color:#fff;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">PEND</span>'),
-}
-
-
-def _status_chip(raw: str | None) -> str:
-    if raw is None or raw == "":
-        return ""
-    up = (raw or "").upper()
-    if up in _STATUS_CHIP:
-        return _STATUS_CHIP[up]
-    if any(f in up for f in ("FAIL", "ERROR", "ABORT")):
-        return _STATUS_CHIP["FAILED"]
-    if up in ("SUCCESS", "SUCCEEDED", "PASSED", "OK", "APPROVED"):
-        return _STATUS_CHIP["SUCCESS"]
-    if up in ("PENDING", "WAITING", "OPEN", "NEW"):
-        return _STATUS_CHIP["PENDING"]
-    return (f'<span style="background:var(--cc-surface2);color:var(--cc-text-dim);border-radius:4px;'
-            f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
-
-
-@st.fragment
-def _render_event_log() -> None:
-    """Inline event log — role-scoped types/envs/stages. Reruns independently."""
-    # Role-allowed event type options
-    _allowed_types = _ROLE_EVENT_TYPES.get(_effective_role, _ROLE_EVENT_TYPES["Admin"])
-    _type_options = ["All"] + _allowed_types
-    _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
-    _env_options = ["(all)"] + _allowed_envs
-
-    _el_c1, _el_c2, _el_c3 = st.columns([1.5, 1.2, 1.2])
-    with _el_c1:
-        el_type = st.selectbox("Type", _type_options, key="el_type_v2")
-    with _el_c2:
-        # QC role only has one env — show it read-only
-        if len(_env_options) == 2:
-            el_env = _env_options[1]
-            st.markdown(
-                f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Env</div>'
-                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text);'
-                f'text-transform:uppercase">{el_env}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            el_env = st.selectbox("Env", _env_options, key="el_env_v2")
-    with _el_c3:
-        el_limit = st.selectbox("Show", [50, 100, 250], key="el_limit_v2")
-
-    events: list[dict] = []
-
-    # ── builds (Developer/Admin) ────────────────────────────────────────────
-    if el_type in ("All", "Builds") and _role_allows_type("Builds"):
-        _bld_f = [range_filter("startdate", start_dt, end_dt)] + list(scope_filters())
-        _bld_r = es_search(
-            IDX["builds"],
-            {"query": {"bool": {"filter": _bld_f}},
-             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]},
-            size=int(el_limit),
-        )
-        for _h in _bld_r.get("hits", {}).get("hits", []):
-            _s = _h["_source"]
-            _dv = _pick_date(_s, "build")
-            events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "build",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("branch","")} · {_s.get("technology","")}',
-                "Status":  _s.get("status", ""),
-                "Extra":   _s.get("project", ""),
-            })
-
-    # ── deployments (role-filtered env) ─────────────────────────────────────
-    if el_type in ("All", "Deployments") and _role_allows_type("Deployments"):
-        _dep_f = [range_filter("startdate", start_dt, end_dt)] + list(scope_filters())
-        if el_env != "(all)":
-            _dep_f.append({"term": {"environment": el_env}})
-        else:
-            # Restrict to role-allowed envs
-            _dep_f.append({"terms": {"environment": _allowed_envs}})
-        _dep_r = es_search(
-            IDX["deployments"],
-            {"query": {"bool": {"filter": _dep_f}},
-             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]},
-            size=int(el_limit),
-        )
-        for _h in _dep_r.get("hits", {}).get("hits", []):
-            _s = _h["_source"]
-            _dv = _pick_date(_s, "deploy")
-            events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "deploy",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")} [{_s.get("project","")}]',
-                "Status":  _s.get("status", ""),
-                "Extra":   _s.get("triggeredby", ""),
-            })
-
-    # ── releases ────────────────────────────────────────────────────────────
-    if el_type in ("All", "Releases") and _role_allows_type("Releases"):
-        _rel_f = [range_filter("releasedate", start_dt, end_dt)] + list(scope_filters())
-        _rel_r = es_search(
-            IDX["releases"],
-            {"query": {"bool": {"filter": _rel_f}},
-             "sort": [{"releasedate": {"order": "desc", "unmapped_type": "date"}}]},
-            size=int(el_limit),
-        )
-        for _h in _rel_r.get("hits", {}).get("hits", []):
-            _s = _h["_source"]
-            _dv = _pick_date(_s, "release")
-            events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "release",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'RLM: {_s.get("RLM_STATUS","")}',
-                "Status":  _s.get("RLM_STATUS", ""),
-                "Extra":   "",
-            })
-
-    # ── requests / approvals (role-filtered by stage) ───────────────────────
-    if el_type in ("All", "Requests") and _role_allows_type("Requests"):
-        # ef-devops-requests
-        _rq_f = [range_filter("RequestDate", start_dt, end_dt)] + list(scope_filters())
-        _rq_r = es_search(
-            IDX["requests"],
-            {"query": {"bool": {"filter": _rq_f}},
-             "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
-            size=int(el_limit),
-        )
-        for _h in _rq_r.get("hits", {}).get("hits", []):
-            _s = _h["_source"]
-            # Role-filter by target environment if applicable
-            _rq_env = (_s.get("TargetEnvironment") or _s.get("environment") or "").lower()
-            if _rq_env and not _role_allows_env(_rq_env):
-                continue
-            _dv = _pick_date(_s, "request")
-            events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "request",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
-                "Status":  _s.get("Status", ""),
-                "Extra":   _s.get("RequestNumber") or _s.get("id") or "",
-            })
-        # ef-cicd-approval (stage-based, role-scoped)
-        _ap_f: list[dict] = list(scope_filters())
-        _ap_f.append({"bool": {"should": [
-            range_filter("RequestDate", start_dt, end_dt),
-            range_filter("Created", start_dt, end_dt),
-            range_filter("CreatedDate", start_dt, end_dt),
-        ], "minimum_should_match": 1}})
-        _rsf = _role_stage_filter()
-        if _rsf is not None:
-            _ap_f.append(_rsf)
-        _ap_r = es_search(
-            IDX["approval"],
-            {"query": {"bool": {"filter": _ap_f}},
-             "sort": [{"RequestDate": {"order": "desc", "unmapped_type": "date"}}]},
-            size=int(el_limit),
-        )
-        for _h in _ap_r.get("hits", {}).get("hits", []):
-            _s = _h["_source"]
-            _dv = _pick_date(_s, "request")
-            _stage = _s.get("stage") or ""
-            if _stage == "build":
-                _detail = "Running build"
-            elif _stage.startswith("request_deploy_"):
-                _detail = f'Deploy request ({_stage.replace("request_deploy_", "")})'
-            elif _stage == "request_promote":
-                _detail = "Release request (promote)"
-            elif _stage:
-                _detail = f'Running deploy ({_stage})'
-            else:
-                _detail = _s.get("ApprovalType") or ""
-            events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "request",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
-                "Status":  _stage or _s.get("Status", ""),
-                "Extra":   _s.get("ApprovalId") or _s.get("id") or "",
-            })
-
-    # ── commits (Developer/Admin) ───────────────────────────────────────────
-    if el_type in ("All", "Commits") and _role_allows_type("Commits"):
-        _com_f = [range_filter("commitdate", start_dt, end_dt)] + list(commit_scope_filters())
-        _com_r = es_search(
-            IDX["commits"],
-            {"query": {"bool": {"filter": _com_f}},
-             "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}]},
-            size=int(el_limit),
-        )
-        for _h in _com_r.get("hits", {}).get("hits", []):
-            _s = _h["_source"]
-            _dv = _pick_date(_s, "commit")
-            events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "commit",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("project", _s.get("repository", "")),
-                "Version": "",
-                "Detail":  f'{_s.get("branch","")} · {_s.get("authorname","")}',
-                "Status":  "",
-                "Extra":   (_s.get("commitmessage") or "")[:80],
-            })
-
-    # ── sort & render inline ────────────────────────────────────────────────
-    events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
-    events = events[:int(el_limit)]
-
-    if not events:
-        inline_note("No events match the current filters.", "info")
-        return
-
-    _rows_html = []
-    for ev in events:
-        _ver_cell = (
-            f'<span style="font-family:var(--cc-mono);font-size:0.73rem;color:var(--cc-accent);'
-            f'background:var(--cc-accent-lt);padding:1px 6px;border-radius:4px">{ev["Version"]}</span>'
-            if ev.get("Version") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
-        )
-        _rows_html.append(
-            f"<tr>"
-            f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
-            f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
-            f'<td style="font-weight:600;color:var(--cc-text);font-size:0.82rem;padding:5px 4px">{ev["Who"]}</td>'
-            f'<td style="padding:5px 4px">{_ver_cell}</td>'
-            f'<td style="color:var(--cc-text-dim);font-size:0.8rem;padding:5px 4px">{ev["Detail"]}</td>'
-            f'<td style="padding:5px 6px">{_status_chip(ev["Status"])}</td>'
-            f'<td style="color:var(--cc-text-mute);font-size:0.75rem;max-width:220px;'
-            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 4px">{ev["Extra"]}</td>'
-            f"</tr>"
-        )
-    _th_style = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
-    _table_html = (
-        '<div style="overflow-y:auto;max-height:60vh;border:1px solid var(--cc-border);border-radius:10px">'
-        '<table style="width:100%;border-collapse:collapse;font-family:inherit">'
-        f'<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left;background:var(--cc-surface2)">'
-        f'<th {_th_style}>Time</th>'
-        f'<th {_th_style}>Type</th>'
-        f'<th {_th_style}>Application</th>'
-        f'<th {_th_style}>Artifact</th>'
-        f'<th {_th_style}>Detail</th>'
-        f'<th {_th_style}>Status</th>'
-        f'<th {_th_style}>Note</th>'
-        f'</tr></thead>'
-        '<tbody>' + "".join(_rows_html) + "</tbody>"
-        "</table></div>"
-    )
-    _type_counts: dict[str, int] = {}
-    for ev in events:
-        _type_counts[ev["type"]] = _type_counts.get(ev["type"], 0) + 1
-    _type_summary = " · ".join(
-        f"{_type_counts.get(t, 0)} {t}s"
-        for t in ["build", "deploy", "release", "request", "commit"]
-        if _type_counts.get(t, 0)
-    )
-    st.markdown(
-        f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
-        f'Showing {len(events)} events · {_type_summary} · sorted newest first</p>'
-        + _table_html,
-        unsafe_allow_html=True,
-    )
-
-
-if _show("eventlog"):
-    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
-    _el_hint = {
-        "Admin": "builds · deployments · releases · requests · commits",
-        "Developer": "your builds, commits, and build-stage requests",
-        "QC": "QC deployments, release requests, and releases",
-        "Operator": "UAT/PRD deployments, deploy requests, and releases",
-    }.get(_effective_role, "all event types")
-    st.markdown(
-        f'<div class="section">'
-        f'<div class="title-wrap"><h2>Event log</h2><span class="badge">{ROLE_ICONS[_effective_role]} Live · {_effective_role}</span></div>'
-        f'<span class="hint">{_el_hint} &mdash; newest first</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    _render_event_log()
 
 
 # =============================================================================
