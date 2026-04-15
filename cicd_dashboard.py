@@ -30,6 +30,14 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:  # pragma: no cover
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
+# All user-facing timestamps render in this zone. Internal math/storage remain UTC.
+DISPLAY_TZ = ZoneInfo("Africa/Cairo")
+DISPLAY_TZ_LABEL = "Cairo"
 
 import pandas as pd
 import plotly.express as px
@@ -812,9 +820,20 @@ def parse_dt(value: Any) -> "pd.Timestamp | None":
 
 
 def fmt_dt(value: Any, fmt: str = "%Y-%m-%d %H:%M") -> str:
-    """Parse and format a date value; returns "" on failure."""
+    """Parse a date value, convert to the configured display TZ, and format.
+
+    Returns "" on failure. Internal time math still uses UTC; only the rendered
+    output is shifted to Africa/Cairo (``DISPLAY_TZ``).
+    """
     ts = parse_dt(value)
-    return ts.strftime(fmt) if ts is not None else ""
+    if ts is None:
+        return ""
+    try:
+        ts_local = ts.tz_convert(DISPLAY_TZ)
+    except Exception:
+        # Fall back to naive UTC if tz conversion fails for any reason
+        ts_local = ts
+    return ts_local.strftime(fmt)
 
 
 # Date field candidates per index family — ES source field names can vary
@@ -1230,9 +1249,16 @@ interval    = pick_interval(delta)
 now_utc     = datetime.now(timezone.utc)
 pending_window_start = now_utc - timedelta(days=30)
 
-_window_label = "All-time" if preset == "All-time" else f"{start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M} UTC"
+_start_local = start_dt.astimezone(DISPLAY_TZ)
+_end_local   = end_dt.astimezone(DISPLAY_TZ)
+_now_local   = now_utc.astimezone(DISPLAY_TZ)
+_window_label = (
+    "All-time" if preset == "All-time"
+    else f"{_start_local:%Y-%m-%d %H:%M} → {_end_local:%Y-%m-%d %H:%M} {DISPLAY_TZ_LABEL}"
+)
 st.caption(
-    f"{_window_label}  ·  bucket {interval}  ·  vs prior equal window  ·  {now_utc:%H:%M} UTC"
+    f"{_window_label}  ·  bucket {interval}  ·  vs prior equal window  ·  "
+    f"{_now_local:%H:%M} {DISPLAY_TZ_LABEL}"
     + ("  ·  ⊘ azure_sql excluded" if exclude_svc else "")
 )
 
@@ -2200,7 +2226,7 @@ def _render_event_log() -> None:
             f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
             f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Last refresh</div>'
             f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
-            f'{datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC · auto every 60s</div>',
+            f'{datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto every 60s</div>',
             unsafe_allow_html=True,
         )
 
@@ -3915,11 +3941,15 @@ with tab_builds:
     c1, c2 = st.columns([2, 1])
     df_tl = pd.DataFrame(rows)
     if not df_tl.empty:
-        df_tl["time"] = pd.to_datetime(df_tl["time"], utc=True)
+        df_tl["time"] = (
+            pd.to_datetime(df_tl["time"], utc=True)
+            .dt.tz_convert(DISPLAY_TZ)
+            .dt.tz_localize(None)
+        )
         fig = px.bar(
             df_tl, x="time", y="count", color="status",
             color_discrete_map=STATUS_COLORS,
-            title=f"Builds over time ({interval} buckets)",
+            title=f"Builds over time ({interval} buckets, {DISPLAY_TZ_LABEL})",
         )
         fig.update_layout(
             height=380,
@@ -4013,10 +4043,14 @@ with tab_deploys:
             })
     df_tl = pd.DataFrame(rows)
     if not df_tl.empty:
-        df_tl["time"] = pd.to_datetime(df_tl["time"], utc=True)
+        df_tl["time"] = (
+            pd.to_datetime(df_tl["time"], utc=True)
+            .dt.tz_convert(DISPLAY_TZ)
+            .dt.tz_localize(None)
+        )
         fig = px.area(
             df_tl, x="time", y="count", color="environment",
-            title=f"Deployments over time ({interval} buckets)",
+            title=f"Deployments over time ({interval} buckets, {DISPLAY_TZ_LABEL})",
         )
         fig.update_layout(
             height=380,
