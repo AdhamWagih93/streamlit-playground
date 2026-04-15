@@ -2521,15 +2521,17 @@ def _render_event_log() -> None:
             _s = _h.get("_source", {})
             _dv = _hit_date(_h, "build")
             events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "build",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Project": _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("branch","")} · {_s.get("technology","")}',
-                "Status":  _s.get("status", ""),
-                "Extra":   "",
+                "_ts":       parse_dt(_dv),
+                "type":      "build",
+                "When":      fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":       _s.get("application") or _s.get("project", ""),
+                "Project":   _s.get("project", ""),
+                "Version":   _s.get("codeversion", ""),
+                "Detail":    f'{_s.get("branch","")} · {_s.get("technology","")}',
+                "Status":    _s.get("status", ""),
+                "Requester": _s.get("requester", ""),
+                "Approver":  _s.get("approver", ""),
+                "Extra":     "",
             })
 
     # ── deployments (role-filtered env) ─────────────────────────────────────
@@ -2549,15 +2551,17 @@ def _render_event_log() -> None:
             _s = _h.get("_source", {})
             _dv = _hit_date(_h, "deploy")
             events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "deploy",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Project": _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")}',
-                "Status":  _s.get("status", ""),
-                "Extra":   _s.get("triggeredby", ""),
+                "_ts":       parse_dt(_dv),
+                "type":      "deploy",
+                "When":      fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":       _s.get("application") or _s.get("project", ""),
+                "Project":   _s.get("project", ""),
+                "Version":   _s.get("codeversion", ""),
+                "Detail":    f'{_s.get("environment","?")} · {_s.get("technology","")}',
+                "Status":    _s.get("status", ""),
+                "Requester": _s.get("requester", ""),
+                "Approver":  _s.get("approver", ""),
+                "Extra":     _s.get("triggeredby", ""),
             })
 
     # ── releases ────────────────────────────────────────────────────────────
@@ -2581,16 +2585,18 @@ def _render_event_log() -> None:
                 else _rlm_status
             )
             events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "release",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application", ""),
-                "Project": _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'RLM: {_rlm_detail}' if _rlm_detail else "",
+                "_ts":       parse_dt(_dv),
+                "type":      "release",
+                "When":      fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":       _s.get("application", ""),
+                "Project":   _s.get("project", ""),
+                "Version":   _s.get("codeversion", ""),
+                "Detail":    f'RLM: {_rlm_detail}' if _rlm_detail else "",
                 # Releases are historical artifacts — always rendered OK.
-                "Status":  "SUCCESS",
-                "Extra":   "",
+                "Status":    "SUCCESS",
+                "Requester": _s.get("requester", ""),
+                "Approver":  _s.get("approver", ""),
+                "Extra":     "",
             })
 
     # ── requests / approvals (role-filtered by stage) ───────────────────────
@@ -2608,16 +2614,27 @@ def _render_event_log() -> None:
             if _rq_env and not _role_allows_env(_rq_env):
                 continue
             _dv = _hit_date(_h, "request")
+            # Pick approver based on outcome: ApprovedBy if approved, RejectedBy
+            # if rejected, else empty (still pending).
+            _rq_status = (_s.get("Status") or "").upper()
+            if any(k in _rq_status for k in ("APPROV", "SUCCESS", "COMPLETE", "OK")):
+                _rq_approver = _s.get("ApprovedBy", "") or ""
+            elif any(k in _rq_status for k in ("REJECT", "DENY", "FAIL")):
+                _rq_approver = _s.get("RejectedBy", "") or ""
+            else:
+                _rq_approver = ""
             events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "request",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Project": _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
-                "Status":  _s.get("Status", ""),
-                "Extra":   _s.get("RequestNumber") or _s.get("id") or "",
+                "_ts":       parse_dt(_dv),
+                "type":      "request",
+                "When":      fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":       _s.get("application") or _s.get("project", ""),
+                "Project":   _s.get("project", ""),
+                "Version":   _s.get("codeversion", ""),
+                "Detail":    f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
+                "Status":    _s.get("Status", ""),
+                "Requester": _s.get("Requester", ""),
+                "Approver":  _rq_approver,
+                "Extra":     _s.get("RequestNumber") or _s.get("id") or "",
             })
         # ef-cicd-approval (stage-based, role-scoped)
         _ap_f: list[dict] = list(scope_filters())
@@ -2649,16 +2666,26 @@ def _render_event_log() -> None:
                 _detail = f'Running deploy ({_stage})'
             else:
                 _detail = _s.get("ApprovalType") or ""
+            # Same approval-outcome logic for ef-cicd-approval.
+            _ap_status = ((_s.get("Status") or "") + " " + _stage).upper()
+            if any(k in _ap_status for k in ("APPROV", "SUCCESS", "COMPLETE")):
+                _ap_approver = _s.get("ApprovedBy", "") or ""
+            elif any(k in _ap_status for k in ("REJECT", "DENY", "FAIL")):
+                _ap_approver = _s.get("RejectedBy", "") or ""
+            else:
+                _ap_approver = ""
             events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "request",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("application") or _s.get("project", ""),
-                "Project": _s.get("project", ""),
-                "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
-                "Status":  _stage or _s.get("Status", ""),
-                "Extra":   _s.get("ApprovalId") or _s.get("id") or "",
+                "_ts":       parse_dt(_dv),
+                "type":      "request",
+                "When":      fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "Who":       _s.get("application") or _s.get("project", ""),
+                "Project":   _s.get("project", ""),
+                "Version":   _s.get("codeversion", ""),
+                "Detail":    f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
+                "Status":    _stage or _s.get("Status", ""),
+                "Requester": _s.get("RequestedBy") or _s.get("Requester", ""),
+                "Approver":  _ap_approver,
+                "Extra":     _s.get("ApprovalId") or _s.get("id") or "",
             })
 
     # ── commits (Developer/Admin) ───────────────────────────────────────────
@@ -2675,22 +2702,31 @@ def _render_event_log() -> None:
             _dv = _hit_date(_h, "commit")
             _cmsg = (_s.get("commitmessage") or "").strip().splitlines()
             _cmsg_first = _cmsg[0] if _cmsg else ""
+            # Commits don't have a separate approver — author fills both roles.
+            _a_name = _s.get("authorname", "") or ""
+            _a_mail = _s.get("authormail", "") or ""
+            if _a_name and _a_mail:
+                _commit_person = f"{_a_name} / {_a_mail}"
+            else:
+                _commit_person = _a_name or _a_mail
             events.append({
-                "_ts":     parse_dt(_dv),
-                "type":    "commit",
-                "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
+                "_ts":       parse_dt(_dv),
+                "type":      "commit",
+                "When":      fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 # ef-git-commits has no `application` field — surface `repository`
                 # as the Application-column identity for commit events.
-                "Who":     _s.get("repository", ""),
-                "Project": _s.get("project", ""),
-                "Version": "",
-                "Detail":  (
+                "Who":       _s.get("repository", ""),
+                "Project":   _s.get("project", ""),
+                "Version":   "",
+                "Detail":    (
                     f'{_s.get("branch","")} · {_s.get("authorname","")}'
                     + (f' — {_cmsg_first}' if _cmsg_first else "")
                 ),
                 # Commits are recorded events — always rendered OK.
-                "Status":  "SUCCESS",
-                "Extra":   _cmsg_first,
+                "Status":    "SUCCESS",
+                "Requester": _commit_person,
+                "Approver":  _commit_person,
+                "Extra":     _cmsg_first,
             })
 
     # ── sort & render inline ────────────────────────────────────────────────
@@ -2744,6 +2780,17 @@ def _render_event_log() -> None:
             f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{ev["Project"]}</span>'
             if ev.get("Project") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
         )
+
+        def _person_cell(val: str) -> str:
+            if not val:
+                return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+            return (
+                f'<span style="color:var(--cc-text-dim);font-size:0.76rem;'
+                f'max-width:180px;display:inline-block;overflow:hidden;'
+                f'text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" '
+                f'title="{val}">{val}</span>'
+            )
+
         _rows_html.append(
             f"<tr>"
             f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
@@ -2753,6 +2800,8 @@ def _render_event_log() -> None:
             f'<td style="padding:5px 4px">{_ver_cell}</td>'
             f'<td style="color:var(--cc-text-dim);font-size:0.8rem;padding:5px 4px">{ev["Detail"]}</td>'
             f'<td style="padding:5px 6px">{_status_chip(ev["Status"])}</td>'
+            f'<td style="padding:5px 4px">{_person_cell(ev.get("Requester", ""))}</td>'
+            f'<td style="padding:5px 4px">{_person_cell(ev.get("Approver", ""))}</td>'
             f'<td style="color:var(--cc-text-mute);font-size:0.75rem;max-width:220px;'
             f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 4px">{ev["Extra"]}</td>'
             f"</tr>"
@@ -2812,6 +2861,8 @@ def _render_event_log() -> None:
         f'<th {_th_style}>Artifact</th>'
         f'<th {_th_style}>Detail</th>'
         f'<th {_th_style}>Status</th>'
+        f'<th {_th_style}>Requester</th>'
+        f'<th {_th_style}>Approver</th>'
         f'<th {_th_style}>Note</th>'
         f'</tr></thead>'
         '<tbody>' + "".join(_rows_html) + "</tbody>"
