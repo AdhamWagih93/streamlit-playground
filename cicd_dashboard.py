@@ -2249,10 +2249,11 @@ def _render_event_log() -> None:
                 "type":    "build",
                 "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 "Who":     _s.get("application") or _s.get("project", ""),
+                "Project": _s.get("project", ""),
                 "Version": _s.get("codeversion", ""),
                 "Detail":  f'{_s.get("branch","")} · {_s.get("technology","")}',
                 "Status":  _s.get("status", ""),
-                "Extra":   _s.get("project", ""),
+                "Extra":   "",
             })
 
     # ── deployments (role-filtered env) ─────────────────────────────────────
@@ -2276,8 +2277,9 @@ def _render_event_log() -> None:
                 "type":    "deploy",
                 "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 "Who":     _s.get("application") or _s.get("project", ""),
+                "Project": _s.get("project", ""),
                 "Version": _s.get("codeversion", ""),
-                "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")} [{_s.get("project","")}]',
+                "Detail":  f'{_s.get("environment","?")} · {_s.get("technology","")}',
                 "Status":  _s.get("status", ""),
                 "Extra":   _s.get("triggeredby", ""),
             })
@@ -2299,6 +2301,7 @@ def _render_event_log() -> None:
                 "type":    "release",
                 "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 "Who":     _s.get("application", ""),
+                "Project": _s.get("project", ""),
                 "Version": _s.get("codeversion", ""),
                 "Detail":  f'RLM: {_s.get("RLM_STATUS","")}',
                 "Status":  _s.get("RLM_STATUS", ""),
@@ -2325,6 +2328,7 @@ def _render_event_log() -> None:
                 "type":    "request",
                 "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 "Who":     _s.get("application") or _s.get("project", ""),
+                "Project": _s.get("project", ""),
                 "Version": _s.get("codeversion", ""),
                 "Detail":  f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
                 "Status":  _s.get("Status", ""),
@@ -2365,6 +2369,7 @@ def _render_event_log() -> None:
                 "type":    "request",
                 "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 "Who":     _s.get("application") or _s.get("project", ""),
+                "Project": _s.get("project", ""),
                 "Version": _s.get("codeversion", ""),
                 "Detail":  f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
                 "Status":  _stage or _s.get("Status", ""),
@@ -2387,7 +2392,10 @@ def _render_event_log() -> None:
                 "_ts":     parse_dt(_dv),
                 "type":    "commit",
                 "When":    fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":     _s.get("project", _s.get("repository", "")),
+                # ef-git-commits has no `application` field — surface `repository`
+                # as the Application-column identity for commit events.
+                "Who":     _s.get("repository", ""),
+                "Project": _s.get("project", ""),
                 "Version": "",
                 "Detail":  f'{_s.get("branch","")} · {_s.get("authorname","")}',
                 "Status":  "",
@@ -2409,11 +2417,16 @@ def _render_event_log() -> None:
             f'background:var(--cc-accent-lt);padding:1px 6px;border-radius:4px">{ev["Version"]}</span>'
             if ev.get("Version") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
         )
+        _proj_cell = (
+            f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{ev["Project"]}</span>'
+            if ev.get("Project") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        )
         _rows_html.append(
             f"<tr>"
             f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
             f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
             f'<td style="font-weight:600;color:var(--cc-text);font-size:0.82rem;padding:5px 4px">{ev["Who"]}</td>'
+            f'<td style="padding:5px 4px">{_proj_cell}</td>'
             f'<td style="padding:5px 4px">{_ver_cell}</td>'
             f'<td style="color:var(--cc-text-dim);font-size:0.8rem;padding:5px 4px">{ev["Detail"]}</td>'
             f'<td style="padding:5px 6px">{_status_chip(ev["Status"])}</td>'
@@ -2429,6 +2442,7 @@ def _render_event_log() -> None:
         f'<th {_th_style}>Time</th>'
         f'<th {_th_style}>Type</th>'
         f'<th {_th_style}>Application</th>'
+        f'<th {_th_style}>Project</th>'
         f'<th {_th_style}>Artifact</th>'
         f'<th {_th_style}>Detail</th>'
         f'<th {_th_style}>Status</th>'
