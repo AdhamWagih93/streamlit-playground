@@ -1050,6 +1050,163 @@ div[data-testid="stPopover"] button:hover {
     border-radius: 999px;
     letter-spacing: .03em;
 }
+
+/* ── Event-log stats + type-pill filter card ─────────────────────────────── */
+.el-typefilter-head {
+    display: flex;
+    align-items: stretch;
+    gap: 20px;
+    background:
+        radial-gradient(circle at top right, var(--cc-accent-lt), transparent 55%),
+        linear-gradient(135deg, var(--cc-surface2) 0%, var(--cc-surface) 100%);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin: 4px 0 10px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 18px -8px rgba(0,0,0,.12);
+}
+.el-typefilter-head::after {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    background: linear-gradient(180deg, var(--cc-accent) 0%, #0ea5e9 100%);
+    border-radius: 4px 0 0 4px;
+}
+.el-tf-left {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 18px 0 6px;
+    border-right: 1px dashed var(--cc-border);
+    min-width: 140px;
+}
+.el-tf-total {
+    font-size: 2.4rem;
+    font-weight: 800;
+    color: var(--cc-text);
+    font-family: var(--cc-mono);
+    line-height: 1;
+    letter-spacing: -0.03em;
+}
+.el-tf-total-label {
+    margin-top: 6px;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.el-tf-mid {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+}
+.el-tf-kicker {
+    font-size: 0.70rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--cc-accent);
+    font-weight: 800;
+}
+.el-tf-hint {
+    margin-top: 3px;
+    font-size: 0.78rem;
+    color: var(--cc-text-dim);
+    line-height: 1.35;
+}
+.el-tf-right {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    justify-content: center;
+    align-items: flex-end;
+    min-width: 120px;
+}
+.el-tf-badge {
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    padding: 3px 11px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.el-tf-badge.layout {
+    background: var(--cc-accent);
+    color: #fff;
+    box-shadow: 0 2px 6px -1px rgba(0,0,0,0.15);
+}
+.el-tf-badge.sort {
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border: 1px solid var(--cc-border);
+}
+
+/* Polish Streamlit's st.pills so it reads like a deliberate pill bar    */
+/* and responds to hover / selected states with our accent palette.     */
+div[data-testid="stPills"],
+div[data-testid="stPillsContainer"] {
+    margin: -4px 0 6px;
+}
+div[data-testid="stPills"] button,
+div[data-testid="stPillsContainer"] button {
+    font-family: var(--cc-mono) !important;
+    font-weight: 700 !important;
+    font-size: 0.78rem !important;
+    letter-spacing: 0.01em !important;
+    border-radius: 999px !important;
+    padding: 5px 14px !important;
+    border: 1px solid var(--cc-border) !important;
+    background: var(--cc-surface) !important;
+    color: var(--cc-text-dim) !important;
+    transition: transform .14s ease, box-shadow .14s ease,
+                background .14s ease, color .14s ease, border-color .14s ease !important;
+}
+div[data-testid="stPills"] button:hover,
+div[data-testid="stPillsContainer"] button:hover {
+    transform: translateY(-1px);
+    border-color: var(--cc-accent) !important;
+    color: var(--cc-accent) !important;
+    box-shadow: 0 4px 12px -4px rgba(0,0,0,0.18);
+}
+div[data-testid="stPills"] button[aria-pressed="true"],
+div[data-testid="stPillsContainer"] button[aria-pressed="true"],
+div[data-testid="stPills"] button[data-selected="true"],
+div[data-testid="stPillsContainer"] button[data-selected="true"] {
+    background: linear-gradient(135deg, var(--cc-accent) 0%, #0ea5e9 100%) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+    box-shadow: 0 3px 10px -2px rgba(14,165,233,0.5) !important;
+}
+
+/* Caption under the pill row */
+.el-tf-caption {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.76rem;
+    color: var(--cc-text-mute);
+    margin: 2px 0 8px;
+    padding-left: 4px;
+}
+.el-tf-caption-count {
+    font-family: var(--cc-mono);
+    font-weight: 700;
+    color: var(--cc-text-dim);
+    background: var(--cc-accent-lt);
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.70rem;
+    letter-spacing: 0.04em;
+}
+.el-tf-caption-sep { color: var(--cc-border); font-weight: 700; }
+.el-tf-caption b { color: var(--cc-accent); font-weight: 700; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -3105,17 +3262,15 @@ def _status_chip(raw: str | None) -> str:
 @st.fragment(run_every="60s")
 def _render_event_log() -> None:
     """Inline event log — role-scoped, auto-refreshes every 60s independently."""
-    # Role-allowed event type options
-    _allowed_types = _ROLE_EVENT_TYPES.get(_effective_role, _ROLE_EVENT_TYPES["Admin"])
-    _type_options = ["All"] + _allowed_types
+    # Role-allowed environments for the Env selector.
     _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
     _env_options = ["(all)"] + _allowed_envs
 
-    # ── Row 1: Type · Project · Env · Time ──────────────────────────────────
-    _el_r1 = st.columns([1.5, 1.7, 1.1, 1.1])
+    # ── Row 1: Project · Env · Time window · Per-project toggle ─────────────
+    # Type is no longer a selectbox — it moves to the clickable pill bar above
+    # the table so users can include/exclude any combination of types.
+    _el_r1 = st.columns([1.7, 1.1, 1.1, 1.2])
     with _el_r1[0]:
-        el_type = st.selectbox("Type", _type_options, key="el_type_v3")
-    with _el_r1[1]:
         # Event-log-local project filter: defaults to the global choice if one
         # is set, otherwise picks from the role's visible projects.
         _el_proj_options = [_ALL] + (_proj_scoped or [])
@@ -3127,7 +3282,7 @@ def _render_event_log() -> None:
             help="Restrict the event log to a single project; 'All' falls back to the global scope",
         )
         el_project_filter = "" if el_project == _ALL else el_project
-    with _el_r1[2]:
+    with _el_r1[1]:
         if len(_env_options) == 2:
             el_env = _env_options[1]
             st.markdown(
@@ -3139,26 +3294,21 @@ def _render_event_log() -> None:
             )
         else:
             el_env = st.selectbox("Env", _env_options, key="el_env_v3")
-    with _el_r1[3]:
+    with _el_r1[2]:
         _el_tw_label = st.selectbox(
             "Time window", list(_EL_TIME_WINDOWS.keys()), index=3, key="el_time_v3",
             help="How far back to pull events for the log (independent of the page-wide window)",
         )
         _el_delta = _EL_TIME_WINDOWS[_el_tw_label]
-
-    # ── Row 2: Per-project toggle · Last refresh ────────────────────────────
-    _el_r2 = st.columns([1.5, 1.7, 2.2, 1.1])
-    with _el_r2[0]:
+    with _el_r1[3]:
         el_per_project = st.toggle(
             "Per-project tables", value=False, key="el_per_project_v3",
             help="Group events into a separate table per project instead of a consolidated view",
         )
-    with _el_r2[3]:
         st.markdown(
-            f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-            f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Last refresh</div>'
-            f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
-            f'{datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto every 60s</div>',
+            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
+            f'text-transform:uppercase;font-weight:600;margin-top:-4px">'
+            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto 60s</div>',
             unsafe_allow_html=True,
         )
 
@@ -3189,21 +3339,12 @@ def _render_event_log() -> None:
     if _role_allows_type("Build-release"):
         _builds_allowed_subtypes.append("build-release")
 
-    # Does the selected Type filter permit builds at all, and which subtype(s)?
-    _type_selected_subtypes: list[str] | None = None
-    if el_type == "All":
-        _type_selected_subtypes = _builds_allowed_subtypes
-    elif el_type == "Build-develop":
-        _type_selected_subtypes = ["build-develop"] if "build-develop" in _builds_allowed_subtypes else []
-    elif el_type == "Build-release":
-        _type_selected_subtypes = ["build-release"] if "build-release" in _builds_allowed_subtypes else []
-    else:
-        _type_selected_subtypes = []
-
     events: list[dict] = []
 
     # ── builds (split into build-develop / build-release by branch) ─────────
-    if _type_selected_subtypes:
+    # Always fetch every allowed subtype so the pill counts above the table
+    # reflect reality even when some types are filtered out of the view.
+    if _builds_allowed_subtypes:
         _bld_f = _el_scope([range_filter("startdate", _el_start, _el_end)] + list(scope_filters()))
         _bld_r = es_search(
             IDX["builds"],
@@ -3214,7 +3355,7 @@ def _render_event_log() -> None:
         for _h in _bld_r.get("hits", {}).get("hits", []):
             _s = _h.get("_source", {})
             _sub = _build_subtype(_s.get("branch", ""))
-            if _sub not in _type_selected_subtypes:
+            if _sub not in _builds_allowed_subtypes:
                 continue
             _dv = _hit_date(_h, "build")
             events.append({
@@ -3233,7 +3374,7 @@ def _render_event_log() -> None:
             })
 
     # ── deployments (role-filtered env) ─────────────────────────────────────
-    if el_type in ("All", "Deployments") and _role_allows_type("Deployments"):
+    if _role_allows_type("Deployments"):
         _dep_f = _el_scope([range_filter("startdate", _el_start, _el_end)] + list(scope_filters()))
         if el_env != "(all)":
             _dep_f.append({"term": {"environment": el_env}})
@@ -3264,7 +3405,7 @@ def _render_event_log() -> None:
             })
 
     # ── releases ────────────────────────────────────────────────────────────
-    if el_type in ("All", "Releases") and _role_allows_type("Releases"):
+    if _role_allows_type("Releases"):
         _rel_f = _el_scope([range_filter("releasedate", _el_start, _el_end)] + list(scope_filters()))
         _rel_r = es_search(
             IDX["releases"],
@@ -3297,7 +3438,7 @@ def _render_event_log() -> None:
             })
 
     # ── requests / approvals (role-filtered by stage) ───────────────────────
-    if el_type in ("All", "Requests") and _role_allows_type("Requests"):
+    if _role_allows_type("Requests"):
         _rq_f = _el_scope([range_filter("RequestDate", _el_start, _el_end)] + list(scope_filters()))
         _rq_r = es_search(
             IDX["requests"],
@@ -3391,7 +3532,7 @@ def _render_event_log() -> None:
             })
 
     # ── commits (Developer/Admin) ───────────────────────────────────────────
-    if el_type in ("All", "Commits") and _role_allows_type("Commits"):
+    if _role_allows_type("Commits"):
         _com_f = _el_scope([range_filter("commitdate", _el_start, _el_end)] + list(commit_scope_filters()))
         _com_r = es_search(
             IDX["commits"],
@@ -3431,8 +3572,92 @@ def _render_event_log() -> None:
     # ── sort (time-window already bounded the queries; no row limit) ────────
     events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
 
+    # ── Stats / filter pill bar ─────────────────────────────────────────────
+    # Counts reflect the full universe of events the window contains — so the
+    # user can see at a glance what *is* available, even if they narrow the
+    # view via the pills.
+    _type_counts_full: dict[str, int] = {}
+    for _ev in events:
+        _type_counts_full[_ev["type"]] = _type_counts_full.get(_ev["type"], 0) + 1
+
+    # Pill metadata — order is deliberate (left-to-right: build ladder →
+    # deploys → releases → requests → commits).
+    _TYPE_FILTER_META: list[tuple[str, str, str, str]] = [
+        # (internal_type, display_label, icon, role-gate name for _role_allows_type)
+        ("build-develop", "Dev builds",  "◇", "Build-develop"),
+        ("build-release", "Rel builds",  "◆", "Build-release"),
+        ("deploy",        "Deploys",     "⬢", "Deployments"),
+        ("release",       "Releases",    "★", "Releases"),
+        ("request",       "Requests",    "✦", "Requests"),
+        ("commit",        "Commits",     "⎇", "Commits"),
+    ]
+    _pill_entries = [
+        (_it, _lbl, _ico, _type_counts_full.get(_it, 0))
+        for _it, _lbl, _ico, _gate in _TYPE_FILTER_META
+        if _role_allows_type(_gate)
+    ]
+
+    _total_events_unfiltered = len(events)
+    _layout_badge = "per-project" if el_per_project else "consolidated"
+
+    # Stats card: left = big total, middle = kicker + hint, right = mode chips.
+    st.markdown(
+        f'<div class="el-typefilter-head">'
+        f'  <div class="el-tf-left">'
+        f'    <div class="el-tf-total">{_total_events_unfiltered}</div>'
+        f'    <div class="el-tf-total-label">'
+        f'event{"s" if _total_events_unfiltered != 1 else ""} · {_el_tw_label.lower()}'
+        f'</div>'
+        f'  </div>'
+        f'  <div class="el-tf-mid">'
+        f'    <div class="el-tf-kicker">Filter by event type</div>'
+        f'    <div class="el-tf-hint">'
+        f'Click any pill to include it · select multiple to combine · none selected = show all'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="el-tf-right">'
+        f'    <span class="el-tf-badge layout">{_layout_badge}</span>'
+        f'    <span class="el-tf-badge sort">newest first</span>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Build pill options. Labels double as the selection keys so we can round-
+    # trip them back to internal types.
+    _pill_options: list[str] = []
+    _pill_to_internal: dict[str, str] = {}
+    for _it, _lbl, _ico, _cnt in _pill_entries:
+        _opt = f"{_ico}  {_lbl} · {_cnt}"
+        _pill_options.append(_opt)
+        _pill_to_internal[_opt] = _it
+
+    if _pill_options:
+        _selected_opts = st.pills(
+            "Event types",
+            options=_pill_options,
+            selection_mode="multi",
+            default=None,
+            key="el_type_pills_v1",
+            label_visibility="collapsed",
+        )
+    else:
+        _selected_opts = []
+    _active_types = {_pill_to_internal[o] for o in (_selected_opts or [])}
+
+    # Apply the pill filter — empty selection is treated as "show all".
+    if _active_types:
+        events = [ev for ev in events if ev["type"] in _active_types]
+
     if not events:
-        inline_note("No events match the current filters.", "info")
+        if _total_events_unfiltered:
+            inline_note(
+                f"No events match the selected type pill(s). {_total_events_unfiltered} "
+                f"events exist in this window — deselect pills to show them.",
+                "info",
+            )
+        else:
+            inline_note("No events match the current filters.", "info")
         return
 
     # Types whose "Who" column carries a real application name (vs commits'
@@ -3958,27 +4183,19 @@ def _render_event_log() -> None:
         _rows = "".join(_row_html(ev, include_project=True) for ev in events)
         _main_html = _table_shell(_rows, include_project=True, max_h="60vh")
 
-    _type_counts: dict[str, int] = {}
-    for ev in events:
-        _type_counts[ev["type"]] = _type_counts.get(ev["type"], 0) + 1
-    # Include the new build subtypes so the running total reflects reality.
-    _type_summary = " · ".join(
-        f"{_type_counts.get(t, 0)} {_lbl}"
-        for t, _lbl in [
-            ("build-develop", "dev builds"),
-            ("build-release", "rel builds"),
-            ("deploy",        "deploys"),
-            ("release",       "releases"),
-            ("request",       "requests"),
-            ("commit",        "commits"),
-        ]
-        if _type_counts.get(t, 0)
+    # Thin caption under the pill bar — reminds users about the interactive
+    # popovers now that the type-count summary lives in the stats card.
+    _visible_badge = (
+        f"showing {len(events)} of {_total_events_unfiltered}"
+        if _active_types else
+        f"showing all {len(events)}"
     )
-    _layout_badge = "per-project" if el_per_project else "consolidated"
     st.markdown(
-        f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
-        f'Showing {len(events)} events · {_type_summary} · {_layout_badge} view · sorted newest first · '
-        f'<span style="color:var(--cc-accent)">click project, application, or version chips to inspect</span></p>'
+        f'<p class="el-tf-caption">'
+        f'  <span class="el-tf-caption-count">{_visible_badge}</span>'
+        f'  <span class="el-tf-caption-sep">·</span>'
+        f'  <span>click any <b>project</b>, <b>application</b>, or <b>version</b> chip to open its detail popover</span>'
+        f'</p>'
         + _main_html
         + "".join(_popovers_html),
         unsafe_allow_html=True,
