@@ -64,6 +64,7 @@ IDX = {
     "builds":      "ef-cicd-builds",
     "deployments": "ef-cicd-deployments",
     "releases":    "ef-cicd-releases",
+    "prismacloud": "ef-cicd-prismacloud",
 }
 
 CACHE_TTL = 300  # seconds — 5 minutes balances freshness vs cluster load
@@ -758,6 +759,213 @@ div[data-testid="stPopover"] button:hover {
     transform: none;
 }
 
+/* -------- Version popover — amber accent for the “where is it live?” lens -------- */
+.el-app-pop.is-version .ap-head {
+    background:
+        radial-gradient(120% 120% at 0% 0%, rgba(217,119,6,.14), transparent 60%),
+        linear-gradient(135deg, #ffffff, #fffaf0);
+}
+.el-app-pop.is-version .ap-icon {
+    background: linear-gradient(135deg, #d97706, #b45309);
+    box-shadow: 0 6px 16px -4px rgba(217,119,6,.45);
+}
+.el-app-pop.is-version .ap-kicker { color: #b45309; }
+.el-app-pop.is-version {
+    box-shadow:
+        0 1px 2px rgba(26,29,46,.05),
+        0 20px 50px -10px rgba(26,29,46,.25),
+        0 0 0 1px rgba(217,119,6,.12);
+}
+
+/* Live / offline status banner inside the version popover  */
+.el-app-pop .ap-live {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: .82rem;
+    font-weight: 600;
+    margin-top: -4px;
+}
+.el-app-pop .ap-live.is-live {
+    background: rgba(5,150,105,.08);
+    color: #047857;
+    border: 1px solid rgba(5,150,105,.25);
+}
+.el-app-pop .ap-live.is-offline {
+    background: rgba(220,38,38,.06);
+    color: #b91c1c;
+    border: 1px solid rgba(220,38,38,.22);
+}
+.el-app-pop .ap-live .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    box-shadow: 0 0 0 3px rgba(255,255,255,.6);
+}
+.el-app-pop .ap-live.is-live .dot {
+    background: #10b981;
+    animation: ap-pulse 1.8s ease-in-out infinite;
+}
+.el-app-pop .ap-live.is-offline .dot { background: #dc2626; }
+@keyframes ap-pulse {
+    0%,100% { box-shadow: 0 0 0 3px rgba(16,185,129,.25); }
+    50%     { box-shadow: 0 0 0 6px rgba(16,185,129,.05); }
+}
+
+/* Prismacloud severity strip — four tiles (critical / high / medium / low) */
+.el-app-pop .ap-sev {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-top: 2px;
+}
+.el-app-pop .ap-sev-tile {
+    position: relative;
+    border-radius: 10px;
+    padding: 9px 8px 8px;
+    text-align: center;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    overflow: hidden;
+    transition: transform .14s;
+}
+.el-app-pop .ap-sev-tile::before {
+    content: "";
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--sev-accent, var(--cc-border));
+}
+.el-app-pop .ap-sev-tile .sev-num {
+    font-family: var(--cc-mono);
+    font-size: 1.15rem; font-weight: 800;
+    color: var(--sev-accent, var(--cc-text));
+    line-height: 1;
+    letter-spacing: -.02em;
+}
+.el-app-pop .ap-sev-tile .sev-label {
+    font-size: .58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .11em;
+    color: var(--cc-text-mute);
+    margin-top: 4px;
+}
+.el-app-pop .ap-sev-tile .sev-delta {
+    font-family: var(--cc-mono);
+    font-size: .62rem;
+    font-weight: 700;
+    margin-top: 3px;
+    letter-spacing: 0;
+}
+.el-app-pop .ap-sev-tile .sev-delta.up   { color: #b91c1c; }
+.el-app-pop .ap-sev-tile .sev-delta.down { color: #047857; }
+.el-app-pop .ap-sev-tile .sev-delta.eq   { color: var(--cc-text-mute); }
+.el-app-pop .ap-sev-tile.critical { --sev-accent: #dc2626; }
+.el-app-pop .ap-sev-tile.critical.nonzero {
+    background: linear-gradient(180deg, rgba(220,38,38,.10), rgba(220,38,38,.04));
+    border-color: rgba(220,38,38,.35);
+    box-shadow: 0 0 0 3px rgba(220,38,38,.06);
+    animation: ap-crit-glow 2.2s ease-in-out infinite;
+}
+.el-app-pop .ap-sev-tile.high    { --sev-accent: #d97706; }
+.el-app-pop .ap-sev-tile.high.nonzero {
+    background: linear-gradient(180deg, rgba(217,119,6,.09), rgba(217,119,6,.03));
+    border-color: rgba(217,119,6,.32);
+}
+.el-app-pop .ap-sev-tile.medium  { --sev-accent: #ca8a04; }
+.el-app-pop .ap-sev-tile.medium.nonzero {
+    background: linear-gradient(180deg, rgba(202,138,4,.07), rgba(202,138,4,.02));
+    border-color: rgba(202,138,4,.25);
+}
+.el-app-pop .ap-sev-tile.low     { --sev-accent: #475569; }
+.el-app-pop .ap-sev-tile.low.nonzero {
+    background: linear-gradient(180deg, rgba(71,85,105,.06), transparent);
+}
+@keyframes ap-crit-glow {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(220,38,38,.06); }
+    50%      { box-shadow: 0 0 0 6px rgba(220,38,38,.03); }
+}
+
+.el-app-pop .ap-sev-subhead {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: .66rem;
+    font-weight: 700;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    margin-top: 4px;
+}
+.el-app-pop .ap-sev-subhead .sev-sum {
+    font-family: var(--cc-mono);
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--cc-text-dim);
+}
+.el-app-pop .ap-sev-empty {
+    grid-column: 1 / -1;
+    padding: 12px;
+    font-size: .78rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    text-align: center;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+}
+
+.el-app-pop .ap-compare-head {
+    grid-column: 1 / -1;
+    display: flex; align-items: baseline; gap: 6px;
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px dashed var(--cc-border);
+    font-size: .66rem;
+    font-weight: 700;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+}
+.el-app-pop .ap-compare-head .cmp-pill {
+    font-family: var(--cc-mono);
+    font-size: .68rem;
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+}
+
+/* Version trigger in the event-log Version column — chip-styled button  */
+.el-ver-trigger {
+    all: unset;
+    cursor: pointer;
+    font-family: var(--cc-mono);
+    font-size: 0.73rem;
+    color: var(--cc-accent);
+    background: var(--cc-accent-lt);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    transition: border-color .12s, color .12s, background .12s;
+}
+.el-ver-trigger:hover {
+    border-color: #d97706;
+    color: #b45309;
+    background: rgba(217,119,6,.10);
+}
+.el-ver-trigger:focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+}
+
 /* Project trigger in the event-log Project column  */
 .el-proj-trigger {
     all: unset;
@@ -1257,6 +1465,145 @@ def _load_team_applications(role: str, team: str) -> list[str]:
         return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
     except Exception:
         return []
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
+    """For each application, return the current prd deployment snapshot.
+
+    Returns ``{app: {"live": bool, "version": str, "when": <iso str>,
+    "status": str}}``. ``live`` is True iff the most recent prd deployment has a
+    non-failed status. Apps with no prd deployment on record are omitted — the
+    caller treats that as "not live".
+    """
+    if not apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["deployments"],
+            {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"terms": {"application.keyword": list(apps)}},
+                            {"term": {"environment": "prd"}},
+                        ]
+                    }
+                },
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application.keyword", "size": len(apps)},
+                        "aggs": {
+                            "latest": {
+                                "top_hits": {
+                                    "size": 1,
+                                    "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
+                                    "_source": ["application", "codeversion", "status", "startdate"],
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            size=0,
+        )
+    except Exception:
+        return {}
+    _failed_upper = {s.upper() for s in FAILED_STATUSES}
+    out: dict[str, dict] = {}
+    for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _app = _b.get("key")
+        _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
+        if not _app or not _hits:
+            continue
+        _s = _hits[0].get("_source", {}) or {}
+        _status_raw = _s.get("status", "") or ""
+        out[_app] = {
+            "live":    _status_raw.upper() not in _failed_upper,
+            "version": _s.get("codeversion", "") or "",
+            "when":    _s.get("startdate", "") or "",
+            "status":  _status_raw,
+        }
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Fetch the most-recent prismacloud scan for each ``(app, version)`` pair.
+
+    Returns ``{(app, version): {Vcritical, Vhigh, Vmedium, Vlow, Ccritical,
+    Chigh, Cmedium, Clow, status, when, imageName, imageTag}}``. Pairs with no
+    matching scan are omitted — the caller treats that as "no prisma data".
+    """
+    if not app_versions:
+        return {}
+    # Unique apps → one aggregation per app that buckets by codeversion, then
+    # top_hits for the freshest scan of each version.
+    apps = sorted({_a for _a, _ in app_versions if _a})
+    if not apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["prismacloud"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application.keyword": apps}}]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application.keyword", "size": len(apps)},
+                        "aggs": {
+                            "by_ver": {
+                                "terms": {"field": "codeversion.keyword", "size": 200},
+                                "aggs": {
+                                    "latest": {
+                                        "top_hits": {
+                                            "size": 1,
+                                            "sort": [{"enddate": {"order": "desc", "unmapped_type": "date"}}],
+                                            "_source": [
+                                                "application", "codeversion", "status",
+                                                "Vcritical", "Vhigh", "Vmedium", "Vlow",
+                                                "Ccritical", "Chigh", "Cmedium", "Clow",
+                                                "imageName", "imageTag", "enddate", "startdate",
+                                            ],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+    except Exception:
+        return {}
+    wanted = {(a, v) for a, v in app_versions if a and v}
+    out: dict[tuple[str, str], dict] = {}
+    for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _app = _ab.get("key")
+        for _vb in _ab.get("by_ver", {}).get("buckets", []):
+            _ver = _vb.get("key")
+            _hits = _vb.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            key = (_app, _ver)
+            if wanted and key not in wanted:
+                continue
+            out[key] = {
+                "Vcritical": int(_s.get("Vcritical") or 0),
+                "Vhigh":     int(_s.get("Vhigh")     or 0),
+                "Vmedium":   int(_s.get("Vmedium")   or 0),
+                "Vlow":      int(_s.get("Vlow")      or 0),
+                "Ccritical": int(_s.get("Ccritical") or 0),
+                "Chigh":     int(_s.get("Chigh")     or 0),
+                "Cmedium":   int(_s.get("Cmedium")   or 0),
+                "Clow":      int(_s.get("Clow")      or 0),
+                "status":    _s.get("status", "")    or "",
+                "imageName": _s.get("imageName", "") or "",
+                "imageTag":  _s.get("imageTag", "")  or "",
+                "when":      _s.get("enddate") or _s.get("startdate") or "",
+            }
+    return out
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -2902,6 +3249,26 @@ def _render_event_log() -> None:
     _pop_apps = sorted(_pop_apps_set)
     _inv_map = _fetch_inventory_details(tuple(_pop_apps)) if _pop_apps else {}
 
+    # Current prd liveness per application — only need this for apps that
+    # actually appear in a Version cell (build/deploy/release events).
+    # Unique (app, version) pairs that show up in a Version cell — one popover
+    # per pair so the same app can be inspected at different versions.
+    _ver_apps_versions = sorted({
+        (ev["Who"], ev["Version"]) for ev in events
+        if ev["type"] in ("build", "deploy", "release") and ev.get("Who") and ev.get("Version")
+    })
+    _ver_apps = sorted({_a for _a, _ in _ver_apps_versions})
+    _prd_map = _fetch_prd_status(tuple(_ver_apps)) if _ver_apps else {}
+
+    # Prismacloud lookup — query both the event's version AND the app's current
+    # prd version so the popover can render a side-by-side delta.
+    _prisma_keys: set[tuple[str, str]] = set(_ver_apps_versions)
+    for _a, _prd in _prd_map.items():
+        _pv = (_prd or {}).get("version") or ""
+        if _pv:
+            _prisma_keys.add((_a, _pv))
+    _prisma_map = _fetch_prismacloud(tuple(sorted(_prisma_keys))) if _prisma_keys else {}
+
     def _slug(val: str, prefix: str) -> str:
         return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
 
@@ -2912,6 +3279,10 @@ def _render_event_log() -> None:
     def _proj_pop_id(project: str) -> str:
         """Deterministic DOM id for a project popover."""
         return _slug(project, "el-proj-pop-")
+
+    def _ver_pop_id(app: str, version: str) -> str:
+        """Deterministic DOM id for an app+version liveness/security popover."""
+        return _slug(f"{app}--{version}", "el-ver-pop-")
 
     def _app_cell(ev: dict) -> str:
         """Render the Application column — clickable popover trigger when we
@@ -2945,13 +3316,32 @@ def _render_event_log() -> None:
             )
         return f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{_proj}</span>'
 
+    def _version_cell(ev: dict) -> str:
+        """Render the Version column — a clickable chip that pops the
+        application's live-in-prd status. Plain chip when we can't key it to an
+        application (commits, requests, empty versions)."""
+        _ver = ev.get("Version") or ""
+        if not _ver:
+            return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        _app = ev.get("Who") or ""
+        if ev["type"] in ("build", "deploy", "release") and _app:
+            _title = (
+                "Live in prd" if (_prd_map.get(_app) or {}).get("live")
+                else ("Last prd deploy failed" if _app in _prd_map else "Not deployed to prd")
+            )
+            return (
+                f'<button type="button" class="el-ver-trigger" '
+                f'popovertarget="{_ver_pop_id(_app, _ver)}" '
+                f'title="{_title} · click for details">{_ver}</button>'
+            )
+        return (
+            f'<span style="font-family:var(--cc-mono);font-size:0.73rem;color:var(--cc-accent);'
+            f'background:var(--cc-accent-lt);padding:1px 6px;border-radius:4px">{_ver}</span>'
+        )
+
     _rows_html = []
     for ev in events:
-        _ver_cell = (
-            f'<span style="font-family:var(--cc-mono);font-size:0.73rem;color:var(--cc-accent);'
-            f'background:var(--cc-accent-lt);padding:1px 6px;border-radius:4px">{ev["Version"]}</span>'
-            if ev.get("Version") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
-        )
+        _ver_cell = _version_cell(ev)
         _proj_cell = _project_cell(ev)
 
         def _person_cell(val: str) -> str:
@@ -3099,6 +3489,171 @@ def _render_event_log() -> None:
             f'  <div class="ap-foot">Source: ef-devops-inventory · click an app for build &amp; deploy details</div>'
             f'</div>'
         )
+
+    # Severity-strip helpers ------------------------------------------------
+    _SEV_KEYS = [
+        ("critical", "Critical"),
+        ("high",     "High"),
+        ("medium",   "Medium"),
+        ("low",      "Low"),
+    ]
+
+    def _sev_tile(level: str, label: str, count: int, delta: int | None) -> str:
+        """One severity tile. ``delta`` may be None (no comparison), 0, or ±N."""
+        _nz = "nonzero" if count > 0 else "zero"
+        if delta is None:
+            _delta_html = ""
+        elif delta > 0:
+            _delta_html = f'<div class="sev-delta up">▲ +{delta} vs prd</div>'
+        elif delta < 0:
+            _delta_html = f'<div class="sev-delta down">▼ {delta} vs prd</div>'
+        else:
+            _delta_html = '<div class="sev-delta eq">= vs prd</div>'
+        return (
+            f'<div class="ap-sev-tile {level} {_nz}">'
+            f'  <div class="sev-num">{count}</div>'
+            f'  <div class="sev-label">{label}</div>'
+            f'  {_delta_html}'
+            f'</div>'
+        )
+
+    def _sev_strip(prefix: str, scan: dict, baseline: dict | None) -> tuple[str, int]:
+        """Four tiles for the V* or C* fields in ``scan``, optionally with a
+        delta computed against the same fields in ``baseline``.
+
+        Returns ``(tiles_html, total_count)``. Field names in the index are
+        ``Vcritical``/``Vhigh``/``Vmedium``/``Vlow`` and the C* equivalents —
+        uppercase prefix, lowercase level.
+        """
+        tiles: list[str] = []
+        _total = 0
+        for _lvl, _lbl in _SEV_KEYS:
+            _fld = f"{prefix}{_lvl}"     # Vcritical, Chigh, …
+            _n = int(scan.get(_fld, 0) or 0)
+            _total += _n
+            _delta: int | None = None
+            if baseline is not None:
+                _delta = _n - int(baseline.get(_fld, 0) or 0)
+            tiles.append(_sev_tile(_lvl, _lbl, _n, _delta))
+        return "".join(tiles), _total
+
+    # One version popover per unique (app, version) pair in the event log.
+    for _app, _ver in _ver_apps_versions:
+        _prd = _prd_map.get(_app)
+        _vid = _ver_pop_id(_app, _ver)
+        _prd_ver = (_prd or {}).get("version", "") or ""
+        _is_this_prd = bool(_prd_ver and _prd_ver == _ver)
+
+        # Live banner — same logic as before, tailored for the current version.
+        if _prd:
+            _live = bool(_prd.get("live"))
+            _prd_when   = fmt_dt(_prd.get("when"), "%Y-%m-%d %H:%M") or ""
+            _prd_status = _prd.get("status", "") or ""
+            if _live and _is_this_prd:
+                _banner = (
+                    f'<div class="ap-live is-live">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>This version is live in prd · '
+                    f'<span class="ap-chip">{_ver}</span></span>'
+                    f'</div>'
+                )
+            elif _live:
+                _banner = (
+                    f'<div class="ap-live is-live">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>App is live in prd · running '
+                    f'<span class="ap-chip">{_prd_ver}</span> (not this version)</span>'
+                    f'</div>'
+                )
+            else:
+                _banner = (
+                    f'<div class="ap-live is-offline">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>Last prd deploy failed · {_prd_status or "FAILED"}</span>'
+                    f'</div>'
+                )
+            _prd_block = (
+                f'    <div class="ap-section">Current prd deploy</div>'
+                f'    <span class="ap-k">Version</span>{_chip(_prd_ver)}'
+                f'    <span class="ap-k">Status</span>{_v(_prd_status)}'
+                f'    <span class="ap-k">When ({DISPLAY_TZ_LABEL})</span>{_v(_prd_when)}'
+            )
+        else:
+            _banner = (
+                f'<div class="ap-live is-offline">'
+                f'  <span class="dot"></span>'
+                f'  <span>App not deployed to prd</span>'
+                f'</div>'
+            )
+            _prd_block = (
+                f'    <div class="ap-section">Current prd deploy</div>'
+                f'    <span class="ap-k">Version</span><span class="ap-v empty">none on record</span>'
+            )
+
+        # Prismacloud block ---------------------------------------------------
+        _this_scan = _prisma_map.get((_app, _ver))
+        _prd_scan  = _prisma_map.get((_app, _prd_ver)) if _prd_ver else None
+        # Only compute deltas when this version != prd version AND prd scan exists.
+        _baseline = _prd_scan if (_prd_ver and not _is_this_prd and _prd_scan) else None
+
+        if _this_scan:
+            _v_tiles, _v_total = _sev_strip("V", _this_scan, _baseline)
+            _c_tiles, _c_total = _sev_strip("C", _this_scan, _baseline)
+            _scan_when = fmt_dt(_this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+            _scan_stat = _this_scan.get("status", "") or ""
+            _sec_subhead_v = (
+                f'<div class="ap-sev-subhead">'
+                f'  <span>Vulnerabilities · this version</span>'
+                f'  <span class="sev-sum">{_v_total} total</span>'
+                f'</div>'
+            )
+            _sec_subhead_c = (
+                f'<div class="ap-sev-subhead">'
+                f'  <span>Compliance · this version</span>'
+                f'  <span class="sev-sum">{_c_total} total</span>'
+                f'</div>'
+            )
+            _prisma_block = (
+                f'    <div class="ap-section">Prismacloud scan</div>'
+                f'    <span class="ap-k">Scan status</span>{_v(_scan_stat)}'
+                f'    <span class="ap-k">Scanned ({DISPLAY_TZ_LABEL})</span>{_v(_scan_when)}'
+                f'    {_sec_subhead_v}'
+                f'    <div class="ap-sev">{_v_tiles}</div>'
+                f'    {_sec_subhead_c}'
+                f'    <div class="ap-sev">{_c_tiles}</div>'
+            )
+            if _baseline is not None:
+                _prisma_block += (
+                    f'    <div class="ap-compare-head">'
+                    f'      <span>Δ vs current prd</span>'
+                    f'      <span class="cmp-pill">{_prd_ver}</span>'
+                    f'    </div>'
+                )
+        else:
+            _prisma_block = (
+                f'    <div class="ap-section">Prismacloud scan</div>'
+                f'    <div class="ap-sev-empty">No prismacloud scan on record for this version.</div>'
+            )
+
+        _popovers_html.append(
+            f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">▲</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Version · {_ver}</div>'
+            f'      <div class="ap-title">{_app}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_vid}" popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    {_banner}'
+            f'    {_prd_block}'
+            f'    {_prisma_block}'
+            f'  </div>'
+            f'  <div class="ap-foot">Sources: ef-cicd-deployments · ef-cicd-prismacloud</div>'
+            f'</div>'
+        )
+
     _th_style = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
     _table_html = (
         '<div style="overflow-y:auto;max-height:60vh;border:1px solid var(--cc-border);border-radius:10px">'
@@ -3108,7 +3663,7 @@ def _render_event_log() -> None:
         f'<th {_th_style}>Type</th>'
         f'<th {_th_style}>Project</th>'
         f'<th {_th_style}>Application</th>'
-        f'<th {_th_style}>Artifact</th>'
+        f'<th {_th_style}>Version</th>'
         f'<th {_th_style}>Detail</th>'
         f'<th {_th_style}>Status</th>'
         f'<th {_th_style}>Requester</th>'
@@ -3129,7 +3684,7 @@ def _render_event_log() -> None:
     st.markdown(
         f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
         f'Showing {len(events)} events · {_type_summary} · sorted newest first · '
-        f'<span style="color:var(--cc-accent)">click project or application names to inspect</span></p>'
+        f'<span style="color:var(--cc-accent)">click project, application, or version chips to inspect</span></p>'
         + _table_html
         + "".join(_popovers_html),
         unsafe_allow_html=True,
