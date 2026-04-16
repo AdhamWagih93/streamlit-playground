@@ -689,6 +689,95 @@ div[data-testid="stPopover"] button:hover {
     border-top: 1px solid var(--cc-border);
     text-align: right;
 }
+
+/* -------- Project popover — reuses .el-app-pop skeleton with a teal accent -------- */
+.el-app-pop.is-project .ap-head {
+    background:
+        radial-gradient(120% 120% at 0% 0%, rgba(5,150,105,.14), transparent 60%),
+        linear-gradient(135deg, #ffffff, #f5fbf8);
+}
+.el-app-pop.is-project .ap-icon {
+    background: linear-gradient(135deg, #059669, #0d9488);
+    box-shadow: 0 6px 16px -4px rgba(5,150,105,.45);
+}
+.el-app-pop.is-project .ap-kicker { color: #059669; }
+.el-app-pop.is-project {
+    box-shadow:
+        0 1px 2px rgba(26,29,46,.05),
+        0 20px 50px -10px rgba(26,29,46,.25),
+        0 0 0 1px rgba(5,150,105,.12);
+}
+
+/* Applications grid inside a project popover — spans the full row  */
+.el-app-pop .ap-applist {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 2px;
+}
+.el-app-pop .ap-applist:empty::after {
+    content: "no applications in inventory";
+    font-family: var(--cc-sans);
+    font-style: italic;
+    color: var(--cc-text-mute);
+    font-size: .76rem;
+}
+.el-app-pop .ap-app-chip {
+    all: unset;
+    cursor: pointer;
+    display: inline-block;
+    padding: 3px 9px;
+    background: var(--cc-surface2);
+    color: var(--cc-text);
+    border: 1px solid var(--cc-border);
+    border-radius: 6px;
+    font-family: var(--cc-mono);
+    font-size: .74rem;
+    font-weight: 600;
+    transition: border-color .12s, color .12s, background .12s, transform .12s;
+}
+.el-app-pop .ap-app-chip:hover {
+    border-color: var(--cc-accent);
+    color: var(--cc-accent);
+    background: var(--cc-accent-lt);
+    transform: translateY(-1px);
+}
+.el-app-pop .ap-app-chip:focus-visible {
+    outline: 2px solid var(--cc-accent);
+    outline-offset: 2px;
+}
+.el-app-pop .ap-app-chip.static {
+    cursor: default;
+    color: var(--cc-text-mute);
+}
+.el-app-pop .ap-app-chip.static:hover {
+    border-color: var(--cc-border);
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    transform: none;
+}
+
+/* Project trigger in the event-log Project column  */
+.el-proj-trigger {
+    all: unset;
+    cursor: pointer;
+    color: var(--cc-text-dim);
+    font-size: 0.78rem;
+    font-weight: 500;
+    border-bottom: 1px dotted var(--cc-text-mute);
+    padding: 0 2px;
+    transition: color .12s, border-color .12s;
+}
+.el-proj-trigger:hover {
+    color: #059669;
+    border-bottom-color: #059669;
+}
+.el-proj-trigger:focus-visible {
+    outline: 2px solid #059669;
+    outline-offset: 2px;
+    border-radius: 2px;
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -1225,6 +1314,57 @@ def _fetch_inventory_details(apps: tuple[str, ...]) -> dict[str, dict]:
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
+    """Batch-fetch a summary record per project from the inventory.
+
+    Returns ``{project: {"teams": {field: [values]}, "apps": [app names]}}``
+    where ``field`` is any inventory field ending in ``_team`` (dev_team,
+    qc_team, uat_team, prd_team, etc.). Missing or empty values are omitted.
+    """
+    if not projects:
+        return {}
+    try:
+        resp = es_search(
+            IDX["inventory"],
+            {
+                "query": {"terms": {"project.keyword": list(projects)}},
+                # Wildcard picks up any *_team field (dev_team, qc_team, uat_team, prd_team, …)
+                "_source": ["application", "project", "*_team"],
+            },
+            size=2000,
+        )
+    except Exception:
+        return {}
+    out: dict[str, dict] = {p: {"teams": {}, "apps": set()} for p in projects}
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        _p = _s.get("project")
+        if not _p or _p not in out:
+            continue
+        _app = _s.get("application")
+        if _app:
+            out[_p]["apps"].add(_app)
+        for _k, _v in _s.items():
+            if not _k.endswith("_team") or not _v:
+                continue
+            # Some indices may store arrays; normalise to a flat set
+            if isinstance(_v, (list, tuple, set)):
+                for _item in _v:
+                    if _item:
+                        out[_p]["teams"].setdefault(_k, set()).add(str(_item))
+            else:
+                out[_p]["teams"].setdefault(_k, set()).add(str(_v))
+    # Normalise sets to sorted lists for deterministic rendering
+    result: dict[str, dict] = {}
+    for _p, _data in out.items():
+        result[_p] = {
+            "teams": {_f: sorted(_s) for _f, _s in _data["teams"].items() if _s},
+            "apps":  sorted(_data["apps"]),
+        }
+    return result
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str]:
     """Return inventory projects where the role's team field(s) match any of ``teams``.
 
@@ -1413,13 +1553,16 @@ _ROLE_SHOWS_BUILDS: dict[str, bool] = {
 }
 _ROLE_EVENT_TYPES: dict[str, list[str]] = {
     "Admin":     ["Builds", "Deployments", "Releases", "Requests", "Commits"],
-    "Developer": ["Builds", "Commits", "Requests"],
-    "QC":        ["Deployments", "Releases", "Requests"],
-    "Operator":  ["Deployments", "Releases", "Requests"],
+    # Developer: commits, builds, and dev-env deployments.
+    "Developer": ["Commits", "Builds", "Deployments"],
+    # QC: qc-env deployments and released versions.
+    "QC":        ["Deployments", "Releases"],
+    # Operator: uat- and prd-env deployments.
+    "Operator":  ["Deployments"],
 }
 _ROLE_ENVS: dict[str, list[str]] = {
     "Admin":     ["prd", "uat", "qc", "dev"],
-    "Developer": ["dev", "qc", "uat", "prd"],
+    "Developer": ["dev"],
     "QC":        ["qc"],
     "Operator":  ["uat", "prd"],
 }
@@ -2739,17 +2882,36 @@ def _render_event_log() -> None:
 
     # Collect unique application names from build/deploy/release events (only
     # these carry reliable inventory identity) and fetch their inventory cards.
-    _pop_apps = sorted({
+    _pop_apps_primary = sorted({
         ev["Who"] for ev in events
         if ev["type"] in ("build", "deploy", "release") and ev.get("Who")
     })
+
+    # Also collect unique projects from any event type so the Project column can
+    # drill into teams + applications via a popover.
+    _pop_projects = sorted({ev["Project"] for ev in events if ev.get("Project")})
+    _proj_map = _fetch_project_details(tuple(_pop_projects)) if _pop_projects else {}
+
+    # Extend the inventory fetch with every app discovered through a project so
+    # that app-chips inside a project popover also resolve to a detail popover.
+    _pop_apps_set = set(_pop_apps_primary)
+    for _pdata in _proj_map.values():
+        for _a in _pdata.get("apps", []):
+            if _a:
+                _pop_apps_set.add(_a)
+    _pop_apps = sorted(_pop_apps_set)
     _inv_map = _fetch_inventory_details(tuple(_pop_apps)) if _pop_apps else {}
+
+    def _slug(val: str, prefix: str) -> str:
+        return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
 
     def _pop_id(app: str) -> str:
         """Deterministic DOM id for an application popover."""
-        return "el-app-pop-" + "".join(
-            c.lower() if c.isalnum() else "-" for c in app
-        )[:80]
+        return _slug(app, "el-app-pop-")
+
+    def _proj_pop_id(project: str) -> str:
+        """Deterministic DOM id for a project popover."""
+        return _slug(project, "el-proj-pop-")
 
     def _app_cell(ev: dict) -> str:
         """Render the Application column — clickable popover trigger when we
@@ -2769,6 +2931,20 @@ def _render_event_log() -> None:
             f'font-size:0.82rem">{_name}</span>'
         )
 
+    def _project_cell(ev: dict) -> str:
+        """Render the Project column — clickable popover trigger when we have
+        inventory data for the project; otherwise a plain label."""
+        _proj = ev.get("Project") or ""
+        if not _proj:
+            return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        if _proj in _proj_map:
+            return (
+                f'<button type="button" class="el-proj-trigger" '
+                f'popovertarget="{_proj_pop_id(_proj)}" '
+                f'title="Click for teams & applications">{_proj}</button>'
+            )
+        return f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{_proj}</span>'
+
     _rows_html = []
     for ev in events:
         _ver_cell = (
@@ -2776,10 +2952,7 @@ def _render_event_log() -> None:
             f'background:var(--cc-accent-lt);padding:1px 6px;border-radius:4px">{ev["Version"]}</span>'
             if ev.get("Version") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
         )
-        _proj_cell = (
-            f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{ev["Project"]}</span>'
-            if ev.get("Project") else '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
-        )
+        _proj_cell = _project_cell(ev)
 
         def _person_cell(val: str) -> str:
             if not val:
@@ -2849,6 +3022,83 @@ def _render_event_log() -> None:
             f'  <div class="ap-foot">Source: ef-devops-inventory · click outside to dismiss</div>'
             f'</div>'
         )
+
+    # Pretty labels for the *_team inventory fields
+    _TEAM_LABELS = {
+        "dev_team": "Dev team",
+        "qc_team":  "QC team",
+        "uat_team": "UAT team",
+        "prd_team": "PRD team",
+    }
+
+    def _team_label(field: str) -> str:
+        if field in _TEAM_LABELS:
+            return _TEAM_LABELS[field]
+        # Fallback: pretty-print any *_team field we don't know yet
+        _base = field[:-5] if field.endswith("_team") else field
+        return _base.replace("_", " ").strip().upper() + " team"
+
+    # Build one popover per unique project — lists team ownership + applications.
+    for _proj in _pop_projects:
+        _pdata = _proj_map.get(_proj)
+        if not _pdata:
+            continue
+        _pid_p = _proj_pop_id(_proj)
+        _teams = _pdata.get("teams", {}) or {}
+        _apps  = _pdata.get("apps", []) or []
+
+        # Teams rows — preserve logical dev→qc→uat→prd ordering, then any extras
+        _ordered = [k for k in ("dev_team", "qc_team", "uat_team", "prd_team") if k in _teams]
+        _extras  = sorted(k for k in _teams.keys() if k not in _ordered)
+        _team_rows = []
+        for _f in _ordered + _extras:
+            _vals = _teams.get(_f) or []
+            if not _vals:
+                continue
+            _chips = "".join(f'<span class="ap-chip">{_tv}</span>' for _tv in _vals)
+            _team_rows.append(
+                f'<span class="ap-k">{_team_label(_f)}</span>'
+                f'<span class="ap-v" style="display:flex;flex-wrap:wrap;gap:4px">{_chips}</span>'
+            )
+        if not _team_rows:
+            _team_rows.append(
+                '<span class="ap-k">Teams</span>'
+                '<span class="ap-v empty">none recorded</span>'
+            )
+
+        # Application chips — clickable if that app has an inventory popover,
+        # otherwise rendered as static (still visible but non-interactive).
+        _app_chips = []
+        for _a in _apps:
+            if _a in _inv_map:
+                _app_chips.append(
+                    f'<button type="button" class="ap-app-chip" '
+                    f'popovertarget="{_pop_id(_a)}" '
+                    f'title="Open application details">{_a}</button>'
+                )
+            else:
+                _app_chips.append(f'<span class="ap-app-chip static">{_a}</span>')
+        _apps_block = "".join(_app_chips)
+
+        _popovers_html.append(
+            f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">◇</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Project</div>'
+            f'      <div class="ap-title">{_proj}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_pid_p}" popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    <div class="ap-section">Teams</div>'
+            + "".join(_team_rows) +
+            f'    <div class="ap-section">Applications <span style="text-transform:none;font-weight:600;color:var(--cc-text-mute);letter-spacing:0;margin-left:4px">· {len(_apps)}</span></div>'
+            f'    <div class="ap-applist">{_apps_block}</div>'
+            f'  </div>'
+            f'  <div class="ap-foot">Source: ef-devops-inventory · click an app for build &amp; deploy details</div>'
+            f'</div>'
+        )
     _th_style = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
     _table_html = (
         '<div style="overflow-y:auto;max-height:60vh;border:1px solid var(--cc-border);border-radius:10px">'
@@ -2879,7 +3129,7 @@ def _render_event_log() -> None:
     st.markdown(
         f'<p style="font-size:0.8rem;color:var(--cc-text-mute);margin:0 0 8px">'
         f'Showing {len(events)} events · {_type_summary} · sorted newest first · '
-        f'<span style="color:var(--cc-accent)">click application names to inspect</span></p>'
+        f'<span style="color:var(--cc-accent)">click project or application names to inspect</span></p>'
         + _table_html
         + "".join(_popovers_html),
         unsafe_allow_html=True,
@@ -2890,9 +3140,9 @@ if _show("eventlog"):
     st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
     _el_hint = {
         "Admin": "builds · deployments · releases · requests · commits",
-        "Developer": "your builds, commits, and build-stage requests",
-        "QC": "QC deployments, release requests, and releases",
-        "Operator": "UAT/PRD deployments, deploy requests, and releases",
+        "Developer": "your commits, builds, and dev deployments",
+        "QC": "QC deployments and releases",
+        "Operator": "UAT and PRD deployments",
     }.get(_effective_role, "all event types")
     st.markdown(
         f'<div class="section">'
