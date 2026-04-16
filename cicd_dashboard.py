@@ -1542,17 +1542,20 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
     apps = sorted({_a for _a, _ in app_versions if _a})
     if not apps:
         return {}
+    # The prismacloud index declares ``application`` and ``codeversion`` as
+    # top-level ``keyword`` fields (no ``.keyword`` subfield), so the terms
+    # query / agg has to target the bare names here.
     try:
         resp = es_search(
             IDX["prismacloud"],
             {
-                "query": {"bool": {"filter": [{"terms": {"application.keyword": apps}}]}},
+                "query": {"bool": {"filter": [{"terms": {"application": apps}}]}},
                 "aggs": {
                     "by_app": {
-                        "terms": {"field": "application.keyword", "size": len(apps)},
+                        "terms": {"field": "application", "size": len(apps)},
                         "aggs": {
                             "by_ver": {
-                                "terms": {"field": "codeversion.keyword", "size": 200},
+                                "terms": {"field": "codeversion", "size": 200},
                                 "aggs": {
                                     "latest": {
                                         "top_hits": {
