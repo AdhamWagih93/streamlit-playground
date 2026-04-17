@@ -1263,6 +1263,149 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     letter-spacing: 0.02em;
     white-space: nowrap;
 }
+.iv-stage-rel {
+    color: var(--cc-text-dim);
+    font-weight: 600;
+}
+/* Inline per-row prisma posture chips (sit under the app name) */
+.iv-app-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: flex-start;
+    line-height: 1.15;
+}
+.iv-sec-row {
+    display: inline-flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.iv-sec-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--cc-mono);
+    font-size: 0.60rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    cursor: help;
+    line-height: 1.25;
+}
+.iv-sec-chip .iv-sec-label {
+    opacity: 0.65;
+    font-weight: 800;
+    margin-right: 1px;
+}
+.iv-sec-chip.iv-sec-crit {
+    background: rgba(220, 38, 38, 0.12);
+    color: #b91c1c;
+    border-color: rgba(220, 38, 38, 0.28);
+}
+.iv-sec-chip.iv-sec-high {
+    background: rgba(234, 88, 12, 0.10);
+    color: #c2410c;
+    border-color: rgba(234, 88, 12, 0.25);
+}
+.iv-sec-chip.iv-sec-med {
+    background: rgba(217, 119, 6, 0.08);
+    color: #a16207;
+    border-color: rgba(217, 119, 6, 0.22);
+}
+.iv-sec-chip.iv-sec-low {
+    background: rgba(101, 163, 13, 0.08);
+    color: #4d7c0f;
+    border-color: rgba(101, 163, 13, 0.20);
+}
+.iv-sec-chip.iv-sec-clean {
+    background: rgba(5, 150, 105, 0.06);
+    color: #047857;
+    border-color: rgba(5, 150, 105, 0.20);
+}
+.iv-sec-chip.iv-sec-na {
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border-color: var(--cc-border);
+    opacity: 0.75;
+}
+/* Aggregate posture strip — subtle full-width ribbon above the table */
+.iv-posture-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 14px;
+    margin: 8px 0 10px 0;
+    border-radius: 8px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-left-width: 3px;
+    font-size: 0.78rem;
+}
+.iv-posture-strip.is-crit   { border-left-color: #b91c1c; }
+.iv-posture-strip.is-high   { border-left-color: #c2410c; }
+.iv-posture-strip.is-med    { border-left-color: #a16207; }
+.iv-posture-strip.is-low    { border-left-color: #4d7c0f; }
+.iv-posture-strip.is-clean  { border-left-color: #047857; }
+.iv-posture-strip.is-na     { border-left-color: var(--cc-border); }
+.iv-ps-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.iv-ps-glyph {
+    font-size: 0.95rem;
+    line-height: 1;
+}
+.iv-ps-glyph.is-crit  { color: #b91c1c; }
+.iv-ps-glyph.is-high  { color: #c2410c; }
+.iv-ps-glyph.is-med   { color: #a16207; }
+.iv-ps-glyph.is-low   { color: #4d7c0f; }
+.iv-ps-glyph.is-clean { color: #047857; }
+.iv-ps-glyph.is-na    { color: var(--cc-text-mute); }
+.iv-ps-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.iv-ps-kicker {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cc-text-dim);
+}
+.iv-ps-tier {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--cc-surface2);
+    color: var(--cc-text-dim);
+    border: 1px solid var(--cc-border);
+}
+.iv-ps-tier.is-crit  { color: #b91c1c; background: rgba(220, 38, 38, 0.10); border-color: rgba(220, 38, 38, 0.25); }
+.iv-ps-tier.is-high  { color: #c2410c; background: rgba(234, 88, 12, 0.08); border-color: rgba(234, 88, 12, 0.22); }
+.iv-ps-tier.is-med   { color: #a16207; background: rgba(217, 119, 6, 0.07); border-color: rgba(217, 119, 6, 0.20); }
+.iv-ps-tier.is-low   { color: #4d7c0f; background: rgba(101, 163, 13, 0.07); border-color: rgba(101, 163, 13, 0.18); }
+.iv-ps-tier.is-zero  { opacity: 0.55; }
+.iv-ps-coverage {
+    margin-left: auto;
+    font-size: 0.68rem;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
 /* "Not needed" — positive chip for Lib apps' post-build stages */
 .iv-stage-nn {
     display: inline-flex;
@@ -1609,6 +1752,39 @@ def fmt_dt(value: Any, fmt: str = "%Y-%m-%d %H:%M") -> str:
         # Fall back to naive UTC if tz conversion fails for any reason
         ts_local = ts
     return ts_local.strftime(fmt)
+
+
+def _relative_age(value: Any, *, now: datetime | None = None) -> str:
+    """Short human-readable age: "12s", "5m", "3h", "2d", "3w", "4mo", "2y" ago.
+
+    Returns "" when ``value`` can't be parsed. Negative deltas (future dates) are
+    rendered with an "in …" prefix instead of " ago".
+    """
+    ts = parse_dt(value)
+    if ts is None:
+        return ""
+    _now = now or datetime.now(timezone.utc)
+    try:
+        _delta_s = (_now - ts.to_pydatetime()).total_seconds()
+    except Exception:
+        return ""
+    _future = _delta_s < 0
+    _s = abs(_delta_s)
+    if _s < 45:
+        _tok = f"{int(_s)}s"
+    elif _s < 60 * 45:
+        _tok = f"{int(round(_s / 60))}m"
+    elif _s < 3600 * 22:
+        _tok = f"{int(round(_s / 3600))}h"
+    elif _s < 86400 * 6:
+        _tok = f"{int(round(_s / 86400))}d"
+    elif _s < 86400 * 28:
+        _tok = f"{int(round(_s / (86400 * 7)))}w"
+    elif _s < 86400 * 330:
+        _tok = f"{int(round(_s / (86400 * 30)))}mo"
+    else:
+        _tok = f"{int(round(_s / (86400 * 365)))}y"
+    return f"in {_tok}" if _future else f"{_tok} ago"
 
 
 # Date field candidates per index family — ES source field names can vary
@@ -3664,15 +3840,26 @@ def _build_subtype(branch: str) -> str:
     return "build-release" if "release" in b else "build-develop"
 
 
-# Event-log time-window presets — user-facing labels → timedelta from "now"
-_EL_TIME_WINDOWS: dict[str, timedelta] = {
+# Event-log time-window presets — user-facing labels → timedelta from "now".
+# ``None`` is the "All time" sentinel; handled at query time by substituting a
+# distant past date so the ES range filter still has a lower bound.
+_EL_TIME_WINDOWS: dict[str, timedelta | None] = {
     "Last 15 min": timedelta(minutes=15),
     "Last 1h":     timedelta(hours=1),
     "Last 6h":     timedelta(hours=6),
     "Last 24h":    timedelta(hours=24),
     "Last 3d":     timedelta(days=3),
     "Last 7d":     timedelta(days=7),
+    "Last 14d":    timedelta(days=14),
+    "Last 30d":    timedelta(days=30),
+    "Last 90d":    timedelta(days=90),
+    "Last 180d":   timedelta(days=180),
+    "Last 1y":     timedelta(days=365),
+    "All time":    None,
 }
+# Lower bound substituted for the "All time" window — far enough in the past to
+# cover the entire dataset but a real date so ES range queries stay well-formed.
+_EL_ALLTIME_FLOOR = datetime(2000, 1, 1, tzinfo=timezone.utc)
 _EL_SIZE_CAP = 500  # safety bound so a wide window doesn't drag the cluster
 
 
@@ -3711,23 +3898,15 @@ def _render_event_log() -> None:
     _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
     _env_options = ["(all)"] + _allowed_envs
 
-    # ── Row 1: Project · Env · Time window · Per-project toggle ─────────────
-    # Type is no longer a selectbox — it moves to the clickable pill bar above
-    # the table so users can include/exclude any combination of types.
-    _el_r1 = st.columns([1.7, 1.1, 1.1, 1.2])
+    # ── Shared controls (Project / Search / Per-project) live above the
+    # combined panel; only the view-specific Env + Time window are rendered
+    # locally alongside the live-refresh badge.
+    el_project_filter = _shared_project_filter()
+    el_search = _shared_search_query()
+    el_per_project = _shared_per_project()
+
+    _el_r1 = st.columns([1.0, 1.3, 1.0])
     with _el_r1[0]:
-        # Event-log-local project filter: defaults to the global choice if one
-        # is set, otherwise picks from the role's visible projects.
-        _el_proj_options = [_ALL] + (_proj_scoped or [])
-        _default_idx = 0
-        if project_filter and project_filter in _el_proj_options:
-            _default_idx = _el_proj_options.index(project_filter)
-        el_project = st.selectbox(
-            "Project", _el_proj_options, index=_default_idx, key="el_project_v3",
-            help="Restrict the event log to a single project; 'All' falls back to the global scope",
-        )
-        el_project_filter = "" if el_project == _ALL else el_project
-    with _el_r1[1]:
         if len(_env_options) == 2:
             el_env = _env_options[1]
             st.markdown(
@@ -3739,27 +3918,23 @@ def _render_event_log() -> None:
             )
         else:
             el_env = st.selectbox("Env", _env_options, key="el_env_v3")
-    with _el_r1[2]:
+    with _el_r1[1]:
         _el_tw_label = st.selectbox(
             "Time window", list(_EL_TIME_WINDOWS.keys()), index=3, key="el_time_v3",
             help="How far back to pull events for the log (independent of the page-wide window)",
         )
         _el_delta = _EL_TIME_WINDOWS[_el_tw_label]
-    with _el_r1[3]:
-        el_per_project = st.toggle(
-            "Per-project tables", value=False, key="el_per_project_v3",
-            help="Group events into a separate table per project instead of a consolidated view",
-        )
+    with _el_r1[2]:
         st.markdown(
             f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
-            f'text-transform:uppercase;font-weight:600;margin-top:-4px">'
+            f'text-transform:uppercase;font-weight:600;margin-top:26px;white-space:nowrap">'
             f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto 60s</div>',
             unsafe_allow_html=True,
         )
 
     # ── Compute the event-log's own time window (independent of global) ─────
     _now_utc = datetime.now(timezone.utc)
-    _el_start = _now_utc - _el_delta
+    _el_start = _EL_ALLTIME_FLOOR if _el_delta is None else (_now_utc - _el_delta)
     _el_end   = _now_utc
     _size     = _EL_SIZE_CAP
 
@@ -4108,6 +4283,32 @@ def _render_event_log() -> None:
     if _active_types:
         events = [ev for ev in events if ev["type"] in _active_types]
 
+    # Apply the text search filter — matches against every visible string field
+    # so users can narrow by person, version, detail substring, etc. Terms are
+    # AND so "deploy prd 3.4" narrows progressively.
+    if el_search:
+        _el_terms = [_t for _t in el_search.split() if _t]
+
+        def _el_haystack(_ev: dict) -> str:
+            _parts: list[str] = [
+                str(_ev.get("type", "") or ""),
+                str(_ev.get("Who", "") or ""),
+                str(_ev.get("Project", "") or ""),
+                str(_ev.get("Environment", "") or ""),
+                str(_ev.get("Version", "") or ""),
+                str(_ev.get("Detail", "") or ""),
+                str(_ev.get("Status", "") or ""),
+                str(_ev.get("Requester", "") or ""),
+                str(_ev.get("Approver", "") or ""),
+                str(_ev.get("Extra", "") or ""),
+            ]
+            return " ".join(_parts).lower()
+
+        events = [
+            ev for ev in events
+            if all(_t in _el_haystack(ev) for _t in _el_terms)
+        ]
+
     if not events:
         if _total_events_unfiltered:
             inline_note(
@@ -4268,6 +4469,28 @@ def _render_event_log() -> None:
             f'title="{val}">{val}</span>'
         )
 
+    def _when_cell(ev: dict) -> str:
+        """Render the When column as absolute timestamp + relative age.
+
+        Two stacked lines: top = absolute (DISPLAY_TZ), bottom = "5h ago" /
+        "3d ago" style tag so the reader sees recency at a glance without
+        doing date-math in their head.
+        """
+        _abs = ev.get("When") or ""
+        _rel = _relative_age(ev.get("_ts"))
+        if not _abs and not _rel:
+            return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        _rel_html = (
+            f'<div style="color:var(--cc-text-mute);font-size:0.68rem;'
+            f'letter-spacing:.03em;margin-top:1px">{_rel}</div>'
+            if _rel else ""
+        )
+        return (
+            f'<div style="color:var(--cc-text-dim);font-size:0.78rem;'
+            f'font-family:var(--cc-mono);line-height:1.15">{_abs}</div>'
+            f'{_rel_html}'
+        )
+
     def _row_html(ev: dict, *, include_project: bool = True) -> str:
         """Render a single <tr> for an event.
 
@@ -4280,7 +4503,7 @@ def _render_event_log() -> None:
         )
         return (
             f"<tr>"
-            f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
+            f'<td style="white-space:nowrap;padding:5px 4px;vertical-align:top">{_when_cell(ev)}</td>'
             f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
             f'{_proj_html}'
             f'<td style="padding:5px 4px">{_app_cell(ev)}</td>'
@@ -4703,24 +4926,153 @@ def _render_event_log() -> None:
     )
 
 
-if _show("eventlog"):
+# ── Shared controls for the side-by-side event log + inventory panel ───────
+# Both fragments read these out of session_state so users only set project /
+# search / per-project once. A single search query feeds both views — each
+# view narrows with its own haystack so "jane prd" finds Jane's prd deploys in
+# events AND any inventory row that has jane in a team + prd in a platform/tag.
+_SHARED_LAYOUT_CHOICES: dict[str, tuple[int, int]] = {
+    "Events 75 / Inv 25": (3, 1),
+    "Events 66 / Inv 33": (2, 1),
+    "Balanced 50 / 50":   (1, 1),
+    "Events 33 / Inv 66": (1, 2),
+    "Events 25 / Inv 75": (1, 3),
+}
+
+
+def _render_shared_inv_el_controls(*, show_layout: bool) -> None:
+    """Render shared Project · Search · Per-project (+ Layout) row.
+
+    Writes session_state under the widgets' own keys (``shared_project_v1``,
+    ``shared_search_v1``, ``shared_per_project_v1``, ``shared_layout_v1``).
+    """
+    _opts = [_ALL] + (_proj_scoped or [])
+    _proj_default = 0
+    if project_filter and project_filter in _opts:
+        _proj_default = _opts.index(project_filter)
+
+    # Layout chooser only renders when both views are visible; otherwise the
+    # four-column grid stays compact: project · search · per-project · badge.
+    _cols_spec = [1.3, 1.9, 1.0, 1.2] if not show_layout else [1.2, 1.7, 0.95, 1.1, 1.2]
+    _r = st.columns(_cols_spec)
+    with _r[0]:
+        _proj = st.selectbox(
+            "Project", _opts, index=_proj_default, key="shared_project_v1",
+            help="Shared between event log and inventory — 'All' falls back to the global scope",
+        )
+    with _r[1]:
+        st.text_input(
+            "Search", key="shared_search_v1",
+            placeholder="app · project · version · tech · person · detail…",
+            help="Shared across both views · case-insensitive · "
+                 "space-separated terms are AND · matches every string field "
+                 "(each view narrows with its own haystack)",
+        )
+    with _r[2]:
+        st.toggle(
+            "Per-project tables", value=False, key="shared_per_project_v1",
+            help="Group rows into a separate table per project in both views",
+        )
+    _badge_col = _r[-1]
+    if show_layout:
+        with _r[3]:
+            st.select_slider(
+                "Layout",
+                options=list(_SHARED_LAYOUT_CHOICES.keys()),
+                value="Balanced 50 / 50",
+                key="shared_layout_v1",
+                help="Adjust the width split — slide right to give inventory more room",
+            )
+    with _badge_col:
+        st.markdown(
+            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
+            f'text-transform:uppercase;font-weight:600;margin-top:26px;white-space:nowrap">'
+            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _shared_project_filter() -> str:
+    """Resolve the shared project selector to a filter string ("" = all)."""
+    _v = st.session_state.get("shared_project_v1", _ALL)
+    return "" if _v == _ALL else _v
+
+
+def _shared_search_query() -> str:
+    """Resolve the shared search box to a lowercased, stripped query."""
+    return (st.session_state.get("shared_search_v1", "") or "").strip().lower()
+
+
+def _shared_per_project() -> bool:
+    """Resolve the shared per-project-tables toggle."""
+    return bool(st.session_state.get("shared_per_project_v1", False))
+
+
+def _shared_layout_ratio() -> tuple[int, int]:
+    """Resolve the shared layout ratio for the side-by-side split."""
+    _lbl = st.session_state.get("shared_layout_v1", "Balanced 50 / 50")
+    return _SHARED_LAYOUT_CHOICES.get(_lbl, (1, 1))
+
+
+_show_el = _show("eventlog")
+_show_inv = _show("inventory")
+
+if _show_el or _show_inv:
     st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
+
     _el_hint = {
         "Admin":     "builds (dev/rel) · deployments · releases · requests · commits — full visibility, toggle scope via ‘view all’",
         "Developer": "commits · dev/rel builds · dev deployments — scoped to projects where your team owns dev",
         "QC":        "QC deployments + requests · releases + requests — scoped to projects where your team owns QC",
         "Operator":  "UAT/PRD deployments + requests · releases + requests — scoped to projects where your team owns UAT/PRD",
     }.get(_effective_role, "all event types")
+
+    _combined_title = (
+        "Event log &amp; Application inventory" if (_show_el and _show_inv)
+        else ("Event log" if _show_el else "Application inventory")
+    )
+    _combined_hint = (
+        f"{_el_hint} &mdash; paired with the live application inventory · "
+        f"shared project, search &amp; per-project toggle"
+    ) if (_show_el and _show_inv) else (
+        f"{_el_hint} &mdash; newest first · auto-refreshes every minute"
+        if _show_el else
+        "One row per registered application · PRD liveness · security posture · click any chip for details"
+    )
+    _combined_badge = (
+        f'{ROLE_ICONS[_effective_role]} Live · EL auto 60s · Inv auto 5m · {_effective_role}'
+        if (_show_el and _show_inv) else
+        f'{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}'
+        if _show_el else
+        f'{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}'
+    )
     st.markdown(
         f'<div class="section">'
-        f'<div class="title-wrap"><h2>Event log</h2>'
-        f'<span class="badge">{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}</span></div>'
-        f'<span class="hint">{_el_hint} &mdash; newest first · auto-refreshes every minute</span>'
+        f'<div class="title-wrap"><h2>{_combined_title}</h2>'
+        f'<span class="badge">{_combined_badge}</span></div>'
+        f'<span class="hint">{_combined_hint}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
-    with st.expander("Event log (expand / collapse)", expanded=True):
-        _render_event_log()
+
+    _render_shared_inv_el_controls(show_layout=(_show_el and _show_inv))
+
+    if _show_el and _show_inv:
+        _ratio = _shared_layout_ratio()
+        _cols_panel = st.columns(list(_ratio), gap="large")
+        with _cols_panel[0]:
+            with st.expander("Event log (expand / collapse)", expanded=True):
+                _render_event_log()
+        with _cols_panel[1]:
+            with st.expander("Application inventory (expand / collapse)", expanded=True):
+                _render_inventory_view()
+    elif _show_el:
+        with st.expander("Event log (expand / collapse)", expanded=True):
+            _render_event_log()
+    else:
+        with st.expander("Application inventory (expand / collapse)", expanded=True):
+            _render_inventory_view()
 
 
 # =============================================================================
@@ -4783,31 +5135,50 @@ def _render_inventory_view() -> None:
     """Application inventory table — one row per registered application."""
 
     # ── Controls ────────────────────────────────────────────────────────────
-    _iv_r1 = st.columns([1.7, 1.2, 1.4, 1.1])
+    # Sort choices: each key maps to (label, ordering_fn, descending_bool, badge_label).
+    # Ordering functions return a (missing_flag, value) tuple so "no data" rows
+    # always land at the end regardless of direction.
+    _IV_SORT_OPTIONS = [
+        "Application · A → Z",
+        "Application · Z → A",
+        "Latest activity · newest first",
+        "Latest activity · oldest first",
+        "Vulnerabilities · highest first",
+        "Vulnerabilities · lowest first",
+        "Latest PRD deploy · newest first",
+        "Latest PRD deploy · oldest first",
+        "Live in PRD first",
+    ]
+    _IV_SORT_BADGES = {
+        "Application · A → Z":              "A → Z",
+        "Application · Z → A":              "Z → A",
+        "Latest activity · newest first":   "Activity ↓",
+        "Latest activity · oldest first":   "Activity ↑",
+        "Vulnerabilities · highest first":  "Vulns ↓",
+        "Vulnerabilities · lowest first":   "Vulns ↑",
+        "Latest PRD deploy · newest first": "PRD ↓",
+        "Latest PRD deploy · oldest first": "PRD ↑",
+        "Live in PRD first":                "Live ✓",
+    }
+
+    # Shared controls live above the combined panel — inventory only renders
+    # its view-specific Sort selector next to the live-refresh badge.
+    iv_project_filter = _shared_project_filter()
+    iv_search = _shared_search_query()
+    iv_per_project = _shared_per_project()
+
+    _iv_r1 = st.columns([1.8, 1.0])
     with _iv_r1[0]:
-        _iv_proj_options = [_ALL] + (_proj_scoped or [])
-        _iv_proj_idx = 0
-        if project_filter and project_filter in _iv_proj_options:
-            _iv_proj_idx = _iv_proj_options.index(project_filter)
-        iv_project = st.selectbox(
-            "Project", _iv_proj_options, index=_iv_proj_idx, key="iv_project_v1",
-            help="Restrict inventory to a single project",
+        iv_sort = st.selectbox(
+            "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
+            help="Reorder applications — activity uses latest stage date · "
+                 "vulnerabilities are weighted (critical ≫ high ≫ medium ≫ low) "
+                 "on the version live in PRD",
         )
-        iv_project_filter = "" if iv_project == _ALL else iv_project
     with _iv_r1[1]:
-        iv_search = st.text_input(
-            "Search", key="iv_search_v1", placeholder="app name…",
-            help="Filter applications by name (case-insensitive substring match)",
-        ).strip().lower()
-    with _iv_r1[2]:
-        iv_per_project = st.toggle(
-            "Per-project tables", value=False, key="iv_per_project_v1",
-            help="Group applications by project instead of a single table",
-        )
-    with _iv_r1[3]:
         st.markdown(
             f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
-            f'text-transform:uppercase;font-weight:600;margin-top:8px">'
+            f'text-transform:uppercase;font-weight:600;margin-top:26px;white-space:nowrap">'
             f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto 5m</div>',
             unsafe_allow_html=True,
         )
@@ -4824,14 +5195,52 @@ def _render_inventory_view() -> None:
         _iv_sf.append({"term": {"project.keyword": iv_project_filter}})
 
     _iv_scope_key = json.dumps(_iv_sf, sort_keys=True, default=str)
-    _inv_rows = _fetch_full_inventory(_iv_scope_key)
+    # Full scope rows — stable across search/pill/sort interactions so the
+    # expensive ES fetches and popover HTML cache key on scope alone.
+    _inv_rows_all = _fetch_full_inventory(_iv_scope_key)
+    # Mutable view that search/pills/sort narrow. Popovers are always built
+    # from _inv_rows_all, so cached HTML remains correct when filters change.
+    _inv_rows = list(_inv_rows_all)
 
-    # Apply text search filter client-side
+    # Apply text search filter client-side — matches against every string-ish
+    # inventory field so users can narrow by tech, platform, image, team, etc.
+    # Space-separated terms are AND so "golang prd_team:jane" narrows
+    # progressively. Each term is a plain lowercase substring match.
     if iv_search:
-        _inv_rows = [r for r in _inv_rows if iv_search in r["application"].lower()]
+        _iv_terms = [_t for _t in iv_search.split() if _t]
+
+        def _iv_haystack(_r: dict) -> str:
+            _parts: list[str] = [
+                _r.get("application", ""),
+                _r.get("project", ""),
+                _r.get("company", ""),
+                _r.get("app_type", ""),
+                _r.get("build_technology", ""),
+                _r.get("deploy_technology", ""),
+                _r.get("deploy_platform", ""),
+                _r.get("build_image_name", ""),
+                _r.get("build_image_tag", ""),
+                _r.get("deploy_image_name", ""),
+                _r.get("deploy_image_tag", ""),
+            ]
+            _teams = _r.get("teams") or {}
+            for _tk, _tv in _teams.items():
+                _parts.append(_tk)
+                if isinstance(_tv, (list, tuple, set)):
+                    _parts.extend(str(x) for x in _tv)
+                else:
+                    _parts.append(str(_tv))
+            return " ".join(_parts).lower()
+
+        _inv_rows = [
+            r for r in _inv_rows
+            if all(_t in _iv_haystack(r) for _t in _iv_terms)
+        ]
 
     # ── Fetch PRD status + latest-at-each-stage + Prismacloud ───────────────
-    _iv_apps = tuple(sorted({r["application"] for r in _inv_rows}))
+    # Fetches use the FULL scope so results are stable across search/pill
+    # narrowing and the @st.cache_data caches hit across interactions.
+    _iv_apps = tuple(sorted({r["application"] for r in _inv_rows_all}))
     _iv_prd_map    = _fetch_prd_status(_iv_apps)     if _iv_apps else {}
     _iv_stages_map = _fetch_latest_stages(_iv_apps)  if _iv_apps else {}
 
@@ -4894,7 +5303,7 @@ def _render_inventory_view() -> None:
         f'  </div>'
         f'  <div class="el-tf-right">'
         f'    <span class="el-tf-badge layout">{_iv_layout}</span>'
-        f'    <span class="el-tf-badge sort">A → Z</span>'
+        f'    <span class="el-tf-badge sort">{_IV_SORT_BADGES.get(iv_sort, "A → Z")}</span>'
         f'  </div>'
         f'</div>',
         unsafe_allow_html=True,
@@ -4954,12 +5363,95 @@ def _render_inventory_view() -> None:
         widget_key="iv_deploy_platform_pills_v1",
     )
 
+    # ── Sort ────────────────────────────────────────────────────────────────
+    # Pre-compute sort-aux maps so sorted() doesn't re-parse dates or walk
+    # nested dicts on every key comparison. Each key tuple starts with a
+    # "missing" flag so rows without data always land at the end regardless of
+    # direction.
+    _iv_activity_ts: dict[str, int] = {}
+    for _ap, _sm in _iv_stages_map.items():
+        _maxv: int | None = None
+        for _sd in _sm.values():
+            _ts = parse_dt((_sd or {}).get("when"))
+            if _ts is not None:
+                _v = _ts.value
+                if _maxv is None or _v > _maxv:
+                    _maxv = _v
+        if _maxv is not None:
+            _iv_activity_ts[_ap] = _maxv
+
+    _iv_prd_ts_map: dict[str, int] = {}
+    for _ap, _prd in _iv_prd_map.items():
+        _ts = parse_dt((_prd or {}).get("when"))
+        if _ts is not None:
+            _iv_prd_ts_map[_ap] = _ts.value
+
+    _iv_vuln_score_map: dict[str, int] = {}
+    for _ap, _prd in _iv_prd_map.items():
+        _pv = (_prd or {}).get("version") or ""
+        if not _pv:
+            continue
+        _sc = _iv_prisma_map.get((_ap, _pv))
+        if not _sc:
+            continue
+        # Weighted so one critical outranks many highs, etc.
+        _iv_vuln_score_map[_ap] = (
+            int(_sc.get("Vcritical", 0)) * 1000
+            + int(_sc.get("Vhigh",    0)) * 100
+            + int(_sc.get("Vmedium",  0)) * 10
+            + int(_sc.get("Vlow",     0))
+        )
+
+    def _iv_sort_key(r: dict) -> tuple:
+        _app = r.get("application") or ""
+        _app_lc = _app.lower()
+        _proj_lc = (r.get("project") or "").lower()
+        if iv_sort in ("Application · A → Z", "Application · Z → A"):
+            # Always ascending here; Z → A is handled via a post-reverse so
+            # variable-length strings compare correctly.
+            return (0, _app_lc, _proj_lc)
+        if iv_sort in ("Latest activity · newest first",
+                       "Latest activity · oldest first"):
+            _v = _iv_activity_ts.get(_app)
+            if _v is None:
+                return (1, 0, _app_lc)
+            if iv_sort == "Latest activity · newest first":
+                _v = -_v
+            return (0, _v, _app_lc)
+        if iv_sort in ("Vulnerabilities · highest first",
+                       "Vulnerabilities · lowest first"):
+            _score = _iv_vuln_score_map.get(_app)
+            if _score is None:
+                return (1, 0, _app_lc)
+            if iv_sort == "Vulnerabilities · highest first":
+                _score = -_score
+            return (0, _score, _app_lc)
+        if iv_sort in ("Latest PRD deploy · newest first",
+                       "Latest PRD deploy · oldest first"):
+            _v = _iv_prd_ts_map.get(_app)
+            if _v is None:
+                return (1, 0, _app_lc)
+            if iv_sort == "Latest PRD deploy · newest first":
+                _v = -_v
+            return (0, _v, _app_lc)
+        if iv_sort == "Live in PRD first":
+            _prd = _iv_prd_map.get(_app) or {}
+            _live = 0 if _prd.get("live") else 1
+            return (_live, _app_lc, _proj_lc)
+        return (0, _app_lc, _proj_lc)
+
+    _inv_rows = sorted(_inv_rows, key=_iv_sort_key)
+    if iv_sort == "Application · Z → A":
+        _inv_rows.reverse()
+
     if not _inv_rows:
         inline_note("No applications match the current filters.", "info")
         return
 
     # ── Popover infrastructure (project + app popovers) ─────────────────────
-    _iv_pop_projects = sorted({r["project"] for r in _inv_rows if r.get("project")})
+    # Use the full scope set so popovers remain valid regardless of which
+    # rows the current search/pill filters happen to show.
+    _iv_pop_projects = sorted({r["project"] for r in _inv_rows_all if r.get("project")})
     _iv_proj_map = _fetch_project_details(tuple(_iv_pop_projects)) if _iv_pop_projects else {}
 
     def _iv_slug(val: str, prefix: str) -> str:
@@ -5008,6 +5500,7 @@ def _render_inventory_view() -> None:
         _data = (_iv_stages_map.get(app) or {}).get(stage) or {}
         _ver  = _data.get("version") or ""
         _when = fmt_dt(_data.get("when"), "%Y-%m-%d %H:%M") or ""
+        _rel  = _relative_age(_data.get("when")) if _data.get("when") else ""
         _kind = _iv_app_type_map.get(app, "")
         # Lib applications are build-only — everything after "build" is N/A
         # and should read as a positive, not a gap.
@@ -5042,16 +5535,76 @@ def _render_inventory_view() -> None:
             f'popovertarget="{_iv_ver_pop_id(app, stage, _ver)}" '
             f'title="Click for version details">{_dot}{_ver}</button>'
         )
-        _date_html = (
-            f'<div class="iv-stage-when">{_when}</div>' if _when else ""
-        )
+        if _when:
+            _rel_span = (
+                f'<span class="iv-stage-rel"> · {_rel}</span>' if _rel else ""
+            )
+            _date_html = f'<div class="iv-stage-when">{_when}{_rel_span}</div>'
+        else:
+            _date_html = ""
         return f'<div class="iv-stage-cell">{_btn}{_date_html}</div>'
+
+    # Severity tier → ("class", count) helper. Picks the worst non-zero tier
+    # so each chip shows the most severe signal at a glance; tooltip carries
+    # the full breakdown for detail-seekers.
+    def _iv_sec_tier(sc: dict, prefix: str) -> tuple[str, int, int, int, int, int]:
+        _c = int((sc.get(f"{prefix}critical") or 0))
+        _h = int((sc.get(f"{prefix}high")     or 0))
+        _m = int((sc.get(f"{prefix}medium")   or 0))
+        _l = int((sc.get(f"{prefix}low")      or 0))
+        if _c:   tier, n = "crit", _c
+        elif _h: tier, n = "high", _h
+        elif _m: tier, n = "med",  _m
+        elif _l: tier, n = "low",  _l
+        else:    tier, n = "clean", 0
+        return (tier, n, _c, _h, _m, _l)
+
+    def _iv_sec_chip(kind: str, sc: dict) -> str:
+        """``kind`` is ``V`` (vulnerabilities) or ``C`` (compliance)."""
+        _prefix = kind
+        _tier, _n, _c, _h, _m, _l = _iv_sec_tier(sc, _prefix)
+        _lbl = "Vulns" if kind == "V" else "Compliance"
+        _title = f"{_lbl}: {_c} critical · {_h} high · {_m} medium · {_l} low"
+        if _tier == "clean":
+            return (f'<span class="iv-sec-chip iv-sec-clean" title="{_title}">'
+                    f'<span class="iv-sec-label">{kind}</span>✓</span>')
+        return (f'<span class="iv-sec-chip iv-sec-{_tier}" title="{_title}">'
+                f'<span class="iv-sec-label">{kind}</span>{_n}</span>')
+
+    def _iv_app_posture_html(app: str) -> str:
+        """Render V + C chips side-by-side for *app*'s PRD-live scan.
+
+        Returns an "N/A" chip when we don't have a PRD version or no scan for
+        it — that way the column's visual rhythm stays even across the table.
+        """
+        _prd = _iv_prd_map.get(app) or {}
+        _pv = _prd.get("version") or ""
+        _sc = _iv_prisma_map.get((app, _pv)) if _pv else None
+        if not _sc:
+            _reason = ("no PRD version on record" if not _pv
+                       else f"no Prismacloud scan for {app}@{_pv}")
+            return (
+                f'<span class="iv-sec-row">'
+                f'<span class="iv-sec-chip iv-sec-na" title="{_reason}">'
+                f'<span class="iv-sec-label">V</span>·</span>'
+                f'<span class="iv-sec-chip iv-sec-na" title="{_reason}">'
+                f'<span class="iv-sec-label">C</span>·</span>'
+                f'</span>'
+            )
+        return (
+            f'<span class="iv-sec-row">'
+            f'{_iv_sec_chip("V", _sc)}{_iv_sec_chip("C", _sc)}'
+            f'</span>'
+        )
 
     def _iv_app_cell(app: str) -> str:
         return (
+            f'<div class="iv-app-cell">'
             f'<button type="button" class="el-app-trigger" '
             f'popovertarget="{_iv_app_pop_id(app)}" '
             f'title="Click for full inventory details">{app}</button>'
+            f'{_iv_app_posture_html(app)}'
+            f'</div>'
         )
 
     def _iv_proj_cell(proj: str) -> str:
@@ -5105,6 +5658,91 @@ def _render_inventory_view() -> None:
             f'</table></div>'
         )
 
+    # ── Aggregate posture strip ─────────────────────────────────────────────
+    # Sum V + C severities across every currently-filtered app using each
+    # app's PRD-live version as the basis (same rule as the sort). Rendered
+    # as a subtle ribbon above the table so users see the combined posture
+    # of their selection change as pills and search narrow the list.
+    _agg_v = {"crit": 0, "high": 0, "med": 0, "low": 0}
+    _agg_c = {"crit": 0, "high": 0, "med": 0, "low": 0}
+    _agg_covered = 0
+    _agg_na = 0
+    for _r in _inv_rows:
+        _a = _r.get("application") or ""
+        _prd = _iv_prd_map.get(_a) or {}
+        _pv = _prd.get("version") or ""
+        _sc = _iv_prisma_map.get((_a, _pv)) if _pv else None
+        if not _sc:
+            _agg_na += 1
+            continue
+        _agg_covered += 1
+        _agg_v["crit"] += int(_sc.get("Vcritical") or 0)
+        _agg_v["high"] += int(_sc.get("Vhigh")     or 0)
+        _agg_v["med"]  += int(_sc.get("Vmedium")   or 0)
+        _agg_v["low"]  += int(_sc.get("Vlow")      or 0)
+        _agg_c["crit"] += int(_sc.get("Ccritical") or 0)
+        _agg_c["high"] += int(_sc.get("Chigh")     or 0)
+        _agg_c["med"]  += int(_sc.get("Cmedium")   or 0)
+        _agg_c["low"]  += int(_sc.get("Clow")      or 0)
+
+    _agg_total_rows = len(_inv_rows)
+    # Worst tier across V + C drives the strip's left-border + glyph colour.
+    if _agg_v["crit"] or _agg_c["crit"]:
+        _agg_worst = "crit"
+        _agg_glyph = "⚠"
+    elif _agg_v["high"] or _agg_c["high"]:
+        _agg_worst = "high"
+        _agg_glyph = "⚠"
+    elif _agg_v["med"] or _agg_c["med"]:
+        _agg_worst = "med"
+        _agg_glyph = "◉"
+    elif _agg_v["low"] or _agg_c["low"]:
+        _agg_worst = "low"
+        _agg_glyph = "◉"
+    elif _agg_covered:
+        _agg_worst = "clean"
+        _agg_glyph = "✓"
+    else:
+        _agg_worst = "na"
+        _agg_glyph = "·"
+
+    def _ps_tier_html(kind_label: str, bucket: dict) -> str:
+        _parts = []
+        for _t, _lbl in (("crit", "C"), ("high", "H"), ("med", "M"), ("low", "L")):
+            _n = bucket[_t]
+            _zero = " is-zero" if _n == 0 else ""
+            _parts.append(
+                f'<span class="iv-ps-tier is-{_t}{_zero}" '
+                f'title="{_n} {_t} {kind_label.lower()}">'
+                f'{_n}<span style="opacity:.55;font-weight:600;margin-left:2px">{_lbl}</span>'
+                f'</span>'
+            )
+        return "".join(_parts)
+
+    _ps_coverage = (
+        f"{_agg_covered}/{_agg_total_rows} scanned"
+        if _agg_total_rows else "no filtered apps"
+    )
+    st.markdown(
+        f'<div class="iv-posture-strip is-{_agg_worst}">'
+        f'  <div class="iv-ps-label">'
+        f'    <span class="iv-ps-glyph is-{_agg_worst}">{_agg_glyph}</span>'
+        f'    Security posture · {_agg_total_rows} '
+        f'{"apps" if _agg_total_rows != 1 else "app"}'
+        f'  </div>'
+        f'  <div class="iv-ps-group">'
+        f'    <span class="iv-ps-kicker">Vulns</span>'
+        f'    {_ps_tier_html("vulnerabilities", _agg_v)}'
+        f'  </div>'
+        f'  <div class="iv-ps-group">'
+        f'    <span class="iv-ps-kicker">Compliance</span>'
+        f'    {_ps_tier_html("compliance issues", _agg_c)}'
+        f'  </div>'
+        f'  <div class="iv-ps-coverage">{_ps_coverage}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
     # ── Build table(s) ──────────────────────────────────────────────────────
     if iv_per_project:
         _iv_groups: dict[str, list[dict]] = {}
@@ -5138,7 +5776,18 @@ def _render_inventory_view() -> None:
         _iv_main = _iv_table_shell(_rows, include_project=True, max_h="60vh")
 
     # ── Build popovers — app detail + project detail ────────────────────────
+    # Popover HTML is stable across widget interactions (search / sort / pill
+    # toggles don't change the underlying ES data), so we memoize the full
+    # concatenated HTML in session_state keyed on scope + TTL bucket. The
+    # bucket expires naturally every CACHE_TTL seconds, aligned with the ES
+    # fetch caches, so stale data never lingers past a single refresh cycle.
     _iv_popovers: list[str] = []
+    _IV_POP_SS = "_iv_pop_html_cache_v1"
+    _iv_pop_store: dict = st.session_state.setdefault(_IV_POP_SS, {})
+    _iv_pop_bucket = int(datetime.now(timezone.utc).timestamp() // CACHE_TTL)
+    _iv_pop_cache_key = (_iv_scope_key, _iv_pop_bucket)
+    _iv_cached_pop_html = _iv_pop_store.get(_iv_pop_cache_key)
+    _build_popovers_flag = _iv_cached_pop_html is None
 
     # Team label helper (reuse same logic as event log)
     _TEAM_LABELS = {
@@ -5152,8 +5801,10 @@ def _render_inventory_view() -> None:
         _base = field[:-5] if field.endswith("_team") else field
         return _base.replace("_", " ").strip().upper() + " team"
 
-    # App popovers
-    for r in _inv_rows:
+    # App popovers (built for FULL scope so cached HTML works across filter
+    # changes — hidden popovers are cheap in the DOM and this lets the
+    # popover cache key on scope alone).
+    for r in (_inv_rows_all if _build_popovers_flag else []):
         _app = r["application"]
         _pid = _iv_app_pop_id(_app)
         _prd = _iv_prd_map.get(_app)
@@ -5313,7 +5964,7 @@ def _render_inventory_view() -> None:
             tiles.append(_iv_sev_tile(_lvl, _lbl, _n, _delta, baseline_label))
         return "".join(tiles), _total
 
-    for _app, _stages in _iv_stages_map.items():
+    for _app, _stages in (_iv_stages_map.items() if _build_popovers_flag else []):
         # Only build popovers for apps that are in the rendered rows.
         if _app not in _iv_apps:
             continue
@@ -5484,7 +6135,7 @@ def _render_inventory_view() -> None:
             )
 
     # Project popovers
-    for _proj in _iv_pop_projects:
+    for _proj in (_iv_pop_projects if _build_popovers_flag else []):
         _pdata = _iv_proj_map.get(_proj)
         if not _pdata:
             continue
@@ -5542,6 +6193,15 @@ def _render_inventory_view() -> None:
             f'</div>'
         )
 
+    # ── Finalize popover cache ──────────────────────────────────────────────
+    if _build_popovers_flag:
+        _iv_popovers_html = "".join(_iv_popovers)
+        # Retain only the most recent scope+bucket to bound session memory.
+        _iv_pop_store.clear()
+        _iv_pop_store[_iv_pop_cache_key] = _iv_popovers_html
+    else:
+        _iv_popovers_html = _iv_cached_pop_html
+
     # ── Final render ────────────────────────────────────────────────────────
     _iv_visible_badge = f"showing {len(_inv_rows)}"
     st.markdown(
@@ -5551,25 +6211,13 @@ def _render_inventory_view() -> None:
         f'  <span>click any <b>application</b> or <b>project</b> chip to open its detail popover</span>'
         f'</p>'
         + _iv_main
-        + "".join(_iv_popovers),
+        + _iv_popovers_html,
         unsafe_allow_html=True,
     )
 
 
-# ── Render inventory section (visible to all roles) ─────────────────────────
-if _show("inventory"):
-    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="section">'
-        f'<div class="title-wrap"><h2>Application inventory</h2>'
-        f'<span class="badge">{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}</span></div>'
-        f'<span class="hint">One row per registered application · PRD liveness · security posture · '
-        f'click any chip for details</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    with st.expander("Application inventory (expand / collapse)", expanded=True):
-        _render_inventory_view()
+# Inventory rendering is handled alongside the event log above in the combined
+# side-by-side panel — no standalone section here.
 
 
 # =============================================================================
