@@ -1764,14 +1764,14 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
                 "query": {
                     "bool": {
                         "filter": [
-                            {"terms": {"application.keyword": list(apps)}},
+                            {"terms": {"application": list(apps)}},
                             {"term": {"environment": "prd"}},
                         ]
                     }
                 },
                 "aggs": {
                     "by_app": {
-                        "terms": {"field": "application.keyword", "size": len(apps)},
+                        "terms": {"field": "application", "size": len(apps)},
                         "aggs": {
                             # Absolute latest — reports last-attempted status
                             "latest": {
@@ -1941,22 +1941,22 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
     apps_list = list(apps)
     out: dict[str, dict[str, dict]] = {a: {} for a in apps_list}
 
-    def _abs_sort() -> list[dict]:
-        return [{"startdate": {"order": "desc", "unmapped_type": "date"}}]
+    def _sort_by(date_field: str) -> list[dict]:
+        return [{date_field: {"order": "desc", "unmapped_type": "date"}}]
 
-    # ---- builds ------------------------------------------------------------
+    # ---- builds (startdate) ------------------------------------------------
     try:
         resp = es_search(
             IDX["builds"],
             {
                 "query": {"bool": {"filter": [
-                    {"terms": {"application.keyword": apps_list}},
+                    {"terms": {"application": apps_list}},
                 ]}},
                 "aggs": {
                     "by_app": {
-                        "terms": {"field": "application.keyword", "size": len(apps_list)},
+                        "terms": {"field": "application", "size": len(apps_list)},
                         "aggs": {"latest": {"top_hits": {
-                            "size": 1, "sort": _abs_sort(),
+                            "size": 1, "sort": _sort_by("startdate"),
                             "_source": ["application", "codeversion", "status", "startdate"],
                         }}},
                     }
@@ -1979,20 +1979,20 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
     except Exception:
         pass
 
-    # ---- releases ----------------------------------------------------------
+    # ---- releases (releasedate) -------------------------------------------
     try:
         resp = es_search(
             IDX["releases"],
             {
                 "query": {"bool": {"filter": [
-                    {"terms": {"application.keyword": apps_list}},
+                    {"terms": {"application": apps_list}},
                 ]}},
                 "aggs": {
                     "by_app": {
-                        "terms": {"field": "application.keyword", "size": len(apps_list)},
+                        "terms": {"field": "application", "size": len(apps_list)},
                         "aggs": {"latest": {"top_hits": {
-                            "size": 1, "sort": _abs_sort(),
-                            "_source": ["application", "codeversion", "status", "startdate"],
+                            "size": 1, "sort": _sort_by("releasedate"),
+                            "_source": ["application", "codeversion", "status", "releasedate"],
                         }}},
                     }
                 },
@@ -2008,31 +2008,29 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
             if _app in out:
                 out[_app]["release"] = {
                     "version": _s.get("codeversion", "") or "",
-                    "when":    _s.get("startdate", "") or "",
+                    "when":    _s.get("releasedate", "") or "",
                     "status":  _s.get("status", "") or "",
                 }
     except Exception:
         pass
 
-    # ---- deployments split by environment ---------------------------------
-    # Double terms agg (app × env) with per-bucket latest hit. One ES round
-    # trip covers all four envs.
+    # ---- deployments split by environment (startdate) ---------------------
     try:
         resp = es_search(
             IDX["deployments"],
             {
                 "query": {"bool": {"filter": [
-                    {"terms": {"application.keyword": apps_list}},
+                    {"terms": {"application": apps_list}},
                     {"terms": {"environment": ["dev", "qc", "uat", "prd"]}},
                 ]}},
                 "aggs": {
                     "by_app": {
-                        "terms": {"field": "application.keyword", "size": len(apps_list)},
+                        "terms": {"field": "application", "size": len(apps_list)},
                         "aggs": {
                             "by_env": {
                                 "terms": {"field": "environment", "size": 4},
                                 "aggs": {"latest": {"top_hits": {
-                                    "size": 1, "sort": _abs_sort(),
+                                    "size": 1, "sort": _sort_by("startdate"),
                                     "_source": ["application", "codeversion", "status", "startdate", "environment"],
                                 }}},
                             }
@@ -2121,9 +2119,10 @@ def _fetch_inventory_details(apps: tuple[str, ...]) -> dict[str, dict]:
 def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
     """Batch-fetch a summary record per project from the inventory.
 
-    Returns ``{project: {"teams": {field: [values]}, "apps": [app names]}}``
-    where ``field`` is any inventory field ending in ``_team`` (dev_team,
-    qc_team, uat_team, prd_team, etc.). Missing or empty values are omitted.
+    Returns ``{project: {"company": str, "teams": {field: [values]},
+    "apps": [app names]}}`` where ``field`` is any inventory field ending in
+    ``_team``. Company is picked from any matching inventory record (apps in
+    the same project normally share a company). Missing values are omitted.
     """
     if not projects:
         return {}
@@ -2132,14 +2131,15 @@ def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
             IDX["inventory"],
             {
                 "query": {"terms": {"project.keyword": list(projects)}},
-                # Wildcard picks up any *_team field (dev_team, qc_team, uat_team, prd_team, …)
-                "_source": ["application", "project", "*_team"],
+                "_source": ["application", "project", "company", "*_team"],
             },
             size=2000,
         )
     except Exception:
         return {}
-    out: dict[str, dict] = {p: {"teams": {}, "apps": set()} for p in projects}
+    out: dict[str, dict] = {
+        p: {"teams": {}, "apps": set(), "companies": set()} for p in projects
+    }
     for _h in resp.get("hits", {}).get("hits", []):
         _s = _h.get("_source", {}) or {}
         _p = _s.get("project")
@@ -2148,6 +2148,9 @@ def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
         _app = _s.get("application")
         if _app:
             out[_p]["apps"].add(_app)
+        _co = _s.get("company")
+        if _co:
+            out[_p]["companies"].add(str(_co))
         for _k, _v in _s.items():
             if not _k.endswith("_team") or not _v:
                 continue
@@ -2161,9 +2164,11 @@ def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
     # Normalise sets to sorted lists for deterministic rendering
     result: dict[str, dict] = {}
     for _p, _data in out.items():
+        _cos = sorted(_data["companies"])
         result[_p] = {
-            "teams": {_f: sorted(_s) for _f, _s in _data["teams"].items() if _s},
-            "apps":  sorted(_data["apps"]),
+            "company": ", ".join(_cos) if _cos else "",
+            "teams":   {_f: sorted(_s) for _f, _s in _data["teams"].items() if _s},
+            "apps":    sorted(_data["apps"]),
         }
     return result
 
@@ -4080,9 +4085,9 @@ def _render_event_log() -> None:
             f"<tr>"
             f'<td style="white-space:nowrap;color:var(--cc-text-mute);font-size:0.78rem;padding:5px 4px">{ev["When"]}</td>'
             f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
-            f'<td style="padding:5px 6px">{_env_cell(ev)}</td>'
             f'{_proj_html}'
             f'<td style="padding:5px 4px">{_app_cell(ev)}</td>'
+            f'<td style="padding:5px 6px">{_env_cell(ev)}</td>'
             f'<td style="padding:5px 4px">{_version_cell(ev)}</td>'
             f'<td style="color:var(--cc-text-dim);font-size:0.8rem;padding:5px 4px">{ev["Detail"]}</td>'
             f'<td style="padding:5px 6px">{_status_chip(ev["Status"])}</td>'
@@ -4159,6 +4164,7 @@ def _render_event_log() -> None:
         _pid_p = _proj_pop_id(_proj)
         _teams = _pdata.get("teams", {}) or {}
         _apps  = _pdata.get("apps", []) or []
+        _co_p  = _pdata.get("company", "") or ""
 
         # Teams rows — preserve logical dev→qc→uat→prd ordering, then any extras
         _ordered = [k for k in ("dev_team", "qc_team", "uat_team", "prd_team") if k in _teams]
@@ -4193,6 +4199,11 @@ def _render_event_log() -> None:
                 _app_chips.append(f'<span class="ap-app-chip static">{_a}</span>')
         _apps_block = "".join(_app_chips)
 
+        _company_block = (
+            f'    <div class="ap-section">Company</div>'
+            f'    <span class="ap-k">Name</span>{_chip(_co_p) if _co_p else _v("")}'
+        )
+
         _popovers_html.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -4204,6 +4215,7 @@ def _render_event_log() -> None:
             f'    <button class="ap-close" popovertarget="{_pid_p}" popovertargetaction="hide" aria-label="Close">×</button>'
             f'  </div>'
             f'  <div class="ap-body">'
+            f'    {_company_block}'
             f'    <div class="ap-section">Teams</div>'
             + "".join(_team_rows) +
             f'    <div class="ap-section">Applications <span style="text-transform:none;font-weight:600;color:var(--cc-text-mute);letter-spacing:0;margin-left:4px">· {len(_apps)}</span></div>'
@@ -4385,9 +4397,9 @@ def _render_event_log() -> None:
             f'<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left;background:var(--cc-surface2)">'
             f'<th {_th_style}>Time</th>'
             f'<th {_th_style}>Type</th>'
-            f'<th {_th_style}>Env</th>'
             f'{_proj_th}'
             f'<th {_th_style}>Application</th>'
+            f'<th {_th_style}>Env</th>'
             f'<th {_th_style}>Version</th>'
             f'<th {_th_style}>Detail</th>'
             f'<th {_th_style}>Status</th>'
@@ -4765,9 +4777,8 @@ def _render_inventory_view() -> None:
         )
         return (
             f'<tr>'
-            f'<td style="padding:5px 4px">{_iv_app_cell(_app)}</td>'
             f'{_proj_td}'
-            f'<td style="padding:5px 4px;color:var(--cc-text-dim);font-size:.78rem">{r["company"] or "—"}</td>'
+            f'<td style="padding:5px 4px">{_iv_app_cell(_app)}</td>'
             f'{_stage_tds}'
             f'</tr>'
         )
@@ -4779,9 +4790,8 @@ def _render_inventory_view() -> None:
         )
         return (
             f'<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left;background:var(--cc-surface2)">'
-            f'<th {_iv_th}>Application</th>'
             f'{_p_th}'
-            f'<th {_iv_th}>Company</th>'
+            f'<th {_iv_th}>Application</th>'
             f'{_stage_th}'
             f'</tr></thead>'
         )
@@ -5154,6 +5164,7 @@ def _render_inventory_view() -> None:
         _pid_p = _iv_proj_pop_id(_proj)
         _teams_p = _pdata.get("teams", {}) or {}
         _apps_p  = _pdata.get("apps", []) or []
+        _co_p    = _pdata.get("company", "") or ""
         _ordered_p = [k for k in ("dev_team", "qc_team", "uat_team", "prd_team") if k in _teams_p]
         _extras_p  = sorted(k for k in _teams_p.keys() if k not in _ordered_p)
         _team_rows_p: list[str] = []
@@ -5179,6 +5190,10 @@ def _render_inventory_view() -> None:
                 f'title="Open application details">{_a}</button>'
             )
         _apps_block_p = "".join(_app_chips_p)
+        _company_block_p = (
+            f'    <div class="ap-section">Company</div>'
+            f'    <span class="ap-k">Name</span>{_iv_chip(_co_p) if _co_p else _iv_v("")}'
+        )
         _iv_popovers.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -5190,6 +5205,7 @@ def _render_inventory_view() -> None:
             f'    <button class="ap-close" popovertarget="{_pid_p}" popovertargetaction="hide" aria-label="Close">×</button>'
             f'  </div>'
             f'  <div class="ap-body">'
+            f'    {_company_block_p}'
             f'    <div class="ap-section">Teams</div>'
             + "".join(_team_rows_p) +
             f'    <div class="ap-section">Applications <span style="text-transform:none;font-weight:600;color:var(--cc-text-mute);letter-spacing:0;margin-left:4px">· {len(_apps_p)}</span></div>'
