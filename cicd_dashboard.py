@@ -1263,6 +1263,67 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     letter-spacing: 0.02em;
     white-space: nowrap;
 }
+/* "Not needed" — positive chip for Lib apps' post-build stages */
+.iv-stage-nn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--cc-green);
+    background: color-mix(in srgb, var(--cc-green) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-green) 35%, transparent);
+    border-radius: 3px;
+    padding: 2px 6px;
+    white-space: nowrap;
+}
+/* "Not reached" — subtle warning for App apps that haven't hit this stage */
+.iv-stage-gap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--cc-amber, #d97706);
+    background: color-mix(in srgb, var(--cc-amber, #d97706) 8%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--cc-amber, #d97706) 45%, transparent);
+    border-radius: 3px;
+    padding: 2px 6px;
+    white-space: nowrap;
+    opacity: 0.9;
+}
+/* app_type pill — distinguishes App vs Lib in identity section */
+.ap-type-pill {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+}
+.ap-type-pill.is-app {
+    color: var(--cc-blue, #3b82f6);
+    background: color-mix(in srgb, var(--cc-blue, #3b82f6) 12%, transparent);
+    border-color: color-mix(in srgb, var(--cc-blue, #3b82f6) 35%, transparent);
+}
+.ap-type-pill.is-lib {
+    color: #8b5cf6;
+    background: color-mix(in srgb, #8b5cf6 12%, transparent);
+    border-color: color-mix(in srgb, #8b5cf6 40%, transparent);
+}
+.ap-type-pill.is-other {
+    color: var(--cc-text-dim);
+    background: var(--cc-surface2);
+    border-color: var(--cc-border);
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -1944,6 +2005,15 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
     def _sort_by(date_field: str) -> list[dict]:
         return [{date_field: {"order": "desc", "unmapped_type": "date"}}]
 
+    # Broader _source so _hit_date can fall back through alternative date fields.
+    _BUILD_SRC   = ["application", "codeversion", "status",
+                    "startdate", "StartDate", "start_date",
+                    "enddate", "created", "timestamp", "@timestamp"]
+    _RELEASE_SRC = ["application", "codeversion", "status",
+                    "releasedate", "ReleaseDate", "release_date",
+                    "created", "timestamp", "@timestamp"]
+    _DEPLOY_SRC  = _BUILD_SRC + ["environment"]
+
     # ---- builds (startdate) ------------------------------------------------
     try:
         resp = es_search(
@@ -1957,7 +2027,7 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
                         "terms": {"field": "application", "size": len(apps_list)},
                         "aggs": {"latest": {"top_hits": {
                             "size": 1, "sort": _sort_by("startdate"),
-                            "_source": ["application", "codeversion", "status", "startdate"],
+                            "_source": _BUILD_SRC,
                         }}},
                     }
                 },
@@ -1968,12 +2038,13 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
             _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
             if not _hits:
                 continue
-            _s = _hits[0].get("_source", {}) or {}
+            _h = _hits[0]
+            _s = _h.get("_source", {}) or {}
             _app = _s.get("application") or _b.get("key")
             if _app in out:
                 out[_app]["build"] = {
                     "version": _s.get("codeversion", "") or "",
-                    "when":    _s.get("startdate", "") or "",
+                    "when":    _hit_date(_h, "build") or "",
                     "status":  _s.get("status", "") or "",
                 }
     except Exception:
@@ -1992,7 +2063,7 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
                         "terms": {"field": "application", "size": len(apps_list)},
                         "aggs": {"latest": {"top_hits": {
                             "size": 1, "sort": _sort_by("releasedate"),
-                            "_source": ["application", "codeversion", "status", "releasedate"],
+                            "_source": _RELEASE_SRC,
                         }}},
                     }
                 },
@@ -2003,12 +2074,13 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
             _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
             if not _hits:
                 continue
-            _s = _hits[0].get("_source", {}) or {}
+            _h = _hits[0]
+            _s = _h.get("_source", {}) or {}
             _app = _s.get("application") or _b.get("key")
             if _app in out:
                 out[_app]["release"] = {
                     "version": _s.get("codeversion", "") or "",
-                    "when":    _s.get("releasedate", "") or "",
+                    "when":    _hit_date(_h, "release") or "",
                     "status":  _s.get("status", "") or "",
                 }
     except Exception:
@@ -2031,7 +2103,7 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
                                 "terms": {"field": "environment", "size": 4},
                                 "aggs": {"latest": {"top_hits": {
                                     "size": 1, "sort": _sort_by("startdate"),
-                                    "_source": ["application", "codeversion", "status", "startdate", "environment"],
+                                    "_source": _DEPLOY_SRC,
                                 }}},
                             }
                         },
@@ -2049,12 +2121,134 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
                 _hits = _eb.get("latest", {}).get("hits", {}).get("hits", [])
                 if not _env or not _hits:
                     continue
-                _s = _hits[0].get("_source", {}) or {}
+                _h = _hits[0]
+                _s = _h.get("_source", {}) or {}
                 out[_app][_env] = {
                     "version": _s.get("codeversion", "") or "",
-                    "when":    _s.get("startdate", "") or "",
+                    "when":    _hit_date(_h, "deploy") or "",
                     "status":  _s.get("status", "") or "",
                 }
+    except Exception:
+        pass
+
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_version_meta(app_versions: tuple[tuple[str, str], ...]
+                        ) -> dict[tuple[str, str], dict]:
+    """For each ``(app, version)`` pair, return build-date, release-date, RLM.
+
+    Returns ``{(app, ver): {"build_when": str, "release_when": str,
+    "rlm": str, "rlm_status": str}}`` — missing lookups are simply absent
+    (callers treat that as "no record").
+    """
+    if not app_versions:
+        return {}
+    apps = sorted({_a for _a, _ in app_versions if _a})
+    if not apps:
+        return {}
+    wanted = {(a, v) for a, v in app_versions if a and v}
+    out: dict[tuple[str, str], dict] = {}
+
+    def _set(key: tuple[str, str], field: str, val: str) -> None:
+        if not val or key not in wanted:
+            return
+        out.setdefault(key, {})[field] = val
+
+    _BUILD_META_SRC = [
+        "application", "codeversion",
+        "startdate", "StartDate", "start_date",
+        "enddate", "created", "timestamp", "@timestamp",
+    ]
+    _RELEASE_META_SRC = [
+        "application", "codeversion", "RLM", "RLM_STATUS",
+        "releasedate", "ReleaseDate", "release_date",
+        "created", "timestamp", "@timestamp",
+    ]
+
+    # ---- builds: newest record per (app, codeversion) ---------------------
+    try:
+        resp = es_search(
+            IDX["builds"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": apps}}]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application", "size": len(apps)},
+                        "aggs": {
+                            "by_ver": {
+                                "terms": {"field": "codeversion", "size": 300},
+                                "aggs": {"latest": {"top_hits": {
+                                    "size": 1,
+                                    "sort": [{"startdate": {"order": "desc",
+                                                            "unmapped_type": "date"}}],
+                                    "_source": _BUILD_META_SRC,
+                                }}},
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+        for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+            _app = _ab.get("key")
+            for _vb in _ab.get("by_ver", {}).get("buckets", []):
+                _ver = _vb.get("key")
+                _hits = _vb.get("latest", {}).get("hits", {}).get("hits", [])
+                if not _app or not _ver or not _hits:
+                    continue
+                _h = _hits[0]
+                _when = _hit_date(_h, "build")
+                if _when:
+                    _set((_app, _ver), "build_when", str(_when))
+    except Exception:
+        pass
+
+    # ---- releases: newest record per (app, codeversion) -------------------
+    try:
+        resp = es_search(
+            IDX["releases"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": apps}}]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application", "size": len(apps)},
+                        "aggs": {
+                            "by_ver": {
+                                "terms": {"field": "codeversion", "size": 300},
+                                "aggs": {"latest": {"top_hits": {
+                                    "size": 1,
+                                    "sort": [{"releasedate": {"order": "desc",
+                                                              "unmapped_type": "date"}}],
+                                    "_source": _RELEASE_META_SRC,
+                                }}},
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+        for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+            _app = _ab.get("key")
+            for _vb in _ab.get("by_ver", {}).get("buckets", []):
+                _ver = _vb.get("key")
+                _hits = _vb.get("latest", {}).get("hits", {}).get("hits", [])
+                if not _app or not _ver or not _hits:
+                    continue
+                _h = _hits[0]
+                _s = _h.get("_source", {}) or {}
+                _when = _hit_date(_h, "release")
+                if _when:
+                    _set((_app, _ver), "release_when", str(_when))
+                _rlm = (_s.get("RLM") or "").strip()
+                if _rlm:
+                    _set((_app, _ver), "rlm", _rlm)
+                _rst = (_s.get("RLM_STATUS") or "").strip()
+                if _rst:
+                    _set((_app, _ver), "rlm_status", _rst)
     except Exception:
         pass
 
@@ -2077,7 +2271,7 @@ def _fetch_inventory_details(apps: tuple[str, ...]) -> dict[str, dict]:
             {
                 "query": {"terms": {"application.keyword": list(apps)}},
                 "_source": [
-                    "application", "company", "project",
+                    "application", "company", "project", "app_type",
                     "build_technology", "deploy_technology", "deploy_platform",
                     "build_image", "deploy_image",
                     "build_image.name", "build_image.tag",
@@ -2104,6 +2298,7 @@ def _fetch_inventory_details(apps: tuple[str, ...]) -> dict[str, dict]:
         out[_app] = {
             "company":            _s.get("company", ""),
             "project":            _s.get("project", ""),
+            "app_type":           (_s.get("app_type") or "").strip(),
             "build_technology":   _s.get("build_technology", ""),
             "deploy_technology":  _s.get("deploy_technology", ""),
             "deploy_platform":    _s.get("deploy_platform", ""),
@@ -3970,6 +4165,8 @@ def _render_event_log() -> None:
         if _pv:
             _prisma_keys.add((_a, _pv))
     _prisma_map = _fetch_prismacloud(tuple(sorted(_prisma_keys))) if _prisma_keys else {}
+    # Per-version build/release provenance for the event-log version popovers.
+    _ver_meta_map = _fetch_version_meta(tuple(sorted(_prisma_keys))) if _prisma_keys else {}
 
     def _slug(val: str, prefix: str) -> str:
         return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
@@ -4107,6 +4304,17 @@ def _render_event_log() -> None:
         return (f'<span class="ap-v"><span class="ap-chip">{val}</span></span>'
                 if val else '<span class="ap-v empty">—</span>')
 
+    def _app_type_pill(val: str) -> str:
+        """Render app_type as a coloured pill — App (blue) / Lib (violet)."""
+        _t = (val or "").strip()
+        if not _t:
+            return '<span class="ap-v empty">—</span>'
+        _cls = "is-app" if _t.lower() == "app" else (
+            "is-lib" if _t.lower() == "lib" else "is-other"
+        )
+        return (f'<span class="ap-v"><span class="ap-type-pill {_cls}">'
+                f'{_t}</span></span>')
+
     _popovers_html: list[str] = []
     for _app in _pop_apps:
         _inv = _inv_map.get(_app)
@@ -4127,6 +4335,7 @@ def _render_event_log() -> None:
             f'    <div class="ap-section">Identity</div>'
             f'    <span class="ap-k">Project</span>{_v(_inv.get("project", ""))}'
             f'    <span class="ap-k">Company</span>{_v(_inv.get("company", ""))}'
+            f'    <span class="ap-k">Type</span>{_app_type_pill(_inv.get("app_type", ""))}'
             f'    <div class="ap-section">Build</div>'
             f'    <span class="ap-k">Technology</span>{_chip(_inv.get("build_technology", ""))}'
             f'    <span class="ap-k">Image name</span>{_v(_inv.get("build_image_name", ""))}'
@@ -4370,6 +4579,26 @@ def _render_event_log() -> None:
                 f'    <div class="ap-sev-empty">No prismacloud scan on record for this version.</div>'
             )
 
+        # Per-version provenance: always show build date; if released, show
+        # release date + RLM + RLM status.
+        _vmeta = _ver_meta_map.get((_app, _ver)) or {}
+        _build_when_disp = fmt_dt(_vmeta.get("build_when"), "%Y-%m-%d %H:%M") or ""
+        _rel_when_disp   = fmt_dt(_vmeta.get("release_when"), "%Y-%m-%d %H:%M") or ""
+        _rlm_id   = _vmeta.get("rlm", "")
+        _rlm_stat = _vmeta.get("rlm_status", "")
+        _prov_block = (
+            f'    <div class="ap-section">Version provenance</div>'
+            f'    <span class="ap-k">Built ({DISPLAY_TZ_LABEL})</span>{_v(_build_when_disp)}'
+        )
+        if _rel_when_disp or _rlm_id or _rlm_stat:
+            _prov_block += (
+                f'    <span class="ap-k">Released ({DISPLAY_TZ_LABEL})</span>{_v(_rel_when_disp)}'
+            )
+            if _rlm_id:
+                _prov_block += f'    <span class="ap-k">RLM</span>{_chip(_rlm_id)}'
+            if _rlm_stat:
+                _prov_block += f'    <span class="ap-k">RLM status</span>{_v(_rlm_stat)}'
+
         _popovers_html.append(
             f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
             f'  <div class="ap-head">'
@@ -4382,10 +4611,11 @@ def _render_event_log() -> None:
             f'  </div>'
             f'  <div class="ap-body">'
             f'    {_banner}'
+            f'    {_prov_block}'
             f'    {_prd_block}'
             f'    {_prisma_block}'
             f'  </div>'
-            f'  <div class="ap-foot">Sources: ef-cicd-deployments · ef-cicd-prismacloud</div>'
+            f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud</div>'
             f'</div>'
         )
 
@@ -4534,6 +4764,7 @@ def _fetch_full_inventory(scope_json: str) -> list[dict]:
             "application":       _app,
             "project":           _s.get("project", ""),
             "company":           _s.get("company", ""),
+            "app_type":          (_s.get("app_type") or "").strip(),
             "build_technology":  _s.get("build_technology", ""),
             "deploy_technology": _s.get("deploy_technology", ""),
             "deploy_platform":   _s.get("deploy_platform", ""),
@@ -4618,22 +4849,25 @@ def _render_inventory_view() -> None:
             if _v:
                 _iv_prisma_keys.add((_a, _v))
     _iv_prisma_map = _fetch_prismacloud(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
+    # Per-version build date / release date / RLM — used inside the stage
+    # version popover so each code version carries its own provenance.
+    _iv_vermeta_map = _fetch_version_meta(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
 
     # ── Group by technology / platform for pill filter ──────────────────────
     _iv_techs: dict[str, int] = {}
+    _iv_deploy_techs: dict[str, int] = {}
+    _iv_platforms: dict[str, int] = {}
+    _iv_projects: dict[str, int] = {}
     for r in _inv_rows:
         _bt = r.get("build_technology") or ""
         if _bt:
             _iv_techs[_bt] = _iv_techs.get(_bt, 0) + 1
-
-    _iv_platforms: dict[str, int] = {}
-    for r in _inv_rows:
+        _dt = r.get("deploy_technology") or ""
+        if _dt:
+            _iv_deploy_techs[_dt] = _iv_deploy_techs.get(_dt, 0) + 1
         _dp = r.get("deploy_platform") or ""
         if _dp:
             _iv_platforms[_dp] = _iv_platforms.get(_dp, 0) + 1
-
-    _iv_projects: dict[str, int] = {}
-    for r in _inv_rows:
         _p = r.get("project") or "(none)"
         _iv_projects[_p] = _iv_projects.get(_p, 0) + 1
 
@@ -4666,25 +4900,59 @@ def _render_inventory_view() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Tech filter pills ───────────────────────────────────────────────────
-    _iv_pill_opts: list[str] = []
-    _iv_pill_to_tech: dict[str, str] = {}
-    for _t, _cnt in sorted(_iv_techs.items(), key=lambda x: -x[1]):
-        _opt = f"⚙ {_t} · {_cnt}"
-        _iv_pill_opts.append(_opt)
-        _iv_pill_to_tech[_opt] = _t
-    if _iv_pill_opts:
-        _iv_sel = st.pills(
-            "Build technology",
-            options=_iv_pill_opts,
+    # ── Tech / platform filter pills ────────────────────────────────────────
+    # One pill-row per dimension (build tech, deploy tech, deploy platform).
+    # Each row is self-labelled with a glyph + caption so users can tell them
+    # apart at a glance without a bulky Streamlit field label.
+    def _iv_pill_filter(
+        *,
+        field: str,
+        counts: dict[str, int],
+        caption: str,
+        glyph: str,
+        widget_key: str,
+    ) -> None:
+        """Render a pill filter row for ``field`` and narrow _inv_rows in place."""
+        nonlocal _inv_rows
+        if not counts:
+            return
+        _opts: list[str] = []
+        _pill_to_val: dict[str, str] = {}
+        for _val, _cnt in sorted(counts.items(), key=lambda x: -x[1]):
+            _opt = f"{glyph} {_val} · {_cnt}"
+            _opts.append(_opt)
+            _pill_to_val[_opt] = _val
+        st.markdown(
+            f'<div class="iv-pill-caption">{caption}</div>',
+            unsafe_allow_html=True,
+        )
+        _sel = st.pills(
+            caption,
+            options=_opts,
             selection_mode="multi",
             default=None,
-            key="iv_tech_pills_v1",
+            key=widget_key,
             label_visibility="collapsed",
         )
-        _iv_active_techs = {_iv_pill_to_tech[o] for o in (_iv_sel or [])}
-        if _iv_active_techs:
-            _inv_rows = [r for r in _inv_rows if r.get("build_technology") in _iv_active_techs]
+        _active = {_pill_to_val[o] for o in (_sel or [])}
+        if _active:
+            _inv_rows = [r for r in _inv_rows if (r.get(field) or "") in _active]
+
+    _iv_pill_filter(
+        field="build_technology", counts=_iv_techs,
+        caption="Build technology", glyph="⚙",
+        widget_key="iv_tech_pills_v1",
+    )
+    _iv_pill_filter(
+        field="deploy_technology", counts=_iv_deploy_techs,
+        caption="Deploy technology", glyph="⛭",
+        widget_key="iv_deploy_tech_pills_v1",
+    )
+    _iv_pill_filter(
+        field="deploy_platform", counts=_iv_platforms,
+        caption="Deploy platform", glyph="☁",
+        widget_key="iv_deploy_platform_pills_v1",
+    )
 
     if not _inv_rows:
         inline_note("No applications match the current filters.", "info")
@@ -4717,6 +4985,22 @@ def _render_inventory_view() -> None:
         return (f'<span class="ap-v"><span class="ap-chip">{val}</span></span>'
                 if val else '<span class="ap-v empty">—</span>')
 
+    def _iv_app_type_pill(val: str) -> str:
+        _t = (val or "").strip()
+        if not _t:
+            return '<span class="ap-v empty">—</span>'
+        _cls = "is-app" if _t.lower() == "app" else (
+            "is-lib" if _t.lower() == "lib" else "is-other"
+        )
+        return (f'<span class="ap-v"><span class="ap-type-pill {_cls}">'
+                f'{_t}</span></span>')
+
+    # Pre-compute app_type per application for stage-cell rendering logic.
+    _iv_app_type_map = {
+        r["application"]: (r.get("app_type") or "").strip().lower()
+        for r in _inv_rows
+    }
+
     # ── Stage cell — version chip popover trigger + compact date ───────────
     _iv_th = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
 
@@ -4724,6 +5008,22 @@ def _render_inventory_view() -> None:
         _data = (_iv_stages_map.get(app) or {}).get(stage) or {}
         _ver  = _data.get("version") or ""
         _when = fmt_dt(_data.get("when"), "%Y-%m-%d %H:%M") or ""
+        _kind = _iv_app_type_map.get(app, "")
+        # Lib applications are build-only — everything after "build" is N/A
+        # and should read as a positive, not a gap.
+        if not _ver and _kind == "lib" and stage != "build":
+            return (
+                '<span class="iv-stage-nn" title="Libraries do not progress '
+                'past build">✓ Not needed</span>'
+            )
+        # App applications that haven't reached a stage get a subtle warning
+        # so the gap is visible without being alarming.
+        if not _ver and _kind == "app" and stage != "build":
+            return (
+                f'<span class="iv-stage-gap" '
+                f'title="No {stage} record for this application yet">'
+                f'△ Not reached</span>'
+            )
         if not _ver:
             return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
         # For prd stage, attach a live dot when this version matches what's
@@ -4951,6 +5251,7 @@ def _render_inventory_view() -> None:
             f'    <div class="ap-section">Identity</div>'
             f'    <span class="ap-k">Project</span>{_iv_v(r.get("project", ""))}'
             f'    <span class="ap-k">Company</span>{_iv_v(r.get("company", ""))}'
+            f'    <span class="ap-k">Type</span>{_iv_app_type_pill(r.get("app_type", ""))}'
             f'    <div class="ap-section">Teams</div>'
             f'    {_team_html}'
             f'    <div class="ap-section">Build</div>'
@@ -5071,6 +5372,32 @@ def _render_inventory_view() -> None:
                 f'    <span class="ap-k">Status</span>{_iv_v(_status)}'
                 f'    <span class="ap-k">When ({DISPLAY_TZ_LABEL})</span>{_iv_v(_when_disp)}'
             )
+
+            # ── Version provenance — always show build date for this version,
+            # plus release date & RLM when this version has been released.
+            _vmeta = _iv_vermeta_map.get((_app, _ver)) or {}
+            _build_when_disp = fmt_dt(_vmeta.get("build_when"), "%Y-%m-%d %H:%M") or ""
+            _rel_when_disp   = fmt_dt(_vmeta.get("release_when"), "%Y-%m-%d %H:%M") or ""
+            _rlm_id   = _vmeta.get("rlm", "")
+            _rlm_stat = _vmeta.get("rlm_status", "")
+            _prov_rows = (
+                f'    <div class="ap-section">Version provenance</div>'
+                f'    <span class="ap-k">Built ({DISPLAY_TZ_LABEL})</span>{_iv_v(_build_when_disp)}'
+            )
+            if _rel_when_disp or _rlm_id or _rlm_stat:
+                _prov_rows += (
+                    f'    <span class="ap-k">Released ({DISPLAY_TZ_LABEL})</span>'
+                    f'{_iv_v(_rel_when_disp)}'
+                )
+                if _rlm_id:
+                    _prov_rows += (
+                        f'    <span class="ap-k">RLM</span>{_iv_chip(_rlm_id)}'
+                    )
+                if _rlm_stat:
+                    _prov_rows += (
+                        f'    <span class="ap-k">RLM status</span>{_iv_v(_rlm_stat)}'
+                    )
+            _stage_block += _prov_rows
 
             # ── Previous-stage context (for Δ baseline) ─────────────────────
             _prev_stage = _STAGE_PREV.get(_stage)
