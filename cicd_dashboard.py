@@ -28,6 +28,7 @@ Performance notes
 from __future__ import annotations
 
 import json
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any
 try:
@@ -1207,6 +1208,103 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .el-tf-caption-sep { color: var(--cc-border); font-weight: 700; }
 .el-tf-caption b { color: var(--cc-accent); font-weight: 700; }
+
+/* ── Inline (+) filter buttons — Kibana-style drill-down ─────────────────── */
+.el-filter-plus {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    font-size: 0.60rem;
+    font-weight: 900;
+    text-decoration: none !important;
+    margin-left: 2px;
+    vertical-align: middle;
+    opacity: 0;
+    transition: opacity .12s, background .12s, color .12s, border-color .12s, transform .12s;
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border: 1px solid var(--cc-border);
+    cursor: pointer;
+    line-height: 1;
+}
+tr:hover .el-filter-plus { opacity: 0.55; }
+tr:hover .el-filter-plus:hover {
+    opacity: 1;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    border-color: var(--cc-accent);
+    transform: scale(1.15);
+}
+.el-filter-plus.active {
+    opacity: 1 !important;
+    background: var(--cc-accent);
+    color: #fff;
+    border-color: var(--cc-accent);
+}
+.el-filter-plus.active:hover {
+    background: #dc2626;
+    border-color: #dc2626;
+}
+
+/* Active-filter badge bar */
+.el-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 4px 8px;
+}
+.el-filter-bar-label {
+    font-size: 0.66rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--cc-text-mute);
+    margin-right: 2px;
+}
+.el-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: linear-gradient(135deg, var(--cc-accent) 0%, #0ea5e9 100%);
+    color: #fff;
+    border-radius: 999px;
+    padding: 3px 6px 3px 10px;
+    font-size: 0.70rem;
+    font-weight: 700;
+    font-family: var(--cc-mono);
+    letter-spacing: 0.02em;
+    box-shadow: 0 2px 6px -1px rgba(14,165,233,0.4);
+}
+.el-filter-chip .fk { opacity: .7; margin-right: 1px; }
+.el-filter-chip .fx {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.25);
+    color: #fff;
+    font-size: 0.62rem;
+    font-weight: 900;
+    text-decoration: none !important;
+    transition: background .12s;
+    cursor: pointer;
+}
+.el-filter-chip .fx:hover { background: #dc2626; }
+.el-filter-clear {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    text-decoration: none !important;
+    border-bottom: 1px dashed var(--cc-text-mute);
+    transition: color .12s, border-color .12s;
+    margin-left: 4px;
+    cursor: pointer;
+}
+.el-filter-clear:hover { color: #dc2626; border-color: #dc2626; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -2217,6 +2315,17 @@ if role_pick == "Admin" and _banner_cols[1] is not None:
         st.selectbox("View as role", _admin_view_options, index=0, key="admin_role_view",
                      help="Preview dashboard sections as another role")
 
+# ── Effective role (admin view-as support) + admin-only flag ────────────────
+# Determined here so downstream section-gating can short-circuit before the
+# HUD/KPIs render. Non-admin roles (incl. Admin viewing AS another role) only
+# see the event log; the rest of the page is admin-exclusive.
+_effective_role = role_pick
+if role_pick == "Admin":
+    _admin_view = st.session_state.get("admin_role_view", "Admin")
+    if _admin_view in ("Admin", "Developer", "QC", "Operator"):
+        _effective_role = _admin_view
+_is_admin = (_effective_role == "Admin")
+
 # ── Row 2: time window segmented button group ────────────────────────────────
 _TW_LABELS = list(PRESETS.keys())
 _preset_default_idx = _TW_LABELS.index("7d")
@@ -2670,8 +2779,9 @@ dormant_pct = (1 - active_projs / inv_count) * 100 if inv_count else 0
 
 # Placeholder for alerts ribbon — actually filled by the ALERTS block further
 # down, but rendered at THIS position in the page (above KPIs) so the most
-# actionable items always sit at the top of the viewport.
-_alerts_ph = st.container()
+# actionable items always sit at the top of the viewport. Only created for
+# admin — non-admin users see only the event log.
+_alerts_ph = st.container() if _is_admin else None
 
 
 # =============================================================================
@@ -2746,261 +2856,263 @@ elif role_pick == "Operator":
     if prd_fail:
         _quests.append((C_DANGER, "💥", f"<b>{prd_fail}</b> prod deploy failures", f"{prd_fail}"))
 
-# ── Render HUD ────────────────────────────────────────────────────────────────
-_hud_c1, _hud_c2, _hud_c3 = st.columns([1, 1.5, 2])
+# ── Render HUD ── (admin only) ────────────────────────────────────────────────
+if _is_admin:
+    _hud_c1, _hud_c2, _hud_c3 = st.columns([1, 1.5, 2])
 
-with _hud_c1:
-    _ring_svg = _svg_ring(_health_score, _health_color, 80)
-    st.markdown(
-        f'<div class="hud-ring">'
-        f'  {_ring_svg}'
-        f'  <div>'
-        f'    <div class="score-value">{_health_score}</div>'
-        f'    <div class="score-label">Team health</div>'
-        f'  </div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-with _hud_c2:
-    _streak_cls = "" if _streak_days >= 3 else ("warn" if _streak_days >= 1 else "bad")
-    st.markdown(
-        f'<div class="hud-mission">'
-        f'  <div class="mission-title">Artifact flow &amp; velocity</div>'
-        f'  <div class="hud-stat">'
-        f'    <div class="stat-icon" style="background:var(--cc-accent-lt);color:var(--cc-accent)">📦</div>'
-        f'    <div class="stat-label">Artifacts built</div>'
-        f'    <div class="stat-val">{art_built}</div>'
-        f'  </div>'
-        f'  <div class="hud-stat">'
-        f'    <div class="stat-icon" style="background:var(--cc-green-lt);color:var(--cc-green)">🚀</div>'
-        f'    <div class="stat-label">Artifacts → PRD</div>'
-        f'    <div class="stat-val">{art_dep_prd}</div>'
-        f'  </div>'
-        f'  <div class="hud-stat">'
-        f'    <div class="stat-icon" style="background:var(--cc-blue-lt);color:var(--cc-blue)">⚡</div>'
-        f'    <div class="stat-label">Deploy velocity</div>'
-        f'    <div class="stat-val">{_velocity:.1f}/d</div>'
-        f'  </div>'
-        f'  <div class="hud-stat">'
-        f'    <div class="stat-icon" style="background:{"var(--cc-green-lt)" if art_build_to_prd >= 50 else "var(--cc-amber-lt)"};'
-        f'color:{"var(--cc-green)" if art_build_to_prd >= 50 else "var(--cc-amber)"}">📈</div>'
-        f'    <div class="stat-label">Build→PRD rate</div>'
-        f'    <div class="stat-val">{art_build_to_prd:.0f}%</div>'
-        f'  </div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-with _hud_c3:
-    _quest_html = ""
-    for _q_color, _q_icon, _q_text, _q_val in _quests[:5]:
-        _quest_html += (
-            f'<div class="hud-quest">'
-            f'  <div class="quest-prio" style="background:{_q_color}">{_q_icon}</div>'
-            f'  <div class="quest-text">{_q_text}</div>'
-            f'  <div class="quest-val">{_q_val}</div>'
-            f'</div>'
+    with _hud_c1:
+        _ring_svg = _svg_ring(_health_score, _health_color, 80)
+        st.markdown(
+            f'<div class="hud-ring">'
+            f'  {_ring_svg}'
+            f'  <div>'
+            f'    <div class="score-value">{_health_score}</div>'
+            f'    <div class="score-label">Team health</div>'
+            f'  </div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-    if not _quest_html:
-        _quest_html = '<div style="font-size:.85rem;color:var(--cc-text-mute);padding:12px 0">All clear — no action items</div>'
-    st.markdown(
-        f'<div class="hud-mission">'
-        f'  <div class="mission-title">{ROLE_ICONS[role_pick]} {role_pick} missions</div>'
-        f'  {_quest_html}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+
+    with _hud_c2:
+        _streak_cls = "" if _streak_days >= 3 else ("warn" if _streak_days >= 1 else "bad")
+        st.markdown(
+            f'<div class="hud-mission">'
+            f'  <div class="mission-title">Artifact flow &amp; velocity</div>'
+            f'  <div class="hud-stat">'
+            f'    <div class="stat-icon" style="background:var(--cc-accent-lt);color:var(--cc-accent)">📦</div>'
+            f'    <div class="stat-label">Artifacts built</div>'
+            f'    <div class="stat-val">{art_built}</div>'
+            f'  </div>'
+            f'  <div class="hud-stat">'
+            f'    <div class="stat-icon" style="background:var(--cc-green-lt);color:var(--cc-green)">🚀</div>'
+            f'    <div class="stat-label">Artifacts → PRD</div>'
+            f'    <div class="stat-val">{art_dep_prd}</div>'
+            f'  </div>'
+            f'  <div class="hud-stat">'
+            f'    <div class="stat-icon" style="background:var(--cc-blue-lt);color:var(--cc-blue)">⚡</div>'
+            f'    <div class="stat-label">Deploy velocity</div>'
+            f'    <div class="stat-val">{_velocity:.1f}/d</div>'
+            f'  </div>'
+            f'  <div class="hud-stat">'
+            f'    <div class="stat-icon" style="background:{"var(--cc-green-lt)" if art_build_to_prd >= 50 else "var(--cc-amber-lt)"};'
+            f'color:{"var(--cc-green)" if art_build_to_prd >= 50 else "var(--cc-amber)"}">📈</div>'
+            f'    <div class="stat-label">Build→PRD rate</div>'
+            f'    <div class="stat-val">{art_build_to_prd:.0f}%</div>'
+            f'  </div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    with _hud_c3:
+        _quest_html = ""
+        for _q_color, _q_icon, _q_text, _q_val in _quests[:5]:
+            _quest_html += (
+                f'<div class="hud-quest">'
+                f'  <div class="quest-prio" style="background:{_q_color}">{_q_icon}</div>'
+                f'  <div class="quest-text">{_q_text}</div>'
+                f'  <div class="quest-val">{_q_val}</div>'
+                f'</div>'
+            )
+        if not _quest_html:
+            _quest_html = '<div style="font-size:.85rem;color:var(--cc-text-mute);padding:12px 0">All clear — no action items</div>'
+        st.markdown(
+            f'<div class="hud-mission">'
+            f'  <div class="mission-title">{ROLE_ICONS[role_pick]} {role_pick} missions</div>'
+            f'  {_quest_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
-# =============================================================================
+    # =============================================================================
 # KPIs  (2 rows × 4)
 # =============================================================================
 
 # Anchor for in-page navigation
-st.markdown('<a class="anchor" id="sec-kpis"></a>', unsafe_allow_html=True)
+if _is_admin:
+    st.markdown('<a class="anchor" id="sec-kpis"></a>', unsafe_allow_html=True)
 
-# Helper functions for WoW/MoM/YoY (used inside the trend popover below)
-def _trend_count(
-    index: str, date_field: str, cur_start: datetime, cur_end: datetime,
-    prev_start: datetime, prev_end: datetime,
-    extra: list[dict] | None = None,
-) -> tuple[int, int]:
-    cur  = count_with_range(index, date_field, cur_start, cur_end, extra=extra)
-    prev = count_with_range(index, date_field, prev_start, prev_end, extra=extra)
-    return cur, prev
-
-
-def _cell(cur: int, prev: int) -> str:
-    if prev == 0 and cur == 0:
-        return '<span style="color:var(--cc-text-mute);">—</span>'
-    if prev == 0:
-        return f'<b style="color:var(--cc-text);">{cur:,}</b> <span style="color:var(--cc-green);">new</span>'
-    diff = cur - prev
-    pct  = diff / prev * 100
-    direction = "var(--cc-green)" if diff > 0 else ("var(--cc-red)" if diff < 0 else "var(--cc-text-mute)")
-    arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "→")
-    sign = "+" if diff >= 0 else ""
-    return (
-        f'<b style="color:var(--cc-text);">{cur:,}</b> '
-        f'<span style="color:{direction};font-size:.80rem;"> {arrow} {sign}{pct:.1f}%</span>'
-    )
+    # Helper functions for WoW/MoM/YoY (used inside the trend popover below)
+    def _trend_count(
+        index: str, date_field: str, cur_start: datetime, cur_end: datetime,
+        prev_start: datetime, prev_end: datetime,
+        extra: list[dict] | None = None,
+    ) -> tuple[int, int]:
+        cur  = count_with_range(index, date_field, cur_start, cur_end, extra=extra)
+        prev = count_with_range(index, date_field, prev_start, prev_end, extra=extra)
+        return cur, prev
 
 
-_periods: list[tuple[str, timedelta]] = [
-    ("WoW (7d)", timedelta(days=7)),
-    ("MoM (30d)", timedelta(days=30)),
-    ("YoY (365d)", timedelta(days=365)),
-]
+    def _cell(cur: int, prev: int) -> str:
+        if prev == 0 and cur == 0:
+            return '<span style="color:var(--cc-text-mute);">—</span>'
+        if prev == 0:
+            return f'<b style="color:var(--cc-text);">{cur:,}</b> <span style="color:var(--cc-green);">new</span>'
+        diff = cur - prev
+        pct  = diff / prev * 100
+        direction = "var(--cc-green)" if diff > 0 else ("var(--cc-red)" if diff < 0 else "var(--cc-text-mute)")
+        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "→")
+        sign = "+" if diff >= 0 else ""
+        return (
+            f'<b style="color:var(--cc-text);">{cur:,}</b> '
+            f'<span style="color:{direction};font-size:.80rem;"> {arrow} {sign}{pct:.1f}%</span>'
+        )
 
 
-def _trend_windows(td: timedelta) -> tuple[datetime, datetime, datetime, datetime]:
-    cur_end    = now_utc
-    cur_start  = cur_end - td
-    prev_end   = cur_start
-    prev_start = prev_end - td
-    return cur_start, cur_end, prev_start, prev_end
+    _periods: list[tuple[str, timedelta]] = [
+        ("WoW (7d)", timedelta(days=7)),
+        ("MoM (30d)", timedelta(days=30)),
+        ("YoY (365d)", timedelta(days=365)),
+    ]
 
 
-_trend_metrics = [
-    ("Builds",            IDX["builds"],       "startdate",   None,   False),
-    ("Build failures",    IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}], False),
-    ("Deployments",       IDX["deployments"],  "startdate",   None,   False),
-    ("Prod deployments",  IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}], False),
-    ("Prod failures",     IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}], False),
-    ("Commits",           IDX["commits"],      "commitdate",  None,   True),   # use commit scope
-    ("Releases",          IDX["releases"],     "releasedate", None,   False),
-    ("Requests",          IDX["requests"],     "RequestDate", None,   False),
-]
-
-# Row 1 — Artifact-centric headline (5 cards)
-r1 = st.columns(5)
-d, dn = fmt_delta(art_built, art_built_prev)
-kpi_block(r1[0], "📦 Artifacts built", f"{art_built:,}", d, dn,
-    "Unique code versions built in window")
-kpi_block(r1[1], "🚀 Artifacts → PRD", f"{art_dep_prd:,}",
-    f"{art_build_to_prd:.0f}% conversion" if art_built else "—",
-    "up" if art_build_to_prd >= 50 else ("dn" if art_built and art_build_to_prd < 20 else "flat"),
-    "Unique versions reaching production")
-kpi_block(r1[2], "Deploy freq", f"{deploy_freq_per_day:.1f}/day",
-    f"{prd_deploys:,} prod deploys",
-    "up" if deploy_freq_per_day >= 1 else "flat", "DORA · prod deploys / day")
-kpi_block(r1[3], "Change fail rate", f"{cfr:.1f}%",
-    f"{prd_fail} / {prd_deploys} prod" if prd_deploys else "no prod deploys",
-    "dn" if cfr > 15 else ("up" if prd_deploys else "flat"), "DORA · failed prod / prod deploys")
-kpi_block(r1[4], "Build success", f"{success_rate:.1f}%",
-    f"{builds_fail:,} failed of {builds_now:,}" if builds_fail else "all green",
-    "dn" if builds_fail else "up", "(builds − failed) / builds")
-
-# Row 2 — volume + health (5 cards) + trend popover, role-tailored
-r2c = st.columns([1, 1, 1, 1, 1, 1.4])
-
-# Slot 0: Builds (Developer/Admin) or PRD deploys (Operator) or QC deploys (QC)
-if _ROLE_SHOWS_BUILDS.get(role_pick, True):
-    d, dn = fmt_delta(builds_now, builds_prev)
-    kpi_block(r2c[0], "Builds", f"{builds_now:,}", d, dn)
-elif role_pick == "Operator":
-    d, dn = fmt_delta(art_dep_prd, art_dep_prd_prev)
-    kpi_block(r2c[0], "PRD artifacts", f"{art_dep_prd:,}", d, dn,
-              "Unique artifacts deployed to PRD")
-else:  # QC
-    kpi_block(r2c[0], "QC artifacts", f"{art_dep_qc:,}", "this window", "flat",
-              "Unique artifacts deployed to QC")
-
-# Slot 1: Commits (Developer/Admin) or Releases (QC/Operator)
-if role_pick in ("Admin", "Developer"):
-    d, dn = fmt_delta(commits_now, commits_prev)
-    kpi_block(r2c[1], "Commits", f"{commits_now:,}", d, dn)
-else:
-    kpi_block(r2c[1], "Releases", f"{rel_now:,}",
-              f"{rel_now - rel_prev:+d} vs prior" if rel_prev else "this window",
-              "up" if rel_now >= rel_prev else "dn")
-
-# Slot 2: Pending — always relevant (role-scoped queue shown in Workflow section)
-kpi_block(r2c[2], "Pending", f"{pending_now:,}",
-    "needs action" if pending_now else "clear",
-    "dn" if pending_now else "up", "Pending approvals (last 30d)")
-
-# Slot 3: JIRA (Admin/Dev/QC) or Deploy freq-focused metric (Operator)
-if _ROLE_SHOWS_JIRA.get(role_pick, True):
-    kpi_block(r2c[3], "Open JIRA", f"{open_jira:,}", "all-time", "flat")
-else:
-    kpi_block(r2c[3], "UAT artifacts", f"{art_dep_uat:,}", "this window", "flat",
-              "Unique artifacts deployed to UAT")
-
-kpi_block(r2c[4], "Platform health",
-    f"{active_projs}/{inv_count}" if inv_count else "—",
-    f"{100 - dormant_pct:.0f}% active" if inv_count else "",
-    "up" if dormant_pct < 30 else ("dn" if dormant_pct > 60 else "flat"), "active / inventory")
-
-with r2c[5]:
-    with st.popover("📈  WoW / MoM / YoY trends", use_container_width=True):
-        st.markdown("**Rolling period comparisons** — independent of the window selector above")
-        _trend_rows = []
-        for _lbl, _idx, _df, _ex, _use_cs in _trend_metrics:
-            _row: dict[str, Any] = {"Metric": _lbl}
-            for _pl, _td in _periods:
-                _cs, _ce, _ps, _pe = _trend_windows(_td)
-                _cur  = count_with_range(_idx, _df, _cs, _ce, extra=_ex, use_commit_scope=_use_cs)
-                _prev = count_with_range(_idx, _df, _ps, _pe, extra=_ex, use_commit_scope=_use_cs)
-                _row[_pl] = _cell(_cur, _prev)
-            _trend_rows.append(_row)
-        _hdrs = ["Metric"] + [p[0] for p in _periods]
-        _html = [
-            '<div style="background:var(--cc-surface);border:1px solid var(--cc-border);border-radius:10px;overflow:hidden;">',
-            '<table style="width:100%;border-collapse:collapse;font-size:.88rem;">',
-            '<thead><tr>',
-        ]
-        for _i, _h in enumerate(_hdrs):
-            _align = "left" if _i == 0 else "right"
-            _html.append(
-                f'<th style="text-align:{_align};padding:10px 14px;color:var(--cc-text-mute);font-size:.68rem;'
-                f'letter-spacing:.10em;text-transform:uppercase;font-weight:600;'
-                f'border-bottom:1px solid var(--cc-border);background:var(--cc-surface2);">{_h}</th>'
-            )
-        _html.append('</tr></thead><tbody>')
-        for _row in _trend_rows:
-            _html.append('<tr>')
-            _html.append(f'<td style="padding:9px 14px;color:var(--cc-text);font-weight:500;border-bottom:1px solid var(--cc-border);">{_row["Metric"]}</td>')
-            for _pl, _ in _periods:
-                _html.append(f'<td style="text-align:right;padding:9px 14px;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--cc-border);">{_row[_pl]}</td>')
-            _html.append('</tr>')
-        _html.append('</tbody></table></div>')
-        st.markdown("".join(_html), unsafe_allow_html=True)
+    def _trend_windows(td: timedelta) -> tuple[datetime, datetime, datetime, datetime]:
+        cur_end    = now_utc
+        cur_start  = cur_end - td
+        prev_end   = cur_start
+        prev_start = prev_end - td
+        return cur_start, cur_end, prev_start, prev_end
 
 
-# ── Contextual digest — one-liner translating the numbers into meaning ──────
-_stuck_count_early = sum(1 for r in _all_pending if (r.get("Age (h)") or 0) >= 24)
-_digest_parts: list[str] = []
-if prd_fail:
-    _digest_parts.append(f"<b>{prd_fail}</b> prod deploy failure(s) need attention")
-if _stuck_count_early:
-    _digest_parts.append(f"<b>{_stuck_count_early}</b> approval(s) stuck > 24h")
-if builds_now and success_rate < 80:
-    _digest_parts.append(f"build success rate <b>{success_rate:.0f}%</b> (below 80%)")
-if art_built and art_build_to_prd < 30:
-    _digest_parts.append(f"only <b>{art_build_to_prd:.0f}%</b> of artifacts reaching PRD")
-if not _digest_parts and builds_now:
-    # positive summary
-    if art_built and art_build_to_prd >= 50:
-        _digest_parts.append(f"<b>{art_dep_prd}</b> of <b>{art_built}</b> artifacts reached PRD ({art_build_to_prd:.0f}%)")
-    if success_rate >= 95:
-        _digest_parts.append(f"build pipeline healthy at <b>{success_rate:.0f}%</b> success")
-    if deploy_freq_per_day >= 1:
-        _digest_parts.append(f"shipping <b>{deploy_freq_per_day:.1f}</b> prod deploys / day")
-    if not pending_now:
-        _digest_parts.append("no pending approvals")
-if _digest_parts:
-    _has_issues = bool(prd_fail or _stuck_count_early)
-    st.markdown(
-        f'<div class="learn">'
-        f'  <b>TL;DR</b> &mdash; {" &middot; ".join(_digest_parts)}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    _trend_metrics = [
+        ("Builds",            IDX["builds"],       "startdate",   None,   False),
+        ("Build failures",    IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}], False),
+        ("Deployments",       IDX["deployments"],  "startdate",   None,   False),
+        ("Prod deployments",  IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}], False),
+        ("Prod failures",     IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}], False),
+        ("Commits",           IDX["commits"],      "commitdate",  None,   True),   # use commit scope
+        ("Releases",          IDX["releases"],     "releasedate", None,   False),
+        ("Requests",          IDX["requests"],     "RequestDate", None,   False),
+    ]
+
+    # Row 1 — Artifact-centric headline (5 cards)
+    r1 = st.columns(5)
+    d, dn = fmt_delta(art_built, art_built_prev)
+    kpi_block(r1[0], "📦 Artifacts built", f"{art_built:,}", d, dn,
+        "Unique code versions built in window")
+    kpi_block(r1[1], "🚀 Artifacts → PRD", f"{art_dep_prd:,}",
+        f"{art_build_to_prd:.0f}% conversion" if art_built else "—",
+        "up" if art_build_to_prd >= 50 else ("dn" if art_built and art_build_to_prd < 20 else "flat"),
+        "Unique versions reaching production")
+    kpi_block(r1[2], "Deploy freq", f"{deploy_freq_per_day:.1f}/day",
+        f"{prd_deploys:,} prod deploys",
+        "up" if deploy_freq_per_day >= 1 else "flat", "DORA · prod deploys / day")
+    kpi_block(r1[3], "Change fail rate", f"{cfr:.1f}%",
+        f"{prd_fail} / {prd_deploys} prod" if prd_deploys else "no prod deploys",
+        "dn" if cfr > 15 else ("up" if prd_deploys else "flat"), "DORA · failed prod / prod deploys")
+    kpi_block(r1[4], "Build success", f"{success_rate:.1f}%",
+        f"{builds_fail:,} failed of {builds_now:,}" if builds_fail else "all green",
+        "dn" if builds_fail else "up", "(builds − failed) / builds")
+
+    # Row 2 — volume + health (5 cards) + trend popover, role-tailored
+    r2c = st.columns([1, 1, 1, 1, 1, 1.4])
+
+    # Slot 0: Builds (Developer/Admin) or PRD deploys (Operator) or QC deploys (QC)
+    if _ROLE_SHOWS_BUILDS.get(role_pick, True):
+        d, dn = fmt_delta(builds_now, builds_prev)
+        kpi_block(r2c[0], "Builds", f"{builds_now:,}", d, dn)
+    elif role_pick == "Operator":
+        d, dn = fmt_delta(art_dep_prd, art_dep_prd_prev)
+        kpi_block(r2c[0], "PRD artifacts", f"{art_dep_prd:,}", d, dn,
+                  "Unique artifacts deployed to PRD")
+    else:  # QC
+        kpi_block(r2c[0], "QC artifacts", f"{art_dep_qc:,}", "this window", "flat",
+                  "Unique artifacts deployed to QC")
+
+    # Slot 1: Commits (Developer/Admin) or Releases (QC/Operator)
+    if role_pick in ("Admin", "Developer"):
+        d, dn = fmt_delta(commits_now, commits_prev)
+        kpi_block(r2c[1], "Commits", f"{commits_now:,}", d, dn)
+    else:
+        kpi_block(r2c[1], "Releases", f"{rel_now:,}",
+                  f"{rel_now - rel_prev:+d} vs prior" if rel_prev else "this window",
+                  "up" if rel_now >= rel_prev else "dn")
+
+    # Slot 2: Pending — always relevant (role-scoped queue shown in Workflow section)
+    kpi_block(r2c[2], "Pending", f"{pending_now:,}",
+        "needs action" if pending_now else "clear",
+        "dn" if pending_now else "up", "Pending approvals (last 30d)")
+
+    # Slot 3: JIRA (Admin/Dev/QC) or Deploy freq-focused metric (Operator)
+    if _ROLE_SHOWS_JIRA.get(role_pick, True):
+        kpi_block(r2c[3], "Open JIRA", f"{open_jira:,}", "all-time", "flat")
+    else:
+        kpi_block(r2c[3], "UAT artifacts", f"{art_dep_uat:,}", "this window", "flat",
+                  "Unique artifacts deployed to UAT")
+
+    kpi_block(r2c[4], "Platform health",
+        f"{active_projs}/{inv_count}" if inv_count else "—",
+        f"{100 - dormant_pct:.0f}% active" if inv_count else "",
+        "up" if dormant_pct < 30 else ("dn" if dormant_pct > 60 else "flat"), "active / inventory")
+
+    with r2c[5]:
+        with st.popover("📈  WoW / MoM / YoY trends", use_container_width=True):
+            st.markdown("**Rolling period comparisons** — independent of the window selector above")
+            _trend_rows = []
+            for _lbl, _idx, _df, _ex, _use_cs in _trend_metrics:
+                _row: dict[str, Any] = {"Metric": _lbl}
+                for _pl, _td in _periods:
+                    _cs, _ce, _ps, _pe = _trend_windows(_td)
+                    _cur  = count_with_range(_idx, _df, _cs, _ce, extra=_ex, use_commit_scope=_use_cs)
+                    _prev = count_with_range(_idx, _df, _ps, _pe, extra=_ex, use_commit_scope=_use_cs)
+                    _row[_pl] = _cell(_cur, _prev)
+                _trend_rows.append(_row)
+            _hdrs = ["Metric"] + [p[0] for p in _periods]
+            _html = [
+                '<div style="background:var(--cc-surface);border:1px solid var(--cc-border);border-radius:10px;overflow:hidden;">',
+                '<table style="width:100%;border-collapse:collapse;font-size:.88rem;">',
+                '<thead><tr>',
+            ]
+            for _i, _h in enumerate(_hdrs):
+                _align = "left" if _i == 0 else "right"
+                _html.append(
+                    f'<th style="text-align:{_align};padding:10px 14px;color:var(--cc-text-mute);font-size:.68rem;'
+                    f'letter-spacing:.10em;text-transform:uppercase;font-weight:600;'
+                    f'border-bottom:1px solid var(--cc-border);background:var(--cc-surface2);">{_h}</th>'
+                )
+            _html.append('</tr></thead><tbody>')
+            for _row in _trend_rows:
+                _html.append('<tr>')
+                _html.append(f'<td style="padding:9px 14px;color:var(--cc-text);font-weight:500;border-bottom:1px solid var(--cc-border);">{_row["Metric"]}</td>')
+                for _pl, _ in _periods:
+                    _html.append(f'<td style="text-align:right;padding:9px 14px;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--cc-border);">{_row[_pl]}</td>')
+                _html.append('</tr>')
+            _html.append('</tbody></table></div>')
+            st.markdown("".join(_html), unsafe_allow_html=True)
 
 
-# =============================================================================
+    # ── Contextual digest — one-liner translating the numbers into meaning ──────
+    _stuck_count_early = sum(1 for r in _all_pending if (r.get("Age (h)") or 0) >= 24)
+    _digest_parts: list[str] = []
+    if prd_fail:
+        _digest_parts.append(f"<b>{prd_fail}</b> prod deploy failure(s) need attention")
+    if _stuck_count_early:
+        _digest_parts.append(f"<b>{_stuck_count_early}</b> approval(s) stuck > 24h")
+    if builds_now and success_rate < 80:
+        _digest_parts.append(f"build success rate <b>{success_rate:.0f}%</b> (below 80%)")
+    if art_built and art_build_to_prd < 30:
+        _digest_parts.append(f"only <b>{art_build_to_prd:.0f}%</b> of artifacts reaching PRD")
+    if not _digest_parts and builds_now:
+        # positive summary
+        if art_built and art_build_to_prd >= 50:
+            _digest_parts.append(f"<b>{art_dep_prd}</b> of <b>{art_built}</b> artifacts reached PRD ({art_build_to_prd:.0f}%)")
+        if success_rate >= 95:
+            _digest_parts.append(f"build pipeline healthy at <b>{success_rate:.0f}%</b> success")
+        if deploy_freq_per_day >= 1:
+            _digest_parts.append(f"shipping <b>{deploy_freq_per_day:.1f}</b> prod deploys / day")
+        if not pending_now:
+            _digest_parts.append("no pending approvals")
+    if _digest_parts:
+        _has_issues = bool(prd_fail or _stuck_count_early)
+        st.markdown(
+            f'<div class="learn">'
+            f'  <b>TL;DR</b> &mdash; {" &middot; ".join(_digest_parts)}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+    # =============================================================================
 # EVENT TICKER — subtle always-visible live feed at top of content
 # =============================================================================
 
@@ -3071,7 +3183,7 @@ def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
 _tick_scope = json.dumps(scope_filters(), sort_keys=True)
 _tick_evts = _ticker_events(_tick_scope, exclude_svc)
 
-if _tick_evts:
+if _tick_evts and _is_admin:
     _TYPE_CHIP = {
         "prd-deploy": ("PRD", "#059669", "#d1fae5"),
         "release":    ("REL", "#4f46e5", "#eef2ff"),
@@ -3103,21 +3215,17 @@ if _tick_evts:
 
 
 # ── Role-based section emphasis ────────────────────────────────────────────
-# Each role sees only the sections relevant to them. Admin sees everything.
-# Priority order matters: used for nav chip ordering too.
+# Admin sees every section. All other roles (Developer / QC / Operator) are
+# restricted to the event log, where their configured RBAC rules govern what
+# rows they can see. This keeps operational context focused for non-admins.
 _ROLE_PRIORITY_SECTIONS: dict[str, list[str]] = {
-    "Admin":     ["eventlog", "alerts", "landscape", "lifecycle", "pipeline", "workflow"],
-    "Developer": ["eventlog", "alerts", "pipeline", "lifecycle", "workflow"],
-    "QC":        ["eventlog", "alerts", "workflow", "lifecycle", "pipeline"],
-    "Operator":  ["eventlog", "alerts", "workflow", "pipeline", "lifecycle"],
+    "Admin":     ["eventlog", "inventory", "alerts", "landscape", "lifecycle", "pipeline", "workflow"],
+    "Developer": ["eventlog", "inventory"],
+    "QC":        ["eventlog", "inventory"],
+    "Operator":  ["eventlog", "inventory"],
 }
-# Effective role for rendering — Admin can view-as another role
-_effective_role = role_pick
-if role_pick == "Admin":
-    _admin_view = st.session_state.get("admin_role_view", "Admin")
-    if _admin_view != "Admin" and _admin_view in _ROLE_PRIORITY_SECTIONS:
-        _effective_role = _admin_view
-
+# _effective_role and _is_admin are computed earlier (right after admin_role_view
+# widget) so that the HUD/KPI blocks can be gated before they render.
 _visible = set(_ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"]))
 
 
@@ -3168,6 +3276,7 @@ _all_nav = [
     ("pipeline", _rl.get("pipeline", "Pipeline"), "#sec-pipeline"),
     ("workflow", _rl.get("workflow", "Workflow"), "#sec-workflow"),
     ("eventlog", "Event log", "#sec-eventlog"),
+    ("inventory", "Inventory", "#sec-inventory"),
 ]
 # Filter to visible sections only, then order by role priority
 _priority_order = _ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"])
@@ -3189,6 +3298,78 @@ st.markdown(_nav_html, unsafe_allow_html=True)
 # =============================================================================
 # EVENT LOG — TOP OF PAGE — fragment, auto-refresh every 60s, expandable
 # =============================================================================
+
+
+# ── Inline (+) filter helpers ────────────────────────────────────────────────
+# Builds <a> links that toggle a query-param filter. On click the browser
+# navigates to the same page with the param added (or removed if already
+# active), triggering a Streamlit rerun so the fragment picks up the change.
+
+def _filter_href(prefix: str, key: str, value: str) -> str:
+    """Return an href that toggles the ``{prefix}_{key}`` query param to *value*.
+
+    If the param is already set to *value*, the returned link removes it
+    (toggle-off). All other existing query params are preserved.
+    """
+    params = dict(st.query_params)
+    param_name = f"{prefix}_{key}"
+    if params.get(param_name) == value:
+        params.pop(param_name, None)
+    else:
+        params[param_name] = value
+    qs = urllib.parse.urlencode(params)
+    return f"?{qs}" if qs else "?"
+
+
+def _filter_btn(prefix: str, key: str, value: str, active_val: str) -> str:
+    """Return a small ⊕/⊖ HTML link for a cell.
+
+    ``active_val`` is the current value of that inline filter (empty string if
+    not active). When *value* matches *active_val* the button shows ⊖ with
+    the active class; otherwise ⊕ with the default class.
+    """
+    if not value:
+        return ""
+    _is_active = bool(active_val and active_val == value)
+    _icon = "−" if _is_active else "+"
+    _cls = "el-filter-plus active" if _is_active else "el-filter-plus"
+    _title = f'{"Remove" if _is_active else "Filter by"}: {value}'
+    _href = _filter_href(prefix, key, value)
+    return f'<a href="{_href}" class="{_cls}" title="{_title}">{_icon}</a>'
+
+
+def _render_filter_bar(prefix: str, keys: dict[str, str]) -> str:
+    """Build the active-filter badge bar HTML.
+
+    ``keys`` maps param keys (without prefix) to their active value (may be
+    empty). Returns empty string when nothing is active.
+    """
+    params = dict(st.query_params)
+    chips: list[str] = []
+    for key, value in keys.items():
+        if not value:
+            continue
+        _remove_href = _filter_href(prefix, key, value)
+        chips.append(
+            f'<span class="el-filter-chip">'
+            f'<span class="fk">{key}</span> {value}'
+            f'<a href="{_remove_href}" class="fx" title="Remove filter">×</a>'
+            f'</span>'
+        )
+    if not chips:
+        return ""
+    # "clear all" link removes every filter param for this prefix
+    _clear_params = {k: v for k, v in params.items() if not k.startswith(f"{prefix}_")}
+    _clear_qs = urllib.parse.urlencode(_clear_params)
+    _clear_href = f"?{_clear_qs}" if _clear_qs else "?"
+    return (
+        '<div class="el-filter-bar">'
+        '<span class="el-filter-bar-label">Active filters</span>'
+        + "".join(chips)
+        + f'<a href="{_clear_href}" class="el-filter-clear">clear all</a>'
+        + '</div>'
+    )
+
 
 # ── styling helpers — module-level so the fragment re-uses them cheaply ────
 _TYPE_BADGE = {
@@ -3262,6 +3443,11 @@ def _status_chip(raw: str | None) -> str:
 @st.fragment(run_every="60s")
 def _render_event_log() -> None:
     """Inline event log — role-scoped, auto-refreshes every 60s independently."""
+    # ── Inline (+) filter state from query params ───────────────────────────
+    _elf_app  = st.query_params.get("elf_app", "")
+    _elf_proj = st.query_params.get("elf_proj", "")
+    _elf_env  = st.query_params.get("elf_env", "")
+
     # Role-allowed environments for the Env selector.
     _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
     _env_options = ["(all)"] + _allowed_envs
@@ -3437,6 +3623,20 @@ def _render_event_log() -> None:
                 "Extra":       "",
             })
 
+    # Helper: resolve application / project from request docs, which may use
+    # any of three naming conventions depending on the request source.
+    def _rq_app(_s: dict) -> str:
+        return (_s.get("application")
+                or _s.get("ado.application_name")
+                or _s.get("application_name")
+                or "")
+
+    def _rq_proj(_s: dict) -> str:
+        return (_s.get("project")
+                or _s.get("ado.project_name")
+                or _s.get("project_name")
+                or "")
+
     # ── requests / approvals (role-filtered by stage) ───────────────────────
     if _role_allows_type("Requests"):
         _rq_f = _el_scope([range_filter("RequestDate", _el_start, _el_end)] + list(scope_filters()))
@@ -3463,8 +3663,8 @@ def _render_event_log() -> None:
                 "_ts":         parse_dt(_dv),
                 "type":        "request",
                 "When":        fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":         _s.get("application") or _s.get("project", ""),
-                "Project":     _s.get("project", ""),
+                "Who":         _rq_app(_s) or _rq_proj(_s),
+                "Project":     _rq_proj(_s),
                 "Environment": _rq_env,
                 "Version":     _s.get("codeversion", ""),
                 "Detail":      f'{_s.get("RequestType","")} · {_s.get("Requester","")}',
@@ -3520,8 +3720,8 @@ def _render_event_log() -> None:
                 "_ts":         parse_dt(_dv),
                 "type":        "request",
                 "When":        fmt_dt(_dv, "%Y-%m-%d %H:%M"),
-                "Who":         _s.get("application") or _s.get("project", ""),
-                "Project":     _s.get("project", ""),
+                "Who":         _rq_app(_s) or _rq_proj(_s),
+                "Project":     _rq_proj(_s),
                 "Environment": _ap_env,
                 "Version":     _s.get("codeversion", ""),
                 "Detail":      f'{_detail} · {_s.get("RequestedBy") or _s.get("Requester", "")}',
@@ -3649,11 +3849,24 @@ def _render_event_log() -> None:
     if _active_types:
         events = [ev for ev in events if ev["type"] in _active_types]
 
+    # Apply inline (+) filters from query params.
+    if _elf_app:
+        events = [ev for ev in events if ev.get("Who") == _elf_app]
+    if _elf_proj:
+        events = [ev for ev in events if ev.get("Project") == _elf_proj]
+    if _elf_env:
+        events = [ev for ev in events if (ev.get("Environment") or "").lower() == _elf_env.lower()]
+
+    # Active-filter badge bar (rendered between pills and table).
+    _el_filter_bar = _render_filter_bar("elf", {"app": _elf_app, "proj": _elf_proj, "env": _elf_env})
+    if _el_filter_bar:
+        st.markdown(_el_filter_bar, unsafe_allow_html=True)
+
     if not events:
         if _total_events_unfiltered:
             inline_note(
-                f"No events match the selected type pill(s). {_total_events_unfiltered} "
-                f"events exist in this window — deselect pills to show them.",
+                f"No events match the current filters. {_total_events_unfiltered} "
+                f"events exist in this window — remove filters or deselect pills to show them.",
                 "info",
             )
         else:
@@ -3724,35 +3937,39 @@ def _render_event_log() -> None:
 
     def _app_cell(ev: dict) -> str:
         """Render the Application column — clickable popover trigger when we
-        have inventory data for it; otherwise plain text."""
+        have inventory data for it; otherwise plain text.  Includes an inline
+        (+) filter button."""
         _name = ev.get("Who") or ""
         if not _name:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        _fb = _filter_btn("elf", "app", _name, _elf_app)
         if ev["type"] in _APP_EVENT_TYPES and _name in _inv_map:
             return (
                 f'<button type="button" class="el-app-trigger" '
                 f'popovertarget="{_pop_id(_name)}" '
-                f'title="Click for inventory details">{_name}</button>'
+                f'title="Click for inventory details">{_name}</button>{_fb}'
             )
         # No inventory / non-inspectable event type → plain label
         return (
             f'<span style="font-weight:600;color:var(--cc-text);'
-            f'font-size:0.82rem">{_name}</span>'
+            f'font-size:0.82rem">{_name}</span>{_fb}'
         )
 
     def _project_cell(ev: dict) -> str:
         """Render the Project column — clickable popover trigger when we have
-        inventory data for the project; otherwise a plain label."""
+        inventory data for the project; otherwise a plain label.  Includes an
+        inline (+) filter button."""
         _proj = ev.get("Project") or ""
         if not _proj:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        _fb = _filter_btn("elf", "proj", _proj, _elf_proj)
         if _proj in _proj_map:
             return (
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_proj_pop_id(_proj)}" '
-                f'title="Click for teams & applications">{_proj}</button>'
+                f'title="Click for teams & applications">{_proj}</button>{_fb}'
             )
-        return f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{_proj}</span>'
+        return f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{_proj}</span>{_fb}'
 
     def _version_cell(ev: dict) -> str:
         """Render the Version column — a clickable chip that pops the
@@ -3791,10 +4008,11 @@ def _render_event_log() -> None:
         if not _env:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
         _bg, _fg, _lbl = _ENV_CHIP.get(_env, ("var(--cc-surface2)", "var(--cc-text-dim)", _env.upper()))
+        _fb = _filter_btn("elf", "env", _env, _elf_env)
         return (
             f'<span style="background:{_bg};color:{_fg};border-radius:4px;'
             f'padding:1px 7px;font-size:0.70rem;font-weight:800;letter-spacing:.04em;'
-            f'font-family:var(--cc-mono)">{_lbl}</span>'
+            f'font-family:var(--cc-mono)">{_lbl}</span>{_fb}'
         )
 
     def _person_cell(val: str) -> str:
@@ -4223,11 +4441,614 @@ if _show("eventlog"):
 
 
 # =============================================================================
+# APPLICATION INVENTORY — one row per app, RBAC-scoped, below event log
+# =============================================================================
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_full_inventory(scope_json: str) -> list[dict]:
+    """Return all inventory records matching *scope_json* with every field."""
+    _sf = json.loads(scope_json)
+    try:
+        resp = es_search(
+            IDX["inventory"],
+            {"query": {"bool": {"filter": _sf}}, "_source": True},
+            size=2000,
+        )
+    except Exception:
+        return []
+    rows: list[dict] = []
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        _app = _s.get("application") or ""
+        if not _app:
+            continue
+        _bi = _s.get("build_image") or {}
+        _di = _s.get("deploy_image") or {}
+        _bi_name = (_bi.get("name") if isinstance(_bi, dict) else None) or _s.get("build_image.name", "")
+        _bi_tag  = (_bi.get("tag")  if isinstance(_bi, dict) else None) or _s.get("build_image.tag", "")
+        _di_name = (_di.get("name") if isinstance(_di, dict) else None) or _s.get("deploy_image.name", "")
+        _di_tag  = (_di.get("tag")  if isinstance(_di, dict) else None) or _s.get("deploy_image.tag", "")
+        # Collect all *_team fields
+        _teams: dict[str, list[str]] = {}
+        for _k, _v in _s.items():
+            if not _k.endswith("_team") or not _v:
+                continue
+            if isinstance(_v, (list, tuple, set)):
+                _teams[_k] = sorted(str(x) for x in _v if x)
+            else:
+                _teams[_k] = [str(_v)]
+        rows.append({
+            "application":       _app,
+            "project":           _s.get("project", ""),
+            "company":           _s.get("company", ""),
+            "build_technology":  _s.get("build_technology", ""),
+            "deploy_technology": _s.get("deploy_technology", ""),
+            "deploy_platform":   _s.get("deploy_platform", ""),
+            "build_image_name":  _bi_name or "",
+            "build_image_tag":   _bi_tag  or "",
+            "deploy_image_name": _di_name or "",
+            "deploy_image_tag":  _di_tag  or "",
+            "teams":             _teams,
+        })
+    rows.sort(key=lambda r: (r["project"].lower(), r["application"].lower()))
+    return rows
+
+
+@st.fragment(run_every="300s")
+def _render_inventory_view() -> None:
+    """Application inventory table — one row per registered application."""
+
+    # ── Inline (+) filter query params ─────────────────────────────────────
+    _ivf_app  = st.query_params.get("ivf_app", "")
+    _ivf_proj = st.query_params.get("ivf_proj", "")
+
+    # ── Controls ────────────────────────────────────────────────────────────
+    _iv_r1 = st.columns([1.7, 1.2, 1.4, 1.1])
+    with _iv_r1[0]:
+        _iv_proj_options = [_ALL] + (_proj_scoped or [])
+        _iv_proj_idx = 0
+        if project_filter and project_filter in _iv_proj_options:
+            _iv_proj_idx = _iv_proj_options.index(project_filter)
+        iv_project = st.selectbox(
+            "Project", _iv_proj_options, index=_iv_proj_idx, key="iv_project_v1",
+            help="Restrict inventory to a single project",
+        )
+        iv_project_filter = "" if iv_project == _ALL else iv_project
+    with _iv_r1[1]:
+        iv_search = st.text_input(
+            "Search", key="iv_search_v1", placeholder="app name…",
+            help="Filter applications by name (case-insensitive substring match)",
+        ).strip().lower()
+    with _iv_r1[2]:
+        iv_per_project = st.toggle(
+            "Per-project tables", value=False, key="iv_per_project_v1",
+            help="Group applications by project instead of a single table",
+        )
+    with _iv_r1[3]:
+        st.markdown(
+            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
+            f'text-transform:uppercase;font-weight:600;margin-top:8px">'
+            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto 5m</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Build scope filters (like the event log but for inventory) ──────────
+    _iv_sf: list[dict] = list(scope_filters_inv())
+    if iv_project_filter:
+        _iv_sf = [f for f in _iv_sf if not (
+            isinstance(f, dict) and "term" in f and "project.keyword" in f["term"]
+        )]
+        _iv_sf = [f for f in _iv_sf if not (
+            isinstance(f, dict) and "terms" in f and "project.keyword" in f["terms"]
+        )]
+        _iv_sf.append({"term": {"project.keyword": iv_project_filter}})
+
+    _iv_scope_key = json.dumps(_iv_sf, sort_keys=True, default=str)
+    _inv_rows = _fetch_full_inventory(_iv_scope_key)
+
+    # Apply text search filter client-side
+    if iv_search:
+        _inv_rows = [r for r in _inv_rows if iv_search in r["application"].lower()]
+
+    # ── Fetch PRD status + Prismacloud for every listed app ─────────────────
+    _iv_apps = tuple(sorted({r["application"] for r in _inv_rows}))
+    _iv_prd_map = _fetch_prd_status(_iv_apps) if _iv_apps else {}
+
+    # For prismacloud we need (app, prd_version) pairs
+    _iv_prisma_keys: set[tuple[str, str]] = set()
+    for _a, _prd in _iv_prd_map.items():
+        _pv = (_prd or {}).get("version") or ""
+        if _pv:
+            _iv_prisma_keys.add((_a, _pv))
+    _iv_prisma_map = _fetch_prismacloud(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
+
+    # ── Group by technology / platform for pill filter ──────────────────────
+    _iv_techs: dict[str, int] = {}
+    for r in _inv_rows:
+        _bt = r.get("build_technology") or ""
+        if _bt:
+            _iv_techs[_bt] = _iv_techs.get(_bt, 0) + 1
+
+    _iv_platforms: dict[str, int] = {}
+    for r in _inv_rows:
+        _dp = r.get("deploy_platform") or ""
+        if _dp:
+            _iv_platforms[_dp] = _iv_platforms.get(_dp, 0) + 1
+
+    _iv_projects: dict[str, int] = {}
+    for r in _inv_rows:
+        _p = r.get("project") or "(none)"
+        _iv_projects[_p] = _iv_projects.get(_p, 0) + 1
+
+    _iv_total = len(_inv_rows)
+    _iv_live = sum(1 for r in _inv_rows if (_iv_prd_map.get(r["application"]) or {}).get("live"))
+    _iv_layout = "per-project" if iv_per_project else "consolidated"
+
+    # ── Stats card ──────────────────────────────────────────────────────────
+    _iv_live_pct = f"{_iv_live / _iv_total * 100:.0f}%" if _iv_total else "—"
+    st.markdown(
+        f'<div class="el-typefilter-head">'
+        f'  <div class="el-tf-left">'
+        f'    <div class="el-tf-total">{_iv_total}</div>'
+        f'    <div class="el-tf-total-label">application{"s" if _iv_total != 1 else ""}</div>'
+        f'  </div>'
+        f'  <div class="el-tf-mid">'
+        f'    <div class="el-tf-kicker">Application inventory</div>'
+        f'    <div class="el-tf-hint">'
+        f'      {_iv_live} live in PRD ({_iv_live_pct}) · '
+        f'      {len(_iv_projects)} project{"s" if len(_iv_projects) != 1 else ""} · '
+        f'      {len(_iv_techs)} build tech{"s" if len(_iv_techs) != 1 else ""} · '
+        f'      {len(_iv_platforms)} deploy platform{"s" if len(_iv_platforms) != 1 else ""}'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="el-tf-right">'
+        f'    <span class="el-tf-badge layout">{_iv_layout}</span>'
+        f'    <span class="el-tf-badge sort">A → Z</span>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Tech filter pills ───────────────────────────────────────────────────
+    _iv_pill_opts: list[str] = []
+    _iv_pill_to_tech: dict[str, str] = {}
+    for _t, _cnt in sorted(_iv_techs.items(), key=lambda x: -x[1]):
+        _opt = f"⚙ {_t} · {_cnt}"
+        _iv_pill_opts.append(_opt)
+        _iv_pill_to_tech[_opt] = _t
+    if _iv_pill_opts:
+        _iv_sel = st.pills(
+            "Build technology",
+            options=_iv_pill_opts,
+            selection_mode="multi",
+            default=None,
+            key="iv_tech_pills_v1",
+            label_visibility="collapsed",
+        )
+        _iv_active_techs = {_iv_pill_to_tech[o] for o in (_iv_sel or [])}
+        if _iv_active_techs:
+            _inv_rows = [r for r in _inv_rows if r.get("build_technology") in _iv_active_techs]
+
+    # Apply inline (+) filters from query params.
+    if _ivf_app:
+        _inv_rows = [r for r in _inv_rows if r.get("application") == _ivf_app]
+    if _ivf_proj:
+        _inv_rows = [r for r in _inv_rows if r.get("project") == _ivf_proj]
+
+    # Active-filter badge bar
+    _iv_filter_bar = _render_filter_bar("ivf", {"app": _ivf_app, "proj": _ivf_proj})
+    if _iv_filter_bar:
+        st.markdown(_iv_filter_bar, unsafe_allow_html=True)
+
+    if not _inv_rows:
+        inline_note("No applications match the current filters.", "info")
+        return
+
+    # ── Popover infrastructure (project + app popovers) ─────────────────────
+    _iv_pop_projects = sorted({r["project"] for r in _inv_rows if r.get("project")})
+    _iv_proj_map = _fetch_project_details(tuple(_iv_pop_projects)) if _iv_pop_projects else {}
+
+    def _iv_slug(val: str, prefix: str) -> str:
+        return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
+
+    def _iv_app_pop_id(app: str) -> str:
+        return _iv_slug(app, "iv-app-pop-")
+
+    def _iv_proj_pop_id(proj: str) -> str:
+        return _iv_slug(proj, "iv-proj-pop-")
+
+    def _iv_v(val: str) -> str:
+        return (f'<span class="ap-v">{val}</span>'
+                if val else '<span class="ap-v empty">—</span>')
+
+    def _iv_chip(val: str) -> str:
+        return (f'<span class="ap-v"><span class="ap-chip">{val}</span></span>'
+                if val else '<span class="ap-v empty">—</span>')
+
+    # ── PRD status badge per row ────────────────────────────────────────────
+    def _iv_prd_badge(app: str) -> str:
+        _prd = _iv_prd_map.get(app)
+        if not _prd:
+            return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
+        _live = _prd.get("live")
+        _ver  = _prd.get("version") or ""
+        if _live:
+            return (
+                f'<span style="display:inline-flex;align-items:center;gap:4px;font-size:.72rem">'
+                f'<span style="width:7px;height:7px;border-radius:50%;background:#059669;'
+                f'display:inline-block;box-shadow:0 0 4px #059669"></span>'
+                f'<span style="color:#059669;font-weight:700">LIVE</span>'
+                f'<span style="font-family:var(--cc-mono);color:var(--cc-accent);'
+                f'background:var(--cc-accent-lt);padding:0 5px;border-radius:3px;font-size:.68rem">{_ver}</span>'
+                f'</span>'
+            )
+        return (
+            f'<span style="display:inline-flex;align-items:center;gap:4px;font-size:.72rem">'
+            f'<span style="width:7px;height:7px;border-radius:50%;background:#dc2626;'
+            f'display:inline-block"></span>'
+            f'<span style="color:#dc2626;font-weight:700">FAIL</span>'
+            f'</span>'
+        )
+
+    # ── Prismacloud mini badge per row ──────────────────────────────────────
+    def _iv_prisma_badge(app: str) -> str:
+        _prd = _iv_prd_map.get(app)
+        _pv = (_prd or {}).get("version") or ""
+        if not _pv:
+            return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
+        _scan = _iv_prisma_map.get((app, _pv))
+        if not _scan:
+            return '<span style="color:var(--cc-text-mute);font-size:.70rem">no scan</span>'
+        _vc = int(_scan.get("Vcritical", 0) or 0)
+        _vh = int(_scan.get("Vhigh", 0) or 0)
+        _cc = int(_scan.get("Ccritical", 0) or 0)
+        _ch = int(_scan.get("Chigh", 0) or 0)
+        _parts: list[str] = []
+        if _vc:
+            _parts.append(f'<span style="color:#dc2626;font-weight:800">V{_vc}c</span>')
+        if _vh:
+            _parts.append(f'<span style="color:#ea580c;font-weight:700">V{_vh}h</span>')
+        if _cc:
+            _parts.append(f'<span style="color:#dc2626;font-weight:800">C{_cc}c</span>')
+        if _ch:
+            _parts.append(f'<span style="color:#ea580c;font-weight:700">C{_ch}h</span>')
+        if not _parts:
+            return '<span style="color:#059669;font-size:.72rem;font-weight:700">clean</span>'
+        return (
+            f'<span style="font-size:.70rem;font-family:var(--cc-mono);'
+            f'display:inline-flex;gap:5px">' + " ".join(_parts) + '</span>'
+        )
+
+    # ── Table cell helpers ──────────────────────────────────────────────────
+    _iv_th = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
+
+    def _iv_app_cell(app: str) -> str:
+        _fb = _filter_btn("ivf", "app", app, _ivf_app)
+        return (
+            f'<button type="button" class="el-app-trigger" '
+            f'popovertarget="{_iv_app_pop_id(app)}" '
+            f'title="Click for full inventory details">{app}</button>{_fb}'
+        )
+
+    def _iv_proj_cell(proj: str) -> str:
+        if not proj:
+            return '<span style="color:var(--cc-text-mute);font-size:.72rem">—</span>'
+        _fb = _filter_btn("ivf", "proj", proj, _ivf_proj)
+        if proj in _iv_proj_map:
+            return (
+                f'<button type="button" class="el-proj-trigger" '
+                f'popovertarget="{_iv_proj_pop_id(proj)}" '
+                f'title="Click for teams & applications">{proj}</button>{_fb}'
+            )
+        return f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>{_fb}'
+
+    def _iv_tech_cell(val: str) -> str:
+        if not val:
+            return '<span style="color:var(--cc-text-mute);font-size:.72rem">—</span>'
+        return (
+            f'<span style="background:var(--cc-accent-lt);color:var(--cc-accent);'
+            f'border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">{val}</span>'
+        )
+
+    def _iv_row_html(r: dict, *, include_project: bool = True) -> str:
+        _proj_td = (
+            f'<td style="padding:5px 4px">{_iv_proj_cell(r["project"])}</td>'
+            if include_project else ""
+        )
+        return (
+            f'<tr>'
+            f'<td style="padding:5px 4px">{_iv_app_cell(r["application"])}</td>'
+            f'{_proj_td}'
+            f'<td style="padding:5px 4px;color:var(--cc-text-dim);font-size:.78rem">{r["company"] or "—"}</td>'
+            f'<td style="padding:5px 6px">{_iv_tech_cell(r["build_technology"])}</td>'
+            f'<td style="padding:5px 6px">{_iv_tech_cell(r["deploy_technology"])}</td>'
+            f'<td style="padding:5px 6px">{_iv_tech_cell(r["deploy_platform"])}</td>'
+            f'<td style="padding:5px 4px">{_iv_prd_badge(r["application"])}</td>'
+            f'<td style="padding:5px 4px">{_iv_prisma_badge(r["application"])}</td>'
+            f'</tr>'
+        )
+
+    def _iv_thead(include_project: bool) -> str:
+        _p_th = f'<th {_iv_th}>Project</th>' if include_project else ""
+        return (
+            f'<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left;background:var(--cc-surface2)">'
+            f'<th {_iv_th}>Application</th>'
+            f'{_p_th}'
+            f'<th {_iv_th}>Company</th>'
+            f'<th {_iv_th}>Build tech</th>'
+            f'<th {_iv_th}>Deploy tech</th>'
+            f'<th {_iv_th}>Platform</th>'
+            f'<th {_iv_th}>PRD status</th>'
+            f'<th {_iv_th}>Security</th>'
+            f'</tr></thead>'
+        )
+
+    def _iv_table_shell(rows_html: str, *, include_project: bool, max_h: str = "60vh") -> str:
+        return (
+            f'<div style="overflow-y:auto;max-height:{max_h};border:1px solid var(--cc-border);border-radius:10px">'
+            f'<table style="width:100%;border-collapse:collapse;font-family:inherit">'
+            f'{_iv_thead(include_project)}'
+            f'<tbody>{rows_html}</tbody>'
+            f'</table></div>'
+        )
+
+    # ── Build table(s) ──────────────────────────────────────────────────────
+    if iv_per_project:
+        _iv_groups: dict[str, list[dict]] = {}
+        for r in _inv_rows:
+            _gk = r.get("project") or "(no project)"
+            _iv_groups.setdefault(_gk, []).append(r)
+        _iv_sections: list[str] = []
+        for _proj, _apps in _iv_groups.items():
+            _rows = "".join(_iv_row_html(r, include_project=False) for r in _apps)
+            _proj_pid = _iv_proj_pop_id(_proj) if _proj in _iv_proj_map else ""
+            _proj_heading = (
+                f'<button type="button" class="el-proj-trigger" '
+                f'popovertarget="{_proj_pid}" '
+                f'title="Click for teams & applications">{_proj}</button>'
+                if _proj_pid else
+                f'<span style="font-weight:700;color:var(--cc-text);font-size:0.92rem">{_proj}</span>'
+            )
+            _iv_sections.append(
+                f'<section class="el-proj-section">'
+                f'  <header class="el-proj-section-head">'
+                f'    <span class="el-proj-section-kicker">Project</span>'
+                f'    <span class="el-proj-section-title">{_proj_heading}</span>'
+                f'    <span class="el-proj-section-count">{len(_apps)} app{"s" if len(_apps) != 1 else ""}</span>'
+                f'  </header>'
+                f'  {_iv_table_shell(_rows, include_project=False, max_h="38vh")}'
+                f'</section>'
+            )
+        _iv_main = '<div class="el-proj-stack">' + "".join(_iv_sections) + '</div>'
+    else:
+        _rows = "".join(_iv_row_html(r, include_project=True) for r in _inv_rows)
+        _iv_main = _iv_table_shell(_rows, include_project=True, max_h="60vh")
+
+    # ── Build popovers — app detail + project detail ────────────────────────
+    _iv_popovers: list[str] = []
+
+    # Team label helper (reuse same logic as event log)
+    _TEAM_LABELS = {
+        "dev_team": "Dev team", "qc_team": "QC team",
+        "uat_team": "UAT team", "prd_team": "PRD team",
+    }
+
+    def _iv_team_label(field: str) -> str:
+        if field in _TEAM_LABELS:
+            return _TEAM_LABELS[field]
+        _base = field[:-5] if field.endswith("_team") else field
+        return _base.replace("_", " ").strip().upper() + " team"
+
+    # App popovers
+    for r in _inv_rows:
+        _app = r["application"]
+        _pid = _iv_app_pop_id(_app)
+        _prd = _iv_prd_map.get(_app)
+        _prd_ver = (_prd or {}).get("version") or ""
+        _live = (_prd or {}).get("live")
+
+        # PRD banner
+        if _prd:
+            if _live:
+                _banner = (
+                    f'<div class="ap-live is-live">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>Live in PRD · '
+                    f'<span class="ap-chip">{_prd_ver}</span></span>'
+                    f'</div>'
+                )
+            else:
+                _prd_st = (_prd or {}).get("status", "") or ""
+                _banner = (
+                    f'<div class="ap-live is-offline">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>Last PRD deploy failed · {_prd_st or "FAILED"}</span>'
+                    f'</div>'
+                )
+        else:
+            _banner = (
+                f'<div class="ap-live is-offline">'
+                f'  <span class="dot"></span>'
+                f'  <span>Not deployed to PRD</span>'
+                f'</div>'
+            )
+
+        # Prismacloud section
+        _scan = _iv_prisma_map.get((_app, _prd_ver)) if _prd_ver else None
+        if _scan:
+            _SEV_KEYS_IV = [("critical", "Critical"), ("high", "High"),
+                            ("medium", "Medium"), ("low", "Low")]
+            def _mini_tiles(prefix: str, scan: dict) -> str:
+                tiles: list[str] = []
+                for _lvl, _lbl in _SEV_KEYS_IV:
+                    _fld = f"{prefix}{_lvl}"
+                    _n = int(scan.get(_fld, 0) or 0)
+                    _nz = "nonzero" if _n > 0 else "zero"
+                    tiles.append(
+                        f'<div class="ap-sev-tile {_lvl} {_nz}">'
+                        f'  <div class="sev-num">{_n}</div>'
+                        f'  <div class="sev-label">{_lbl}</div>'
+                        f'</div>'
+                    )
+                return "".join(tiles)
+            _v_tiles = _mini_tiles("V", _scan)
+            _c_tiles = _mini_tiles("C", _scan)
+            _prisma_html = (
+                f'    <div class="ap-section">Prismacloud scan · {_prd_ver}</div>'
+                f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
+                f'    <div class="ap-sev">{_v_tiles}</div>'
+                f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
+                f'    <div class="ap-sev">{_c_tiles}</div>'
+            )
+        else:
+            _prisma_html = (
+                f'    <div class="ap-section">Prismacloud scan</div>'
+                f'    <div class="ap-sev-empty">No scan on record.</div>'
+            )
+
+        # Team rows
+        _teams = r.get("teams") or {}
+        _ordered_t = [k for k in ("dev_team", "qc_team", "uat_team", "prd_team") if k in _teams]
+        _extras_t  = sorted(k for k in _teams.keys() if k not in _ordered_t)
+        _team_html = ""
+        for _f in _ordered_t + _extras_t:
+            _vals = _teams.get(_f) or []
+            if not _vals:
+                continue
+            _chips_t = "".join(f'<span class="ap-chip">{_tv}</span>' for _tv in _vals)
+            _team_html += (
+                f'<span class="ap-k">{_iv_team_label(_f)}</span>'
+                f'<span class="ap-v" style="display:flex;flex-wrap:wrap;gap:4px">{_chips_t}</span>'
+            )
+        if not _team_html:
+            _team_html = '<span class="ap-k">Teams</span><span class="ap-v empty">none recorded</span>'
+
+        _iv_popovers.append(
+            f'<div id="{_pid}" popover="auto" class="el-app-pop">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">◆</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Application</div>'
+            f'      <div class="ap-title">{_app}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_pid}" popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    {_banner}'
+            f'    <div class="ap-section">Identity</div>'
+            f'    <span class="ap-k">Project</span>{_iv_v(r.get("project", ""))}'
+            f'    <span class="ap-k">Company</span>{_iv_v(r.get("company", ""))}'
+            f'    <div class="ap-section">Teams</div>'
+            f'    {_team_html}'
+            f'    <div class="ap-section">Build</div>'
+            f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("build_technology", ""))}'
+            f'    <span class="ap-k">Image name</span>{_iv_v(r.get("build_image_name", ""))}'
+            f'    <span class="ap-k">Image tag</span>{_iv_v(r.get("build_image_tag", ""))}'
+            f'    <div class="ap-section">Deploy</div>'
+            f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("deploy_technology", ""))}'
+            f'    <span class="ap-k">Platform</span>{_iv_chip(r.get("deploy_platform", ""))}'
+            f'    <span class="ap-k">Image name</span>{_iv_v(r.get("deploy_image_name", ""))}'
+            f'    <span class="ap-k">Image tag</span>{_iv_v(r.get("deploy_image_tag", ""))}'
+            f'    {_prisma_html}'
+            f'  </div>'
+            f'  <div class="ap-foot">Source: ef-devops-inventory · ef-cicd-deployments · ef-cicd-prismacloud</div>'
+            f'</div>'
+        )
+
+    # Project popovers
+    for _proj in _iv_pop_projects:
+        _pdata = _iv_proj_map.get(_proj)
+        if not _pdata:
+            continue
+        _pid_p = _iv_proj_pop_id(_proj)
+        _teams_p = _pdata.get("teams", {}) or {}
+        _apps_p  = _pdata.get("apps", []) or []
+        _ordered_p = [k for k in ("dev_team", "qc_team", "uat_team", "prd_team") if k in _teams_p]
+        _extras_p  = sorted(k for k in _teams_p.keys() if k not in _ordered_p)
+        _team_rows_p: list[str] = []
+        for _f in _ordered_p + _extras_p:
+            _vals = _teams_p.get(_f) or []
+            if not _vals:
+                continue
+            _chips_p = "".join(f'<span class="ap-chip">{_tv}</span>' for _tv in _vals)
+            _team_rows_p.append(
+                f'<span class="ap-k">{_iv_team_label(_f)}</span>'
+                f'<span class="ap-v" style="display:flex;flex-wrap:wrap;gap:4px">{_chips_p}</span>'
+            )
+        if not _team_rows_p:
+            _team_rows_p.append(
+                '<span class="ap-k">Teams</span>'
+                '<span class="ap-v empty">none recorded</span>'
+            )
+        _app_chips_p = []
+        for _a in _apps_p:
+            _app_chips_p.append(
+                f'<button type="button" class="ap-app-chip" '
+                f'popovertarget="{_iv_app_pop_id(_a)}" '
+                f'title="Open application details">{_a}</button>'
+            )
+        _apps_block_p = "".join(_app_chips_p)
+        _iv_popovers.append(
+            f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">◇</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Project</div>'
+            f'      <div class="ap-title">{_proj}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_pid_p}" popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    <div class="ap-section">Teams</div>'
+            + "".join(_team_rows_p) +
+            f'    <div class="ap-section">Applications <span style="text-transform:none;font-weight:600;color:var(--cc-text-mute);letter-spacing:0;margin-left:4px">· {len(_apps_p)}</span></div>'
+            f'    <div class="ap-applist">{_apps_block_p}</div>'
+            f'  </div>'
+            f'  <div class="ap-foot">Source: ef-devops-inventory · click an app for full details</div>'
+            f'</div>'
+        )
+
+    # ── Final render ────────────────────────────────────────────────────────
+    _iv_visible_badge = f"showing {len(_inv_rows)}"
+    st.markdown(
+        f'<p class="el-tf-caption">'
+        f'  <span class="el-tf-caption-count">{_iv_visible_badge}</span>'
+        f'  <span class="el-tf-caption-sep">·</span>'
+        f'  <span>click any <b>application</b> or <b>project</b> chip to open its detail popover</span>'
+        f'</p>'
+        + _iv_main
+        + "".join(_iv_popovers),
+        unsafe_allow_html=True,
+    )
+
+
+# ── Render inventory section (visible to all roles) ─────────────────────────
+if _show("inventory"):
+    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="section">'
+        f'<div class="title-wrap"><h2>Application inventory</h2>'
+        f'<span class="badge">{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}</span></div>'
+        f'<span class="hint">One row per registered application · PRD liveness · security posture · '
+        f'click any chip for details</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("Application inventory (expand / collapse)", expanded=True):
+        _render_inventory_view()
+
+
+# =============================================================================
 # ALERTS — compact chips, vivid colors
 # =============================================================================
 
 # _lc_classified is populated later in the lifecycle section; pre-init so
 # alert popovers that reference it don't raise NameError on first render.
+
+# Non-admin users see only the event log + inventory — halt before admin-only sections.
+if not _is_admin:
+    st.stop()
+
 _lc_classified: dict[str, str] = {}
 
 alerts: list[tuple[str, str, str, str]] = []  # (severity, icon, title, detail)
