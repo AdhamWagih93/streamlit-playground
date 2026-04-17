@@ -28,7 +28,6 @@ Performance notes
 from __future__ import annotations
 
 import json
-import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any
 try:
@@ -91,6 +90,7 @@ STATUS_COLORS = {
 }
 
 FAILED_STATUSES = ["FAILED", "FAILURE", "Failed", "failed"]
+SUCCESS_STATUSES = ["SUCCESS", "SUCCEEDED", "Success", "Succeeded", "COMPLETED", "Completed"]
 CLOSED_JIRA = ["Done", "Closed", "Resolved", "Cancelled", "Rejected"]
 PENDING_STATUSES = ["Pending", "PENDING", "pending"]
 
@@ -1209,102 +1209,60 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .el-tf-caption-sep { color: var(--cc-border); font-weight: 700; }
 .el-tf-caption b { color: var(--cc-accent); font-weight: 700; }
 
-/* ── Inline (+) filter buttons — Kibana-style drill-down ─────────────────── */
-.el-filter-plus {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 15px; height: 15px;
-    border-radius: 50%;
-    font-size: 0.60rem;
-    font-weight: 900;
-    text-decoration: none !important;
-    margin-left: 2px;
-    vertical-align: middle;
-    opacity: 0;
-    transition: opacity .12s, background .12s, color .12s, border-color .12s, transform .12s;
-    background: var(--cc-surface2);
-    color: var(--cc-text-mute);
-    border: 1px solid var(--cc-border);
-    cursor: pointer;
-    line-height: 1;
+/* ── Inventory stage cell — version chip + date stacked vertically ─────── */
+.iv-stage-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+    line-height: 1.15;
 }
-tr:hover .el-filter-plus { opacity: 0.55; }
-tr:hover .el-filter-plus:hover {
-    opacity: 1;
+.iv-stage-ver {
     background: var(--cc-accent-lt);
     color: var(--cc-accent);
-    border-color: var(--cc-accent);
-    transform: scale(1.15);
-}
-.el-filter-plus.active {
-    opacity: 1 !important;
-    background: var(--cc-accent);
-    color: #fff;
-    border-color: var(--cc-accent);
-}
-.el-filter-plus.active:hover {
-    background: #dc2626;
-    border-color: #dc2626;
-}
-
-/* Active-filter badge bar */
-.el-filter-bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 4px 8px;
-}
-.el-filter-bar-label {
-    font-size: 0.66rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--cc-text-mute);
-    margin-right: 2px;
-}
-.el-filter-chip {
+    border: 1px solid rgba(79,70,229,.22);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s, transform .12s;
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    background: linear-gradient(135deg, var(--cc-accent) 0%, #0ea5e9 100%);
-    color: #fff;
-    border-radius: 999px;
-    padding: 3px 6px 3px 10px;
-    font-size: 0.70rem;
-    font-weight: 700;
-    font-family: var(--cc-mono);
-    letter-spacing: 0.02em;
-    box-shadow: 0 2px 6px -1px rgba(14,165,233,0.4);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
-.el-filter-chip .fk { opacity: .7; margin-right: 1px; }
-.el-filter-chip .fx {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px; height: 16px;
+.iv-stage-ver:hover {
+    background: var(--cc-accent);
+    color: #fff;
+    border-color: var(--cc-accent);
+    transform: translateY(-1px);
+}
+.iv-stage-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
     border-radius: 50%;
-    background: rgba(255,255,255,.25);
-    color: #fff;
-    font-size: 0.62rem;
-    font-weight: 900;
-    text-decoration: none !important;
-    transition: background .12s;
-    cursor: pointer;
+    background: var(--cc-green);
+    box-shadow: 0 0 4px var(--cc-green);
+    flex-shrink: 0;
 }
-.el-filter-chip .fx:hover { background: #dc2626; }
-.el-filter-clear {
-    font-size: 0.68rem;
-    font-weight: 700;
+.iv-stage-dot.is-fail {
+    background: var(--cc-red);
+    box-shadow: none;
+}
+.iv-stage-when {
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
     color: var(--cc-text-mute);
-    text-decoration: none !important;
-    border-bottom: 1px dashed var(--cc-text-mute);
-    transition: color .12s, border-color .12s;
-    margin-left: 4px;
-    cursor: pointer;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
 }
-.el-filter-clear:hover { color: #dc2626; border-color: #dc2626; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -1790,10 +1748,12 @@ def _load_team_applications(role: str, team: str) -> list[str]:
 def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
     """For each application, return the current prd deployment snapshot.
 
-    Returns ``{app: {"live": bool, "version": str, "when": <iso str>,
-    "status": str}}``. ``live`` is True iff the most recent prd deployment has a
-    non-failed status. Apps with no prd deployment on record are omitted — the
-    caller treats that as "not live".
+    ``live`` means the app has a SUCCESSFUL prd deployment on record (the app
+    is actually running in prd). ``version`` is the latest successful prd
+    version — what's actually live right now. ``status`` reports the most
+    recent prd deployment status, which may differ (e.g. a newer deploy failed
+    on top of an older successful one — we still consider the app live at the
+    last-successful version).
     """
     if not apps:
         return {}
@@ -1813,13 +1773,28 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
                     "by_app": {
                         "terms": {"field": "application.keyword", "size": len(apps)},
                         "aggs": {
+                            # Absolute latest — reports last-attempted status
                             "latest": {
                                 "top_hits": {
                                     "size": 1,
                                     "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
                                     "_source": ["application", "codeversion", "status", "startdate"],
                                 }
-                            }
+                            },
+                            # Latest among successful-only — reports the version
+                            # that is actually live in prd right now.
+                            "latest_success": {
+                                "filter": {"terms": {"status": SUCCESS_STATUSES}},
+                                "aggs": {
+                                    "hit": {
+                                        "top_hits": {
+                                            "size": 1,
+                                            "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
+                                            "_source": ["application", "codeversion", "status", "startdate"],
+                                        }
+                                    }
+                                }
+                            },
                         }
                     }
                 }
@@ -1828,20 +1803,25 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
         )
     except Exception:
         return {}
-    _failed_upper = {s.upper() for s in FAILED_STATUSES}
     out: dict[str, dict] = {}
     for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _b.get("key")
-        _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
-        if not _app or not _hits:
+        if not _app:
             continue
-        _s = _hits[0].get("_source", {}) or {}
-        _status_raw = _s.get("status", "") or ""
+        _latest_hits  = _b.get("latest", {}).get("hits", {}).get("hits", [])
+        _succ_hits    = _b.get("latest_success", {}).get("hit", {}).get("hits", {}).get("hits", [])
+        _last_s  = (_latest_hits[0].get("_source") if _latest_hits else {}) or {}
+        _succ_s  = (_succ_hits[0].get("_source")   if _succ_hits   else {}) or {}
+        _live_version = _succ_s.get("codeversion", "") or ""
         out[_app] = {
-            "live":    _status_raw.upper() not in _failed_upper,
-            "version": _s.get("codeversion", "") or "",
-            "when":    _s.get("startdate", "") or "",
-            "status":  _status_raw,
+            "live":           bool(_succ_s),
+            "version":        _live_version,
+            "when":           _succ_s.get("startdate", "") or "",
+            "status":         _last_s.get("status", "") or "",
+            # Extra context so popovers can show "last attempt failed" etc.
+            "last_version":   _last_s.get("codeversion", "") or "",
+            "last_when":      _last_s.get("startdate", "") or "",
+            "last_succeeded": bool(_succ_s) and _succ_s.get("codeversion") == _last_s.get("codeversion"),
         }
     return out
 
@@ -1925,6 +1905,161 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                 "imageTag":  _s.get("imageTag", "")  or "",
                 "when":      _s.get("enddate") or _s.get("startdate") or "",
             }
+    return out
+
+
+# Stage ordering drives the inventory columns and the "previous stage" chain
+# used for Δ-vs-previous-stage comparisons in stage popovers.
+_STAGE_ORDER = ("build", "dev", "qc", "release", "uat", "prd")
+_STAGE_PREV  = {"dev": "build", "qc": "dev", "release": "qc", "uat": "release", "prd": "uat"}
+_STAGE_LABEL = {
+    "build":   "Latest build",
+    "dev":     "Latest dev deploy",
+    "qc":      "Latest qc deploy",
+    "release": "Latest release",
+    "uat":     "Latest uat deploy",
+    "prd":     "Latest prd deploy",
+}
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
+    """For each application, fetch the latest record at each stage.
+
+    A "stage" is one of: build (ef-cicd-builds), release (ef-cicd-releases),
+    or a deployment in a given environment (dev/qc/uat/prd on
+    ef-cicd-deployments).
+
+    Returns::
+
+        {app: {stage: {"version": str, "when": iso-str, "status": str}}}
+
+    Stages with no data are simply absent from the inner dict.
+    """
+    if not apps:
+        return {}
+    apps_list = list(apps)
+    out: dict[str, dict[str, dict]] = {a: {} for a in apps_list}
+
+    def _abs_sort() -> list[dict]:
+        return [{"startdate": {"order": "desc", "unmapped_type": "date"}}]
+
+    # ---- builds ------------------------------------------------------------
+    try:
+        resp = es_search(
+            IDX["builds"],
+            {
+                "query": {"bool": {"filter": [
+                    {"terms": {"application.keyword": apps_list}},
+                ]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application.keyword", "size": len(apps_list)},
+                        "aggs": {"latest": {"top_hits": {
+                            "size": 1, "sort": _abs_sort(),
+                            "_source": ["application", "codeversion", "status", "startdate"],
+                        }}},
+                    }
+                },
+            },
+            size=0,
+        )
+        for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+            _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            _app = _s.get("application") or _b.get("key")
+            if _app in out:
+                out[_app]["build"] = {
+                    "version": _s.get("codeversion", "") or "",
+                    "when":    _s.get("startdate", "") or "",
+                    "status":  _s.get("status", "") or "",
+                }
+    except Exception:
+        pass
+
+    # ---- releases ----------------------------------------------------------
+    try:
+        resp = es_search(
+            IDX["releases"],
+            {
+                "query": {"bool": {"filter": [
+                    {"terms": {"application.keyword": apps_list}},
+                ]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application.keyword", "size": len(apps_list)},
+                        "aggs": {"latest": {"top_hits": {
+                            "size": 1, "sort": _abs_sort(),
+                            "_source": ["application", "codeversion", "status", "startdate"],
+                        }}},
+                    }
+                },
+            },
+            size=0,
+        )
+        for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+            _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            _app = _s.get("application") or _b.get("key")
+            if _app in out:
+                out[_app]["release"] = {
+                    "version": _s.get("codeversion", "") or "",
+                    "when":    _s.get("startdate", "") or "",
+                    "status":  _s.get("status", "") or "",
+                }
+    except Exception:
+        pass
+
+    # ---- deployments split by environment ---------------------------------
+    # Double terms agg (app × env) with per-bucket latest hit. One ES round
+    # trip covers all four envs.
+    try:
+        resp = es_search(
+            IDX["deployments"],
+            {
+                "query": {"bool": {"filter": [
+                    {"terms": {"application.keyword": apps_list}},
+                    {"terms": {"environment": ["dev", "qc", "uat", "prd"]}},
+                ]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application.keyword", "size": len(apps_list)},
+                        "aggs": {
+                            "by_env": {
+                                "terms": {"field": "environment", "size": 4},
+                                "aggs": {"latest": {"top_hits": {
+                                    "size": 1, "sort": _abs_sort(),
+                                    "_source": ["application", "codeversion", "status", "startdate", "environment"],
+                                }}},
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+        for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+            _app = _b.get("key")
+            if _app not in out:
+                continue
+            for _eb in _b.get("by_env", {}).get("buckets", []):
+                _env = _eb.get("key")
+                _hits = _eb.get("latest", {}).get("hits", {}).get("hits", [])
+                if not _env or not _hits:
+                    continue
+                _s = _hits[0].get("_source", {}) or {}
+                out[_app][_env] = {
+                    "version": _s.get("codeversion", "") or "",
+                    "when":    _s.get("startdate", "") or "",
+                    "status":  _s.get("status", "") or "",
+                }
+    except Exception:
+        pass
+
     return out
 
 
@@ -3300,77 +3435,6 @@ st.markdown(_nav_html, unsafe_allow_html=True)
 # =============================================================================
 
 
-# ── Inline (+) filter helpers ────────────────────────────────────────────────
-# Builds <a> links that toggle a query-param filter. On click the browser
-# navigates to the same page with the param added (or removed if already
-# active), triggering a Streamlit rerun so the fragment picks up the change.
-
-def _filter_href(prefix: str, key: str, value: str) -> str:
-    """Return an href that toggles the ``{prefix}_{key}`` query param to *value*.
-
-    If the param is already set to *value*, the returned link removes it
-    (toggle-off). All other existing query params are preserved.
-    """
-    params = dict(st.query_params)
-    param_name = f"{prefix}_{key}"
-    if params.get(param_name) == value:
-        params.pop(param_name, None)
-    else:
-        params[param_name] = value
-    qs = urllib.parse.urlencode(params)
-    return f"?{qs}" if qs else "?"
-
-
-def _filter_btn(prefix: str, key: str, value: str, active_val: str) -> str:
-    """Return a small ⊕/⊖ HTML link for a cell.
-
-    ``active_val`` is the current value of that inline filter (empty string if
-    not active). When *value* matches *active_val* the button shows ⊖ with
-    the active class; otherwise ⊕ with the default class.
-    """
-    if not value:
-        return ""
-    _is_active = bool(active_val and active_val == value)
-    _icon = "−" if _is_active else "+"
-    _cls = "el-filter-plus active" if _is_active else "el-filter-plus"
-    _title = f'{"Remove" if _is_active else "Filter by"}: {value}'
-    _href = _filter_href(prefix, key, value)
-    return f'<a href="{_href}" class="{_cls}" title="{_title}">{_icon}</a>'
-
-
-def _render_filter_bar(prefix: str, keys: dict[str, str]) -> str:
-    """Build the active-filter badge bar HTML.
-
-    ``keys`` maps param keys (without prefix) to their active value (may be
-    empty). Returns empty string when nothing is active.
-    """
-    params = dict(st.query_params)
-    chips: list[str] = []
-    for key, value in keys.items():
-        if not value:
-            continue
-        _remove_href = _filter_href(prefix, key, value)
-        chips.append(
-            f'<span class="el-filter-chip">'
-            f'<span class="fk">{key}</span> {value}'
-            f'<a href="{_remove_href}" class="fx" title="Remove filter">×</a>'
-            f'</span>'
-        )
-    if not chips:
-        return ""
-    # "clear all" link removes every filter param for this prefix
-    _clear_params = {k: v for k, v in params.items() if not k.startswith(f"{prefix}_")}
-    _clear_qs = urllib.parse.urlencode(_clear_params)
-    _clear_href = f"?{_clear_qs}" if _clear_qs else "?"
-    return (
-        '<div class="el-filter-bar">'
-        '<span class="el-filter-bar-label">Active filters</span>'
-        + "".join(chips)
-        + f'<a href="{_clear_href}" class="el-filter-clear">clear all</a>'
-        + '</div>'
-    )
-
-
 # ── styling helpers — module-level so the fragment re-uses them cheaply ────
 _TYPE_BADGE = {
     # Build is split by branch — develop vs release — with distinct chips so the
@@ -3443,11 +3507,6 @@ def _status_chip(raw: str | None) -> str:
 @st.fragment(run_every="60s")
 def _render_event_log() -> None:
     """Inline event log — role-scoped, auto-refreshes every 60s independently."""
-    # ── Inline (+) filter state from query params ───────────────────────────
-    _elf_app  = st.query_params.get("elf_app", "")
-    _elf_proj = st.query_params.get("elf_proj", "")
-    _elf_env  = st.query_params.get("elf_env", "")
-
     # Role-allowed environments for the Env selector.
     _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
     _env_options = ["(all)"] + _allowed_envs
@@ -3849,19 +3908,6 @@ def _render_event_log() -> None:
     if _active_types:
         events = [ev for ev in events if ev["type"] in _active_types]
 
-    # Apply inline (+) filters from query params.
-    if _elf_app:
-        events = [ev for ev in events if ev.get("Who") == _elf_app]
-    if _elf_proj:
-        events = [ev for ev in events if ev.get("Project") == _elf_proj]
-    if _elf_env:
-        events = [ev for ev in events if (ev.get("Environment") or "").lower() == _elf_env.lower()]
-
-    # Active-filter badge bar (rendered between pills and table).
-    _el_filter_bar = _render_filter_bar("elf", {"app": _elf_app, "proj": _elf_proj, "env": _elf_env})
-    if _el_filter_bar:
-        st.markdown(_el_filter_bar, unsafe_allow_html=True)
-
     if not events:
         if _total_events_unfiltered:
             inline_note(
@@ -3937,39 +3983,35 @@ def _render_event_log() -> None:
 
     def _app_cell(ev: dict) -> str:
         """Render the Application column — clickable popover trigger when we
-        have inventory data for it; otherwise plain text.  Includes an inline
-        (+) filter button."""
+        have inventory data for it; otherwise plain text."""
         _name = ev.get("Who") or ""
         if not _name:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
-        _fb = _filter_btn("elf", "app", _name, _elf_app)
         if ev["type"] in _APP_EVENT_TYPES and _name in _inv_map:
             return (
                 f'<button type="button" class="el-app-trigger" '
                 f'popovertarget="{_pop_id(_name)}" '
-                f'title="Click for inventory details">{_name}</button>{_fb}'
+                f'title="Click for inventory details">{_name}</button>'
             )
         # No inventory / non-inspectable event type → plain label
         return (
             f'<span style="font-weight:600;color:var(--cc-text);'
-            f'font-size:0.82rem">{_name}</span>{_fb}'
+            f'font-size:0.82rem">{_name}</span>'
         )
 
     def _project_cell(ev: dict) -> str:
         """Render the Project column — clickable popover trigger when we have
-        inventory data for the project; otherwise a plain label.  Includes an
-        inline (+) filter button."""
+        inventory data for the project; otherwise a plain label."""
         _proj = ev.get("Project") or ""
         if not _proj:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
-        _fb = _filter_btn("elf", "proj", _proj, _elf_proj)
         if _proj in _proj_map:
             return (
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_proj_pop_id(_proj)}" '
-                f'title="Click for teams & applications">{_proj}</button>{_fb}'
+                f'title="Click for teams & applications">{_proj}</button>'
             )
-        return f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{_proj}</span>{_fb}'
+        return f'<span style="color:var(--cc-text-dim);font-size:0.78rem">{_proj}</span>'
 
     def _version_cell(ev: dict) -> str:
         """Render the Version column — a clickable chip that pops the
@@ -4008,11 +4050,10 @@ def _render_event_log() -> None:
         if not _env:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
         _bg, _fg, _lbl = _ENV_CHIP.get(_env, ("var(--cc-surface2)", "var(--cc-text-dim)", _env.upper()))
-        _fb = _filter_btn("elf", "env", _env, _elf_env)
         return (
             f'<span style="background:{_bg};color:{_fg};border-radius:4px;'
             f'padding:1px 7px;font-size:0.70rem;font-weight:800;letter-spacing:.04em;'
-            f'font-family:var(--cc-mono)">{_lbl}</span>{_fb}'
+            f'font-family:var(--cc-mono)">{_lbl}</span>'
         )
 
     def _person_cell(val: str) -> str:
@@ -4498,10 +4539,6 @@ def _fetch_full_inventory(scope_json: str) -> list[dict]:
 def _render_inventory_view() -> None:
     """Application inventory table — one row per registered application."""
 
-    # ── Inline (+) filter query params ─────────────────────────────────────
-    _ivf_app  = st.query_params.get("ivf_app", "")
-    _ivf_proj = st.query_params.get("ivf_proj", "")
-
     # ── Controls ────────────────────────────────────────────────────────────
     _iv_r1 = st.columns([1.7, 1.2, 1.4, 1.1])
     with _iv_r1[0]:
@@ -4550,16 +4587,24 @@ def _render_inventory_view() -> None:
     if iv_search:
         _inv_rows = [r for r in _inv_rows if iv_search in r["application"].lower()]
 
-    # ── Fetch PRD status + Prismacloud for every listed app ─────────────────
+    # ── Fetch PRD status + latest-at-each-stage + Prismacloud ───────────────
     _iv_apps = tuple(sorted({r["application"] for r in _inv_rows}))
-    _iv_prd_map = _fetch_prd_status(_iv_apps) if _iv_apps else {}
+    _iv_prd_map    = _fetch_prd_status(_iv_apps)     if _iv_apps else {}
+    _iv_stages_map = _fetch_latest_stages(_iv_apps)  if _iv_apps else {}
 
-    # For prismacloud we need (app, prd_version) pairs
+    # Prismacloud covers: prd-live version (baseline) + every version that
+    # appears in any stage across every app (so each stage's popover can show
+    # its own vulnerability tiles and compute Δ vs prd).
     _iv_prisma_keys: set[tuple[str, str]] = set()
     for _a, _prd in _iv_prd_map.items():
         _pv = (_prd or {}).get("version") or ""
         if _pv:
             _iv_prisma_keys.add((_a, _pv))
+    for _a, _stages in _iv_stages_map.items():
+        for _st_data in _stages.values():
+            _v = (_st_data or {}).get("version") or ""
+            if _v:
+                _iv_prisma_keys.add((_a, _v))
     _iv_prisma_map = _fetch_prismacloud(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
 
     # ── Group by technology / platform for pill filter ──────────────────────
@@ -4629,17 +4674,6 @@ def _render_inventory_view() -> None:
         if _iv_active_techs:
             _inv_rows = [r for r in _inv_rows if r.get("build_technology") in _iv_active_techs]
 
-    # Apply inline (+) filters from query params.
-    if _ivf_app:
-        _inv_rows = [r for r in _inv_rows if r.get("application") == _ivf_app]
-    if _ivf_proj:
-        _inv_rows = [r for r in _inv_rows if r.get("project") == _ivf_proj]
-
-    # Active-filter badge bar
-    _iv_filter_bar = _render_filter_bar("ivf", {"app": _ivf_app, "proj": _ivf_proj})
-    if _iv_filter_bar:
-        st.markdown(_iv_filter_bar, unsafe_allow_html=True)
-
     if not _inv_rows:
         inline_note("No applications match the current filters.", "info")
         return
@@ -4657,6 +4691,12 @@ def _render_inventory_view() -> None:
     def _iv_proj_pop_id(proj: str) -> str:
         return _iv_slug(proj, "iv-proj-pop-")
 
+    def _iv_ver_pop_id(app: str, stage: str, ver: str) -> str:
+        """One popover per (app, stage, version). Stage is part of the id
+        because the same version number can surface in multiple stages with
+        different previous-stage baselines."""
+        return _iv_slug(f"{app}--{stage}--{ver}", "iv-ver-pop-")
+
     def _iv_v(val: str) -> str:
         return (f'<span class="ap-v">{val}</span>'
                 if val else '<span class="ap-v empty">—</span>')
@@ -4665,121 +4705,84 @@ def _render_inventory_view() -> None:
         return (f'<span class="ap-v"><span class="ap-chip">{val}</span></span>'
                 if val else '<span class="ap-v empty">—</span>')
 
-    # ── PRD status badge per row ────────────────────────────────────────────
-    def _iv_prd_badge(app: str) -> str:
-        _prd = _iv_prd_map.get(app)
-        if not _prd:
-            return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
-        _live = _prd.get("live")
-        _ver  = _prd.get("version") or ""
-        if _live:
-            return (
-                f'<span style="display:inline-flex;align-items:center;gap:4px;font-size:.72rem">'
-                f'<span style="width:7px;height:7px;border-radius:50%;background:#059669;'
-                f'display:inline-block;box-shadow:0 0 4px #059669"></span>'
-                f'<span style="color:#059669;font-weight:700">LIVE</span>'
-                f'<span style="font-family:var(--cc-mono);color:var(--cc-accent);'
-                f'background:var(--cc-accent-lt);padding:0 5px;border-radius:3px;font-size:.68rem">{_ver}</span>'
-                f'</span>'
-            )
-        return (
-            f'<span style="display:inline-flex;align-items:center;gap:4px;font-size:.72rem">'
-            f'<span style="width:7px;height:7px;border-radius:50%;background:#dc2626;'
-            f'display:inline-block"></span>'
-            f'<span style="color:#dc2626;font-weight:700">FAIL</span>'
-            f'</span>'
-        )
-
-    # ── Prismacloud mini badge per row ──────────────────────────────────────
-    def _iv_prisma_badge(app: str) -> str:
-        _prd = _iv_prd_map.get(app)
-        _pv = (_prd or {}).get("version") or ""
-        if not _pv:
-            return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
-        _scan = _iv_prisma_map.get((app, _pv))
-        if not _scan:
-            return '<span style="color:var(--cc-text-mute);font-size:.70rem">no scan</span>'
-        _vc = int(_scan.get("Vcritical", 0) or 0)
-        _vh = int(_scan.get("Vhigh", 0) or 0)
-        _cc = int(_scan.get("Ccritical", 0) or 0)
-        _ch = int(_scan.get("Chigh", 0) or 0)
-        _parts: list[str] = []
-        if _vc:
-            _parts.append(f'<span style="color:#dc2626;font-weight:800">V{_vc}c</span>')
-        if _vh:
-            _parts.append(f'<span style="color:#ea580c;font-weight:700">V{_vh}h</span>')
-        if _cc:
-            _parts.append(f'<span style="color:#dc2626;font-weight:800">C{_cc}c</span>')
-        if _ch:
-            _parts.append(f'<span style="color:#ea580c;font-weight:700">C{_ch}h</span>')
-        if not _parts:
-            return '<span style="color:#059669;font-size:.72rem;font-weight:700">clean</span>'
-        return (
-            f'<span style="font-size:.70rem;font-family:var(--cc-mono);'
-            f'display:inline-flex;gap:5px">' + " ".join(_parts) + '</span>'
-        )
-
-    # ── Table cell helpers ──────────────────────────────────────────────────
+    # ── Stage cell — version chip popover trigger + compact date ───────────
     _iv_th = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
 
+    def _iv_stage_cell(app: str, stage: str) -> str:
+        _data = (_iv_stages_map.get(app) or {}).get(stage) or {}
+        _ver  = _data.get("version") or ""
+        _when = fmt_dt(_data.get("when"), "%Y-%m-%d %H:%M") or ""
+        if not _ver:
+            return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
+        # For prd stage, attach a live dot when this version matches what's
+        # actually live in prd (per _iv_prd_map).
+        _dot = ""
+        if stage == "prd":
+            _prd = _iv_prd_map.get(app) or {}
+            if _prd.get("live") and _prd.get("version") == _ver:
+                _dot = ('<span class="iv-stage-dot" '
+                        'title="Currently live in prd"></span>')
+            elif _prd and not _prd.get("live"):
+                _dot = ('<span class="iv-stage-dot is-fail" '
+                        'title="Last prd attempt failed"></span>')
+        _btn = (
+            f'<button type="button" class="iv-stage-ver" '
+            f'popovertarget="{_iv_ver_pop_id(app, stage, _ver)}" '
+            f'title="Click for version details">{_dot}{_ver}</button>'
+        )
+        _date_html = (
+            f'<div class="iv-stage-when">{_when}</div>' if _when else ""
+        )
+        return f'<div class="iv-stage-cell">{_btn}{_date_html}</div>'
+
     def _iv_app_cell(app: str) -> str:
-        _fb = _filter_btn("ivf", "app", app, _ivf_app)
         return (
             f'<button type="button" class="el-app-trigger" '
             f'popovertarget="{_iv_app_pop_id(app)}" '
-            f'title="Click for full inventory details">{app}</button>{_fb}'
+            f'title="Click for full inventory details">{app}</button>'
         )
 
     def _iv_proj_cell(proj: str) -> str:
         if not proj:
             return '<span style="color:var(--cc-text-mute);font-size:.72rem">—</span>'
-        _fb = _filter_btn("ivf", "proj", proj, _ivf_proj)
         if proj in _iv_proj_map:
             return (
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_iv_proj_pop_id(proj)}" '
-                f'title="Click for teams & applications">{proj}</button>{_fb}'
+                f'title="Click for teams & applications">{proj}</button>'
             )
-        return f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>{_fb}'
-
-    def _iv_tech_cell(val: str) -> str:
-        if not val:
-            return '<span style="color:var(--cc-text-mute);font-size:.72rem">—</span>'
-        return (
-            f'<span style="background:var(--cc-accent-lt);color:var(--cc-accent);'
-            f'border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">{val}</span>'
-        )
+        return f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>'
 
     def _iv_row_html(r: dict, *, include_project: bool = True) -> str:
         _proj_td = (
             f'<td style="padding:5px 4px">{_iv_proj_cell(r["project"])}</td>'
             if include_project else ""
         )
+        _app = r["application"]
+        _stage_tds = "".join(
+            f'<td style="padding:5px 6px">{_iv_stage_cell(_app, _s)}</td>'
+            for _s in _STAGE_ORDER
+        )
         return (
             f'<tr>'
-            f'<td style="padding:5px 4px">{_iv_app_cell(r["application"])}</td>'
+            f'<td style="padding:5px 4px">{_iv_app_cell(_app)}</td>'
             f'{_proj_td}'
             f'<td style="padding:5px 4px;color:var(--cc-text-dim);font-size:.78rem">{r["company"] or "—"}</td>'
-            f'<td style="padding:5px 6px">{_iv_tech_cell(r["build_technology"])}</td>'
-            f'<td style="padding:5px 6px">{_iv_tech_cell(r["deploy_technology"])}</td>'
-            f'<td style="padding:5px 6px">{_iv_tech_cell(r["deploy_platform"])}</td>'
-            f'<td style="padding:5px 4px">{_iv_prd_badge(r["application"])}</td>'
-            f'<td style="padding:5px 4px">{_iv_prisma_badge(r["application"])}</td>'
+            f'{_stage_tds}'
             f'</tr>'
         )
 
     def _iv_thead(include_project: bool) -> str:
         _p_th = f'<th {_iv_th}>Project</th>' if include_project else ""
+        _stage_th = "".join(
+            f'<th {_iv_th}>{_STAGE_LABEL[_s]}</th>' for _s in _STAGE_ORDER
+        )
         return (
             f'<thead><tr style="border-bottom:2px solid var(--cc-border);text-align:left;background:var(--cc-surface2)">'
             f'<th {_iv_th}>Application</th>'
             f'{_p_th}'
             f'<th {_iv_th}>Company</th>'
-            f'<th {_iv_th}>Build tech</th>'
-            f'<th {_iv_th}>Deploy tech</th>'
-            f'<th {_iv_th}>Platform</th>'
-            f'<th {_iv_th}>PRD status</th>'
-            f'<th {_iv_th}>Security</th>'
+            f'{_stage_th}'
             f'</tr></thead>'
         )
 
@@ -4954,6 +4957,194 @@ def _render_inventory_view() -> None:
             f'  <div class="ap-foot">Source: ef-devops-inventory · ef-cicd-deployments · ef-cicd-prismacloud</div>'
             f'</div>'
         )
+
+    # ── Stage version popovers ──────────────────────────────────────────────
+    # One popover per (app, stage, version) triple. Each shows:
+    #   · live-in-prd banner (tailored to this version)
+    #   · prismacloud scan for this version with absolute V/C tiles
+    #   · delta vs current prd version (skipped when this IS the prd version)
+    #   · delta vs previous-stage version (skipped when no prev stage or same)
+    _IV_SEV_KEYS = [
+        ("critical", "Critical"), ("high", "High"),
+        ("medium",   "Medium"),   ("low",  "Low"),
+    ]
+
+    def _iv_sev_tile(level: str, label: str, count: int,
+                     delta: int | None, baseline_label: str) -> str:
+        _nz = "nonzero" if count > 0 else "zero"
+        if delta is None:
+            _delta_html = ""
+        elif delta > 0:
+            _delta_html = f'<div class="sev-delta up">▲ +{delta} vs {baseline_label}</div>'
+        elif delta < 0:
+            _delta_html = f'<div class="sev-delta down">▼ {delta} vs {baseline_label}</div>'
+        else:
+            _delta_html = f'<div class="sev-delta eq">= vs {baseline_label}</div>'
+        return (
+            f'<div class="ap-sev-tile {level} {_nz}">'
+            f'  <div class="sev-num">{count}</div>'
+            f'  <div class="sev-label">{label}</div>'
+            f'  {_delta_html}'
+            f'</div>'
+        )
+
+    def _iv_sev_strip(prefix: str, scan: dict,
+                      baseline: dict | None, baseline_label: str) -> tuple[str, int]:
+        tiles: list[str] = []
+        _total = 0
+        for _lvl, _lbl in _IV_SEV_KEYS:
+            _fld = f"{prefix}{_lvl}"
+            _n = int(scan.get(_fld, 0) or 0)
+            _total += _n
+            _delta: int | None = None
+            if baseline is not None:
+                _delta = _n - int(baseline.get(_fld, 0) or 0)
+            tiles.append(_iv_sev_tile(_lvl, _lbl, _n, _delta, baseline_label))
+        return "".join(tiles), _total
+
+    for _app, _stages in _iv_stages_map.items():
+        # Only build popovers for apps that are in the rendered rows.
+        if _app not in _iv_apps:
+            continue
+        _prd_data = _iv_prd_map.get(_app) or {}
+        _prd_ver  = _prd_data.get("version") or ""
+        _prd_scan = _iv_prisma_map.get((_app, _prd_ver)) if _prd_ver else None
+
+        for _stage, _data in _stages.items():
+            _ver = (_data or {}).get("version") or ""
+            if not _ver:
+                continue
+            _vid = _iv_ver_pop_id(_app, _stage, _ver)
+            _stage_lbl = _STAGE_LABEL.get(_stage, _stage)
+            _when_disp = fmt_dt(_data.get("when"), "%Y-%m-%d %H:%M") or ""
+            _status    = _data.get("status", "") or ""
+            _is_prd_ver = bool(_prd_ver and _prd_ver == _ver)
+
+            # ── Live banner, tailored to this stage's version ───────────────
+            if _prd_data.get("live"):
+                if _is_prd_ver:
+                    _banner = (
+                        f'<div class="ap-live is-live">'
+                        f'  <span class="dot"></span>'
+                        f'  <span>This version is live in prd · '
+                        f'<span class="ap-chip">{_ver}</span></span>'
+                        f'</div>'
+                    )
+                else:
+                    _banner = (
+                        f'<div class="ap-live is-live">'
+                        f'  <span class="dot"></span>'
+                        f'  <span>App live in prd · running '
+                        f'<span class="ap-chip">{_prd_ver}</span> (not this version)</span>'
+                        f'</div>'
+                    )
+            elif _prd_data:
+                _last_st = _prd_data.get("status", "") or "FAILED"
+                _banner = (
+                    f'<div class="ap-live is-offline">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>App not live · last prd attempt {_last_st}</span>'
+                    f'</div>'
+                )
+            else:
+                _banner = (
+                    f'<div class="ap-live is-offline">'
+                    f'  <span class="dot"></span>'
+                    f'  <span>App has never deployed to prd</span>'
+                    f'</div>'
+                )
+
+            # ── Stage-detail block (version + date + status) ────────────────
+            _stage_block = (
+                f'    <div class="ap-section">{_stage_lbl}</div>'
+                f'    <span class="ap-k">Version</span>{_iv_chip(_ver)}'
+                f'    <span class="ap-k">Status</span>{_iv_v(_status)}'
+                f'    <span class="ap-k">When ({DISPLAY_TZ_LABEL})</span>{_iv_v(_when_disp)}'
+            )
+
+            # ── Previous-stage context (for Δ baseline) ─────────────────────
+            _prev_stage = _STAGE_PREV.get(_stage)
+            _prev_ver: str = ""
+            _prev_scan: dict | None = None
+            if _prev_stage:
+                _prev_data = (_stages.get(_prev_stage) or {})
+                _prev_ver = _prev_data.get("version") or ""
+                if _prev_ver and _prev_ver != _ver:
+                    _prev_scan = _iv_prisma_map.get((_app, _prev_ver))
+
+            # ── Prismacloud for this version ────────────────────────────────
+            _this_scan = _iv_prisma_map.get((_app, _ver))
+            if _this_scan:
+                _v_tiles, _v_total = _iv_sev_strip("V", _this_scan, None, "")
+                _c_tiles, _c_total = _iv_sev_strip("C", _this_scan, None, "")
+                _scan_when = fmt_dt(_this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+                _scan_stat = _this_scan.get("status", "") or ""
+                _prisma_block = (
+                    f'    <div class="ap-section">Prismacloud scan</div>'
+                    f'    <span class="ap-k">Scan status</span>{_iv_v(_scan_stat)}'
+                    f'    <span class="ap-k">Scanned ({DISPLAY_TZ_LABEL})</span>{_iv_v(_scan_when)}'
+                    f'    <div class="ap-sev-subhead"><span>Vulnerabilities · this version</span>'
+                    f'      <span class="sev-sum">{_v_total} total</span></div>'
+                    f'    <div class="ap-sev">{_v_tiles}</div>'
+                    f'    <div class="ap-sev-subhead"><span>Compliance · this version</span>'
+                    f'      <span class="sev-sum">{_c_total} total</span></div>'
+                    f'    <div class="ap-sev">{_c_tiles}</div>'
+                )
+
+                # Δ vs current prd
+                if _prd_scan is not None and _prd_ver and not _is_prd_ver:
+                    _vd, _ = _iv_sev_strip("V", _this_scan, _prd_scan, "prd")
+                    _cd, _ = _iv_sev_strip("C", _this_scan, _prd_scan, "prd")
+                    _prisma_block += (
+                        f'    <div class="ap-compare-head">'
+                        f'      <span>Δ vs current prd</span>'
+                        f'      <span class="cmp-pill">{_prd_ver}</span>'
+                        f'    </div>'
+                        f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
+                        f'    <div class="ap-sev">{_vd}</div>'
+                        f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
+                        f'    <div class="ap-sev">{_cd}</div>'
+                    )
+
+                # Δ vs previous stage
+                if _prev_scan is not None and _prev_ver and _prev_ver != _ver:
+                    _prev_lbl = _STAGE_LABEL.get(_prev_stage, _prev_stage).lower()
+                    _vd2, _ = _iv_sev_strip("V", _this_scan, _prev_scan, _prev_stage)
+                    _cd2, _ = _iv_sev_strip("C", _this_scan, _prev_scan, _prev_stage)
+                    _prisma_block += (
+                        f'    <div class="ap-compare-head">'
+                        f'      <span>Δ vs {_prev_lbl}</span>'
+                        f'      <span class="cmp-pill">{_prev_ver}</span>'
+                        f'    </div>'
+                        f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
+                        f'    <div class="ap-sev">{_vd2}</div>'
+                        f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
+                        f'    <div class="ap-sev">{_cd2}</div>'
+                    )
+            else:
+                _prisma_block = (
+                    f'    <div class="ap-section">Prismacloud scan</div>'
+                    f'    <div class="ap-sev-empty">No prismacloud scan on record for this version.</div>'
+                )
+
+            _iv_popovers.append(
+                f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
+                f'  <div class="ap-head">'
+                f'    <div class="ap-icon">▲</div>'
+                f'    <div class="ap-title-wrap">'
+                f'      <div class="ap-kicker">{_stage_lbl} · {_ver}</div>'
+                f'      <div class="ap-title">{_app}</div>'
+                f'    </div>'
+                f'    <button class="ap-close" popovertarget="{_vid}" popovertargetaction="hide" aria-label="Close">×</button>'
+                f'  </div>'
+                f'  <div class="ap-body">'
+                f'    {_banner}'
+                f'    {_stage_block}'
+                f'    {_prisma_block}'
+                f'  </div>'
+                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud</div>'
+                f'</div>'
+            )
 
     # Project popovers
     for _proj in _iv_pop_projects:
