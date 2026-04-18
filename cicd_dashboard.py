@@ -235,6 +235,65 @@ CUSTOM_CSS = """
 }
 .cc-rail-meta b { color: var(--cc-text-dim); font-weight: 700; }
 
+/* -------- Inventory stats tiles (big numbers) -------- */
+.iv-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin: 12px 0 14px 0;
+}
+.iv-stat {
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    position: relative;
+    overflow: hidden;
+    transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.iv-stat::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--iv-stat-accent, var(--cc-accent));
+    opacity: .8;
+}
+.iv-stat:hover {
+    transform: translateY(-1px);
+    border-color: var(--iv-stat-accent, var(--cc-accent));
+    box-shadow: 0 6px 18px rgba(10, 14, 30, 0.06);
+}
+.iv-stat-label {
+    font-size: .66rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 6px;
+}
+.iv-stat-label .iv-stat-glyph {
+    font-size: .85rem;
+    color: var(--iv-stat-accent, var(--cc-accent));
+}
+.iv-stat-number {
+    font-size: 1.85rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--cc-text);
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+.iv-stat-sub {
+    margin-top: 6px;
+    font-size: .7rem;
+    color: var(--cc-text-dim);
+    font-weight: 500;
+    line-height: 1.35;
+}
+.iv-stat-sub b {
+    color: var(--iv-stat-accent, var(--cc-accent));
+    font-weight: 700;
+}
+
 /* -------- Inventory dimensional filters -------- */
 .iv-pill-caption {
     font-size: 0.66rem;
@@ -259,6 +318,18 @@ CUSTOM_CSS = """
     font-size: 0.72rem;
     font-weight: 600;
     letter-spacing: 0.005em;
+}
+.iv-active-chip.iv-active-chip-sess {
+    background: var(--cc-surface2);
+    color: var(--cc-text-dim);
+    border-color: var(--cc-border-hi);
+    font-style: italic;
+}
+.iv-active-chip.iv-active-chip-sort {
+    background: transparent;
+    color: var(--cc-text-mute);
+    border-color: var(--cc-border);
+    font-weight: 500;
 }
 .iv-filter-hint {
     font-size: 0.74rem;
@@ -4623,7 +4694,7 @@ def _shared_per_project() -> bool:
 
 
 # =============================================================================
-# APPLICATION INVENTORY — one row per app, RBAC-scoped, below event log
+# PIPELINES INVENTORY — one row per registered pipeline, RBAC-scoped
 # =============================================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -4679,7 +4750,7 @@ def _fetch_full_inventory(scope_json: str) -> list[dict]:
 
 @st.fragment(run_every="300s")
 def _render_inventory_view() -> None:
-    """Application inventory table — one row per registered application."""
+    """Pipelines inventory table — one row per registered pipeline."""
 
     # ── Controls ────────────────────────────────────────────────────────────
     # Sort choices: each key maps to (label, ordering_fn, descending_bool, badge_label).
@@ -4708,27 +4779,10 @@ def _render_inventory_view() -> None:
         "Live in PRD first":                "Live ✓",
     }
 
-    # Shared controls live above the combined panel — inventory only renders
-    # its view-specific Sort selector next to the live-refresh badge.
+    # Shared controls come from the global rail (project/search/per-project).
     iv_project_filter = _shared_project_filter()
     iv_search = _shared_search_query()
     iv_per_project = _shared_per_project()
-
-    _iv_r1 = st.columns([1.8, 1.0])
-    with _iv_r1[0]:
-        iv_sort = st.selectbox(
-            "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
-            help="Reorder applications — activity uses latest stage date · "
-                 "vulnerabilities are weighted (critical ≫ high ≫ medium ≫ low) "
-                 "on the version live in PRD",
-        )
-    with _iv_r1[1]:
-        st.markdown(
-            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
-            f'text-transform:uppercase;font-weight:600;margin-top:26px;white-space:nowrap">'
-            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto 5m</div>',
-            unsafe_allow_html=True,
-        )
 
     # ── Build scope filters (like the event log but for inventory) ──────────
     _iv_sf: list[dict] = list(scope_filters_inv())
@@ -4749,10 +4803,7 @@ def _render_inventory_view() -> None:
     # from _inv_rows_all, so cached HTML remains correct when filters change.
     _inv_rows = list(_inv_rows_all)
 
-    # Apply text search filter client-side — matches against every string-ish
-    # inventory field so users can narrow by tech, platform, image, team, etc.
-    # Space-separated terms are AND so "golang prd_team:jane" narrows
-    # progressively. Each term is a plain lowercase substring match.
+    # Apply text search filter client-side.
     if iv_search:
         _iv_terms = [_t for _t in iv_search.split() if _t]
 
@@ -4791,9 +4842,6 @@ def _render_inventory_view() -> None:
     _iv_prd_map    = _fetch_prd_status(_iv_apps)     if _iv_apps else {}
     _iv_stages_map = _fetch_latest_stages(_iv_apps)  if _iv_apps else {}
 
-    # Prismacloud covers: prd-live version (baseline) + every version that
-    # appears in any stage across every app (so each stage's popover can show
-    # its own vulnerability tiles and compute Δ vs prd).
     _iv_prisma_keys: set[tuple[str, str]] = set()
     for _a, _prd in _iv_prd_map.items():
         _pv = (_prd or {}).get("version") or ""
@@ -4805,154 +4853,431 @@ def _render_inventory_view() -> None:
             if _v:
                 _iv_prisma_keys.add((_a, _v))
     _iv_prisma_map = _fetch_prismacloud(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
-    # Per-version build date / release date / RLM — used inside the stage
-    # version popover so each code version carries its own provenance.
     _iv_vermeta_map = _fetch_version_meta(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
 
-    # ── Group by technology / platform for pill filter ──────────────────────
-    _iv_techs: dict[str, int] = {}
-    _iv_deploy_techs: dict[str, int] = {}
-    _iv_platforms: dict[str, int] = {}
-    _iv_projects: dict[str, int] = {}
-    for r in _inv_rows:
-        _bt = r.get("build_technology") or ""
-        if _bt:
-            _iv_techs[_bt] = _iv_techs.get(_bt, 0) + 1
-        _dt = r.get("deploy_technology") or ""
-        if _dt:
-            _iv_deploy_techs[_dt] = _iv_deploy_techs.get(_dt, 0) + 1
-        _dp = r.get("deploy_platform") or ""
-        if _dp:
-            _iv_platforms[_dp] = _iv_platforms.get(_dp, 0) + 1
-        _p = r.get("project") or "(none)"
-        _iv_projects[_p] = _iv_projects.get(_p, 0) + 1
+    # ── Team extraction helper (inventory rows may carry multiple *_team fields) ─
+    def _iv_row_teams(_r: dict) -> set[str]:
+        """All team values across every *_team field on a row."""
+        _out: set[str] = set()
+        for _tv in (_r.get("teams") or {}).values():
+            if isinstance(_tv, (list, tuple, set)):
+                for _x in _tv:
+                    if _x:
+                        _out.add(str(_x))
+            elif _tv:
+                _out.add(str(_tv))
+        return _out
 
-    _iv_total = len(_inv_rows)
-    _iv_live = sum(1 for r in _inv_rows if (_iv_prd_map.get(r["application"]) or {}).get("live"))
-    _iv_layout = "per-project" if iv_per_project else "consolidated"
+    # ── Dimensional filters — unified popover (sort + scope + dims) ─────────
+    # The options for every dimensional filter are derived from _inv_rows_all
+    # (post text search) so the user always sees every value available in
+    # their current scope. Filters narrow _inv_rows sequentially below, and
+    # the stats row is computed AFTER filters are applied so the big numbers
+    # stay reactive.
+    _iv_companies_all: dict[str, int] = {}
+    _iv_teams_all: dict[str, int] = {}
+    _iv_projects_all: dict[str, int] = {}
+    _iv_apps_all_names: dict[str, int] = {}
+    _iv_build_all: dict[str, int] = {}
+    _iv_deploy_all: dict[str, int] = {}
+    _iv_platform_all: dict[str, int] = {}
+    for _r in _inv_rows:
+        _co = (_r.get("company") or "").strip()
+        if _co: _iv_companies_all[_co] = _iv_companies_all.get(_co, 0) + 1
+        for _t in _iv_row_teams(_r):
+            _iv_teams_all[_t] = _iv_teams_all.get(_t, 0) + 1
+        _pj = (_r.get("project") or "").strip()
+        if _pj: _iv_projects_all[_pj] = _iv_projects_all.get(_pj, 0) + 1
+        _ap = (_r.get("application") or "").strip()
+        if _ap: _iv_apps_all_names[_ap] = _iv_apps_all_names.get(_ap, 0) + 1
+        _bt = (_r.get("build_technology") or "").strip()
+        if _bt: _iv_build_all[_bt] = _iv_build_all.get(_bt, 0) + 1
+        _dt = (_r.get("deploy_technology") or "").strip()
+        if _dt: _iv_deploy_all[_dt] = _iv_deploy_all.get(_dt, 0) + 1
+        _dp = (_r.get("deploy_platform") or "").strip()
+        if _dp: _iv_platform_all[_dp] = _iv_platform_all.get(_dp, 0) + 1
 
-    # ── Stats card ──────────────────────────────────────────────────────────
-    _iv_live_pct = f"{_iv_live / _iv_total * 100:.0f}%" if _iv_total else "—"
-    st.markdown(
-        f'<div class="el-typefilter-head">'
-        f'  <div class="el-tf-left">'
-        f'    <div class="el-tf-total">{_iv_total}</div>'
-        f'    <div class="el-tf-total-label">application{"s" if _iv_total != 1 else ""}</div>'
-        f'  </div>'
-        f'  <div class="el-tf-mid">'
-        f'    <div class="el-tf-kicker">Application inventory</div>'
-        f'    <div class="el-tf-hint">'
-        f'      {_iv_live} live in PRD ({_iv_live_pct}) · '
-        f'      {len(_iv_projects)} project{"s" if len(_iv_projects) != 1 else ""} · '
-        f'      {len(_iv_techs)} build tech{"s" if len(_iv_techs) != 1 else ""} · '
-        f'      {len(_iv_platforms)} deploy platform{"s" if len(_iv_platforms) != 1 else ""}'
-        f'    </div>'
-        f'  </div>'
-        f'  <div class="el-tf-right">'
-        f'    <span class="el-tf-badge layout">{_iv_layout}</span>'
-        f'    <span class="el-tf-badge sort">{_IV_SORT_BADGES.get(iv_sort, "A → Z")}</span>'
-        f'  </div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Dimensional filters — single popover, spec-driven ───────────────────
-    # Add more filters by appending to _IV_FILTER_SPECS. Each spec drives the
-    # popover UI, the active-chip summary line, and the final row-narrowing
-    # loop, so no code changes are needed per new dimension.
-    _IV_FILTER_SPECS: list[dict] = [
-        {"field": "build_technology",  "label": "Build tech",
-         "glyph": "⚙",  "key": "iv_tech_pills_v1",            "counts": _iv_techs},
-        {"field": "deploy_technology", "label": "Deploy tech",
-         "glyph": "⛭",  "key": "iv_deploy_tech_pills_v1",     "counts": _iv_deploy_techs},
-        {"field": "deploy_platform",   "label": "Deploy platform",
-         "glyph": "☁",  "key": "iv_deploy_platform_pills_v1", "counts": _iv_platforms},
+    # ── Non-admin company + team lock rules ────────────────────────────────
+    # Non-admins: company auto-scopes to st.session_state.company. The filter
+    # UI does NOT show a company picker (the scope is implicit). Team filter
+    # is hidden unless the user has multiple session teams, in which case
+    # they may narrow within those teams only.
+    _iv_session_company: str = (st.session_state.get("company") or "").strip()
+    _iv_session_teams: list[str] = [
+        str(_t).strip() for _t in (st.session_state.get("teams") or []) if _t
     ]
 
-    def _iv_pill_options(spec: dict) -> tuple[list[str], dict[str, str]]:
-        """Return (options_in_pill_label_form, pill_label → raw_value)."""
-        _opts: list[str] = []
-        _pill_to_val: dict[str, str] = {}
-        for _v, _c in sorted(spec["counts"].items(), key=lambda x: -x[1]):
-            _opt = f'{spec["glyph"]} {_v} · {_c}'
-            _opts.append(_opt)
-            _pill_to_val[_opt] = _v
-        return _opts, _pill_to_val
+    _iv_filter_keys = {
+        "company": "iv_f_company_v1",
+        "team":    "iv_f_team_v1",
+        "project": "iv_f_project_v1",
+        "app":     "iv_f_app_v1",
+        "build":   "iv_tech_pills_v1",
+        "deploy":  "iv_deploy_tech_pills_v1",
+        "platform":"iv_deploy_platform_pills_v1",
+    }
 
-    _iv_active_total = sum(
-        len(st.session_state.get(_s["key"]) or []) for _s in _IV_FILTER_SPECS
+    # For non-admin, prime the company filter with their session company so
+    # the scope is visibly locked even though the widget isn't rendered.
+    if not _is_admin and _iv_session_company:
+        st.session_state[_iv_filter_keys["company"]] = [_iv_session_company]
+    elif not _is_admin:
+        st.session_state[_iv_filter_keys["company"]] = []
+
+    # For non-admin with 1 session team, lock team filter to that team (no UI).
+    # With >1 session teams, widget renders but options restricted to their
+    # session teams. With 0 session teams (edge), no team filter.
+    if not _is_admin and len(_iv_session_teams) == 1:
+        st.session_state[_iv_filter_keys["team"]] = list(_iv_session_teams)
+    elif not _is_admin and len(_iv_session_teams) == 0:
+        st.session_state[_iv_filter_keys["team"]] = []
+
+    # Count active selections (for popover label)
+    _iv_active_sel: dict[str, list[str]] = {
+        _k: list(st.session_state.get(_key) or [])
+        for _k, _key in _iv_filter_keys.items()
+    }
+    _iv_active_total = sum(len(v) for v in _iv_active_sel.values())
+    # Hide implicit locks from "active total" — only count user-driven picks.
+    if not _is_admin:
+        _iv_active_total -= len(_iv_active_sel.get("company") or [])
+        if len(_iv_session_teams) == 1:
+            _iv_active_total -= len(_iv_active_sel.get("team") or [])
+    _iv_active_total = max(_iv_active_total, 0)
+
+    _iv_sort_badge = _IV_SORT_BADGES.get(
+        st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0]),
+        "A → Z",
     )
 
-    _iv_fb = st.columns([1.4, 5.4, 0.8], vertical_alignment="center")
+    _iv_fb = st.columns([1.6, 5.2, 0.8], vertical_alignment="center")
 
     with _iv_fb[0]:
         _pop_label = (
-            f"🔎 Filters · {_iv_active_total} active" if _iv_active_total
-            else "🔎 Filters"
+            f"🔎 Filters & sort · {_iv_active_total} active"
+            if _iv_active_total else "🔎 Filters & sort"
         )
         with st.popover(_pop_label, use_container_width=True,
-                         help="Narrow the inventory by technology, platform, and more"):
+                        help="Narrow the inventory and pick a sort order"):
+            # Sort (first so filters below override defaults cleanly)
             st.markdown(
-                '<div style="font-size:.7rem;color:var(--cc-text-mute);'
-                'letter-spacing:.06em;text-transform:uppercase;font-weight:700;'
-                'margin-bottom:4px">Dimensional filters</div>',
+                '<div class="iv-pill-caption">Sort order</div>',
                 unsafe_allow_html=True,
             )
-            _rendered_any = False
-            for _spec in _IV_FILTER_SPECS:
-                if not _spec["counts"]:
-                    continue
-                _rendered_any = True
-                _opts, _ = _iv_pill_options(_spec)
+            st.selectbox(
+                "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
+                label_visibility="collapsed",
+                help="Activity uses latest stage date · vulnerabilities are "
+                     "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
+            )
+
+            # Company (admin only)
+            if _is_admin and _iv_companies_all:
                 st.markdown(
-                    f'<div class="iv-pill-caption">{_spec["label"]}</div>',
+                    '<div class="iv-pill-caption">Company</div>',
+                    unsafe_allow_html=True,
+                )
+                st.multiselect(
+                    "Company", options=sorted(_iv_companies_all.keys()),
+                    key=_iv_filter_keys["company"],
+                    label_visibility="collapsed",
+                    placeholder=f"Any of {len(_iv_companies_all)} companies",
+                )
+
+            # Team
+            if _is_admin and _iv_teams_all:
+                st.markdown(
+                    '<div class="iv-pill-caption">Team</div>',
+                    unsafe_allow_html=True,
+                )
+                st.multiselect(
+                    "Team", options=sorted(_iv_teams_all.keys()),
+                    key=_iv_filter_keys["team"],
+                    label_visibility="collapsed",
+                    placeholder=f"Any of {len(_iv_teams_all)} teams",
+                )
+            elif (not _is_admin) and len(_iv_session_teams) > 1:
+                st.markdown(
+                    '<div class="iv-pill-caption">Team (your session)</div>',
+                    unsafe_allow_html=True,
+                )
+                st.multiselect(
+                    "Team", options=list(_iv_session_teams),
+                    key=_iv_filter_keys["team"],
+                    label_visibility="collapsed",
+                    placeholder=f"Any of your {len(_iv_session_teams)} teams",
+                )
+
+            # Project
+            if _iv_projects_all:
+                st.markdown(
+                    '<div class="iv-pill-caption">Project</div>',
+                    unsafe_allow_html=True,
+                )
+                st.multiselect(
+                    "Project", options=sorted(_iv_projects_all.keys()),
+                    key=_iv_filter_keys["project"],
+                    label_visibility="collapsed",
+                    placeholder=f"Any of {len(_iv_projects_all)} projects",
+                )
+
+            # Application
+            if _iv_apps_all_names:
+                st.markdown(
+                    '<div class="iv-pill-caption">Application</div>',
+                    unsafe_allow_html=True,
+                )
+                st.multiselect(
+                    "Application", options=sorted(_iv_apps_all_names.keys()),
+                    key=_iv_filter_keys["app"],
+                    label_visibility="collapsed",
+                    placeholder=f"Any of {len(_iv_apps_all_names)} applications",
+                )
+
+            # Build / deploy / platform pills
+            _pill_specs = [
+                ("Build technology",  _iv_build_all,    "⚙", _iv_filter_keys["build"]),
+                ("Deploy technology", _iv_deploy_all,   "⛭", _iv_filter_keys["deploy"]),
+                ("Deploy platform",   _iv_platform_all, "☁", _iv_filter_keys["platform"]),
+            ]
+            for _label, _counts, _glyph, _key in _pill_specs:
+                if not _counts:
+                    continue
+                _opts: list[str] = []
+                for _v, _c in sorted(_counts.items(), key=lambda x: -x[1]):
+                    _opts.append(f"{_glyph} {_v} · {_c}")
+                st.markdown(
+                    f'<div class="iv-pill-caption">{_label}</div>',
                     unsafe_allow_html=True,
                 )
                 st.pills(
-                    _spec["label"], options=_opts, selection_mode="multi",
-                    default=None, key=_spec["key"], label_visibility="collapsed",
+                    _label, options=_opts, selection_mode="multi",
+                    default=None, key=_key, label_visibility="collapsed",
                 )
-            if not _rendered_any:
-                st.caption("No filterable dimensions in current scope.")
 
     with _iv_fb[1]:
-        if _iv_active_total:
-            _chip_html: list[str] = []
-            for _spec in _IV_FILTER_SPECS:
-                _sel = st.session_state.get(_spec["key"]) or []
-                for _opt in _sel:
-                    _chip_html.append(
-                        f'<span class="iv-active-chip" title="{_spec["label"]}">'
-                        f'{_opt}</span>'
-                    )
+        _chip_specs: list[tuple[str, str]] = []
+        # Surface implicit non-admin locks as informational chips
+        if not _is_admin and _iv_session_company:
+            _chip_specs.append((f"🏢 {_iv_session_company} (scoped)", "session"))
+        if not _is_admin and len(_iv_session_teams) == 1:
+            _chip_specs.append((f"👥 {_iv_session_teams[0]} (scoped)", "session"))
+        # User-driven filters
+        if _is_admin:
+            for _v in _iv_active_sel["company"]:
+                _chip_specs.append((f"🏢 {_v}", "user"))
+        _team_locked = (not _is_admin) and len(_iv_session_teams) == 1
+        if not _team_locked:
+            for _v in _iv_active_sel["team"]:
+                _chip_specs.append((f"👥 {_v}", "user"))
+        for _v in _iv_active_sel["project"]:
+            _chip_specs.append((f"📁 {_v}", "user"))
+        for _v in _iv_active_sel["app"]:
+            _chip_specs.append((f"▣ {_v}", "user"))
+        for _v in _iv_active_sel["build"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["deploy"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["platform"]:
+            _chip_specs.append((_v, "user"))
+        # Sort chip
+        _chip_specs.append((f"↕ Sort: {_iv_sort_badge}", "sort"))
+        if _chip_specs:
+            _chip_html = []
+            for _txt, _kind in _chip_specs:
+                _cls = (
+                    "iv-active-chip" if _kind == "user"
+                    else "iv-active-chip iv-active-chip-sess" if _kind == "session"
+                    else "iv-active-chip iv-active-chip-sort"
+                )
+                _chip_html.append(f'<span class="{_cls}">{_txt}</span>')
             st.markdown(
                 '<div class="iv-active-chips">' + "".join(_chip_html) + '</div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                '<div class="iv-filter-hint">No dimensional filters applied — '
-                'use 🔎 to narrow by technology or platform.</div>',
+                '<div class="iv-filter-hint">No filters applied — click 🔎 to narrow '
+                'the inventory.</div>',
                 unsafe_allow_html=True,
             )
 
     with _iv_fb[2]:
         if _iv_active_total:
             if st.button("Clear", key="iv_filters_clear_v1",
-                         use_container_width=True, help="Clear all dimensional filters"):
-                for _spec in _IV_FILTER_SPECS:
-                    if _spec["key"] in st.session_state:
-                        st.session_state.pop(_spec["key"], None)
+                         use_container_width=True,
+                         help="Clear all user-selected filters"):
+                # Clear user-driven keys. Preserve session-locked defaults.
+                _clear_keys = [
+                    _iv_filter_keys["project"],
+                    _iv_filter_keys["app"],
+                    _iv_filter_keys["build"],
+                    _iv_filter_keys["deploy"],
+                    _iv_filter_keys["platform"],
+                ]
+                if _is_admin:
+                    _clear_keys.append(_iv_filter_keys["company"])
+                    _clear_keys.append(_iv_filter_keys["team"])
+                elif len(_iv_session_teams) > 1:
+                    _clear_keys.append(_iv_filter_keys["team"])
+                for _k in _clear_keys:
+                    st.session_state.pop(_k, None)
                 st.rerun()
 
-    # Narrow _inv_rows by every active dimensional filter.
-    for _spec in _IV_FILTER_SPECS:
-        _sel = st.session_state.get(_spec["key"]) or []
-        if not _sel:
-            continue
-        _opts, _pill_to_val = _iv_pill_options(_spec)
-        _active_vals = {_pill_to_val.get(o, "") for o in _sel}
-        _inv_rows = [r for r in _inv_rows if (r.get(_spec["field"]) or "") in _active_vals]
+    iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
+
+    # ── Apply every filter to _inv_rows (order doesn't matter for ∩) ────────
+    _sel_company  = list(st.session_state.get(_iv_filter_keys["company"]) or [])
+    _sel_team     = list(st.session_state.get(_iv_filter_keys["team"])    or [])
+    _sel_project  = list(st.session_state.get(_iv_filter_keys["project"]) or [])
+    _sel_app      = list(st.session_state.get(_iv_filter_keys["app"])     or [])
+    _sel_build    = list(st.session_state.get(_iv_filter_keys["build"])   or [])
+    _sel_deploy   = list(st.session_state.get(_iv_filter_keys["deploy"])  or [])
+    _sel_platform = list(st.session_state.get(_iv_filter_keys["platform"]) or [])
+
+    # Pill selections are "glyph value · count" strings — extract the raw value
+    # between the leading glyph+space and the final " · <count>".
+    def _pill_to_val(opt: str) -> str:
+        _core = opt.split(" ", 1)[1] if " " in opt else opt
+        if " · " in _core:
+            _core = _core.rsplit(" · ", 1)[0]
+        return _core
+    _sel_build_vals    = {_pill_to_val(o) for o in _sel_build}
+    _sel_deploy_vals   = {_pill_to_val(o) for o in _sel_deploy}
+    _sel_platform_vals = {_pill_to_val(o) for o in _sel_platform}
+
+    if _sel_company:
+        _inv_rows = [r for r in _inv_rows if (r.get("company") or "") in _sel_company]
+    if _sel_team:
+        _team_set = set(_sel_team)
+        _inv_rows = [r for r in _inv_rows if _iv_row_teams(r) & _team_set]
+    if _sel_project:
+        _inv_rows = [r for r in _inv_rows if (r.get("project") or "") in _sel_project]
+    if _sel_app:
+        _inv_rows = [r for r in _inv_rows if (r.get("application") or "") in _sel_app]
+    if _sel_build_vals:
+        _inv_rows = [r for r in _inv_rows if (r.get("build_technology") or "") in _sel_build_vals]
+    if _sel_deploy_vals:
+        _inv_rows = [r for r in _inv_rows if (r.get("deploy_technology") or "") in _sel_deploy_vals]
+    if _sel_platform_vals:
+        _inv_rows = [r for r in _inv_rows if (r.get("deploy_platform") or "") in _sel_platform_vals]
+
+    # ── Reactive stats row (computed POST-filter) ───────────────────────────
+    _post_companies: set[str] = set()
+    _post_teams: set[str] = set()
+    _post_projects: set[str] = set()
+    _post_apps: set[str] = set()
+    _post_build: set[str] = set()
+    _post_deploy: set[str] = set()
+    _post_platform: set[str] = set()
+    _post_pipelines: set[tuple[str, str, str]] = set()
+    for _r in _inv_rows:
+        _co = (_r.get("company") or "").strip()
+        if _co: _post_companies.add(_co)
+        for _t in _iv_row_teams(_r):
+            _post_teams.add(_t)
+        _pj = (_r.get("project") or "").strip()
+        if _pj: _post_projects.add(_pj)
+        _ap = (_r.get("application") or "").strip()
+        if _ap: _post_apps.add(_ap)
+        _bt = (_r.get("build_technology") or "").strip()
+        if _bt: _post_build.add(_bt)
+        _dt = (_r.get("deploy_technology") or "").strip()
+        if _dt: _post_deploy.add(_dt)
+        _dp = (_r.get("deploy_platform") or "").strip()
+        if _dp: _post_platform.add(_dp)
+        if _bt or _dt or _dp:
+            _post_pipelines.add((_bt, _dt, _dp))
+
+    # Live counts — apps that are currently live in PRD, projects that own
+    # at least one such app.
+    _iv_total = len(_inv_rows)
+    _live_apps: set[str] = set()
+    _live_projects: set[str] = set()
+    for _r in _inv_rows:
+        _ap = _r.get("application") or ""
+        if _ap and (_iv_prd_map.get(_ap) or {}).get("live"):
+            _live_apps.add(_ap)
+            _pj = (_r.get("project") or "").strip()
+            if _pj:
+                _live_projects.add(_pj)
+    _iv_live = len(_live_apps)
+    _iv_live_pct = f"{_iv_live / _iv_total * 100:.0f}%" if _iv_total else "—"
+    _iv_layout = "per-project" if iv_per_project else "consolidated"
+
+    _proj_live_pct = (
+        f"{len(_live_projects) / len(_post_projects) * 100:.0f}%"
+        if _post_projects else "—"
+    )
+
+    # Tile order: Companies (admin) → Teams (admin) → Projects (+live) →
+    # Apps (+live) → Build tech → Deploy tech → Deploy platform → Unique
+    # pipelines.
+    _TILE_COLORS = {
+        "companies":"var(--cc-accent)",
+        "teams":    "var(--cc-teal)",
+        "projects": "var(--cc-blue)",
+        "apps":     "var(--cc-green)",
+        "build":    "var(--cc-amber)",
+        "deploy":   "var(--cc-teal)",
+        "platform": "var(--cc-blue)",
+        "pipeline": "var(--cc-accent)",
+    }
+    _tiles: list[str] = []
+    def _tile(label: str, glyph: str, number: int | str,
+              sub: str, color_key: str) -> str:
+        return (
+            f'<div class="iv-stat" style="--iv-stat-accent:{_TILE_COLORS[color_key]}">'
+            f'<div class="iv-stat-label"><span class="iv-stat-glyph">{glyph}</span>{label}</div>'
+            f'<div class="iv-stat-number">{number}</div>'
+            f'<div class="iv-stat-sub">{sub}</div>'
+            f'</div>'
+        )
+    if _is_admin:
+        _tiles.append(_tile(
+            "Companies", "🏢", len(_post_companies),
+            "Tenant boundaries in this filtered scope",
+            "companies",
+        ))
+        _tiles.append(_tile(
+            "Teams", "👥", len(_post_teams),
+            "Distinct owner teams across all role fields",
+            "teams",
+        ))
+    _tiles.append(_tile(
+        "Projects", "📁", len(_post_projects),
+        f"<b>{len(_live_projects)}</b> with live PRD apps ({_proj_live_pct})",
+        "projects",
+    ))
+    _tiles.append(_tile(
+        "Applications", "▣", _iv_total,
+        f"<b>{_iv_live}</b> live in PRD ({_iv_live_pct})",
+        "apps",
+    ))
+    _tiles.append(_tile(
+        "Build technologies", "⚙", len(_post_build),
+        "Distinct build stacks in scope",
+        "build",
+    ))
+    _tiles.append(_tile(
+        "Deploy technologies", "⛭", len(_post_deploy),
+        "Distinct deployment tooling in scope",
+        "deploy",
+    ))
+    _tiles.append(_tile(
+        "Deploy platforms", "☁", len(_post_platform),
+        "Distinct target platforms in scope",
+        "platform",
+    ))
+    _tiles.append(_tile(
+        "Unique pipelines", "⇋", len(_post_pipelines),
+        "build × deploy × platform combinations",
+        "pipeline",
+    ))
+    st.markdown(
+        '<div class="iv-stats-grid">' + "".join(_tiles) + '</div>',
+        unsafe_allow_html=True,
+    )
 
     # ── Sort ────────────────────────────────────────────────────────────────
     # Pre-compute sort-aux maps so sorted() doesn't re-parse dates or walk
@@ -5885,10 +6210,10 @@ if _show_inv and _inventory_slot is not None:
     with _inventory_slot.container():
         st.markdown(
             '<div class="cc-panel-head">'
-            '<h2>Application inventory</h2>'
+            '<h2>Pipelines inventory</h2>'
             f'<span class="cc-panel-tag">Auto-refresh 5m · {_effective_role}</span>'
             '</div>'
-            '<div class="cc-panel-sub">One row per registered application · PRD liveness · '
+            '<div class="cc-panel-sub">One row per registered pipeline · PRD liveness · '
             'security posture · click any chip for project / app / version detail</div>',
             unsafe_allow_html=True,
         )
