@@ -5014,65 +5014,8 @@ def _shared_layout_ratio() -> tuple[int, int]:
     return _SHARED_LAYOUT_CHOICES.get(_lbl, (1, 1))
 
 
-_show_el = _show("eventlog")
-_show_inv = _show("inventory")
-
-if _show_el or _show_inv:
-    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
-    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
-
-    _el_hint = {
-        "Admin":     "builds (dev/rel) · deployments · releases · requests · commits — full visibility, toggle scope via ‘view all’",
-        "Developer": "commits · dev/rel builds · dev deployments — scoped to projects where your team owns dev",
-        "QC":        "QC deployments + requests · releases + requests — scoped to projects where your team owns QC",
-        "Operator":  "UAT/PRD deployments + requests · releases + requests — scoped to projects where your team owns UAT/PRD",
-    }.get(_effective_role, "all event types")
-
-    _combined_title = (
-        "Event log &amp; Application inventory" if (_show_el and _show_inv)
-        else ("Event log" if _show_el else "Application inventory")
-    )
-    _combined_hint = (
-        f"{_el_hint} &mdash; paired with the live application inventory · "
-        f"shared project, search &amp; per-project toggle"
-    ) if (_show_el and _show_inv) else (
-        f"{_el_hint} &mdash; newest first · auto-refreshes every minute"
-        if _show_el else
-        "One row per registered application · PRD liveness · security posture · click any chip for details"
-    )
-    _combined_badge = (
-        f'{ROLE_ICONS[_effective_role]} Live · EL auto 60s · Inv auto 5m · {_effective_role}'
-        if (_show_el and _show_inv) else
-        f'{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}'
-        if _show_el else
-        f'{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}'
-    )
-    st.markdown(
-        f'<div class="section">'
-        f'<div class="title-wrap"><h2>{_combined_title}</h2>'
-        f'<span class="badge">{_combined_badge}</span></div>'
-        f'<span class="hint">{_combined_hint}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    _render_shared_inv_el_controls(show_layout=(_show_el and _show_inv))
-
-    if _show_el and _show_inv:
-        _ratio = _shared_layout_ratio()
-        _cols_panel = st.columns(list(_ratio), gap="large")
-        with _cols_panel[0]:
-            with st.expander("Event log (expand / collapse)", expanded=True):
-                _render_event_log()
-        with _cols_panel[1]:
-            with st.expander("Application inventory (expand / collapse)", expanded=True):
-                _render_inventory_view()
-    elif _show_el:
-        with st.expander("Event log (expand / collapse)", expanded=True):
-            _render_event_log()
-    else:
-        with st.expander("Application inventory (expand / collapse)", expanded=True):
-            _render_inventory_view()
+# Combined side-by-side render block is declared further below — after
+# _render_inventory_view is defined so the reference resolves.
 
 
 # =============================================================================
@@ -6216,8 +6159,68 @@ def _render_inventory_view() -> None:
     )
 
 
-# Inventory rendering is handled alongside the event log above in the combined
-# side-by-side panel — no standalone section here.
+# ── Combined side-by-side render: event log (left) + inventory (right) ─────
+# Must live AFTER both fragment definitions (_render_event_log above and
+# _render_inventory_view just above this block) so the references resolve.
+_show_el = _show("eventlog")
+_show_inv = _show("inventory")
+
+if _show_el or _show_inv:
+    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
+
+    _el_hint = {
+        "Admin":     "builds (dev/rel) · deployments · releases · requests · commits — full visibility, toggle scope via ‘view all’",
+        "Developer": "commits · dev/rel builds · dev deployments — scoped to projects where your team owns dev",
+        "QC":        "QC deployments + requests · releases + requests — scoped to projects where your team owns QC",
+        "Operator":  "UAT/PRD deployments + requests · releases + requests — scoped to projects where your team owns UAT/PRD",
+    }.get(_effective_role, "all event types")
+
+    _combined_title = (
+        "Event log &amp; Application inventory" if (_show_el and _show_inv)
+        else ("Event log" if _show_el else "Application inventory")
+    )
+    _combined_hint = (
+        f"{_el_hint} &mdash; paired with the live application inventory · "
+        f"shared project, search &amp; per-project toggle"
+    ) if (_show_el and _show_inv) else (
+        f"{_el_hint} &mdash; newest first · auto-refreshes every minute"
+        if _show_el else
+        "One row per registered application · PRD liveness · security posture · click any chip for details"
+    )
+    _combined_badge = (
+        f'{ROLE_ICONS[_effective_role]} Live · EL auto 60s · Inv auto 5m · {_effective_role}'
+        if (_show_el and _show_inv) else
+        f'{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}'
+        if _show_el else
+        f'{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}'
+    )
+    st.markdown(
+        f'<div class="section">'
+        f'<div class="title-wrap"><h2>{_combined_title}</h2>'
+        f'<span class="badge">{_combined_badge}</span></div>'
+        f'<span class="hint">{_combined_hint}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _render_shared_inv_el_controls(show_layout=(_show_el and _show_inv))
+
+    if _show_el and _show_inv:
+        _ratio = _shared_layout_ratio()
+        _cols_panel = st.columns(list(_ratio), gap="large")
+        with _cols_panel[0]:
+            with st.expander("Event log (expand / collapse)", expanded=True):
+                _render_event_log()
+        with _cols_panel[1]:
+            with st.expander("Application inventory (expand / collapse)", expanded=True):
+                _render_inventory_view()
+    elif _show_el:
+        with st.expander("Event log (expand / collapse)", expanded=True):
+            _render_event_log()
+    else:
+        with st.expander("Application inventory (expand / collapse)", expanded=True):
+            _render_inventory_view()
 
 
 # =============================================================================
