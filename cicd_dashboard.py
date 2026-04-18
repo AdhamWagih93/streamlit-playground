@@ -156,6 +156,145 @@ CUSTOM_CSS = """
     font-weight: 600; margin-bottom: 4px;
 }
 
+/* -------- Sticky unified filter rail -------- */
+.st-key-cc_filter_rail {
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    background: rgba(255, 255, 255, 0.88);
+    backdrop-filter: saturate(140%) blur(10px);
+    -webkit-backdrop-filter: saturate(140%) blur(10px);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 10px 14px 8px 14px;
+    margin: 6px 0 14px 0;
+    box-shadow: 0 6px 20px rgba(10, 14, 30, 0.06),
+                0 1px 3px rgba(10, 14, 30, 0.04);
+}
+.st-key-cc_filter_rail [data-testid="stSelectbox"] label,
+.st-key-cc_filter_rail [data-testid="stTextInput"] label,
+.st-key-cc_filter_rail [data-testid="stToggle"] label {
+    font-size: 0.62rem !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute) !important;
+    font-weight: 700 !important;
+    margin-bottom: 2px !important;
+}
+.st-key-cc_filter_rail [data-testid="stSelectbox"] > div > div,
+.st-key-cc_filter_rail [data-testid="stTextInput"] > div > div {
+    min-height: 36px;
+}
+.cc-rail-id {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 2px 0 0 0;
+}
+.cc-rail-id-role {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-weight: 700; font-size: 0.78rem;
+    letter-spacing: 0.02em;
+    width: fit-content;
+}
+.cc-rail-id-team {
+    font-size: 0.72rem;
+    color: var(--cc-text-dim);
+    font-weight: 500;
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding-left: 2px;
+}
+.cc-rail-readonly {
+    padding-top: 2px;
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.cc-rail-readonly em {
+    display: block;
+    font-style: normal;
+    font-size: 0.82rem;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--cc-text-mute);
+    font-weight: 400;
+    margin-top: 2px;
+}
+.cc-rail-meta {
+    font-size: 0.68rem;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.04em;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--cc-border);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.cc-rail-meta b { color: var(--cc-text-dim); font-weight: 700; }
+
+/* -------- Inventory dimensional filters -------- */
+.iv-pill-caption {
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+    margin: 6px 0 4px 0;
+}
+.iv-active-chips {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    align-items: center;
+    padding: 2px 4px;
+}
+.iv-active-chip {
+    display: inline-flex; align-items: center;
+    padding: 3px 10px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    border: 1px solid rgba(79, 70, 229, 0.25);
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.005em;
+}
+.iv-filter-hint {
+    font-size: 0.74rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    padding: 4px 6px;
+}
+
+/* -------- Primary panel header (replaces expanders) -------- */
+.cc-panel-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px;
+    margin: 18px 0 8px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--cc-border);
+}
+.cc-panel-head h2 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    color: var(--cc-text);
+}
+.cc-panel-head .cc-panel-tag {
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.cc-panel-sub {
+    font-size: 0.76rem;
+    color: var(--cc-text-mute);
+    margin: -4px 0 10px 0;
+}
+
 /* -------- KPI cards — bright, vivid top accent stripe -------- */
 .kpi {
     background: var(--cc-surface);
@@ -2650,174 +2789,17 @@ for _sr in _session_roles:
 _detected_roles = list(dict.fromkeys(_detected_roles)) or ["Admin"]  # fallback
 
 
-# ── Row 1: role view + team + company/project + controls ─────────────────────
-_cb1 = st.columns([1.2, 1.2, 1.5, 1.5, 0.6, 0.6, 0.6])
-
-with _cb1[0]:
-    # Role is auto-detected from st.session_state.roles (mapped through
-    # _ROLE_ALIASES). If multiple roles are present, Admin wins; otherwise the
-    # first detected role is used. No dropdown — purely read-only display.
-    if "Admin" in _detected_roles:
-        role_pick = "Admin"
-    else:
-        role_pick = _detected_roles[0]
-    st.markdown(f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Role</div>'
-                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
-                f'{ROLE_ICONS[role_pick]} {role_pick}</div>', unsafe_allow_html=True)
-
-with _cb1[1]:
-    # Teams are auto-detected from st.session_state.teams — no dropdown.
-    # A single team renders as that team; multiple teams render as a union
-    # (team_filter stays empty so scope queries span all of them).
-    if _session_teams:
-        _active_teams: list[str] = list(_session_teams)
-        if len(_session_teams) == 1:
-            team_filter = _session_teams[0]
-            _team_display = _session_teams[0]
-        else:
-            team_filter = ""  # union scope
-            _team_display = " · ".join(_session_teams)
-        st.markdown(
-            f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-            f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">'
-            f'{"Teams" if len(_session_teams) > 1 else "Team"}</div>'
-            f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text);'
-            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{_team_display}">'
-            f'{_team_display}</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        # No session teams — render informational placeholder.
-        team_filter = ""
-        _active_teams = []
-        st.markdown('<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                    'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
-                    '<div style="font-size:.90rem;color:var(--cc-text-mute)">No team assigned</div>',
-                    unsafe_allow_html=True)
-
-# Resolve team → application list for scope filtering
-if team_filter:
-    # When Admin scopes to a team, query all team fields (any role assignment counts)
-    if role_pick == "Admin":
-        _admin_team_apps: set[str] = set()
-        for _r in ["Developer", "QC", "Operator"]:
-            _admin_team_apps.update(_load_team_applications(_r, team_filter))
-        _team_apps = sorted(_admin_team_apps)
-    else:
-        _team_apps = _load_team_applications(role_pick, team_filter)
-elif role_pick != "Admin" and _active_teams:
-    # Non-admin "all my teams" — union across every session team
-    _union: set[str] = set()
-    for _t in _active_teams:
-        _union.update(_load_team_applications(role_pick, _t))
-    _team_apps = sorted(_union)
+# ── Resolve role early so the filter rail can style itself by role color ────
+if "Admin" in _detected_roles:
+    role_pick = "Admin"
 else:
-    _team_apps = []  # no team-based restriction
+    role_pick = _detected_roles[0]
 
-with _cb1[2]:
-    # Company selector is Admin-only. Non-admins are confined to whatever
-    # companies their team assignment covers — no company toggle shown.
-    if role_pick == "Admin":
-        _company_options = [_ALL] + _all_companies
-        company_pick = st.selectbox(
-            "Company", _company_options, index=0, key="company_pick",
-            help=f"{len(_all_companies)} companies in inventory",
-        )
-        company_filter = "" if company_pick == _ALL else company_pick
-    else:
-        company_filter = ""
-        st.markdown(
-            '<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-            'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Company</div>'
-            '<div style="font-size:.90rem;color:var(--cc-text-mute)">Scoped by team</div>',
-            unsafe_allow_html=True,
-        )
+# Time-window presets — resolved before the rail so selectbox order is stable.
+_TW_LABELS = list(PRESETS.keys())
+_preset_default_idx = _TW_LABELS.index("7d")
 
-with _cb1[3]:
-    # Project options are filtered to the role's team assignment via inventory.
-    # Admin default: only projects where the admin's own team matches dev_team
-    # (so admin views the same slice a developer on their team would see).
-    # The "view everything" toggle bypasses that.
-    admin_view_all = bool(st.session_state.get("admin_view_all", False))
-    if role_pick == "Admin":
-        if admin_view_all:
-            _proj_scoped = _all_projects
-            _proj_help = f"{len(_all_projects)} projects in inventory · view-everything ON"
-        else:
-            _candidate_teams = _active_teams or _session_teams
-            if _candidate_teams:
-                _proj_scoped = _load_projects_for_role_teams("Developer", tuple(_candidate_teams))
-                _proj_help = (
-                    f"{len(_proj_scoped)} project(s) where dev_team ∈ "
-                    f"{', '.join(_candidate_teams)} — toggle 'view all' to lift"
-                )
-            else:
-                _proj_scoped = _all_projects
-                _proj_help = f"{len(_all_projects)} projects (no teams on admin session)"
-    elif _active_teams:
-        _proj_scoped = _load_projects_for_role_teams(role_pick, tuple(_active_teams))
-        _proj_help = (
-            f"{len(_proj_scoped)} project(s) where {role_pick.lower()} team ∈ "
-            f"{', '.join(_active_teams)}"
-        )
-    else:
-        _proj_scoped = []
-        _proj_help = "No projects visible — no team assigned"
-    _proj_options = [_ALL] + _proj_scoped
-    project_pick = st.selectbox(
-        "Project", _proj_options, index=0, key="project_pick", help=_proj_help,
-    )
-    project_filter = "" if project_pick == _ALL else project_pick
-
-# For non-admin roles with no specific project picked, restrict queries to the
-# role's visible projects. For Admin, apply the same scoping unless the
-# "view everything" toggle is on.
-_scoped_projects: list[str] = []
-if not project_filter:
-    if role_pick != "Admin":
-        _scoped_projects = _proj_scoped
-    elif not admin_view_all:
-        _scoped_projects = _proj_scoped
-
-with _cb1[4]:
-    # Admin-only: lift the default dev_team scoping and see every project.
-    if role_pick == "Admin":
-        st.toggle(
-            "View all", value=admin_view_all,
-            help="Admin: bypass the default dev_team scoping and see every project & stage",
-            key="admin_view_all",
-        )
-    else:
-        auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
-
-with _cb1[5]:
-    if role_pick == "Admin":
-        auto_refresh = st.toggle("Auto", value=False, help="Auto-refresh every 60s", key="auto_refresh")
-    else:
-        exclude_svc = st.toggle("Excl. svc", value=True,
-                                help="Exclude service account 'azure_sql' from all commit displays",
-                                key="exclude_svc")
-
-with _cb1[6]:
-    if role_pick == "Admin":
-        exclude_svc = st.toggle("Excl. svc", value=True,
-                                help="Exclude service account 'azure_sql'",
-                                key="exclude_svc")
-    else:
-        if st.button("↻", help="Clear cache & reload", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-# Admin lacks a dedicated reload button slot — surface it inline below the row.
-if role_pick == "Admin":
-    _rel_cols = st.columns([0.1, 0.9])
-    with _rel_cols[0]:
-        if st.button("↻", help="Clear cache & reload", use_container_width=True, key="admin_reload"):
-            st.cache_data.clear()
-            st.rerun()
-
-# ── Role-scoped visibility flags — relied on by KPI row + section skips ────
+# ── Role-scoped visibility flags — relied on by scope filters + sections ───
 _ROLE_SHOWS_JIRA: dict[str, bool] = {
     "Admin": True, "Developer": True, "QC": True, "Operator": False,
 }
@@ -2825,14 +2807,9 @@ _ROLE_SHOWS_BUILDS: dict[str, bool] = {
     "Admin": True, "Developer": True, "QC": False, "Operator": False,
 }
 _ROLE_EVENT_TYPES: dict[str, list[str]] = {
-    # Builds are split by branch into Build-develop / Build-release — roles opt
-    # into each subtype independently.
     "Admin":     ["Build-develop", "Build-release", "Deployments", "Releases", "Requests", "Commits"],
-    # Developer: commits, all builds, and dev-env deployments.
     "Developer": ["Commits", "Build-develop", "Build-release", "Deployments"],
-    # QC: qc-env deployments, releases, and the related approval queue.
     "QC":        ["Deployments", "Releases", "Requests"],
-    # Operator: uat- and prd-env deployments, releases, and their request queue.
     "Operator":  ["Deployments", "Releases", "Requests"],
 }
 _ROLE_ENVS: dict[str, list[str]] = {
@@ -2843,120 +2820,234 @@ _ROLE_ENVS: dict[str, list[str]] = {
 }
 _ROLE_APPROVAL_STAGES: dict[str, list[str]] = {
     "Admin":     [],
-    # Developer stages per new RBAC: no requests — only commits/builds/dev deploys.
     "Developer": [],
     "QC":        ["qc", "request_deploy_qc", "request_promote"],
-    # Operator now also sees release-promotion requests alongside uat/prd deploy approvals.
     "Operator":  ["uat", "prd", "request_deploy_uat", "request_deploy_prd", "request_promote"],
 }
-
-# ── Role HUD banner ──────────────────────────────────────────────────────────
-_role_clr = ROLE_COLORS[role_pick]
-_role_icon = ROLE_ICONS[role_pick]
-_team_label = f" · {team_filter}" if team_filter else ""
-_apps_label = f"{len(_team_apps)} applications" if _team_apps else "all applications"
-
-st.markdown(
-    f'<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;margin:2px 0 6px;'
-    f'border-radius:10px;border:1px solid {_role_clr}20;'
-    f'background:linear-gradient(90deg,{_role_clr}08,transparent 60%);">'
-    f'<span style="font-size:1.3rem">{_role_icon}</span>'
-    f'<span style="font-size:.95rem;font-weight:700;color:{_role_clr}">{role_pick}</span>'
-    f'<span style="font-size:.82rem;color:var(--cc-text-dim)">{_team_label}</span>'
-    f'<span style="margin-left:auto;font-size:.72rem;color:var(--cc-text-mute)">'
-    f'{_apps_label}</span>'
-    f'</div>',
-    unsafe_allow_html=True,
-)
-
-# ── Effective role + admin-only flag ────────────────────────────────────────
-# Role is driven entirely by st.session_state.roles — there is no
-# "view as another role" override. Non-admin roles only see the event log
-# and inventory; the rest of the page is admin-exclusive.
 _effective_role = role_pick
 _is_admin = (_effective_role == "Admin")
 
-# ── Row 2: time window segmented button group ────────────────────────────────
-_TW_LABELS = list(PRESETS.keys())
-_preset_default_idx = _TW_LABELS.index("7d")
-
-# Use a radio rendered as segmented buttons via CSS
-st.markdown("""
-<style>
-div[data-testid="stRadio"] > div { flex-wrap: wrap; gap: 4px; }
-div[data-testid="stRadio"] label {
-    background: var(--cc-surface2) !important;
-    border: 1px solid var(--cc-border) !important;
-    border-radius: 8px !important;
-    padding: 4px 12px !important;
-    font-size: 0.78rem !important;
-    font-weight: 600 !important;
-    color: var(--cc-text-dim) !important;
-    cursor: pointer !important;
-    transition: all .12s ease;
-}
-div[data-testid="stRadio"] label:has(input:checked) {
-    background: var(--cc-accent-lt) !important;
-    border-color: var(--cc-accent) !important;
-    color: var(--cc-accent) !important;
-}
-div[data-testid="stRadio"] label:hover {
-    border-color: var(--cc-border-hi) !important;
-    color: var(--cc-text) !important;
-}
-div[data-testid="stRadio"] label span { display: none !important; }
-div[data-testid="stRadio"] label p { margin: 0 !important; font-size: 0.78rem !important; }
-</style>
-""", unsafe_allow_html=True)
-
-preset = st.radio(
-    "Time window",
-    _TW_LABELS,
-    index=_preset_default_idx,
-    horizontal=True,
-    label_visibility="collapsed",
-    key="time_preset",
-)
-
-# Custom range or All-time — revealed only when needed
-if preset == "Custom":
-    dr = st.columns([1, 1, 4])
-    today = datetime.now(timezone.utc).date()
-    d_start = dr[0].date_input("From", today - timedelta(days=7))
-    d_end   = dr[1].date_input("To",   today)
-    start_dt = datetime.combine(d_start, datetime.min.time(), tzinfo=timezone.utc)
-    end_dt   = datetime.combine(d_end,   datetime.max.time(), tzinfo=timezone.utc)
-elif preset == "All-time":
-    end_dt   = datetime.now(timezone.utc)
-    start_dt = datetime(2000, 1, 1, tzinfo=timezone.utc)   # epoch-like lower bound
+# Team auto-detection (from st.session_state.teams) — resolves team_filter and
+# the _active_teams list that drive project/company scope queries downstream.
+if _session_teams:
+    _active_teams: list[str] = list(_session_teams)
+    if len(_session_teams) == 1:
+        team_filter = _session_teams[0]
+        _team_display = _session_teams[0]
+    else:
+        team_filter = ""  # union scope
+        _team_display = " · ".join(_session_teams)
 else:
-    end_dt   = datetime.now(timezone.utc)
-    start_dt = end_dt - PRESETS[preset]  # type: ignore[operator]
+    team_filter = ""
+    _active_teams = []
+    _team_display = "— no team —"
 
-delta       = end_dt - start_dt
-prior_end   = start_dt
-prior_start = start_dt - delta
-interval    = pick_interval(delta)
-now_utc     = datetime.now(timezone.utc)
-pending_window_start = now_utc - timedelta(days=30)
+if team_filter:
+    if role_pick == "Admin":
+        _admin_team_apps: set[str] = set()
+        for _r in ["Developer", "QC", "Operator"]:
+            _admin_team_apps.update(_load_team_applications(_r, team_filter))
+        _team_apps = sorted(_admin_team_apps)
+    else:
+        _team_apps = _load_team_applications(role_pick, team_filter)
+elif role_pick != "Admin" and _active_teams:
+    _union: set[str] = set()
+    for _t in _active_teams:
+        _union.update(_load_team_applications(role_pick, _t))
+    _team_apps = sorted(_union)
+else:
+    _team_apps = []
 
-_start_local = start_dt.astimezone(DISPLAY_TZ)
-_end_local   = end_dt.astimezone(DISPLAY_TZ)
-_now_local   = now_utc.astimezone(DISPLAY_TZ)
-_window_label = (
-    "All-time" if preset == "All-time"
-    else f"{_start_local:%Y-%m-%d %H:%M} → {_end_local:%Y-%m-%d %H:%M} {DISPLAY_TZ_LABEL}"
-)
-st.caption(
-    f"{_window_label}  ·  bucket {interval}  ·  vs prior equal window  ·  "
-    f"{_now_local:%H:%M} {DISPLAY_TZ_LABEL}"
-    + ("  ·  ⊘ azure_sql excluded" if exclude_svc else "")
-)
+# Resolve project scope before the rail so the project dropdown respects
+# admin_view_all + team assignment without re-querying per widget.
+admin_view_all = bool(st.session_state.get("admin_view_all", False))
+if role_pick == "Admin":
+    if admin_view_all:
+        _proj_scoped = _all_projects
+        _proj_help = f"{len(_all_projects)} projects · view-all ON"
+    else:
+        _candidate_teams = _active_teams or _session_teams
+        if _candidate_teams:
+            _proj_scoped = _load_projects_for_role_teams("Developer", tuple(_candidate_teams))
+            _proj_help = (
+                f"{len(_proj_scoped)} project(s) where dev_team ∈ "
+                f"{', '.join(_candidate_teams)} — toggle 'view all' to lift"
+            )
+        else:
+            _proj_scoped = _all_projects
+            _proj_help = f"{len(_all_projects)} projects (no admin team)"
+elif _active_teams:
+    _proj_scoped = _load_projects_for_role_teams(role_pick, tuple(_active_teams))
+    _proj_help = (
+        f"{len(_proj_scoped)} project(s) where {role_pick.lower()} team ∈ "
+        f"{', '.join(_active_teams)}"
+    )
+else:
+    _proj_scoped = []
+    _proj_help = "No projects visible — no team assigned"
+
+_role_clr = ROLE_COLORS[role_pick]
+_role_icon = ROLE_ICONS[role_pick]
+
+# =============================================================================
+# STICKY FILTER RAIL — one consolidated bar that follows on scroll
+# =============================================================================
+# Every pre-event-log filter, scope, and toggle lives inside this container.
+# The .st-key-cc_filter_rail CSS rule pins it to the viewport top and styles
+# it with a blurred surface so downstream content flows beneath it.
+with st.container(key="cc_filter_rail"):
+    _rail = st.columns(
+        [1.7, 1.2, 1.2, 1.4, 2.4, 0.5],
+        vertical_alignment="bottom",
+    )
+
+    # ── Col 0: compact identity badge (role + team) ────────────────────────
+    with _rail[0]:
+        st.markdown(
+            f'<div class="cc-rail-id">'
+            f'<div class="cc-rail-id-role" '
+            f'style="color:{_role_clr};border-color:{_role_clr}55;'
+            f'background:{_role_clr}0F">{_role_icon} {role_pick}</div>'
+            f'<div class="cc-rail-id-team" title="{_team_display}">{_team_display}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Col 1: time window (compact dropdown) ──────────────────────────────
+    with _rail[1]:
+        preset = st.selectbox(
+            "Window",
+            _TW_LABELS,
+            index=_preset_default_idx,
+            key="time_preset",
+            help="Query time window (select Custom for an explicit range)",
+        )
+
+    # ── Col 2: company (admin-only) ────────────────────────────────────────
+    with _rail[2]:
+        if role_pick == "Admin":
+            _company_options = [_ALL] + _all_companies
+            company_pick = st.selectbox(
+                "Company", _company_options, index=0, key="company_pick",
+                help=f"{len(_all_companies)} companies in inventory",
+            )
+            company_filter = "" if company_pick == _ALL else company_pick
+        else:
+            company_filter = ""
+            st.markdown(
+                '<div class="cc-rail-readonly">Company<em>scoped by team</em></div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Col 3: project ─────────────────────────────────────────────────────
+    with _rail[3]:
+        _proj_options = [_ALL] + _proj_scoped
+        project_pick = st.selectbox(
+            "Project", _proj_options, index=0, key="project_pick", help=_proj_help,
+        )
+        project_filter = "" if project_pick == _ALL else project_pick
+
+    # ── Col 4: ops search — shared by event log + inventory ────────────────
+    with _rail[4]:
+        st.text_input(
+            "Search",
+            key="shared_search_v1",
+            placeholder="app · project · version · tech · person · detail…",
+            help="Shared across event log and inventory · case-insensitive · "
+                 "space-separated terms are AND",
+        )
+
+    # ── Col 5: settings popover (less-used toggles + reload) ───────────────
+    with _rail[5]:
+        st.markdown(
+            '<div style="font-size:.62rem;letter-spacing:.08em;'
+            'text-transform:uppercase;color:var(--cc-text-mute);'
+            'font-weight:700;margin-bottom:2px">More</div>',
+            unsafe_allow_html=True,
+        )
+        with st.popover("⚙", help="Auxiliary toggles · cache reload", use_container_width=True):
+            st.toggle(
+                "Per-project tables", value=False, key="shared_per_project_v1",
+                help="Group rows into a separate table per project",
+            )
+            if role_pick == "Admin":
+                st.toggle(
+                    "Admin: view all projects", value=admin_view_all, key="admin_view_all",
+                    help="Bypass the default dev_team scoping and see every project",
+                )
+            auto_refresh = st.toggle(
+                "Auto-refresh (60s)", value=False, key="auto_refresh",
+                help="Rerun the page every 60 seconds",
+            )
+            exclude_svc = st.toggle(
+                "Exclude service accounts", value=True, key="exclude_svc",
+                help="Hide 'azure_sql' service account commits",
+            )
+            st.markdown(
+                '<div style="border-top:1px solid var(--cc-border);margin:6px 0 4px"></div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("↻ Clear cache & reload", key="settings_reload",
+                         use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+
+    # ── Custom range picker (only when preset is Custom) ──────────────────
+    if preset == "Custom":
+        _dr = st.columns([1, 1, 4])
+        _today = datetime.now(timezone.utc).date()
+        d_start = _dr[0].date_input("From", _today - timedelta(days=7))
+        d_end   = _dr[1].date_input("To",   _today)
+        start_dt = datetime.combine(d_start, datetime.min.time(), tzinfo=timezone.utc)
+        end_dt   = datetime.combine(d_end,   datetime.max.time(), tzinfo=timezone.utc)
+    elif preset == "All-time":
+        end_dt   = datetime.now(timezone.utc)
+        start_dt = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    else:
+        end_dt   = datetime.now(timezone.utc)
+        start_dt = end_dt - PRESETS[preset]  # type: ignore[operator]
+
+    delta       = end_dt - start_dt
+    prior_end   = start_dt
+    prior_start = start_dt - delta
+    interval    = pick_interval(delta)
+    now_utc     = datetime.now(timezone.utc)
+    pending_window_start = now_utc - timedelta(days=30)
+
+    _start_local = start_dt.astimezone(DISPLAY_TZ)
+    _end_local   = end_dt.astimezone(DISPLAY_TZ)
+    _now_local   = now_utc.astimezone(DISPLAY_TZ)
+    _window_label = (
+        "All-time" if preset == "All-time"
+        else f"{_start_local:%Y-%m-%d %H:%M} → {_end_local:%Y-%m-%d %H:%M} {DISPLAY_TZ_LABEL}"
+    )
+    # Inline meta row — date range, bucket, apps scope, service-account hint.
+    _apps_label = f"{len(_team_apps)} apps" if _team_apps else "all apps"
+    _meta_bits = [
+        f'<span><b>Range</b> {_window_label}</span>',
+        f'<span><b>Bucket</b> {interval}</span>',
+        f'<span><b>Scope</b> {_apps_label}</span>',
+        f'<span><b>Updated</b> {_now_local:%H:%M} {DISPLAY_TZ_LABEL}</span>',
+    ]
+    if exclude_svc:
+        _meta_bits.append('<span>⊘ azure_sql excluded</span>')
+    st.markdown(
+        '<div class="cc-rail-meta">' + ''.join(_meta_bits) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+# For non-admin roles with no specific project picked, restrict queries to
+# the role's visible projects. For Admin, scope the same unless view-all.
+_scoped_projects: list[str] = []
+if not project_filter:
+    if role_pick != "Admin":
+        _scoped_projects = _proj_scoped
+    elif not admin_view_all:
+        _scoped_projects = _proj_scoped
 
 
-# ── Role-based section emphasis (moved up so event log + inventory can render
-# at the top of the page, right after the primary filters). Admin sees every
-# section; other roles are restricted to the event log + inventory.
+# ── Role-based section visibility — admins see everything; other roles stay
+# confined to the event log + inventory which are their primary surface.
 _ROLE_PRIORITY_SECTIONS: dict[str, list[str]] = {
     "Admin":     ["eventlog", "inventory", "alerts", "landscape", "lifecycle", "pipeline", "workflow"],
     "Developer": ["eventlog", "inventory"],
@@ -2967,82 +3058,18 @@ _visible = set(_ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTI
 
 
 def _show(section: str) -> bool:
-    """Return True if the current role should see this section."""
     return section in _visible
 
 
-# ── Event log + inventory are the primary operational surface for every role.
-# We render their shared search / per-project toggle inline with the top filter
-# strip, then stash empty slots here. The fragment definitions live far below;
-# the render block at the end of the file writes into these slots, which lets
-# the views appear at the top of the page without moving ~2000 lines of code.
+# ── Event log + inventory panel anchors + slots ───────────────────────────
+# Fragment definitions live far below; these st.empty() slots let us render
+# the views at the top of the page without forward-declaring ~2000 lines.
 _show_el  = _show("eventlog")
 _show_inv = _show("inventory")
 
 if _show_el or _show_inv:
-    _ops_r = st.columns([1.9, 1.0, 1.1])
-    with _ops_r[0]:
-        st.text_input(
-            "Ops search",
-            key="shared_search_v1",
-            placeholder="app · project · version · tech · person · detail…",
-            help="Shared across event log and inventory · case-insensitive · "
-                 "space-separated terms are AND · matches every string field",
-            label_visibility="collapsed",
-        )
-    with _ops_r[1]:
-        st.toggle(
-            "Per-project tables",
-            value=False,
-            key="shared_per_project_v1",
-            help="Group rows into a separate table per project in both views",
-        )
-    with _ops_r[2]:
-        st.markdown(
-            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
-            f'text-transform:uppercase;font-weight:600;margin-top:6px;text-align:right;'
-            f'white-space:nowrap">'
-            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL}</div>',
-            unsafe_allow_html=True,
-        )
-
     st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
     st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
-
-    _el_hint = {
-        "Admin":     "builds (dev/rel) · deployments · releases · requests · commits — full visibility, toggle scope via ‘view all’",
-        "Developer": "commits · dev/rel builds · dev deployments — scoped to projects where your team owns dev",
-        "QC":        "QC deployments + requests · releases + requests — scoped to projects where your team owns QC",
-        "Operator":  "UAT/PRD deployments + requests · releases + requests — scoped to projects where your team owns UAT/PRD",
-    }.get(_effective_role, "all event types")
-    _combined_title = (
-        "Event log &amp; Application inventory" if (_show_el and _show_inv)
-        else ("Event log" if _show_el else "Application inventory")
-    )
-    _combined_hint = (
-        f"{_el_hint} &mdash; paired with the live application inventory · "
-        f"filters shared with the top bar"
-    ) if (_show_el and _show_inv) else (
-        f"{_el_hint} &mdash; newest first · auto-refreshes every minute"
-        if _show_el else
-        "One row per registered application · PRD liveness · security posture · click any chip for details"
-    )
-    _combined_badge = (
-        f'{ROLE_ICONS[_effective_role]} Live · EL auto 60s · Inv auto 5m · {_effective_role}'
-        if (_show_el and _show_inv) else
-        f'{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}'
-        if _show_el else
-        f'{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}'
-    )
-    st.markdown(
-        f'<div class="section">'
-        f'<div class="title-wrap"><h2>{_combined_title}</h2>'
-        f'<span class="badge">{_combined_badge}</span></div>'
-        f'<span class="hint">{_combined_hint}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
     _event_log_slot = st.empty() if _show_el else None
     _inventory_slot = st.empty() if _show_inv else None
 
@@ -4829,59 +4856,103 @@ def _render_inventory_view() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Tech / platform filter pills ────────────────────────────────────────
-    # One pill-row per dimension (build tech, deploy tech, deploy platform).
-    # Each row is self-labelled with a glyph + caption so users can tell them
-    # apart at a glance without a bulky Streamlit field label.
-    def _iv_pill_filter(
-        *,
-        field: str,
-        counts: dict[str, int],
-        caption: str,
-        glyph: str,
-        widget_key: str,
-    ) -> None:
-        """Render a pill filter row for ``field`` and narrow _inv_rows in place."""
-        nonlocal _inv_rows
-        if not counts:
-            return
+    # ── Dimensional filters — single popover, spec-driven ───────────────────
+    # Add more filters by appending to _IV_FILTER_SPECS. Each spec drives the
+    # popover UI, the active-chip summary line, and the final row-narrowing
+    # loop, so no code changes are needed per new dimension.
+    _IV_FILTER_SPECS: list[dict] = [
+        {"field": "build_technology",  "label": "Build tech",
+         "glyph": "⚙",  "key": "iv_tech_pills_v1",            "counts": _iv_techs},
+        {"field": "deploy_technology", "label": "Deploy tech",
+         "glyph": "⛭",  "key": "iv_deploy_tech_pills_v1",     "counts": _iv_deploy_techs},
+        {"field": "deploy_platform",   "label": "Deploy platform",
+         "glyph": "☁",  "key": "iv_deploy_platform_pills_v1", "counts": _iv_platforms},
+    ]
+
+    def _iv_pill_options(spec: dict) -> tuple[list[str], dict[str, str]]:
+        """Return (options_in_pill_label_form, pill_label → raw_value)."""
         _opts: list[str] = []
         _pill_to_val: dict[str, str] = {}
-        for _val, _cnt in sorted(counts.items(), key=lambda x: -x[1]):
-            _opt = f"{glyph} {_val} · {_cnt}"
+        for _v, _c in sorted(spec["counts"].items(), key=lambda x: -x[1]):
+            _opt = f'{spec["glyph"]} {_v} · {_c}'
             _opts.append(_opt)
-            _pill_to_val[_opt] = _val
-        st.markdown(
-            f'<div class="iv-pill-caption">{caption}</div>',
-            unsafe_allow_html=True,
-        )
-        _sel = st.pills(
-            caption,
-            options=_opts,
-            selection_mode="multi",
-            default=None,
-            key=widget_key,
-            label_visibility="collapsed",
-        )
-        _active = {_pill_to_val[o] for o in (_sel or [])}
-        if _active:
-            _inv_rows = [r for r in _inv_rows if (r.get(field) or "") in _active]
+            _pill_to_val[_opt] = _v
+        return _opts, _pill_to_val
 
-    _iv_pill_filter(
-        field="build_technology", counts=_iv_techs,
-        caption="Build technology", glyph="⚙",
-        widget_key="iv_tech_pills_v1",
+    _iv_active_total = sum(
+        len(st.session_state.get(_s["key"]) or []) for _s in _IV_FILTER_SPECS
     )
-    _iv_pill_filter(
-        field="deploy_technology", counts=_iv_deploy_techs,
-        caption="Deploy technology", glyph="⛭",
-        widget_key="iv_deploy_tech_pills_v1",
-    )
-    _iv_pill_filter(
-        field="deploy_platform", counts=_iv_platforms,
-        caption="Deploy platform", glyph="☁",
-        widget_key="iv_deploy_platform_pills_v1",
-    )
+
+    _iv_fb = st.columns([1.4, 5.4, 0.8], vertical_alignment="center")
+
+    with _iv_fb[0]:
+        _pop_label = (
+            f"🔎 Filters · {_iv_active_total} active" if _iv_active_total
+            else "🔎 Filters"
+        )
+        with st.popover(_pop_label, use_container_width=True,
+                         help="Narrow the inventory by technology, platform, and more"):
+            st.markdown(
+                '<div style="font-size:.7rem;color:var(--cc-text-mute);'
+                'letter-spacing:.06em;text-transform:uppercase;font-weight:700;'
+                'margin-bottom:4px">Dimensional filters</div>',
+                unsafe_allow_html=True,
+            )
+            _rendered_any = False
+            for _spec in _IV_FILTER_SPECS:
+                if not _spec["counts"]:
+                    continue
+                _rendered_any = True
+                _opts, _ = _iv_pill_options(_spec)
+                st.markdown(
+                    f'<div class="iv-pill-caption">{_spec["label"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.pills(
+                    _spec["label"], options=_opts, selection_mode="multi",
+                    default=None, key=_spec["key"], label_visibility="collapsed",
+                )
+            if not _rendered_any:
+                st.caption("No filterable dimensions in current scope.")
+
+    with _iv_fb[1]:
+        if _iv_active_total:
+            _chip_html: list[str] = []
+            for _spec in _IV_FILTER_SPECS:
+                _sel = st.session_state.get(_spec["key"]) or []
+                for _opt in _sel:
+                    _chip_html.append(
+                        f'<span class="iv-active-chip" title="{_spec["label"]}">'
+                        f'{_opt}</span>'
+                    )
+            st.markdown(
+                '<div class="iv-active-chips">' + "".join(_chip_html) + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="iv-filter-hint">No dimensional filters applied — '
+                'use 🔎 to narrow by technology or platform.</div>',
+                unsafe_allow_html=True,
+            )
+
+    with _iv_fb[2]:
+        if _iv_active_total:
+            if st.button("Clear", key="iv_filters_clear_v1",
+                         use_container_width=True, help="Clear all dimensional filters"):
+                for _spec in _IV_FILTER_SPECS:
+                    if _spec["key"] in st.session_state:
+                        st.session_state.pop(_spec["key"], None)
+                st.rerun()
+
+    # Narrow _inv_rows by every active dimensional filter.
+    for _spec in _IV_FILTER_SPECS:
+        _sel = st.session_state.get(_spec["key"]) or []
+        if not _sel:
+            continue
+        _opts, _pill_to_val = _iv_pill_options(_spec)
+        _active_vals = {_pill_to_val.get(o, "") for o in _sel}
+        _inv_rows = [r for r in _inv_rows if (r.get(_spec["field"]) or "") in _active_vals]
 
     # ── Sort ────────────────────────────────────────────────────────────────
     # Pre-compute sort-aux maps so sorted() doesn't re-parse dates or walk
@@ -5794,13 +5865,34 @@ def _render_inventory_view() -> None:
 # inventory) — side-by-side proved too cramped at typical widths.
 if _show_el and _event_log_slot is not None:
     with _event_log_slot.container():
-        with st.expander("Event log (expand / collapse)", expanded=True):
-            _render_event_log()
+        _el_sub = {
+            "Admin":     "builds · deployments · releases · requests · commits — full visibility",
+            "Developer": "commits · dev/rel builds · dev deployments — scoped to your team",
+            "QC":        "QC deployments · releases · approval requests — scoped to your team",
+            "Operator":  "UAT/PRD deployments · releases · approval requests — scoped to your team",
+        }.get(_effective_role, "all event types")
+        st.markdown(
+            '<div class="cc-panel-head">'
+            '<h2>Event log</h2>'
+            f'<span class="cc-panel-tag">Live · auto-refresh 60s · {_effective_role}</span>'
+            '</div>'
+            f'<div class="cc-panel-sub">{_el_sub} — newest first · click any row for details</div>',
+            unsafe_allow_html=True,
+        )
+        _render_event_log()
 
 if _show_inv and _inventory_slot is not None:
     with _inventory_slot.container():
-        with st.expander("Application inventory (expand / collapse)", expanded=True):
-            _render_inventory_view()
+        st.markdown(
+            '<div class="cc-panel-head">'
+            '<h2>Application inventory</h2>'
+            f'<span class="cc-panel-tag">Auto-refresh 5m · {_effective_role}</span>'
+            '</div>'
+            '<div class="cc-panel-sub">One row per registered application · PRD liveness · '
+            'security posture · click any chip for project / app / version detail</div>',
+            unsafe_allow_html=True,
+        )
+        _render_inventory_view()
 
 
 # =============================================================================
@@ -6290,10 +6382,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Classify each project into one of 5 buckets:
-# Classify each application through the pipeline.
-# _lc_apps contains application names keyed from the "application" field.
-# _app_to_parent maps application → parent project from inventory.
+# Build application → parent-project mapping from the inventory index.
+# Used by lifecycle, workflow, and pipeline sections below.
+_app_to_parent: dict[str, str] = {}
+try:
+    _ap_rows = _fetch_full_inventory(
+        json.dumps(scope_filters_inv(), sort_keys=True, default=str)
+    )
+    for _ap_row in _ap_rows:
+        _ap_app = _ap_row.get("application") or ""
+        _ap_proj = _ap_row.get("project") or ""
+        if _ap_app and _ap_app not in _app_to_parent:
+            _app_to_parent[_ap_app] = _ap_proj or "—"
+except Exception:
+    _app_to_parent = {}
 
 _inv_apps = set(_app_to_parent.keys())
 
