@@ -2915,6 +2915,99 @@ st.caption(
 )
 
 
+# ── Role-based section emphasis (moved up so event log + inventory can render
+# at the top of the page, right after the primary filters). Admin sees every
+# section; other roles are restricted to the event log + inventory.
+_ROLE_PRIORITY_SECTIONS: dict[str, list[str]] = {
+    "Admin":     ["eventlog", "inventory", "alerts", "landscape", "lifecycle", "pipeline", "workflow"],
+    "Developer": ["eventlog", "inventory"],
+    "QC":        ["eventlog", "inventory"],
+    "Operator":  ["eventlog", "inventory"],
+}
+_visible = set(_ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"]))
+
+
+def _show(section: str) -> bool:
+    """Return True if the current role should see this section."""
+    return section in _visible
+
+
+# ── Event log + inventory are the primary operational surface for every role.
+# We render their shared search / per-project toggle inline with the top filter
+# strip, then stash empty slots here. The fragment definitions live far below;
+# the render block at the end of the file writes into these slots, which lets
+# the views appear at the top of the page without moving ~2000 lines of code.
+_show_el  = _show("eventlog")
+_show_inv = _show("inventory")
+
+if _show_el or _show_inv:
+    _ops_r = st.columns([1.9, 1.0, 1.1])
+    with _ops_r[0]:
+        st.text_input(
+            "Ops search",
+            key="shared_search_v1",
+            placeholder="app · project · version · tech · person · detail…",
+            help="Shared across event log and inventory · case-insensitive · "
+                 "space-separated terms are AND · matches every string field",
+            label_visibility="collapsed",
+        )
+    with _ops_r[1]:
+        st.toggle(
+            "Per-project tables",
+            value=False,
+            key="shared_per_project_v1",
+            help="Group rows into a separate table per project in both views",
+        )
+    with _ops_r[2]:
+        st.markdown(
+            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
+            f'text-transform:uppercase;font-weight:600;margin-top:6px;text-align:right;'
+            f'white-space:nowrap">'
+            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL}</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
+
+    _el_hint = {
+        "Admin":     "builds (dev/rel) · deployments · releases · requests · commits — full visibility, toggle scope via ‘view all’",
+        "Developer": "commits · dev/rel builds · dev deployments — scoped to projects where your team owns dev",
+        "QC":        "QC deployments + requests · releases + requests — scoped to projects where your team owns QC",
+        "Operator":  "UAT/PRD deployments + requests · releases + requests — scoped to projects where your team owns UAT/PRD",
+    }.get(_effective_role, "all event types")
+    _combined_title = (
+        "Event log &amp; Application inventory" if (_show_el and _show_inv)
+        else ("Event log" if _show_el else "Application inventory")
+    )
+    _combined_hint = (
+        f"{_el_hint} &mdash; paired with the live application inventory · "
+        f"filters shared with the top bar"
+    ) if (_show_el and _show_inv) else (
+        f"{_el_hint} &mdash; newest first · auto-refreshes every minute"
+        if _show_el else
+        "One row per registered application · PRD liveness · security posture · click any chip for details"
+    )
+    _combined_badge = (
+        f'{ROLE_ICONS[_effective_role]} Live · EL auto 60s · Inv auto 5m · {_effective_role}'
+        if (_show_el and _show_inv) else
+        f'{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}'
+        if _show_el else
+        f'{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}'
+    )
+    st.markdown(
+        f'<div class="section">'
+        f'<div class="title-wrap"><h2>{_combined_title}</h2>'
+        f'<span class="badge">{_combined_badge}</span></div>'
+        f'<span class="hint">{_combined_hint}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _event_log_slot = st.empty() if _show_el else None
+    _inventory_slot = st.empty() if _show_inv else None
+
+
 def scope_filters() -> list[dict]:
     """Base filters for operational indices (builds, deployments, commits, etc.)."""
     fs: list[dict] = []
@@ -3723,26 +3816,6 @@ if _tick_evts and _is_admin:
         + "".join(_ticker_html_items) + "</div>",
         unsafe_allow_html=True,
     )
-
-
-# ── Role-based section emphasis ────────────────────────────────────────────
-# Admin sees every section. All other roles (Developer / QC / Operator) are
-# restricted to the event log, where their configured RBAC rules govern what
-# rows they can see. This keeps operational context focused for non-admins.
-_ROLE_PRIORITY_SECTIONS: dict[str, list[str]] = {
-    "Admin":     ["eventlog", "inventory", "alerts", "landscape", "lifecycle", "pipeline", "workflow"],
-    "Developer": ["eventlog", "inventory"],
-    "QC":        ["eventlog", "inventory"],
-    "Operator":  ["eventlog", "inventory"],
-}
-# _effective_role and _is_admin are computed earlier (right after admin_role_view
-# widget) so that the HUD/KPI blocks can be gated before they render.
-_visible = set(_ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"]))
-
-
-def _show(section: str) -> bool:
-    """Return True if the current role should see this section."""
-    return section in _visible
 
 
 # ── Role-scoped event type / env / stage helpers ──────────────────────────
@@ -4926,76 +4999,13 @@ def _render_event_log() -> None:
     )
 
 
-# ── Shared controls for the side-by-side event log + inventory panel ───────
-# Both fragments read these out of session_state so users only set project /
-# search / per-project once. A single search query feeds both views — each
-# view narrows with its own haystack so "jane prd" finds Jane's prd deploys in
-# events AND any inventory row that has jane in a team + prd in a platform/tag.
-_SHARED_LAYOUT_CHOICES: dict[str, tuple[int, int]] = {
-    "Events 75 / Inv 25": (3, 1),
-    "Events 66 / Inv 33": (2, 1),
-    "Balanced 50 / 50":   (1, 1),
-    "Events 33 / Inv 66": (1, 2),
-    "Events 25 / Inv 75": (1, 3),
-}
-
-
-def _render_shared_inv_el_controls(*, show_layout: bool) -> None:
-    """Render shared Project · Search · Per-project (+ Layout) row.
-
-    Writes session_state under the widgets' own keys (``shared_project_v1``,
-    ``shared_search_v1``, ``shared_per_project_v1``, ``shared_layout_v1``).
-    """
-    _opts = [_ALL] + (_proj_scoped or [])
-    _proj_default = 0
-    if project_filter and project_filter in _opts:
-        _proj_default = _opts.index(project_filter)
-
-    # Layout chooser only renders when both views are visible; otherwise the
-    # four-column grid stays compact: project · search · per-project · badge.
-    _cols_spec = [1.3, 1.9, 1.0, 1.2] if not show_layout else [1.2, 1.7, 0.95, 1.1, 1.2]
-    _r = st.columns(_cols_spec)
-    with _r[0]:
-        _proj = st.selectbox(
-            "Project", _opts, index=_proj_default, key="shared_project_v1",
-            help="Shared between event log and inventory — 'All' falls back to the global scope",
-        )
-    with _r[1]:
-        st.text_input(
-            "Search", key="shared_search_v1",
-            placeholder="app · project · version · tech · person · detail…",
-            help="Shared across both views · case-insensitive · "
-                 "space-separated terms are AND · matches every string field "
-                 "(each view narrows with its own haystack)",
-        )
-    with _r[2]:
-        st.toggle(
-            "Per-project tables", value=False, key="shared_per_project_v1",
-            help="Group rows into a separate table per project in both views",
-        )
-    _badge_col = _r[-1]
-    if show_layout:
-        with _r[3]:
-            st.select_slider(
-                "Layout",
-                options=list(_SHARED_LAYOUT_CHOICES.keys()),
-                value="Balanced 50 / 50",
-                key="shared_layout_v1",
-                help="Adjust the width split — slide right to give inventory more room",
-            )
-    with _badge_col:
-        st.markdown(
-            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
-            f'text-transform:uppercase;font-weight:600;margin-top:26px;white-space:nowrap">'
-            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL}</div>',
-            unsafe_allow_html=True,
-        )
-
-
+# ── Shared controls for the event log + inventory panel ──────────────────
+# Both fragments read these out of session_state so users only set search /
+# per-project once. Project is unified with the top filter strip; the two
+# helpers below just reflect the already-set values back into each view.
 def _shared_project_filter() -> str:
-    """Resolve the shared project selector to a filter string ("" = all)."""
-    _v = st.session_state.get("shared_project_v1", _ALL)
-    return "" if _v == _ALL else _v
+    """Reuse the top-bar project picker — no separate shared widget."""
+    return project_filter
 
 
 def _shared_search_query() -> str:
@@ -5006,16 +5016,6 @@ def _shared_search_query() -> str:
 def _shared_per_project() -> bool:
     """Resolve the shared per-project-tables toggle."""
     return bool(st.session_state.get("shared_per_project_v1", False))
-
-
-def _shared_layout_ratio() -> tuple[int, int]:
-    """Resolve the shared layout ratio for the side-by-side split."""
-    _lbl = st.session_state.get("shared_layout_v1", "Balanced 50 / 50")
-    return _SHARED_LAYOUT_CHOICES.get(_lbl, (1, 1))
-
-
-# Combined side-by-side render block is declared further below — after
-# _render_inventory_view is defined so the reference resolves.
 
 
 # =============================================================================
@@ -6159,66 +6159,20 @@ def _render_inventory_view() -> None:
     )
 
 
-# ── Combined side-by-side render: event log (left) + inventory (right) ─────
-# Must live AFTER both fragment definitions (_render_event_log above and
-# _render_inventory_view just above this block) so the references resolve.
-_show_el = _show("eventlog")
-_show_inv = _show("inventory")
-
-if _show_el or _show_inv:
-    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
-    st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
-
-    _el_hint = {
-        "Admin":     "builds (dev/rel) · deployments · releases · requests · commits — full visibility, toggle scope via ‘view all’",
-        "Developer": "commits · dev/rel builds · dev deployments — scoped to projects where your team owns dev",
-        "QC":        "QC deployments + requests · releases + requests — scoped to projects where your team owns QC",
-        "Operator":  "UAT/PRD deployments + requests · releases + requests — scoped to projects where your team owns UAT/PRD",
-    }.get(_effective_role, "all event types")
-
-    _combined_title = (
-        "Event log &amp; Application inventory" if (_show_el and _show_inv)
-        else ("Event log" if _show_el else "Application inventory")
-    )
-    _combined_hint = (
-        f"{_el_hint} &mdash; paired with the live application inventory · "
-        f"shared project, search &amp; per-project toggle"
-    ) if (_show_el and _show_inv) else (
-        f"{_el_hint} &mdash; newest first · auto-refreshes every minute"
-        if _show_el else
-        "One row per registered application · PRD liveness · security posture · click any chip for details"
-    )
-    _combined_badge = (
-        f'{ROLE_ICONS[_effective_role]} Live · EL auto 60s · Inv auto 5m · {_effective_role}'
-        if (_show_el and _show_inv) else
-        f'{ROLE_ICONS[_effective_role]} Live · auto 60s · {_effective_role}'
-        if _show_el else
-        f'{ROLE_ICONS[_effective_role]} auto 5m · {_effective_role}'
-    )
-    st.markdown(
-        f'<div class="section">'
-        f'<div class="title-wrap"><h2>{_combined_title}</h2>'
-        f'<span class="badge">{_combined_badge}</span></div>'
-        f'<span class="hint">{_combined_hint}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    _render_shared_inv_el_controls(show_layout=(_show_el and _show_inv))
-
-    if _show_el and _show_inv:
-        _ratio = _shared_layout_ratio()
-        _cols_panel = st.columns(list(_ratio), gap="large")
-        with _cols_panel[0]:
-            with st.expander("Event log (expand / collapse)", expanded=True):
-                _render_event_log()
-        with _cols_panel[1]:
-            with st.expander("Application inventory (expand / collapse)", expanded=True):
-                _render_inventory_view()
-    elif _show_el:
+# ── Late render into the top-of-page slots ────────────────────────────────
+# The shared header + anchors + st.empty() slots were created right after the
+# global filter strip so event log and inventory appear at the top of the
+# page. Their fragment functions are defined far below; by writing into the
+# slots here we keep the reading order top-down without having to forward-
+# declare ~2000 lines of helpers. Views are stacked (event log above
+# inventory) — side-by-side proved too cramped at typical widths.
+if _show_el and _event_log_slot is not None:
+    with _event_log_slot.container():
         with st.expander("Event log (expand / collapse)", expanded=True):
             _render_event_log()
-    else:
+
+if _show_inv and _inventory_slot is not None:
+    with _inventory_slot.container():
         with st.expander("Application inventory (expand / collapse)", expanded=True):
             _render_inventory_view()
 
