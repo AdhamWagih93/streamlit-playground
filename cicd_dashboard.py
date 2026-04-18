@@ -1406,6 +1406,69 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-weight: 600;
     letter-spacing: 0.04em;
 }
+/* Project-health ribbon — one subtle chip per project, colored by the worst
+ * security tier across its applications. Replaces the old landscape treemap
+ * with a compact always-visible alternative that sits above the inventory
+ * table. */
+.iv-proj-ribbon {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 8px 0;
+    padding: 0;
+}
+.iv-proj-ribbon .iv-pr-lbl {
+    font-size: 0.62rem;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    margin-right: 2px;
+}
+.iv-proj-ribbon .iv-pr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 14px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--cc-surface2);
+    color: var(--cc-text-dim);
+    border: 1px solid var(--cc-border);
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease;
+}
+.iv-proj-ribbon .iv-pr-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+}
+.iv-proj-ribbon .iv-pr-chip .iv-pr-n {
+    font-size: 0.64rem;
+    font-weight: 500;
+    opacity: 0.65;
+    margin-left: 2px;
+}
+.iv-proj-ribbon .iv-pr-chip.is-crit  { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+.iv-proj-ribbon .iv-pr-chip.is-high  { border-color:#fed7aa; background:#fff7ed; color:#9a3412; }
+.iv-proj-ribbon .iv-pr-chip.is-med   { border-color:#fde68a; background:#fffbeb; color:#854d0e; }
+.iv-proj-ribbon .iv-pr-chip.is-low   { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
+.iv-proj-ribbon .iv-pr-chip.is-clean { border-color:#d1fae5; background:#ecfdf5; color:#065f46; }
+.iv-proj-ribbon .iv-pr-chip.is-na    { border-color:var(--cc-border); background:var(--cc-surface2); color:var(--cc-text-mute); }
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot.is-crit  { background:#dc2626; }
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot.is-high  { background:#ea580c; }
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot.is-med   { background:#d97706; }
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot.is-low   { background:#65a30d; }
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot.is-clean { background:#10b981; }
+.iv-proj-ribbon .iv-pr-chip .iv-pr-dot.is-na    { background:var(--cc-text-mute); }
 /* "Not needed" — positive chip for Lib apps' post-build stages */
 .iv-stage-nn {
     display: inline-flex;
@@ -3364,440 +3427,15 @@ dormant_pct = (1 - active_projs / inv_count) * 100 if inv_count else 0
 _alerts_ph = st.container() if _is_admin else None
 
 
-# =============================================================================
-# HUD — Gamified team health panel
-# =============================================================================
-
-def _svg_ring(score: float, color: str, size: int = 64) -> str:
-    """Return an SVG circular progress ring for the given score (0-100)."""
-    r = (size - 6) // 2
-    circ = 2 * 3.14159 * r
-    offset = circ * (1 - score / 100)
-    return (
-        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
-        f'<circle cx="{size//2}" cy="{size//2}" r="{r}" fill="none" stroke="var(--cc-border)" stroke-width="5"/>'
-        f'<circle cx="{size//2}" cy="{size//2}" r="{r}" fill="none" stroke="{color}" stroke-width="5"'
-        f' stroke-linecap="round" stroke-dasharray="{circ:.1f}" stroke-dashoffset="{offset:.1f}"'
-        f' transform="rotate(-90 {size//2} {size//2})"'
-        f' style="transition:stroke-dashoffset .6s ease"/>'
-        f'</svg>'
-    )
-
-
-# Compute team health score (composite: build success 30%, artifact throughput 25%, CFR 25%, queue 20%)
-_health_build = min(success_rate, 100)
-_health_throughput = min(art_build_to_prd * 2, 100) if art_built else 50  # 50% conv = 100 score
-_health_cfr = max(0, 100 - cfr * 5)  # 0% CFR = 100, 20% CFR = 0
-_health_queue = 100 if not pending_now else max(0, 100 - pending_now * 15)
-_health_score = int(_health_build * 0.3 + _health_throughput * 0.25 + _health_cfr * 0.25 + _health_queue * 0.2)
-_health_color = "var(--cc-green)" if _health_score >= 75 else ("var(--cc-amber)" if _health_score >= 50 else "var(--cc-red)")
-
-# Streak: consecutive days with at least one successful build
-_streak_days = 0
-if builds_now > builds_fail:
-    _streak_days = min(int(days_in_window), 30)  # simplified estimate
-
-# Velocity: deployments per day
-_velocity = deploy_freq_per_day
-
-# Role-specific quest items
-_quests: list[tuple[str, str, str, str]] = []  # (priority_color, icon, text, value)
-
-if role_pick == "Admin":
-    if builds_fail:
-        _quests.append((C_DANGER, "!", f"<b>{builds_fail}</b> build failures to investigate", f"{builds_fail}"))
-    if pending_now:
-        _quests.append((C_WARN, "⏳", f"<b>{pending_now}</b> requests awaiting approval", f"{pending_now}"))
-    _inv_total = count_with_range(IDX["inventory"], "startdate", start_dt, end_dt) if False else inv_count
-    _quests.append((C_INFO, "📋", f"<b>{inv_count}</b> inventory pipelines, <b>{active_projs}</b> active", ""))
-elif role_pick == "Developer":
-    if builds_fail:
-        _quests.append((C_DANGER, "🔴", f"<b>{builds_fail}</b> failed builds need fixing", f"{builds_fail}"))
-    _quests.append((C_SUCCESS if success_rate >= 90 else C_WARN, "🏗",
-                    f"Build success rate: <b>{success_rate:.0f}%</b>", f"{success_rate:.0f}%"))
-    _quests.append((C_INFO, "📦", f"<b>{commits_now:,}</b> commits pushed this window", f"{commits_now:,}"))
-elif role_pick == "QC":
-    # QC cares about release requests (stage=request_promote)
-    _qc_pending = sum(1 for r in _all_pending
-                       if (r.get("Stage") or "") == "request_promote")
-    if _qc_pending:
-        _quests.append((C_WARN, "🔬", f"<b>{_qc_pending}</b> release requests awaiting QC approval", f"{_qc_pending}"))
-    _quests.append((C_INFO, "📊", f"<b>{deploys_now:,}</b> total deployments this window", f"{deploys_now:,}"))
-    _quests.append((C_SUCCESS, "✓", f"Change failure rate: <b>{cfr:.1f}%</b>",
-                    f"{cfr:.1f}%"))
-elif role_pick == "Operator":
-    # Operator cares about deployment requests (stage=request_deploy_*)
-    _ops_pending = sum(1 for r in _all_pending
-                        if (r.get("Stage") or "").startswith("request_deploy_"))
-    if _ops_pending:
-        _quests.append((C_WARN, "🚀", f"<b>{_ops_pending}</b> deployment requests pending", f"{_ops_pending}"))
-    _quests.append((C_SUCCESS, "🎯", f"<b>{prd_deploys}</b> prod deploys ({deploy_freq_per_day:.1f}/day)",
-                    f"{prd_deploys}"))
-    if prd_fail:
-        _quests.append((C_DANGER, "💥", f"<b>{prd_fail}</b> prod deploy failures", f"{prd_fail}"))
-
-# ── Render HUD ── (admin only) ────────────────────────────────────────────────
-if _is_admin:
-    _hud_c1, _hud_c2, _hud_c3 = st.columns([1, 1.5, 2])
-
-    with _hud_c1:
-        _ring_svg = _svg_ring(_health_score, _health_color, 80)
-        st.markdown(
-            f'<div class="hud-ring">'
-            f'  {_ring_svg}'
-            f'  <div>'
-            f'    <div class="score-value">{_health_score}</div>'
-            f'    <div class="score-label">Team health</div>'
-            f'  </div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    with _hud_c2:
-        _streak_cls = "" if _streak_days >= 3 else ("warn" if _streak_days >= 1 else "bad")
-        st.markdown(
-            f'<div class="hud-mission">'
-            f'  <div class="mission-title">Artifact flow &amp; velocity</div>'
-            f'  <div class="hud-stat">'
-            f'    <div class="stat-icon" style="background:var(--cc-accent-lt);color:var(--cc-accent)">📦</div>'
-            f'    <div class="stat-label">Artifacts built</div>'
-            f'    <div class="stat-val">{art_built}</div>'
-            f'  </div>'
-            f'  <div class="hud-stat">'
-            f'    <div class="stat-icon" style="background:var(--cc-green-lt);color:var(--cc-green)">🚀</div>'
-            f'    <div class="stat-label">Artifacts → PRD</div>'
-            f'    <div class="stat-val">{art_dep_prd}</div>'
-            f'  </div>'
-            f'  <div class="hud-stat">'
-            f'    <div class="stat-icon" style="background:var(--cc-blue-lt);color:var(--cc-blue)">⚡</div>'
-            f'    <div class="stat-label">Deploy velocity</div>'
-            f'    <div class="stat-val">{_velocity:.1f}/d</div>'
-            f'  </div>'
-            f'  <div class="hud-stat">'
-            f'    <div class="stat-icon" style="background:{"var(--cc-green-lt)" if art_build_to_prd >= 50 else "var(--cc-amber-lt)"};'
-            f'color:{"var(--cc-green)" if art_build_to_prd >= 50 else "var(--cc-amber)"}">📈</div>'
-            f'    <div class="stat-label">Build→PRD rate</div>'
-            f'    <div class="stat-val">{art_build_to_prd:.0f}%</div>'
-            f'  </div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    with _hud_c3:
-        _quest_html = ""
-        for _q_color, _q_icon, _q_text, _q_val in _quests[:5]:
-            _quest_html += (
-                f'<div class="hud-quest">'
-                f'  <div class="quest-prio" style="background:{_q_color}">{_q_icon}</div>'
-                f'  <div class="quest-text">{_q_text}</div>'
-                f'  <div class="quest-val">{_q_val}</div>'
-                f'</div>'
-            )
-        if not _quest_html:
-            _quest_html = '<div style="font-size:.85rem;color:var(--cc-text-mute);padding:12px 0">All clear — no action items</div>'
-        st.markdown(
-            f'<div class="hud-mission">'
-            f'  <div class="mission-title">{ROLE_ICONS[role_pick]} {role_pick} missions</div>'
-            f'  {_quest_html}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-
-    # =============================================================================
-# KPIs  (2 rows × 4)
-# =============================================================================
-
-# Anchor for in-page navigation
-if _is_admin:
-    st.markdown('<a class="anchor" id="sec-kpis"></a>', unsafe_allow_html=True)
-
-    # Helper functions for WoW/MoM/YoY (used inside the trend popover below)
-    def _trend_count(
-        index: str, date_field: str, cur_start: datetime, cur_end: datetime,
-        prev_start: datetime, prev_end: datetime,
-        extra: list[dict] | None = None,
-    ) -> tuple[int, int]:
-        cur  = count_with_range(index, date_field, cur_start, cur_end, extra=extra)
-        prev = count_with_range(index, date_field, prev_start, prev_end, extra=extra)
-        return cur, prev
-
-
-    def _cell(cur: int, prev: int) -> str:
-        if prev == 0 and cur == 0:
-            return '<span style="color:var(--cc-text-mute);">—</span>'
-        if prev == 0:
-            return f'<b style="color:var(--cc-text);">{cur:,}</b> <span style="color:var(--cc-green);">new</span>'
-        diff = cur - prev
-        pct  = diff / prev * 100
-        direction = "var(--cc-green)" if diff > 0 else ("var(--cc-red)" if diff < 0 else "var(--cc-text-mute)")
-        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "→")
-        sign = "+" if diff >= 0 else ""
-        return (
-            f'<b style="color:var(--cc-text);">{cur:,}</b> '
-            f'<span style="color:{direction};font-size:.80rem;"> {arrow} {sign}{pct:.1f}%</span>'
-        )
-
-
-    _periods: list[tuple[str, timedelta]] = [
-        ("WoW (7d)", timedelta(days=7)),
-        ("MoM (30d)", timedelta(days=30)),
-        ("YoY (365d)", timedelta(days=365)),
-    ]
-
-
-    def _trend_windows(td: timedelta) -> tuple[datetime, datetime, datetime, datetime]:
-        cur_end    = now_utc
-        cur_start  = cur_end - td
-        prev_end   = cur_start
-        prev_start = prev_end - td
-        return cur_start, cur_end, prev_start, prev_end
-
-
-    _trend_metrics = [
-        ("Builds",            IDX["builds"],       "startdate",   None,   False),
-        ("Build failures",    IDX["builds"],       "startdate",   [{"terms": {"status": FAILED_STATUSES}}], False),
-        ("Deployments",       IDX["deployments"],  "startdate",   None,   False),
-        ("Prod deployments",  IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}], False),
-        ("Prod failures",     IDX["deployments"],  "startdate",   [{"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}], False),
-        ("Commits",           IDX["commits"],      "commitdate",  None,   True),   # use commit scope
-        ("Releases",          IDX["releases"],     "releasedate", None,   False),
-        ("Requests",          IDX["requests"],     "RequestDate", None,   False),
-    ]
-
-    # Row 1 — Artifact-centric headline (5 cards)
-    r1 = st.columns(5)
-    d, dn = fmt_delta(art_built, art_built_prev)
-    kpi_block(r1[0], "📦 Artifacts built", f"{art_built:,}", d, dn,
-        "Unique code versions built in window")
-    kpi_block(r1[1], "🚀 Artifacts → PRD", f"{art_dep_prd:,}",
-        f"{art_build_to_prd:.0f}% conversion" if art_built else "—",
-        "up" if art_build_to_prd >= 50 else ("dn" if art_built and art_build_to_prd < 20 else "flat"),
-        "Unique versions reaching production")
-    kpi_block(r1[2], "Deploy freq", f"{deploy_freq_per_day:.1f}/day",
-        f"{prd_deploys:,} prod deploys",
-        "up" if deploy_freq_per_day >= 1 else "flat", "DORA · prod deploys / day")
-    kpi_block(r1[3], "Change fail rate", f"{cfr:.1f}%",
-        f"{prd_fail} / {prd_deploys} prod" if prd_deploys else "no prod deploys",
-        "dn" if cfr > 15 else ("up" if prd_deploys else "flat"), "DORA · failed prod / prod deploys")
-    kpi_block(r1[4], "Build success", f"{success_rate:.1f}%",
-        f"{builds_fail:,} failed of {builds_now:,}" if builds_fail else "all green",
-        "dn" if builds_fail else "up", "(builds − failed) / builds")
-
-    # Row 2 — volume + health (5 cards) + trend popover, role-tailored
-    r2c = st.columns([1, 1, 1, 1, 1, 1.4])
-
-    # Slot 0: Builds (Developer/Admin) or PRD deploys (Operator) or QC deploys (QC)
-    if _ROLE_SHOWS_BUILDS.get(role_pick, True):
-        d, dn = fmt_delta(builds_now, builds_prev)
-        kpi_block(r2c[0], "Builds", f"{builds_now:,}", d, dn)
-    elif role_pick == "Operator":
-        d, dn = fmt_delta(art_dep_prd, art_dep_prd_prev)
-        kpi_block(r2c[0], "PRD artifacts", f"{art_dep_prd:,}", d, dn,
-                  "Unique artifacts deployed to PRD")
-    else:  # QC
-        kpi_block(r2c[0], "QC artifacts", f"{art_dep_qc:,}", "this window", "flat",
-                  "Unique artifacts deployed to QC")
-
-    # Slot 1: Commits (Developer/Admin) or Releases (QC/Operator)
-    if role_pick in ("Admin", "Developer"):
-        d, dn = fmt_delta(commits_now, commits_prev)
-        kpi_block(r2c[1], "Commits", f"{commits_now:,}", d, dn)
-    else:
-        kpi_block(r2c[1], "Releases", f"{rel_now:,}",
-                  f"{rel_now - rel_prev:+d} vs prior" if rel_prev else "this window",
-                  "up" if rel_now >= rel_prev else "dn")
-
-    # Slot 2: Pending — always relevant (role-scoped queue shown in Workflow section)
-    kpi_block(r2c[2], "Pending", f"{pending_now:,}",
-        "needs action" if pending_now else "clear",
-        "dn" if pending_now else "up", "Pending approvals (last 30d)")
-
-    # Slot 3: JIRA (Admin/Dev/QC) or Deploy freq-focused metric (Operator)
-    if _ROLE_SHOWS_JIRA.get(role_pick, True):
-        kpi_block(r2c[3], "Open JIRA", f"{open_jira:,}", "all-time", "flat")
-    else:
-        kpi_block(r2c[3], "UAT artifacts", f"{art_dep_uat:,}", "this window", "flat",
-                  "Unique artifacts deployed to UAT")
-
-    kpi_block(r2c[4], "Platform health",
-        f"{active_projs}/{inv_count}" if inv_count else "—",
-        f"{100 - dormant_pct:.0f}% active" if inv_count else "",
-        "up" if dormant_pct < 30 else ("dn" if dormant_pct > 60 else "flat"), "active / inventory")
-
-    with r2c[5]:
-        with st.popover("📈  WoW / MoM / YoY trends", use_container_width=True):
-            st.markdown("**Rolling period comparisons** — independent of the window selector above")
-            _trend_rows = []
-            for _lbl, _idx, _df, _ex, _use_cs in _trend_metrics:
-                _row: dict[str, Any] = {"Metric": _lbl}
-                for _pl, _td in _periods:
-                    _cs, _ce, _ps, _pe = _trend_windows(_td)
-                    _cur  = count_with_range(_idx, _df, _cs, _ce, extra=_ex, use_commit_scope=_use_cs)
-                    _prev = count_with_range(_idx, _df, _ps, _pe, extra=_ex, use_commit_scope=_use_cs)
-                    _row[_pl] = _cell(_cur, _prev)
-                _trend_rows.append(_row)
-            _hdrs = ["Metric"] + [p[0] for p in _periods]
-            _html = [
-                '<div style="background:var(--cc-surface);border:1px solid var(--cc-border);border-radius:10px;overflow:hidden;">',
-                '<table style="width:100%;border-collapse:collapse;font-size:.88rem;">',
-                '<thead><tr>',
-            ]
-            for _i, _h in enumerate(_hdrs):
-                _align = "left" if _i == 0 else "right"
-                _html.append(
-                    f'<th style="text-align:{_align};padding:10px 14px;color:var(--cc-text-mute);font-size:.68rem;'
-                    f'letter-spacing:.10em;text-transform:uppercase;font-weight:600;'
-                    f'border-bottom:1px solid var(--cc-border);background:var(--cc-surface2);">{_h}</th>'
-                )
-            _html.append('</tr></thead><tbody>')
-            for _row in _trend_rows:
-                _html.append('<tr>')
-                _html.append(f'<td style="padding:9px 14px;color:var(--cc-text);font-weight:500;border-bottom:1px solid var(--cc-border);">{_row["Metric"]}</td>')
-                for _pl, _ in _periods:
-                    _html.append(f'<td style="text-align:right;padding:9px 14px;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--cc-border);">{_row[_pl]}</td>')
-                _html.append('</tr>')
-            _html.append('</tbody></table></div>')
-            st.markdown("".join(_html), unsafe_allow_html=True)
-
-
-    # ── Contextual digest — one-liner translating the numbers into meaning ──────
-    _stuck_count_early = sum(1 for r in _all_pending if (r.get("Age (h)") or 0) >= 24)
-    _digest_parts: list[str] = []
-    if prd_fail:
-        _digest_parts.append(f"<b>{prd_fail}</b> prod deploy failure(s) need attention")
-    if _stuck_count_early:
-        _digest_parts.append(f"<b>{_stuck_count_early}</b> approval(s) stuck > 24h")
-    if builds_now and success_rate < 80:
-        _digest_parts.append(f"build success rate <b>{success_rate:.0f}%</b> (below 80%)")
-    if art_built and art_build_to_prd < 30:
-        _digest_parts.append(f"only <b>{art_build_to_prd:.0f}%</b> of artifacts reaching PRD")
-    if not _digest_parts and builds_now:
-        # positive summary
-        if art_built and art_build_to_prd >= 50:
-            _digest_parts.append(f"<b>{art_dep_prd}</b> of <b>{art_built}</b> artifacts reached PRD ({art_build_to_prd:.0f}%)")
-        if success_rate >= 95:
-            _digest_parts.append(f"build pipeline healthy at <b>{success_rate:.0f}%</b> success")
-        if deploy_freq_per_day >= 1:
-            _digest_parts.append(f"shipping <b>{deploy_freq_per_day:.1f}</b> prod deploys / day")
-        if not pending_now:
-            _digest_parts.append("no pending approvals")
-    if _digest_parts:
-        _has_issues = bool(prd_fail or _stuck_count_early)
-        st.markdown(
-            f'<div class="learn">'
-            f'  <b>TL;DR</b> &mdash; {" &middot; ".join(_digest_parts)}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-
-    # =============================================================================
-# EVENT TICKER — subtle always-visible live feed at top of content
-# =============================================================================
-
-@st.cache_data(ttl=60, show_spinner=False)   # short TTL — meant to feel live
-def _ticker_events(scope_json: str, excl_svc: bool) -> list[dict]:
-    """Fetch the 12 most-recent events (any type) for the ticker strip."""
-    _sf = json.loads(scope_json)
-    _commit_f = _sf + ([{"bool": {"must_not": [{"term": {"authorname": "azure_sql"}}]}}] if excl_svc else [])
-    _now = datetime.now(timezone.utc)
-    _win = _now - timedelta(hours=48)
-    _evts: list[dict] = []
-
-    _deploy_extra = [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]
-    # Prod deploys
-    _r = _run_search(IDX["deployments"], json.dumps({
-        "query": {"bool": {"filter": [
-            range_filter("startdate", _win, _now),
-            {"term": {"environment": "prd"}},
-        ] + _sf + _deploy_extra}},
-        "sort": [{"startdate": "desc"}], "track_total_hits": True,
-    }, default=str, sort_keys=True), 6)
-    for _h in _r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _ok = (_s.get("status") or "").upper() not in ("FAILED", "FAILURE", "FAILED")
-        _evts.append({
-            "ts": parse_dt(_pick_date(_s, "deploy")),
-            "type": "prd-deploy",
-            "label": f'PRD deploy · {_s.get("application") or _s.get("project","")} v{_s.get("codeversion","")}',
-            "ok": _ok,
-        })
-
-    # Releases
-    _r = _run_search(IDX["releases"], json.dumps({
-        "query": {"bool": {"filter": [range_filter("releasedate", _win, _now)] + _sf}},
-        "sort": [{"releasedate": "desc"}], "track_total_hits": True,
-    }, default=str, sort_keys=True), 6)
-    for _h in _r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _evts.append({
-            "ts": parse_dt(_pick_date(_s, "release")),
-            "type": "release",
-            "label": f'Release · {_s.get("application","")} v{_s.get("codeversion","")}',
-            "ok": True,
-        })
-
-    _build_extra = [{"term": {"branch": "release"}}]
-    # Failed builds (release branch only)
-    _r = _run_search(IDX["builds"], json.dumps({
-        "query": {"bool": {"filter": [
-            range_filter("startdate", _win, _now),
-            {"terms": {"status": FAILED_STATUSES}},
-        ] + _sf + _build_extra}},
-        "sort": [{"startdate": "desc"}], "track_total_hits": True,
-    }, default=str, sort_keys=True), 4)
-    for _h in _r.get("hits", {}).get("hits", []):
-        _s = _h["_source"]
-        _evts.append({
-            "ts": parse_dt(_pick_date(_s, "build")),
-            "type": "fail",
-            "label": f'Build failed · {_s.get("application") or _s.get("project","")} {_s.get("branch","")}',
-            "ok": False,
-        })
-
-    _evts.sort(key=lambda e: e["ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
-    return _evts[:14]
-
-
-_tick_scope = json.dumps(scope_filters(), sort_keys=True)
-_tick_evts = _ticker_events(_tick_scope, exclude_svc)
-
-if _tick_evts and _is_admin:
-    _TYPE_CHIP = {
-        "prd-deploy": ("PRD", "#059669", "#d1fae5"),
-        "release":    ("REL", "#4f46e5", "#eef2ff"),
-        "fail":       ("FAIL", "#dc2626", "#fee2e2"),
-    }
-    _ticker_html_items = []
-    for _te in _tick_evts:
-        _ch_lbl, _ch_clr, _ch_bg = _TYPE_CHIP.get(_te["type"], ("EVT", "#8890a4", "#f7f8fb"))
-        _age_h = age_hours(_te["ts"]) or 0
-        _age_str = f"{_age_h}h ago" if _age_h < 24 else f"{_age_h//24}d ago"
-        _item_bg = "#fee2e2" if not _te["ok"] else "#f7f8fb"
-        _ticker_html_items.append(
-            f'<span style="display:inline-flex;align-items:center;gap:6px;'
-            f'padding:3px 10px 3px 4px;margin:0 6px 0 0;'
-            f'background:{_item_bg};border:1px solid var(--cc-border);border-radius:20px;'
-            f'white-space:nowrap;font-size:0.73rem;">'
-            f'  <span style="background:{_ch_clr};color:#fff;font-size:0.63rem;font-weight:700;'
-            f'  padding:1px 6px;border-radius:999px">{_ch_lbl}</span>'
-            f'  <span style="color:var(--cc-text-dim)">{_te["label"]}</span>'
-            f'  <span style="color:var(--cc-text-mute)">{_age_str}</span>'
-            f'</span>'
-        )
-    st.markdown(
-        '<div style="overflow-x:auto;white-space:nowrap;padding:6px 0 8px;'
-        'border-bottom:1px solid var(--cc-border);margin-bottom:8px">'
-        + "".join(_ticker_html_items) + "</div>",
-        unsafe_allow_html=True,
-    )
+# HUD gamification panel, KPI trend cards, and event ticker were removed in
+# the event-log-first redesign. Event log and inventory are now the primary
+# surface; admin analytics live in the collapsible insights drawer below.
 
 
 # ── Role-scoped event type / env / stage helpers ──────────────────────────
 # The dicts themselves (_ROLE_EVENT_TYPES, _ROLE_ENVS, _ROLE_APPROVAL_STAGES,
 # _ROLE_SHOWS_JIRA, _ROLE_SHOWS_BUILDS) are defined near the top of the page
-# so the KPI row can use them.
+# so downstream filtering can reuse them.
 
 
 def _role_allows_type(t: str) -> bool:
@@ -3819,40 +3457,6 @@ def _role_stage_filter() -> dict | None:
     for s in stages:
         shoulds.append({"prefix": {"stage": s}})
     return {"bool": {"should": shoulds, "minimum_should_match": 1}}
-
-# Role-specific nav chip labels
-_NAV_LABELS: dict[str, dict[str, str]] = {
-    "Developer": {"pipeline": "My builds", "workflow": "Requests"},
-    "QC":        {"workflow": "Release queue", "lifecycle": "Quality gates"},
-    "Operator":  {"workflow": "Deploy queue", "pipeline": "Deployments"},
-}
-_rl = _NAV_LABELS.get(role_pick, {})
-
-# ── Section navigation — quick-jump chip strip (role-ordered, role-filtered) ─
-_all_nav = [
-    ("alerts", "Alerts", "#sec-alerts"),
-    ("landscape", _rl.get("landscape", "Landscape"), "#sec-landscape"),
-    ("lifecycle", _rl.get("lifecycle", "Lifecycle"), "#sec-lifecycle"),
-    ("pipeline", _rl.get("pipeline", "Pipeline"), "#sec-pipeline"),
-    ("workflow", _rl.get("workflow", "Workflow"), "#sec-workflow"),
-    ("eventlog", "Event log", "#sec-eventlog"),
-    ("inventory", "Inventory", "#sec-inventory"),
-]
-# Filter to visible sections only, then order by role priority
-_priority_order = _ROLE_PRIORITY_SECTIONS.get(_effective_role, _ROLE_PRIORITY_SECTIONS["Admin"])
-_ordered_nav = sorted(
-    [n for n in _all_nav if _show(n[0])],
-    key=lambda x: _priority_order.index(x[0]) if x[0] in _priority_order else 99,
-)
-
-_nav_html = '<div class="navchips"><span class="navlbl">Jump to</span>'
-for _sec_id, _nl, _nh in _ordered_nav:
-    # Highlight the top-2 role-priority sections
-    _is_primary = _priority_order.index(_sec_id) <= 2 if _sec_id in _priority_order else False
-    _extra_cls = "" if not _is_primary else ' style="border-color:var(--cc-accent);color:var(--cc-accent) !important;font-weight:700"'
-    _nav_html += f'<a href="{_nh}"{_extra_cls}>{_nl}</a>'
-_nav_html += '</div>'
-st.markdown(_nav_html, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -4852,24 +4456,21 @@ def _render_event_log() -> None:
             )
 
         # Per-version provenance: always show build date; if released, show
-        # release date + RLM + RLM status.
+        # release date + RLM.
         _vmeta = _ver_meta_map.get((_app, _ver)) or {}
         _build_when_disp = fmt_dt(_vmeta.get("build_when"), "%Y-%m-%d %H:%M") or ""
         _rel_when_disp   = fmt_dt(_vmeta.get("release_when"), "%Y-%m-%d %H:%M") or ""
         _rlm_id   = _vmeta.get("rlm", "")
-        _rlm_stat = _vmeta.get("rlm_status", "")
         _prov_block = (
             f'    <div class="ap-section">Version provenance</div>'
             f'    <span class="ap-k">Built ({DISPLAY_TZ_LABEL})</span>{_v(_build_when_disp)}'
         )
-        if _rel_when_disp or _rlm_id or _rlm_stat:
+        if _rel_when_disp or _rlm_id:
             _prov_block += (
                 f'    <span class="ap-k">Released ({DISPLAY_TZ_LABEL})</span>{_v(_rel_when_disp)}'
             )
             if _rlm_id:
                 _prov_block += f'    <span class="ap-k">RLM</span>{_chip(_rlm_id)}'
-            if _rlm_stat:
-                _prov_block += f'    <span class="ap-k">RLM status</span>{_v(_rlm_stat)}'
 
         _popovers_html.append(
             f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
@@ -5454,11 +5055,13 @@ def _render_inventory_view() -> None:
             f'popovertarget="{_iv_ver_pop_id(app, stage, _ver)}" '
             f'title="Click for version details">{_dot}{_ver}</button>'
         )
-        if _when:
-            _rel_span = (
-                f'<span class="iv-stage-rel"> · {_rel}</span>' if _rel else ""
+        # Table row shows the relative age only — the version popover carries
+        # the exact absolute timestamp for anyone who needs it.
+        if _rel:
+            _date_html = (
+                f'<div class="iv-stage-when" title="{_when}">'
+                f'<span class="iv-stage-rel">{_rel}</span></div>'
             )
-            _date_html = f'<div class="iv-stage-when">{_when}{_rel_span}</div>'
         else:
             _date_html = ""
         return f'<div class="iv-stage-cell">{_btn}{_date_html}</div>'
@@ -5661,6 +5264,73 @@ def _render_inventory_view() -> None:
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    # ── Project-health ribbon — subtle landscape replacement ────────────────
+    # One chip per project in the filtered inventory, colored by the worst
+    # security tier across its apps. Clicking a chip opens the existing
+    # project popover (teams + applications). This is the compact successor
+    # to the old landscape treemap.
+    _pr_TIER_RANK = {"crit": 5, "high": 4, "med": 3, "low": 2, "clean": 1, "na": 0}
+    _pr_by_proj: dict[str, dict] = {}
+    for _r in _inv_rows:
+        _pk = _r.get("project") or "(no project)"
+        _p_bucket = _pr_by_proj.setdefault(_pk, {"count": 0, "worst": "na", "covered": 0})
+        _p_bucket["count"] += 1
+        _a = _r.get("application") or ""
+        _prd = _iv_prd_map.get(_a) or {}
+        _pv = _prd.get("version") or ""
+        _sc = _iv_prisma_map.get((_a, _pv)) if _pv else None
+        if not _sc:
+            continue
+        _p_bucket["covered"] += 1
+        if int(_sc.get("Vcritical") or 0) or int(_sc.get("Ccritical") or 0):
+            _t = "crit"
+        elif int(_sc.get("Vhigh") or 0) or int(_sc.get("Chigh") or 0):
+            _t = "high"
+        elif int(_sc.get("Vmedium") or 0) or int(_sc.get("Cmedium") or 0):
+            _t = "med"
+        elif int(_sc.get("Vlow") or 0) or int(_sc.get("Clow") or 0):
+            _t = "low"
+        else:
+            _t = "clean"
+        if _pr_TIER_RANK[_t] > _pr_TIER_RANK[_p_bucket["worst"]]:
+            _p_bucket["worst"] = _t
+
+    if _pr_by_proj:
+        _pr_sorted = sorted(
+            _pr_by_proj.items(),
+            key=lambda kv: (-_pr_TIER_RANK[kv[1]["worst"]], -kv[1]["count"], kv[0]),
+        )
+        _pr_chips: list[str] = []
+        for _proj, _b in _pr_sorted:
+            _pid_pr = _iv_proj_pop_id(_proj) if _proj in _iv_proj_map else ""
+            _t = _b["worst"]
+            _n = _b["count"]
+            _tip = (
+                f"{_proj} · {_n} app{'s' if _n != 1 else ''} · "
+                f"{_b['covered']} scanned · worst tier: {_t}"
+            )
+            if _pid_pr:
+                _pr_chips.append(
+                    f'<button type="button" class="iv-pr-chip is-{_t}" '
+                    f'popovertarget="{_pid_pr}" title="{_tip}">'
+                    f'<span class="iv-pr-dot is-{_t}"></span>{_proj}'
+                    f'<span class="iv-pr-n">{_n}</span></button>'
+                )
+            else:
+                _pr_chips.append(
+                    f'<span class="iv-pr-chip is-{_t}" title="{_tip}">'
+                    f'<span class="iv-pr-dot is-{_t}"></span>{_proj}'
+                    f'<span class="iv-pr-n">{_n}</span></span>'
+                )
+        st.markdown(
+            '<div class="iv-proj-ribbon">'
+            f'<span class="iv-pr-lbl">{len(_pr_by_proj)} project'
+            f'{"s" if len(_pr_by_proj) != 1 else ""}</span>'
+            + "".join(_pr_chips) +
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Build table(s) ──────────────────────────────────────────────────────
     if iv_per_project:
@@ -5934,12 +5604,11 @@ def _render_inventory_view() -> None:
             _build_when_disp = fmt_dt(_vmeta.get("build_when"), "%Y-%m-%d %H:%M") or ""
             _rel_when_disp   = fmt_dt(_vmeta.get("release_when"), "%Y-%m-%d %H:%M") or ""
             _rlm_id   = _vmeta.get("rlm", "")
-            _rlm_stat = _vmeta.get("rlm_status", "")
             _prov_rows = (
                 f'    <div class="ap-section">Version provenance</div>'
                 f'    <span class="ap-k">Built ({DISPLAY_TZ_LABEL})</span>{_iv_v(_build_when_disp)}'
             )
-            if _rel_when_disp or _rlm_id or _rlm_stat:
+            if _rel_when_disp or _rlm_id:
                 _prov_rows += (
                     f'    <span class="ap-k">Released ({DISPLAY_TZ_LABEL})</span>'
                     f'{_iv_v(_rel_when_disp)}'
@@ -5947,10 +5616,6 @@ def _render_inventory_view() -> None:
                 if _rlm_id:
                     _prov_rows += (
                         f'    <span class="ap-k">RLM</span>{_iv_chip(_rlm_id)}'
-                    )
-                if _rlm_stat:
-                    _prov_rows += (
-                        f'    <span class="ap-k">RLM status</span>{_iv_v(_rlm_stat)}'
                     )
             _stage_block += _prov_rows
 
@@ -6139,16 +5804,34 @@ if _show_inv and _inventory_slot is not None:
 
 
 # =============================================================================
-# ALERTS — compact chips, vivid colors
+# ADMIN INSIGHTS DRAWER — consolidates alerts, lifecycle, pipeline, workflow
 # =============================================================================
 
-# _lc_classified is populated later in the lifecycle section; pre-init so
-# alert popovers that reference it don't raise NameError on first render.
-
-# Non-admin users see only the event log + inventory — halt before admin-only sections.
+# Non-admin users only see the event log + inventory — halt here.
 if not _is_admin:
     st.stop()
 
+# Single gate for all admin-only analytics. The drawer stays CLOSED by default
+# so the default admin page load renders only event log + inventory — the
+# analytics sections' ES queries and heavy plotly charts run only when the
+# user explicitly opts in by flipping the toggle. Performance critical: the
+# stop below skips ~1500 lines of queries + rendering when drawer is closed.
+st.markdown(
+    '<div style="border-top:1px solid var(--cc-border);margin:18px 0 6px 0"></div>',
+    unsafe_allow_html=True,
+)
+_drawer_open = st.toggle(
+    "Admin insights — alerts · lifecycle · pipeline · workflow",
+    value=False,
+    key="admin_drawer_open_v1",
+    help="Heavy analytics are hidden by default to keep the page fast. "
+         "Toggle on to run the cross-index queries and render the drill-downs.",
+)
+if not _drawer_open:
+    st.stop()
+
+# _lc_classified is populated later in the lifecycle section; pre-init so
+# alert popovers that reference it don't raise NameError on first render.
 _lc_classified: dict[str, str] = {}
 
 alerts: list[tuple[str, str, str, str]] = []  # (severity, icon, title, detail)
@@ -6370,436 +6053,12 @@ with _alerts_ph:
                             inline_note("No dormant applications in window.", "info")
 
 
-# =============================================================================
-# SECTION 3 — CROSS-INDEX INSIGHTS  (Admin, Developer)
-# =============================================================================
+# Landscape treemap + project deep-dive popover removed in the event-log-first
+# redesign — the inventory view already renders one row per application with
+# project grouping and per-project health chips, so this section was pure
+# duplication. The deep-dive flow is covered by the project popover available
+# from any project chip in the inventory / event log.
 
-st.markdown('<a class="anchor" id="sec-landscape"></a>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section">'
-    '<div class="title-wrap"><h2>Project landscape</h2><span class="badge">Inventory x Activity</span></div>'
-    '<span class="hint">active / at-risk / archival candidates &mdash; joined across all indices</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-# ---------------------------------------------------------------------------
-# Project deep-dive popover — pick a project and see every cross-index signal
-# ---------------------------------------------------------------------------
-pop_cols = st.columns([1, 1, 4])
-with pop_cols[0]:
-    with st.popover("🔎  Project deep dive", use_container_width=True):
-        st.markdown("**Inspect a single project across every index**")
-        _dd_proj = st.selectbox(
-            "Project",
-            _all_projects if _all_projects else ["(no projects found)"],
-            key="dd_project",
-        )
-        _dd_window = st.selectbox(
-            "Window",
-            ["Last 7 days", "Last 30 days", "Last 90 days", "Last 365 days"],
-            index=1,
-            key="dd_window",
-        )
-        _dd_delta = {
-            "Last 7 days":   timedelta(days=7),
-            "Last 30 days":  timedelta(days=30),
-            "Last 90 days":  timedelta(days=90),
-            "Last 365 days": timedelta(days=365),
-        }[_dd_window]
-        _dd_end   = now_utc
-        _dd_start = _dd_end - _dd_delta
-
-        if _dd_proj and _dd_proj != "(no projects found)":
-            _pf     = [{"term": {"project": _dd_proj}}]
-            _pf_b   = _pf + [{"term": {"branch": "release"}}]                                           # build filter
-            _pf_d   = _pf + [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]               # deploy filter
-            _pf_inv = [{"term": {"project.keyword": _dd_proj}}]
-
-            # Aggregate per-project stats across all indices
-            _b_all   = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_b}}})
-            _b_fail  = es_count(IDX["builds"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"terms": {"status": FAILED_STATUSES}}] + _pf_b}}})
-            _d_all   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_d}}})
-            _d_prd   = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}] + _pf_d}}})
-            _d_fail  = es_count(IDX["deployments"], {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end), {"term": {"environment": "prd"}}, {"terms": {"status": FAILED_STATUSES}}] + _pf_d}}})
-            _c_all   = es_count(IDX["commits"], {"query": {"bool": {"filter": [range_filter("commitdate", _dd_start, _dd_end)] + _pf + ([{"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}}] if exclude_svc else [])}}})
-            _r_pend  = es_count(IDX["requests"], {"query": {"bool": {"filter": [range_filter("RequestDate", pending_window_start, now_utc), {"terms": {"Status": PENDING_STATUSES}}] + _pf}}})
-            _j_open  = es_count(IDX["jira"], {"query": {"bool": {"filter": _pf, "must_not": [{"terms": {"status": CLOSED_JIRA}}]}}})
-            _succ    = ((_b_all - _b_fail) / _b_all * 100) if _b_all else 0.0
-            _cfr     = (_d_fail / _d_prd * 100) if _d_prd else 0.0
-
-            # Pills summary
-            st.markdown(
-                f"""
-                <div style="margin:6px 0 10px 0;">
-                    <span class="pill blue">{_b_all:,} builds</span>
-                    <span class="pill {'green' if _succ >= 80 else 'red'}">{_succ:.0f}% success</span>
-                    <span class="pill blue">{_d_all:,} deploys</span>
-                    <span class="pill {'red' if _cfr > 15 else 'green'}">{_cfr:.0f}% CFR</span>
-                    <span class="pill blue">{_c_all:,} commits</span>
-                    <span class="pill {'amber' if _r_pend else 'green'}">{_r_pend} pending req</span>
-                    <span class="pill {'amber' if _j_open else 'green'}">{_j_open} open JIRA</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            dd_tabs = st.tabs(["Recent builds", "Recent deploys", "Open JIRA", "Recent commits", "Inventory"])
-
-            with dd_tabs[0]:
-                _r = es_search(
-                    IDX["builds"],
-                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_b}},
-                     "sort": [{"startdate": "desc"}]},
-                    size=50,
-                )
-                _hits = _r.get("hits", {}).get("hits", [])
-                if _hits:
-                    _rows = [
-                        {
-                            "When":       fmt_dt(_pick_date(_s, "build"), "%Y-%m-%d %H:%M"),
-                            "Branch":     _s.get("branch"),
-                            "Version":    _s.get("codeversion"),
-                            "Status":     _s.get("status"),
-                            "Build tech": _s.get("technology"),
-                        }
-                        for _h in _hits for _s in [_h.get("_source", {})]
-                    ]
-                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
-                else:
-                    inline_note("No builds in window.", "info")
-
-            with dd_tabs[1]:
-                _r = es_search(
-                    IDX["deployments"],
-                    {"query": {"bool": {"filter": [range_filter("startdate", _dd_start, _dd_end)] + _pf_d}},
-                     "sort": [{"startdate": "desc"}]},
-                    size=50,
-                )
-                _hits = _r.get("hits", {}).get("hits", [])
-                if _hits:
-                    _rows = [
-                        {
-                            "When":        fmt_dt(_pick_date(_s, "deploy"), "%Y-%m-%d %H:%M"),
-                            "Env":         _s.get("environment"),
-                            "Version":     _s.get("codeversion"),
-                            "Status":      _s.get("status"),
-                            "Deploy tech": _s.get("technology"),
-                        }
-                        for _h in _hits for _s in [_h.get("_source", {})]
-                    ]
-                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
-                else:
-                    inline_note("No deployments in window.", "info")
-
-            with dd_tabs[2]:
-                _r = es_search(
-                    IDX["jira"],
-                    {"query": {"bool": {"filter": _pf, "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
-                     "sort": [{"priority": "asc"}]},
-                    size=50,
-                )
-                _hits = _r.get("hits", {}).get("hits", [])
-                if _hits:
-                    _rows = [
-                        {
-                            "Key":      _s.get("issuekey"),
-                            "Priority": _s.get("priority"),
-                            "Status":   _s.get("status"),
-                            "Assignee": _s.get("assignee"),
-                            "Summary":  (_s.get("summary") or "")[:80],
-                        }
-                        for _h in _hits for _s in [_h.get("_source", {})]
-                    ]
-                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
-                else:
-                    inline_note("No open JIRA for this project.", "success")
-
-            with dd_tabs[3]:
-                _dd_commit_f = [range_filter("commitdate", _dd_start, _dd_end)] + _pf
-                if exclude_svc:
-                    _dd_commit_f.append({"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}})
-                _r = es_search(
-                    IDX["commits"],
-                    {"query": {"bool": {"filter": _dd_commit_f}},
-                     "sort": [{"commitdate": "desc"}]},
-                    size=50,
-                )
-                _hits = _r.get("hits", {}).get("hits", [])
-                if _hits:
-                    _rows = [
-                        {
-                            "When":   fmt_dt(_pick_date(_s, "commit"), "%Y-%m-%d %H:%M"),
-                            "Author": _s.get("authorname"),
-                            "Branch": _s.get("branch"),
-                            "Repo":   _s.get("repository"),
-                        }
-                        for _h in _hits for _s in [_h.get("_source", {})]
-                    ]
-                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, height=360)
-                else:
-                    inline_note("No commits in window.", "info")
-
-            with dd_tabs[4]:
-                _r = es_search(
-                    IDX["inventory"],
-                    {"query": {"bool": {"filter": _pf_inv}}},
-                    size=5,
-                )
-                _hits = _r.get("hits", {}).get("hits", [])
-                if _hits:
-                    st.json(_hits[0].get("_source", {}), expanded=False)
-                else:
-                    inline_note("Project not found in inventory.", "info")
-
-with pop_cols[1]:
-    with st.popover("👤  Committer deep dive", use_container_width=True):
-        st.markdown("**Committer activity across the window**")
-        _cw = st.selectbox("Window", ["Last 7 days", "Last 30 days", "Last 90 days"], index=1, key="dd_cw")
-        _cd = {"Last 7 days": timedelta(days=7), "Last 30 days": timedelta(days=30), "Last 90 days": timedelta(days=90)}[_cw]
-        _cs, _ce = now_utc - _cd, now_utc
-        _cdr_f = [range_filter("commitdate", _cs, _ce)]
-        if exclude_svc:
-            _cdr_f.append({"bool": {"must_not": [{"term": {"authorname": SVC_ACCOUNT}}]}})
-        _cr = es_search(
-            IDX["commits"],
-            {
-                "query": {"bool": {"filter": _cdr_f}},
-                "aggs": {
-                    "top": {
-                        "terms": {"field": "authorname", "size": 30},
-                        "aggs": {
-                            "ins": {"sum": {"field": "insertedlines"}},
-                            "dlt": {"sum": {"field": "deletedlines"}},
-                            "projs": {"cardinality": {"field": "project"}},
-                        },
-                    }
-                },
-            },
-        )
-        _buckets = bucket_rows(_cr, "top")
-        if _buckets:
-            _df = pd.DataFrame([
-                {
-                    "Author":   b["key"],
-                    "Commits":  b["doc_count"],
-                    "Lines +":  int(b.get("ins", {}).get("value", 0) or 0),
-                    "Lines −":  int(b.get("dlt", {}).get("value", 0) or 0),
-                    "Projects": int(b.get("projs", {}).get("value", 0) or 0),
-                }
-                for b in _buckets
-            ])
-            st.dataframe(_df, use_container_width=True, hide_index=True, height=440)
-        else:
-            inline_note("No commits in the selected window.", "info")
-
-# ---------------------------------------------------------------------------
-# Project landscape treemap — ALL-TIME data (ignores time filter)
-# Hierarchy: status → project → application
-# "project" field in builds == application name; inventory gives us the
-# parent project grouping via project.keyword → application.keyword mapping.
-# ---------------------------------------------------------------------------
-
-# ── Inventory: project → [applications] mapping (all-time, scope-filtered) ──
-_tm_inv_query = {"bool": {"filter": scope_filters_inv()}} if scope_filters_inv() else {"match_all": {}}
-_tm_inv_map   = composite_terms(IDX["inventory"], "project.keyword", _tm_inv_query)
-
-_tm_proj_to_apps: dict[str, list[str]] = {}
-_inv_app_res = es_search(
-    IDX["inventory"],
-    {
-        "query": _tm_inv_query,
-        "aggs": {
-            "projs": {
-                "terms": {"field": "project.keyword", "size": 500},
-                "aggs": {"apps": {"terms": {"field": "application.keyword", "size": 200}}},
-            }
-        },
-    },
-)
-for _pb in bucket_rows(_inv_app_res, "projs"):
-    _tm_proj_to_apps[_pb["key"]] = [
-        _ab["key"] for _ab in (_pb.get("apps", {}).get("buckets") or [])
-    ]
-
-# application → parent_project reverse lookup (from inventory)
-_app_to_parent: dict[str, str] = {}
-for _parent, _apps in _tm_proj_to_apps.items():
-    for _app in _apps:
-        _app_to_parent[_app] = _parent
-
-# application → (build_technology, deploy_technology) from inventory
-_app_build_tech: dict[str, str] = {}
-_app_deploy_tech: dict[str, str] = {}
-_inv_tech_res = es_search(
-    IDX["inventory"],
-    {
-        "query": _tm_inv_query,
-        "aggs": {
-            "apps": {
-                "terms": {"field": "application.keyword", "size": 1000},
-                "aggs": {
-                    "bt": {"terms": {"field": "build_technology.keyword", "size": 1}},
-                    "dt": {"terms": {"field": "deploy_technology.keyword", "size": 1}},
-                },
-            }
-        },
-    },
-)
-for _tb in bucket_rows(_inv_tech_res, "apps"):
-    _app_name = _tb["key"]
-    _bt_bkts = _tb.get("bt", {}).get("buckets") or []
-    _dt_bkts = _tb.get("dt", {}).get("buckets") or []
-    if _bt_bkts:
-        _app_build_tech[_app_name] = _bt_bkts[0]["key"]
-    if _dt_bkts:
-        _app_deploy_tech[_app_name] = _dt_bkts[0]["key"]
-
-
-# ── All-time activity per application (NOT time-filtered) ───────────────────
-# Use "application" field in operational indices (inventory is the master reference).
-_tm_build_q   = {"bool": {"filter": build_scope_filters()}} if build_scope_filters() else {"match_all": {}}
-_tm_deploy_prd_q = {"bool": {"filter": [{"term": {"environment": "prd"}}] + deploy_scope_filters()}}
-_tm_active_map = composite_terms(IDX["builds"], "application", _tm_build_q)            # app → build_count
-_tm_prd_map    = composite_terms(IDX["deployments"], "application", _tm_deploy_prd_q)  # app → prd_deploy_count
-# Unique versions built all-time per application
-_tm_uv_map = composite_unique_versions(IDX["builds"], "application", _tm_build_q)
-
-# All-time fails per application
-_tm_fail_res = es_search(IDX["builds"], {
-    "query": _tm_build_q,
-    "aggs": {"apps": {"terms": {"field": "application", "size": 500},
-                      "aggs": {"fails": {"filter": {"terms": {"status": FAILED_STATUSES}}}}}},
-})
-_tm_fail_map = {b["key"]: b.get("fails", {}).get("doc_count", 0) for b in bucket_rows(_tm_fail_res, "apps")}
-
-# Open JIRA per application (JIRA uses "project" field — map via inventory lookup)
-_jira_proj_map = {b["key"]: b["doc_count"] for b in bucket_rows(
-    es_search(IDX["jira"], {
-        "query": {"bool": {"filter": scope_filters_inv(), "must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
-        "aggs": {"apps": {"terms": {"field": "project", "size": 500}}},
-    }), "apps",
-)}
-# Distribute JIRA counts down to applications via the inventory hierarchy
-_jira_map_tm: dict[str, int] = {}
-for _jp, _jcnt in _jira_proj_map.items():
-    _japps = _tm_proj_to_apps.get(_jp, [])
-    if _japps:
-        _per_app = max(1, _jcnt // len(_japps))
-        for _ja in _japps:
-            _jira_map_tm[_ja] = _jira_map_tm.get(_ja, 0) + _per_app
-    else:
-        _jira_map_tm[_jp] = _jira_map_tm.get(_jp, 0) + _jcnt
-
-# ── Build per-application rows for the treemap ──────────────────────────────
-_all_apps = set(_tm_active_map) | set(_tm_prd_map) | {
-    app for apps in _tm_proj_to_apps.values() for app in apps
-}
-
-_tm_rows = []
-for _app in _all_apps:
-    _builds_all = _tm_active_map.get(_app, 0)
-    _uv         = _tm_uv_map.get(_app, 0)
-    _in_inv     = _app in _app_to_parent or any(_app in apps for apps in _tm_proj_to_apps.values())
-    _fails      = _tm_fail_map.get(_app, 0)
-    _jira_open  = _jira_map_tm.get(_app, 0)
-    _in_prd     = _tm_prd_map.get(_app, 0) > 0
-    _parent     = _app_to_parent.get(_app, "(ungrouped)")
-
-    if _builds_all == 0 and _in_inv:
-        _status = "Archival candidate"
-    elif _builds_all > 0 and _in_prd:
-        _succ_pct = (_builds_all - _fails) / _builds_all * 100 if _builds_all else 100
-        _status = "Live · healthy" if _succ_pct >= 80 else "Live · at-risk"
-    elif _builds_all > 0:
-        _status = "Building · not in PRD"
-    else:
-        _status = "Unknown"
-
-    _score = min(100, max(0, int(
-        ((_builds_all - _fails) / _builds_all * 100 if _builds_all else 50) - _jira_open * 1.5
-    )))
-    _tm_rows.append({
-        "application":      _app,
-        "project":          _parent,
-        "builds":           max(_builds_all, 1),
-        "uniq_ver":         _uv,
-        "status":           _status,
-        "score":            _score,
-        "fails":            _fails,
-        "open_jira":        _jira_open,
-        "live":             "Yes" if _in_prd else "No",
-        "build_tech":       _app_build_tech.get(_app, "—"),
-        "deploy_tech":      _app_deploy_tech.get(_app, "—"),
-    })
-
-if _tm_rows:
-    _df_tm = pd.DataFrame(_tm_rows)
-    _color_map = {
-        "Live · healthy":        "#059669",
-        "Live · at-risk":        "#d97706",
-        "Building · not in PRD": "#2563eb",
-        "Archival candidate":    "#9ca3af",
-        "Unknown":               "#d1d5db",
-    }
-    # Treemap: status → project → application  (3-level hierarchy)
-    _tm_fig = px.treemap(
-        _df_tm,
-        path=["status", "project", "application"],
-        values="builds",
-        color="status",
-        color_discrete_map=_color_map,
-        custom_data=["fails", "open_jira", "score", "uniq_ver", "live", "deploy_tech", "build_tech"],
-        title="Application landscape · all-time  (size = total builds · color = live/dormant status)",
-    )
-    _tm_fig.update_traces(
-        hovertemplate=(
-            "<b>%{label}</b><br>"
-            "Builds (all-time): %{value:,}<br>"
-            "Unique versions: %{customdata[3]}<br>"
-            "Failures: %{customdata[0]}<br>"
-            "Open JIRA: %{customdata[1]}<br>"
-            "Health score: %{customdata[2]}/100<br>"
-            "Live (in PRD): %{customdata[4]}<br>"
-            "Deploy tech: %{customdata[5]}<br>"
-            "Build tech: %{customdata[6]}"
-            "<extra></extra>"
-        ),
-        textinfo="label+value",
-        insidetextfont=dict(size=11, color="white"),
-    )
-    _tm_fig.update_layout(
-        height=420,
-        margin=dict(l=0, r=0, t=36, b=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#4a5068", family="system-ui, sans-serif"),
-    )
-    st.plotly_chart(_tm_fig, use_container_width=True)
-
-    # Status summary pills
-    _status_counts = _df_tm["status"].value_counts().to_dict()
-    _pills = ""
-    for _s, _c_clr in _color_map.items():
-        _n = _status_counts.get(_s, 0)
-        if _n:
-            _pills += (
-                f'<span style="display:inline-flex;align-items:center;gap:5px;'
-                f'margin:0 6px 4px 0;padding:3px 10px;border-radius:999px;'
-                f'font-size:0.73rem;font-weight:600;'
-                f'background:{_c_clr}18;color:{_c_clr};border:1px solid {_c_clr}40">'
-                f'{_n} {_s}</span>'
-            )
-    st.markdown(f'<div style="margin-top:6px">{_pills}</div>', unsafe_allow_html=True)
-
-    # Archival candidates — collapsed to reduce noise
-    _archival = _df_tm[_df_tm["status"] == "Archival candidate"].sort_values("application")
-    if not _archival.empty:
-        with st.expander(f"⚠ {len(_archival)} archival candidate(s) — in inventory but no builds ever recorded"):
-            _arc_d = _archival[["project", "application", "deploy_tech", "build_tech", "open_jira"]].copy()
-            _arc_d.columns = ["Project", "Application", "Deploy tech", "Build tech", "Open JIRA"]
-            st.dataframe(_arc_d, use_container_width=True, hide_index=True, height=400)
-else:
-    inline_note("No application data available.", "info")
 
 # =============================================================================
 # APP LIFECYCLE — pipeline stage funnel per project + bottleneck finder
