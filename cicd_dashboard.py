@@ -2591,54 +2591,41 @@ _detected_roles = list(dict.fromkeys(_detected_roles)) or ["Admin"]  # fallback
 _cb1 = st.columns([1.2, 1.2, 1.5, 1.5, 0.6, 0.6, 0.6])
 
 with _cb1[0]:
-    # If user has multiple roles, let them pick; otherwise show the one they have
-    if len(_detected_roles) > 1:
-        role_pick = st.selectbox("View as", _detected_roles, index=0, key="role_pick",
-                                 help="Switch between your assigned role views")
+    # Role is auto-detected from st.session_state.roles (mapped through
+    # _ROLE_ALIASES). If multiple roles are present, Admin wins; otherwise the
+    # first detected role is used. No dropdown — purely read-only display.
+    if "Admin" in _detected_roles:
+        role_pick = "Admin"
     else:
         role_pick = _detected_roles[0]
-        st.markdown(f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                    f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Role</div>'
-                    f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
-                    f'{ROLE_ICONS[role_pick]} {role_pick}</div>', unsafe_allow_html=True)
-
-_ALL_MY_TEAMS = "— All my teams —"
+    st.markdown(f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Role</div>'
+                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
+                f'{ROLE_ICONS[role_pick]} {role_pick}</div>', unsafe_allow_html=True)
 
 with _cb1[1]:
-    # Teams come from session state; for non-Admin roles the user is confined
-    # to their session teams. Admin may optionally scope to any inventory team.
-    if role_pick == "Admin":
-        _admin_teams = _session_teams or _load_teams_for_role("Admin")
-        team_pick = st.selectbox("Team", [_ALL] + _admin_teams, index=0, key="team_pick",
-                                 help="Admin: optionally filter to a specific team")
-        team_filter = "" if team_pick == _ALL else team_pick
-        _active_teams: list[str] = [team_filter] if team_filter else []
-    elif _session_teams:
-        if len(_session_teams) > 1:
-            team_pick = st.selectbox(
-                "Team", [_ALL_MY_TEAMS] + _session_teams, index=0, key="team_pick",
-                help="Scope to a single team, or leave on 'all my teams' for a union view",
-            )
-            if team_pick == _ALL_MY_TEAMS:
-                team_filter = ""                        # union of all session teams
-                _active_teams = list(_session_teams)
-            else:
-                team_filter = team_pick
-                _active_teams = [team_pick]
+    # Teams are auto-detected from st.session_state.teams — no dropdown.
+    # A single team renders as that team; multiple teams render as a union
+    # (team_filter stays empty so scope queries span all of them).
+    if _session_teams:
+        _active_teams: list[str] = list(_session_teams)
+        if len(_session_teams) == 1:
+            team_filter = _session_teams[0]
+            _team_display = _session_teams[0]
         else:
-            # Exactly one team → auto-selected, rendered read-only
-            team_pick = _session_teams[0]
-            st.markdown(
-                f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Team</div>'
-                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text)">'
-                f'{team_pick}</div>',
-                unsafe_allow_html=True,
-            )
-            team_filter = team_pick
-            _active_teams = [team_pick]
+            team_filter = ""  # union scope
+            _team_display = " · ".join(_session_teams)
+        st.markdown(
+            f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
+            f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">'
+            f'{"Teams" if len(_session_teams) > 1 else "Team"}</div>'
+            f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text);'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{_team_display}">'
+            f'{_team_display}</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        # Non-Admin with no session teams — render informational placeholder.
+        # No session teams — render informational placeholder.
         team_filter = ""
         _active_teams = []
         st.markdown('<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
@@ -2806,35 +2793,24 @@ _role_icon = ROLE_ICONS[role_pick]
 _team_label = f" · {team_filter}" if team_filter else ""
 _apps_label = f"{len(_team_apps)} applications" if _team_apps else "all applications"
 
-_banner_cols = st.columns([5, 1.5]) if role_pick == "Admin" else [st.container(), None]
-with _banner_cols[0]:
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;margin:2px 0 6px;'
-        f'border-radius:10px;border:1px solid {_role_clr}20;'
-        f'background:linear-gradient(90deg,{_role_clr}08,transparent 60%);">'
-        f'<span style="font-size:1.3rem">{_role_icon}</span>'
-        f'<span style="font-size:.95rem;font-weight:700;color:{_role_clr}">{role_pick}</span>'
-        f'<span style="font-size:.82rem;color:var(--cc-text-dim)">{_team_label}</span>'
-        f'<span style="margin-left:auto;font-size:.72rem;color:var(--cc-text-mute)">'
-        f'{_apps_label}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-if role_pick == "Admin" and _banner_cols[1] is not None:
-    with _banner_cols[1]:
-        _admin_view_options = ["Admin"] + [r for r in ROLES if r != "Admin"]
-        st.selectbox("View as role", _admin_view_options, index=0, key="admin_role_view",
-                     help="Preview dashboard sections as another role")
+st.markdown(
+    f'<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;margin:2px 0 6px;'
+    f'border-radius:10px;border:1px solid {_role_clr}20;'
+    f'background:linear-gradient(90deg,{_role_clr}08,transparent 60%);">'
+    f'<span style="font-size:1.3rem">{_role_icon}</span>'
+    f'<span style="font-size:.95rem;font-weight:700;color:{_role_clr}">{role_pick}</span>'
+    f'<span style="font-size:.82rem;color:var(--cc-text-dim)">{_team_label}</span>'
+    f'<span style="margin-left:auto;font-size:.72rem;color:var(--cc-text-mute)">'
+    f'{_apps_label}</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 
-# ── Effective role (admin view-as support) + admin-only flag ────────────────
-# Determined here so downstream section-gating can short-circuit before the
-# HUD/KPIs render. Non-admin roles (incl. Admin viewing AS another role) only
-# see the event log; the rest of the page is admin-exclusive.
+# ── Effective role + admin-only flag ────────────────────────────────────────
+# Role is driven entirely by st.session_state.roles — there is no
+# "view as another role" override. Non-admin roles only see the event log
+# and inventory; the rest of the page is admin-exclusive.
 _effective_role = role_pick
-if role_pick == "Admin":
-    _admin_view = st.session_state.get("admin_role_view", "Admin")
-    if _admin_view in ("Admin", "Developer", "QC", "Operator"):
-        _effective_role = _admin_view
 _is_admin = (_effective_role == "Admin")
 
 # ── Row 2: time window segmented button group ────────────────────────────────
@@ -5813,22 +5789,9 @@ def _render_inventory_view() -> None:
                 f'    <div class="ap-sev-empty">No scan on record.</div>'
             )
 
-        # Team rows
-        _teams = r.get("teams") or {}
-        _ordered_t = [k for k in ("dev_team", "qc_team", "uat_team", "prd_team") if k in _teams]
-        _extras_t  = sorted(k for k in _teams.keys() if k not in _ordered_t)
-        _team_html = ""
-        for _f in _ordered_t + _extras_t:
-            _vals = _teams.get(_f) or []
-            if not _vals:
-                continue
-            _chips_t = "".join(f'<span class="ap-chip">{_tv}</span>' for _tv in _vals)
-            _team_html += (
-                f'<span class="ap-k">{_iv_team_label(_f)}</span>'
-                f'<span class="ap-v" style="display:flex;flex-wrap:wrap;gap:4px">{_chips_t}</span>'
-            )
-        if not _team_html:
-            _team_html = '<span class="ap-k">Teams</span><span class="ap-v empty">none recorded</span>'
+        # Team rows intentionally omitted — ownership is surfaced by the
+        # project popover, which the project chip in the Identity section
+        # links into. Duplicating it here just clutters the app view.
 
         _iv_popovers.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop">'
@@ -5846,8 +5809,6 @@ def _render_inventory_view() -> None:
             f'    <span class="ap-k">Project</span>{_iv_v(r.get("project", ""))}'
             f'    <span class="ap-k">Company</span>{_iv_v(r.get("company", ""))}'
             f'    <span class="ap-k">Type</span>{_iv_app_type_pill(r.get("app_type", ""))}'
-            f'    <div class="ap-section">Teams</div>'
-            f'    {_team_html}'
             f'    <div class="ap-section">Build</div>'
             f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("build_technology", ""))}'
             f'    <span class="ap-k">Image name</span>{_iv_v(r.get("build_image_name", ""))}'
