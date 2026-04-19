@@ -111,6 +111,8 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 /* -------- CSS custom properties — Bright ops palette -------- */
 :root {
     --cc-surface:   #ffffff;
@@ -1740,6 +1742,689 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     background: var(--cc-surface2);
     border-color: var(--cc-border);
 }
+
+/* ==========================================================================
+   PRECISION OPS TERMINAL — typographic + atmospheric uplift applied to the
+   Pipelines inventory section and its embedded event log.  Layered on top of
+   the existing style system; no existing rules are removed.  The aim is a
+   premium ops-terminal feel: editorial serif for monumental numbers & titles,
+   IBM Plex for body, JetBrains Mono for data, atmospheric gradient mesh on
+   the sticky rail, staggered reveals on the stat tiles, and a live-signal
+   pulse on the embedded event log heading.
+   ========================================================================== */
+:root {
+    --cc-display: 'Fraunces', 'IBM Plex Serif', Georgia, serif;
+    --cc-body:    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --cc-data:    'JetBrains Mono', 'SF Mono', 'Cascadia Code', ui-monospace, monospace;
+    --cc-ink:     #0a0d1e;
+    --cc-signal:  #f59e0b;
+    --cc-signal-soft: rgba(245,158,11,.35);
+}
+
+/* Inherit the refined body font across the Streamlit app surface so labels,
+   captions, and widget text all read consistently.  Targets the outermost
+   container; generic enough to cascade but not aggressive enough to fight
+   Streamlit's internal component styles. */
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] .main,
+.st-key-cc_filter_rail {
+    font-family: var(--cc-body);
+}
+
+/* ----- Atmospheric sticky rail ----- */
+.st-key-cc_filter_rail {
+    background:
+        radial-gradient(120% 160% at 0% 0%, rgba(79,70,229,.10) 0%, transparent 55%),
+        radial-gradient(110% 140% at 100% 0%, rgba(13,148,136,.08) 0%, transparent 58%),
+        radial-gradient(100% 120% at 55% 100%, rgba(245,158,11,.05) 0%, transparent 62%),
+        rgba(255,255,255,.94) !important;
+    border: 1px solid rgba(15,13,38,.10) !important;
+    border-radius: 18px !important;
+    padding: 16px 20px 12px 20px !important;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.9) inset,
+        0 22px 48px -26px rgba(15,13,38,.22),
+        0 1px 2px rgba(15,13,38,.03) !important;
+    overflow: hidden;
+}
+.st-key-cc_filter_rail::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(15,13,38,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(15,13,38,.045) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-position: -1px -1px;
+    -webkit-mask-image: radial-gradient(140% 100% at 50% 0%, black 30%, transparent 88%);
+            mask-image: radial-gradient(140% 100% at 50% 0%, black 30%, transparent 88%);
+    opacity: .55;
+    pointer-events: none;
+    z-index: 0;
+}
+.st-key-cc_filter_rail > * { position: relative; z-index: 1; }
+
+/* ----- Display heading — Fraunces serif, tight optical tracking ----- */
+.cc-panel-head {
+    border-bottom: 1px solid transparent !important;
+    background:
+        linear-gradient(90deg,
+            var(--cc-accent) 0 44px,
+            rgba(15,13,38,.12) 44px 100%) bottom / 100% 1px no-repeat;
+    padding-bottom: 10px !important;
+}
+.cc-panel-head h2 {
+    font-family: var(--cc-display) !important;
+    font-variation-settings: "opsz" 120, "SOFT" 50;
+    font-size: 1.55rem !important;
+    font-weight: 500 !important;
+    letter-spacing: -0.015em !important;
+    color: var(--cc-ink) !important;
+    line-height: 1.05;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 12px;
+}
+.cc-panel-head h2::before {
+    content: attr(data-section-num);
+    font-family: var(--cc-data);
+    font-size: 0.42em;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--cc-accent);
+    padding: 3px 7px 2px 7px;
+    border: 1px solid var(--cc-accent);
+    border-radius: 5px;
+    background: rgba(79,70,229,.07);
+    position: relative;
+    top: -4px;
+    line-height: 1;
+}
+.cc-panel-head h2:not([data-section-num])::before { display: none; }
+
+.cc-panel-head .cc-panel-tag {
+    font-family: var(--cc-body);
+    font-size: 0.62rem !important;
+    letter-spacing: 0.14em !important;
+    color: var(--cc-text-mute);
+    font-weight: 600 !important;
+    padding: 4px 9px 3px 9px;
+    border: 1px solid var(--cc-border-hi);
+    border-radius: 999px;
+    background: rgba(255,255,255,.65);
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+.cc-panel-sub {
+    font-family: var(--cc-body) !important;
+    font-size: 0.78rem !important;
+    color: var(--cc-text-dim);
+    font-weight: 400;
+    letter-spacing: 0.005em;
+}
+
+/* ----- Secondary heading (embedded event log) — teal numeral + live dot ----- */
+.cc-panel-head--live {
+    margin-top: 26px !important;
+    background:
+        linear-gradient(90deg,
+            var(--cc-teal) 0 44px,
+            rgba(15,13,38,.12) 44px 100%) bottom / 100% 1px no-repeat !important;
+}
+.cc-panel-head--live h2::before {
+    color: var(--cc-teal);
+    border-color: var(--cc-teal);
+    background: rgba(13,148,136,.07);
+}
+.cc-panel-head--live .cc-panel-tag::before {
+    content: '';
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--cc-signal);
+    margin-right: 8px;
+    vertical-align: middle;
+    box-shadow: 0 0 0 0 var(--cc-signal-soft);
+    animation: cc-live-pulse 1.6s ease-out infinite;
+}
+@keyframes cc-live-pulse {
+    0%   { box-shadow: 0 0 0 0 var(--cc-signal-soft); }
+    80%  { box-shadow: 0 0 0 10px rgba(245,158,11,0); }
+    100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); }
+}
+
+/* ----- Monumental stat tiles — serif numerals + atmospheric accent ----- */
+.iv-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(164px, 1fr));
+    gap: 12px;
+    margin: 16px 0 18px 0;
+}
+.iv-stat {
+    background:
+        radial-gradient(140% 100% at 0% 0%, color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 8%, transparent) 0%, transparent 55%),
+        var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 14px 16px 13px 20px;
+    position: relative;
+    overflow: hidden;
+    transition:
+        transform .25s cubic-bezier(.2,.7,.2,1),
+        border-color .2s ease,
+        box-shadow .25s ease;
+    opacity: 0;
+    animation: iv-stat-in .6s cubic-bezier(.2,.7,.2,1) forwards;
+}
+.iv-stat::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--iv-stat-accent, var(--cc-accent));
+    box-shadow: 0 0 14px 0 color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 45%, transparent);
+    opacity: .92;
+}
+.iv-stat::after {
+    content: '';
+    position: absolute; right: -70px; top: -70px;
+    width: 180px; height: 180px;
+    background: radial-gradient(circle,
+        color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 14%, transparent) 0%,
+        transparent 62%);
+    pointer-events: none;
+    transition: transform .45s cubic-bezier(.2,.7,.2,1);
+}
+.iv-stat:hover {
+    transform: translateY(-2px);
+    border-color: var(--iv-stat-accent, var(--cc-accent));
+    box-shadow:
+        0 16px 32px -18px color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 35%, transparent),
+        0 0 0 1px color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 18%, transparent);
+}
+.iv-stat:hover::after { transform: translate(-14px, 14px) scale(1.12); }
+
+.iv-stat:nth-child(1) { animation-delay: .00s; }
+.iv-stat:nth-child(2) { animation-delay: .06s; }
+.iv-stat:nth-child(3) { animation-delay: .12s; }
+.iv-stat:nth-child(4) { animation-delay: .18s; }
+.iv-stat:nth-child(5) { animation-delay: .24s; }
+.iv-stat:nth-child(6) { animation-delay: .30s; }
+.iv-stat:nth-child(7) { animation-delay: .36s; }
+.iv-stat:nth-child(8) { animation-delay: .42s; }
+@keyframes iv-stat-in {
+    from { opacity: 0; transform: translateY(10px) scale(.985); }
+    to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+.iv-stat-label {
+    font-family: var(--cc-body);
+    font-size: 0.60rem !important;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 7px;
+}
+.iv-stat-label .iv-stat-glyph {
+    color: var(--iv-stat-accent, var(--cc-accent));
+    font-size: 0.90rem;
+    opacity: .88;
+}
+.iv-stat-number {
+    font-family: var(--cc-display) !important;
+    font-variation-settings: "opsz" 144, "SOFT" 90;
+    font-size: 2.45rem !important;
+    font-weight: 500 !important;
+    line-height: 1.0 !important;
+    color: var(--cc-ink) !important;
+    letter-spacing: -0.028em !important;
+    font-variant-numeric: tabular-nums lining-nums;
+    padding: 4px 0 2px 0;
+    position: relative;
+}
+.iv-stat-number::after {
+    content: '';
+    display: block;
+    width: 22px;
+    height: 2px;
+    background: var(--iv-stat-accent, var(--cc-accent));
+    margin-top: 6px;
+    opacity: .55;
+    border-radius: 2px;
+    transition: width .22s ease, opacity .22s ease;
+}
+.iv-stat:hover .iv-stat-number::after {
+    width: 42px;
+    opacity: 1;
+}
+.iv-stat-sub {
+    font-family: var(--cc-body);
+    margin-top: 8px;
+    font-size: 0.68rem;
+    color: var(--cc-text-dim);
+    font-weight: 500;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+}
+.iv-stat-sub b {
+    color: var(--iv-stat-accent, var(--cc-accent));
+    font-family: var(--cc-data);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+/* ----- Refined caption above the inventory table ----- */
+.el-tf-caption {
+    font-family: var(--cc-body) !important;
+    font-size: 0.72rem !important;
+    letter-spacing: 0.01em !important;
+    color: var(--cc-text-mute);
+    margin: 16px 0 6px 0 !important;
+    display: flex; align-items: center; gap: 10px;
+    padding-left: 2px;
+}
+.el-tf-caption-count {
+    font-family: var(--cc-data) !important;
+    font-weight: 600;
+    font-size: 0.74rem !important;
+    color: var(--cc-ink) !important;
+    padding: 2px 9px 1px 9px;
+    background: var(--cc-accent-lt);
+    border-radius: 5px;
+    letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 18%, transparent);
+}
+.el-tf-caption-sep {
+    color: var(--cc-border-hi);
+    font-weight: 300;
+}
+
+/* ----- Version chips, date cells → JetBrains Mono for tabular rhythm ----- */
+.ap-v, .ap-chip {
+    font-family: var(--cc-data) !important;
+    font-variant-numeric: tabular-nums lining-nums;
+}
+.ap-k {
+    font-family: var(--cc-body) !important;
+    letter-spacing: 0.005em;
+}
+
+/* ----- Rail meta strip — ultra-fine all-caps + mono accents ----- */
+.cc-rail-meta {
+    font-family: var(--cc-body) !important;
+    font-size: 0.62rem !important;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    margin-top: 10px !important;
+    padding-top: 10px !important;
+    border-top-style: dashed !important;
+    border-top-color: rgba(15,13,38,.10) !important;
+}
+.cc-rail-meta b {
+    font-family: var(--cc-body) !important;
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    color: var(--cc-text-dim) !important;
+    font-weight: 700;
+    margin-right: 2px;
+}
+.cc-rail-meta span:not(:first-child)::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    background: var(--cc-border-hi);
+    border-radius: 50%;
+    margin-right: 10px;
+    vertical-align: middle;
+}
+
+/* Inline mono on the meta range/bucket values — they read as data, not copy */
+.cc-rail-meta span > b + :is(:not(span)) { font-family: var(--cc-data); }
+
+/* ----- Rail identity badge — editorial serif on role name ----- */
+.cc-rail-id-role {
+    font-family: var(--cc-display) !important;
+    font-variation-settings: "opsz" 60;
+    font-weight: 600 !important;
+    letter-spacing: -0.005em !important;
+    font-size: 0.82rem !important;
+    padding: 4px 12px !important;
+}
+.cc-rail-id-team {
+    font-family: var(--cc-body) !important;
+    font-size: 0.70rem !important;
+    letter-spacing: 0.04em;
+}
+
+/* Rail widget labels a touch tighter + finer */
+.st-key-cc_filter_rail [data-testid="stSelectbox"] label,
+.st-key-cc_filter_rail [data-testid="stTextInput"] label,
+.st-key-cc_filter_rail [data-testid="stToggle"] label {
+    font-family: var(--cc-body) !important;
+    font-size: 0.58rem !important;
+    letter-spacing: 0.16em !important;
+}
+
+/* ----- Active filter chips — refined hairline, micro-mono counts ----- */
+.iv-active-chip {
+    font-family: var(--cc-body) !important;
+    border-radius: 6px !important;
+    font-size: 0.68rem !important;
+    letter-spacing: 0.01em;
+    border: 1px solid var(--cc-border-hi);
+    padding: 3px 9px 2px 9px;
+}
+.iv-active-chip-sess {
+    background:
+        repeating-linear-gradient(
+            45deg,
+            var(--cc-surface2),
+            var(--cc-surface2) 6px,
+            rgba(15,13,38,.03) 6px,
+            rgba(15,13,38,.03) 8px
+        ) !important;
+}
+
+/* ----- Inventory table — row hover, head typography, subtle grid ----- */
+.el-tf {
+    border-radius: 12px !important;
+    border: 1px solid rgba(15,13,38,.08) !important;
+    overflow: hidden;
+}
+.el-tf thead th {
+    font-family: var(--cc-body) !important;
+    font-size: 0.60rem !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase;
+    color: var(--cc-text-mute) !important;
+    font-weight: 600 !important;
+    background:
+        linear-gradient(180deg, rgba(247,248,251,.85), rgba(247,248,251,.65)) !important;
+    border-bottom: 1px solid rgba(15,13,38,.08) !important;
+    padding: 12px 10px !important;
+}
+.el-tf tbody td {
+    font-family: var(--cc-body) !important;
+    transition: background .14s ease;
+}
+.el-tf tbody tr:hover td {
+    background: color-mix(in srgb, var(--cc-accent) 3%, transparent) !important;
+}
+.el-tf tbody tr:hover td:first-child {
+    box-shadow: inset 3px 0 0 0 var(--cc-accent);
+}
+
+/* The "showing N" count badge above the table — mono treatment ---- */
+.el-tf-caption b { font-family: var(--cc-data); font-variant-numeric: tabular-nums; }
+
+/* Fine-tune existing KPI + section styles (unused in inventory view but keeps
+   typography consistent across any admin-drawer content that might share the
+   page).  Scoped so existing rules remain authoritative. */
+.kpi .value { font-family: var(--cc-display); font-variation-settings: "opsz" 120; }
+.kpi .label, .section, .section-label { font-family: var(--cc-body); }
+
+/* Popover inner cards (project/app detail) — editorial headline for titles */
+.el-app-pop .ap-title {
+    font-family: var(--cc-display) !important;
+    font-variation-settings: "opsz" 96, "SOFT" 40;
+    font-weight: 500 !important;
+    letter-spacing: -0.015em;
+}
+.el-app-pop .ap-kicker {
+    font-family: var(--cc-body) !important;
+    letter-spacing: 0.18em;
+    font-size: 0.56rem;
+}
+
+/* ----- Inventory fleet pulse strip — 4 compact visualizations ----- */
+.iv-pulse-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+    margin: 14px 0 20px 0;
+}
+.iv-pulse-tile {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.94) 0%, rgba(247,248,251,.90) 100%),
+        radial-gradient(120% 140% at 0% 0%, rgba(79,70,229,.06), transparent 55%);
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    padding: 10px 13px 11px 13px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .14s ease, transform .14s ease;
+}
+.iv-pulse-tile:hover {
+    border-color: var(--cc-border-hi);
+    transform: translateY(-1px);
+}
+.iv-pulse-tile::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: var(--iv-pulse-accent, linear-gradient(90deg, var(--cc-accent), var(--cc-teal)));
+    opacity: .70;
+}
+.iv-pulse-label {
+    font-family: var(--cc-data);
+    font-size: .56rem;
+    letter-spacing: .16em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+    text-transform: uppercase;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+.iv-pulse-label .iv-pulse-tag {
+    font-family: var(--cc-data);
+    font-size: .54rem;
+    letter-spacing: .10em;
+    color: var(--cc-accent);
+    font-weight: 700;
+    padding: 1px 6px;
+    border: 1px solid var(--cc-accent);
+    border-radius: 3px;
+    background: rgba(79,70,229,.06);
+    text-transform: uppercase;
+}
+.iv-pulse-label .iv-pulse-tag.ok   { color: var(--cc-green); border-color: var(--cc-green); background: rgba(5,150,105,.06); }
+.iv-pulse-label .iv-pulse-tag.warn { color: var(--cc-amber); border-color: var(--cc-amber); background: rgba(217,119,6,.06); }
+.iv-pulse-label .iv-pulse-tag.crit { color: var(--cc-red);   border-color: var(--cc-red);   background: rgba(220,38,38,.06); }
+.iv-pulse-value {
+    font-family: var(--cc-display);
+    font-variation-settings: "opsz" 120, "SOFT" 50;
+    font-size: 2.0rem;
+    font-weight: 500;
+    color: var(--cc-ink, var(--cc-text));
+    letter-spacing: -.022em;
+    line-height: 1.0;
+    margin-top: 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.iv-pulse-value .iv-pulse-unit {
+    font-family: var(--cc-data);
+    font-size: .78rem;
+    color: var(--cc-text-mute);
+    font-weight: 500;
+    letter-spacing: .02em;
+}
+.iv-pulse-sub {
+    font-family: var(--cc-body);
+    font-size: .70rem;
+    color: var(--cc-text-dim);
+    letter-spacing: .005em;
+    margin: 2px 0 8px 0;
+}
+.iv-pulse-sub b {
+    font-family: var(--cc-data);
+    font-weight: 600;
+    color: var(--cc-text);
+}
+.iv-pulse-spark {
+    width: 100%;
+    height: 38px;
+    display: block;
+    overflow: visible;
+}
+.iv-pulse-bar {
+    width: 100%;
+    height: 9px;
+    display: block;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 2px;
+    background: color-mix(in srgb, var(--cc-border) 50%, transparent);
+}
+.iv-pulse-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    margin-top: 6px;
+    line-height: 1.2;
+}
+.iv-pulse-leg {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .03em;
+    color: var(--cc-text-mute);
+    white-space: nowrap;
+}
+.iv-pulse-leg .iv-pulse-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 4px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.04);
+}
+.iv-pulse-leg b {
+    font-family: var(--cc-data);
+    font-weight: 600;
+    color: var(--cc-text);
+}
+.iv-pulse-empty {
+    font-family: var(--cc-body);
+    font-size: .70rem;
+    color: var(--cc-text-mute);
+    text-align: center;
+    padding: 10px 0;
+    letter-spacing: .04em;
+}
+.iv-pulse-axis {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2px;
+    font-family: var(--cc-data);
+    font-size: .52rem;
+    color: var(--cc-text-mute);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+/* ----- Event-log activity ribbon — stacked histogram above the table ----- */
+.el-ribbon {
+    margin: 10px 0 14px 0;
+    padding: 10px 12px 10px 12px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.96) 0%, rgba(247,248,251,.92) 100%),
+        radial-gradient(80% 140% at 100% 0%, rgba(13,148,136,.05), transparent 60%);
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    position: relative;
+    overflow: hidden;
+}
+.el-ribbon::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0; width: 2px;
+    background: linear-gradient(180deg, var(--cc-teal), var(--cc-accent));
+    opacity: .55;
+}
+.el-ribbon-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 5px;
+}
+.el-ribbon-title {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .14em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.el-ribbon-title b {
+    font-family: var(--cc-display);
+    font-variation-settings: "opsz" 96, "SOFT" 40;
+    font-size: .96rem;
+    font-weight: 500;
+    color: var(--cc-ink, var(--cc-text));
+    letter-spacing: -.01em;
+    margin-right: 6px;
+    text-transform: none;
+}
+.el-ribbon-legend {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+}
+.el-rib-leg {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .04em;
+    color: var(--cc-text-mute);
+    white-space: nowrap;
+}
+.el-rib-leg b {
+    font-family: var(--cc-data);
+    font-weight: 600;
+    color: var(--cc-text);
+    margin-left: 2px;
+}
+.el-rib-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 4px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.04);
+}
+.el-ribbon-svg {
+    display: block;
+    width: 100%;
+    height: 52px;
+    overflow: visible;
+}
+.el-ribbon-axis {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 3px;
+    font-family: var(--cc-data);
+    font-size: .52rem;
+    color: var(--cc-text-mute);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.el-ribbon-axis span + span { text-align: right; }
+.el-ribbon-empty {
+    font-family: var(--cc-body);
+    font-size: .74rem;
+    color: var(--cc-text-mute);
+    text-align: center;
+    padding: 8px 0 4px 0;
+    letter-spacing: .02em;
+}
+
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -2961,12 +3646,24 @@ _role_clr = ROLE_COLORS[role_pick]
 _role_icon = ROLE_ICONS[role_pick]
 
 # =============================================================================
-# STICKY FILTER RAIL — one consolidated bar that follows on scroll
+# PIPELINES INVENTORY — unified filter bar (global + facet filters live here)
 # =============================================================================
-# Every pre-event-log filter, scope, and toggle lives inside this container.
+# Every pre-inventory filter, scope, and toggle lives inside this container.
 # The .st-key-cc_filter_rail CSS rule pins it to the viewport top and styles
-# it with a blurred surface so downstream content flows beneath it.
+# it with a blurred surface so the stat tiles + table (and nested event log)
+# flow beneath it as one continuous surface.
 with st.container(key="cc_filter_rail"):
+    # Section heading lives inside the rail so users read "Pipelines inventory"
+    # first, then the filters that scope it. Every role currently has the
+    # inventory in its priority sections, so the heading renders unconditionally.
+    # The inventory fragment below no longer renders a duplicate header.
+    st.markdown(
+        '<div class="cc-panel-head cc-panel-head--numbered" style="margin:0 0 8px 0">'
+        f'<h2 data-section-num="01">Pipelines inventory</h2>'
+        f'<span class="cc-panel-tag">Live inventory · event log inherits these filters · {role_pick}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     _rail = st.columns(
         [1.7, 1.2, 1.2, 1.4, 2.4, 0.5],
         vertical_alignment="bottom",
@@ -3132,16 +3829,17 @@ def _show(section: str) -> bool:
     return section in _visible
 
 
-# ── Event log + inventory panel anchors + slots ───────────────────────────
-# Fragment definitions live far below; these st.empty() slots let us render
-# the views at the top of the page without forward-declaring ~2000 lines.
+# ── Pipelines inventory panel anchor + slot ───────────────────────────────
+# Fragment definitions live far below; the st.empty() slot lets us render the
+# view at the top of the page without forward-declaring ~2000 lines.
+# The event log is no longer a sibling panel — it renders inside the inventory
+# fragment so it inherits every filter the user selects on the inventory.
 _show_el  = _show("eventlog")
 _show_inv = _show("inventory")
 
 if _show_el or _show_inv:
-    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
     st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
-    _event_log_slot = st.empty() if _show_el else None
+    st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
     _inventory_slot = st.empty() if _show_inv else None
 
 
@@ -3689,6 +4387,13 @@ def _render_event_log() -> None:
     _el_end   = _now_utc
     _size     = _EL_SIZE_CAP
 
+    # Inventory-driven scope override — when the event log is rendered inside
+    # the pipelines inventory, the inventory stashes its fully-filtered app
+    # list here so every event-log query inherits those filters. An empty list
+    # (explicit) means "inventory returned zero apps"; None / missing means
+    # "no inventory scope active — fall back to global scope only".
+    _el_inv_apps: list[str] | None = st.session_state.get("_el_inv_scope_apps")
+
     # ── Helper: merge the global scope filters with the local project pick ──
     def _el_scope(base: list[dict]) -> list[dict]:
         fs = list(base)
@@ -3701,6 +4406,21 @@ def _render_event_log() -> None:
                 isinstance(f, dict) and "terms" in f and "project" in f["terms"]
             )]
             fs.append({"term": {"project": el_project_filter}})
+        if _el_inv_apps is not None:
+            # Inventory scope takes precedence — drop any global application
+            # restriction and replace it with the inventory's filtered set so
+            # the event log matches the table above row-for-row.
+            fs = [f for f in fs if not (
+                isinstance(f, dict) and "terms" in f and "application" in f["terms"]
+            )]
+            fs = [f for f in fs if not (
+                isinstance(f, dict) and "term" in f and "application" in f["term"]
+            )]
+            if _el_inv_apps:
+                fs.append({"terms": {"application": list(_el_inv_apps)}})
+            else:
+                # Zero apps in scope — short-circuit with an impossible match
+                fs.append({"terms": {"application": ["__no_match__"]}})
         return fs
 
     # Which build subtypes is the role allowed to see?
@@ -3957,6 +4677,55 @@ def _render_event_log() -> None:
     # ── sort (time-window already bounded the queries; no row limit) ────────
     events.sort(key=lambda e: e["_ts"] or pd.Timestamp("1970-01-01", tz="UTC"), reverse=True)
 
+    # ── New-event toasts ────────────────────────────────────────────────────
+    # Strictly timestamp-based so scope/pill/search changes don't trigger
+    # spurious notifications — only events with _ts > the previous refresh's
+    # max timestamp count as "new". The first render is silent; we just seed
+    # the watermark and start alerting on subsequent refreshes. Rate-limited
+    # to avoid a wall of toasts when someone returns to an idle tab.
+    _ev_max_ts = max(
+        (ev["_ts"] for ev in events if ev.get("_ts") is not None),
+        default=None,
+    )
+    _el_last_max = st.session_state.get("_el_last_max_ts")
+    if (_el_last_max is not None and _ev_max_ts is not None
+            and _ev_max_ts > _el_last_max):
+        _new_evs = [
+            ev for ev in events
+            if ev.get("_ts") is not None and ev["_ts"] > _el_last_max
+        ]
+        _TYPE_SHORT = {
+            "build-develop": "dev build",
+            "build-release": "rel build",
+            "deploy":        "deploy",
+            "release":       "release",
+            "request":       "request",
+            "commit":        "commit",
+        }
+        if 1 <= len(_new_evs) <= 3:
+            for _ev in _new_evs:
+                _who = (_ev.get("Who") or "").strip() or "—"
+                _env = (_ev.get("Environment") or "").strip()
+                _ver = (_ev.get("Version") or "").strip()
+                _status = (_ev.get("Status") or "").strip()
+                _parts = [_TYPE_SHORT.get(_ev.get("type", ""), _ev.get("type", "")),
+                          _who]
+                if _env:
+                    _parts.append(_env.lower())
+                if _ver:
+                    _parts.append(_ver)
+                _msg = " · ".join(p for p in _parts if p)
+                if _status and _status.upper() not in ("SUCCESS", "SUCCEEDED", "OK"):
+                    _msg += f"  [{_status}]"
+                st.toast(f"new · {_msg}", icon=":material/notifications_active:")
+        elif len(_new_evs) > 3:
+            st.toast(
+                f"{len(_new_evs)} new events in the current scope",
+                icon=":material/notifications_active:",
+            )
+    if _ev_max_ts is not None:
+        st.session_state["_el_last_max_ts"] = _ev_max_ts
+
     # ── Stats / filter pill bar ─────────────────────────────────────────────
     # Counts reflect the full universe of events the window contains — so the
     # user can see at a glance what *is* available, even if they narrow the
@@ -4070,6 +4839,14 @@ def _render_event_log() -> None:
         else:
             inline_note("No events match the current filters.", "info")
         return
+
+    # ── Activity ribbon — stacked histogram mirroring the filtered table ──
+    # Uses the already-filtered ``events`` list so it tracks the pill+search
+    # selection 1:1 with what the rows below show. No extra ES call — we
+    # bucket the in-memory events into ~60 slots across the chosen window.
+    _ribbon_html = _build_event_ribbon(events, _el_start, _el_end, _el_tw_label)
+    if _ribbon_html:
+        st.markdown(_ribbon_html, unsafe_allow_html=True)
 
     # Types whose "Who" column carries a real application name (vs commits'
     # repository or requests' project). Keep this list in one place so the
@@ -4748,6 +5525,350 @@ def _fetch_full_inventory(scope_json: str) -> list[dict]:
     return rows
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_inv_pulse(apps_json: str, days: int = 14) -> dict:
+    """Daily build + PRD-deploy activity for the given application scope.
+
+    Returns ``{"build": [{"success", "failure", "other"}, ...],
+    "deploy_prd": [counts]}`` with one entry per calendar day (oldest first).
+    """
+    _apps: list[str] = json.loads(apps_json)
+    _empty = {"build": [0] * days, "deploy_prd": [0] * days,
+              "build_success": [0] * days, "build_failure": [0] * days}
+    if not _apps:
+        return _empty
+    _now = datetime.now(timezone.utc)
+    _start = _now - timedelta(days=days)
+    # Builds — daily bucket with status breakdown
+    try:
+        _br = es_search(
+            IDX["builds"],
+            {
+                "query": {"bool": {"filter": [
+                    {"terms": {"application": _apps}},
+                    range_filter("startdate", _start, _now),
+                ]}},
+                "aggs": {
+                    "tl": {
+                        "date_histogram": {
+                            "field": "startdate",
+                            "fixed_interval": "1d",
+                            "min_doc_count": 0,
+                            "extended_bounds": {
+                                "min": int(_start.timestamp() * 1000),
+                                "max": int(_now.timestamp() * 1000),
+                            },
+                        },
+                        "aggs": {"s": {"terms": {"field": "status", "size": 10}}},
+                    },
+                },
+            },
+            size=0,
+        )
+    except Exception:
+        _br = {}
+    _build_succ: list[int] = []
+    _build_fail: list[int] = []
+    _build_other: list[int] = []
+    for _b in _br.get("aggregations", {}).get("tl", {}).get("buckets", []):
+        _succ = _fail = _other = 0
+        for _s in _b.get("s", {}).get("buckets", []):
+            _k = _s.get("key") or ""
+            _n = int(_s.get("doc_count") or 0)
+            if _k in SUCCESS_STATUSES:
+                _succ += _n
+            elif _k in FAILED_STATUSES:
+                _fail += _n
+            else:
+                _other += _n
+        _build_succ.append(_succ)
+        _build_fail.append(_fail)
+        _build_other.append(_other)
+    # PRD deploys — daily count
+    try:
+        _dr = es_search(
+            IDX["deployments"],
+            {
+                "query": {"bool": {"filter": [
+                    {"terms": {"application": _apps}},
+                    {"term": {"environment": "prd"}},
+                    range_filter("startdate", _start, _now),
+                ]}},
+                "aggs": {
+                    "tl": {
+                        "date_histogram": {
+                            "field": "startdate",
+                            "fixed_interval": "1d",
+                            "min_doc_count": 0,
+                            "extended_bounds": {
+                                "min": int(_start.timestamp() * 1000),
+                                "max": int(_now.timestamp() * 1000),
+                            },
+                        }
+                    }
+                },
+            },
+            size=0,
+        )
+    except Exception:
+        _dr = {}
+    _dep_counts = [
+        int(_b.get("doc_count") or 0)
+        for _b in _dr.get("aggregations", {}).get("tl", {}).get("buckets", [])
+    ]
+    # Pad to exactly ``days`` slots (histograms may return ±1 bucket depending
+    # on bounds alignment).
+    def _pad(xs: list[int]) -> list[int]:
+        if len(xs) >= days:
+            return xs[-days:]
+        return [0] * (days - len(xs)) + xs
+    return {
+        "build_success": _pad(_build_succ),
+        "build_failure": _pad(_build_fail),
+        "build":         _pad([s + f + o for s, f, o in zip(_build_succ, _build_fail, _build_other)]),
+        "deploy_prd":    _pad(_dep_counts),
+    }
+
+
+def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
+    """Daily stacked bars — success (green) on bottom, failure (red) on top."""
+    if not success and not failure:
+        return '<div class="iv-pulse-empty">no builds in 14d</div>'
+    _W, _H = 240.0, 38.0
+    _n = max(len(success), len(failure))
+    if _n == 0:
+        return '<div class="iv-pulse-empty">no builds in 14d</div>'
+    _max = max((s + f) for s, f in zip(success, failure)) or 1
+    _slot = _W / _n
+    _bw = _slot * 0.72
+    _pad = (_slot - _bw) / 2
+    _bars: list[str] = []
+    for _i in range(_n):
+        _s = success[_i] if _i < len(success) else 0
+        _f = failure[_i] if _i < len(failure) else 0
+        _x = _i * _slot + _pad
+        _hs = (_s / _max) * (_H - 2)
+        _hf = (_f / _max) * (_H - 2)
+        # Track (faint)
+        if _s == 0 and _f == 0:
+            _bars.append(
+                f'<rect x="{_x:.2f}" y="{_H - 2:.2f}" width="{_bw:.2f}" height="2" '
+                f'fill="var(--cc-border)" opacity=".55"/>'
+            )
+            continue
+        if _s > 0:
+            _bars.append(
+                f'<rect x="{_x:.2f}" y="{_H - _hs:.2f}" width="{_bw:.2f}" height="{_hs:.2f}" '
+                f'fill="var(--cc-green)" opacity=".88"><title>{_s} ok</title></rect>'
+            )
+        if _f > 0:
+            _bars.append(
+                f'<rect x="{_x:.2f}" y="{_H - _hs - _hf:.2f}" width="{_bw:.2f}" height="{_hf:.2f}" '
+                f'fill="var(--cc-red)"><title>{_f} fail</title></rect>'
+            )
+    return (
+        f'<svg class="iv-pulse-spark" viewBox="0 0 {_W:.0f} {_H:.0f}" '
+        f'preserveAspectRatio="none" aria-hidden="true">{"".join(_bars)}</svg>'
+    )
+
+
+def _svg_area_spark(values: list[int], color: str = "var(--cc-blue)") -> str:
+    """Filled area sparkline with endpoint dot."""
+    if not values or not any(v > 0 for v in values):
+        return '<div class="iv-pulse-empty">no deploys in 14d</div>'
+    _W, _H = 240.0, 38.0
+    _n = len(values)
+    _max = max(values) or 1
+    _step = _W / max(_n - 1, 1)
+    _pts = [
+        f"{_i * _step:.2f},{(_H - 1.5 - (_v / _max) * (_H - 3)):.2f}"
+        for _i, _v in enumerate(values)
+    ]
+    _line = " ".join(_pts)
+    _area = f"0,{_H:.2f} " + _line + f" {_W:.2f},{_H:.2f}"
+    _lx = (_n - 1) * _step
+    _ly = _H - 1.5 - (values[-1] / _max) * (_H - 3)
+    return (
+        f'<svg class="iv-pulse-spark" viewBox="0 0 {_W:.0f} {_H:.0f}" '
+        f'preserveAspectRatio="none" aria-hidden="true">'
+        f'<polygon points="{_area}" fill="{color}" opacity=".16"/>'
+        f'<polyline points="{_line}" fill="none" stroke="{color}" '
+        f'stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<circle cx="{_lx:.2f}" cy="{_ly:.2f}" r="2.4" fill="{color}" '
+        f'stroke="#fff" stroke-width="1"/>'
+        f'</svg>'
+    )
+
+
+def _svg_dist_bar(segments: list[tuple[int, str, str]]) -> str:
+    """Horizontal stacked bar + legend row.
+
+    ``segments`` = ``[(count, color, label), ...]``. Renders track + filled
+    segments proportionally; empty segments are omitted from the legend.
+    """
+    _total = sum(s[0] for s in segments)
+    if _total <= 0:
+        return '<div class="iv-pulse-empty">no data</div>'
+    _W, _H = 240.0, 9.0
+    _x = 0.0
+    _parts: list[str] = []
+    for _cnt, _color, _label in segments:
+        if _cnt <= 0:
+            continue
+        _w = (_cnt / _total) * _W
+        _parts.append(
+            f'<rect x="{_x:.2f}" y="0" width="{_w:.2f}" height="{_H:.0f}" '
+            f'fill="{_color}"><title>{_label}: {_cnt}</title></rect>'
+        )
+        _x += _w
+    _svg = (
+        f'<svg class="iv-pulse-bar" viewBox="0 0 {_W:.0f} {_H:.0f}" '
+        f'preserveAspectRatio="none" aria-hidden="true">{"".join(_parts)}</svg>'
+    )
+    _legend: list[str] = []
+    for _cnt, _color, _label in segments:
+        if _cnt <= 0:
+            continue
+        _legend.append(
+            f'<span class="iv-pulse-leg">'
+            f'<span class="iv-pulse-dot" style="background:{_color}"></span>'
+            f'{_label} <b>{_cnt}</b></span>'
+        )
+    return _svg + '<div class="iv-pulse-legend">' + "".join(_legend) + '</div>'
+
+
+def _build_event_ribbon(
+    events: list[dict],
+    start_utc: datetime,
+    end_utc: datetime,
+    window_label: str,
+    n_buckets: int = 60,
+) -> str:
+    """Stacked histogram ribbon of ``events`` over the event-log time window.
+
+    Events are bucketed by ``_ts`` and stacked by ``type``. Empty windows
+    render a minimal placeholder so the slot doesn't collapse jarringly.
+    """
+    _types_order = ["build-develop", "build-release", "deploy",
+                    "release", "request", "commit"]
+    _type_colors = {
+        "build-develop": "var(--cc-teal)",
+        "build-release": "var(--cc-accent)",
+        "deploy":        "var(--cc-green)",
+        "release":       "var(--cc-amber)",
+        "request":       "var(--cc-blue)",
+        "commit":        "var(--cc-text-mute)",
+    }
+    _type_labels = {
+        "build-develop": "dev build",
+        "build-release": "rel build",
+        "deploy":        "deploy",
+        "release":       "release",
+        "request":       "request",
+        "commit":        "commit",
+    }
+    _duration = (end_utc - start_utc).total_seconds()
+    if _duration <= 0:
+        return ""
+    _bucket_s = _duration / n_buckets
+    _buckets: list[list[int]] = [[0] * len(_types_order) for _ in range(n_buckets)]
+    _type_idx = {_t: _i for _i, _t in enumerate(_types_order)}
+    _total_typed = 0
+    for _ev in events:
+        _ts = _ev.get("_ts")
+        if _ts is None:
+            continue
+        _dt = _ts.to_pydatetime() if hasattr(_ts, "to_pydatetime") else _ts
+        _off = (_dt - start_utc).total_seconds()
+        if _off < 0 or _off > _duration:
+            continue
+        _bi = min(int(_off / _bucket_s), n_buckets - 1)
+        _ti = _type_idx.get(_ev.get("type") or "")
+        if _ti is None:
+            continue
+        _buckets[_bi][_ti] += 1
+        _total_typed += 1
+
+    if _total_typed == 0:
+        return (
+            '<div class="el-ribbon">'
+            '<div class="el-ribbon-head">'
+            f'<span class="el-ribbon-title"><b>Activity ribbon</b> · {window_label.lower()} · no events charted</span>'
+            '</div>'
+            '<div class="el-ribbon-empty">No events landed in the bucketed window.</div>'
+            '</div>'
+        )
+
+    _W, _H = 1200.0, 52.0
+    _slot = _W / n_buckets
+    _bw = _slot * 0.82
+    _pad = (_slot - _bw) / 2
+    _max = max((sum(_b) for _b in _buckets), default=1) or 1
+    _bars: list[str] = []
+    for _i, _row in enumerate(_buckets):
+        _tot = sum(_row)
+        if _tot == 0:
+            continue
+        _x = _i * _slot + _pad
+        _stacked = 0.0
+        for _ti, _cnt in enumerate(_row):
+            if _cnt <= 0:
+                continue
+            _h = (_cnt / _max) * (_H - 3)
+            _y = _H - 1 - _stacked - _h
+            _t = _types_order[_ti]
+            _bars.append(
+                f'<rect x="{_x:.2f}" y="{_y:.2f}" width="{_bw:.2f}" '
+                f'height="{_h:.2f}" fill="{_type_colors[_t]}" opacity=".90">'
+                f'<title>{_type_labels[_t]}: {_cnt}</title></rect>'
+            )
+            _stacked += _h
+    _baseline = (
+        f'<line x1="0" y1="{_H - 0.5:.2f}" x2="{_W:.0f}" y2="{_H - 0.5:.2f}" '
+        f'stroke="var(--cc-border)" stroke-width=".6"/>'
+    )
+    _totals = {_t: 0 for _t in _types_order}
+    for _row in _buckets:
+        for _ti, _cnt in enumerate(_row):
+            _totals[_types_order[_ti]] += _cnt
+    _legend: list[str] = []
+    for _t in _types_order:
+        _c = _totals[_t]
+        if _c <= 0:
+            continue
+        _legend.append(
+            f'<span class="el-rib-leg">'
+            f'<span class="el-rib-dot" style="background:{_type_colors[_t]}"></span>'
+            f'{_type_labels[_t]} <b>{_c}</b></span>'
+        )
+
+    if _duration < 86400 * 2:
+        _fmt = "%H:%M"
+    elif _duration < 86400 * 30:
+        _fmt = "%m-%d %H:%M"
+    else:
+        _fmt = "%m-%d"
+    _sl = start_utc.astimezone(DISPLAY_TZ).strftime(_fmt)
+    _el = end_utc.astimezone(DISPLAY_TZ).strftime(_fmt)
+    # A middle tick helps anchor longer windows.
+    _mid_utc = start_utc + (end_utc - start_utc) / 2
+    _ml = _mid_utc.astimezone(DISPLAY_TZ).strftime(_fmt)
+    return (
+        '<div class="el-ribbon">'
+        '<div class="el-ribbon-head">'
+        f'<span class="el-ribbon-title"><b>Activity ribbon</b> · '
+        f'{window_label.lower()} · {n_buckets} buckets · {_total_typed} events</span>'
+        f'<span class="el-ribbon-legend">{"".join(_legend)}</span>'
+        '</div>'
+        f'<svg class="el-ribbon-svg" viewBox="0 0 {_W:.0f} {_H:.0f}" '
+        f'preserveAspectRatio="none" aria-hidden="true">{_baseline}{"".join(_bars)}</svg>'
+        '<div class="el-ribbon-axis">'
+        f'<span>{_sl}</span><span>{_ml}</span><span>{_el}</span>'
+        '</div>'
+        '</div>'
+    )
+
+
 @st.fragment(run_every="300s")
 def _render_inventory_view() -> None:
     """Pipelines inventory table — one row per registered pipeline."""
@@ -5279,6 +6400,180 @@ def _render_inventory_view() -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Fleet pulse strip — four subtle visualizations of scope state ──────
+    # Two temporal sparklines (14d build success, PRD deploy cadence) + two
+    # distribution bars (PRD freshness, security posture). Everything reflects
+    # the current filtered scope so users can redirect the narrative by
+    # changing any filter above.
+    if _post_apps:
+        _pulse = _fetch_inv_pulse(json.dumps(sorted(_post_apps)), days=14)
+        _bs = _pulse.get("build_success", [])
+        _bf = _pulse.get("build_failure", [])
+        _dp = _pulse.get("deploy_prd", [])
+        _bs_sum = sum(_bs)
+        _bf_sum = sum(_bf)
+        _b_total = _bs_sum + _bf_sum
+        if _b_total:
+            _rate_pct = _bs_sum / _b_total * 100
+            _rate = f"{_rate_pct:.0f}"
+            _rate_tag = (
+                "ok" if _rate_pct >= 90
+                else "warn" if _rate_pct >= 75
+                else "crit"
+            )
+            _rate_tag_lbl = (
+                "healthy" if _rate_pct >= 90
+                else "watch" if _rate_pct >= 75
+                else "degraded"
+            )
+        else:
+            _rate = "—"
+            _rate_tag = ""
+            _rate_tag_lbl = "quiet"
+        _dp_total = sum(_dp)
+        _dp_peak = max(_dp) if _dp else 0
+        _dp_active_days = sum(1 for _v in _dp if _v > 0)
+        _dp_tag = "ok" if _dp_active_days else ""
+        _dp_tag_lbl = (
+            f"{_dp_active_days}/14d" if _dp_active_days else "idle"
+        )
+
+        # PRD freshness distribution
+        _now_pulse = datetime.now(timezone.utc)
+        _fresh = 0; _recent = 0; _stale = 0; _cold = 0; _never = 0
+        for _ap in _post_apps:
+            _prd = _iv_prd_map.get(_ap) or {}
+            _ts_prd = parse_dt(_prd.get("when"))
+            if _ts_prd is None:
+                _never += 1
+                continue
+            _pdt = _ts_prd.to_pydatetime()
+            if _pdt.tzinfo is None:
+                _pdt = _pdt.replace(tzinfo=timezone.utc)
+            _dage = (_now_pulse - _pdt).days
+            if _dage < 7:   _fresh  += 1
+            elif _dage < 30: _recent += 1
+            elif _dage < 90: _stale  += 1
+            else:            _cold   += 1
+        _fresh_total = _fresh + _recent + _stale + _cold + _never
+        _fresh_pct = (_fresh / _fresh_total * 100) if _fresh_total else 0
+        _fresh_tag = (
+            "ok" if _fresh_pct >= 60
+            else "warn" if _fresh_pct >= 30
+            else "crit" if _fresh_total else ""
+        )
+        _fresh_bar = _svg_dist_bar([
+            (_fresh,  "var(--cc-green)",     "fresh <7d"),
+            (_recent, "var(--cc-teal)",      "recent <30d"),
+            (_stale,  "var(--cc-amber)",     "stale <90d"),
+            (_cold,   "var(--cc-red)",       "cold >90d"),
+            (_never,  "var(--cc-text-mute)", "never"),
+        ])
+
+        # Security posture — sum critical/high/medium/low across PRD versions
+        _vc = 0; _vh = 0; _vm = 0; _vl = 0
+        _apps_scanned = 0
+        _apps_with_ver = 0
+        for _ap in _post_apps:
+            _prd = _iv_prd_map.get(_ap) or {}
+            _pv = (_prd.get("version") or "")
+            if not _pv:
+                continue
+            _apps_with_ver += 1
+            _sc = _iv_prisma_map.get((_ap, _pv))
+            if not _sc:
+                continue
+            _apps_scanned += 1
+            _vc += int(_sc.get("Vcritical") or 0)
+            _vh += int(_sc.get("Vhigh")     or 0)
+            _vm += int(_sc.get("Vmedium")   or 0)
+            _vl += int(_sc.get("Vlow")      or 0)
+        _v_crit_high = _vc + _vh
+        _sec_tag = (
+            "crit" if _vc > 0
+            else "warn" if _vh > 0
+            else "ok" if _apps_scanned
+            else ""
+        )
+        _sec_tag_lbl = (
+            f"{_vc} crit" if _vc > 0
+            else f"{_vh} high" if _vh > 0
+            else "clean" if _apps_scanned
+            else "unscanned"
+        )
+        _sec_bar = _svg_dist_bar([
+            (_vc, "var(--cc-red)",       "critical"),
+            (_vh, "var(--cc-amber)",     "high"),
+            (_vm, "var(--cc-blue)",      "medium"),
+            (_vl, "var(--cc-text-mute)", "low"),
+        ])
+
+        _spark_build = _svg_stacked_spark(_bs, _bf)
+        _spark_dep = _svg_area_spark(_dp, color="var(--cc-blue)")
+
+        _pulse_html = (
+            '<div class="iv-pulse-strip">'
+            # Tile 1: Build success rate
+            '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
+            'linear-gradient(90deg,var(--cc-green),var(--cc-teal))">'
+            '<div class="iv-pulse-label">'
+            '<span>Build success · 14d</span>'
+            + (f'<span class="iv-pulse-tag {_rate_tag}">{_rate_tag_lbl}</span>'
+               if _rate_tag else '')
+            + '</div>'
+            + f'<div class="iv-pulse-value">{_rate}'
+            + ('<span class="iv-pulse-unit">%</span>' if _b_total else '')
+            + '</div>'
+            + f'<div class="iv-pulse-sub"><b>{_b_total}</b> builds · '
+              f'<b>{_bs_sum}</b> ok · <b>{_bf_sum}</b> fail</div>'
+            + _spark_build
+            + '<div class="iv-pulse-axis"><span>14d ago</span><span>today</span></div>'
+            + '</div>'
+            # Tile 2: PRD deploy cadence
+            + '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
+              'linear-gradient(90deg,var(--cc-blue),var(--cc-accent))">'
+            '<div class="iv-pulse-label">'
+            '<span>PRD cadence · 14d</span>'
+            + (f'<span class="iv-pulse-tag {_dp_tag}">{_dp_tag_lbl}</span>'
+               if _dp_tag else f'<span class="iv-pulse-tag">{_dp_tag_lbl}</span>')
+            + '</div>'
+            + f'<div class="iv-pulse-value">{_dp_total}</div>'
+            + f'<div class="iv-pulse-sub">peak <b>{_dp_peak}</b>/day · '
+              f'active <b>{_dp_active_days}</b>/14d</div>'
+            + _spark_dep
+            + '<div class="iv-pulse-axis"><span>14d ago</span><span>today</span></div>'
+            + '</div>'
+            # Tile 3: PRD freshness
+            + '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
+              'linear-gradient(90deg,var(--cc-green),var(--cc-amber))">'
+            '<div class="iv-pulse-label">'
+            '<span>PRD freshness</span>'
+            + (f'<span class="iv-pulse-tag {_fresh_tag}">{_fresh_pct:.0f}% fresh</span>'
+               if _fresh_tag else '')
+            + '</div>'
+            + f'<div class="iv-pulse-value">{_fresh}'
+            + f'<span class="iv-pulse-unit">/ {_fresh_total}</span>'
+            + '</div>'
+            + f'<div class="iv-pulse-sub">apps deployed to PRD in the last 7 days</div>'
+            + _fresh_bar
+            + '</div>'
+            # Tile 4: Security posture
+            + '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
+              'linear-gradient(90deg,var(--cc-red),var(--cc-amber))">'
+            '<div class="iv-pulse-label">'
+            '<span>Security posture</span>'
+            + (f'<span class="iv-pulse-tag {_sec_tag}">{_sec_tag_lbl}</span>'
+               if _sec_tag else '')
+            + '</div>'
+            + f'<div class="iv-pulse-value">{_v_crit_high}</div>'
+            + f'<div class="iv-pulse-sub">crit + high · <b>{_apps_scanned}</b>/'
+              f'<b>{_apps_with_ver}</b> PRD versions scanned</div>'
+            + _sec_bar
+            + '</div>'
+            + '</div>'
+        )
+        st.markdown(_pulse_html, unsafe_allow_html=True)
+
     # ── Sort ────────────────────────────────────────────────────────────────
     # Pre-compute sort-aux maps so sorted() doesn't re-parse dates or walk
     # nested dicts on every key comparison. Each key tuple starts with a
@@ -5362,6 +6657,19 @@ def _render_inventory_view() -> None:
 
     if not _inv_rows:
         inline_note("No applications match the current filters.", "info")
+        # Even on empty inventory, still render the event log below so users
+        # see "no events" in the same scope — consistent with the filter-
+        # inheritance contract.
+        if _show_el:
+            st.session_state["_el_inv_scope_apps"] = []
+            st.markdown(
+                '<div class="cc-panel-head cc-panel-head--numbered cc-panel-head--live" style="margin-top:22px">'
+                '<h2 data-section-num="02">Event log</h2>'
+                '<span class="cc-panel-tag">Live · 60s · no apps in scope</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            _render_event_log()
         return
 
     # ── Popover infrastructure (project + app popovers) ─────────────────────
@@ -6180,44 +7488,61 @@ def _render_inventory_view() -> None:
         unsafe_allow_html=True,
     )
 
-
-# ── Late render into the top-of-page slots ────────────────────────────────
-# The shared header + anchors + st.empty() slots were created right after the
-# global filter strip so event log and inventory appear at the top of the
-# page. Their fragment functions are defined far below; by writing into the
-# slots here we keep the reading order top-down without having to forward-
-# declare ~2000 lines of helpers. Views are stacked (event log above
-# inventory) — side-by-side proved too cramped at typical widths.
-if _show_el and _event_log_slot is not None:
-    with _event_log_slot.container():
-        _el_sub = {
-            "Admin":     "builds · deployments · releases · requests · commits — full visibility",
-            "Developer": "commits · dev/rel builds · dev deployments — scoped to your team",
-            "QC":        "QC deployments · releases · approval requests — scoped to your team",
-            "Operator":  "UAT/PRD deployments · releases · approval requests — scoped to your team",
-        }.get(_effective_role, "all event types")
+    # ── Nested event log ────────────────────────────────────────────────────
+    # Stash the filtered app list so the event-log fragment inherits every
+    # filter applied above. An empty list is meaningful ("scope is zero"); we
+    # only stash when at least one inventory filter is driving the selection.
+    if _show_el:
+        _el_scope_apps = sorted({
+            r.get("application") or "" for r in _inv_rows if r.get("application")
+        })
+        st.session_state["_el_inv_scope_apps"] = _el_scope_apps
         st.markdown(
-            '<div class="cc-panel-head">'
-            '<h2>Event log</h2>'
-            f'<span class="cc-panel-tag">Live · auto-refresh 60s · {_effective_role}</span>'
+            '<div class="cc-panel-head cc-panel-head--numbered cc-panel-head--live" style="margin-top:22px">'
+            '<h2 data-section-num="02">Event log</h2>'
+            f'<span class="cc-panel-tag">Live · 60s · scoped to {len(_el_scope_apps)} '
+            f'{"app" if len(_el_scope_apps) == 1 else "apps"} from the inventory above</span>'
             '</div>'
-            f'<div class="cc-panel-sub">{_el_sub} — newest first · click any row for details</div>',
+            '<div class="cc-panel-sub">Builds · deployments · releases · requests · commits — '
+            'newest first · click any row for details · scope mirrors the pipelines table above</div>',
             unsafe_allow_html=True,
         )
         _render_event_log()
 
+
+# ── Late render into the top-of-page slot ─────────────────────────────────
+# The inventory is the primary surface — its fragment renders the stat tiles,
+# the pipelines table, and (at the bottom) the event log, which inherits every
+# filter selected in the inventory header. Fragment defs live far below, so
+# the slot pattern keeps reading order top-down without forward-declaring
+# ~2000 lines of helpers.
 if _show_inv and _inventory_slot is not None:
     with _inventory_slot.container():
+        # Header already rendered inside the sticky filter rail at the top of
+        # the page — the rail IS the section header here. A thin sub-caption
+        # keeps the context copy without doubling up on the H2.
         st.markdown(
-            '<div class="cc-panel-head">'
-            '<h2>Pipelines inventory</h2>'
-            f'<span class="cc-panel-tag">Auto-refresh 5m · {_effective_role}</span>'
-            '</div>'
-            '<div class="cc-panel-sub">One row per registered pipeline · PRD liveness · '
-            'security posture · click any chip for project / app / version detail</div>',
+            '<div class="cc-panel-sub" style="margin:-4px 0 6px 0">'
+            'One row per registered pipeline · PRD liveness · security posture · '
+            'click any chip for project / app / version detail · '
+            'event log at the bottom inherits every filter above'
+            '</div>',
             unsafe_allow_html=True,
         )
         _render_inventory_view()
+elif _show_el:
+    # Fallback for roles that somehow have event-log-only visibility (none today,
+    # but the mapping allows it). Render the event log standalone with no
+    # inventory-driven scope restriction.
+    st.session_state.pop("_el_inv_scope_apps", None)
+    st.markdown(
+        '<div class="cc-panel-head cc-panel-head--numbered cc-panel-head--live">'
+        '<h2 data-section-num="02">Event log</h2>'
+        f'<span class="cc-panel-tag">Live · auto-refresh 60s · {_effective_role}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    _render_event_log()
 
 
 # =============================================================================
