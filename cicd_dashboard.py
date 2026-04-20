@@ -7735,10 +7735,10 @@ def _render_inventory_view() -> None:
             if _pdt.tzinfo is None:
                 _pdt = _pdt.replace(tzinfo=timezone.utc)
             _dage = (_now_pulse - _pdt).days
-            if _dage < 7:   _fresh  += 1
-            elif _dage < 30: _recent += 1
-            elif _dage < 90: _stale  += 1
-            else:            _cold   += 1
+            if _dage < 365:    _fresh  += 1
+            elif _dage < 730:  _recent += 1
+            elif _dage < 1095: _stale  += 1
+            else:              _cold   += 1
         _fresh_total = _fresh + _recent + _stale + _cold + _never
         _fresh_pct = (_fresh / _fresh_total * 100) if _fresh_total else 0
         _fresh_tag = (
@@ -7747,10 +7747,10 @@ def _render_inventory_view() -> None:
             else "crit" if _fresh_total else ""
         )
         _fresh_bar = _svg_dist_bar([
-            (_fresh,  "var(--cc-green)",     "fresh <7d"),
-            (_recent, "var(--cc-teal)",      "recent <30d"),
-            (_stale,  "var(--cc-amber)",     "stale <90d"),
-            (_cold,   "var(--cc-red)",       "cold >90d"),
+            (_fresh,  "var(--cc-green)",     "fresh <1y"),
+            (_recent, "var(--cc-teal)",      "recent <2y"),
+            (_stale,  "var(--cc-amber)",     "stale <3y"),
+            (_cold,   "var(--cc-red)",       "cold ≥3y"),
             (_never,  "var(--cc-text-mute)", "never"),
         ])
 
@@ -7838,7 +7838,7 @@ def _render_inventory_view() -> None:
             + f'<div class="iv-pulse-value">{_fresh}'
             + f'<span class="iv-pulse-unit">/ {_fresh_total}</span>'
             + '</div>'
-            + f'<div class="iv-pulse-sub">apps deployed to PRD in the last 7 days</div>'
+            + f'<div class="iv-pulse-sub">apps deployed to PRD in the last year</div>'
             + _fresh_bar
             + '</div>'
             # Tile 4: Security posture
