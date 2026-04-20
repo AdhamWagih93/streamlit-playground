@@ -3586,6 +3586,49 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     }
 }
 
+/* ==========================================================================
+   STICKY RAIL HARDENING
+   Streamlit wraps every container in nested `stVerticalBlock` flex parents.
+   Any ancestor with `overflow: hidden/auto` breaks `position: sticky`, and
+   any ancestor with a `transform`/`filter` creates a new containing block
+   that re-anchors the sticky to the wrong scroll root. We explicitly target
+   Streamlit's known wrappers to guarantee the rail pins to the viewport.
+   ========================================================================== */
+
+/* Force the rail to stick no matter how many CSS blocks above declared it.
+   -webkit-sticky fallback for older Safari. */
+.st-key-cc_filter_rail {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 950 !important;
+}
+
+/* Rail's direct + transitive ancestors up to the scroll root must not clip
+   or transform. These are all Streamlit's own wrappers. */
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+section.main,
+.main,
+.main .block-container,
+[data-testid="stVerticalBlock"],
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stElementContainer"] {
+    overflow: visible !important;
+    transform: none !important;
+    filter: none !important;
+}
+
+/* The secondary filter bar sits below the rail. Its `top` must clear the
+   rail's actual painted height (padding + borders). Re-pin it explicitly. */
+.st-key-cc_filter_secondary {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+    top: 96px !important;
+    z-index: 900 !important;
+}
+
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -5979,14 +6022,6 @@ def _render_event_log() -> None:
         else:
             inline_note("No events match the current filters.", "info")
         return
-
-    # ── Activity ribbon — stacked histogram mirroring the filtered table ──
-    # Uses the already-filtered ``events`` list so it tracks the pill+search
-    # selection 1:1 with what the rows below show. No extra ES call — we
-    # bucket the in-memory events into ~60 slots across the chosen window.
-    _ribbon_html = _build_event_ribbon(events, _el_start, _el_end, _el_tw_label)
-    if _ribbon_html:
-        st.markdown(_ribbon_html, unsafe_allow_html=True)
 
     # Types whose "Who" column carries a real application name (vs commits'
     # repository or requests' project). Keep this list in one place so the
