@@ -4488,17 +4488,23 @@ _STAGE_LABEL = {
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
-    """For each application, fetch the latest record at each stage.
+    """For each application, fetch the latest *successful* record at each stage.
 
     A "stage" is one of: build (ef-cicd-builds), release (ef-cicd-releases),
     or a deployment in a given environment (dev/qc/uat/prd on
     ef-cicd-deployments).
 
+    Build and deployment queries filter on ``status`` ∈ ``SUCCESS_STATUSES`` so
+    the inventory's "latest" columns reflect what actually shipped — a failed
+    deploy on top of an older successful one should not mask the last known
+    good version. Releases are not status-filtered (they lack a consistent
+    success flag).
+
     Returns::
 
         {app: {stage: {"version": str, "when": iso-str, "status": str}}}
 
-    Stages with no data are simply absent from the inner dict.
+    Stages with no successful record are simply absent from the inner dict.
     """
     if not apps:
         return {}
@@ -4517,13 +4523,15 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
                     "created", "timestamp", "@timestamp"]
     _DEPLOY_SRC  = _BUILD_SRC + ["environment"]
 
-    # ---- builds (startdate) ------------------------------------------------
+    # ---- builds (startdate) — SUCCESS only so the inventory's Build column
+    # reflects the last known-good build rather than the last attempted one.
     try:
         resp = es_search(
             IDX["builds"],
             {
                 "query": {"bool": {"filter": [
                     {"terms": {"application": apps_list}},
+                    {"terms": {"status": SUCCESS_STATUSES}},
                 ]}},
                 "aggs": {
                     "by_app": {
@@ -4589,7 +4597,9 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
     except Exception:
         pass
 
-    # ---- deployments split by environment (startdate) ---------------------
+    # ---- deployments split by environment (startdate) — SUCCESS only so the
+    # inventory's env columns (Dev / QC / UAT / PRD) reflect what is actually
+    # running in each environment, not the last attempt.
     try:
         resp = es_search(
             IDX["deployments"],
@@ -4597,6 +4607,7 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
                 "query": {"bool": {"filter": [
                     {"terms": {"application": apps_list}},
                     {"terms": {"environment": ["dev", "qc", "uat", "prd"]}},
+                    {"terms": {"status": SUCCESS_STATUSES}},
                 ]}},
                 "aggs": {
                     "by_app": {
