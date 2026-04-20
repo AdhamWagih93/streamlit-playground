@@ -2985,30 +2985,39 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 
 /* ==========================================================================
-   FILTERABLE STAT TILES
-   The stat boxes (companies, teams, projects, apps, build, deploy, platform)
-   are now clickable popovers. The popover button IS the tile — CSS reshapes
-   the Streamlit button to look like the monumental stat tile layout
-   (accent bar, glyph + label, big number, subtitle). Active selections show
-   a luminous badge in the corner.
+   FILTERABLE STAT TILES (overlay pattern)
+   Each tile renders a visual HTML card PLUS an absolutely-positioned,
+   transparent popover button that covers the card. The HTML guarantees
+   identical size + layout across tiles; the overlay makes the whole card
+   clickable. :hover and :has([aria-expanded="true"]) on the wrapper apply
+   lifted / expanded states to the card underneath.
    ========================================================================== */
 
-/* Tile row container — matches the grid of the legacy static tiles */
+/* Tile row container */
 .st-key-cc_iv_tiles_row {
     margin: 18px 0 20px 0 !important;
     padding: 0 !important;
 }
 .st-key-cc_iv_tiles_row > div[data-testid="stHorizontalBlock"] {
     gap: 10px !important;
+    align-items: stretch !important;
+}
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+    display: flex !important;
 }
 
-/* Per-tile wrapper — each tile gets .st-key-cc_tile_<dim> which supplies
-   the dimension's accent color via CSS custom property */
+/* Per-tile wrapper — each wraps the HTML card + overlay popover.
+   Gives the popover an anchor for absolute positioning and holds the
+   per-dimension accent color. */
 [class*="st-key-cc_tile_"] {
+    position: relative !important;
     padding: 0 !important;
     margin: 0 !important;
-    height: 100%;
+    width: 100% !important;
+    height: 100% !important;
     --iv-stat-accent: var(--cc-accent);
+    display: flex !important;
+    flex-direction: column !important;
 }
 .st-key-cc_tile_company  { --iv-stat-accent: var(--cc-accent); }
 .st-key-cc_tile_team     { --iv-stat-accent: var(--cc-teal); }
@@ -3017,208 +3026,15 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_tile_build    { --iv-stat-accent: var(--cc-amber); }
 .st-key-cc_tile_deploy   { --iv-stat-accent: var(--cc-teal); }
 .st-key-cc_tile_platform { --iv-stat-accent: var(--cc-blue); }
-.st-key-cc_tile__pipelines { --iv-stat-accent: var(--cc-accent); }
+.st-key-cc_tile_combo    { --iv-stat-accent: var(--cc-red); }
 
-/* Popover trigger — reshape Streamlit's button into a tile. Applies only
-   to tile-wrappers (cc_tile_*) so the Sort popover on the sticky bar
-   retains its own styling. */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button {
-    all: unset !important;
-    box-sizing: border-box !important;
-    display: block !important;
-    width: 100% !important;
-    min-height: 124px !important;
-    padding: 14px 16px 13px 20px !important;
-    border-radius: 14px !important;
-    border: 1px solid var(--cc-border) !important;
-    background:
-        radial-gradient(140% 100% at 0% 0%,
-            color-mix(in srgb, var(--iv-stat-accent) 10%, transparent) 0%,
-            transparent 55%),
-        var(--cc-surface) !important;
-    cursor: pointer !important;
-    position: relative !important;
-    overflow: hidden !important;
-    text-align: left !important;
-    transition:
-        transform .25s cubic-bezier(.2,.7,.2,1),
-        border-color .2s ease,
-        box-shadow .25s ease !important;
-    opacity: 0;
-    animation: iv-stat-in .6s cubic-bezier(.2,.7,.2,1) forwards;
-}
-
-/* Stagger animation across tiles */
-[class*="st-key-cc_tile_"]:nth-child(1) > div > button { animation-delay: .00s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(1) [data-testid*="Popover"] > button { animation-delay: .00s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid*="Popover"] > button { animation-delay: .06s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(3) [data-testid*="Popover"] > button { animation-delay: .12s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(4) [data-testid*="Popover"] > button { animation-delay: .18s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(5) [data-testid*="Popover"] > button { animation-delay: .24s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(6) [data-testid*="Popover"] > button { animation-delay: .30s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(7) [data-testid*="Popover"] > button { animation-delay: .36s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(8) [data-testid*="Popover"] > button { animation-delay: .42s; }
-
-/* Accent bar on the left edge */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button::before,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button::before {
-    content: '';
-    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-    background: var(--iv-stat-accent);
-    box-shadow: 0 0 14px 0
-        color-mix(in srgb, var(--iv-stat-accent) 45%, transparent);
-    opacity: .92;
-    transition: box-shadow .28s ease, width .28s ease;
-}
-
-/* Atmospheric corner glow */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button::after,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button::after {
-    content: '';
-    position: absolute; right: -70px; top: -70px;
-    width: 180px; height: 180px;
-    background: radial-gradient(circle,
-        color-mix(in srgb, var(--iv-stat-accent) 14%, transparent) 0%,
-        transparent 62%);
-    pointer-events: none;
-    transition:
-        transform .45s cubic-bezier(.2,.7,.2,1),
-        opacity  .35s ease;
-}
-
-/* Hover state */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover {
-    transform: translateY(-3px) !important;
-    border-color: var(--iv-stat-accent) !important;
-    box-shadow:
-        0 18px 34px -20px color-mix(in srgb, var(--iv-stat-accent) 45%, transparent),
-        0 0 0 1px color-mix(in srgb, var(--iv-stat-accent) 20%, transparent) !important;
-}
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover::before,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover::before {
-    width: 4px;
-    box-shadow: 0 0 22px 0
-        color-mix(in srgb, var(--iv-stat-accent) 70%, transparent);
-}
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover::after,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover::after {
-    transform: translate(-14px, 14px) scale(1.12);
-}
-
-/* Open (expanded) state — lock the lifted look while popover is open */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button[aria-expanded="true"],
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button[aria-expanded="true"] {
-    transform: translateY(-3px) !important;
-    border-color: var(--iv-stat-accent) !important;
-    box-shadow:
-        0 20px 40px -22px color-mix(in srgb, var(--iv-stat-accent) 55%, transparent),
-        0 0 0 2px color-mix(in srgb, var(--iv-stat-accent) 28%, transparent) !important;
-    background:
-        radial-gradient(140% 100% at 0% 0%,
-            color-mix(in srgb, var(--iv-stat-accent) 16%, transparent) 0%,
-            transparent 55%),
-        var(--cc-surface) !important;
-}
-
-/* Inner text layout — target the markdown container Streamlit wraps the
-   label in. Lines 1/2/3 become: label row, big number, subtitle. */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"],
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] {
-    display: block !important;
-    width: 100% !important;
-}
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p {
-    margin: 0 !important;
-    padding: 0 !important;
-    text-align: left !important;
-    line-height: 1.2 !important;
-    letter-spacing: 0 !important;
-    color: var(--cc-text-dim) !important;
-    font-family: var(--cc-body) !important;
-    font-size: 0.66rem !important;
-    font-weight: 500 !important;
-    white-space: normal !important;
-}
-/* First paragraph = label row (glyph + label + optional ✱N badge) */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1),
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1) {
-    font-family: var(--cc-body) !important;
-    font-size: 0.62rem !important;
-    letter-spacing: 0.14em !important;
-    text-transform: uppercase !important;
-    color: var(--cc-text-mute) !important;
-    font-weight: 600 !important;
-    margin-bottom: 8px !important;
-}
-/* Second paragraph = bold number. Use :has() to restyle when it contains
-   <strong>, falling back to direct strong targeting for broader support. */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2),
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2) {
-    font-family: var(--cc-display) !important;
-    font-variation-settings: "opsz" 144, "SOFT" 90;
-    font-size: 2.35rem !important;
-    font-weight: 500 !important;
-    line-height: 1.0 !important;
-    color: var(--cc-ink) !important;
-    letter-spacing: -0.028em !important;
-    font-variant-numeric: tabular-nums lining-nums !important;
-    padding: 2px 0 4px 0 !important;
-    position: relative !important;
-    display: flex !important;
-    align-items: baseline !important;
-    gap: 0 !important;
-}
-/* Strong inside the number paragraph inherits the display treatment */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2) strong,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2) strong {
-    font-family: var(--cc-display) !important;
-    font-weight: 500 !important;
-    font-size: inherit !important;
-    color: inherit !important;
-    letter-spacing: inherit !important;
-}
-/* Underline accent below the number */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after {
-    content: '';
-    position: absolute;
-    left: 0; bottom: -4px;
-    width: 22px; height: 2px;
-    background: var(--iv-stat-accent);
-    opacity: .55;
-    border-radius: 2px;
-    transition: width .22s ease, opacity .22s ease;
-}
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button[aria-expanded="true"] [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button[aria-expanded="true"] [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after {
-    width: 42px;
-    opacity: 1;
-}
-/* Third paragraph = subtitle */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3),
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3) {
-    margin-top: 10px !important;
-    font-size: 0.68rem !important;
-    color: var(--cc-text-dim) !important;
-    line-height: 1.4 !important;
-    font-variant-numeric: tabular-nums !important;
-}
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3) strong,
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3) strong {
-    color: var(--iv-stat-accent) !important;
-    font-family: var(--cc-data) !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.01em !important;
-    font-size: 0.74rem !important;
-}
-
-/* Static tile (Unique pipelines) — same visual as popover tiles */
-.iv-tile.iv-tile-static {
+/* The visual HTML card — uniform size, all the atmosphere */
+.iv-tile.iv-tile-click {
+    position: relative;
+    z-index: 1;
+    pointer-events: none;                 /* clicks fall through to overlay */
+    display: flex;
+    flex-direction: column;
     background:
         radial-gradient(140% 100% at 0% 0%,
             color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 10%, transparent) 0%,
@@ -3226,25 +3042,29 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
         var(--cc-surface);
     border: 1px solid var(--cc-border);
     border-radius: 14px;
-    padding: 14px 16px 13px 20px;
-    position: relative;
-    overflow: hidden;
-    min-height: 124px;
+    padding: 14px 18px 13px 20px;
+    min-height: 148px;
     height: 100%;
     box-sizing: border-box;
+    overflow: hidden;
     opacity: 0;
     animation: iv-stat-in .6s cubic-bezier(.2,.7,.2,1) forwards;
-    animation-delay: .42s;
+    transition:
+        transform .25s cubic-bezier(.2,.7,.2,1),
+        border-color .22s ease,
+        box-shadow .25s ease,
+        background .22s ease;
 }
-.iv-tile.iv-tile-static::before {
+.iv-tile.iv-tile-click::before {
     content: '';
     position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: var(--iv-stat-accent, var(--cc-accent));
     box-shadow: 0 0 14px 0
         color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 45%, transparent);
     opacity: .92;
+    transition: box-shadow .28s ease, width .28s ease;
 }
-.iv-tile.iv-tile-static::after {
+.iv-tile.iv-tile-click::after {
     content: '';
     position: absolute; right: -70px; top: -70px;
     width: 180px; height: 180px;
@@ -3252,8 +3072,47 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
         color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 14%, transparent) 0%,
         transparent 62%);
     pointer-events: none;
+    transition: transform .45s cubic-bezier(.2,.7,.2,1);
 }
-.iv-tile-head {
+
+/* Stagger-in via nth-child on the column */
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) .iv-tile.iv-tile-click { animation-delay: .00s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) .iv-tile.iv-tile-click { animation-delay: .06s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) .iv-tile.iv-tile-click { animation-delay: .12s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(4) .iv-tile.iv-tile-click { animation-delay: .18s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(5) .iv-tile.iv-tile-click { animation-delay: .24s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(6) .iv-tile.iv-tile-click { animation-delay: .30s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(7) .iv-tile.iv-tile-click { animation-delay: .36s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(8) .iv-tile.iv-tile-click { animation-delay: .42s; }
+
+/* Hover / expanded state propagates from the wrapper to the card */
+[class*="st-key-cc_tile_"]:hover .iv-tile.iv-tile-click,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click {
+    transform: translateY(-3px);
+    border-color: var(--iv-stat-accent);
+    box-shadow:
+        0 18px 34px -20px color-mix(in srgb, var(--iv-stat-accent) 45%, transparent),
+        0 0 0 1px color-mix(in srgb, var(--iv-stat-accent) 20%, transparent);
+}
+[class*="st-key-cc_tile_"]:hover .iv-tile.iv-tile-click::before,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click::before {
+    width: 4px;
+    box-shadow: 0 0 22px 0
+        color-mix(in srgb, var(--iv-stat-accent) 70%, transparent);
+}
+[class*="st-key-cc_tile_"]:hover .iv-tile.iv-tile-click::after,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click::after {
+    transform: translate(-14px, 14px) scale(1.12);
+}
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click {
+    border-color: var(--iv-stat-accent);
+    box-shadow:
+        0 20px 40px -22px color-mix(in srgb, var(--iv-stat-accent) 55%, transparent),
+        0 0 0 2px color-mix(in srgb, var(--iv-stat-accent) 28%, transparent);
+}
+
+/* Card content: label row */
+.iv-tile .iv-tile-head {
     font-family: var(--cc-body);
     font-size: 0.62rem;
     letter-spacing: 0.14em;
@@ -3261,18 +3120,53 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-text-mute);
     font-weight: 600;
     margin-bottom: 8px;
-    display: flex; align-items: center; gap: 7px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 18px;
 }
-.iv-tile-head .iv-tile-glyph {
+.iv-tile .iv-tile-glyph {
     color: var(--iv-stat-accent, var(--cc-accent));
-    font-size: 0.90rem;
-    opacity: .88;
+    font-size: 0.95rem;
+    opacity: .90;
+    line-height: 1;
 }
-.iv-tile-head .iv-tile-label { }
-.iv-tile-number {
+.iv-tile .iv-tile-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Active-selection badge (glowing pill in the top-right) */
+.iv-tile .iv-tile-badge {
+    font-family: var(--cc-data);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: #fff;
+    background: var(--iv-stat-accent, var(--cc-accent));
+    padding: 2px 8px 1px 7px;
+    border-radius: 999px;
+    box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--iv-stat-accent) 25%, transparent),
+        0 4px 10px -4px color-mix(in srgb, var(--iv-stat-accent) 50%, transparent);
+    font-variant-numeric: tabular-nums;
+    animation: iv-tile-badge-pulse 2.8s ease-in-out infinite;
+}
+@keyframes iv-tile-badge-pulse {
+    0%, 100% { box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--iv-stat-accent) 25%, transparent),
+        0 4px 10px -4px color-mix(in srgb, var(--iv-stat-accent) 50%, transparent); }
+    50% { box-shadow:
+        0 0 0 4px color-mix(in srgb, var(--iv-stat-accent) 18%, transparent),
+        0 6px 14px -4px color-mix(in srgb, var(--iv-stat-accent) 60%, transparent); }
+}
+
+/* Big number */
+.iv-tile .iv-tile-number {
     font-family: var(--cc-display) !important;
     font-variation-settings: "opsz" 144, "SOFT" 90;
-    font-size: 2.35rem !important;
+    font-size: 2.45rem !important;
     font-weight: 500 !important;
     line-height: 1.0 !important;
     color: var(--cc-ink) !important;
@@ -3280,61 +3174,157 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-variant-numeric: tabular-nums lining-nums;
     padding: 2px 0 4px 0;
     position: relative;
+    transition: color .24s ease;
 }
-.iv-tile-number::after {
+.iv-tile .iv-tile-number::after {
     content: '';
     display: block;
-    width: 22px; height: 2px;
+    width: 22px;
+    height: 2px;
     background: var(--iv-stat-accent, var(--cc-accent));
     margin-top: 6px;
     opacity: .55;
     border-radius: 2px;
+    transition: width .22s ease, opacity .22s ease;
 }
-.iv-tile-sub {
+[class*="st-key-cc_tile_"]:hover .iv-tile .iv-tile-number::after,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile .iv-tile-number::after {
+    width: 42px;
+    opacity: 1;
+}
+[class*="st-key-cc_tile_"]:hover .iv-tile .iv-tile-number {
+    color: color-mix(in srgb, var(--cc-ink) 88%, var(--iv-stat-accent)) !important;
+}
+
+/* Subtitle */
+.iv-tile .iv-tile-sub {
     font-family: var(--cc-body);
-    margin-top: 10px;
-    font-size: 0.68rem;
+    margin-top: 8px;
+    font-size: 0.70rem;
     color: var(--cc-text-dim);
     font-weight: 500;
     line-height: 1.4;
     font-variant-numeric: tabular-nums;
+    flex: 1;
+}
+.iv-tile .iv-tile-sub b {
+    color: var(--iv-stat-accent, var(--cc-accent));
+    font-family: var(--cc-data);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    font-size: 0.76rem;
 }
 
-/* Active-selection badge on tile corner: inject a glowing dot when the
-   tile has an ✱ marker in its label. The marker text gets pushed to the
-   corner and restyled. */
-[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1),
-[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1) {
-    position: relative;
-    padding-right: 22px;
+/* CTA strip at the bottom — reveals on hover/expand */
+.iv-tile .iv-tile-cta {
+    font-family: var(--cc-data);
+    font-size: 0.58rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--iv-stat-accent, var(--cc-accent));
+    font-weight: 700;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed
+        color-mix(in srgb, var(--iv-stat-accent) 22%, transparent);
+    opacity: .45;
+    transition: opacity .22s ease, letter-spacing .22s ease;
+}
+[class*="st-key-cc_tile_"]:hover .iv-tile .iv-tile-cta,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile .iv-tile-cta {
+    opacity: 1;
+    letter-spacing: 0.22em;
 }
 
-/* Popover contents — tighten + theme */
-[class*="st-key-cc_tile_"] [data-baseweb="popover"] {
-    min-width: 280px;
+/* Overlay popover — absolutely positioned, visually invisible, clickable.
+   Scoped to tile wrappers so the Sort popover in the sticky bar keeps
+   its normal styling. */
+[class*="st-key-cc_tile_"] > div[data-testid="stPopover"],
+[class*="st-key-cc_tile_"] > div[data-testid="stPopoverButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 2 !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
+[class*="st-key-cc_tile_"] > div[data-testid="stPopover"] > button,
+[class*="st-key-cc_tile_"] > div[data-testid="stPopoverButton"] > button {
+    all: unset !important;
+    display: block !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 100% !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-radius: 14px !important;
+    cursor: pointer !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    opacity: 0 !important;            /* text invisible; box-fill clickable */
+}
+[class*="st-key-cc_tile_"] > div[data-testid="stPopover"] > button:focus-visible,
+[class*="st-key-cc_tile_"] > div[data-testid="stPopoverButton"] > button:focus-visible {
+    opacity: 1 !important;            /* focus ring visible for a11y */
+    outline: 2px solid var(--iv-stat-accent) !important;
+    outline-offset: 2px !important;
+    border-radius: 14px !important;
+}
+/* Kill the markdown container inside the button — tile HTML provides text */
+[class*="st-key-cc_tile_"] > div[data-testid="stPopover"] > button [data-testid="stMarkdownContainer"],
+[class*="st-key-cc_tile_"] > div[data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] {
+    display: none !important;
+}
+
+/* Popover FLOATING content — the filter widget drawer */
+[class*="st-key-cc_tile_"] [data-baseweb="popover"],
+[class*="st-key-cc_tile_"] ~ [data-baseweb="popover"] {
+    min-width: 320px;
+}
+.iv-tile-pop-head {
+    font-family: var(--cc-body);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 0 10px 2px;
+    border-bottom: 1px solid
+        color-mix(in srgb, var(--cc-border) 65%, transparent);
+    margin-bottom: 12px;
+}
+.iv-tile-pop-glyph {
+    font-size: 1.0rem;
+    color: var(--cc-accent);
+    line-height: 1;
+}
+.iv-tile-pop-title {
+    color: var(--cc-ink);
+    letter-spacing: 0.08em;
+}
+
 .iv-tile-hint {
     font-family: var(--cc-data);
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.04em;
     color: var(--cc-text-mute);
     padding: 0 0 8px 2px;
     text-transform: uppercase;
     font-weight: 600;
-    border-bottom: 1px dashed
-        color-mix(in srgb, var(--cc-border) 70%, transparent);
-    margin-bottom: 10px;
+    margin-bottom: 6px;
 }
 
-/* Reduced-motion honors user pref on tile animations */
+/* Reduced-motion honors user preference */
 @media (prefers-reduced-motion: reduce) {
-    [class*="st-key-cc_tile_"] [data-testid="stPopover"] > button,
-    [class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button,
-    .iv-tile.iv-tile-static {
+    .iv-tile.iv-tile-click {
         animation: none;
         opacity: 1;
     }
+    .iv-tile .iv-tile-badge { animation: none; }
 }
 
 /* Sort popover on the sticky bar — gentler than before so the tiles
@@ -3357,6 +3347,243 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     box-shadow:
         0 1px 0 rgba(255,255,255,.9) inset,
         0 8px 18px -8px color-mix(in srgb, var(--cc-accent) 35%, transparent) !important;
+}
+
+/* ==========================================================================
+   OPS TERMINAL — THIRD-PASS UI/UX BOOST
+   Targeted refinements layered on top of the prior passes. The focus is on
+   three high-signal wins:
+     1. Sticky table headers on the event-log and inventory shells so the
+        column rail stays visible while scrolling long event lists.
+     2. A per-row freshness pulse-dot in the When column so event recency
+        reads at a glance without hunting for the "5m ago" text.
+     3. Micro-animations on the fleet-pulse sparkline endpoints + activity
+        ribbon (weekend bands, peak marker) to give the ops-terminal feel
+        more life without adding visual noise.
+   Scoped through `.el-tf-shell` + the `.el-fresh-dot` / `.iv-pulse-spark-*`
+   classes so no prior rules are overridden.
+   ========================================================================== */
+
+/* ── Table shell: sticky header, soft top glow, subtle column hairlines ── */
+.el-tf-shell {
+    position: relative;
+    isolation: isolate;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--cc-teal) 45%, transparent) transparent;
+}
+.el-tf-shell::-webkit-scrollbar { width: 8px; height: 8px; }
+.el-tf-shell::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--cc-teal) 35%, transparent);
+    border-radius: 8px;
+}
+.el-tf-shell::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--cc-teal) 65%, transparent);
+}
+.el-tf-shell > table {
+    position: relative;
+    z-index: 1;
+}
+.el-tf-shell thead th {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 3 !important;
+    backdrop-filter: saturate(160%) blur(6px);
+    -webkit-backdrop-filter: saturate(160%) blur(6px);
+    background:
+        linear-gradient(180deg,
+            rgba(247,248,251,.97) 0%,
+            rgba(247,248,251,.82) 100%) !important;
+    box-shadow:
+        inset 0 -1px 0 0 color-mix(in srgb, var(--cc-border) 75%, transparent),
+        0 6px 10px -8px rgba(15,13,38,.10);
+    font-family: var(--cc-body) !important;
+    font-size: 0.60rem !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase;
+    color: var(--cc-text-mute) !important;
+    font-weight: 700 !important;
+    padding: 12px 10px !important;
+}
+.el-tf-shell thead th + th {
+    border-left: 1px dashed color-mix(in srgb, var(--cc-border) 55%, transparent);
+}
+.el-tf-shell thead th:first-child { border-top-left-radius: 10px; }
+.el-tf-shell thead th:last-child  { border-top-right-radius: 10px; }
+
+/* Zebra striping with a teal warmth, kept very subtle */
+.el-tf-shell tbody tr { position: relative; transition: background .14s ease; }
+.el-tf-shell tbody tr:nth-child(even) > td {
+    background: color-mix(in srgb, var(--cc-teal) 2%, transparent);
+}
+.el-tf-shell tbody tr:hover > td {
+    background: color-mix(in srgb, var(--cc-teal) 6%, transparent) !important;
+}
+.el-tf-shell.is-inventory tbody tr:hover > td {
+    background: color-mix(in srgb, var(--cc-accent) 5%, transparent) !important;
+}
+.el-tf-shell tbody tr:hover > td:first-child {
+    box-shadow: inset 3px 0 0 0 var(--cc-teal) !important;
+}
+.el-tf-shell.is-inventory tbody tr:hover > td:first-child {
+    box-shadow: inset 3px 0 0 0 var(--cc-accent) !important;
+}
+/* Row focus-beam — a thin underglow that animates on hover */
+.el-tf-shell tbody tr::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0; height: 1px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--cc-teal) 55%, transparent) 50%,
+        transparent 100%);
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform .32s cubic-bezier(.2,.7,.2,1);
+    pointer-events: none;
+    z-index: 0;
+}
+.el-tf-shell.is-inventory tbody tr::after {
+    background: linear-gradient(90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--cc-accent) 55%, transparent) 50%,
+        transparent 100%);
+}
+.el-tf-shell tbody tr:hover::after { transform: scaleX(1); }
+
+/* ── Freshness dot in the When column — compact signal of recency ────── */
+.el-fresh-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: baseline;
+    position: relative;
+    top: -1px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.85);
+    flex-shrink: 0;
+}
+.el-fresh-dot.is-live {
+    background: var(--cc-green);
+    box-shadow:
+        0 0 0 1px #fff,
+        0 0 0 3px rgba(5,150,105,.22),
+        0 0 10px 0 rgba(5,150,105,.55);
+    animation: el-fresh-pulse 1.7s ease-in-out infinite;
+}
+.el-fresh-dot.is-fresh {
+    background: var(--cc-teal);
+    box-shadow: 0 0 0 1px #fff, 0 0 6px 0 rgba(13,148,136,.45);
+}
+.el-fresh-dot.is-today {
+    background: var(--cc-blue);
+    box-shadow: 0 0 0 1px #fff, 0 0 4px 0 rgba(59,130,246,.30);
+}
+.el-fresh-dot.is-week {
+    background: color-mix(in srgb, var(--cc-text-mute) 55%, var(--cc-blue));
+    box-shadow: 0 0 0 1px #fff;
+}
+.el-fresh-dot.is-older {
+    background: var(--cc-text-mute);
+    opacity: .50;
+}
+@keyframes el-fresh-pulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow:
+            0 0 0 1px #fff,
+            0 0 0 3px rgba(5,150,105,.22),
+            0 0 10px 0 rgba(5,150,105,.55);
+    }
+    50% {
+        transform: scale(1.22);
+        box-shadow:
+            0 0 0 1px #fff,
+            0 0 0 7px rgba(5,150,105,.12),
+            0 0 16px 3px rgba(5,150,105,.60);
+    }
+}
+
+/* When-column relative-age row — wraps the dot + text so alignment is
+   predictable across event types. */
+.el-when-rel {
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+
+/* ── Pulse-tile area sparkline: endpoint gets a soft expanding ping ring ─ */
+.iv-pulse-spark-dot {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: iv-spark-endpoint-dot 2.6s ease-in-out infinite;
+}
+.iv-pulse-spark-ping {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: iv-spark-endpoint-ping 2.6s ease-out infinite;
+}
+@keyframes iv-spark-endpoint-dot {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .85; }
+}
+@keyframes iv-spark-endpoint-ping {
+    0%   { r: 2.4; opacity: .55; }
+    70%  { r: 7;   opacity: 0;   }
+    100% { r: 7;   opacity: 0;   }
+}
+
+/* ── Activity ribbon: weekend bands + peak marker ──────────────────────── */
+.el-ribbon-weekend {
+    opacity: .10;
+    pointer-events: none;
+}
+.el-ribbon-peak { opacity: .95; }
+.el-ribbon-peak-line {
+    stroke: color-mix(in srgb, var(--cc-amber) 90%, transparent);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+    opacity: .55;
+}
+.el-ribbon-peak-label {
+    font-family: var(--cc-data);
+    font-size: 8px;
+    fill: var(--cc-amber);
+    letter-spacing: .04em;
+    font-weight: 700;
+    paint-order: stroke fill;
+    stroke: rgba(255,255,255,.65);
+    stroke-width: 2.5px;
+    stroke-linejoin: round;
+}
+
+/* ── Project-timeline node: faint inner ring on the timeline dot when the
+   section is the first in view — reads as "you're here" anchor ──────── */
+.el-proj-stack .el-proj-section:first-child::after {
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 4px color-mix(in srgb, var(--cc-teal) 40%, transparent),
+        0 0 14px 1px color-mix(in srgb, var(--cc-teal) 50%, transparent);
+}
+
+/* ── Inventory table shell: stage-column header accent ─────────────────── */
+.el-tf-shell.is-inventory thead th:nth-child(n+3) {
+    background:
+        linear-gradient(180deg,
+            rgba(79,70,229,.06) 0%,
+            rgba(247,248,251,.92) 18%,
+            rgba(247,248,251,.82) 100%) !important;
+}
+
+/* ── Reduced motion: kill the new animations we added ──────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .el-fresh-dot.is-live   { animation: none; }
+    .iv-pulse-spark-dot     { animation: none; }
+    .iv-pulse-spark-ping    { animation: none; opacity: 0; }
+    .el-tf-shell tbody tr::after {
+        transition: none;
+        transform: scaleX(1);
+        opacity: .25;
+    }
 }
 
 </style>
@@ -5910,25 +6137,53 @@ def _render_event_log() -> None:
             f'title="{val}">{val}</span>'
         )
 
+    def _freshness_tier(_ts) -> str:
+        """Classify an event's recency into a CSS-ready tier.
+
+        live <5m · fresh <1h · today <24h · week <7d · older beyond that.
+        Drives the colored pulse dot in the When column so scanning the
+        table conveys recency at a glance.
+        """
+        if _ts is None:
+            return "older"
+        try:
+            _pdt = _ts.to_pydatetime() if hasattr(_ts, "to_pydatetime") else _ts
+            if _pdt.tzinfo is None:
+                _pdt = _pdt.replace(tzinfo=timezone.utc)
+            _delta_s = (datetime.now(timezone.utc) - _pdt).total_seconds()
+        except Exception:
+            return "older"
+        if _delta_s < 0:         return "fresh"
+        if _delta_s < 300:       return "live"
+        if _delta_s < 3600:      return "fresh"
+        if _delta_s < 86400:     return "today"
+        if _delta_s < 86400 * 7: return "week"
+        return "older"
+
     def _when_cell(ev: dict) -> str:
         """Render the When column as absolute timestamp + relative age.
 
         Two stacked lines: top = absolute (DISPLAY_TZ), bottom = "5h ago" /
         "3d ago" style tag so the reader sees recency at a glance without
-        doing date-math in their head.
+        doing date-math in their head. A small colored pulse-dot prefixes
+        the relative-age row, color-coded by freshness tier — live events
+        (<5 minutes old) pulse to signal activity on the stream.
         """
         _abs = ev.get("When") or ""
         _rel = _relative_age(ev.get("_ts"))
         if not _abs and not _rel:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        _tier = _freshness_tier(ev.get("_ts"))
+        _dot = f'<span class="el-fresh-dot is-{_tier}" aria-hidden="true"></span>'
         _rel_html = (
-            f'<div style="color:var(--cc-text-mute);font-size:0.68rem;'
-            f'letter-spacing:.03em;margin-top:1px">{_rel}</div>'
+            f'<div class="el-when-rel" style="color:var(--cc-text-mute);'
+            f'font-size:0.68rem;letter-spacing:.03em;margin-top:1px">'
+            f'{_dot}{_rel}</div>'
             if _rel else ""
         )
         return (
-            f'<div style="color:var(--cc-text-dim);font-size:0.78rem;'
-            f'font-family:var(--cc-mono);line-height:1.15">{_abs}</div>'
+            f'<div class="el-when-abs" style="color:var(--cc-text-dim);'
+            f'font-size:0.78rem;font-family:var(--cc-mono);line-height:1.15">{_abs}</div>'
             f'{_rel_html}'
         )
 
@@ -6302,7 +6557,8 @@ def _render_event_log() -> None:
 
     def _table_shell(rows_html: str, *, include_project: bool, max_h: str = "60vh") -> str:
         return (
-            f'<div style="overflow-y:auto;max-height:{max_h};border:1px solid var(--cc-border);border-radius:10px">'
+            f'<div class="el-tf el-tf-shell" style="overflow-y:auto;max-height:{max_h};'
+            f'border:1px solid var(--cc-border);border-radius:10px">'
             '<table style="width:100%;border-collapse:collapse;font-family:inherit">'
             f'{_thead_html(include_project)}'
             f'<tbody>{rows_html}</tbody>'
@@ -6607,8 +6863,10 @@ def _svg_area_spark(values: list[int], color: str = "var(--cc-blue)") -> str:
         f'<polygon points="{_area}" fill="{color}" opacity=".16"/>'
         f'<polyline points="{_line}" fill="none" stroke="{color}" '
         f'stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
-        f'<circle cx="{_lx:.2f}" cy="{_ly:.2f}" r="2.4" fill="{color}" '
-        f'stroke="#fff" stroke-width="1"/>'
+        f'<circle class="iv-pulse-spark-ping" cx="{_lx:.2f}" cy="{_ly:.2f}" '
+        f'r="2.4" fill="none" stroke="{color}" stroke-width="1.2" opacity=".5"/>'
+        f'<circle class="iv-pulse-spark-dot" cx="{_lx:.2f}" cy="{_ly:.2f}" '
+        f'r="2.4" fill="{color}" stroke="#fff" stroke-width="1"/>'
         f'</svg>'
     )
 
@@ -6740,6 +6998,65 @@ def _build_event_ribbon(
         f'<line x1="0" y1="{_H - 0.5:.2f}" x2="{_W:.0f}" y2="{_H - 0.5:.2f}" '
         f'stroke="var(--cc-border)" stroke-width=".6"/>'
     )
+
+    # Weekend bands — pale vertical strips marking Saturday / Sunday within the
+    # window, rendered behind the bars so they read as context, not foreground.
+    # Only drawn for windows where weekends are semantically meaningful (< 90d)
+    # and the bucket resolution is fine enough to resolve a day (~1d per bucket
+    # or finer). Otherwise the bands would dominate the ribbon.
+    _weekend_bands: list[str] = []
+    if _duration <= 86400 * 90 and _bucket_s <= 86400 * 1.5:
+        _day_cursor = start_utc.astimezone(DISPLAY_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        _end_local = end_utc.astimezone(DISPLAY_TZ)
+        while _day_cursor < _end_local:
+            if _day_cursor.weekday() >= 5:  # Sat=5, Sun=6
+                _day_end = _day_cursor + timedelta(days=1)
+                _wk_start = max(_day_cursor, start_utc.astimezone(DISPLAY_TZ))
+                _wk_end = min(_day_end, _end_local)
+                _wx0 = ((_wk_start.astimezone(timezone.utc)
+                         - start_utc).total_seconds() / _duration) * _W
+                _wx1 = ((_wk_end.astimezone(timezone.utc)
+                         - start_utc).total_seconds() / _duration) * _W
+                if _wx1 - _wx0 > 0.5:
+                    _weekend_bands.append(
+                        f'<rect class="el-ribbon-weekend" x="{_wx0:.2f}" y="0" '
+                        f'width="{_wx1 - _wx0:.2f}" height="{_H:.0f}" '
+                        f'fill="var(--cc-text-mute)"/>'
+                    )
+            _day_cursor = _day_cursor + timedelta(days=1)
+
+    # Peak marker — find the single tallest bucket and draw a faint dashed
+    # vertical rail + small label so users can locate the activity spike in
+    # one glance without hunting through tooltips.
+    _peak_bi = -1
+    _peak_tot = 0
+    for _i, _row in enumerate(_buckets):
+        _t = sum(_row)
+        if _t > _peak_tot:
+            _peak_tot = _t
+            _peak_bi = _i
+    _peak_svg = ""
+    if _peak_bi >= 0 and _peak_tot > 0 and _peak_tot >= 2:
+        _px = _peak_bi * _slot + _slot / 2
+        # Keep the label anchored inside the ribbon even near the left / right
+        # edges so it doesn't get clipped by the SVG viewBox.
+        _lbl_anchor = (
+            "start" if _px < 40
+            else "end" if _px > _W - 40
+            else "middle"
+        )
+        _peak_svg = (
+            f'<g class="el-ribbon-peak">'
+            f'<line class="el-ribbon-peak-line" x1="{_px:.2f}" y1="2" '
+            f'x2="{_px:.2f}" y2="{_H - 1:.2f}"/>'
+            f'<text class="el-ribbon-peak-label" x="{_px:.2f}" y="10" '
+            f'text-anchor="{_lbl_anchor}">▲ peak · {_peak_tot}</text>'
+            f'<title>Peak bucket: {_peak_tot} events</title>'
+            f'</g>'
+        )
+
     _totals = {_t: 0 for _t in _types_order}
     for _row in _buckets:
         for _ti, _cnt in enumerate(_row):
@@ -6774,7 +7091,9 @@ def _build_event_ribbon(
         f'<span class="el-ribbon-legend">{"".join(_legend)}</span>'
         '</div>'
         f'<svg class="el-ribbon-svg" viewBox="0 0 {_W:.0f} {_H:.0f}" '
-        f'preserveAspectRatio="none" aria-hidden="true">{_baseline}{"".join(_bars)}</svg>'
+        f'preserveAspectRatio="none" aria-hidden="true">'
+        f'{"".join(_weekend_bands)}{_baseline}{"".join(_bars)}{_peak_svg}'
+        f'</svg>'
         '<div class="el-ribbon-axis">'
         f'<span>{_sl}</span><span>{_ml}</span><span>{_el}</span>'
         '</div>'
@@ -6920,6 +7239,7 @@ def _render_inventory_view() -> None:
         "build":   "iv_tech_pills_v1",
         "deploy":  "iv_deploy_tech_pills_v1",
         "platform":"iv_deploy_platform_pills_v1",
+        "combo":   "iv_f_combo_v1",
     }
 
     if not _is_admin and _iv_session_company:
@@ -6939,6 +7259,7 @@ def _render_inventory_view() -> None:
     _sel_build    = list(st.session_state.get(_iv_filter_keys["build"])   or [])
     _sel_deploy   = list(st.session_state.get(_iv_filter_keys["deploy"])  or [])
     _sel_platform = list(st.session_state.get(_iv_filter_keys["platform"]) or [])
+    _sel_combo    = list(st.session_state.get(_iv_filter_keys["combo"])   or [])
 
     # Pill selections are "glyph value · count" strings — extract the raw value.
     def _pill_to_val(opt: str) -> str:
@@ -6949,6 +7270,27 @@ def _render_inventory_view() -> None:
     _sel_build_vals    = {_pill_to_val(o) for o in _sel_build}
     _sel_deploy_vals   = {_pill_to_val(o) for o in _sel_deploy}
     _sel_platform_vals = {_pill_to_val(o) for o in _sel_platform}
+
+    # Combo encoding: "⚙ {bt}  /  ⛭ {dt}  /  ☁ {dp}"  — empty field → "—".
+    # Selection strings may carry a trailing " · <count>" annotation (the
+    # same convention used for build/deploy/platform pills). Strip it for
+    # canonical matching.
+    def _combo_key(bt: str, dt: str, dp: str) -> str:
+        return (
+            f"⚙ {bt or '—'}  /  "
+            f"⛭ {dt or '—'}  /  "
+            f"☁ {dp or '—'}"
+        )
+    def _row_combo(r: dict) -> str | None:
+        _bt = (r.get("build_technology") or "").strip()
+        _dt = (r.get("deploy_technology") or "").strip()
+        _dp = (r.get("deploy_platform") or "").strip()
+        if not (_bt or _dt or _dp):
+            return None
+        return _combo_key(_bt, _dt, _dp)
+    def _combo_to_key(opt: str) -> str:
+        return opt.rsplit(" · ", 1)[0] if " · " in opt else opt
+    _sel_combo_keys = {_combo_to_key(o) for o in _sel_combo}
 
     # ── Cross-filter helper (leave-one-out) ───────────────────────────────
     # Passing exclude="project" returns rows narrowed by every filter EXCEPT
@@ -6974,6 +7316,8 @@ def _render_inventory_view() -> None:
             out = [r for r in out if (r.get("deploy_technology") or "") in _sel_deploy_vals]
         if exclude != "platform" and _sel_platform_vals:
             out = [r for r in out if (r.get("deploy_platform") or "") in _sel_platform_vals]
+        if exclude != "combo" and _sel_combo_keys:
+            out = [r for r in out if _row_combo(r) in _sel_combo_keys]
         return out
 
     # ── Leave-one-out option dicts for each dimension's tile popover ───────
@@ -6992,6 +7336,14 @@ def _render_inventory_view() -> None:
                 out[t] = out.get(t, 0) + 1
         return out
 
+    def _count_combos(rows: list[dict]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for r in rows:
+            c = _row_combo(r)
+            if c:
+                out[c] = out.get(c, 0) + 1
+        return out
+
     _iv_companies_opts = _count_single(_apply_iv_filters(_inv_rows, exclude="company"), "company")
     _iv_teams_opts     = _count_teams(_apply_iv_filters(_inv_rows, exclude="team"))
     _iv_projects_opts  = _count_single(_apply_iv_filters(_inv_rows, exclude="project"), "project")
@@ -6999,6 +7351,7 @@ def _render_inventory_view() -> None:
     _iv_build_opts     = _count_single(_apply_iv_filters(_inv_rows, exclude="build"), "build_technology")
     _iv_deploy_opts    = _count_single(_apply_iv_filters(_inv_rows, exclude="deploy"), "deploy_technology")
     _iv_platform_opts  = _count_single(_apply_iv_filters(_inv_rows, exclude="platform"), "deploy_platform")
+    _iv_combo_opts     = _count_combos(_apply_iv_filters(_inv_rows, exclude="combo"))
 
     # ── Active selection summary + sort badge ─────────────────────────────
     _iv_active_sel: dict[str, list[str]] = {
@@ -7111,6 +7464,8 @@ def _render_inventory_view() -> None:
             _chip_specs.append((_v, "user"))
         for _v in _iv_active_sel["platform"]:
             _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["combo"]:
+            _chip_specs.append((f"⇋ {_combo_to_key(_v)}", "user"))
         _chip_specs.append((f"↕ Sort: {_iv_sort_badge}", "sort"))
         if _chip_specs:
             _chip_html = []
@@ -7143,6 +7498,7 @@ def _render_inventory_view() -> None:
                     _iv_filter_keys["build"],
                     _iv_filter_keys["deploy"],
                     _iv_filter_keys["platform"],
+                    _iv_filter_keys["combo"],
                 ]
                 if _is_admin:
                     _clear_keys.append(_iv_filter_keys["company"])
@@ -7155,7 +7511,10 @@ def _render_inventory_view() -> None:
 
     iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
 
-    # ── Filterable stat tiles — click any tile to narrow that dimension ───
+    # ── Filterable stat tiles — each is a visual HTML tile with an
+    # invisible popover-button overlay. Clicking anywhere on the tile opens
+    # that dimension's filter popover. Because every tile renders the same
+    # HTML structure, heights are identical regardless of content length.
     _TILE_COLORS = {
         "company":  "var(--cc-accent)",
         "team":     "var(--cc-teal)",
@@ -7164,14 +7523,11 @@ def _render_inventory_view() -> None:
         "build":    "var(--cc-amber)",
         "deploy":   "var(--cc-teal)",
         "platform": "var(--cc-blue)",
-        "pipeline": "var(--cc-accent)",
+        "combo":    "var(--cc-red)",
     }
 
     def _render_tile_ms(dim_key: str, opts: dict[str, int],
                         placeholder: str) -> None:
-        """Multiselect inside a tile popover, with count-aware format_func.
-        Preserves selections even when cross-filters make them temporarily
-        unavailable (they render with a '(filtered out)' annotation)."""
         ss_key = _iv_filter_keys[dim_key]
         _cur = list(st.session_state.get(ss_key) or [])
         _union = set(opts.keys()) | set(_cur)
@@ -7191,8 +7547,6 @@ def _render_inventory_view() -> None:
         )
 
     def _render_tile_pills(dim_key: str, opts: dict[str, int], glyph: str) -> None:
-        """Pills inside a tile popover — preserves selections across count
-        changes by re-syncing session state to new 'glyph val · count' strings."""
         ss_key = _iv_filter_keys[dim_key]
         _cur = list(st.session_state.get(ss_key) or [])
         _cur_vals = {_pill_to_val(o) for o in _cur}
@@ -7212,9 +7566,32 @@ def _render_inventory_view() -> None:
             default=None, key=ss_key, label_visibility="collapsed",
         )
 
-    # Build tile spec list (order + visibility depends on role)
+    def _render_tile_combos(opts: dict[str, int]) -> None:
+        """Multiselect for pipeline (build×deploy×platform) combinations.
+        Selection strings include ` · <count>` for pill-style persistence;
+        _combo_to_key normalizes them to canonical combo keys for matching."""
+        ss_key = _iv_filter_keys["combo"]
+        _cur = list(st.session_state.get(ss_key) or [])
+        _cur_keys = {_combo_to_key(o) for o in _cur}
+        _all_keys = set(opts.keys()) | _cur_keys
+        _sorted = sorted(_all_keys, key=lambda v: (-opts.get(v, 0), v))
+        _options = [f"{k} · {opts.get(k, 0)}" for k in _sorted]
+        _new_cur = [o for o in _options if _combo_to_key(o) in _cur_keys]
+        if _new_cur != _cur:
+            st.session_state[ss_key] = _new_cur
+        st.markdown(
+            f'<div class="iv-tile-hint">{len(opts)} combinations available · '
+            f'{len(_cur_keys)} selected</div>',
+            unsafe_allow_html=True,
+        )
+        st.multiselect(
+            "Pipeline combinations", options=_options, key=ss_key,
+            label_visibility="collapsed",
+            placeholder="Select build × deploy × platform combinations",
+        )
+
+    # Tile specs: (dim_key, glyph, label, number, sub_markdown)
     _tile_specs: list[tuple[str, str, str, int, str]] = []
-    # (dim_key, glyph, label, number, sub_markdown)
     if _is_admin:
         _tile_specs.append(("company", "🏢", "Companies", len(_post_companies),
                             "Tenant boundaries in scope"))
@@ -7224,51 +7601,55 @@ def _render_inventory_view() -> None:
         _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
                             f"Across your {len(_iv_session_teams)} session teams"))
     _tile_specs.append(("project", "📁", "Projects", len(_post_projects),
-                        f"**{len(_live_projects)}** live in PRD ({_proj_live_pct})"))
+                        f"<b>{len(_live_projects)}</b> live in PRD ({_proj_live_pct})"))
     _tile_specs.append(("app", "▣", "Applications", _iv_total,
-                        f"**{_iv_live}** live in PRD ({_iv_live_pct})"))
+                        f"<b>{_iv_live}</b> live in PRD ({_iv_live_pct})"))
     _tile_specs.append(("build", "⚙", "Build stacks", len(_post_build),
                         "Distinct build technologies"))
     _tile_specs.append(("deploy", "⛭", "Deploy stacks", len(_post_deploy),
                         "Distinct deployment tooling"))
     _tile_specs.append(("platform", "☁", "Deploy platforms", len(_post_platform),
                         "Distinct target platforms"))
-    _tile_specs.append(("_pipelines", "⇋", "Unique pipelines", len(_post_pipelines),
+    _tile_specs.append(("combo", "⇋", "Unique pipelines", len(_post_pipelines),
                         "build × deploy × platform"))
 
     with st.container(key="cc_iv_tiles_row"):
         _tile_cols = st.columns(len(_tile_specs), gap="small")
         for _idx, (_dk, _glyph, _tlabel, _tnum, _tsub_md) in enumerate(_tile_specs):
             with _tile_cols[_idx]:
+                _nsel = len(_iv_active_sel.get(_dk, []))
+                _accent = _TILE_COLORS[_dk]
+                _badge_html = (
+                    f'<span class="iv-tile-badge">✱ {_nsel}</span>'
+                    if _nsel else ''
+                )
+                _tile_html = (
+                    f'<div class="iv-tile iv-tile-click" '
+                    f'style="--iv-stat-accent:{_accent}">'
+                    f'<div class="iv-tile-head">'
+                    f'<span class="iv-tile-glyph">{_glyph}</span>'
+                    f'<span class="iv-tile-label">{_tlabel}</span>'
+                    f'{_badge_html}'
+                    f'</div>'
+                    f'<div class="iv-tile-number">{_tnum}</div>'
+                    f'<div class="iv-tile-sub">{_tsub_md}</div>'
+                    f'<div class="iv-tile-cta">Click to filter ▸</div>'
+                    f'</div>'
+                )
                 with st.container(key=f"cc_tile_{_dk}"):
-                    if _dk == "_pipelines":
-                        # Static tile — derived, not directly filterable.
+                    st.markdown(_tile_html, unsafe_allow_html=True)
+                    # Empty-label popover — becomes a transparent overlay on
+                    # top of the tile via CSS. The tile HTML provides all
+                    # visuals; the popover button provides clickability.
+                    with st.popover(" ", use_container_width=True,
+                                    help=f"Filter by {_tlabel.lower()}"):
                         st.markdown(
-                            f'<div class="iv-tile iv-tile-static" '
-                            f'style="--iv-stat-accent:{_TILE_COLORS["pipeline"]}">'
-                            f'<div class="iv-tile-head">'
-                            f'<span class="iv-tile-glyph">{_glyph}</span>'
-                            f'<span class="iv-tile-label">{_tlabel}</span>'
-                            f'</div>'
-                            f'<div class="iv-tile-number">{_tnum}</div>'
-                            f'<div class="iv-tile-sub">{_tsub_md}</div>'
+                            f'<div class="iv-tile-pop-head">'
+                            f'<span class="iv-tile-pop-glyph">{_glyph}</span>'
+                            f'<span class="iv-tile-pop-title">{_tlabel}</span>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
-                        continue
-
-                    _nsel = len(_iv_active_sel.get(_dk, []))
-                    _badge = f"  ·  ✱ {_nsel}" if _nsel else ""
-                    # Multi-paragraph markdown — produces three <p> tags that
-                    # CSS reshapes into the stat-tile layout (label / big
-                    # number / subtitle).
-                    _label_md = (
-                        f"{_glyph}  {_tlabel}{_badge}\n\n"
-                        f"**{_tnum}**\n\n"
-                        f"{_tsub_md}"
-                    )
-                    with st.popover(_label_md, use_container_width=True,
-                                    help=f"Click to filter by {_tlabel.lower()}"):
                         if _dk == "company":
                             if _is_admin and (_iv_companies_opts or _sel_company):
                                 _render_tile_ms("company", _iv_companies_opts,
@@ -7300,6 +7681,8 @@ def _render_inventory_view() -> None:
                             _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
                         elif _dk == "platform":
                             _render_tile_pills("platform", _iv_platform_opts, "☁")
+                        elif _dk == "combo":
+                            _render_tile_combos(_iv_combo_opts)
 
     # ── Fleet pulse strip — four subtle visualizations of scope state ──────
     # Two temporal sparklines (14d build success, PRD deploy cadence) + two
@@ -7778,7 +8161,8 @@ def _render_inventory_view() -> None:
 
     def _iv_table_shell(rows_html: str, *, include_project: bool, max_h: str = "60vh") -> str:
         return (
-            f'<div style="overflow-y:auto;max-height:{max_h};border:1px solid var(--cc-border);border-radius:10px">'
+            f'<div class="el-tf el-tf-shell is-inventory" style="overflow-y:auto;'
+            f'max-height:{max_h};border:1px solid var(--cc-border);border-radius:10px">'
             f'<table style="width:100%;border-collapse:collapse;font-family:inherit">'
             f'{_iv_thead(include_project)}'
             f'<tbody>{rows_html}</tbody>'
