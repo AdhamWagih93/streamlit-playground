@@ -3587,6 +3587,161 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 
 /* ==========================================================================
+   ROLE DETECTION EXPLAINER — popover next to the identity badge.
+   Everything lives inside the popover, so styles only need to paint text
+   blocks, a KV list, and a compact resolution-trace table.
+   ========================================================================== */
+.cc-role-why {
+    font-family: var(--cc-body);
+    margin: -4px 0 8px 0;
+    padding: 8px 10px 10px 10px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cc-border) 70%, transparent);
+    background:
+        linear-gradient(180deg,
+            color-mix(in srgb, var(--cc-accent) 3%, #fff) 0%,
+            #fff 100%);
+}
+.cc-role-why-head {
+    font-size: .64rem; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase;
+    color: var(--cc-text-mute);
+    margin-bottom: 4px;
+}
+.cc-role-why-pick {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 4px;
+}
+.cc-role-why-icon { font-size: 1.15rem; line-height: 1; }
+.cc-role-why-name {
+    font-family: var(--cc-display);
+    font-weight: 700; font-size: 1.05rem;
+    letter-spacing: -.005em;
+}
+.cc-role-why-reason {
+    font-size: .80rem;
+    color: var(--cc-text);
+    line-height: 1.4;
+}
+.cc-role-why-sub {
+    font-size: .62rem; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase;
+    color: var(--cc-text-mute);
+    margin: 10px 0 4px 0;
+    border-top: 1px solid color-mix(in srgb, var(--cc-border) 50%, transparent);
+    padding-top: 8px;
+}
+.cc-role-why-kv {
+    font-size: .78rem;
+    color: var(--cc-ink);
+    margin-bottom: 3px;
+    line-height: 1.4;
+    word-break: break-word;
+}
+.cc-role-why-kv code {
+    font-family: var(--cc-data);
+    font-size: .72rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--cc-accent) 8%, #fff);
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 18%, transparent);
+    color: var(--cc-accent);
+}
+.cc-role-why-rules {
+    list-style: none;
+    padding: 0; margin: 0 0 6px 0;
+}
+.cc-role-why-rules li {
+    font-size: .78rem;
+    margin-bottom: 2px;
+    color: var(--cc-text);
+}
+.cc-role-why-rules code {
+    font-family: var(--cc-data);
+    font-size: .72rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    color: var(--cc-ink);
+}
+.cc-role-why-rules b { color: var(--cc-accent); }
+.cc-role-why-note {
+    font-size: .72rem;
+    color: var(--cc-text-mute);
+    line-height: 1.45;
+    font-style: italic;
+    margin-top: 2px;
+}
+.cc-role-why-note code {
+    font-family: var(--cc-data);
+    font-size: .68rem;
+    font-style: normal;
+    padding: 0 3px;
+    background: color-mix(in srgb, var(--cc-border) 40%, transparent);
+    border-radius: 3px;
+}
+.cc-role-why-trace {
+    width: 100%;
+    font-family: var(--cc-data);
+    font-size: .72rem;
+    border-collapse: collapse;
+    margin-top: 4px;
+}
+.cc-role-why-trace thead th {
+    text-align: left;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: .60rem;
+    letter-spacing: .1em;
+    color: var(--cc-text-mute);
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.cc-role-why-trace tbody td {
+    padding: 4px 6px;
+    border-bottom: 1px dashed color-mix(in srgb, var(--cc-border) 60%, transparent);
+    color: var(--cc-ink);
+    vertical-align: top;
+}
+.cc-role-why-trace tbody tr:last-child td { border-bottom: none; }
+.cc-role-why-trace code {
+    font-family: var(--cc-data);
+    font-size: .70rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--cc-surface2);
+    color: var(--cc-ink);
+}
+.cc-role-why-trace b { color: var(--cc-accent); }
+.cc-role-why-skip {
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-family: var(--cc-body);
+    font-size: .72rem;
+}
+
+/* The ⓘ popover button sits in the rail's identity column. Keep it compact
+   and visually subordinate to the role badge itself. */
+.st-key-cc_filter_rail .stColumn:first-child [data-testid="stPopover"] button,
+.st-key-cc_filter_rail .stColumn:first-child [data-testid="stPopoverButton"] button {
+    min-height: 30px !important;
+    padding: 4px 6px !important;
+    font-size: 0.82rem !important;
+    font-family: var(--cc-body) !important;
+    background: transparent !important;
+    border: 1px solid color-mix(in srgb, var(--cc-border) 60%, transparent) !important;
+    color: var(--cc-text-mute) !important;
+    box-shadow: none !important;
+}
+.st-key-cc_filter_rail .stColumn:first-child [data-testid="stPopover"] button:hover,
+.st-key-cc_filter_rail .stColumn:first-child [data-testid="stPopoverButton"] button:hover {
+    background: color-mix(in srgb, var(--cc-accent) 6%, #fff) !important;
+    border-color: var(--cc-accent) !important;
+    color: var(--cc-accent) !important;
+}
+
+/* ==========================================================================
    STICKY RAIL HARDENING
    Streamlit wraps every container in nested `stVerticalBlock` flex parents.
    Any ancestor with `overflow: hidden/auto` breaks `position: sticky`, and
@@ -4738,12 +4893,27 @@ _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
 # ── Detect role & teams from session state (set by the parent multipage app) ─
+# Two sources are honoured because different auth layers in this repo populate
+# different keys:
+#   • ``st.session_state.roles`` — list[str] of role names
+#   • ``st.session_state.user_roles`` — dict keyed by role name (agent.py and
+#     agentUI.py both use ``"admin" in user_roles`` as the admin gate).
+# We union tokens from both before mapping so a user flagged admin in
+# ``user_roles`` is still detected here even if ``roles`` is empty.
 _session_roles: list[str] = st.session_state.get("roles") or []
 _session_teams: list[str] = st.session_state.get("teams") or []
+_session_user_roles = st.session_state.get("user_roles") or {}
+_user_role_keys: list[str] = (
+    list(_session_user_roles.keys())
+    if isinstance(_session_user_roles, dict)
+    else list(_session_user_roles)
+    if isinstance(_session_user_roles, (list, tuple, set))
+    else []
+)
 
-# Strict role mapping — only the canonical strings below are honoured. Admin
-# is granted only when "admin" is literally present in session_state.roles; no
-# implicit fallback and no loose aliases (devops / dev / ops / quality).
+# Strict role mapping — only the canonical strings below are honoured. No
+# loose aliases (devops / dev / ops / quality) so a typo or adjacent role
+# can't silently elevate.
 _ROLE_STRICT: dict[str, str] = {
     "admin":           "Admin",
     "developer":       "Developer",
@@ -4751,11 +4921,18 @@ _ROLE_STRICT: dict[str, str] = {
     "operator":        "Operator",
 }
 _detected_roles: list[str] = []
-for _sr in _session_roles:
-    _norm = _sr.strip().lower()
-    _canon = _ROLE_STRICT.get(_norm)
-    if _canon is not None:
-        _detected_roles.append(_canon)
+_role_trace: list[tuple[str, str, str]] = []  # (source, raw, resolved)
+for _src_label, _bag in (("roles", _session_roles), ("user_roles", _user_role_keys)):
+    for _sr in _bag:
+        if not isinstance(_sr, str):
+            continue
+        _norm = _sr.strip().lower()
+        _canon = _ROLE_STRICT.get(_norm)
+        if _canon is not None:
+            _detected_roles.append(_canon)
+            _role_trace.append((_src_label, _sr, _canon))
+        else:
+            _role_trace.append((_src_label, _sr, "—"))
 # Deduplicate while preserving order
 _detected_roles = list(dict.fromkeys(_detected_roles))
 
@@ -4763,13 +4940,21 @@ _detected_roles = list(dict.fromkeys(_detected_roles))
 # ── Resolve role early so the filter rail can style itself by role color ────
 if "Admin" in _detected_roles:
     role_pick = "Admin"
+    _role_pick_reason = "'admin' present in session state — highest privilege wins"
 elif _detected_roles:
     role_pick = _detected_roles[0]
+    _role_pick_reason = (
+        f"no 'admin' in session state; first recognised role '{role_pick}' used"
+    )
 else:
-    # No recognised role in session_state.roles — surface it explicitly rather
-    # than silently granting Admin. The rail still renders; downstream gates
+    # No recognised role in session_state — surface it explicitly rather than
+    # silently granting Admin. The rail still renders; downstream gates
     # (hygiene, requests, env scope) already key off role_pick.
     role_pick = "Developer"
+    _role_pick_reason = (
+        "no recognised role in session_state.roles or user_roles — "
+        "defaulted to Developer (least privileged)"
+    )
 
 # Time-window presets — resolved before the rail so selectbox order is stable.
 _TW_LABELS = list(PRESETS.keys())
@@ -4883,17 +5068,120 @@ with st.container(key="cc_filter_rail"):
         vertical_alignment="bottom",
     )
 
-    # ── Col 0: compact identity badge (role + team) ────────────────────────
+    # ── Col 0: compact identity badge (role + team) + "how was this role
+    # picked?" explainer popover. The badge is visible at a glance; the
+    # popover surfaces the raw session state, the mapping rules, and the
+    # tie-break so "why am I detected as X" never needs a code dive.
     with _rail[0]:
-        st.markdown(
-            f'<div class="cc-rail-id">'
-            f'<div class="cc-rail-id-role" '
-            f'style="color:{_role_clr};border-color:{_role_clr}55;'
-            f'background:{_role_clr}0F">{_role_icon} {role_pick}</div>'
-            f'<div class="cc-rail-id-team" title="{_team_display}">{_team_display}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        _ident_cols = st.columns([4.2, 1], gap="small", vertical_alignment="center")
+        with _ident_cols[0]:
+            st.markdown(
+                f'<div class="cc-rail-id">'
+                f'<div class="cc-rail-id-role" '
+                f'style="color:{_role_clr};border-color:{_role_clr}55;'
+                f'background:{_role_clr}0F">{_role_icon} {role_pick}</div>'
+                f'<div class="cc-rail-id-team" title="{_team_display}">{_team_display}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with _ident_cols[1]:
+            with st.popover("ⓘ", help="How was this role picked?",
+                            use_container_width=True):
+                st.markdown(
+                    '<div class="cc-role-why">'
+                    '<div class="cc-role-why-head">Role detection</div>'
+                    f'<div class="cc-role-why-pick">'
+                    f'<span class="cc-role-why-icon" '
+                    f'style="color:{_role_clr}">{_role_icon}</span>'
+                    f'<span class="cc-role-why-name" '
+                    f'style="color:{_role_clr}">{role_pick}</span>'
+                    '</div>'
+                    f'<div class="cc-role-why-reason">{_role_pick_reason}</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Raw session-state values — so the user can see exactly what
+                # the parent auth layer fed us.
+                st.markdown(
+                    '<div class="cc-role-why-sub">Session state</div>',
+                    unsafe_allow_html=True,
+                )
+                _roles_repr = ", ".join(
+                    f"'{r}'" for r in _session_roles
+                ) or "— empty —"
+                _user_roles_repr = ", ".join(
+                    f"'{k}'" for k in _user_role_keys
+                ) or "— empty —"
+                _teams_repr = ", ".join(
+                    f"'{t}'" for t in _session_teams
+                ) or "— empty —"
+                st.markdown(
+                    f'<div class="cc-role-why-kv">'
+                    f'<code>st.session_state.roles</code>: {_roles_repr}</div>'
+                    f'<div class="cc-role-why-kv">'
+                    f'<code>st.session_state.user_roles</code> keys: '
+                    f'{_user_roles_repr}</div>'
+                    f'<div class="cc-role-why-kv">'
+                    f'<code>st.session_state.teams</code>: {_teams_repr}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Mapping rules — strict list so the user knows which literal
+                # strings are honoured.
+                st.markdown(
+                    '<div class="cc-role-why-sub">Mapping rules (strict)</div>'
+                    '<ul class="cc-role-why-rules">'
+                    '<li><code>admin</code> → <b>Admin</b></li>'
+                    '<li><code>developer</code> → <b>Developer</b></li>'
+                    '<li><code>quality-control</code> → <b>QC</b></li>'
+                    '<li><code>operator</code> → <b>Operator</b></li>'
+                    '</ul>'
+                    '<div class="cc-role-why-note">'
+                    'Comparison is case-insensitive on the stripped string. '
+                    'Anything not in this list is ignored (no loose aliases). '
+                    'If <code>admin</code> is present in either source, it '
+                    'wins regardless of order.'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Trace — shows every token seen and how it was resolved. Most
+                # useful when a role you expected isn't being picked up.
+                if _role_trace:
+                    _skip_html = (
+                        "<span class=\"cc-role-why-skip\">ignored</span>"
+                    )
+                    _rows: list[str] = []
+                    for _src, _raw, _out in _role_trace:
+                        _cell = (
+                            f"<b>{_out}</b>" if _out != "—" else _skip_html
+                        )
+                        _rows.append(
+                            f"<tr><td><code>{_src}</code></td>"
+                            f"<td><code>{_raw}</code></td>"
+                            f"<td>{_cell}</td></tr>"
+                        )
+                    _rows_html = "".join(_rows)
+                    st.markdown(
+                        '<div class="cc-role-why-sub">Resolution trace</div>'
+                        '<table class="cc-role-why-trace">'
+                        '<thead><tr><th>Source</th><th>Token</th>'
+                        '<th>Resolved</th></tr></thead>'
+                        f'<tbody>{_rows_html}</tbody></table>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="cc-role-why-note">'
+                        'Neither <code>roles</code> nor <code>user_roles</code> '
+                        'carried any tokens. Check that your auth layer is '
+                        'populating <code>st.session_state.roles</code> '
+                        '(list) or <code>st.session_state.user_roles</code> '
+                        '(dict keyed by role name).'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
 
     # ── Col 1: persistent ops search (shared by event log + inventory) ─────
     with _rail[1]:
