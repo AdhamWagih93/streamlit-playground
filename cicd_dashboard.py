@@ -4156,6 +4156,10 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
     """
     if not apps:
         return {}
+    # Pull every candidate date field so downstream parsing can fall back when
+    # the index uses a non-canonical casing (StartDate, @timestamp, etc.).
+    _deploy_date_fields = _DATE_CANDIDATES.get("deploy", ["startdate"])
+    _hit_source = ["application", "codeversion", "status", *_deploy_date_fields]
     try:
         resp = es_search(
             IDX["deployments"],
@@ -4177,7 +4181,7 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
                                 "top_hits": {
                                     "size": 1,
                                     "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
-                                    "_source": ["application", "codeversion", "status", "startdate"],
+                                    "_source": _hit_source,
                                 }
                             },
                             # Latest among successful-only — reports the version
@@ -4189,7 +4193,7 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
                                         "top_hits": {
                                             "size": 1,
                                             "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
-                                            "_source": ["application", "codeversion", "status", "startdate"],
+                                            "_source": _hit_source,
                                         }
                                     }
                                 }
@@ -4209,17 +4213,23 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
             continue
         _latest_hits  = _b.get("latest", {}).get("hits", {}).get("hits", [])
         _succ_hits    = _b.get("latest_success", {}).get("hit", {}).get("hits", {}).get("hits", [])
-        _last_s  = (_latest_hits[0].get("_source") if _latest_hits else {}) or {}
-        _succ_s  = (_succ_hits[0].get("_source")   if _succ_hits   else {}) or {}
+        _last_hit = _latest_hits[0] if _latest_hits else {}
+        _succ_hit = _succ_hits[0]   if _succ_hits   else {}
+        _last_s  = (_last_hit.get("_source") if _last_hit else {}) or {}
+        _succ_s  = (_succ_hit.get("_source") if _succ_hit else {}) or {}
         _live_version = _succ_s.get("codeversion", "") or ""
+        # Use _hit_date so we pull the sort value (epoch-ms) or any candidate
+        # date field rather than failing silently on a single hard-coded name.
+        _succ_when = _hit_date(_succ_hit, "deploy") if _succ_hit else ""
+        _last_when = _hit_date(_last_hit, "deploy") if _last_hit else ""
         out[_app] = {
             "live":           bool(_succ_s),
             "version":        _live_version,
-            "when":           _succ_s.get("startdate", "") or "",
+            "when":           _succ_when or "",
             "status":         _last_s.get("status", "") or "",
             # Extra context so popovers can show "last attempt failed" etc.
             "last_version":   _last_s.get("codeversion", "") or "",
-            "last_when":      _last_s.get("startdate", "") or "",
+            "last_when":      _last_when or "",
             "last_succeeded": bool(_succ_s) and _succ_s.get("codeversion") == _last_s.get("codeversion"),
         }
     return out
@@ -4731,29 +4741,35 @@ _ALL = "— All —"
 _session_roles: list[str] = st.session_state.get("roles") or []
 _session_teams: list[str] = st.session_state.get("teams") or []
 
-# Map session roles to our 4 canonical roles (case-insensitive partial match)
-_ROLE_ALIASES: dict[str, str] = {
-    "admin": "Admin", "devops": "Admin", "administrator": "Admin",
-    "developer": "Developer", "dev": "Developer",
-    "qc": "QC", "quality": "QC", "quality-control": "QC", "quality_control": "QC",
-    "operator": "Operator", "ops": "Operator", "operations": "Operator",
+# Strict role mapping — only the canonical strings below are honoured. Admin
+# is granted only when "admin" is literally present in session_state.roles; no
+# implicit fallback and no loose aliases (devops / dev / ops / quality).
+_ROLE_STRICT: dict[str, str] = {
+    "admin":           "Admin",
+    "developer":       "Developer",
+    "quality-control": "QC",
+    "operator":        "Operator",
 }
 _detected_roles: list[str] = []
 for _sr in _session_roles:
-    _norm = _sr.strip().lower().replace(" ", "_").replace("-", "_")
-    if _norm in _ROLE_ALIASES:
-        _detected_roles.append(_ROLE_ALIASES[_norm])
-    elif _sr in ROLES:
-        _detected_roles.append(_sr)
+    _norm = _sr.strip().lower()
+    _canon = _ROLE_STRICT.get(_norm)
+    if _canon is not None:
+        _detected_roles.append(_canon)
 # Deduplicate while preserving order
-_detected_roles = list(dict.fromkeys(_detected_roles)) or ["Admin"]  # fallback
+_detected_roles = list(dict.fromkeys(_detected_roles))
 
 
 # ── Resolve role early so the filter rail can style itself by role color ────
 if "Admin" in _detected_roles:
     role_pick = "Admin"
-else:
+elif _detected_roles:
     role_pick = _detected_roles[0]
+else:
+    # No recognised role in session_state.roles — surface it explicitly rather
+    # than silently granting Admin. The rail still renders; downstream gates
+    # (hygiene, requests, env scope) already key off role_pick.
+    role_pick = "Developer"
 
 # Time-window presets — resolved before the rail so selectbox order is stable.
 _TW_LABELS = list(PRESETS.keys())
