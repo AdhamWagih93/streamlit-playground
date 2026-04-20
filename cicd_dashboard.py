@@ -4893,14 +4893,10 @@ _all_companies, _all_projects = _load_inventory_choices()
 _ALL = "— All —"
 
 # ── Detect role & teams from session state (set by the parent multipage app) ─
-# Two sources are honoured because different auth layers in this repo populate
-# different keys:
-#   • ``st.session_state.roles`` — list[str] of role names
-#   • ``st.session_state.user_roles`` — dict keyed by role name (agent.py and
-#     agentUI.py both use ``"admin" in user_roles`` as the admin gate).
-# We union tokens from both before mapping so a user flagged admin in
-# ``user_roles`` is still detected here even if ``roles`` is empty.
-_session_roles: list[str] = st.session_state.get("roles") or []
+# Canonical role source in this repo is ``st.session_state.user_roles`` — a
+# dict keyed by role name (agent.py / agentUI.py both gate admin on
+# ``"admin" in user_roles``). ``session_state.roles`` is not used by the auth
+# layer here, so we don't read it.
 _session_teams: list[str] = st.session_state.get("teams") or []
 _session_user_roles = st.session_state.get("user_roles") or {}
 _user_role_keys: list[str] = (
@@ -4921,18 +4917,17 @@ _ROLE_STRICT: dict[str, str] = {
     "operator":        "Operator",
 }
 _detected_roles: list[str] = []
-_role_trace: list[tuple[str, str, str]] = []  # (source, raw, resolved)
-for _src_label, _bag in (("roles", _session_roles), ("user_roles", _user_role_keys)):
-    for _sr in _bag:
-        if not isinstance(_sr, str):
-            continue
-        _norm = _sr.strip().lower()
-        _canon = _ROLE_STRICT.get(_norm)
-        if _canon is not None:
-            _detected_roles.append(_canon)
-            _role_trace.append((_src_label, _sr, _canon))
-        else:
-            _role_trace.append((_src_label, _sr, "—"))
+_role_trace: list[tuple[str, str]] = []  # (raw, resolved)
+for _sr in _user_role_keys:
+    if not isinstance(_sr, str):
+        continue
+    _norm = _sr.strip().lower()
+    _canon = _ROLE_STRICT.get(_norm)
+    if _canon is not None:
+        _detected_roles.append(_canon)
+        _role_trace.append((_sr, _canon))
+    else:
+        _role_trace.append((_sr, "—"))
 # Deduplicate while preserving order
 _detected_roles = list(dict.fromkeys(_detected_roles))
 
@@ -4940,20 +4935,23 @@ _detected_roles = list(dict.fromkeys(_detected_roles))
 # ── Resolve role early so the filter rail can style itself by role color ────
 if "Admin" in _detected_roles:
     role_pick = "Admin"
-    _role_pick_reason = "'admin' present in session state — highest privilege wins"
+    _role_pick_reason = (
+        "'admin' present in session_state.user_roles — highest privilege wins"
+    )
 elif _detected_roles:
     role_pick = _detected_roles[0]
     _role_pick_reason = (
-        f"no 'admin' in session state; first recognised role '{role_pick}' used"
+        f"no 'admin' in session_state.user_roles; first recognised role "
+        f"'{role_pick}' used"
     )
 else:
-    # No recognised role in session_state — surface it explicitly rather than
+    # No recognised role in user_roles — surface it explicitly rather than
     # silently granting Admin. The rail still renders; downstream gates
     # (hygiene, requests, env scope) already key off role_pick.
     role_pick = "Developer"
     _role_pick_reason = (
-        "no recognised role in session_state.roles or user_roles — "
-        "defaulted to Developer (least privileged)"
+        "no recognised role in session_state.user_roles — defaulted to "
+        "Developer (least privileged)"
     )
 
 # Time-window presets — resolved before the rail so selectbox order is stable.
@@ -5107,9 +5105,6 @@ with st.container(key="cc_filter_rail"):
                     '<div class="cc-role-why-sub">Session state</div>',
                     unsafe_allow_html=True,
                 )
-                _roles_repr = ", ".join(
-                    f"'{r}'" for r in _session_roles
-                ) or "— empty —"
                 _user_roles_repr = ", ".join(
                     f"'{k}'" for k in _user_role_keys
                 ) or "— empty —"
@@ -5117,8 +5112,6 @@ with st.container(key="cc_filter_rail"):
                     f"'{t}'" for t in _session_teams
                 ) or "— empty —"
                 st.markdown(
-                    f'<div class="cc-role-why-kv">'
-                    f'<code>st.session_state.roles</code>: {_roles_repr}</div>'
                     f'<div class="cc-role-why-kv">'
                     f'<code>st.session_state.user_roles</code> keys: '
                     f'{_user_roles_repr}</div>'
@@ -5138,10 +5131,12 @@ with st.container(key="cc_filter_rail"):
                     '<li><code>operator</code> → <b>Operator</b></li>'
                     '</ul>'
                     '<div class="cc-role-why-note">'
-                    'Comparison is case-insensitive on the stripped string. '
+                    'Only <code>st.session_state.user_roles</code> is read — '
+                    'that\'s the canonical role source across this repo. '
+                    'Comparison is case-insensitive on the stripped key. '
                     'Anything not in this list is ignored (no loose aliases). '
-                    'If <code>admin</code> is present in either source, it '
-                    'wins regardless of order.'
+                    'If <code>admin</code> is a key, it wins regardless of '
+                    'order.'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -5153,20 +5148,19 @@ with st.container(key="cc_filter_rail"):
                         "<span class=\"cc-role-why-skip\">ignored</span>"
                     )
                     _rows: list[str] = []
-                    for _src, _raw, _out in _role_trace:
+                    for _raw, _out in _role_trace:
                         _cell = (
                             f"<b>{_out}</b>" if _out != "—" else _skip_html
                         )
                         _rows.append(
-                            f"<tr><td><code>{_src}</code></td>"
-                            f"<td><code>{_raw}</code></td>"
+                            f"<tr><td><code>{_raw}</code></td>"
                             f"<td>{_cell}</td></tr>"
                         )
                     _rows_html = "".join(_rows)
                     st.markdown(
                         '<div class="cc-role-why-sub">Resolution trace</div>'
                         '<table class="cc-role-why-trace">'
-                        '<thead><tr><th>Source</th><th>Token</th>'
+                        '<thead><tr><th>user_roles key</th>'
                         '<th>Resolved</th></tr></thead>'
                         f'<tbody>{_rows_html}</tbody></table>',
                         unsafe_allow_html=True,
@@ -5174,11 +5168,10 @@ with st.container(key="cc_filter_rail"):
                 else:
                     st.markdown(
                         '<div class="cc-role-why-note">'
-                        'Neither <code>roles</code> nor <code>user_roles</code> '
-                        'carried any tokens. Check that your auth layer is '
-                        'populating <code>st.session_state.roles</code> '
-                        '(list) or <code>st.session_state.user_roles</code> '
-                        '(dict keyed by role name).'
+                        '<code>st.session_state.user_roles</code> carried no '
+                        'keys. Check that your auth layer populates it as a '
+                        'dict keyed by role name (e.g. '
+                        '<code>{"admin": {...}}</code>).'
                         '</div>',
                         unsafe_allow_html=True,
                     )
