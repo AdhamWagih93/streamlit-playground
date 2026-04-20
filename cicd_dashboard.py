@@ -2425,6 +2425,940 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     letter-spacing: .02em;
 }
 
+/* ==========================================================================
+   OPS TERMINAL — SECOND-PASS UI/UX BOOST
+   Layered above the earlier Precision Ops Terminal block. Scoped tightly to
+   the Pipelines-inventory panel and the embedded Event Log so the rest of
+   the dashboard keeps its existing voice. Themes:
+     · monumental section framing with corner bracket registration marks
+     · ticker-style live indicator on the event-log heading
+     · per-project sections rendered as timeline nodes with a vertical spine
+     · each event row carries a status-tinted left gutter that bleeds on hover
+     · a radar sweep accent on the caption count badge
+   ========================================================================== */
+
+/* ── Shared decorative variables ─────────────────────────────────────────── */
+.st-key-cc_filter_rail,
+[data-testid="stAppViewContainer"] {
+    --ot-bracket: rgba(15,13,38,.22);
+    --ot-bracket-hi: var(--cc-accent);
+    --ot-scan: rgba(245,158,11,.55);
+    --ot-spine: linear-gradient(180deg,
+        rgba(79,70,229,.55) 0%,
+        rgba(13,148,136,.55) 55%,
+        rgba(245,158,11,.55) 100%);
+}
+
+/* ── Registration-mark corner brackets on the sticky rail ────────────────── */
+.st-key-cc_filter_rail::after {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border: 0 solid var(--ot-bracket);
+    border-radius: 14px;
+    background:
+        /* top-left corner */
+        linear-gradient(to right, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) top left / 14px 1px no-repeat,
+        linear-gradient(to bottom, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) top left / 1px 14px no-repeat,
+        /* top-right corner */
+        linear-gradient(to left, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) top right / 14px 1px no-repeat,
+        linear-gradient(to bottom, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) top right / 1px 14px no-repeat,
+        /* bottom-left corner */
+        linear-gradient(to right, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) bottom left / 14px 1px no-repeat,
+        linear-gradient(to top, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) bottom left / 1px 14px no-repeat,
+        /* bottom-right corner */
+        linear-gradient(to left, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) bottom right / 14px 1px no-repeat,
+        linear-gradient(to top, var(--ot-bracket-hi) 0, var(--ot-bracket-hi) 14px, transparent 14px) bottom right / 1px 14px no-repeat;
+    pointer-events: none;
+    opacity: .38;
+    z-index: 2;
+    mix-blend-mode: multiply;
+}
+
+/* ── Section-head: animated underline sweep on first paint ──────────────── */
+.cc-panel-head {
+    position: relative;
+}
+.cc-panel-head::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--cc-accent) 65%, transparent) 20%,
+        color-mix(in srgb, var(--cc-accent) 90%, transparent) 48%,
+        color-mix(in srgb, var(--cc-accent) 65%, transparent) 76%,
+        transparent 100%);
+    transform: scaleX(0);
+    transform-origin: left center;
+    animation: ot-head-sweep 1.1s cubic-bezier(.2,.7,.2,1) .18s forwards;
+    opacity: .55;
+    pointer-events: none;
+}
+.cc-panel-head--live::after {
+    background: linear-gradient(90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--cc-teal) 70%, transparent) 20%,
+        color-mix(in srgb, var(--cc-teal) 95%, transparent) 48%,
+        color-mix(in srgb, var(--cc-teal) 70%, transparent) 76%,
+        transparent 100%);
+    animation: ot-head-sweep 1.1s cubic-bezier(.2,.7,.2,1) .30s forwards;
+}
+@keyframes ot-head-sweep {
+    from { transform: scaleX(0); }
+    to   { transform: scaleX(1); }
+}
+
+/* Numeral chip: subtle embossed shadow + breathing glow */
+.cc-panel-head h2::before {
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--cc-accent) 14%, transparent),
+        inset 0 -4px 10px -6px color-mix(in srgb, var(--cc-accent) 40%, transparent);
+    transition: transform .3s ease, box-shadow .3s ease;
+}
+.cc-panel-head:hover h2::before {
+    transform: translateY(-1px);
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--cc-accent) 30%, transparent),
+        0 6px 14px -8px color-mix(in srgb, var(--cc-accent) 60%, transparent);
+}
+.cc-panel-head--live h2::before {
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--cc-teal) 14%, transparent),
+        inset 0 -4px 10px -6px color-mix(in srgb, var(--cc-teal) 40%, transparent);
+}
+.cc-panel-head--live:hover h2::before {
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--cc-teal) 30%, transparent),
+        0 6px 14px -8px color-mix(in srgb, var(--cc-teal) 60%, transparent);
+}
+
+/* ── Live tag: ticker-style marquee pulse under the pill ─────────────────── */
+.cc-panel-head--live .cc-panel-tag {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+}
+.cc-panel-head--live .cc-panel-tag::after {
+    content: '';
+    position: absolute;
+    left: -40%;
+    bottom: 0;
+    width: 40%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--ot-scan), transparent);
+    animation: ot-tag-ticker 3.2s linear infinite;
+    z-index: -1;
+}
+@keyframes ot-tag-ticker {
+    0%   { left: -40%; }
+    100% { left: 140%; }
+}
+
+/* ── Sub-caption below the inventory title: typewriter cursor flick ─────── */
+.st-key-cc_filter_rail ~ div .cc-panel-sub,
+.st-key-cc_filter_rail + div .cc-panel-sub {
+    position: relative;
+}
+
+/* ── Stat tiles: add a thin sparkline-style baseline shimmer on hover ────── */
+.iv-stat {
+    isolation: isolate;
+}
+.iv-stat::after {
+    transition:
+        transform .45s cubic-bezier(.2,.7,.2,1),
+        opacity  .35s ease;
+}
+.iv-stat:hover {
+    transform: translateY(-3px);
+}
+.iv-stat::before {
+    transition: box-shadow .28s ease, width .28s ease;
+}
+.iv-stat:hover::before {
+    width: 4px;
+    box-shadow: 0 0 22px 0 color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 70%, transparent);
+}
+
+/* Give the stat number a subtle conic shimmer swatch on hover */
+.iv-stat-number {
+    background-clip: text;
+    -webkit-background-clip: text;
+    transition: color .24s ease;
+}
+.iv-stat:hover .iv-stat-number {
+    color: color-mix(in srgb, var(--cc-ink) 88%, var(--iv-stat-accent, var(--cc-accent))) !important;
+}
+
+/* ── Refined caption count: radar-sweep highlight on the count chip ──────── */
+.el-tf-caption-count {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+}
+.el-tf-caption-count::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg,
+        transparent 0%,
+        transparent 42%,
+        rgba(255,255,255,.55) 50%,
+        transparent 58%,
+        transparent 100%);
+    transform: translateX(-120%);
+    animation: ot-count-sweep 4.8s ease-in-out infinite;
+    pointer-events: none;
+}
+@keyframes ot-count-sweep {
+    0%,  24% { transform: translateX(-120%); }
+    48%      { transform: translateX(120%); }
+    100%     { transform: translateX(120%); }
+}
+
+/* ── Per-project event-log sections: timeline-node treatment ─────────────── */
+.el-proj-stack {
+    position: relative;
+    padding-left: 14px;
+    margin-top: 6px;
+}
+.el-proj-stack::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 18px;
+    bottom: 18px;
+    width: 1px;
+    background: var(--ot-spine);
+    opacity: .28;
+    border-radius: 2px;
+}
+.el-proj-stack .el-proj-section {
+    position: relative;
+    transition:
+        border-color .22s ease,
+        transform    .22s cubic-bezier(.2,.7,.2,1),
+        box-shadow   .22s ease;
+}
+.el-proj-stack .el-proj-section::after {
+    content: '';
+    position: absolute;
+    left: -14px;
+    top: 20px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 35% 30%,
+            color-mix(in srgb, var(--cc-teal) 85%, #fff) 0%,
+            var(--cc-teal) 60%,
+            color-mix(in srgb, var(--cc-teal) 40%, #000) 100%);
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 3px color-mix(in srgb, var(--cc-teal) 30%, transparent),
+        0 0 10px 0 color-mix(in srgb, var(--cc-teal) 35%, transparent);
+    z-index: 1;
+}
+.el-proj-stack .el-proj-section:hover {
+    border-color: color-mix(in srgb, var(--cc-teal) 40%, var(--cc-border));
+    transform: translateX(2px);
+    box-shadow:
+        0 14px 28px -20px color-mix(in srgb, var(--cc-teal) 35%, transparent),
+        0 0 0 1px color-mix(in srgb, var(--cc-teal) 12%, transparent);
+}
+.el-proj-stack .el-proj-section:hover::after {
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 3px color-mix(in srgb, var(--cc-teal) 60%, transparent),
+        0 0 18px 2px color-mix(in srgb, var(--cc-teal) 55%, transparent);
+}
+
+/* Project kicker: upgrade to a notched label */
+.el-proj-section-kicker {
+    font-family: var(--cc-data) !important;
+    letter-spacing: .18em !important;
+    font-size: .58rem !important;
+    color: color-mix(in srgb, var(--cc-teal) 75%, var(--cc-text-mute)) !important;
+    padding: 2px 7px 1px 7px;
+    border: 1px solid color-mix(in srgb, var(--cc-teal) 30%, var(--cc-border));
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--cc-teal) 6%, transparent);
+    font-weight: 700 !important;
+}
+
+/* Project count chip: mono + teal accent */
+.el-proj-section-count {
+    font-family: var(--cc-data) !important;
+    font-weight: 700 !important;
+    font-size: .66rem !important;
+    letter-spacing: .04em;
+    color: color-mix(in srgb, var(--cc-teal) 70%, var(--cc-ink)) !important;
+    background: color-mix(in srgb, var(--cc-teal) 8%, var(--cc-surface)) !important;
+    border: 1px solid color-mix(in srgb, var(--cc-teal) 25%, var(--cc-border));
+    font-variant-numeric: tabular-nums;
+    padding: 2px 10px !important;
+}
+
+/* ── Event-log table: refined row hover with a status-neutral left gutter ── */
+.el-tf tbody tr {
+    position: relative;
+    transition: background .16s ease, box-shadow .16s ease;
+}
+.el-tf tbody tr:hover {
+    background: color-mix(in srgb, var(--cc-teal) 4%, transparent) !important;
+}
+.el-tf tbody tr:hover td:first-child {
+    box-shadow: inset 3px 0 0 0 var(--cc-teal) !important;
+}
+/* Align the baseline of every cell so the type badge, version chip, and
+   person avatar all sit on the same optical rail */
+.el-tf tbody td {
+    vertical-align: middle !important;
+    border-bottom: 1px solid color-mix(in srgb, var(--cc-border) 55%, transparent) !important;
+}
+.el-tf tbody tr:last-child td {
+    border-bottom: none !important;
+}
+
+/* Mono-fy time + detail cells for data rhythm */
+.el-tf tbody td:first-child {
+    font-family: var(--cc-data) !important;
+    font-variant-numeric: tabular-nums lining-nums;
+    font-size: .76rem !important;
+    letter-spacing: .01em;
+    color: var(--cc-text-dim) !important;
+}
+
+/* ── Activity ribbon: a faint scanning glow on the head ──────────────────── */
+.el-ribbon {
+    transition: border-color .22s ease, box-shadow .22s ease;
+}
+.el-ribbon:hover {
+    border-color: color-mix(in srgb, var(--cc-teal) 30%, var(--cc-border));
+    box-shadow: 0 14px 30px -22px color-mix(in srgb, var(--cc-teal) 30%, transparent);
+}
+.el-ribbon-title b {
+    background: linear-gradient(90deg,
+        var(--cc-ink) 0%,
+        color-mix(in srgb, var(--cc-ink) 80%, var(--cc-teal)) 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* ── Empty/no-events inline note inside the inventory panel ──────────────── */
+.st-key-cc_filter_rail ~ div [data-testid="stAlert"],
+.st-key-cc_filter_rail + div [data-testid="stAlert"] {
+    border-radius: 12px !important;
+    border: 1px dashed color-mix(in srgb, var(--cc-accent) 28%, var(--cc-border)) !important;
+    background:
+        repeating-linear-gradient(45deg,
+            rgba(79,70,229,.04) 0,
+            rgba(79,70,229,.04) 8px,
+            transparent 8px,
+            transparent 14px),
+        var(--cc-surface2) !important;
+}
+
+/* ── Micro-elevation on the inventory table's scrollable shell ──────────── */
+.el-tf {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.96) 0%, rgba(247,248,251,.85) 100%) !important;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.9) inset,
+        0 24px 44px -30px rgba(15,13,38,.22),
+        0 0 0 1px rgba(15,13,38,.035);
+}
+
+/* ── "showing N of M" caption: add blinking terminal cursor after text ───── */
+.el-tf-caption > span:last-child::after {
+    content: '▍';
+    display: inline-block;
+    color: color-mix(in srgb, var(--cc-teal) 75%, transparent);
+    margin-left: 4px;
+    font-family: var(--cc-data);
+    font-weight: 700;
+    animation: ot-cursor-blink 1.1s steps(2, start) infinite;
+    transform: translateY(-1px);
+}
+@keyframes ot-cursor-blink {
+    0%,  49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+/* ── Reduced-motion: honor user preference ───────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .cc-panel-head::after,
+    .cc-panel-head--live::after { animation: none; transform: scaleX(1); }
+    .cc-panel-head--live .cc-panel-tag::after { animation: none; display: none; }
+    .el-tf-caption-count::after { animation: none; display: none; }
+    .el-tf-caption > span:last-child::after { animation: none; opacity: 1; }
+    .iv-stat { animation: none; opacity: 1; transform: none; }
+}
+
+/* ==========================================================================
+   SLIM RAIL + STICKY SECONDARY FILTER BAR
+   The top rail is now role-badge + search + settings-cog only. Below it the
+   inventory's "Filters & sort" row pins sticky so users keep scope controls
+   visible as they scroll through the table + event log.
+   ========================================================================== */
+
+/* Rail: tighter vertical rhythm + larger, hero-styled search */
+.st-key-cc_filter_rail {
+    padding: 10px 16px 8px 16px !important;
+    margin: 4px 0 0 0 !important;
+}
+
+/* Kill the corner-bracket decoration from the second-pass boost now that
+   the rail is slimmer — the brackets looked cramped at this height. */
+.st-key-cc_filter_rail::after { display: none !important; }
+
+/* Hero search: tall, crisp, with a soft inner glow on focus */
+.st-key-cc_filter_rail [data-testid="stTextInput"] > div > div {
+    min-height: 44px !important;
+    border-radius: 10px !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.98) 0%, rgba(249,250,253,.95) 100%) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.9),
+        inset 0 0 0 1px rgba(15,13,38,.02);
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+.st-key-cc_filter_rail [data-testid="stTextInput"] input {
+    font-family: var(--cc-body) !important;
+    font-size: 0.92rem !important;
+    letter-spacing: 0.005em !important;
+    color: var(--cc-ink) !important;
+    padding: 10px 14px !important;
+}
+.st-key-cc_filter_rail [data-testid="stTextInput"] input::placeholder {
+    color: var(--cc-text-mute) !important;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    opacity: 0.85;
+}
+.st-key-cc_filter_rail [data-testid="stTextInput"] > div > div:focus-within {
+    border-color: var(--cc-accent) !important;
+    background: #fff !important;
+    box-shadow:
+        0 0 0 3px color-mix(in srgb, var(--cc-accent) 16%, transparent),
+        0 8px 18px -12px color-mix(in srgb, var(--cc-accent) 35%, transparent) !important;
+}
+
+/* Settings cog: pill-form, quiet, expands on hover */
+.st-key-cc_filter_rail [data-testid="stPopover"] button,
+.st-key-cc_filter_rail [data-testid="stPopoverButton"] button {
+    font-family: var(--cc-data) !important;
+    font-size: 1.05rem !important;
+    padding: 9px 0 !important;
+    border-radius: 10px !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    background: rgba(255,255,255,.85) !important;
+    color: var(--cc-text-dim) !important;
+    transition: color .16s ease, border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.st-key-cc_filter_rail [data-testid="stPopover"] button:hover,
+.st-key-cc_filter_rail [data-testid="stPopoverButton"] button:hover {
+    color: var(--cc-accent) !important;
+    border-color: var(--cc-accent) !important;
+    background: color-mix(in srgb, var(--cc-accent) 8%, #fff) !important;
+    transform: translateY(-1px);
+}
+
+/* ── Secondary sticky bar: Filters & sort + active chips + Clear button ──── */
+.st-key-cc_filter_secondary {
+    position: sticky;
+    top: 92px;               /* sits just below the slim rail */
+    z-index: 800;
+    margin: 0 0 12px 0;
+    padding: 8px 14px 8px 14px;
+    background: rgba(255,255,255,.82);
+    -webkit-backdrop-filter: saturate(150%) blur(10px);
+            backdrop-filter: saturate(150%) blur(10px);
+    border: 1px solid color-mix(in srgb, var(--cc-border) 80%, transparent);
+    border-radius: 12px;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.8) inset,
+        0 10px 22px -18px rgba(15,13,38,.18),
+        0 1px 2px rgba(15,13,38,.03);
+    transition: box-shadow .22s ease, border-color .22s ease;
+}
+.st-key-cc_filter_secondary:hover {
+    border-color: color-mix(in srgb, var(--cc-accent) 22%, var(--cc-border));
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.8) inset,
+        0 14px 28px -20px color-mix(in srgb, var(--cc-accent) 30%, transparent),
+        0 1px 2px rgba(15,13,38,.03);
+}
+
+/* Filters & sort popover trigger — make it look like a primary action */
+.st-key-cc_filter_secondary [data-testid="stPopover"] button,
+.st-key-cc_filter_secondary [data-testid="stPopoverButton"] button {
+    font-family: var(--cc-body) !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em !important;
+    padding: 8px 14px !important;
+    border-radius: 10px !important;
+    background:
+        linear-gradient(180deg,
+            color-mix(in srgb, var(--cc-accent) 95%, #fff) 0%,
+            var(--cc-accent) 100%) !important;
+    color: #fff !important;
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 80%, #000) !important;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.25) inset,
+        0 6px 14px -6px color-mix(in srgb, var(--cc-accent) 60%, transparent) !important;
+    transition: transform .16s ease, box-shadow .16s ease, filter .16s ease !important;
+}
+.st-key-cc_filter_secondary [data-testid="stPopover"] button:hover,
+.st-key-cc_filter_secondary [data-testid="stPopoverButton"] button:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.04);
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.25) inset,
+        0 10px 22px -8px color-mix(in srgb, var(--cc-accent) 70%, transparent) !important;
+}
+
+/* Clear button — quiet secondary treatment */
+.st-key-cc_filter_secondary [data-testid="stButton"] button {
+    font-family: var(--cc-body) !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.04em !important;
+    text-transform: uppercase;
+    padding: 7px 12px !important;
+    border-radius: 8px !important;
+    color: var(--cc-text-mute) !important;
+    background: transparent !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.st-key-cc_filter_secondary [data-testid="stButton"] button:hover {
+    color: var(--cc-red) !important;
+    border-color: color-mix(in srgb, var(--cc-red) 35%, var(--cc-border-hi)) !important;
+    background: color-mix(in srgb, var(--cc-red) 6%, transparent) !important;
+}
+
+/* Active-filter chips row — neat wrap, no scroll */
+.st-key-cc_filter_secondary .iv-active-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 6px;
+    align-items: center;
+    max-height: 32px;
+    overflow: hidden;
+    mask-image: linear-gradient(90deg, black 0%, black 92%, transparent 100%);
+    -webkit-mask-image: linear-gradient(90deg, black 0%, black 92%, transparent 100%);
+}
+.st-key-cc_filter_secondary .iv-filter-hint {
+    font-size: 0.74rem;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.01em;
+    padding-left: 4px;
+}
+
+/* Role-identity cell: trim for the slim rail */
+.st-key-cc_filter_rail .cc-rail-id-role {
+    padding: 3px 10px !important;
+    font-size: 0.74rem !important;
+}
+.st-key-cc_filter_rail .cc-rail-id-team {
+    font-size: 0.66rem !important;
+    letter-spacing: 0.01em;
+}
+
+/* Meta strip — keep on rail but more compact */
+.cc-rail-meta {
+    margin-top: 8px !important;
+    padding-top: 7px !important;
+}
+
+/* Responsive: stack the rail's two columns on narrow viewports */
+@media (max-width: 900px) {
+    .st-key-cc_filter_secondary {
+        top: 164px;
+    }
+}
+
+/* ==========================================================================
+   FILTERABLE STAT TILES
+   The stat boxes (companies, teams, projects, apps, build, deploy, platform)
+   are now clickable popovers. The popover button IS the tile — CSS reshapes
+   the Streamlit button to look like the monumental stat tile layout
+   (accent bar, glyph + label, big number, subtitle). Active selections show
+   a luminous badge in the corner.
+   ========================================================================== */
+
+/* Tile row container — matches the grid of the legacy static tiles */
+.st-key-cc_iv_tiles_row {
+    margin: 18px 0 20px 0 !important;
+    padding: 0 !important;
+}
+.st-key-cc_iv_tiles_row > div[data-testid="stHorizontalBlock"] {
+    gap: 10px !important;
+}
+
+/* Per-tile wrapper — each tile gets .st-key-cc_tile_<dim> which supplies
+   the dimension's accent color via CSS custom property */
+[class*="st-key-cc_tile_"] {
+    padding: 0 !important;
+    margin: 0 !important;
+    height: 100%;
+    --iv-stat-accent: var(--cc-accent);
+}
+.st-key-cc_tile_company  { --iv-stat-accent: var(--cc-accent); }
+.st-key-cc_tile_team     { --iv-stat-accent: var(--cc-teal); }
+.st-key-cc_tile_project  { --iv-stat-accent: var(--cc-blue); }
+.st-key-cc_tile_app      { --iv-stat-accent: var(--cc-green); }
+.st-key-cc_tile_build    { --iv-stat-accent: var(--cc-amber); }
+.st-key-cc_tile_deploy   { --iv-stat-accent: var(--cc-teal); }
+.st-key-cc_tile_platform { --iv-stat-accent: var(--cc-blue); }
+.st-key-cc_tile__pipelines { --iv-stat-accent: var(--cc-accent); }
+
+/* Popover trigger — reshape Streamlit's button into a tile. Applies only
+   to tile-wrappers (cc_tile_*) so the Sort popover on the sticky bar
+   retains its own styling. */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button {
+    all: unset !important;
+    box-sizing: border-box !important;
+    display: block !important;
+    width: 100% !important;
+    min-height: 124px !important;
+    padding: 14px 16px 13px 20px !important;
+    border-radius: 14px !important;
+    border: 1px solid var(--cc-border) !important;
+    background:
+        radial-gradient(140% 100% at 0% 0%,
+            color-mix(in srgb, var(--iv-stat-accent) 10%, transparent) 0%,
+            transparent 55%),
+        var(--cc-surface) !important;
+    cursor: pointer !important;
+    position: relative !important;
+    overflow: hidden !important;
+    text-align: left !important;
+    transition:
+        transform .25s cubic-bezier(.2,.7,.2,1),
+        border-color .2s ease,
+        box-shadow .25s ease !important;
+    opacity: 0;
+    animation: iv-stat-in .6s cubic-bezier(.2,.7,.2,1) forwards;
+}
+
+/* Stagger animation across tiles */
+[class*="st-key-cc_tile_"]:nth-child(1) > div > button { animation-delay: .00s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(1) [data-testid*="Popover"] > button { animation-delay: .00s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid*="Popover"] > button { animation-delay: .06s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(3) [data-testid*="Popover"] > button { animation-delay: .12s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(4) [data-testid*="Popover"] > button { animation-delay: .18s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(5) [data-testid*="Popover"] > button { animation-delay: .24s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(6) [data-testid*="Popover"] > button { animation-delay: .30s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(7) [data-testid*="Popover"] > button { animation-delay: .36s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div:nth-child(8) [data-testid*="Popover"] > button { animation-delay: .42s; }
+
+/* Accent bar on the left edge */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button::before,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--iv-stat-accent);
+    box-shadow: 0 0 14px 0
+        color-mix(in srgb, var(--iv-stat-accent) 45%, transparent);
+    opacity: .92;
+    transition: box-shadow .28s ease, width .28s ease;
+}
+
+/* Atmospheric corner glow */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button::after,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button::after {
+    content: '';
+    position: absolute; right: -70px; top: -70px;
+    width: 180px; height: 180px;
+    background: radial-gradient(circle,
+        color-mix(in srgb, var(--iv-stat-accent) 14%, transparent) 0%,
+        transparent 62%);
+    pointer-events: none;
+    transition:
+        transform .45s cubic-bezier(.2,.7,.2,1),
+        opacity  .35s ease;
+}
+
+/* Hover state */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover {
+    transform: translateY(-3px) !important;
+    border-color: var(--iv-stat-accent) !important;
+    box-shadow:
+        0 18px 34px -20px color-mix(in srgb, var(--iv-stat-accent) 45%, transparent),
+        0 0 0 1px color-mix(in srgb, var(--iv-stat-accent) 20%, transparent) !important;
+}
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover::before,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover::before {
+    width: 4px;
+    box-shadow: 0 0 22px 0
+        color-mix(in srgb, var(--iv-stat-accent) 70%, transparent);
+}
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover::after,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover::after {
+    transform: translate(-14px, 14px) scale(1.12);
+}
+
+/* Open (expanded) state — lock the lifted look while popover is open */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button[aria-expanded="true"],
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button[aria-expanded="true"] {
+    transform: translateY(-3px) !important;
+    border-color: var(--iv-stat-accent) !important;
+    box-shadow:
+        0 20px 40px -22px color-mix(in srgb, var(--iv-stat-accent) 55%, transparent),
+        0 0 0 2px color-mix(in srgb, var(--iv-stat-accent) 28%, transparent) !important;
+    background:
+        radial-gradient(140% 100% at 0% 0%,
+            color-mix(in srgb, var(--iv-stat-accent) 16%, transparent) 0%,
+            transparent 55%),
+        var(--cc-surface) !important;
+}
+
+/* Inner text layout — target the markdown container Streamlit wraps the
+   label in. Lines 1/2/3 become: label row, big number, subtitle. */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"],
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] {
+    display: block !important;
+    width: 100% !important;
+}
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p {
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: left !important;
+    line-height: 1.2 !important;
+    letter-spacing: 0 !important;
+    color: var(--cc-text-dim) !important;
+    font-family: var(--cc-body) !important;
+    font-size: 0.66rem !important;
+    font-weight: 500 !important;
+    white-space: normal !important;
+}
+/* First paragraph = label row (glyph + label + optional ✱N badge) */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1),
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1) {
+    font-family: var(--cc-body) !important;
+    font-size: 0.62rem !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase !important;
+    color: var(--cc-text-mute) !important;
+    font-weight: 600 !important;
+    margin-bottom: 8px !important;
+}
+/* Second paragraph = bold number. Use :has() to restyle when it contains
+   <strong>, falling back to direct strong targeting for broader support. */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2),
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2) {
+    font-family: var(--cc-display) !important;
+    font-variation-settings: "opsz" 144, "SOFT" 90;
+    font-size: 2.35rem !important;
+    font-weight: 500 !important;
+    line-height: 1.0 !important;
+    color: var(--cc-ink) !important;
+    letter-spacing: -0.028em !important;
+    font-variant-numeric: tabular-nums lining-nums !important;
+    padding: 2px 0 4px 0 !important;
+    position: relative !important;
+    display: flex !important;
+    align-items: baseline !important;
+    gap: 0 !important;
+}
+/* Strong inside the number paragraph inherits the display treatment */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2) strong,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2) strong {
+    font-family: var(--cc-display) !important;
+    font-weight: 500 !important;
+    font-size: inherit !important;
+    color: inherit !important;
+    letter-spacing: inherit !important;
+}
+/* Underline accent below the number */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after {
+    content: '';
+    position: absolute;
+    left: 0; bottom: -4px;
+    width: 22px; height: 2px;
+    background: var(--iv-stat-accent);
+    opacity: .55;
+    border-radius: 2px;
+    transition: width .22s ease, opacity .22s ease;
+}
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button:hover [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button:hover [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button[aria-expanded="true"] [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button[aria-expanded="true"] [data-testid="stMarkdownContainer"] p:nth-of-type(2)::after {
+    width: 42px;
+    opacity: 1;
+}
+/* Third paragraph = subtitle */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3),
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3) {
+    margin-top: 10px !important;
+    font-size: 0.68rem !important;
+    color: var(--cc-text-dim) !important;
+    line-height: 1.4 !important;
+    font-variant-numeric: tabular-nums !important;
+}
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3) strong,
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(3) strong {
+    color: var(--iv-stat-accent) !important;
+    font-family: var(--cc-data) !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em !important;
+    font-size: 0.74rem !important;
+}
+
+/* Static tile (Unique pipelines) — same visual as popover tiles */
+.iv-tile.iv-tile-static {
+    background:
+        radial-gradient(140% 100% at 0% 0%,
+            color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 10%, transparent) 0%,
+            transparent 55%),
+        var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 14px 16px 13px 20px;
+    position: relative;
+    overflow: hidden;
+    min-height: 124px;
+    height: 100%;
+    box-sizing: border-box;
+    opacity: 0;
+    animation: iv-stat-in .6s cubic-bezier(.2,.7,.2,1) forwards;
+    animation-delay: .42s;
+}
+.iv-tile.iv-tile-static::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--iv-stat-accent, var(--cc-accent));
+    box-shadow: 0 0 14px 0
+        color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 45%, transparent);
+    opacity: .92;
+}
+.iv-tile.iv-tile-static::after {
+    content: '';
+    position: absolute; right: -70px; top: -70px;
+    width: 180px; height: 180px;
+    background: radial-gradient(circle,
+        color-mix(in srgb, var(--iv-stat-accent, var(--cc-accent)) 14%, transparent) 0%,
+        transparent 62%);
+    pointer-events: none;
+}
+.iv-tile-head {
+    font-family: var(--cc-body);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 7px;
+}
+.iv-tile-head .iv-tile-glyph {
+    color: var(--iv-stat-accent, var(--cc-accent));
+    font-size: 0.90rem;
+    opacity: .88;
+}
+.iv-tile-head .iv-tile-label { }
+.iv-tile-number {
+    font-family: var(--cc-display) !important;
+    font-variation-settings: "opsz" 144, "SOFT" 90;
+    font-size: 2.35rem !important;
+    font-weight: 500 !important;
+    line-height: 1.0 !important;
+    color: var(--cc-ink) !important;
+    letter-spacing: -0.028em !important;
+    font-variant-numeric: tabular-nums lining-nums;
+    padding: 2px 0 4px 0;
+    position: relative;
+}
+.iv-tile-number::after {
+    content: '';
+    display: block;
+    width: 22px; height: 2px;
+    background: var(--iv-stat-accent, var(--cc-accent));
+    margin-top: 6px;
+    opacity: .55;
+    border-radius: 2px;
+}
+.iv-tile-sub {
+    font-family: var(--cc-body);
+    margin-top: 10px;
+    font-size: 0.68rem;
+    color: var(--cc-text-dim);
+    font-weight: 500;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Active-selection badge on tile corner: inject a glowing dot when the
+   tile has an ✱ marker in its label. The marker text gets pushed to the
+   corner and restyled. */
+[class*="st-key-cc_tile_"] [data-testid="stPopover"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1),
+[class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button [data-testid="stMarkdownContainer"] p:nth-of-type(1) {
+    position: relative;
+    padding-right: 22px;
+}
+
+/* Popover contents — tighten + theme */
+[class*="st-key-cc_tile_"] [data-baseweb="popover"] {
+    min-width: 280px;
+}
+.iv-tile-hint {
+    font-family: var(--cc-data);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    color: var(--cc-text-mute);
+    padding: 0 0 8px 2px;
+    text-transform: uppercase;
+    font-weight: 600;
+    border-bottom: 1px dashed
+        color-mix(in srgb, var(--cc-border) 70%, transparent);
+    margin-bottom: 10px;
+}
+
+/* Reduced-motion honors user pref on tile animations */
+@media (prefers-reduced-motion: reduce) {
+    [class*="st-key-cc_tile_"] [data-testid="stPopover"] > button,
+    [class*="st-key-cc_tile_"] [data-testid="stPopoverButton"] > button,
+    .iv-tile.iv-tile-static {
+        animation: none;
+        opacity: 1;
+    }
+}
+
+/* Sort popover on the sticky bar — gentler than before so the tiles
+   below feel like the primary action. Overrides the gradient treatment
+   applied to .st-key-cc_filter_secondary popovers earlier. */
+.st-key-cc_filter_secondary [data-testid="stPopover"] > button,
+.st-key-cc_filter_secondary [data-testid="stPopoverButton"] > button {
+    background: rgba(255,255,255,.94) !important;
+    color: var(--cc-ink) !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.9) inset,
+        0 4px 10px -6px rgba(15,13,38,.12) !important;
+}
+.st-key-cc_filter_secondary [data-testid="stPopover"] > button:hover,
+.st-key-cc_filter_secondary [data-testid="stPopoverButton"] > button:hover {
+    border-color: var(--cc-accent) !important;
+    color: var(--cc-accent) !important;
+    background: color-mix(in srgb, var(--cc-accent) 6%, #fff) !important;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.9) inset,
+        0 8px 18px -8px color-mix(in srgb, var(--cc-accent) 35%, transparent) !important;
+}
+
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -3653,19 +4587,13 @@ _role_icon = ROLE_ICONS[role_pick]
 # it with a blurred surface so the stat tiles + table (and nested event log)
 # flow beneath it as one continuous surface.
 with st.container(key="cc_filter_rail"):
-    # Section heading lives inside the rail so users read "Pipelines inventory"
-    # first, then the filters that scope it. Every role currently has the
-    # inventory in its priority sections, so the heading renders unconditionally.
-    # The inventory fragment below no longer renders a duplicate header.
-    st.markdown(
-        '<div class="cc-panel-head cc-panel-head--numbered" style="margin:0 0 8px 0">'
-        f'<h2 data-section-num="01">Pipelines inventory</h2>'
-        f'<span class="cc-panel-tag">Live inventory · event log inherits these filters · {role_pick}</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    # Minimal rail: role identity · persistent search · settings cog.
+    # Company/Project live in the inventory's "Filters & sort" popover below,
+    # which is pinned sticky just under this rail so both stay visible while
+    # scrolling. Time window moved into the settings popover — the event log
+    # carries its own window selector so the global one is rarely touched.
     _rail = st.columns(
-        [1.7, 1.2, 1.2, 1.4, 2.4, 0.5],
+        [1.4, 5.8, 0.7],
         vertical_alignment="bottom",
     )
 
@@ -3681,59 +4609,38 @@ with st.container(key="cc_filter_rail"):
             unsafe_allow_html=True,
         )
 
-    # ── Col 1: time window (compact dropdown) ──────────────────────────────
+    # ── Col 1: persistent ops search (shared by event log + inventory) ─────
     with _rail[1]:
-        preset = st.selectbox(
-            "Window",
-            _TW_LABELS,
-            index=_preset_default_idx,
-            key="time_preset",
-            help="Query time window (select Custom for an explicit range)",
-        )
-
-    # ── Col 2: company (admin-only) ────────────────────────────────────────
-    with _rail[2]:
-        if role_pick == "Admin":
-            _company_options = [_ALL] + _all_companies
-            company_pick = st.selectbox(
-                "Company", _company_options, index=0, key="company_pick",
-                help=f"{len(_all_companies)} companies in inventory",
-            )
-            company_filter = "" if company_pick == _ALL else company_pick
-        else:
-            company_filter = ""
-            st.markdown(
-                '<div class="cc-rail-readonly">Company<em>scoped by team</em></div>',
-                unsafe_allow_html=True,
-            )
-
-    # ── Col 3: project ─────────────────────────────────────────────────────
-    with _rail[3]:
-        _proj_options = [_ALL] + _proj_scoped
-        project_pick = st.selectbox(
-            "Project", _proj_options, index=0, key="project_pick", help=_proj_help,
-        )
-        project_filter = "" if project_pick == _ALL else project_pick
-
-    # ── Col 4: ops search — shared by event log + inventory ────────────────
-    with _rail[4]:
         st.text_input(
             "Search",
             key="shared_search_v1",
-            placeholder="app · project · version · tech · person · detail…",
+            placeholder="🔎  app · project · version · tech · person · detail…  (space-separated terms are AND)",
             help="Shared across event log and inventory · case-insensitive · "
                  "space-separated terms are AND",
+            label_visibility="collapsed",
         )
 
-    # ── Col 5: settings popover (less-used toggles + reload) ───────────────
-    with _rail[5]:
-        st.markdown(
-            '<div style="font-size:.62rem;letter-spacing:.08em;'
-            'text-transform:uppercase;color:var(--cc-text-mute);'
-            'font-weight:700;margin-bottom:2px">More</div>',
-            unsafe_allow_html=True,
-        )
-        with st.popover("⚙", help="Auxiliary toggles · cache reload", use_container_width=True):
+    # ── Col 2: settings popover (window, toggles, reload) ─────────────────
+    with _rail[2]:
+        with st.popover("⚙", help="Time window · toggles · cache reload",
+                        use_container_width=True):
+            st.markdown(
+                '<div class="iv-pill-caption">Global time window</div>',
+                unsafe_allow_html=True,
+            )
+            preset = st.selectbox(
+                "Window",
+                _TW_LABELS,
+                index=_preset_default_idx,
+                key="time_preset",
+                label_visibility="collapsed",
+                help="Query time window for admin analytics · the event log "
+                     "and inventory have their own scopes",
+            )
+            st.markdown(
+                '<div style="border-top:1px solid var(--cc-border);margin:10px 0 6px"></div>',
+                unsafe_allow_html=True,
+            )
             st.toggle(
                 "Per-project tables", value=False, key="shared_per_project_v1",
                 help="Group rows into a separate table per project",
@@ -3760,14 +4667,20 @@ with st.container(key="cc_filter_rail"):
                 st.cache_data.clear()
                 st.rerun()
 
-    # ── Custom range picker (only when preset is Custom) ──────────────────
+    # Global company/project pickers were removed from the rail — the
+    # inventory's "Filters & sort" popover (pinned below) is the canonical
+    # place to narrow scope. We default both to empty so every ES query is
+    # unscoped at this layer; the inventory popover applies its own multiselect
+    # on top, and the event log inherits the inventory-filtered app set.
+    company_filter = ""
+    project_filter = ""
+
+    # Resolve the selected window → start/end timestamps. `preset` is read from
+    # the settings popover (defaults to 7d on first paint).
     if preset == "Custom":
-        _dr = st.columns([1, 1, 4])
-        _today = datetime.now(timezone.utc).date()
-        d_start = _dr[0].date_input("From", _today - timedelta(days=7))
-        d_end   = _dr[1].date_input("To",   _today)
-        start_dt = datetime.combine(d_start, datetime.min.time(), tzinfo=timezone.utc)
-        end_dt   = datetime.combine(d_end,   datetime.max.time(), tzinfo=timezone.utc)
+        # Rail no longer exposes a Custom range picker — fall back to 7d.
+        end_dt   = datetime.now(timezone.utc)
+        start_dt = end_dt - PRESETS["7d"]
     elif preset == "All-time":
         end_dt   = datetime.now(timezone.utc)
         start_dt = datetime(2000, 1, 1, tzinfo=timezone.utc)
@@ -5989,40 +6902,11 @@ def _render_inventory_view() -> None:
                 _out.add(str(_tv))
         return _out
 
-    # ── Dimensional filters — unified popover (sort + scope + dims) ─────────
-    # The options for every dimensional filter are derived from _inv_rows_all
-    # (post text search) so the user always sees every value available in
-    # their current scope. Filters narrow _inv_rows sequentially below, and
-    # the stats row is computed AFTER filters are applied so the big numbers
-    # stay reactive.
-    _iv_companies_all: dict[str, int] = {}
-    _iv_teams_all: dict[str, int] = {}
-    _iv_projects_all: dict[str, int] = {}
-    _iv_apps_all_names: dict[str, int] = {}
-    _iv_build_all: dict[str, int] = {}
-    _iv_deploy_all: dict[str, int] = {}
-    _iv_platform_all: dict[str, int] = {}
-    for _r in _inv_rows:
-        _co = (_r.get("company") or "").strip()
-        if _co: _iv_companies_all[_co] = _iv_companies_all.get(_co, 0) + 1
-        for _t in _iv_row_teams(_r):
-            _iv_teams_all[_t] = _iv_teams_all.get(_t, 0) + 1
-        _pj = (_r.get("project") or "").strip()
-        if _pj: _iv_projects_all[_pj] = _iv_projects_all.get(_pj, 0) + 1
-        _ap = (_r.get("application") or "").strip()
-        if _ap: _iv_apps_all_names[_ap] = _iv_apps_all_names.get(_ap, 0) + 1
-        _bt = (_r.get("build_technology") or "").strip()
-        if _bt: _iv_build_all[_bt] = _iv_build_all.get(_bt, 0) + 1
-        _dt = (_r.get("deploy_technology") or "").strip()
-        if _dt: _iv_deploy_all[_dt] = _iv_deploy_all.get(_dt, 0) + 1
-        _dp = (_r.get("deploy_platform") or "").strip()
-        if _dp: _iv_platform_all[_dp] = _iv_platform_all.get(_dp, 0) + 1
-
-    # ── Non-admin company + team lock rules ────────────────────────────────
-    # Non-admins: company auto-scopes to st.session_state.company. The filter
-    # UI does NOT show a company picker (the scope is implicit). Team filter
-    # is hidden unless the user has multiple session teams, in which case
-    # they may narrow within those teams only.
+    # ── Filter keys + non-admin lock rules ─────────────────────────────────
+    # Non-admins: company auto-scopes to st.session_state.company. The
+    # Companies tile is NOT shown in the stat row (the scope is implicit).
+    # Team filter: hidden when the user has 0 or 1 session teams; when >1
+    # the Teams tile renders with options restricted to those session teams.
     _iv_session_company: str = (st.session_state.get("company") or "").strip()
     _iv_session_teams: list[str] = [
         str(_t).strip() for _t in (st.session_state.get("teams") or []) if _t
@@ -6038,216 +6922,16 @@ def _render_inventory_view() -> None:
         "platform":"iv_deploy_platform_pills_v1",
     }
 
-    # For non-admin, prime the company filter with their session company so
-    # the scope is visibly locked even though the widget isn't rendered.
     if not _is_admin and _iv_session_company:
         st.session_state[_iv_filter_keys["company"]] = [_iv_session_company]
     elif not _is_admin:
         st.session_state[_iv_filter_keys["company"]] = []
-
-    # For non-admin with 1 session team, lock team filter to that team (no UI).
-    # With >1 session teams, widget renders but options restricted to their
-    # session teams. With 0 session teams (edge), no team filter.
     if not _is_admin and len(_iv_session_teams) == 1:
         st.session_state[_iv_filter_keys["team"]] = list(_iv_session_teams)
     elif not _is_admin and len(_iv_session_teams) == 0:
         st.session_state[_iv_filter_keys["team"]] = []
 
-    # Count active selections (for popover label)
-    _iv_active_sel: dict[str, list[str]] = {
-        _k: list(st.session_state.get(_key) or [])
-        for _k, _key in _iv_filter_keys.items()
-    }
-    _iv_active_total = sum(len(v) for v in _iv_active_sel.values())
-    # Hide implicit locks from "active total" — only count user-driven picks.
-    if not _is_admin:
-        _iv_active_total -= len(_iv_active_sel.get("company") or [])
-        if len(_iv_session_teams) == 1:
-            _iv_active_total -= len(_iv_active_sel.get("team") or [])
-    _iv_active_total = max(_iv_active_total, 0)
-
-    _iv_sort_badge = _IV_SORT_BADGES.get(
-        st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0]),
-        "A → Z",
-    )
-
-    _iv_fb = st.columns([1.6, 5.2, 0.8], vertical_alignment="center")
-
-    with _iv_fb[0]:
-        _pop_label = (
-            f"🔎 Filters & sort · {_iv_active_total} active"
-            if _iv_active_total else "🔎 Filters & sort"
-        )
-        with st.popover(_pop_label, use_container_width=True,
-                        help="Narrow the inventory and pick a sort order"):
-            # Sort (first so filters below override defaults cleanly)
-            st.markdown(
-                '<div class="iv-pill-caption">Sort order</div>',
-                unsafe_allow_html=True,
-            )
-            st.selectbox(
-                "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
-                label_visibility="collapsed",
-                help="Activity uses latest stage date · vulnerabilities are "
-                     "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
-            )
-
-            # Company (admin only)
-            if _is_admin and _iv_companies_all:
-                st.markdown(
-                    '<div class="iv-pill-caption">Company</div>',
-                    unsafe_allow_html=True,
-                )
-                st.multiselect(
-                    "Company", options=sorted(_iv_companies_all.keys()),
-                    key=_iv_filter_keys["company"],
-                    label_visibility="collapsed",
-                    placeholder=f"Any of {len(_iv_companies_all)} companies",
-                )
-
-            # Team
-            if _is_admin and _iv_teams_all:
-                st.markdown(
-                    '<div class="iv-pill-caption">Team</div>',
-                    unsafe_allow_html=True,
-                )
-                st.multiselect(
-                    "Team", options=sorted(_iv_teams_all.keys()),
-                    key=_iv_filter_keys["team"],
-                    label_visibility="collapsed",
-                    placeholder=f"Any of {len(_iv_teams_all)} teams",
-                )
-            elif (not _is_admin) and len(_iv_session_teams) > 1:
-                st.markdown(
-                    '<div class="iv-pill-caption">Team (your session)</div>',
-                    unsafe_allow_html=True,
-                )
-                st.multiselect(
-                    "Team", options=list(_iv_session_teams),
-                    key=_iv_filter_keys["team"],
-                    label_visibility="collapsed",
-                    placeholder=f"Any of your {len(_iv_session_teams)} teams",
-                )
-
-            # Project
-            if _iv_projects_all:
-                st.markdown(
-                    '<div class="iv-pill-caption">Project</div>',
-                    unsafe_allow_html=True,
-                )
-                st.multiselect(
-                    "Project", options=sorted(_iv_projects_all.keys()),
-                    key=_iv_filter_keys["project"],
-                    label_visibility="collapsed",
-                    placeholder=f"Any of {len(_iv_projects_all)} projects",
-                )
-
-            # Application
-            if _iv_apps_all_names:
-                st.markdown(
-                    '<div class="iv-pill-caption">Application</div>',
-                    unsafe_allow_html=True,
-                )
-                st.multiselect(
-                    "Application", options=sorted(_iv_apps_all_names.keys()),
-                    key=_iv_filter_keys["app"],
-                    label_visibility="collapsed",
-                    placeholder=f"Any of {len(_iv_apps_all_names)} applications",
-                )
-
-            # Build / deploy / platform pills
-            _pill_specs = [
-                ("Build technology",  _iv_build_all,    "⚙", _iv_filter_keys["build"]),
-                ("Deploy technology", _iv_deploy_all,   "⛭", _iv_filter_keys["deploy"]),
-                ("Deploy platform",   _iv_platform_all, "☁", _iv_filter_keys["platform"]),
-            ]
-            for _label, _counts, _glyph, _key in _pill_specs:
-                if not _counts:
-                    continue
-                _opts: list[str] = []
-                for _v, _c in sorted(_counts.items(), key=lambda x: -x[1]):
-                    _opts.append(f"{_glyph} {_v} · {_c}")
-                st.markdown(
-                    f'<div class="iv-pill-caption">{_label}</div>',
-                    unsafe_allow_html=True,
-                )
-                st.pills(
-                    _label, options=_opts, selection_mode="multi",
-                    default=None, key=_key, label_visibility="collapsed",
-                )
-
-    with _iv_fb[1]:
-        _chip_specs: list[tuple[str, str]] = []
-        # Surface implicit non-admin locks as informational chips
-        if not _is_admin and _iv_session_company:
-            _chip_specs.append((f"🏢 {_iv_session_company} (scoped)", "session"))
-        if not _is_admin and len(_iv_session_teams) == 1:
-            _chip_specs.append((f"👥 {_iv_session_teams[0]} (scoped)", "session"))
-        # User-driven filters
-        if _is_admin:
-            for _v in _iv_active_sel["company"]:
-                _chip_specs.append((f"🏢 {_v}", "user"))
-        _team_locked = (not _is_admin) and len(_iv_session_teams) == 1
-        if not _team_locked:
-            for _v in _iv_active_sel["team"]:
-                _chip_specs.append((f"👥 {_v}", "user"))
-        for _v in _iv_active_sel["project"]:
-            _chip_specs.append((f"📁 {_v}", "user"))
-        for _v in _iv_active_sel["app"]:
-            _chip_specs.append((f"▣ {_v}", "user"))
-        for _v in _iv_active_sel["build"]:
-            _chip_specs.append((_v, "user"))
-        for _v in _iv_active_sel["deploy"]:
-            _chip_specs.append((_v, "user"))
-        for _v in _iv_active_sel["platform"]:
-            _chip_specs.append((_v, "user"))
-        # Sort chip
-        _chip_specs.append((f"↕ Sort: {_iv_sort_badge}", "sort"))
-        if _chip_specs:
-            _chip_html = []
-            for _txt, _kind in _chip_specs:
-                _cls = (
-                    "iv-active-chip" if _kind == "user"
-                    else "iv-active-chip iv-active-chip-sess" if _kind == "session"
-                    else "iv-active-chip iv-active-chip-sort"
-                )
-                _chip_html.append(f'<span class="{_cls}">{_txt}</span>')
-            st.markdown(
-                '<div class="iv-active-chips">' + "".join(_chip_html) + '</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<div class="iv-filter-hint">No filters applied — click 🔎 to narrow '
-                'the inventory.</div>',
-                unsafe_allow_html=True,
-            )
-
-    with _iv_fb[2]:
-        if _iv_active_total:
-            if st.button("Clear", key="iv_filters_clear_v1",
-                         use_container_width=True,
-                         help="Clear all user-selected filters"):
-                # Clear user-driven keys. Preserve session-locked defaults.
-                _clear_keys = [
-                    _iv_filter_keys["project"],
-                    _iv_filter_keys["app"],
-                    _iv_filter_keys["build"],
-                    _iv_filter_keys["deploy"],
-                    _iv_filter_keys["platform"],
-                ]
-                if _is_admin:
-                    _clear_keys.append(_iv_filter_keys["company"])
-                    _clear_keys.append(_iv_filter_keys["team"])
-                elif len(_iv_session_teams) > 1:
-                    _clear_keys.append(_iv_filter_keys["team"])
-                for _k in _clear_keys:
-                    st.session_state.pop(_k, None)
-                st.rerun()
-
-    iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
-
-    # ── Apply every filter to _inv_rows (order doesn't matter for ∩) ────────
+    # ── Read current selections (before applying any filter) ──────────────
     _sel_company  = list(st.session_state.get(_iv_filter_keys["company"]) or [])
     _sel_team     = list(st.session_state.get(_iv_filter_keys["team"])    or [])
     _sel_project  = list(st.session_state.get(_iv_filter_keys["project"]) or [])
@@ -6256,8 +6940,7 @@ def _render_inventory_view() -> None:
     _sel_deploy   = list(st.session_state.get(_iv_filter_keys["deploy"])  or [])
     _sel_platform = list(st.session_state.get(_iv_filter_keys["platform"]) or [])
 
-    # Pill selections are "glyph value · count" strings — extract the raw value
-    # between the leading glyph+space and the final " · <count>".
+    # Pill selections are "glyph value · count" strings — extract the raw value.
     def _pill_to_val(opt: str) -> str:
         _core = opt.split(" ", 1)[1] if " " in opt else opt
         if " · " in _core:
@@ -6267,23 +6950,76 @@ def _render_inventory_view() -> None:
     _sel_deploy_vals   = {_pill_to_val(o) for o in _sel_deploy}
     _sel_platform_vals = {_pill_to_val(o) for o in _sel_platform}
 
-    if _sel_company:
-        _inv_rows = [r for r in _inv_rows if (r.get("company") or "") in _sel_company]
-    if _sel_team:
-        _team_set = set(_sel_team)
-        _inv_rows = [r for r in _inv_rows if _iv_row_teams(r) & _team_set]
-    if _sel_project:
-        _inv_rows = [r for r in _inv_rows if (r.get("project") or "") in _sel_project]
-    if _sel_app:
-        _inv_rows = [r for r in _inv_rows if (r.get("application") or "") in _sel_app]
-    if _sel_build_vals:
-        _inv_rows = [r for r in _inv_rows if (r.get("build_technology") or "") in _sel_build_vals]
-    if _sel_deploy_vals:
-        _inv_rows = [r for r in _inv_rows if (r.get("deploy_technology") or "") in _sel_deploy_vals]
-    if _sel_platform_vals:
-        _inv_rows = [r for r in _inv_rows if (r.get("deploy_platform") or "") in _sel_platform_vals]
+    # ── Cross-filter helper (leave-one-out) ───────────────────────────────
+    # Passing exclude="project" returns rows narrowed by every filter EXCEPT
+    # project — so the Projects tile shows projects available under the
+    # other active filters, not the already-selected projects.
+    def _apply_iv_filters(rows: list[dict], *, exclude: str = "") -> list[dict]:
+        out = rows
+        if exclude != "company" and _sel_company:
+            _s = set(_sel_company)
+            out = [r for r in out if (r.get("company") or "") in _s]
+        if exclude != "team" and _sel_team:
+            _s = set(_sel_team)
+            out = [r for r in out if _iv_row_teams(r) & _s]
+        if exclude != "project" and _sel_project:
+            _s = set(_sel_project)
+            out = [r for r in out if (r.get("project") or "") in _s]
+        if exclude != "app" and _sel_app:
+            _s = set(_sel_app)
+            out = [r for r in out if (r.get("application") or "") in _s]
+        if exclude != "build" and _sel_build_vals:
+            out = [r for r in out if (r.get("build_technology") or "") in _sel_build_vals]
+        if exclude != "deploy" and _sel_deploy_vals:
+            out = [r for r in out if (r.get("deploy_technology") or "") in _sel_deploy_vals]
+        if exclude != "platform" and _sel_platform_vals:
+            out = [r for r in out if (r.get("deploy_platform") or "") in _sel_platform_vals]
+        return out
 
-    # ── Reactive stats row (computed POST-filter) ───────────────────────────
+    # ── Leave-one-out option dicts for each dimension's tile popover ───────
+    def _count_single(rows: list[dict], field: str) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for r in rows:
+            v = (r.get(field) or "").strip()
+            if v:
+                out[v] = out.get(v, 0) + 1
+        return out
+
+    def _count_teams(rows: list[dict]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for r in rows:
+            for t in _iv_row_teams(r):
+                out[t] = out.get(t, 0) + 1
+        return out
+
+    _iv_companies_opts = _count_single(_apply_iv_filters(_inv_rows, exclude="company"), "company")
+    _iv_teams_opts     = _count_teams(_apply_iv_filters(_inv_rows, exclude="team"))
+    _iv_projects_opts  = _count_single(_apply_iv_filters(_inv_rows, exclude="project"), "project")
+    _iv_apps_opts      = _count_single(_apply_iv_filters(_inv_rows, exclude="app"), "application")
+    _iv_build_opts     = _count_single(_apply_iv_filters(_inv_rows, exclude="build"), "build_technology")
+    _iv_deploy_opts    = _count_single(_apply_iv_filters(_inv_rows, exclude="deploy"), "deploy_technology")
+    _iv_platform_opts  = _count_single(_apply_iv_filters(_inv_rows, exclude="platform"), "deploy_platform")
+
+    # ── Active selection summary + sort badge ─────────────────────────────
+    _iv_active_sel: dict[str, list[str]] = {
+        _k: list(st.session_state.get(_key) or [])
+        for _k, _key in _iv_filter_keys.items()
+    }
+    _iv_active_total = sum(len(v) for v in _iv_active_sel.values())
+    if not _is_admin:
+        _iv_active_total -= len(_iv_active_sel.get("company") or [])
+        if len(_iv_session_teams) == 1:
+            _iv_active_total -= len(_iv_active_sel.get("team") or [])
+    _iv_active_total = max(_iv_active_total, 0)
+
+    _iv_sort_badge = _IV_SORT_BADGES.get(
+        st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0]), "A → Z",
+    )
+
+    # ── Apply every filter to produce the final scoped row list ───────────
+    _inv_rows = _apply_iv_filters(_inv_rows)
+
+    # ── Reactive aggregates (computed POST-filter) ────────────────────────
     _post_companies: set[str] = set()
     _post_teams: set[str] = set()
     _post_projects: set[str] = set()
@@ -6310,8 +7046,6 @@ def _render_inventory_view() -> None:
         if _bt or _dt or _dp:
             _post_pipelines.add((_bt, _dt, _dp))
 
-    # Live counts — apps that are currently live in PRD, projects that own
-    # at least one such app.
     _iv_total = len(_inv_rows)
     _live_apps: set[str] = set()
     _live_projects: set[str] = set()
@@ -6325,80 +7059,247 @@ def _render_inventory_view() -> None:
     _iv_live = len(_live_apps)
     _iv_live_pct = f"{_iv_live / _iv_total * 100:.0f}%" if _iv_total else "—"
     _iv_layout = "per-project" if iv_per_project else "consolidated"
-
     _proj_live_pct = (
         f"{len(_live_projects) / len(_post_projects) * 100:.0f}%"
         if _post_projects else "—"
     )
 
-    # Tile order: Companies (admin) → Teams (admin) → Projects (+live) →
-    # Apps (+live) → Build tech → Deploy tech → Deploy platform → Unique
-    # pipelines.
+    # ── Sticky secondary bar: Sort popover + active chips + Clear button ──
+    # Dimensional filters now live inside the stat tiles (click any tile to
+    # filter by that dimension). This bar keeps Sort + filter summary sticky
+    # as the user scrolls.
+    with st.container(key="cc_filter_secondary"):
+        _iv_fb = st.columns([1.8, 5.0, 0.8], vertical_alignment="center")
+
+    with _iv_fb[0]:
+        with st.popover(
+            f"↕ Sort · {_iv_sort_badge}",
+            use_container_width=True,
+            help="Change how pipelines are ordered",
+        ):
+            st.markdown(
+                '<div class="iv-pill-caption">Sort order</div>',
+                unsafe_allow_html=True,
+            )
+            st.selectbox(
+                "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
+                label_visibility="collapsed",
+                help="Activity uses latest stage date · vulnerabilities are "
+                     "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
+            )
+
+    with _iv_fb[1]:
+        _chip_specs: list[tuple[str, str]] = []
+        if not _is_admin and _iv_session_company:
+            _chip_specs.append((f"🏢 {_iv_session_company} (scoped)", "session"))
+        if not _is_admin and len(_iv_session_teams) == 1:
+            _chip_specs.append((f"👥 {_iv_session_teams[0]} (scoped)", "session"))
+        if _is_admin:
+            for _v in _iv_active_sel["company"]:
+                _chip_specs.append((f"🏢 {_v}", "user"))
+        _team_locked = (not _is_admin) and len(_iv_session_teams) == 1
+        if not _team_locked:
+            for _v in _iv_active_sel["team"]:
+                _chip_specs.append((f"👥 {_v}", "user"))
+        for _v in _iv_active_sel["project"]:
+            _chip_specs.append((f"📁 {_v}", "user"))
+        for _v in _iv_active_sel["app"]:
+            _chip_specs.append((f"▣ {_v}", "user"))
+        for _v in _iv_active_sel["build"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["deploy"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["platform"]:
+            _chip_specs.append((_v, "user"))
+        _chip_specs.append((f"↕ Sort: {_iv_sort_badge}", "sort"))
+        if _chip_specs:
+            _chip_html = []
+            for _txt, _kind in _chip_specs:
+                _cls = (
+                    "iv-active-chip" if _kind == "user"
+                    else "iv-active-chip iv-active-chip-sess" if _kind == "session"
+                    else "iv-active-chip iv-active-chip-sort"
+                )
+                _chip_html.append(f'<span class="{_cls}">{_txt}</span>')
+            st.markdown(
+                '<div class="iv-active-chips">' + "".join(_chip_html) + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="iv-filter-hint">No filters applied — click any tile '
+                'below to narrow the scope.</div>',
+                unsafe_allow_html=True,
+            )
+
+    with _iv_fb[2]:
+        if _iv_active_total:
+            if st.button("Clear", key="iv_filters_clear_v1",
+                         use_container_width=True,
+                         help="Clear all user-selected filters"):
+                _clear_keys = [
+                    _iv_filter_keys["project"],
+                    _iv_filter_keys["app"],
+                    _iv_filter_keys["build"],
+                    _iv_filter_keys["deploy"],
+                    _iv_filter_keys["platform"],
+                ]
+                if _is_admin:
+                    _clear_keys.append(_iv_filter_keys["company"])
+                    _clear_keys.append(_iv_filter_keys["team"])
+                elif len(_iv_session_teams) > 1:
+                    _clear_keys.append(_iv_filter_keys["team"])
+                for _k in _clear_keys:
+                    st.session_state.pop(_k, None)
+                st.rerun()
+
+    iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
+
+    # ── Filterable stat tiles — click any tile to narrow that dimension ───
     _TILE_COLORS = {
-        "companies":"var(--cc-accent)",
-        "teams":    "var(--cc-teal)",
-        "projects": "var(--cc-blue)",
-        "apps":     "var(--cc-green)",
+        "company":  "var(--cc-accent)",
+        "team":     "var(--cc-teal)",
+        "project":  "var(--cc-blue)",
+        "app":      "var(--cc-green)",
         "build":    "var(--cc-amber)",
         "deploy":   "var(--cc-teal)",
         "platform": "var(--cc-blue)",
         "pipeline": "var(--cc-accent)",
     }
-    _tiles: list[str] = []
-    def _tile(label: str, glyph: str, number: int | str,
-              sub: str, color_key: str) -> str:
-        return (
-            f'<div class="iv-stat" style="--iv-stat-accent:{_TILE_COLORS[color_key]}">'
-            f'<div class="iv-stat-label"><span class="iv-stat-glyph">{glyph}</span>{label}</div>'
-            f'<div class="iv-stat-number">{number}</div>'
-            f'<div class="iv-stat-sub">{sub}</div>'
-            f'</div>'
+
+    def _render_tile_ms(dim_key: str, opts: dict[str, int],
+                        placeholder: str) -> None:
+        """Multiselect inside a tile popover, with count-aware format_func.
+        Preserves selections even when cross-filters make them temporarily
+        unavailable (they render with a '(filtered out)' annotation)."""
+        ss_key = _iv_filter_keys[dim_key]
+        _cur = list(st.session_state.get(ss_key) or [])
+        _union = set(opts.keys()) | set(_cur)
+        _sorted_vals = sorted(_union, key=lambda v: (-opts.get(v, 0), v.lower()))
+        def _fmt(v: str) -> str:
+            _c = opts.get(v, 0)
+            return f"{v}  ·  {_c}" if _c else f"{v}  ·  (filtered out)"
+        st.markdown(
+            f'<div class="iv-tile-hint">{len(opts)} available · '
+            f'{len(_cur)} selected</div>',
+            unsafe_allow_html=True,
         )
+        st.multiselect(
+            placeholder, options=_sorted_vals, key=ss_key,
+            label_visibility="collapsed", placeholder=placeholder,
+            format_func=_fmt,
+        )
+
+    def _render_tile_pills(dim_key: str, opts: dict[str, int], glyph: str) -> None:
+        """Pills inside a tile popover — preserves selections across count
+        changes by re-syncing session state to new 'glyph val · count' strings."""
+        ss_key = _iv_filter_keys[dim_key]
+        _cur = list(st.session_state.get(ss_key) or [])
+        _cur_vals = {_pill_to_val(o) for o in _cur}
+        _all_vals = set(opts.keys()) | _cur_vals
+        _sorted = sorted(_all_vals, key=lambda v: (-opts.get(v, 0), v.lower()))
+        _options = [f"{glyph} {v} · {opts.get(v, 0)}" for v in _sorted]
+        _new_cur = [o for o in _options if _pill_to_val(o) in _cur_vals]
+        if _new_cur != _cur:
+            st.session_state[ss_key] = _new_cur
+        st.markdown(
+            f'<div class="iv-tile-hint">{len(opts)} available · '
+            f'{len(_cur_vals)} selected</div>',
+            unsafe_allow_html=True,
+        )
+        st.pills(
+            dim_key, options=_options, selection_mode="multi",
+            default=None, key=ss_key, label_visibility="collapsed",
+        )
+
+    # Build tile spec list (order + visibility depends on role)
+    _tile_specs: list[tuple[str, str, str, int, str]] = []
+    # (dim_key, glyph, label, number, sub_markdown)
     if _is_admin:
-        _tiles.append(_tile(
-            "Companies", "🏢", len(_post_companies),
-            "Tenant boundaries in this filtered scope",
-            "companies",
-        ))
-        _tiles.append(_tile(
-            "Teams", "👥", len(_post_teams),
-            "Distinct owner teams across all role fields",
-            "teams",
-        ))
-    _tiles.append(_tile(
-        "Projects", "📁", len(_post_projects),
-        f"<b>{len(_live_projects)}</b> with live PRD apps ({_proj_live_pct})",
-        "projects",
-    ))
-    _tiles.append(_tile(
-        "Applications", "▣", _iv_total,
-        f"<b>{_iv_live}</b> live in PRD ({_iv_live_pct})",
-        "apps",
-    ))
-    _tiles.append(_tile(
-        "Build technologies", "⚙", len(_post_build),
-        "Distinct build stacks in scope",
-        "build",
-    ))
-    _tiles.append(_tile(
-        "Deploy technologies", "⛭", len(_post_deploy),
-        "Distinct deployment tooling in scope",
-        "deploy",
-    ))
-    _tiles.append(_tile(
-        "Deploy platforms", "☁", len(_post_platform),
-        "Distinct target platforms in scope",
-        "platform",
-    ))
-    _tiles.append(_tile(
-        "Unique pipelines", "⇋", len(_post_pipelines),
-        "build × deploy × platform combinations",
-        "pipeline",
-    ))
-    st.markdown(
-        '<div class="iv-stats-grid">' + "".join(_tiles) + '</div>',
-        unsafe_allow_html=True,
-    )
+        _tile_specs.append(("company", "🏢", "Companies", len(_post_companies),
+                            "Tenant boundaries in scope"))
+        _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
+                            "Distinct owner teams"))
+    elif len(_iv_session_teams) > 1:
+        _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
+                            f"Across your {len(_iv_session_teams)} session teams"))
+    _tile_specs.append(("project", "📁", "Projects", len(_post_projects),
+                        f"**{len(_live_projects)}** live in PRD ({_proj_live_pct})"))
+    _tile_specs.append(("app", "▣", "Applications", _iv_total,
+                        f"**{_iv_live}** live in PRD ({_iv_live_pct})"))
+    _tile_specs.append(("build", "⚙", "Build stacks", len(_post_build),
+                        "Distinct build technologies"))
+    _tile_specs.append(("deploy", "⛭", "Deploy stacks", len(_post_deploy),
+                        "Distinct deployment tooling"))
+    _tile_specs.append(("platform", "☁", "Deploy platforms", len(_post_platform),
+                        "Distinct target platforms"))
+    _tile_specs.append(("_pipelines", "⇋", "Unique pipelines", len(_post_pipelines),
+                        "build × deploy × platform"))
+
+    with st.container(key="cc_iv_tiles_row"):
+        _tile_cols = st.columns(len(_tile_specs), gap="small")
+        for _idx, (_dk, _glyph, _tlabel, _tnum, _tsub_md) in enumerate(_tile_specs):
+            with _tile_cols[_idx]:
+                with st.container(key=f"cc_tile_{_dk}"):
+                    if _dk == "_pipelines":
+                        # Static tile — derived, not directly filterable.
+                        st.markdown(
+                            f'<div class="iv-tile iv-tile-static" '
+                            f'style="--iv-stat-accent:{_TILE_COLORS["pipeline"]}">'
+                            f'<div class="iv-tile-head">'
+                            f'<span class="iv-tile-glyph">{_glyph}</span>'
+                            f'<span class="iv-tile-label">{_tlabel}</span>'
+                            f'</div>'
+                            f'<div class="iv-tile-number">{_tnum}</div>'
+                            f'<div class="iv-tile-sub">{_tsub_md}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        continue
+
+                    _nsel = len(_iv_active_sel.get(_dk, []))
+                    _badge = f"  ·  ✱ {_nsel}" if _nsel else ""
+                    # Multi-paragraph markdown — produces three <p> tags that
+                    # CSS reshapes into the stat-tile layout (label / big
+                    # number / subtitle).
+                    _label_md = (
+                        f"{_glyph}  {_tlabel}{_badge}\n\n"
+                        f"**{_tnum}**\n\n"
+                        f"{_tsub_md}"
+                    )
+                    with st.popover(_label_md, use_container_width=True,
+                                    help=f"Click to filter by {_tlabel.lower()}"):
+                        if _dk == "company":
+                            if _is_admin and (_iv_companies_opts or _sel_company):
+                                _render_tile_ms("company", _iv_companies_opts,
+                                                "Select companies")
+                            else:
+                                st.caption("Company scope is implicit for your session.")
+                        elif _dk == "team":
+                            if _is_admin and (_iv_teams_opts or _sel_team):
+                                _render_tile_ms("team", _iv_teams_opts,
+                                                "Select teams")
+                            elif (not _is_admin) and len(_iv_session_teams) > 1:
+                                _sess_opts = {
+                                    t: _iv_teams_opts.get(t, 0)
+                                    for t in _iv_session_teams
+                                }
+                                _render_tile_ms("team", _sess_opts,
+                                                "Narrow your session teams")
+                            else:
+                                st.caption("Team scope is locked to your session.")
+                        elif _dk == "project":
+                            _render_tile_ms("project", _iv_projects_opts,
+                                            "Select projects")
+                        elif _dk == "app":
+                            _render_tile_ms("app", _iv_apps_opts,
+                                            "Select applications")
+                        elif _dk == "build":
+                            _render_tile_pills("build", _iv_build_opts, "⚙")
+                        elif _dk == "deploy":
+                            _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
+                        elif _dk == "platform":
+                            _render_tile_pills("platform", _iv_platform_opts, "☁")
 
     # ── Fleet pulse strip — four subtle visualizations of scope state ──────
     # Two temporal sparklines (14d build success, PRD deploy cadence) + two
