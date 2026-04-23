@@ -5791,14 +5791,14 @@ def _render_pager(
                          disabled=_page <= 1,
                          help="Previous page"):
                 st.session_state[page_key] = _page - 1
-                st.rerun(scope="fragment")
+                st.rerun()
         with _pc[1]:
             if st.button("⇤  First", key=f"{page_key}_first",
                          use_container_width=True,
                          disabled=_page <= 1,
                          help="Jump to first page"):
                 st.session_state[page_key] = 1
-                st.rerun(scope="fragment")
+                st.rerun()
         with _pc[2]:
             st.markdown(
                 f'<div class="cc-pager-caption">'
@@ -5815,14 +5815,14 @@ def _render_pager(
                          disabled=_page >= _max_page,
                          help="Jump to last page"):
                 st.session_state[page_key] = _max_page
-                st.rerun(scope="fragment")
+                st.rerun()
         with _pc[4]:
             if st.button("Next  ▶", key=f"{page_key}_next",
                          use_container_width=True,
                          disabled=_page >= _max_page,
                          help="Next page"):
                 st.session_state[page_key] = _page + 1
-                st.rerun(scope="fragment")
+                st.rerun()
 
     return _page, _start, _end
 
@@ -7491,7 +7491,6 @@ def _build_event_ribbon(
     )
 
 
-@st.fragment(run_every="300s")
 def _render_inventory_view(controls_slot, body_slot) -> None:
     """Pipelines inventory table — one row per registered pipeline.
 
@@ -7499,6 +7498,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     + stat tiles can live ABOVE the Inventory/Event-log tab group (both
     views inherit the same filters) while the project ribbon, pager,
     and pipeline table render inside the inventory tab itself.
+
+    Not wrapped in @st.fragment — fragments forbid writing widgets into
+    containers declared outside the fragment body, and the controls slot
+    is a top-of-page st.empty() placeholder. Data fetches are
+    @st.cache_data cached, so re-running on every widget change is cheap.
     """
     _ctrl_container = controls_slot.container()
     _body_container = body_slot.container()
