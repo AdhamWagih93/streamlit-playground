@@ -3195,6 +3195,31 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 [class*="st-key-cc_tile_"]:hover .iv-tile .iv-tile-number {
     color: color-mix(in srgb, var(--cc-ink) 88%, var(--iv-stat-accent)) !important;
+    transform: translateX(1px);
+}
+
+/* The stat number is the primary click target — give it a quiet signal:
+   a soft accent halo on hover and a slow ambient glow pulse so the numeral
+   reads as an affordance without screaming for attention. */
+.iv-tile .iv-tile-number {
+    animation:
+        iv-stat-in .6s cubic-bezier(.2,.7,.2,1) both,
+        iv-tile-num-glow 5.6s ease-in-out 1.2s infinite;
+    will-change: text-shadow, transform;
+}
+@keyframes iv-tile-num-glow {
+    0%, 100% { text-shadow: none; }
+    50%      { text-shadow:
+        0 0 12px color-mix(in srgb, var(--iv-stat-accent) 22%, transparent),
+        0 0 2px  color-mix(in srgb, var(--iv-stat-accent) 16%, transparent); }
+}
+[class*="st-key-cc_tile_"]:hover .iv-tile .iv-tile-number,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile .iv-tile-number {
+    transform: translateX(1px);
+    text-shadow:
+        0 0 18px color-mix(in srgb, var(--iv-stat-accent) 50%, transparent),
+        0 0 2px  color-mix(in srgb, var(--iv-stat-accent) 32%, transparent);
+    animation: iv-tile-num-glow 1.4s ease-in-out infinite;
 }
 
 /* Single-value variant: collapse the big numeral into the actual selected
@@ -8064,10 +8089,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
 
-    # ── Filterable stat tiles — each is a visual HTML tile with an
-    # invisible popover-button overlay. Clicking anywhere on the tile opens
-    # that dimension's filter popover. Because every tile renders the same
-    # HTML structure, heights are identical regardless of content length.
+    # ── Filterable stat tiles — each is a visual HTML card topped with an
+    # invisible popover-button overlay. Clicking anywhere on the tile (in
+    # particular, its big stat number) opens that dimension's filter
+    # popover. The unified "Filters · Sort" button above stays available
+    # for holistic review; the tiles are the fast path for drilling into
+    # one dimension at a time.
     _TILE_COLORS = {
         "company":  "var(--cc-accent)",
         "team":     "var(--cc-teal)",
@@ -8080,8 +8107,6 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     }
 
     # Tile specs: (dim_key, glyph, label, number, sub_markdown)
-    # Tiles are now display-only stat cards — all filtering lives in the
-    # unified Filters · Sort popover above.
     _tile_specs: list[tuple[str, str, str, int, str]] = []
     if _is_admin:
         _tile_specs.append(("company", "🏢", "Companies", len(_post_companies),
@@ -8131,7 +8156,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 else:
                     _number_html = f'<div class="iv-tile-number">{_tnum}</div>'
                 _tile_html = (
-                    f'<div class="iv-tile" '
+                    f'<div class="iv-tile iv-tile-click" '
                     f'style="--iv-stat-accent:{_accent}">'
                     f'<div class="iv-tile-head">'
                     f'<span class="iv-tile-glyph">{_glyph}</span>'
@@ -8140,9 +8165,58 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'</div>'
                     f'{_number_html}'
                     f'<div class="iv-tile-sub">{_tsub_md}</div>'
+                    f'<div class="iv-tile-cta">▸ click to filter</div>'
                     f'</div>'
                 )
-                st.markdown(_tile_html, unsafe_allow_html=True)
+                # Wrapped in a scoped container so .st-key-cc_tile_<dim>
+                # CSS can overlay the popover button on top of the tile.
+                with st.container(key=f"cc_tile_{_dk}"):
+                    st.markdown(_tile_html, unsafe_allow_html=True)
+                    # Empty-label popover — becomes a transparent overlay
+                    # over the tile via CSS. Clicking the stat number
+                    # opens the dimension's filter.
+                    with st.popover(" ", use_container_width=True,
+                                    help=f"Filter by {_tlabel.lower()}"):
+                        st.markdown(
+                            f'<div class="iv-tile-pop-head">'
+                            f'<span class="iv-tile-pop-glyph">{_glyph}</span>'
+                            f'<span class="iv-tile-pop-title">{_tlabel}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        if _dk == "company":
+                            if _is_admin and (_iv_companies_opts or _sel_company):
+                                _render_tile_ms("company", _iv_companies_opts,
+                                                "Select companies")
+                            else:
+                                st.caption("Company scope is implicit for your session.")
+                        elif _dk == "team":
+                            if _is_admin and (_iv_teams_opts or _sel_team):
+                                _render_tile_ms("team", _iv_teams_opts,
+                                                "Select teams")
+                            elif (not _is_admin) and len(_iv_session_teams) > 1:
+                                _sess_opts = {
+                                    t: _iv_teams_opts.get(t, 0)
+                                    for t in _iv_session_teams
+                                }
+                                _render_tile_ms("team", _sess_opts,
+                                                "Narrow your session teams")
+                            else:
+                                st.caption("Team scope is locked to your session.")
+                        elif _dk == "project":
+                            _render_tile_ms("project", _iv_projects_opts,
+                                            "Select projects")
+                        elif _dk == "app":
+                            _render_tile_ms("app", _iv_apps_opts,
+                                            "Select applications")
+                        elif _dk == "build":
+                            _render_tile_pills("build", _iv_build_opts, "⚙")
+                        elif _dk == "deploy":
+                            _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
+                        elif _dk == "platform":
+                            _render_tile_pills("platform", _iv_platform_opts, "☁")
+                        elif _dk == "combo":
+                            _render_tile_combos(_iv_combo_opts)
 
     # ── Fleet pulse strip — four subtle visualizations of scope state ──────
     # Two temporal sparklines (14d build success, PRD deploy cadence) + two
