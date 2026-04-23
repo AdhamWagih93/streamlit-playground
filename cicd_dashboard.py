@@ -7847,18 +7847,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _post_projects else "—"
     )
 
-    # ── Sticky secondary bar: unified Filters & Sort popover + active chips
-    # + Clear button. All dimensional selection (company / team / project /
-    # application / build / deploy / platform / pipeline combo) lives inside
-    # the single popover below so the bar stays legible and the stat tiles
-    # can stay purely informational.
+    # ── Sticky secondary bar: Sort popover + Per-project toggle + active
+    # chips + Clear button. Dimensional filters live inside the stat tiles
+    # below — clicking any tile opens its own filter popover. This bar
+    # keeps a summary of applied filters sticky as the user scrolls.
     #
     # Everything from here through the Fleet-pulse strip is emitted into the
     # caller-provided controls_slot so it renders ABOVE the Inventory/Event-log
     # tab group — both views share the same filter state.
     _ctrl_container.__enter__()
     with st.container(key="cc_filter_secondary"):
-        _iv_fb = st.columns([2.4, 1.3, 3.5, 0.8], vertical_alignment="center")
+        _iv_fb = st.columns([1.8, 1.3, 3.7, 0.8], vertical_alignment="center")
 
     # Forward-declare the dimension renderers; their full bodies live below.
     # They need to be callable from inside the merged popover, which sits
@@ -7927,91 +7926,22 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             placeholder="Select build × deploy × platform combinations",
         )
 
-    def _section_heading(label: str, glyph: str = "") -> None:
-        _g = f'<span class="iv-fpop-glyph">{glyph}</span>' if glyph else ""
-        st.markdown(
-            f'<div class="iv-fpop-section">{_g}'
-            f'<span class="iv-fpop-label">{label}</span></div>',
-            unsafe_allow_html=True,
-        )
-
     with _iv_fb[0]:
-        _filter_btn_label = (
-            f"⚙  Filters · Sort  ·  {_iv_active_total} active"
-            if _iv_active_total
-            else "⚙  Filters · Sort"
-        )
         with st.popover(
-            _filter_btn_label,
+            f"↕ Sort · {_iv_sort_badge}",
             use_container_width=True,
-            help="All filters and the sort order in one place",
+            help="Change how pipelines are ordered",
         ):
             st.markdown(
-                '<div class="iv-fpop-head">'
-                '<span class="iv-fpop-kicker">Filters</span>'
-                '<span class="iv-fpop-title">Scope this dashboard</span>'
-                '<span class="iv-fpop-hint">Every selection here feeds both '
-                'the inventory and the event-log tabs.</span>'
-                '</div>',
+                '<div class="iv-pill-caption">Sort order</div>',
                 unsafe_allow_html=True,
             )
-
-            _section_heading("Sort order", "↕")
             st.selectbox(
                 "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
                 label_visibility="collapsed",
                 help="Activity uses latest stage date · vulnerabilities are "
                      "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
             )
-
-            st.markdown('<div class="iv-fpop-divider"></div>',
-                        unsafe_allow_html=True)
-            _section_heading("Scope", "◇")
-            _c_scope = st.columns(2)
-            with _c_scope[0]:
-                st.caption("Company")
-                if _is_admin and (_iv_companies_opts or _sel_company):
-                    _render_tile_ms("company", _iv_companies_opts,
-                                    "Select companies")
-                else:
-                    st.caption("Implicit for your session.")
-            with _c_scope[1]:
-                st.caption("Team")
-                if _is_admin and (_iv_teams_opts or _sel_team):
-                    _render_tile_ms("team", _iv_teams_opts, "Select teams")
-                elif (not _is_admin) and len(_iv_session_teams) > 1:
-                    _sess_opts = {
-                        t: _iv_teams_opts.get(t, 0)
-                        for t in _iv_session_teams
-                    }
-                    _render_tile_ms("team", _sess_opts,
-                                    "Narrow your session teams")
-                else:
-                    st.caption("Locked to your session.")
-
-            st.markdown('<div class="iv-fpop-divider"></div>',
-                        unsafe_allow_html=True)
-            _section_heading("Projects & applications", "▣")
-            _c_pa = st.columns(2)
-            with _c_pa[0]:
-                st.caption("Projects")
-                _render_tile_ms("project", _iv_projects_opts,
-                                "Select projects")
-            with _c_pa[1]:
-                st.caption("Applications")
-                _render_tile_ms("app", _iv_apps_opts, "Select applications")
-
-            st.markdown('<div class="iv-fpop-divider"></div>',
-                        unsafe_allow_html=True)
-            _section_heading("Pipeline shape", "⇋")
-            st.caption("Build stacks")
-            _render_tile_pills("build", _iv_build_opts, "⚙")
-            st.caption("Deploy stacks")
-            _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
-            st.caption("Deploy platforms")
-            _render_tile_pills("platform", _iv_platform_opts, "☁")
-            st.caption("Unique pipeline combinations")
-            _render_tile_combos(_iv_combo_opts)
 
     with _iv_fb[1]:
         st.toggle(
