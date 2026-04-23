@@ -7492,8 +7492,16 @@ def _build_event_ribbon(
 
 
 @st.fragment(run_every="300s")
-def _render_inventory_view() -> None:
-    """Pipelines inventory table — one row per registered pipeline."""
+def _render_inventory_view(controls_slot, body_slot) -> None:
+    """Pipelines inventory table — one row per registered pipeline.
+
+    Output is split across two caller-supplied slots so the filter bar
+    + stat tiles can live ABOVE the Inventory/Event-log tab group (both
+    views inherit the same filters) while the project ribbon, pager,
+    and pipeline table render inside the inventory tab itself.
+    """
+    _ctrl_container = controls_slot.container()
+    _body_container = body_slot.container()
 
     # ── Controls ────────────────────────────────────────────────────────────
     # Sort choices: each key maps to (label, ordering_fn, descending_bool, badge_label).
@@ -7811,6 +7819,11 @@ def _render_inventory_view() -> None:
     # Dimensional filters now live inside the stat tiles (click any tile to
     # filter by that dimension). This bar keeps Sort + filter summary sticky
     # as the user scrolls.
+    #
+    # Everything from here through the Fleet-pulse strip is emitted into the
+    # caller-provided controls_slot so it renders ABOVE the Inventory/Event-log
+    # tab group — both views share the same filter state.
+    _ctrl_container.__enter__()
     with st.container(key="cc_filter_secondary"):
         _iv_fb = st.columns([1.8, 1.3, 3.7, 0.8], vertical_alignment="center")
 
@@ -8270,6 +8283,11 @@ def _render_inventory_view() -> None:
         )
         st.markdown(_pulse_html, unsafe_allow_html=True)
 
+    # End of controls_slot: filter bar, clickable stat tiles, and fleet pulse
+    # are now emitted. Everything below this point lives inside the inventory
+    # tab (body_slot), so the event-log tab renders independently alongside.
+    _ctrl_container.__exit__(None, None, None)
+
     # ── Sort ────────────────────────────────────────────────────────────────
     # Pre-compute sort-aux maps so sorted() doesn't re-parse dates or walk
     # nested dicts on every key comparison. Each key tuple starts with a
@@ -8352,12 +8370,14 @@ def _render_inventory_view() -> None:
         _inv_rows.reverse()
 
     if not _inv_rows:
-        inline_note("No applications match the current filters.", "info")
+        with _body_container:
+            inline_note("No applications match the current filters.", "info")
         # Publish an empty scope so the sibling Event log tab shows
         # "no events" in the same scope — consistent with the filter-
         # inheritance contract.
         if _show_el:
             st.session_state["_el_inv_scope_apps"] = []
+            st.session_state["_iv_total_v1"] = 0
         return
 
     # ── Pagination ─────────────────────────────────────────────────────────
@@ -8367,6 +8387,8 @@ def _render_inventory_view() -> None:
     # render-time cost is concentrated.
     _inv_rows_filtered = _inv_rows
     _inv_total = len(_inv_rows_filtered)
+    # Everything below this point renders inside the inventory tab (body_slot).
+    _body_container.__enter__()
     _iv_page, _iv_start, _iv_end = _render_pager(
         total=_inv_total,
         page_size=_IV_PAGE_SIZE,
@@ -8860,8 +8882,12 @@ def _render_inventory_view() -> None:
                 return "".join(tiles)
             _v_tiles = _mini_tiles("V", _scan)
             _c_tiles = _mini_tiles("C", _scan)
+            _scan_when = fmt_dt(_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+            _scan_stat = _scan.get("status", "") or ""
             _prisma_html = (
                 f'    <div class="ap-section">Prismacloud scan · {_prd_ver}</div>'
+                f'    <span class="ap-k">Scan status</span>{_iv_v(_scan_stat)}'
+                f'    <span class="ap-k">Scanned ({DISPLAY_TZ_LABEL})</span>{_iv_v(_scan_when)}'
                 f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
                 f'    <div class="ap-sev">{_v_tiles}</div>'
                 f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
@@ -9201,6 +9227,8 @@ def _render_inventory_view() -> None:
         + _iv_popovers_html,
         unsafe_allow_html=True,
     )
+    # End of body_slot; the tab panel closes here.
+    _body_container.__exit__(None, None, None)
 
     # ── Publish scope for the event-log tab ─────────────────────────────────
     # The event log lives in a sibling tab (rendered by the late-render block
@@ -9214,6 +9242,8 @@ def _render_inventory_view() -> None:
             if r.get("application")
         })
         st.session_state["_el_inv_scope_apps"] = _el_scope_apps
+    # Publish pipeline count so the tab header can show a live badge.
+    st.session_state["_iv_total_v1"] = _inv_total
 
 
 # ── Late render into the top-of-page slot ─────────────────────────────────
@@ -9225,10 +9255,25 @@ def _render_inventory_view() -> None:
 # of which tab is visible.
 if _show_inv and _inventory_slot is not None:
     with _inventory_slot.container():
+        # Slot A: filter bar + stat tiles + fleet pulse. Rendered ABOVE
+        # the tab group because both tabs inherit the same filter state.
+        _iv_controls_slot = st.empty()
+
+        # Live tab badges reflect the last fragment run. On the first run of
+        # a session the counters may be zero; they stabilize on the next
+        # refresh once the fragment has published them to session_state.
+        _iv_badge_n = int(st.session_state.get("_iv_total_v1", 0) or 0)
+        _el_badge_n = len(st.session_state.get("_el_inv_scope_apps") or [])
+        _iv_badge_txt = (
+            f"  ·  {_iv_badge_n:,}" if _iv_badge_n else ""
+        )
+        _el_badge_txt = (
+            f"  ·  {_el_badge_n:,} apps" if _el_badge_n else ""
+        )
         with st.container(key="cc_surface_tabs"):
             _tab_inv, _tab_log = st.tabs([
-                "❖  PIPELINES INVENTORY",
-                "⧗  EVENT LOG",
+                f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
+                f"⧗  EVENT LOG{_el_badge_txt}",
             ])
             with _tab_inv:
                 st.markdown(
@@ -9238,7 +9283,8 @@ if _show_inv and _inventory_slot is not None:
                     '</div>',
                     unsafe_allow_html=True,
                 )
-                _render_inventory_view()
+                # Slot B: ribbon + pager + the pipeline table itself.
+                _iv_body_slot = st.empty()
             with _tab_log:
                 st.markdown(
                     '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
@@ -9248,7 +9294,18 @@ if _show_inv and _inventory_slot is not None:
                     '</div>',
                     unsafe_allow_html=True,
                 )
-                _render_event_log()
+                # Slot C: event log body — drawn retroactively AFTER the
+                # inventory fragment publishes `_el_inv_scope_apps`, so the
+                # event log always reflects the current filter state.
+                _el_slot = st.empty()
+
+        # Run the inventory fragment first — it emits into slots A + B and
+        # publishes the scope keys the event log needs.
+        _render_inventory_view(_iv_controls_slot, _iv_body_slot)
+
+        # Now the event log reads a fresh scope and fills slot C.
+        with _el_slot.container():
+            _render_event_log()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
