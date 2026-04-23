@@ -27,6 +27,7 @@ Performance notes
 
 from __future__ import annotations
 
+import html
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -3196,6 +3197,270 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: color-mix(in srgb, var(--cc-ink) 88%, var(--iv-stat-accent)) !important;
 }
 
+/* Single-value variant: collapse the big numeral into the actual selected
+   string. Drops the display font down in weight, lets long values truncate
+   with ellipsis, and tints with the tile accent so it reads as an active
+   identity rather than a stat. */
+.iv-tile .iv-tile-number.iv-tile-number--value {
+    font-family: var(--cc-body) !important;
+    font-size: 1.10rem !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.005em !important;
+    line-height: 1.25 !important;
+    color: var(--iv-stat-accent, var(--cc-accent)) !important;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 6px 0 8px 0;
+}
+.iv-tile .iv-tile-number.iv-tile-number--value::after {
+    width: 32px;
+    opacity: .85;
+}
+[class*="st-key-cc_tile_"]:hover .iv-tile .iv-tile-number.iv-tile-number--value {
+    color: var(--iv-stat-accent, var(--cc-accent)) !important;
+    filter: brightness(1.12);
+}
+
+/* ======================================================================
+   PAGER — compact Prev / page N of M / Next bar used by both the inventory
+   table and the event log when their row count exceeds the page size.
+   ====================================================================== */
+.st-key-cc_iv_pager_top,
+.st-key-cc_el_pager_top {
+    margin: 10px 0 10px 0;
+    padding: 6px 10px;
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--cc-surface) 92%, transparent) 0%,
+        color-mix(in srgb, var(--cc-surface2) 80%, transparent) 100%);
+    box-shadow:
+        inset 0 1px 0 color-mix(in srgb, #ffffff 6%, transparent),
+        0 6px 18px -14px color-mix(in srgb, #000 70%, transparent);
+    backdrop-filter: blur(6px) saturate(1.1);
+    -webkit-backdrop-filter: blur(6px) saturate(1.1);
+}
+.st-key-cc_iv_pager_top [data-testid="stButton"] button,
+.st-key-cc_el_pager_top [data-testid="stButton"] button {
+    min-height: 34px !important;
+    padding: 4px 10px !important;
+    font-family: var(--cc-body) !important;
+    font-size: 0.76rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.04em !important;
+    color: var(--cc-text) !important;
+    background: color-mix(in srgb, var(--cc-ink) 3%, transparent) !important;
+    border: 1px solid var(--cc-border) !important;
+    border-radius: 8px !important;
+    box-shadow:
+        inset 0 1px 0 color-mix(in srgb, #ffffff 6%, transparent) !important;
+    transition:
+        background .18s ease,
+        border-color .18s ease,
+        color .18s ease,
+        transform .12s ease !important;
+}
+.st-key-cc_iv_pager_top [data-testid="stButton"] button:hover:not([disabled]),
+.st-key-cc_el_pager_top [data-testid="stButton"] button:hover:not([disabled]) {
+    background: color-mix(in srgb, var(--cc-accent) 12%, transparent) !important;
+    border-color: color-mix(in srgb, var(--cc-accent) 45%, var(--cc-border)) !important;
+    color: var(--cc-ink) !important;
+    transform: translateY(-1px);
+}
+.st-key-cc_iv_pager_top [data-testid="stButton"] button:active:not([disabled]),
+.st-key-cc_el_pager_top [data-testid="stButton"] button:active:not([disabled]) {
+    transform: translateY(0);
+}
+.st-key-cc_iv_pager_top [data-testid="stButton"] button[disabled],
+.st-key-cc_el_pager_top [data-testid="stButton"] button[disabled] {
+    opacity: .38 !important;
+    cursor: not-allowed !important;
+}
+.cc-pager-caption {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-family: var(--cc-body);
+    font-size: 0.78rem;
+    color: var(--cc-text-mute);
+    line-height: 1.2;
+    padding: 2px 6px;
+}
+.cc-pager-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-family: var(--cc-display);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--cc-ink);
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--cc-accent) 12%, transparent),
+        color-mix(in srgb, var(--cc-teal) 10%, transparent));
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 35%, var(--cc-border));
+    border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+}
+.cc-pager-pill b {
+    font-weight: 700;
+    color: var(--cc-accent);
+    margin-right: 1px;
+}
+.cc-pager-sep {
+    opacity: .45;
+    font-weight: 700;
+}
+.cc-pager-range {
+    font-family: var(--cc-body);
+    font-variant-numeric: tabular-nums;
+    color: var(--cc-text);
+    letter-spacing: 0.01em;
+}
+.cc-pager-range b {
+    color: var(--cc-ink);
+    font-weight: 700;
+}
+
+/* ======================================================================
+   SURFACE TABS — Inventory / Event log
+   Scoped to .st-key-cc_surface_tabs so default Streamlit tabs elsewhere
+   render unchanged. The design intent here is an editorial "chapter
+   select" — an etched tablist with a molten underline that slides
+   between tabs, wide uppercase labels set in the display face, and a
+   subtle living gradient that activates on the selected chapter.
+   ====================================================================== */
+.st-key-cc_surface_tabs {
+    margin-top: 6px;
+}
+.st-key-cc_surface_tabs [data-testid="stTabs"] {
+    position: relative;
+    isolation: isolate;
+}
+/* Tablist container — glass bar with etched edges */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] {
+    position: relative;
+    display: flex;
+    gap: 0;
+    padding: 6px;
+    margin: 2px 0 18px 0;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--cc-surface) 92%, transparent) 0%,
+        color-mix(in srgb, var(--cc-surface2) 80%, transparent) 100%);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    box-shadow:
+        inset 0 1px 0 color-mix(in srgb, #ffffff 7%, transparent),
+        0 10px 30px -18px color-mix(in srgb, #000 80%, transparent),
+        0 1px 0 color-mix(in srgb, #000 18%, transparent);
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    overflow: hidden;
+}
+/* Soft living aura behind the tablist */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"]::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    pointer-events: none;
+    background:
+        radial-gradient(70% 160% at 0% 50%,
+            color-mix(in srgb, var(--cc-accent) 10%, transparent) 0%,
+            transparent 60%),
+        radial-gradient(70% 160% at 100% 50%,
+            color-mix(in srgb, var(--cc-teal) 10%, transparent) 0%,
+            transparent 60%);
+    z-index: 0;
+    opacity: .7;
+}
+/* Individual tab buttons — equal width, centered, uppercase display */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab"] {
+    position: relative;
+    flex: 1 1 0;
+    min-height: 52px;
+    padding: 10px 22px !important;
+    margin: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 10px !important;
+    color: var(--cc-text-mute) !important;
+    font-family: var(--cc-display) !important;
+    font-size: 0.80rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.22em !important;
+    text-transform: uppercase;
+    cursor: pointer;
+    z-index: 1;
+    transition:
+        color .3s cubic-bezier(.2,.8,.2,1),
+        background .3s cubic-bezier(.2,.8,.2,1),
+        transform .3s cubic-bezier(.2,.8,.2,1);
+}
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab"]:hover {
+    color: var(--cc-text) !important;
+    background: color-mix(in srgb, var(--cc-ink) 4%, transparent) !important;
+}
+/* Selected tab — warm inked surface with serif emphasis */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {
+    color: var(--cc-ink) !important;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--cc-ink) 3%, var(--cc-paper, var(--cc-surface))) 0%,
+        color-mix(in srgb, var(--cc-accent) 6%, var(--cc-paper, var(--cc-surface))) 100%) !important;
+    box-shadow:
+        inset 0 1px 0 color-mix(in srgb, #ffffff 55%, transparent),
+        0 1px 0 color-mix(in srgb, #000 20%, transparent),
+        0 6px 18px -10px color-mix(in srgb, var(--cc-accent) 60%, transparent);
+}
+/* Molten underline — anchored beneath the active label */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    left: 22%;
+    right: 22%;
+    bottom: 6px;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg,
+        transparent,
+        var(--cc-accent),
+        var(--cc-teal),
+        transparent);
+    opacity: .85;
+    animation: cc-surface-underline .5s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes cc-surface-underline {
+    0%   { transform: scaleX(0); opacity: 0; }
+    60%  { transform: scaleX(1.05); opacity: 1; }
+    100% { transform: scaleX(1); opacity: .85; }
+}
+/* Hide the default baseweb indicator bar — replaced by our own */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab-highlight"],
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab-border"] {
+    display: none !important;
+}
+/* Tab panels — give them a subtle frame that feels continuous with the list */
+.st-key-cc_surface_tabs [data-baseweb="tab-panel"] {
+    padding: 4px 0 0 0 !important;
+    animation: cc-surface-panel-in .45s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes cc-surface-panel-in {
+    0%   { opacity: 0; transform: translateY(4px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+/* Prevent focus ring from re-adding baseweb's blue outline */
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab"]:focus {
+    outline: none !important;
+    box-shadow: none !important;
+}
+.st-key-cc_surface_tabs [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"]:focus {
+    outline: none !important;
+}
+
 /* Subtitle */
 .iv-tile .iv-tile-sub {
     font-family: var(--cc-body);
@@ -4241,12 +4506,16 @@ def range_filter(field: str, start: datetime, end: datetime) -> dict:
 ROLES = ["Admin", "Developer", "QC", "Operator"]
 ROLE_ICONS = {"Admin": "🛡", "Developer": "⌨", "QC": "🔬", "Operator": "🚀"}
 ROLE_COLORS = {"Admin": "#4f46e5", "Developer": "#2563eb", "QC": "#7c3aed", "Operator": "#059669"}
-# Map role → inventory team field(s) used to filter projects
+# Map role → inventory team field(s) used to filter projects. Each role is
+# scoped *strictly* to its own ownership field on the inventory document —
+# Developer sees only projects where dev_team ∈ their teams; QC only where
+# qc_team matches; Operator only where ops_team matches. Admin bypasses
+# this entirely.
 ROLE_TEAM_FIELDS: dict[str, list[str]] = {
-    "Admin":     [],                                          # sees everything
+    "Admin":     [],
     "Developer": ["dev_team.keyword"],
     "QC":        ["qc_team.keyword"],
-    "Operator":  ["uat_team.keyword", "prd_team.keyword"],    # usually both
+    "Operator":  ["ops_team.keyword"],
 }
 
 
@@ -4288,7 +4557,8 @@ def _load_team_applications(role: str, team: str) -> list[str]:
     fields = ROLE_TEAM_FIELDS.get(role, [])
     if not fields or not team:
         return []
-    # OR across the role's team fields (Operator has uat_team + prd_team)
+    # One field per role today; keep the OR structure in case a role is ever
+    # scoped against multiple ownership fields again.
     should_clauses = [{"term": {f: team}} for f in fields]
     query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
     try:
@@ -4885,7 +5155,7 @@ def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
 def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str]:
     """Return inventory projects where the role's team field(s) match any of ``teams``.
 
-    Developer → ``dev_team``; QC → ``qc_team``; Operator → ``uat_team``/``prd_team``.
+    Developer → ``dev_team``; QC → ``qc_team``; Operator → ``ops_team``.
     Admin (or an empty team list) returns an empty list to signal "no scoping".
     """
     fields = ROLE_TEAM_FIELDS.get(role, [])
@@ -5029,7 +5299,12 @@ else:
 
 # Resolve project scope before the rail so the project dropdown respects
 # admin_view_all + team assignment without re-querying per widget.
-admin_view_all = bool(st.session_state.get("admin_view_all", False))
+# Admin sees every project by default on first load — they can opt out via
+# the toggle in the settings popover. Non-admins never see the toggle and
+# stay in team-scoped mode.
+if role_pick == "Admin" and "admin_view_all" not in st.session_state:
+    st.session_state["admin_view_all"] = True
+admin_view_all = bool(st.session_state.get("admin_view_all", False)) if role_pick == "Admin" else False
 if role_pick == "Admin":
     if admin_view_all:
         _proj_scoped = _all_projects
@@ -5151,6 +5426,24 @@ with st.container(key="cc_filter_rail"):
                     unsafe_allow_html=True,
                 )
 
+                # Team-scope mapping — explains which inventory ownership
+                # field gates the visible project set for each role.
+                st.markdown(
+                    '<div class="cc-role-why-sub">Project scope (team field)</div>'
+                    '<ul class="cc-role-why-rules">'
+                    '<li><b>Developer</b> → <code>dev_team</code> ∈ your teams</li>'
+                    '<li><b>QC</b> → <code>qc_team</code> ∈ your teams</li>'
+                    '<li><b>Operator</b> → <code>ops_team</code> ∈ your teams</li>'
+                    '<li><b>Admin</b> → bypasses team scoping (view-all)</li>'
+                    '</ul>'
+                    '<div class="cc-role-why-note">'
+                    'Non-admin roles only see inventory projects where the '
+                    "role's ownership field on the inventory document "
+                    'matches a team you belong to. No cross-ownership leakage.'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
                 # Trace — shows every token seen and how it was resolved. Most
                 # useful when a role you expected isn't being picked up.
                 if _role_trace:
@@ -5218,23 +5511,23 @@ with st.container(key="cc_filter_rail"):
                 '<div style="border-top:1px solid var(--cc-border);margin:10px 0 6px"></div>',
                 unsafe_allow_html=True,
             )
-            st.toggle(
-                "Per-project tables", value=False, key="shared_per_project_v1",
-                help="Group rows into a separate table per project",
+            auto_refresh = st.toggle(
+                "Auto-refresh (60s)", value=False, key="auto_refresh",
+                help="Rerun the page every 60 seconds",
             )
             if role_pick == "Admin":
                 st.toggle(
                     "Admin: view all projects", value=admin_view_all, key="admin_view_all",
                     help="Bypass the default dev_team scoping and see every project",
                 )
-            auto_refresh = st.toggle(
-                "Auto-refresh (60s)", value=False, key="auto_refresh",
-                help="Rerun the page every 60 seconds",
-            )
-            exclude_svc = st.toggle(
-                "Exclude service accounts", value=True, key="exclude_svc",
-                help="Hide 'azure_sql' service account commits",
-            )
+                exclude_svc = st.toggle(
+                    "Exclude service accounts", value=True, key="exclude_svc",
+                    help="Hide 'azure_sql' service account commits",
+                )
+            else:
+                # Non-admins inherit the default (hide service-account noise)
+                # without the toggle surfacing in their settings popover.
+                exclude_svc = True
             st.markdown(
                 '<div style="border-top:1px solid var(--cc-border);margin:6px 0 4px"></div>',
                 unsafe_allow_html=True,
@@ -5458,6 +5751,80 @@ _EL_TIME_WINDOWS: dict[str, timedelta | None] = {
 # cover the entire dataset but a real date so ES range queries stay well-formed.
 _EL_ALLTIME_FLOOR = datetime(2000, 1, 1, tzinfo=timezone.utc)
 _EL_SIZE_CAP = 500  # safety bound so a wide window doesn't drag the cluster
+# Page sizes for the two big row tables. Paginating keeps rendered DOM small
+# even when the filtered set is large — inventory popovers and event rows
+# dominate paint cost, so capping visible rows is the single biggest lever.
+_EL_PAGE_SIZE = 75
+_IV_PAGE_SIZE = 50
+
+
+def _render_pager(
+    *, total: int, page_size: int, page_key: str,
+    unit_label: str, container_key: str,
+) -> tuple[int, int, int]:
+    """Render a Prev / N of M / Next pager and return (page, start, end).
+
+    Only renders when ``total > page_size``. When not needed, returns a
+    no-op window ``(1, 0, total)`` so callers can always slice with the
+    returned range. Session state is the single source of truth for the
+    current page — buttons mutate it then rely on the fragment-auto-rerun
+    that follows a widget interaction."""
+    if total <= page_size:
+        return 1, 0, total
+    _max_page = max(1, (total + page_size - 1) // page_size)
+    try:
+        _page = int(st.session_state.get(page_key, 1) or 1)
+    except (TypeError, ValueError):
+        _page = 1
+    _page = max(1, min(_page, _max_page))
+    # Persist the clamped value so a narrowed filter doesn't leave the user
+    # on an out-of-range page.
+    st.session_state[page_key] = _page
+    _start = (_page - 1) * page_size
+    _end = min(_start + page_size, total)
+
+    with st.container(key=container_key):
+        _pc = st.columns([1.0, 1.0, 4.6, 1.0, 1.0], vertical_alignment="center")
+        with _pc[0]:
+            if st.button("◀  Prev", key=f"{page_key}_prev",
+                         use_container_width=True,
+                         disabled=_page <= 1,
+                         help="Previous page"):
+                st.session_state[page_key] = _page - 1
+                st.rerun(scope="fragment")
+        with _pc[1]:
+            if st.button("⇤  First", key=f"{page_key}_first",
+                         use_container_width=True,
+                         disabled=_page <= 1,
+                         help="Jump to first page"):
+                st.session_state[page_key] = 1
+                st.rerun(scope="fragment")
+        with _pc[2]:
+            st.markdown(
+                f'<div class="cc-pager-caption">'
+                f'<span class="cc-pager-pill">Page <b>{_page}</b> / {_max_page}</span>'
+                f'<span class="cc-pager-sep">·</span>'
+                f'<span class="cc-pager-range">{_start + 1:,}–{_end:,} '
+                f'of <b>{total:,}</b> {unit_label}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with _pc[3]:
+            if st.button("Last  ⇥", key=f"{page_key}_last",
+                         use_container_width=True,
+                         disabled=_page >= _max_page,
+                         help="Jump to last page"):
+                st.session_state[page_key] = _max_page
+                st.rerun(scope="fragment")
+        with _pc[4]:
+            if st.button("Next  ▶", key=f"{page_key}_next",
+                         use_container_width=True,
+                         disabled=_page >= _max_page,
+                         help="Next page"):
+                st.session_state[page_key] = _page + 1
+                st.rerun(scope="fragment")
+
+    return _page, _start, _end
 
 
 _STATUS_CHIP = {
@@ -5987,6 +6354,20 @@ def _render_event_log() -> None:
         else:
             inline_note("No events match the current filters.", "info")
         return
+
+    # ── Pagination: keep the DOM small even when hundreds of events match ──
+    # Popovers + row HTML are built only for the visible slice, so paint cost
+    # scales with page size, not the full filtered set.
+    _events_filtered_total = len(events)
+    _el_page, _el_start, _el_end = _render_pager(
+        total=_events_filtered_total,
+        page_size=_EL_PAGE_SIZE,
+        page_key="_el_page_v1",
+        unit_label="events",
+        container_key="cc_el_pager_top",
+    )
+    if _events_filtered_total > _EL_PAGE_SIZE:
+        events = events[_el_start:_el_end]
 
     # Types whose "Who" column carries a real application name (vs commits'
     # repository or requests' project). Keep this list in one place so the
@@ -6603,11 +6984,20 @@ def _render_event_log() -> None:
 
     # Thin caption under the pill bar — reminds users about the interactive
     # popovers now that the type-count summary lives in the stats card.
-    _visible_badge = (
-        f"showing {len(events)} of {_total_events_unfiltered}"
-        if _active_types else
-        f"showing all {len(events)}"
-    )
+    _paging = _events_filtered_total > _EL_PAGE_SIZE
+    if _paging:
+        _visible_badge = (
+            f"rows {_el_start + 1:,}–{_el_end:,} of {_events_filtered_total:,} "
+            f"(of {_total_events_unfiltered:,} total)"
+            if _active_types else
+            f"rows {_el_start + 1:,}–{_el_end:,} of {_events_filtered_total:,}"
+        )
+    else:
+        _visible_badge = (
+            f"showing {_events_filtered_total:,} of {_total_events_unfiltered:,}"
+            if _active_types else
+            f"showing all {_events_filtered_total:,}"
+        )
     st.markdown(
         f'<p class="el-tf-caption">'
         f'  <span class="el-tf-caption-count">{_visible_badge}</span>'
@@ -7422,7 +7812,7 @@ def _render_inventory_view() -> None:
     # filter by that dimension). This bar keeps Sort + filter summary sticky
     # as the user scrolls.
     with st.container(key="cc_filter_secondary"):
-        _iv_fb = st.columns([1.8, 5.0, 0.8], vertical_alignment="center")
+        _iv_fb = st.columns([1.8, 1.3, 3.7, 0.8], vertical_alignment="center")
 
     with _iv_fb[0]:
         with st.popover(
@@ -7442,6 +7832,12 @@ def _render_inventory_view() -> None:
             )
 
     with _iv_fb[1]:
+        st.toggle(
+            "Per-project view", value=False, key="shared_per_project_v1",
+            help="Group rows into a separate table per project",
+        )
+
+    with _iv_fb[2]:
         _chip_specs: list[tuple[str, str]] = []
         if not _is_admin and _iv_session_company:
             _chip_specs.append((f"🏢 {_iv_session_company} (scoped)", "session"))
@@ -7487,7 +7883,7 @@ def _render_inventory_view() -> None:
                 unsafe_allow_html=True,
             )
 
-    with _iv_fb[2]:
+    with _iv_fb[3]:
         if _iv_active_total:
             if st.button("Clear", key="iv_filters_clear_v1",
                          use_container_width=True,
@@ -7615,14 +8011,30 @@ def _render_inventory_view() -> None:
 
     with st.container(key="cc_iv_tiles_row"):
         _tile_cols = st.columns(len(_tile_specs), gap="small")
+        # Tiles that collapse to the single selected value when exactly one
+        # entry is picked. Count-style dims (team/combo) stay numeric.
+        _SINGLE_VAL_DIMS = {"company", "project", "app",
+                            "build", "deploy", "platform"}
         for _idx, (_dk, _glyph, _tlabel, _tnum, _tsub_md) in enumerate(_tile_specs):
             with _tile_cols[_idx]:
-                _nsel = len(_iv_active_sel.get(_dk, []))
+                _selected = _iv_active_sel.get(_dk, [])
+                _nsel = len(_selected)
                 _accent = _TILE_COLORS[_dk]
                 _badge_html = (
                     f'<span class="iv-tile-badge">✱ {_nsel}</span>'
                     if _nsel else ''
                 )
+                if _nsel == 1 and _dk in _SINGLE_VAL_DIMS:
+                    _solo = _selected[0]
+                    if _dk in {"build", "deploy", "platform"}:
+                        _solo = _pill_to_val(_solo)
+                    _solo_esc = html.escape(str(_solo))
+                    _number_html = (
+                        f'<div class="iv-tile-number iv-tile-number--value" '
+                        f'title="{_solo_esc}">{_solo_esc}</div>'
+                    )
+                else:
+                    _number_html = f'<div class="iv-tile-number">{_tnum}</div>'
                 _tile_html = (
                     f'<div class="iv-tile iv-tile-click" '
                     f'style="--iv-stat-accent:{_accent}">'
@@ -7631,7 +8043,7 @@ def _render_inventory_view() -> None:
                     f'<span class="iv-tile-label">{_tlabel}</span>'
                     f'{_badge_html}'
                     f'</div>'
-                    f'<div class="iv-tile-number">{_tnum}</div>'
+                    f'{_number_html}'
                     f'<div class="iv-tile-sub">{_tsub_md}</div>'
                     f'<div class="iv-tile-cta">Click to filter ▸</div>'
                     f'</div>'
@@ -7941,20 +8353,29 @@ def _render_inventory_view() -> None:
 
     if not _inv_rows:
         inline_note("No applications match the current filters.", "info")
-        # Even on empty inventory, still render the event log below so users
-        # see "no events" in the same scope — consistent with the filter-
+        # Publish an empty scope so the sibling Event log tab shows
+        # "no events" in the same scope — consistent with the filter-
         # inheritance contract.
         if _show_el:
             st.session_state["_el_inv_scope_apps"] = []
-            st.markdown(
-                '<div class="cc-panel-head cc-panel-head--numbered cc-panel-head--live" style="margin-top:22px">'
-                '<h2 data-section-num="02">Event log</h2>'
-                '<span class="cc-panel-tag">Live · 60s · no apps in scope</span>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            _render_event_log()
         return
+
+    # ── Pagination ─────────────────────────────────────────────────────────
+    # Keep the un-sliced filtered set for anything that summarizes the whole
+    # result (project ribbon, event-log scope publication, app_type map).
+    # Only the table row HTML consumes the page slice, which is where the
+    # render-time cost is concentrated.
+    _inv_rows_filtered = _inv_rows
+    _inv_total = len(_inv_rows_filtered)
+    _iv_page, _iv_start, _iv_end = _render_pager(
+        total=_inv_total,
+        page_size=_IV_PAGE_SIZE,
+        page_key="_iv_page_v1",
+        unit_label="pipelines",
+        container_key="cc_iv_pager_top",
+    )
+    if _inv_total > _IV_PAGE_SIZE:
+        _inv_rows = _inv_rows_filtered[_iv_start:_iv_end]
 
     # ── Popover infrastructure (project + app popovers) ─────────────────────
     # Use the full scope set so popovers remain valid regardless of which
@@ -7996,9 +8417,11 @@ def _render_inventory_view() -> None:
                 f'{_t}</span></span>')
 
     # Pre-compute app_type per application for stage-cell rendering logic.
+    # Use the full filtered set so version popovers (built from _inv_rows_all)
+    # and paginated stage cells resolve their kind consistently.
     _iv_app_type_map = {
         r["application"]: (r.get("app_type") or "").strip().lower()
-        for r in _inv_rows
+        for r in _inv_rows_filtered
     }
 
     # ── Stage cell — version chip popover trigger + compact date ───────────
@@ -8259,9 +8682,11 @@ def _render_inventory_view() -> None:
     # security tier across its apps. Clicking a chip opens the existing
     # project popover (teams + applications). This is the compact successor
     # to the old landscape treemap.
+    # Walk the full filtered set (not the page slice) so the ribbon reflects
+    # every project in scope, not just the ones visible on the current page.
     _pr_TIER_RANK = {"crit": 5, "high": 4, "med": 3, "low": 2, "clean": 1, "na": 0}
     _pr_by_proj: dict[str, dict] = {}
-    for _r in _inv_rows:
+    for _r in _inv_rows_filtered:
         _pk = _r.get("project") or "(no project)"
         _p_bucket = _pr_by_proj.setdefault(_pk, {"count": 0, "worst": "na", "covered": 0})
         _p_bucket["count"] += 1
@@ -8761,7 +9186,11 @@ def _render_inventory_view() -> None:
         _iv_popovers_html = _iv_cached_pop_html
 
     # ── Final render ────────────────────────────────────────────────────────
-    _iv_visible_badge = f"showing {len(_inv_rows)}"
+    _iv_visible_badge = (
+        f"rows {_iv_start + 1:,}–{_iv_end:,} of {_inv_total:,}"
+        if _inv_total > _IV_PAGE_SIZE
+        else f"showing {_inv_total:,}"
+    )
     st.markdown(
         f'<p class="el-tf-caption">'
         f'  <span class="el-tf-caption-count">{_iv_visible_badge}</span>'
@@ -8773,48 +9202,53 @@ def _render_inventory_view() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Nested event log ────────────────────────────────────────────────────
-    # Stash the filtered app list so the event-log fragment inherits every
-    # filter applied above. An empty list is meaningful ("scope is zero"); we
-    # only stash when at least one inventory filter is driving the selection.
+    # ── Publish scope for the event-log tab ─────────────────────────────────
+    # The event log lives in a sibling tab (rendered by the late-render block
+    # below) and inherits every inventory filter via this session-state key.
+    # Use the full filtered row set (not the page slice) so the event log
+    # reflects every pipeline the filters match, regardless of which
+    # pipeline inventory page is currently open.
     if _show_el:
         _el_scope_apps = sorted({
-            r.get("application") or "" for r in _inv_rows if r.get("application")
+            r.get("application") or "" for r in _inv_rows_filtered
+            if r.get("application")
         })
         st.session_state["_el_inv_scope_apps"] = _el_scope_apps
-        st.markdown(
-            '<div class="cc-panel-head cc-panel-head--numbered cc-panel-head--live" style="margin-top:22px">'
-            '<h2 data-section-num="02">Event log</h2>'
-            f'<span class="cc-panel-tag">Live · 60s · scoped to {len(_el_scope_apps)} '
-            f'{"app" if len(_el_scope_apps) == 1 else "apps"} from the inventory above</span>'
-            '</div>'
-            '<div class="cc-panel-sub">Builds · deployments · releases · requests · commits — '
-            'newest first · click any row for details · scope mirrors the pipelines table above</div>',
-            unsafe_allow_html=True,
-        )
-        _render_event_log()
 
 
 # ── Late render into the top-of-page slot ─────────────────────────────────
-# The inventory is the primary surface — its fragment renders the stat tiles,
-# the pipelines table, and (at the bottom) the event log, which inherits every
-# filter selected in the inventory header. Fragment defs live far below, so
-# the slot pattern keeps reading order top-down without forward-declaring
-# ~2000 lines of helpers.
+# Both data surfaces live inside a custom-styled tab group. The inventory
+# tab is rendered first (it publishes the app-scope set via
+# st.session_state["_el_inv_scope_apps"]), and the event-log tab consumes
+# that scope — Streamlit renders both tab contents on every run, so the
+# scope is always current when the event log fragment executes, regardless
+# of which tab is visible.
 if _show_inv and _inventory_slot is not None:
     with _inventory_slot.container():
-        # Header already rendered inside the sticky filter rail at the top of
-        # the page — the rail IS the section header here. A thin sub-caption
-        # keeps the context copy without doubling up on the H2.
-        st.markdown(
-            '<div class="cc-panel-sub" style="margin:-4px 0 6px 0">'
-            'One row per registered pipeline · PRD liveness · security posture · '
-            'click any chip for project / app / version detail · '
-            'event log at the bottom inherits every filter above'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        _render_inventory_view()
+        with st.container(key="cc_surface_tabs"):
+            _tab_inv, _tab_log = st.tabs([
+                "❖  PIPELINES INVENTORY",
+                "⧗  EVENT LOG",
+            ])
+            with _tab_inv:
+                st.markdown(
+                    '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                    'One row per registered pipeline · PRD liveness · security '
+                    'posture · click any chip for project / app / version detail'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                _render_inventory_view()
+            with _tab_log:
+                st.markdown(
+                    '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                    'Builds · deployments · releases · requests · commits — '
+                    'newest first · click any row for details · scope mirrors '
+                    'every filter applied in the Inventory tab'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                _render_event_log()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
