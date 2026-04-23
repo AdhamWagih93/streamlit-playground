@@ -4503,19 +4503,19 @@ def range_filter(field: str, start: datetime, end: datetime) -> dict:
 # COMMAND BAR
 # =============================================================================
 
-ROLES = ["Admin", "Developer", "QC", "Operator"]
-ROLE_ICONS = {"Admin": "🛡", "Developer": "⌨", "QC": "🔬", "Operator": "🚀"}
-ROLE_COLORS = {"Admin": "#4f46e5", "Developer": "#2563eb", "QC": "#7c3aed", "Operator": "#059669"}
+ROLES = ["Admin", "Developer", "QC", "Operations"]
+ROLE_ICONS = {"Admin": "🛡", "Developer": "⌨", "QC": "🔬", "Operations": "🚀"}
+ROLE_COLORS = {"Admin": "#4f46e5", "Developer": "#2563eb", "QC": "#7c3aed", "Operations": "#059669"}
 # Map role → inventory team field(s) used to filter projects. Each role is
 # scoped *strictly* to its own ownership field on the inventory document —
 # Developer sees only projects where dev_team ∈ their teams; QC only where
-# qc_team matches; Operator only where ops_team matches. Admin bypasses
+# qc_team matches; Operations only where ops_team matches. Admin bypasses
 # this entirely.
 ROLE_TEAM_FIELDS: dict[str, list[str]] = {
     "Admin":     [],
     "Developer": ["dev_team.keyword"],
     "QC":        ["qc_team.keyword"],
-    "Operator":  ["ops_team.keyword"],
+    "Operations":  ["ops_team.keyword"],
 }
 
 
@@ -5155,7 +5155,7 @@ def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
 def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str]:
     """Return inventory projects where the role's team field(s) match any of ``teams``.
 
-    Developer → ``dev_team``; QC → ``qc_team``; Operator → ``ops_team``.
+    Developer → ``dev_team``; QC → ``qc_team``; Operations → ``ops_team``.
     Admin (or an empty team list) returns an empty list to signal "no scoping".
     """
     fields = ROLE_TEAM_FIELDS.get(role, [])
@@ -5194,7 +5194,8 @@ _ROLE_STRICT: dict[str, str] = {
     "admin":           "Admin",
     "developer":       "Developer",
     "quality-control": "QC",
-    "operator":        "Operator",
+    "operator":        "Operations",
+    "operations":      "Operations",
 }
 _detected_roles: list[str] = []
 _role_trace: list[tuple[str, str]] = []  # (raw, resolved)
@@ -5240,28 +5241,28 @@ _preset_default_idx = _TW_LABELS.index("7d")
 
 # ── Role-scoped visibility flags — relied on by scope filters + sections ───
 _ROLE_SHOWS_JIRA: dict[str, bool] = {
-    "Admin": True, "Developer": True, "QC": True, "Operator": False,
+    "Admin": True, "Developer": True, "QC": True, "Operations": False,
 }
 _ROLE_SHOWS_BUILDS: dict[str, bool] = {
-    "Admin": True, "Developer": True, "QC": False, "Operator": False,
+    "Admin": True, "Developer": True, "QC": False, "Operations": False,
 }
 _ROLE_EVENT_TYPES: dict[str, list[str]] = {
     "Admin":     ["Build-develop", "Build-release", "Deployments", "Releases", "Requests", "Commits"],
     "Developer": ["Commits", "Build-develop", "Build-release", "Deployments"],
     "QC":        ["Deployments", "Releases", "Requests"],
-    "Operator":  ["Deployments", "Releases", "Requests"],
+    "Operations":  ["Deployments", "Releases", "Requests"],
 }
 _ROLE_ENVS: dict[str, list[str]] = {
     "Admin":     ["prd", "uat", "qc", "dev"],
     "Developer": ["dev"],
     "QC":        ["qc"],
-    "Operator":  ["uat", "prd"],
+    "Operations":  ["uat", "prd"],
 }
 _ROLE_APPROVAL_STAGES: dict[str, list[str]] = {
     "Admin":     [],
     "Developer": [],
     "QC":        ["qc", "request_deploy_qc", "request_promote"],
-    "Operator":  ["uat", "prd", "request_deploy_uat", "request_deploy_prd", "request_promote"],
+    "Operations":  ["uat", "prd", "request_deploy_uat", "request_deploy_prd", "request_promote"],
 }
 _effective_role = role_pick
 _is_admin = (_effective_role == "Admin")
@@ -5284,7 +5285,7 @@ else:
 if team_filter:
     if role_pick == "Admin":
         _admin_team_apps: set[str] = set()
-        for _r in ["Developer", "QC", "Operator"]:
+        for _r in ["Developer", "QC", "Operations"]:
             _admin_team_apps.update(_load_team_applications(_r, team_filter))
         _team_apps = sorted(_admin_team_apps)
     else:
@@ -5413,7 +5414,7 @@ with st.container(key="cc_filter_rail"):
                     '<li><code>admin</code> → <b>Admin</b></li>'
                     '<li><code>developer</code> → <b>Developer</b></li>'
                     '<li><code>quality-control</code> → <b>QC</b></li>'
-                    '<li><code>operator</code> → <b>Operator</b></li>'
+                    '<li><code>operator</code> / <code>operations</code> → <b>Operations</b></li>'
                     '</ul>'
                     '<div class="cc-role-why-note">'
                     'Only <code>st.session_state.user_roles</code> is read — '
@@ -5433,7 +5434,7 @@ with st.container(key="cc_filter_rail"):
                     '<ul class="cc-role-why-rules">'
                     '<li><b>Developer</b> → <code>dev_team</code> ∈ your teams</li>'
                     '<li><b>QC</b> → <code>qc_team</code> ∈ your teams</li>'
-                    '<li><b>Operator</b> → <code>ops_team</code> ∈ your teams</li>'
+                    '<li><b>Operations</b> → <code>ops_team</code> ∈ your teams</li>'
                     '<li><b>Admin</b> → bypasses team scoping (view-all)</li>'
                     '</ul>'
                     '<div class="cc-role-why-note">'
@@ -5615,8 +5616,9 @@ def scope_filters() -> list[dict]:
     elif _scoped_projects:
         # Non-admin roles with no specific project → confine to role's visible set
         fs.append({"terms": {"project": _scoped_projects}})
-    # Team-based application restriction
-    if _team_apps:
+    # Team-based application restriction — skipped for admins in view-all
+    # mode so the toggle truly means "every project, every app".
+    if _team_apps and not (role_pick == "Admin" and admin_view_all):
         fs.append({"terms": {"application": _team_apps}})
     # Always exclude noise/test projects
     fs.append({"bool": {"must_not": [{"terms": {"project": EXCLUDED_PROJECTS}}]}})
@@ -5632,8 +5634,9 @@ def scope_filters_inv() -> list[dict]:
         fs.append({"term": {"project.keyword": project_filter}})
     elif _scoped_projects:
         fs.append({"terms": {"project.keyword": _scoped_projects}})
-    # Team-based application restriction
-    if _team_apps:
+    # Team-based application restriction — skipped for admins in view-all
+    # mode so the toggle truly means "every project, every app".
+    if _team_apps and not (role_pick == "Admin" and admin_view_all):
         fs.append({"terms": {"application.keyword": _team_apps}})
     # Always exclude noise/test projects
     fs.append({"bool": {"must_not": [{"terms": {"project.keyword": EXCLUDED_PROJECTS}}]}})
@@ -7819,126 +7822,22 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _post_projects else "—"
     )
 
-    # ── Sticky secondary bar: Sort popover + active chips + Clear button ──
-    # Dimensional filters now live inside the stat tiles (click any tile to
-    # filter by that dimension). This bar keeps Sort + filter summary sticky
-    # as the user scrolls.
+    # ── Sticky secondary bar: unified Filters & Sort popover + active chips
+    # + Clear button. All dimensional selection (company / team / project /
+    # application / build / deploy / platform / pipeline combo) lives inside
+    # the single popover below so the bar stays legible and the stat tiles
+    # can stay purely informational.
     #
     # Everything from here through the Fleet-pulse strip is emitted into the
     # caller-provided controls_slot so it renders ABOVE the Inventory/Event-log
     # tab group — both views share the same filter state.
     _ctrl_container.__enter__()
     with st.container(key="cc_filter_secondary"):
-        _iv_fb = st.columns([1.8, 1.3, 3.7, 0.8], vertical_alignment="center")
+        _iv_fb = st.columns([2.4, 1.3, 3.5, 0.8], vertical_alignment="center")
 
-    with _iv_fb[0]:
-        with st.popover(
-            f"↕ Sort · {_iv_sort_badge}",
-            use_container_width=True,
-            help="Change how pipelines are ordered",
-        ):
-            st.markdown(
-                '<div class="iv-pill-caption">Sort order</div>',
-                unsafe_allow_html=True,
-            )
-            st.selectbox(
-                "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
-                label_visibility="collapsed",
-                help="Activity uses latest stage date · vulnerabilities are "
-                     "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
-            )
-
-    with _iv_fb[1]:
-        st.toggle(
-            "Per-project view", value=False, key="shared_per_project_v1",
-            help="Group rows into a separate table per project",
-        )
-
-    with _iv_fb[2]:
-        _chip_specs: list[tuple[str, str]] = []
-        if not _is_admin and _iv_session_company:
-            _chip_specs.append((f"🏢 {_iv_session_company} (scoped)", "session"))
-        if not _is_admin and len(_iv_session_teams) == 1:
-            _chip_specs.append((f"👥 {_iv_session_teams[0]} (scoped)", "session"))
-        if _is_admin:
-            for _v in _iv_active_sel["company"]:
-                _chip_specs.append((f"🏢 {_v}", "user"))
-        _team_locked = (not _is_admin) and len(_iv_session_teams) == 1
-        if not _team_locked:
-            for _v in _iv_active_sel["team"]:
-                _chip_specs.append((f"👥 {_v}", "user"))
-        for _v in _iv_active_sel["project"]:
-            _chip_specs.append((f"📁 {_v}", "user"))
-        for _v in _iv_active_sel["app"]:
-            _chip_specs.append((f"▣ {_v}", "user"))
-        for _v in _iv_active_sel["build"]:
-            _chip_specs.append((_v, "user"))
-        for _v in _iv_active_sel["deploy"]:
-            _chip_specs.append((_v, "user"))
-        for _v in _iv_active_sel["platform"]:
-            _chip_specs.append((_v, "user"))
-        for _v in _iv_active_sel["combo"]:
-            _chip_specs.append((f"⇋ {_combo_to_key(_v)}", "user"))
-        _chip_specs.append((f"↕ Sort: {_iv_sort_badge}", "sort"))
-        if _chip_specs:
-            _chip_html = []
-            for _txt, _kind in _chip_specs:
-                _cls = (
-                    "iv-active-chip" if _kind == "user"
-                    else "iv-active-chip iv-active-chip-sess" if _kind == "session"
-                    else "iv-active-chip iv-active-chip-sort"
-                )
-                _chip_html.append(f'<span class="{_cls}">{_txt}</span>')
-            st.markdown(
-                '<div class="iv-active-chips">' + "".join(_chip_html) + '</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<div class="iv-filter-hint">No filters applied — click any tile '
-                'below to narrow the scope.</div>',
-                unsafe_allow_html=True,
-            )
-
-    with _iv_fb[3]:
-        if _iv_active_total:
-            if st.button("Clear", key="iv_filters_clear_v1",
-                         use_container_width=True,
-                         help="Clear all user-selected filters"):
-                _clear_keys = [
-                    _iv_filter_keys["project"],
-                    _iv_filter_keys["app"],
-                    _iv_filter_keys["build"],
-                    _iv_filter_keys["deploy"],
-                    _iv_filter_keys["platform"],
-                    _iv_filter_keys["combo"],
-                ]
-                if _is_admin:
-                    _clear_keys.append(_iv_filter_keys["company"])
-                    _clear_keys.append(_iv_filter_keys["team"])
-                elif len(_iv_session_teams) > 1:
-                    _clear_keys.append(_iv_filter_keys["team"])
-                for _k in _clear_keys:
-                    st.session_state.pop(_k, None)
-                st.rerun()
-
-    iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
-
-    # ── Filterable stat tiles — each is a visual HTML tile with an
-    # invisible popover-button overlay. Clicking anywhere on the tile opens
-    # that dimension's filter popover. Because every tile renders the same
-    # HTML structure, heights are identical regardless of content length.
-    _TILE_COLORS = {
-        "company":  "var(--cc-accent)",
-        "team":     "var(--cc-teal)",
-        "project":  "var(--cc-blue)",
-        "app":      "var(--cc-green)",
-        "build":    "var(--cc-amber)",
-        "deploy":   "var(--cc-teal)",
-        "platform": "var(--cc-blue)",
-        "combo":    "var(--cc-red)",
-    }
-
+    # Forward-declare the dimension renderers; their full bodies live below.
+    # They need to be callable from inside the merged popover, which sits
+    # above the tile row in the render order.
     def _render_tile_ms(dim_key: str, opts: dict[str, int],
                         placeholder: str) -> None:
         ss_key = _iv_filter_keys[dim_key]
@@ -8003,7 +7902,186 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             placeholder="Select build × deploy × platform combinations",
         )
 
+    def _section_heading(label: str, glyph: str = "") -> None:
+        _g = f'<span class="iv-fpop-glyph">{glyph}</span>' if glyph else ""
+        st.markdown(
+            f'<div class="iv-fpop-section">{_g}'
+            f'<span class="iv-fpop-label">{label}</span></div>',
+            unsafe_allow_html=True,
+        )
+
+    with _iv_fb[0]:
+        _filter_btn_label = (
+            f"⚙  Filters · Sort  ·  {_iv_active_total} active"
+            if _iv_active_total
+            else "⚙  Filters · Sort"
+        )
+        with st.popover(
+            _filter_btn_label,
+            use_container_width=True,
+            help="All filters and the sort order in one place",
+        ):
+            st.markdown(
+                '<div class="iv-fpop-head">'
+                '<span class="iv-fpop-kicker">Filters</span>'
+                '<span class="iv-fpop-title">Scope this dashboard</span>'
+                '<span class="iv-fpop-hint">Every selection here feeds both '
+                'the inventory and the event-log tabs.</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            _section_heading("Sort order", "↕")
+            st.selectbox(
+                "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
+                label_visibility="collapsed",
+                help="Activity uses latest stage date · vulnerabilities are "
+                     "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
+            )
+
+            st.markdown('<div class="iv-fpop-divider"></div>',
+                        unsafe_allow_html=True)
+            _section_heading("Scope", "◇")
+            _c_scope = st.columns(2)
+            with _c_scope[0]:
+                st.caption("Company")
+                if _is_admin and (_iv_companies_opts or _sel_company):
+                    _render_tile_ms("company", _iv_companies_opts,
+                                    "Select companies")
+                else:
+                    st.caption("Implicit for your session.")
+            with _c_scope[1]:
+                st.caption("Team")
+                if _is_admin and (_iv_teams_opts or _sel_team):
+                    _render_tile_ms("team", _iv_teams_opts, "Select teams")
+                elif (not _is_admin) and len(_iv_session_teams) > 1:
+                    _sess_opts = {
+                        t: _iv_teams_opts.get(t, 0)
+                        for t in _iv_session_teams
+                    }
+                    _render_tile_ms("team", _sess_opts,
+                                    "Narrow your session teams")
+                else:
+                    st.caption("Locked to your session.")
+
+            st.markdown('<div class="iv-fpop-divider"></div>',
+                        unsafe_allow_html=True)
+            _section_heading("Projects & applications", "▣")
+            _c_pa = st.columns(2)
+            with _c_pa[0]:
+                st.caption("Projects")
+                _render_tile_ms("project", _iv_projects_opts,
+                                "Select projects")
+            with _c_pa[1]:
+                st.caption("Applications")
+                _render_tile_ms("app", _iv_apps_opts, "Select applications")
+
+            st.markdown('<div class="iv-fpop-divider"></div>',
+                        unsafe_allow_html=True)
+            _section_heading("Pipeline shape", "⇋")
+            st.caption("Build stacks")
+            _render_tile_pills("build", _iv_build_opts, "⚙")
+            st.caption("Deploy stacks")
+            _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
+            st.caption("Deploy platforms")
+            _render_tile_pills("platform", _iv_platform_opts, "☁")
+            st.caption("Unique pipeline combinations")
+            _render_tile_combos(_iv_combo_opts)
+
+    with _iv_fb[1]:
+        st.toggle(
+            "Per-project view", value=False, key="shared_per_project_v1",
+            help="Group rows into a separate table per project",
+        )
+
+    with _iv_fb[2]:
+        _chip_specs: list[tuple[str, str]] = []
+        if not _is_admin and _iv_session_company:
+            _chip_specs.append((f"🏢 {_iv_session_company} (scoped)", "session"))
+        if not _is_admin and len(_iv_session_teams) == 1:
+            _chip_specs.append((f"👥 {_iv_session_teams[0]} (scoped)", "session"))
+        if _is_admin:
+            for _v in _iv_active_sel["company"]:
+                _chip_specs.append((f"🏢 {_v}", "user"))
+        _team_locked = (not _is_admin) and len(_iv_session_teams) == 1
+        if not _team_locked:
+            for _v in _iv_active_sel["team"]:
+                _chip_specs.append((f"👥 {_v}", "user"))
+        for _v in _iv_active_sel["project"]:
+            _chip_specs.append((f"📁 {_v}", "user"))
+        for _v in _iv_active_sel["app"]:
+            _chip_specs.append((f"▣ {_v}", "user"))
+        for _v in _iv_active_sel["build"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["deploy"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["platform"]:
+            _chip_specs.append((_v, "user"))
+        for _v in _iv_active_sel["combo"]:
+            _chip_specs.append((f"⇋ {_combo_to_key(_v)}", "user"))
+        _chip_specs.append((f"↕ Sort: {_iv_sort_badge}", "sort"))
+        if _chip_specs:
+            _chip_html = []
+            for _txt, _kind in _chip_specs:
+                _cls = (
+                    "iv-active-chip" if _kind == "user"
+                    else "iv-active-chip iv-active-chip-sess" if _kind == "session"
+                    else "iv-active-chip iv-active-chip-sort"
+                )
+                _chip_html.append(f'<span class="{_cls}">{_txt}</span>')
+            st.markdown(
+                '<div class="iv-active-chips">' + "".join(_chip_html) + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="iv-filter-hint">No filters applied — open '
+                '<b>Filters · Sort</b> to narrow the scope.</div>',
+                unsafe_allow_html=True,
+            )
+
+    with _iv_fb[3]:
+        if _iv_active_total:
+            if st.button("Clear", key="iv_filters_clear_v1",
+                         use_container_width=True,
+                         help="Clear all user-selected filters"):
+                _clear_keys = [
+                    _iv_filter_keys["project"],
+                    _iv_filter_keys["app"],
+                    _iv_filter_keys["build"],
+                    _iv_filter_keys["deploy"],
+                    _iv_filter_keys["platform"],
+                    _iv_filter_keys["combo"],
+                ]
+                if _is_admin:
+                    _clear_keys.append(_iv_filter_keys["company"])
+                    _clear_keys.append(_iv_filter_keys["team"])
+                elif len(_iv_session_teams) > 1:
+                    _clear_keys.append(_iv_filter_keys["team"])
+                for _k in _clear_keys:
+                    st.session_state.pop(_k, None)
+                st.rerun()
+
+    iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
+
+    # ── Filterable stat tiles — each is a visual HTML tile with an
+    # invisible popover-button overlay. Clicking anywhere on the tile opens
+    # that dimension's filter popover. Because every tile renders the same
+    # HTML structure, heights are identical regardless of content length.
+    _TILE_COLORS = {
+        "company":  "var(--cc-accent)",
+        "team":     "var(--cc-teal)",
+        "project":  "var(--cc-blue)",
+        "app":      "var(--cc-green)",
+        "build":    "var(--cc-amber)",
+        "deploy":   "var(--cc-teal)",
+        "platform": "var(--cc-blue)",
+        "combo":    "var(--cc-red)",
+    }
+
     # Tile specs: (dim_key, glyph, label, number, sub_markdown)
+    # Tiles are now display-only stat cards — all filtering lives in the
+    # unified Filters · Sort popover above.
     _tile_specs: list[tuple[str, str, str, int, str]] = []
     if _is_admin:
         _tile_specs.append(("company", "🏢", "Companies", len(_post_companies),
@@ -8053,7 +8131,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 else:
                     _number_html = f'<div class="iv-tile-number">{_tnum}</div>'
                 _tile_html = (
-                    f'<div class="iv-tile iv-tile-click" '
+                    f'<div class="iv-tile" '
                     f'style="--iv-stat-accent:{_accent}">'
                     f'<div class="iv-tile-head">'
                     f'<span class="iv-tile-glyph">{_glyph}</span>'
@@ -8062,56 +8140,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'</div>'
                     f'{_number_html}'
                     f'<div class="iv-tile-sub">{_tsub_md}</div>'
-                    f'<div class="iv-tile-cta">Click to filter ▸</div>'
                     f'</div>'
                 )
-                with st.container(key=f"cc_tile_{_dk}"):
-                    st.markdown(_tile_html, unsafe_allow_html=True)
-                    # Empty-label popover — becomes a transparent overlay on
-                    # top of the tile via CSS. The tile HTML provides all
-                    # visuals; the popover button provides clickability.
-                    with st.popover(" ", use_container_width=True,
-                                    help=f"Filter by {_tlabel.lower()}"):
-                        st.markdown(
-                            f'<div class="iv-tile-pop-head">'
-                            f'<span class="iv-tile-pop-glyph">{_glyph}</span>'
-                            f'<span class="iv-tile-pop-title">{_tlabel}</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                        if _dk == "company":
-                            if _is_admin and (_iv_companies_opts or _sel_company):
-                                _render_tile_ms("company", _iv_companies_opts,
-                                                "Select companies")
-                            else:
-                                st.caption("Company scope is implicit for your session.")
-                        elif _dk == "team":
-                            if _is_admin and (_iv_teams_opts or _sel_team):
-                                _render_tile_ms("team", _iv_teams_opts,
-                                                "Select teams")
-                            elif (not _is_admin) and len(_iv_session_teams) > 1:
-                                _sess_opts = {
-                                    t: _iv_teams_opts.get(t, 0)
-                                    for t in _iv_session_teams
-                                }
-                                _render_tile_ms("team", _sess_opts,
-                                                "Narrow your session teams")
-                            else:
-                                st.caption("Team scope is locked to your session.")
-                        elif _dk == "project":
-                            _render_tile_ms("project", _iv_projects_opts,
-                                            "Select projects")
-                        elif _dk == "app":
-                            _render_tile_ms("app", _iv_apps_opts,
-                                            "Select applications")
-                        elif _dk == "build":
-                            _render_tile_pills("build", _iv_build_opts, "⚙")
-                        elif _dk == "deploy":
-                            _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
-                        elif _dk == "platform":
-                            _render_tile_pills("platform", _iv_platform_opts, "☁")
-                        elif _dk == "combo":
-                            _render_tile_combos(_iv_combo_opts)
+                st.markdown(_tile_html, unsafe_allow_html=True)
 
     # ── Fleet pulse strip — four subtle visualizations of scope state ──────
     # Two temporal sparklines (14d build success, PRD deploy cadence) + two
@@ -8617,91 +8648,6 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>'
         )
-
-    # ── Aggregate posture strip ─────────────────────────────────────────────
-    # Sum V + C severities across every currently-filtered app using each
-    # app's PRD-live version as the basis (same rule as the sort). Rendered
-    # as a subtle ribbon above the table so users see the combined posture
-    # of their selection change as pills and search narrow the list.
-    _agg_v = {"crit": 0, "high": 0, "med": 0, "low": 0}
-    _agg_c = {"crit": 0, "high": 0, "med": 0, "low": 0}
-    _agg_covered = 0
-    _agg_na = 0
-    for _r in _inv_rows:
-        _a = _r.get("application") or ""
-        _prd = _iv_prd_map.get(_a) or {}
-        _pv = _prd.get("version") or ""
-        _sc = _iv_prisma_map.get((_a, _pv)) if _pv else None
-        if not _sc:
-            _agg_na += 1
-            continue
-        _agg_covered += 1
-        _agg_v["crit"] += int(_sc.get("Vcritical") or 0)
-        _agg_v["high"] += int(_sc.get("Vhigh")     or 0)
-        _agg_v["med"]  += int(_sc.get("Vmedium")   or 0)
-        _agg_v["low"]  += int(_sc.get("Vlow")      or 0)
-        _agg_c["crit"] += int(_sc.get("Ccritical") or 0)
-        _agg_c["high"] += int(_sc.get("Chigh")     or 0)
-        _agg_c["med"]  += int(_sc.get("Cmedium")   or 0)
-        _agg_c["low"]  += int(_sc.get("Clow")      or 0)
-
-    _agg_total_rows = len(_inv_rows)
-    # Worst tier across V + C drives the strip's left-border + glyph colour.
-    if _agg_v["crit"] or _agg_c["crit"]:
-        _agg_worst = "crit"
-        _agg_glyph = "⚠"
-    elif _agg_v["high"] or _agg_c["high"]:
-        _agg_worst = "high"
-        _agg_glyph = "⚠"
-    elif _agg_v["med"] or _agg_c["med"]:
-        _agg_worst = "med"
-        _agg_glyph = "◉"
-    elif _agg_v["low"] or _agg_c["low"]:
-        _agg_worst = "low"
-        _agg_glyph = "◉"
-    elif _agg_covered:
-        _agg_worst = "clean"
-        _agg_glyph = "✓"
-    else:
-        _agg_worst = "na"
-        _agg_glyph = "·"
-
-    def _ps_tier_html(kind_label: str, bucket: dict) -> str:
-        _parts = []
-        for _t, _lbl in (("crit", "C"), ("high", "H"), ("med", "M"), ("low", "L")):
-            _n = bucket[_t]
-            _zero = " is-zero" if _n == 0 else ""
-            _parts.append(
-                f'<span class="iv-ps-tier is-{_t}{_zero}" '
-                f'title="{_n} {_t} {kind_label.lower()}">'
-                f'{_n}<span style="opacity:.55;font-weight:600;margin-left:2px">{_lbl}</span>'
-                f'</span>'
-            )
-        return "".join(_parts)
-
-    _ps_coverage = (
-        f"{_agg_covered}/{_agg_total_rows} scanned"
-        if _agg_total_rows else "no filtered apps"
-    )
-    st.markdown(
-        f'<div class="iv-posture-strip is-{_agg_worst}">'
-        f'  <div class="iv-ps-label">'
-        f'    <span class="iv-ps-glyph is-{_agg_worst}">{_agg_glyph}</span>'
-        f'    Security posture · {_agg_total_rows} '
-        f'{"apps" if _agg_total_rows != 1 else "app"}'
-        f'  </div>'
-        f'  <div class="iv-ps-group">'
-        f'    <span class="iv-ps-kicker">Vulns</span>'
-        f'    {_ps_tier_html("vulnerabilities", _agg_v)}'
-        f'  </div>'
-        f'  <div class="iv-ps-group">'
-        f'    <span class="iv-ps-kicker">Compliance</span>'
-        f'    {_ps_tier_html("compliance issues", _agg_c)}'
-        f'  </div>'
-        f'  <div class="iv-ps-coverage">{_ps_coverage}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
 
     # ── Project-health ribbon — subtle landscape replacement ────────────────
     # One chip per project in the filtered inventory, colored by the worst
