@@ -5593,20 +5593,6 @@ with st.container(key="cc_filter_rail"):
         "All-time" if preset == "All-time"
         else f"{_start_local:%Y-%m-%d %H:%M} → {_end_local:%Y-%m-%d %H:%M} {DISPLAY_TZ_LABEL}"
     )
-    # Inline meta row — date range, bucket, apps scope, service-account hint.
-    _apps_label = f"{len(_team_apps)} apps" if _team_apps else "all apps"
-    _meta_bits = [
-        f'<span><b>Range</b> {_window_label}</span>',
-        f'<span><b>Bucket</b> {interval}</span>',
-        f'<span><b>Scope</b> {_apps_label}</span>',
-        f'<span><b>Updated</b> {_now_local:%H:%M} {DISPLAY_TZ_LABEL}</span>',
-    ]
-    if exclude_svc:
-        _meta_bits.append('<span>⊘ azure_sql excluded</span>')
-    st.markdown(
-        '<div class="cc-rail-meta">' + ''.join(_meta_bits) + '</div>',
-        unsafe_allow_html=True,
-    )
 
 # For non-admin roles with no specific project picked, restrict queries to
 # the role's visible projects. For Admin, scope the same unless view-all.
@@ -7639,10 +7625,32 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_vermeta_map = _fetch_version_meta(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
 
     # ── Team extraction helper (inventory rows may carry multiple *_team fields) ─
+    # For admins we surface every *_team field so the Teams tile reflects the
+    # full ownership graph. For scoped roles we restrict the "teams" of a row
+    # to just the values in that role's own team field (dev_team for
+    # Developer, qc_team for QC, ops_team for Operations) — otherwise a
+    # co-assigned team on a shared project would leak into the Team tile and
+    # let the user pick teams they don't actually belong to.
+    _iv_row_team_fields: list[str] = []
+    if not _is_admin:
+        _iv_row_team_fields = [
+            _f.replace(".keyword", "")
+            for _f in ROLE_TEAM_FIELDS.get(_effective_role, [])
+        ]
+
     def _iv_row_teams(_r: dict) -> set[str]:
-        """All team values across every *_team field on a row."""
+        """Team values on a row — role-scoped for non-admin users."""
         _out: set[str] = set()
-        for _tv in (_r.get("teams") or {}).values():
+        _teams_blob = _r.get("teams") or {}
+        if _iv_row_team_fields:
+            _iter = [
+                (_f, _teams_blob.get(_f))
+                for _f in _iv_row_team_fields
+                if _f in _teams_blob
+            ]
+        else:
+            _iter = list(_teams_blob.items())
+        for _f, _tv in _iter:
             if isinstance(_tv, (list, tuple, set)):
                 for _x in _tv:
                     if _x:
@@ -7678,6 +7686,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         st.session_state[_iv_filter_keys["company"]] = []
     if not _is_admin and len(_iv_session_teams) == 1:
         st.session_state[_iv_filter_keys["team"]] = list(_iv_session_teams)
+    elif not _is_admin and len(_iv_session_teams) > 1:
+        # Clamp any previously-persisted team selection to session_teams so
+        # a leaked co-team value from a shared project can't widen the view.
+        _legal_teams = set(_iv_session_teams)
+        _prev_team_sel = list(st.session_state.get(_iv_filter_keys["team"]) or [])
+        _clean_team_sel = [t for t in _prev_team_sel if t in _legal_teams]
+        if _clean_team_sel != _prev_team_sel:
+            st.session_state[_iv_filter_keys["team"]] = _clean_team_sel
     elif not _is_admin and len(_iv_session_teams) == 0:
         st.session_state[_iv_filter_keys["team"]] = []
 
@@ -7776,6 +7792,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     _iv_companies_opts = _count_single(_apply_iv_filters(_inv_rows, exclude="company"), "company")
     _iv_teams_opts     = _count_teams(_apply_iv_filters(_inv_rows, exclude="team"))
+    # Non-admins should never see team options beyond their own session
+    # teams — even if a shared project surfaces co-assigned teams in its
+    # inventory document. Strip the options dict down to the legal set.
+    if not _is_admin and _iv_session_teams:
+        _legal = set(_iv_session_teams)
+        _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if t in _legal}
     _iv_projects_opts  = _count_single(_apply_iv_filters(_inv_rows, exclude="project"), "project")
     _iv_apps_opts      = _count_single(_apply_iv_filters(_inv_rows, exclude="app"), "application")
     _iv_build_opts     = _count_single(_apply_iv_filters(_inv_rows, exclude="build"), "build_technology")
