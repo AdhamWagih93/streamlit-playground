@@ -8703,8 +8703,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     with st.container(key="cc_iv_tiles_row"):
         _tile_cols = st.columns(len(_tile_specs), gap="small")
         # Tiles that collapse to the single selected value when exactly one
-        # entry is picked. Count-style dims (team/combo) stay numeric.
-        _SINGLE_VAL_DIMS = {"company", "project", "app",
+        # entry is picked. Combo stays numeric (its label is too long).
+        _SINGLE_VAL_DIMS = {"company", "team", "project", "app",
                             "build", "deploy", "platform"}
         for _idx, (_dk, _glyph, _tlabel, _tnum, _tsub_md) in enumerate(_tile_specs):
             with _tile_cols[_idx]:
