@@ -5961,6 +5961,23 @@ st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
 _inventory_slot = st.empty()
 
 
+# Match-nothing sentinel — used to refuse a fall-back unscoped query when a
+# non-admin user has assigned teams but no role-team coverage in the index
+# (e.g. Operations user whose teams don't appear in any document's ops_team
+# field). Without this, an empty `_team_apps` + empty `_scoped_projects`
+# would silently drop both filters and the user would see ALL apps.
+_MATCH_NONE_FILTER = {"bool": {"must_not": [{"match_all": {}}]}}
+
+
+def _role_team_scope_empty() -> bool:
+    """True when a non-admin role has session teams but neither projects nor
+    apps came back from the role's team field. Triggering this means the
+    query MUST be forced to an empty result rather than running unscoped."""
+    if _is_admin or not _active_teams:
+        return False
+    return (not _team_apps) and (not _scoped_projects)
+
+
 def scope_filters() -> list[dict]:
     """Base filters for operational indices (builds, deployments, commits, etc.)."""
     fs: list[dict] = []
@@ -5975,6 +5992,9 @@ def scope_filters() -> list[dict]:
     # mode so the toggle truly means "every project, every app".
     if _team_apps and not (role_pick == "Admin" and admin_view_all):
         fs.append({"terms": {"application": _team_apps}})
+    # Refuse to run unscoped when the role's team field has zero coverage.
+    if _role_team_scope_empty():
+        fs.append(_MATCH_NONE_FILTER)
     # Always exclude noise/test projects
     fs.append({"bool": {"must_not": [{"terms": {"project": EXCLUDED_PROJECTS}}]}})
     return fs
@@ -5993,6 +6013,9 @@ def scope_filters_inv() -> list[dict]:
     # mode so the toggle truly means "every project, every app".
     if _team_apps and not (role_pick == "Admin" and admin_view_all):
         fs.append({"terms": {"application.keyword": _team_apps}})
+    # Refuse to run unscoped when the role's team field has zero coverage.
+    if _role_team_scope_empty():
+        fs.append(_MATCH_NONE_FILTER)
     # Always exclude noise/test projects
     fs.append({"bool": {"must_not": [{"terms": {"project.keyword": EXCLUDED_PROJECTS}}]}})
     return fs
