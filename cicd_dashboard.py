@@ -9869,12 +9869,14 @@ elif _show_el:
 
 
 # =============================================================================
-# GLOSSARY
+# GLOSSARY — admin-only. Non-admin roles never need to know which ES indices
+# back the dashboard, so the field guide stays hidden from them.
 # =============================================================================
 
-with st.expander("📖  Field guide · index reference · KPI formulas"):
-    st.markdown(
-        """
+if _is_admin:
+    with st.expander("📖  Field guide · index reference · KPI formulas"):
+        st.markdown(
+            """
 **ef-devops-inventory** — single source of truth for every application on the
 CI/CD platform. Each document represents one application; `project.keyword`
 names the parent project. Key fields: `build_technology`, `deploy_technology`.
@@ -9904,8 +9906,8 @@ join CI/CD events to business context.
 **ef-cicd-versions-lookup** — auto-versioning lookup: given `project + branch`,
 returns the next version to stamp on a build.
 
-        """
-    )
+            """
+        )
 
 
 # =============================================================================
