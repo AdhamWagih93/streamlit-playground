@@ -6651,6 +6651,16 @@ def _render_event_log() -> None:
     _layout_badge = "per-project" if el_per_project else "consolidated"
 
     # Stats card: left = big total, middle = kicker + hint, right = mode chips.
+    # If commits are role-allowed, surface that they're opt-in by default so
+    # the empty-pill state isn't surprising.
+    _commit_optin_hint = _role_allows_type("Commits")
+    _hint_html = (
+        'Click any pill to include it · select multiple to combine · '
+        '<b>commits hidden by default — click ⎇ to surface</b>'
+        if _commit_optin_hint
+        else 'Click any pill to include it · select multiple to combine · '
+             'none selected = show all'
+    )
     st.markdown(
         f'<div class="el-typefilter-head">'
         f'  <div class="el-tf-left">'
@@ -6661,9 +6671,7 @@ def _render_event_log() -> None:
         f'  </div>'
         f'  <div class="el-tf-mid">'
         f'    <div class="el-tf-kicker">Filter by event type</div>'
-        f'    <div class="el-tf-hint">'
-        f'Click any pill to include it · select multiple to combine · none selected = show all'
-        f'    </div>'
+        f'    <div class="el-tf-hint">{_hint_html}</div>'
         f'  </div>'
         f'  <div class="el-tf-right">'
         f'    <span class="el-tf-badge layout">{_layout_badge}</span>'
@@ -6695,9 +6703,15 @@ def _render_event_log() -> None:
         _selected_opts = []
     _active_types = {_pill_to_internal[o] for o in (_selected_opts or [])}
 
-    # Apply the pill filter — empty selection is treated as "show all".
+    # Filter semantics:
+    #   • No pills selected → show every visible-by-default type, but HIDE
+    #     commits (they're high-volume noise — opt-in via the ⎇ pill).
+    #   • Any pill selected → show ONLY those types (so clicking ⎇ Commits
+    #     surfaces commits, optionally combined with other selections).
     if _active_types:
         events = [ev for ev in events if ev["type"] in _active_types]
+    else:
+        events = [ev for ev in events if ev["type"] != "commit"]
 
     # Apply the text search filter — matches against every visible string field
     # so users can narrow by person, version, detail substring, etc. Terms are
