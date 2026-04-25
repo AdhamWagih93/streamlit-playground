@@ -2986,6 +2986,375 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 
 /* ==========================================================================
+   RAIL — minimal scope line shown next to the role badge.
+   The rail used to host search + a settings popover; both moved into the
+   Filter Console below. This line is purely informational so the rail
+   doesn't feel like a dead bar.
+   ========================================================================== */
+.cc-rail-scope-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px 8px 16px;
+    margin: 0 0 0 4px;
+    border: 1px dashed
+        color-mix(in srgb, var(--cc-border-hi) 90%, var(--cc-accent) 10%);
+    border-radius: 999px;
+    background:
+        linear-gradient(90deg,
+            color-mix(in srgb, var(--cc-accent) 4%, transparent) 0%,
+            transparent 60%);
+    font-family: var(--cc-body);
+    font-size: 0.74rem;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.01em;
+    line-height: 1.3;
+    transition: border-color .22s ease, background .22s ease;
+}
+.cc-rail-scope-line:hover {
+    border-color: color-mix(in srgb, var(--cc-accent) 32%, var(--cc-border-hi));
+    background:
+        linear-gradient(90deg,
+            color-mix(in srgb, var(--cc-accent) 8%, transparent) 0%,
+            transparent 70%);
+}
+.cc-rail-scope-line .cc-rail-scope-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--cc-accent);
+    box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--cc-accent) 22%, transparent),
+        0 0 10px 1px color-mix(in srgb, var(--cc-accent) 50%, transparent);
+    flex: 0 0 auto;
+    animation: cc-rail-scope-pulse 3.4s ease-in-out infinite;
+}
+@keyframes cc-rail-scope-pulse {
+    0%, 100% {
+        box-shadow:
+            0 0 0 2px color-mix(in srgb, var(--cc-accent) 22%, transparent),
+            0 0 10px 1px color-mix(in srgb, var(--cc-accent) 50%, transparent);
+    }
+    50% {
+        box-shadow:
+            0 0 0 4px color-mix(in srgb, var(--cc-accent) 14%, transparent),
+            0 0 16px 2px color-mix(in srgb, var(--cc-accent) 60%, transparent);
+    }
+}
+.cc-rail-scope-line .cc-rail-scope-text { flex: 1; }
+.cc-rail-scope-line .cc-rail-scope-text b {
+    color: var(--cc-ink);
+    font-weight: 700;
+    letter-spacing: 0.005em;
+}
+
+/* ==========================================================================
+   FILTER CONSOLE — the single popover that owns every filter, view toggle,
+   sort and system action. Visible trigger sits in cc_filter_secondary col 1;
+   the popover content is a tabbed panel (Scope / View & System) with
+   sectioned widget groups. Tagline at the top sets tone.
+   ========================================================================== */
+
+/* The Filter Console trigger — accent-gradient pill with a subtle internal
+   beacon so it reads as the dashboard's primary action. Scoped to col 1 of
+   cc_filter_secondary so other popovers stay neutral. */
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopover"] button,
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopoverButton"] button {
+    position: relative;
+    overflow: hidden;
+    font-family: var(--cc-body) !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em !important;
+    text-transform: uppercase;
+    padding: 9px 14px !important;
+    border-radius: 10px !important;
+    background:
+        linear-gradient(135deg,
+            color-mix(in srgb, var(--cc-accent) 92%, #fff) 0%,
+            var(--cc-accent) 60%,
+            color-mix(in srgb, var(--cc-accent) 80%, var(--cc-blue)) 100%) !important;
+    color: #fff !important;
+    border: 1px solid
+        color-mix(in srgb, var(--cc-accent) 75%, #000) !important;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.30) inset,
+        0 0 0 1px color-mix(in srgb, var(--cc-accent) 25%, transparent),
+        0 8px 18px -8px color-mix(in srgb, var(--cc-accent) 65%, transparent) !important;
+    transition: transform .16s ease, box-shadow .16s ease, filter .16s ease !important;
+}
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopover"] button::before,
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopoverButton"] button::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: -100%;
+    width: 60%;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255,255,255,.18) 50%,
+        transparent 100%);
+    animation: iv-fc-sheen 5.2s ease-in-out infinite;
+    pointer-events: none;
+}
+@keyframes iv-fc-sheen {
+    0%   { left: -100%; }
+    55%  { left: 130%; }
+    100% { left: 130%; }
+}
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopover"] button:hover,
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopoverButton"] button:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.07);
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.32) inset,
+        0 0 0 1px color-mix(in srgb, var(--cc-accent) 35%, transparent),
+        0 14px 26px -10px color-mix(in srgb, var(--cc-accent) 75%, transparent) !important;
+}
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopover"] button[aria-expanded="true"],
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(2)
+    [data-testid="stPopoverButton"] button[aria-expanded="true"] {
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.40) inset,
+        0 0 0 2px color-mix(in srgb, var(--cc-accent) 45%, transparent),
+        0 16px 30px -12px color-mix(in srgb, var(--cc-accent) 75%, transparent) !important;
+}
+
+/* Filter Console content — the floating panel.
+   Streamlit emits popover content into a portal at body level, so the
+   selectors below have to be wide; we scope by markers we control inside. */
+.iv-fc-tagline {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 4px 2px 14px 2px;
+    padding: 6px 12px 6px 10px;
+    font-family: var(--cc-data);
+    font-size: 0.66rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    background: linear-gradient(90deg,
+        color-mix(in srgb, var(--cc-accent) 5%, transparent),
+        transparent);
+    border-left: 2px solid var(--cc-accent);
+    border-radius: 2px;
+}
+.iv-fc-tagline-glyph {
+    color: var(--cc-accent);
+    font-size: 0.85rem;
+    line-height: 1;
+    text-shadow: 0 0 12px color-mix(in srgb, var(--cc-accent) 60%, transparent);
+}
+
+.iv-fc-section {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 14px 0 8px 0;
+    padding: 0 0 6px 0;
+    border-bottom: 1px solid
+        color-mix(in srgb, var(--cc-border) 65%, transparent);
+}
+.iv-fc-section:first-child {
+    margin-top: 4px;
+}
+.iv-fc-section-glyph {
+    font-size: 0.95rem;
+    line-height: 1;
+    color: var(--cc-text-mute);
+    width: 18px;
+    text-align: center;
+}
+.iv-fc-section-label {
+    font-family: var(--cc-data);
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-ink);
+}
+
+.iv-fc-hint {
+    font-family: var(--cc-data);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+    color: var(--cc-text-mute);
+    padding: 0 0 6px 2px;
+    font-weight: 600;
+}
+
+/* Locked-scope row (e.g. session-bound company / single team) — read-only
+   pill that signals "this is fixed for your session". */
+.iv-fc-locked {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px 7px 9px;
+    margin: 12px 0 10px 0;
+    background: color-mix(in srgb, var(--cc-text-mute) 4%, transparent);
+    border: 1px dashed
+        color-mix(in srgb, var(--cc-border-hi) 80%, transparent);
+    border-radius: 8px;
+    font-family: var(--cc-body);
+    font-size: 0.78rem;
+    color: var(--cc-text);
+}
+.iv-fc-locked-glyph {
+    font-size: 0.95rem;
+    color: var(--cc-text-mute);
+}
+.iv-fc-locked-label {
+    font-family: var(--cc-data);
+    font-size: 0.62rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.iv-fc-locked-val {
+    color: var(--cc-ink);
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iv-fc-locked-tag {
+    font-family: var(--cc-data);
+    font-size: 0.58rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--cc-accent);
+    background: color-mix(in srgb, var(--cc-accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 30%, transparent);
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-weight: 700;
+}
+
+/* Search recap line (top of Scope tab) */
+.iv-fc-search-recap {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 12px;
+    margin: 4px 0 14px 0;
+    background:
+        linear-gradient(90deg,
+            color-mix(in srgb, var(--cc-blue) 6%, transparent),
+            transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 22%, var(--cc-border));
+    border-radius: 8px;
+    font-family: var(--cc-body);
+    font-size: 0.78rem;
+}
+.iv-fc-search-recap--empty {
+    background:
+        linear-gradient(90deg,
+            color-mix(in srgb, var(--cc-text-mute) 4%, transparent),
+            transparent);
+    border-color:
+        color-mix(in srgb, var(--cc-border) 80%, transparent);
+}
+.iv-fc-search-glyph {
+    font-size: 0.95rem;
+    color: var(--cc-blue);
+    line-height: 1;
+}
+.iv-fc-search-recap--empty .iv-fc-search-glyph {
+    color: var(--cc-text-mute);
+}
+.iv-fc-search-label {
+    font-family: var(--cc-data);
+    font-size: 0.60rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.iv-fc-search-q {
+    font-family: var(--cc-data);
+    font-size: 0.78rem;
+    color: var(--cc-ink);
+    background: color-mix(in srgb, var(--cc-blue) 10%, transparent);
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 25%, transparent);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iv-fc-search-q-empty {
+    font-family: var(--cc-data);
+    font-size: 0.74rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+}
+
+/* Tabs inside the Filter Console — flatter, more deliberate than default */
+[data-baseweb="popover"] [data-baseweb="tab-list"] {
+    gap: 0 !important;
+    border-bottom: 1px solid
+        color-mix(in srgb, var(--cc-border) 70%, transparent) !important;
+    margin-bottom: 12px !important;
+}
+[data-baseweb="popover"] [data-baseweb="tab"] {
+    font-family: var(--cc-data) !important;
+    font-size: 0.66rem !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase !important;
+    font-weight: 700 !important;
+    padding: 10px 14px !important;
+    color: var(--cc-text-mute) !important;
+    transition: color .18s ease, border-color .18s ease;
+}
+[data-baseweb="popover"] [data-baseweb="tab"][aria-selected="true"] {
+    color: var(--cc-accent) !important;
+    border-bottom-color: var(--cc-accent) !important;
+}
+
+/* Search input in cc_filter_secondary col 0 — pill the user can type into */
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(1)
+    [data-testid="stTextInput"] input {
+    font-family: var(--cc-body) !important;
+    font-size: 0.84rem !important;
+    padding: 9px 14px !important;
+    border-radius: 10px !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    background: rgba(255,255,255,.92) !important;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease !important;
+}
+.st-key-cc_filter_secondary [data-testid="stHorizontalBlock"]
+    > div[data-testid="column"]:nth-child(1)
+    [data-testid="stTextInput"] input:focus {
+    border-color: var(--cc-accent) !important;
+    background: #fff !important;
+    box-shadow:
+        0 0 0 3px color-mix(in srgb, var(--cc-accent) 18%, transparent) !important;
+}
+
+/* ==========================================================================
    FILTERABLE STAT TILES (overlay pattern)
    Each tile renders a visual HTML card PLUS an absolutely-positioned,
    transparent popover button that covers the card. The HTML guarantees
@@ -3030,7 +3399,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_tile_combo    { --iv-stat-accent: var(--cc-red); }
 
 /* The visual HTML card — uniform size, all the atmosphere */
-.iv-tile.iv-tile-click {
+.iv-tile {
     position: relative;
     z-index: 1;
     pointer-events: none;                 /* clicks fall through to overlay */
@@ -3056,7 +3425,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
         box-shadow .25s ease,
         background .22s ease;
 }
-.iv-tile.iv-tile-click::before {
+.iv-tile::before {
     content: '';
     position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: var(--iv-stat-accent, var(--cc-accent));
@@ -3065,7 +3434,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     opacity: .92;
     transition: box-shadow .28s ease, width .28s ease;
 }
-.iv-tile.iv-tile-click::after {
+.iv-tile::after {
     content: '';
     position: absolute; right: -70px; top: -70px;
     width: 180px; height: 180px;
@@ -3077,35 +3446,35 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 
 /* Stagger-in via nth-child on the column */
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) .iv-tile.iv-tile-click { animation-delay: .00s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) .iv-tile.iv-tile-click { animation-delay: .06s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) .iv-tile.iv-tile-click { animation-delay: .12s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(4) .iv-tile.iv-tile-click { animation-delay: .18s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(5) .iv-tile.iv-tile-click { animation-delay: .24s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(6) .iv-tile.iv-tile-click { animation-delay: .30s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(7) .iv-tile.iv-tile-click { animation-delay: .36s; }
-.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(8) .iv-tile.iv-tile-click { animation-delay: .42s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) .iv-tile { animation-delay: .00s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) .iv-tile { animation-delay: .06s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) .iv-tile { animation-delay: .12s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(4) .iv-tile { animation-delay: .18s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(5) .iv-tile { animation-delay: .24s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(6) .iv-tile { animation-delay: .30s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(7) .iv-tile { animation-delay: .36s; }
+.st-key-cc_iv_tiles_row [data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(8) .iv-tile { animation-delay: .42s; }
 
 /* Hover / expanded state propagates from the wrapper to the card */
-[class*="st-key-cc_tile_"]:hover .iv-tile.iv-tile-click,
-[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click {
+[class*="st-key-cc_tile_"]:hover .iv-tile,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile {
     transform: translateY(-3px);
     border-color: var(--iv-stat-accent);
     box-shadow:
         0 18px 34px -20px color-mix(in srgb, var(--iv-stat-accent) 45%, transparent),
         0 0 0 1px color-mix(in srgb, var(--iv-stat-accent) 20%, transparent);
 }
-[class*="st-key-cc_tile_"]:hover .iv-tile.iv-tile-click::before,
-[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click::before {
+[class*="st-key-cc_tile_"]:hover .iv-tile::before,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile::before {
     width: 4px;
     box-shadow: 0 0 22px 0
         color-mix(in srgb, var(--iv-stat-accent) 70%, transparent);
 }
-[class*="st-key-cc_tile_"]:hover .iv-tile.iv-tile-click::after,
-[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click::after {
+[class*="st-key-cc_tile_"]:hover .iv-tile::after,
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile::after {
     transform: translate(-14px, 14px) scale(1.12);
 }
-[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile.iv-tile-click {
+[class*="st-key-cc_tile_"]:has([aria-expanded="true"]) .iv-tile {
     border-color: var(--iv-stat-accent);
     box-shadow:
         0 20px 40px -22px color-mix(in srgb, var(--iv-stat-accent) 55%, transparent),
@@ -3610,7 +3979,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 
 /* Reduced-motion honors user preference */
 @media (prefers-reduced-motion: reduce) {
-    .iv-tile.iv-tile-click {
+    .iv-tile {
         animation: none;
         opacity: 1;
     }
@@ -5331,6 +5700,13 @@ else:
 if role_pick == "Admin" and "admin_view_all" not in st.session_state:
     st.session_state["admin_view_all"] = True
 admin_view_all = bool(st.session_state.get("admin_view_all", False)) if role_pick == "Admin" else False
+
+# Time window / global toggles — defaults seeded here so the rail can read
+# them via session_state. The actual widgets live inside the inventory's
+# unified Filter Console popover (see `cc_filter_secondary` below).
+st.session_state.setdefault("time_preset", _TW_LABELS[_preset_default_idx])
+st.session_state.setdefault("auto_refresh", False)
+st.session_state.setdefault("exclude_svc", True)
 if role_pick == "Admin":
     if admin_view_all:
         _proj_scoped = _all_projects
@@ -5367,13 +5743,14 @@ _role_icon = ROLE_ICONS[role_pick]
 # it with a blurred surface so the stat tiles + table (and nested event log)
 # flow beneath it as one continuous surface.
 with st.container(key="cc_filter_rail"):
-    # Minimal rail: role identity · persistent search · settings cog.
-    # Company/Project live in the inventory's "Filters & sort" popover below,
-    # which is pinned sticky just under this rail so both stay visible while
-    # scrolling. Time window moved into the settings popover — the event log
-    # carries its own window selector so the global one is rarely touched.
+    # Minimal rail: role identity only. Every filter (search, time window,
+    # auto-refresh, admin toggles, sort, per-project view, dimensional
+    # multiselects, clear cache) was consolidated into a single "Filter
+    # Console" popover that sits in the inventory's secondary bar below.
+    # The rail intentionally carries zero filterable widgets — this keeps
+    # identity and scope visually distinct.
     _rail = st.columns(
-        [1.4, 5.8, 0.7],
+        [1.6, 6.4],
         vertical_alignment="bottom",
     )
 
@@ -5505,74 +5882,41 @@ with st.container(key="cc_filter_rail"):
                         unsafe_allow_html=True,
                     )
 
-    # ── Col 1: persistent ops search (shared by event log + inventory) ─────
+    # ── Col 1: scope-summary line (no widgets — everything filterable lives
+    # in the unified Filter Console below). The line is purely informational:
+    # it nods at the active window + role scope so the rail still feels
+    # contextual without re-introducing widget state.
     with _rail[1]:
-        st.text_input(
-            "Search",
-            key="shared_search_v1",
-            placeholder="🔎  app · project · version · tech · person · detail…  (space-separated terms are AND)",
-            help="Shared across event log and inventory · case-insensitive · "
-                 "space-separated terms are AND",
-            label_visibility="collapsed",
+        st.markdown(
+            '<div class="cc-rail-scope-line">'
+            '<span class="cc-rail-scope-dot"></span>'
+            '<span class="cc-rail-scope-text">'
+            'Filters live in the <b>Filter Console</b> below — '
+            'every scope (search, time, dimensions, sort) is consolidated there.'
+            '</span>'
+            '</div>',
+            unsafe_allow_html=True,
         )
 
-    # ── Col 2: settings popover (window, toggles, reload) ─────────────────
-    with _rail[2]:
-        with st.popover("⚙", help="Time window · toggles · cache reload",
-                        use_container_width=True):
-            st.markdown(
-                '<div class="iv-pill-caption">Global time window</div>',
-                unsafe_allow_html=True,
-            )
-            preset = st.selectbox(
-                "Window",
-                _TW_LABELS,
-                index=_preset_default_idx,
-                key="time_preset",
-                label_visibility="collapsed",
-                help="Query time window for admin analytics · the event log "
-                     "and inventory have their own scopes",
-            )
-            st.markdown(
-                '<div style="border-top:1px solid var(--cc-border);margin:10px 0 6px"></div>',
-                unsafe_allow_html=True,
-            )
-            auto_refresh = st.toggle(
-                "Auto-refresh (60s)", value=False, key="auto_refresh",
-                help="Rerun the page every 60 seconds",
-            )
-            if role_pick == "Admin":
-                st.toggle(
-                    "Admin: view all projects", value=admin_view_all, key="admin_view_all",
-                    help="Bypass the default dev_team scoping and see every project",
-                )
-                exclude_svc = st.toggle(
-                    "Exclude service accounts", value=True, key="exclude_svc",
-                    help="Hide 'azure_sql' service account commits",
-                )
-            else:
-                # Non-admins inherit the default (hide service-account noise)
-                # without the toggle surfacing in their settings popover.
-                exclude_svc = True
-            st.markdown(
-                '<div style="border-top:1px solid var(--cc-border);margin:6px 0 4px"></div>',
-                unsafe_allow_html=True,
-            )
-            if st.button("↻ Clear cache & reload", key="settings_reload",
-                         use_container_width=True):
-                st.cache_data.clear()
-                st.rerun()
+    # All filter widgets — search, time window, auto-refresh, admin toggles,
+    # sort, per-project view, dimensional multiselects, clear cache — were
+    # consolidated into the Filter Console popover (rendered later via
+    # `cc_filter_secondary` in `_render_inventory_view`). The rail simply
+    # reads their current values from session_state. Defaults are seeded
+    # upstream via `st.session_state.setdefault(...)`.
+    preset       = st.session_state["time_preset"]
+    auto_refresh = bool(st.session_state["auto_refresh"])
+    exclude_svc  = bool(st.session_state["exclude_svc"]) if role_pick == "Admin" else True
 
     # Global company/project pickers were removed from the rail — the
-    # inventory's "Filters & sort" popover (pinned below) is the canonical
-    # place to narrow scope. We default both to empty so every ES query is
-    # unscoped at this layer; the inventory popover applies its own multiselect
-    # on top, and the event log inherits the inventory-filtered app set.
+    # Filter Console below owns scope. Defaults stay empty so every rail-level
+    # ES query is unscoped at this layer; the inventory's filters apply their
+    # own restrictions, and the event log inherits the inventory-filtered set.
     company_filter = ""
     project_filter = ""
 
-    # Resolve the selected window → start/end timestamps. `preset` is read from
-    # the settings popover (defaults to 7d on first paint).
+    # Resolve the selected window → start/end timestamps. `preset` is read
+    # from the Filter Console (seeded to "7d" on first paint).
     if preset == "Custom":
         # Rail no longer exposes a Custom range picker — fall back to 7d.
         end_dt   = datetime.now(timezone.utc)
@@ -7869,21 +8213,24 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _post_projects else "—"
     )
 
-    # ── Sticky secondary bar: Sort popover + Per-project toggle + active
-    # chips + Clear button. Dimensional filters live inside the stat tiles
-    # below — clicking any tile opens its own filter popover. This bar
-    # keeps a summary of applied filters sticky as the user scrolls.
+    # ── Filter Console — every filter, view toggle, sort, and system action
+    # is consolidated into a single popover here. The visible row carries:
+    #   [ search input ] [ ⚙ Filter Console popover ] [ active chips ] [ Clear ]
+    # …and the popover hosts two tabs:
+    #   🎯 SCOPE — search recap + every dimension multiselect
+    #   ⚙ VIEW & SYSTEM — time window, auto-refresh, admin toggles,
+    #       sort, per-project view, clear cache
+    # Stat tiles below are display-only — their popovers were retired so
+    # widgets exist exactly once (no duplicate-key collisions).
     #
     # Everything from here through the Fleet-pulse strip is emitted into the
     # caller-provided controls_slot so it renders ABOVE the Inventory/Event-log
     # tab group — both views share the same filter state.
     _ctrl_container.__enter__()
     with st.container(key="cc_filter_secondary"):
-        _iv_fb = st.columns([1.8, 1.3, 3.7, 0.8], vertical_alignment="center")
+        _iv_fb = st.columns([4.4, 1.7, 3.1, 0.8], vertical_alignment="center")
 
-    # Forward-declare the dimension renderers; their full bodies live below.
-    # They need to be callable from inside the merged popover, which sits
-    # above the tile row in the render order.
+    # Dimension widget renderers — used inside the Filter Console popover.
     def _render_tile_ms(dim_key: str, opts: dict[str, int],
                         placeholder: str) -> None:
         ss_key = _iv_filter_keys[dim_key]
@@ -7894,7 +8241,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _c = opts.get(v, 0)
             return f"{v}  ·  {_c}" if _c else f"{v}  ·  (filtered out)"
         st.markdown(
-            f'<div class="iv-tile-hint">{len(opts)} available · '
+            f'<div class="iv-fc-hint">{len(opts)} available · '
             f'{len(_cur)} selected</div>',
             unsafe_allow_html=True,
         )
@@ -7915,7 +8262,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _new_cur != _cur:
             st.session_state[ss_key] = _new_cur
         st.markdown(
-            f'<div class="iv-tile-hint">{len(opts)} available · '
+            f'<div class="iv-fc-hint">{len(opts)} available · '
             f'{len(_cur_vals)} selected</div>',
             unsafe_allow_html=True,
         )
@@ -7938,7 +8285,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _new_cur != _cur:
             st.session_state[ss_key] = _new_cur
         st.markdown(
-            f'<div class="iv-tile-hint">{len(opts)} combinations available · '
+            f'<div class="iv-fc-hint">{len(opts)} combinations available · '
             f'{len(_cur_keys)} selected</div>',
             unsafe_allow_html=True,
         )
@@ -7948,29 +8295,254 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             placeholder="Select build × deploy × platform combinations",
         )
 
+    # ── Col 0: persistent search ─────────────────────────────────────────
     with _iv_fb[0]:
-        with st.popover(
-            f"↕ Sort · {_iv_sort_badge}",
-            use_container_width=True,
-            help="Change how pipelines are ordered",
-        ):
-            st.markdown(
-                '<div class="iv-pill-caption">Sort order</div>',
-                unsafe_allow_html=True,
-            )
-            st.selectbox(
-                "Sort by", _IV_SORT_OPTIONS, index=0, key="iv_sort_v1",
-                label_visibility="collapsed",
-                help="Activity uses latest stage date · vulnerabilities are "
-                     "weighted (critical ≫ high ≫ medium ≫ low) on the PRD version",
-            )
-
-    with _iv_fb[1]:
-        st.toggle(
-            "Per-project view", value=False, key="shared_per_project_v1",
-            help="Group rows into a separate table per project",
+        st.text_input(
+            "Search",
+            key="shared_search_v1",
+            placeholder="🔎  app · project · version · tech · person · detail…  (space-separated terms are AND)",
+            help="Shared across event log and inventory · case-insensitive · "
+                 "space-separated terms are AND",
+            label_visibility="collapsed",
         )
 
+    # ── Col 1: ⚙ Filter Console mega popover ─────────────────────────────
+    with _iv_fb[1]:
+        _console_badge = (
+            f" · ✱{_iv_active_total}" if _iv_active_total else ""
+        )
+        with st.popover(
+            f"⚙  Filter Console{_console_badge}",
+            use_container_width=True,
+            help="Every filter, view toggle, sort, and system action — "
+                 "all consolidated here",
+        ):
+            st.markdown(
+                '<div class="iv-fc-tagline">'
+                '<span class="iv-fc-tagline-glyph">◆</span>'
+                'One console — search, time, scope, sort, system.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            _scope_tab, _view_tab = st.tabs([
+                "🎯  SCOPE",
+                "⚙  VIEW & SYSTEM",
+            ])
+
+            with _scope_tab:
+                # Search recap so users always see what's active without
+                # closing the popover. The actual input lives in col 0.
+                _search_now = (st.session_state.get("shared_search_v1", "") or "").strip()
+                if _search_now:
+                    _search_recap = (
+                        f'<div class="iv-fc-search-recap">'
+                        f'<span class="iv-fc-search-glyph">🔎</span>'
+                        f'<span class="iv-fc-search-label">Search</span>'
+                        f'<code class="iv-fc-search-q">{html.escape(_search_now)}</code>'
+                        f'</div>'
+                    )
+                else:
+                    _search_recap = (
+                        '<div class="iv-fc-search-recap iv-fc-search-recap--empty">'
+                        '<span class="iv-fc-search-glyph">🔎</span>'
+                        '<span class="iv-fc-search-label">Search</span>'
+                        '<span class="iv-fc-search-q-empty">— none —</span>'
+                        '</div>'
+                    )
+                st.markdown(_search_recap, unsafe_allow_html=True)
+
+                _scope_l, _scope_r = st.columns(2, gap="medium")
+                with _scope_l:
+                    _admin_company_visible = (
+                        _is_admin and (_iv_companies_opts or _sel_company)
+                    )
+                    if _admin_company_visible:
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph" '
+                            'style="color:var(--cc-accent)">🏢</span>'
+                            '<span class="iv-fc-section-label">Companies</span>'
+                            '</div>', unsafe_allow_html=True)
+                        _render_tile_ms("company", _iv_companies_opts,
+                                        "Select companies")
+                    elif not _is_admin and _iv_session_company:
+                        st.markdown(
+                            f'<div class="iv-fc-locked">'
+                            f'<span class="iv-fc-locked-glyph">🏢</span>'
+                            f'<span class="iv-fc-locked-label">Company</span>'
+                            f'<span class="iv-fc-locked-val">{html.escape(_iv_session_company)}</span>'
+                            f'<span class="iv-fc-locked-tag">scoped</span>'
+                            f'</div>', unsafe_allow_html=True)
+
+                    _team_admin_visible = (
+                        _is_admin and (_iv_teams_opts or _sel_team)
+                    )
+                    _team_user_visible = (
+                        (not _is_admin) and len(_iv_session_teams) > 1
+                    )
+                    if _team_admin_visible:
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph" '
+                            'style="color:var(--cc-teal)">👥</span>'
+                            '<span class="iv-fc-section-label">Teams</span>'
+                            '</div>', unsafe_allow_html=True)
+                        _render_tile_ms("team", _iv_teams_opts, "Select teams")
+                    elif _team_user_visible:
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph" '
+                            'style="color:var(--cc-teal)">👥</span>'
+                            '<span class="iv-fc-section-label">Teams</span>'
+                            '</div>', unsafe_allow_html=True)
+                        _sess_opts = {
+                            t: _iv_teams_opts.get(t, 0)
+                            for t in _iv_session_teams
+                        }
+                        _render_tile_ms("team", _sess_opts,
+                                        "Narrow your session teams")
+                    elif (not _is_admin) and len(_iv_session_teams) == 1:
+                        st.markdown(
+                            f'<div class="iv-fc-locked">'
+                            f'<span class="iv-fc-locked-glyph">👥</span>'
+                            f'<span class="iv-fc-locked-label">Team</span>'
+                            f'<span class="iv-fc-locked-val">{html.escape(_iv_session_teams[0])}</span>'
+                            f'<span class="iv-fc-locked-tag">scoped</span>'
+                            f'</div>', unsafe_allow_html=True)
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-blue)">📁</span>'
+                        '<span class="iv-fc-section-label">Projects</span>'
+                        '</div>', unsafe_allow_html=True)
+                    _render_tile_ms("project", _iv_projects_opts,
+                                    "Select projects")
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-green)">▣</span>'
+                        '<span class="iv-fc-section-label">Applications</span>'
+                        '</div>', unsafe_allow_html=True)
+                    _render_tile_ms("app", _iv_apps_opts,
+                                    "Select applications")
+
+                with _scope_r:
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-amber)">⚙</span>'
+                        '<span class="iv-fc-section-label">Build stacks</span>'
+                        '</div>', unsafe_allow_html=True)
+                    _render_tile_pills("build", _iv_build_opts, "⚙")
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-teal)">⛭</span>'
+                        '<span class="iv-fc-section-label">Deploy stacks</span>'
+                        '</div>', unsafe_allow_html=True)
+                    _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-blue)">☁</span>'
+                        '<span class="iv-fc-section-label">Deploy platforms</span>'
+                        '</div>', unsafe_allow_html=True)
+                    _render_tile_pills("platform", _iv_platform_opts, "☁")
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-red)">⇋</span>'
+                        '<span class="iv-fc-section-label">Pipeline combos</span>'
+                        '</div>', unsafe_allow_html=True)
+                    _render_tile_combos(_iv_combo_opts)
+
+            with _view_tab:
+                _view_l, _view_r = st.columns(2, gap="medium")
+                with _view_l:
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">🕐</span>'
+                        '<span class="iv-fc-section-label">Time window</span>'
+                        '</div>', unsafe_allow_html=True)
+                    st.selectbox(
+                        "Window", _TW_LABELS,
+                        key="time_preset",
+                        label_visibility="collapsed",
+                        help="Query time window for admin analytics · the "
+                             "event log carries its own scope",
+                    )
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">↕</span>'
+                        '<span class="iv-fc-section-label">Sort order</span>'
+                        '</div>', unsafe_allow_html=True)
+                    st.selectbox(
+                        "Sort by", _IV_SORT_OPTIONS, index=0,
+                        key="iv_sort_v1",
+                        label_visibility="collapsed",
+                        help="Activity uses latest stage date · "
+                             "vulnerabilities are weighted "
+                             "(critical ≫ high ≫ medium ≫ low) on the PRD version",
+                    )
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">▦</span>'
+                        '<span class="iv-fc-section-label">Layout</span>'
+                        '</div>', unsafe_allow_html=True)
+                    st.toggle(
+                        "Per-project view", key="shared_per_project_v1",
+                        help="Group rows into a separate table per project",
+                    )
+
+                with _view_r:
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">⚡</span>'
+                        '<span class="iv-fc-section-label">Live</span>'
+                        '</div>', unsafe_allow_html=True)
+                    st.toggle(
+                        "Auto-refresh (60s)", key="auto_refresh",
+                        help="Rerun the page every 60 seconds",
+                    )
+
+                    if role_pick == "Admin":
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph" '
+                            'style="color:var(--cc-accent)">🛡</span>'
+                            '<span class="iv-fc-section-label">Admin</span>'
+                            '</div>', unsafe_allow_html=True)
+                        st.toggle(
+                            "View all projects", key="admin_view_all",
+                            help="Bypass the default team scoping — see every project",
+                        )
+                        st.toggle(
+                            "Exclude service accounts", key="exclude_svc",
+                            help="Hide 'azure_sql' service-account commits",
+                        )
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">↻</span>'
+                        '<span class="iv-fc-section-label">System</span>'
+                        '</div>', unsafe_allow_html=True)
+                    if st.button(
+                        "↻ Clear cache & reload",
+                        key="settings_reload",
+                        use_container_width=True,
+                        help="Drop cached query results and rerun from scratch",
+                    ):
+                        st.cache_data.clear()
+                        st.rerun()
+
+    # ── Col 2: active-filter chips summary ────────────────────────────────
     with _iv_fb[2]:
         _chip_specs: list[tuple[str, str]] = []
         if not _is_admin and _iv_session_company:
@@ -8013,10 +8585,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         else:
             st.markdown(
                 '<div class="iv-filter-hint">No filters applied — open '
-                '<b>Filters · Sort</b> to narrow the scope.</div>',
+                '<b>Filter Console</b> to narrow the scope.</div>',
                 unsafe_allow_html=True,
             )
 
+    # ── Col 3: Clear button ──────────────────────────────────────────────
     with _iv_fb[3]:
         if _iv_active_total:
             if st.button("Clear", key="iv_filters_clear_v1",
@@ -8041,12 +8614,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     iv_sort = st.session_state.get("iv_sort_v1", _IV_SORT_OPTIONS[0])
 
-    # ── Filterable stat tiles — each is a visual HTML card topped with an
-    # invisible popover-button overlay. Clicking anywhere on the tile (in
-    # particular, its big stat number) opens that dimension's filter
-    # popover. The unified "Filters · Sort" button above stays available
-    # for holistic review; the tiles are the fast path for drilling into
-    # one dimension at a time.
+    # ── Stat tiles — display-only metrics that mirror the current scope.
+    # Filter widgets live exclusively in the Filter Console popover above
+    # (so each session_state key backs exactly one widget — no duplicate-key
+    # collisions). Tiles still glow + animate to draw the eye, and the
+    # ✱<n> badge surfaces how many filters are active per dimension.
     _TILE_COLORS = {
         "company":  "var(--cc-accent)",
         "team":     "var(--cc-teal)",
@@ -8108,7 +8680,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 else:
                     _number_html = f'<div class="iv-tile-number">{_tnum}</div>'
                 _tile_html = (
-                    f'<div class="iv-tile iv-tile-click" '
+                    f'<div class="iv-tile" '
                     f'style="--iv-stat-accent:{_accent}">'
                     f'<div class="iv-tile-head">'
                     f'<span class="iv-tile-glyph">{_glyph}</span>'
@@ -8117,58 +8689,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'</div>'
                     f'{_number_html}'
                     f'<div class="iv-tile-sub">{_tsub_md}</div>'
-                    f'<div class="iv-tile-cta">▸ click to filter</div>'
                     f'</div>'
                 )
-                # Wrapped in a scoped container so .st-key-cc_tile_<dim>
-                # CSS can overlay the popover button on top of the tile.
                 with st.container(key=f"cc_tile_{_dk}"):
                     st.markdown(_tile_html, unsafe_allow_html=True)
-                    # Empty-label popover — becomes a transparent overlay
-                    # over the tile via CSS. Clicking the stat number
-                    # opens the dimension's filter.
-                    with st.popover(" ", use_container_width=True,
-                                    help=f"Filter by {_tlabel.lower()}"):
-                        st.markdown(
-                            f'<div class="iv-tile-pop-head">'
-                            f'<span class="iv-tile-pop-glyph">{_glyph}</span>'
-                            f'<span class="iv-tile-pop-title">{_tlabel}</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                        if _dk == "company":
-                            if _is_admin and (_iv_companies_opts or _sel_company):
-                                _render_tile_ms("company", _iv_companies_opts,
-                                                "Select companies")
-                            else:
-                                st.caption("Company scope is implicit for your session.")
-                        elif _dk == "team":
-                            if _is_admin and (_iv_teams_opts or _sel_team):
-                                _render_tile_ms("team", _iv_teams_opts,
-                                                "Select teams")
-                            elif (not _is_admin) and len(_iv_session_teams) > 1:
-                                _sess_opts = {
-                                    t: _iv_teams_opts.get(t, 0)
-                                    for t in _iv_session_teams
-                                }
-                                _render_tile_ms("team", _sess_opts,
-                                                "Narrow your session teams")
-                            else:
-                                st.caption("Team scope is locked to your session.")
-                        elif _dk == "project":
-                            _render_tile_ms("project", _iv_projects_opts,
-                                            "Select projects")
-                        elif _dk == "app":
-                            _render_tile_ms("app", _iv_apps_opts,
-                                            "Select applications")
-                        elif _dk == "build":
-                            _render_tile_pills("build", _iv_build_opts, "⚙")
-                        elif _dk == "deploy":
-                            _render_tile_pills("deploy", _iv_deploy_opts, "⛭")
-                        elif _dk == "platform":
-                            _render_tile_pills("platform", _iv_platform_opts, "☁")
-                        elif _dk == "combo":
-                            _render_tile_combos(_iv_combo_opts)
 
     # ── Fleet pulse strip — four subtle visualizations of scope state ──────
     # Two temporal sparklines (14d build success, PRD deploy cadence) + two
