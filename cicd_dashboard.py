@@ -6236,9 +6236,19 @@ def _status_chip(raw: str | None) -> str:
             f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
 
 
-@st.fragment(run_every="60s")
 def _render_event_log() -> None:
-    """Inline event log — role-scoped, auto-refreshes every 60s independently."""
+    """Inline event log — role-scoped.
+
+    Not a fragment: every filter widget that drives this view (search,
+    project pick, per-project layout, the Filter Console multiselects /
+    pills) lives OUTSIDE this function. A `@st.fragment` decorator
+    (especially with ``run_every``) sets up an independent refresh loop
+    whose state can decouple from the parent rerun, leaving the event
+    log staring at a stale `_el_inv_scope_apps` after a filter change.
+    Running it as a plain function guarantees a fresh re-render on every
+    parent rerun. Periodic refresh remains available via the
+    Filter Console's "Auto-refresh (60s)" toggle.
+    """
     # Role-allowed environments for the Env selector.
     _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
     _env_options = ["(all)"] + _allowed_envs
