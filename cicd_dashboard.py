@@ -2318,6 +2318,54 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     padding: 10px 0;
     letter-spacing: .04em;
 }
+/* Jira tile — type chip strip below the priority distribution bar */
+.iv-jira-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 4px;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px dashed
+        color-mix(in srgb, var(--cc-border) 80%, transparent);
+}
+.iv-jira-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 6px;
+    font-family: var(--cc-body);
+    font-size: .68rem;
+    line-height: 1.4;
+    color: var(--cc-text);
+    background: color-mix(in srgb, var(--cc-blue) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 18%, var(--cc-border));
+    border-radius: 999px;
+    letter-spacing: .005em;
+}
+.iv-jira-chip-g {
+    color: var(--cc-blue);
+    font-size: .76rem;
+    line-height: 1;
+    width: 12px;
+    text-align: center;
+}
+.iv-jira-chip b {
+    font-family: var(--cc-data);
+    font-weight: 700;
+    color: var(--cc-ink);
+    margin-left: 2px;
+    font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--cc-blue) 14%, transparent);
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: .62rem;
+    letter-spacing: .02em;
+}
+/* Jira tile accent — slightly cooler edge accent than the build tile */
+.iv-pulse-tile--jira::before {
+    background: linear-gradient(180deg, #2684ff 0%, #7048e8 100%) !important;
+}
+
 .iv-pulse-axis {
     display: flex;
     justify-content: space-between;
@@ -7594,6 +7642,54 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14) -> dict:
     }
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_jira_open(apps_json: str) -> dict:
+    """Aggregate open Jira issues for the given application scope.
+
+    Open = ``status`` not in ``CLOSED_JIRA``. Returns
+    ``{"total": int, "priority": {label: count}, "type": {label: count}}``.
+    """
+    _apps: list[str] = json.loads(apps_json)
+    _empty = {"total": 0, "priority": {}, "type": {}}
+    if not _apps:
+        return _empty
+    body = {
+        "query": {"bool": {
+            "filter":   [{"terms": {"application.keyword": _apps}}],
+            "must_not": [{"terms": {"status.keyword": CLOSED_JIRA}}],
+        }},
+        "aggs": {
+            "by_priority": {"terms": {
+                "field": "priority.keyword", "size": 20, "missing": "—",
+            }},
+            "by_type": {"terms": {
+                "field": "issuetype.keyword", "size": 20, "missing": "—",
+            }},
+        },
+        "track_total_hits": True,
+    }
+    try:
+        resp = es_search(IDX["jira"], body, size=0)
+    except Exception:
+        return _empty
+    _hits = resp.get("hits") or {}
+    _t = _hits.get("total")
+    _total = (
+        int(_t.get("value", 0)) if isinstance(_t, dict)
+        else int(_t or 0)
+    )
+    _aggs = resp.get("aggregations") or {}
+    _by_p = {
+        str(_b.get("key", "")): int(_b.get("doc_count") or 0)
+        for _b in (_aggs.get("by_priority") or {}).get("buckets", [])
+    }
+    _by_t = {
+        str(_b.get("key", "")): int(_b.get("doc_count") or 0)
+        for _b in (_aggs.get("by_type") or {}).get("buckets", [])
+    }
+    return {"total": _total, "priority": _by_p, "type": _by_t}
+
+
 def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
     """Daily stacked bars — success (green) on bottom, failure (red) on top."""
     if not success and not failure:
@@ -8750,7 +8846,6 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _pulse = _fetch_inv_pulse(json.dumps(sorted(_post_apps)), days=14)
         _bs = _pulse.get("build_success", [])
         _bf = _pulse.get("build_failure", [])
-        _dp = _pulse.get("deploy_prd", [])
         _bs_sum = sum(_bs)
         _bf_sum = sum(_bf)
         _b_total = _bs_sum + _bf_sum
@@ -8771,13 +8866,98 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _rate = "—"
             _rate_tag = ""
             _rate_tag_lbl = "quiet"
-        _dp_total = sum(_dp)
-        _dp_peak = max(_dp) if _dp else 0
-        _dp_active_days = sum(1 for _v in _dp if _v > 0)
-        _dp_tag = "ok" if _dp_active_days else ""
-        _dp_tag_lbl = (
-            f"{_dp_active_days}/14d" if _dp_active_days else "idle"
+
+        # Jira open-issue rollup — only for roles that actually see Jira.
+        # Returns {"total", "priority": {label: count}, "type": {label: count}}.
+        _jira_show = _ROLE_SHOWS_JIRA.get(_effective_role, False)
+        if _jira_show:
+            _jira = _fetch_jira_open(json.dumps(sorted(_post_apps)))
+        else:
+            _jira = {"total": 0, "priority": {}, "type": {}}
+        _jira_total: int = int(_jira.get("total") or 0)
+        _jira_pri: dict[str, int] = dict(_jira.get("priority") or {})
+        _jira_type: dict[str, int] = dict(_jira.get("type") or {})
+        # Severity tag — surface highest/critical first, then high.
+        _pri_lower = {k.lower(): v for k, v in _jira_pri.items()}
+        _highest = (
+            _pri_lower.get("highest", 0)
+            + _pri_lower.get("blocker", 0)
+            + _pri_lower.get("critical", 0)
         )
+        _high = _pri_lower.get("high", 0)
+        if _jira_total == 0 and _jira_show:
+            _jira_tag, _jira_tag_lbl = "ok", "clean"
+        elif _highest > 0:
+            _jira_tag, _jira_tag_lbl = "crit", f"{_highest} blocker"
+        elif _high > 0:
+            _jira_tag, _jira_tag_lbl = "warn", f"{_high} high"
+        elif _jira_show:
+            _jira_tag, _jira_tag_lbl = "ok", f"{_jira_total} open"
+        else:
+            _jira_tag, _jira_tag_lbl = "", "n/a"
+
+        # Priority distribution bar — ordered Highest → Lowest, missing last.
+        # Map known priority labels to colors; everything else falls back to mute.
+        _PRI_ORDER = [
+            ("Highest",  "var(--cc-red)"),
+            ("Blocker",  "var(--cc-red)"),
+            ("Critical", "var(--cc-red)"),
+            ("High",     "var(--cc-amber)"),
+            ("Medium",   "var(--cc-blue)"),
+            ("Low",      "var(--cc-teal)"),
+            ("Lowest",   "var(--cc-text-mute)"),
+        ]
+        _pri_remaining = dict(_jira_pri)
+        _pri_segments: list[tuple[int, str, str]] = []
+        for _lbl, _color in _PRI_ORDER:
+            _v = _pri_remaining.pop(_lbl, 0)
+            if _v:
+                _pri_segments.append((_v, _color, _lbl))
+        # Anything else (e.g. "—" missing bucket, custom priorities) → mute
+        for _lbl, _v in _pri_remaining.items():
+            if _v:
+                _pri_segments.append((_v, "var(--cc-text-mute)",
+                                      _lbl if _lbl != "—" else "(no priority)"))
+        _jira_bar = (
+            _svg_dist_bar(_pri_segments) if _pri_segments
+            else '<div class="iv-pulse-empty">'
+                 + ("no open issues" if _jira_show else "Jira hidden for role")
+                 + '</div>'
+        )
+
+        # Type chip strip — top six types, biggest first; "—" rendered as
+        # "(no type)". Each chip shows a glyph hint based on the label.
+        _TYPE_GLYPH = {
+            "bug":         "🐛",
+            "story":       "✦",
+            "task":        "▣",
+            "epic":        "❖",
+            "improvement": "↑",
+            "incident":    "!",
+            "support":     "⌥",
+            "subtask":     "↳",
+            "sub-task":    "↳",
+        }
+        _jira_type_html = ""
+        if _jira_type:
+            _ranked_types = sorted(
+                _jira_type.items(), key=lambda kv: (-kv[1], kv[0].lower())
+            )[:6]
+            _chip_parts: list[str] = []
+            for _tlbl, _tcnt in _ranked_types:
+                _key = _tlbl.lower().strip()
+                _glyph = _TYPE_GLYPH.get(_key, "·")
+                _disp = _tlbl if _tlbl != "—" else "(no type)"
+                _chip_parts.append(
+                    f'<span class="iv-jira-chip">'
+                    f'<span class="iv-jira-chip-g">{_glyph}</span>'
+                    f'{html.escape(_disp)}'
+                    f'<b>{_tcnt}</b>'
+                    f'</span>'
+                )
+            _jira_type_html = (
+                '<div class="iv-jira-types">' + "".join(_chip_parts) + '</div>'
+            )
 
         # PRD freshness distribution
         _now_pulse = datetime.now(timezone.utc)
@@ -8850,7 +9030,27 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         ])
 
         _spark_build = _svg_stacked_spark(_bs, _bf)
-        _spark_dep = _svg_area_spark(_dp, color="var(--cc-blue)")
+
+        # Tile 2 — Jira open issues. For roles that don't see Jira (Operations
+        # today) we still render the tile so the strip layout stays balanced
+        # but it announces "Jira hidden for role".
+        _jira_value_html = (
+            f'<div class="iv-pulse-value">{_jira_total}</div>'
+            if _jira_show
+            else '<div class="iv-pulse-value">—</div>'
+        )
+        _jira_sub_html = (
+            '<div class="iv-pulse-sub">priority breakdown · '
+            f'<b>{len(_jira_type)}</b> issue type'
+            f'{"s" if len(_jira_type) != 1 else ""}'
+            '</div>'
+            if _jira_show and _jira_total
+            else (
+                '<div class="iv-pulse-sub">no open issues in scope</div>'
+                if _jira_show
+                else '<div class="iv-pulse-sub">role has no Jira visibility</div>'
+            )
+        )
 
         _pulse_html = (
             '<div class="iv-pulse-strip">'
@@ -8870,19 +9070,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + _spark_build
             + '<div class="iv-pulse-axis"><span>14d ago</span><span>today</span></div>'
             + '</div>'
-            # Tile 2: PRD deploy cadence
-            + '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
-              'linear-gradient(90deg,var(--cc-blue),var(--cc-accent))">'
+            # Tile 2: Jira open issues
+            + '<div class="iv-pulse-tile iv-pulse-tile--jira" style="--iv-pulse-accent:'
+              'linear-gradient(90deg,#2684ff,#7048e8)">'
             '<div class="iv-pulse-label">'
-            '<span>PRD cadence · 14d</span>'
-            + (f'<span class="iv-pulse-tag {_dp_tag}">{_dp_tag_lbl}</span>'
-               if _dp_tag else f'<span class="iv-pulse-tag">{_dp_tag_lbl}</span>')
+            '<span>Jira · open issues</span>'
+            + (f'<span class="iv-pulse-tag {_jira_tag}">{_jira_tag_lbl}</span>'
+               if _jira_tag_lbl else '')
             + '</div>'
-            + f'<div class="iv-pulse-value">{_dp_total}</div>'
-            + f'<div class="iv-pulse-sub">peak <b>{_dp_peak}</b>/day · '
-              f'active <b>{_dp_active_days}</b>/14d</div>'
-            + _spark_dep
-            + '<div class="iv-pulse-axis"><span>14d ago</span><span>today</span></div>'
+            + _jira_value_html
+            + _jira_sub_html
+            + _jira_bar
+            + _jira_type_html
             + '</div>'
             # Tile 3: PRD freshness
             + '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
