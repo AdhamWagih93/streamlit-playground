@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import html
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 try:
@@ -7176,6 +7177,7 @@ _IV_PAGE_SIZE = 50
 def _render_pager(
     *, total: int, page_size: int, page_key: str,
     unit_label: str, container_key: str,
+    rerun_scope: str | None = None,
 ) -> tuple[int, int, int]:
     """Render a Prev / N of M / Next pager and return (page, start, end).
 
@@ -7183,7 +7185,15 @@ def _render_pager(
     no-op window ``(1, 0, total)`` so callers can always slice with the
     returned range. Session state is the single source of truth for the
     current page — buttons mutate it then rely on the fragment-auto-rerun
-    that follows a widget interaction."""
+    that follows a widget interaction.
+
+    ``rerun_scope`` toggles the rerun granularity. Pass ``"fragment"``
+    when the pager is rendered inside a ``@st.fragment`` so a page click
+    only re-runs that fragment instead of the whole app — keeps the
+    inventory tile + table from redrawing when the user paginates the
+    event log. Default ``None`` triggers a full app rerun (correct for
+    the inventory pager which lives outside any fragment).
+    """
     if total <= page_size:
         return 1, 0, total
     _max_page = max(1, (total + page_size - 1) // page_size)
@@ -7198,6 +7208,12 @@ def _render_pager(
     _start = (_page - 1) * page_size
     _end = min(_start + page_size, total)
 
+    def _rerun() -> None:
+        if rerun_scope == "fragment":
+            st.rerun(scope="fragment")
+        else:
+            st.rerun()
+
     with st.container(key=container_key):
         _pc = st.columns([1.0, 1.0, 4.6, 1.0, 1.0], vertical_alignment="center")
         with _pc[0]:
@@ -7206,14 +7222,14 @@ def _render_pager(
                          disabled=_page <= 1,
                          help="Previous page"):
                 st.session_state[page_key] = _page - 1
-                st.rerun()
+                _rerun()
         with _pc[1]:
             if st.button("⇤  First", key=f"{page_key}_first",
                          use_container_width=True,
                          disabled=_page <= 1,
                          help="Jump to first page"):
                 st.session_state[page_key] = 1
-                st.rerun()
+                _rerun()
         with _pc[2]:
             st.markdown(
                 f'<div class="cc-pager-caption">'
@@ -7230,14 +7246,14 @@ def _render_pager(
                          disabled=_page >= _max_page,
                          help="Jump to last page"):
                 st.session_state[page_key] = _max_page
-                st.rerun()
+                _rerun()
         with _pc[4]:
             if st.button("Next  ▶", key=f"{page_key}_next",
                          use_container_width=True,
                          disabled=_page >= _max_page,
                          help="Next page"):
                 st.session_state[page_key] = _page + 1
-                st.rerun()
+                _rerun()
 
     return _page, _start, _end
 
@@ -7270,18 +7286,25 @@ def _status_chip(raw: str | None) -> str:
             f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
 
 
+@st.fragment
 def _render_event_log() -> None:
-    """Inline event log — role-scoped.
+    """Inline event log — role-scoped, fragmented for internal-widget perf.
 
-    Not a fragment: every filter widget that drives this view (search,
-    project pick, per-project layout, the Filter Console multiselects /
-    pills) lives OUTSIDE this function. A `@st.fragment` decorator
-    (especially with ``run_every``) sets up an independent refresh loop
-    whose state can decouple from the parent rerun, leaving the event
-    log staring at a stale `_el_inv_scope_apps` after a filter change.
-    Running it as a plain function guarantees a fresh re-render on every
-    parent rerun. Periodic refresh remains available via the
-    Filter Console's "Auto-refresh (60s)" toggle.
+    `@st.fragment` (without ``run_every``) means:
+      • The event log's OWN widgets (env, time window, type pills,
+        per-project toggle, pager buttons) only re-run THIS fragment —
+        the inventory tab and stat tiles are not redrawn for those
+        interactions.
+      • A parent rerun (Filter Console change, search edit, anything
+        outside the fragment) still re-executes the fragment as part of
+        the normal top-down script run, so filter-driven changes still
+        propagate correctly.
+
+    The previous implementation was a plain function; we removed the
+    decorator earlier because `@st.fragment(run_every="60s")` set up an
+    independent refresh schedule that decoupled from parent reruns.
+    Without ``run_every`` the decoupling concern goes away — only the
+    interaction-isolation benefit remains.
     """
     # Role-allowed environments for the Env selector.
     _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
@@ -7804,6 +7827,9 @@ def _render_event_log() -> None:
         page_key="_el_page_v1",
         unit_label="events",
         container_key="cc_el_pager_top",
+        # Event log lives inside a @st.fragment — paginate without
+        # re-rendering the inventory tab.
+        rerun_scope="fragment",
     )
     if _events_filtered_total > _EL_PAGE_SIZE:
         events = events[_el_start:_el_end]
@@ -7854,11 +7880,23 @@ def _render_event_log() -> None:
         if _pv:
             _prisma_keys.add((_a, _pv))
     _prisma_keys_t = tuple(sorted(_prisma_keys))
-    _prisma_map  = _fetch_prismacloud(_prisma_keys_t) if _prisma_keys else {}
-    _invicti_map = _fetch_invicti(_prisma_keys_t)     if _prisma_keys else {}
-    _zap_map     = _fetch_zap(_prisma_keys_t)         if _prisma_keys else {}
-    # Per-version build/release provenance for the event-log version popovers.
-    _ver_meta_map = _fetch_version_meta(_prisma_keys_t) if _prisma_keys else {}
+    # Parallelise the four (app, version) lookups — same pattern as the
+    # inventory render. ES round-trips are I/O-bound and @st.cache_data
+    # is thread-safe, so collapsing to a single wave shaves several
+    # hundred ms off cold loads of the event log.
+    if _prisma_keys:
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="el-scans") as _ex:
+            _f_pri = _ex.submit(_fetch_prismacloud,  _prisma_keys_t)
+            _f_inv = _ex.submit(_fetch_invicti,      _prisma_keys_t)
+            _f_zap = _ex.submit(_fetch_zap,          _prisma_keys_t)
+            # Per-version build/release provenance for the event-log version popovers.
+            _f_vmd = _ex.submit(_fetch_version_meta, _prisma_keys_t)
+            _prisma_map   = _f_pri.result()
+            _invicti_map  = _f_inv.result()
+            _zap_map      = _f_zap.result()
+            _ver_meta_map = _f_vmd.result()
+    else:
+        _prisma_map = _invicti_map = _zap_map = _ver_meta_map = {}
 
     def _slug(val: str, prefix: str) -> str:
         return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
@@ -9301,9 +9339,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # ── Fetch PRD status + latest-at-each-stage + Prismacloud ───────────────
     # Fetches use the FULL scope so results are stable across search/pill
     # narrowing and the @st.cache_data caches hit across interactions.
+    # Independent fetches run in PARALLEL via a small ThreadPoolExecutor —
+    # @st.cache_data is thread-safe, and ES round-trips are I/O-bound, so
+    # the 3-up + 4-up batches collapse from sequential into single-wave.
     _iv_apps = tuple(sorted({r["application"] for r in _inv_rows_all}))
-    _iv_prd_map    = _fetch_prd_status(_iv_apps)     if _iv_apps else {}
-    _iv_stages_map = _fetch_latest_stages(_iv_apps)  if _iv_apps else {}
+    if _iv_apps:
+        _iv_apps_json = json.dumps(sorted(_iv_apps))
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="iv-stage2") as _ex:
+            _f_prd     = _ex.submit(_fetch_prd_status,     _iv_apps)
+            _f_stages  = _ex.submit(_fetch_latest_stages,  _iv_apps)
+            _f_devproj = _ex.submit(_fetch_devops_projects, _iv_apps_json)
+            _iv_prd_map     = _f_prd.result()
+            _iv_stages_map  = _f_stages.result()
+            _iv_devproj_map = _f_devproj.result()
+    else:
+        _iv_prd_map = _iv_stages_map = _iv_devproj_map = {}
 
     _iv_prisma_keys: set[tuple[str, str]] = set()
     for _a, _prd in _iv_prd_map.items():
@@ -9316,17 +9366,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if _v:
                 _iv_prisma_keys.add((_a, _v))
     _iv_prisma_keys_t = tuple(sorted(_iv_prisma_keys))
-    _iv_prisma_map  = _fetch_prismacloud(_iv_prisma_keys_t) if _iv_prisma_keys else {}
-    _iv_invicti_map = _fetch_invicti(_iv_prisma_keys_t)     if _iv_prisma_keys else {}
-    _iv_zap_map     = _fetch_zap(_iv_prisma_keys_t)         if _iv_prisma_keys else {}
-    _iv_vermeta_map = _fetch_version_meta(_iv_prisma_keys_t) if _iv_prisma_keys else {}
-    # Per-app metadata from ef-devops-projects: dev/qc URLs, Remedy
-    # product info, recommended build/deploy image versions used to
-    # flag outdated images. Cached by the in-scope app set.
-    _iv_devproj_map = (
-        _fetch_devops_projects(json.dumps(sorted(_iv_apps)))
-        if _iv_apps else {}
-    )
+    if _iv_prisma_keys:
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="iv-stage3") as _ex:
+            _f_pri = _ex.submit(_fetch_prismacloud,  _iv_prisma_keys_t)
+            _f_inv = _ex.submit(_fetch_invicti,      _iv_prisma_keys_t)
+            _f_zap = _ex.submit(_fetch_zap,          _iv_prisma_keys_t)
+            _f_vmd = _ex.submit(_fetch_version_meta, _iv_prisma_keys_t)
+            _iv_prisma_map  = _f_pri.result()
+            _iv_invicti_map = _f_inv.result()
+            _iv_zap_map     = _f_zap.result()
+            _iv_vermeta_map = _f_vmd.result()
+    else:
+        _iv_prisma_map = _iv_invicti_map = _iv_zap_map = _iv_vermeta_map = {}
 
     def _iv_image_outdated(current: str, recommended: str) -> bool:
         """True when the recommended image version is set and differs from
