@@ -6035,6 +6035,7 @@ admin_view_all = bool(st.session_state.get("admin_view_all", False)) if role_pic
 st.session_state.setdefault("time_preset", _TW_LABELS[_preset_default_idx])
 st.session_state.setdefault("auto_refresh", False)
 st.session_state.setdefault("exclude_svc", True)
+st.session_state.setdefault("exclude_test_runs", True)
 if role_pick == "Admin":
     if admin_view_all:
         _proj_scoped = _all_projects
@@ -6357,14 +6358,33 @@ def commit_scope_filters() -> list[dict]:
     return fs
 
 
+def _testflag_filter() -> list[dict]:
+    """When the "Production runs only" toggle is on (default), restrict
+    build / deployment queries to documents flagged ``testflag = "Normal"``.
+    The toggle lives in the Filter Console (View & System tab); the value
+    is read from session_state so this helper is callable anywhere.
+
+    Builds and deployments are the only indices today that carry a
+    ``testflag`` field, so the helper is invoked exclusively from
+    ``build_scope_filters`` / ``deploy_scope_filters``.
+    """
+    if bool(st.session_state.get("exclude_test_runs", True)):
+        return [{"term": {"testflag": "Normal"}}]
+    return []
+
+
 def build_scope_filters() -> list[dict]:
     """scope_filters() + release-branch only (production pipeline builds)."""
-    return scope_filters() + [{"term": {"branch": "release"}}]
+    return scope_filters() + [{"term": {"branch": "release"}}] + _testflag_filter()
 
 
 def deploy_scope_filters() -> list[dict]:
     """scope_filters() + exclude pre-release/test versions (codeversion 0.*)."""
-    return scope_filters() + [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]
+    return (
+        scope_filters()
+        + [{"bool": {"must_not": [{"prefix": {"codeversion": "0."}}]}}]
+        + _testflag_filter()
+    )
 
 
 def idx_scope(index: str) -> list[dict]:
@@ -7874,8 +7894,15 @@ def _fetch_full_inventory(scope_json: str) -> list[dict]:
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_inv_pulse(apps_json: str, days: int = 14) -> dict:
+def _fetch_inv_pulse(apps_json: str, days: int = 14,
+                     exclude_test: bool = True) -> dict:
     """Daily build + PRD-deploy activity for the given application scope.
+
+    ``exclude_test`` is included in the cache key so the toggle's two
+    states have separate cached results. When True (default), only docs
+    flagged ``testflag = "Normal"`` are counted; when False, every test
+    run is included too. Builds and deployments are the two indices that
+    carry ``testflag``; both are filtered uniformly.
 
     Returns ``{"build": [{"success", "failure", "other"}, ...],
     "deploy_prd": [counts]}`` with one entry per calendar day (oldest first).
@@ -7887,6 +7914,9 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14) -> dict:
         return _empty
     _now = datetime.now(timezone.utc)
     _start = _now - timedelta(days=days)
+    _testflag_clause = (
+        [{"term": {"testflag": "Normal"}}] if exclude_test else []
+    )
     # Builds — daily bucket with status breakdown
     try:
         _br = es_search(
@@ -7895,7 +7925,7 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14) -> dict:
                 "query": {"bool": {"filter": [
                     {"terms": {"application": _apps}},
                     range_filter("startdate", _start, _now),
-                ]}},
+                ] + _testflag_clause}},
                 "aggs": {
                     "tl": {
                         "date_histogram": {
@@ -7941,7 +7971,7 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14) -> dict:
                     {"terms": {"application": _apps}},
                     {"term": {"environment": "prd"}},
                     range_filter("startdate", _start, _now),
-                ]}},
+                ] + _testflag_clause}},
                 "aggs": {
                     "tl": {
                         "date_histogram": {
@@ -8994,6 +9024,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         help="Rerun the page every 60 seconds",
                     )
 
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">▣</span>'
+                        '<span class="iv-fc-section-label">Pipeline data</span>'
+                        '</div>', unsafe_allow_html=True)
+                    st.toggle(
+                        "Production runs only", key="exclude_test_runs",
+                        help="Only count builds + deployments where "
+                             "testflag = \"Normal\". Turn off to include "
+                             "test-flagged runs (testflag = \"Test\").",
+                    )
+
                     if role_pick == "Admin":
                         st.markdown(
                             '<div class="iv-fc-section">'
@@ -9182,7 +9224,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # the current filtered scope so users can redirect the narrative by
     # changing any filter above.
     if _post_apps:
-        _pulse = _fetch_inv_pulse(json.dumps(sorted(_post_apps)), days=14)
+        _pulse = _fetch_inv_pulse(
+            json.dumps(sorted(_post_apps)), days=14,
+            exclude_test=bool(st.session_state.get("exclude_test_runs", True)),
+        )
         _bs = _pulse.get("build_success", [])
         _bf = _pulse.get("build_failure", [])
         _bs_sum = sum(_bs)
