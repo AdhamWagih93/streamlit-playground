@@ -8354,47 +8354,85 @@ def _fetch_jira_open(apps_json: str) -> dict:
     """Aggregate open Jira issues for the given application scope.
 
     Open = ``status`` not in ``CLOSED_JIRA``. Returns
-    ``{"total": int, "priority": {label: count}, "type": {label: count}}``.
+    ``{"total": int, "priority": {label: count}, "type": {label: count},
+    "matched_field": str}``. The Jira index field-naming convention is
+    unknown a priori, so we probe a small set of plausible field combos
+    (matching prisma's bare-keyword convention first, then ``.keyword``
+    subfields, then capitalised variants) and pick the first combo that
+    actually returns data — a single ES round-trip per probe.
     """
     _apps: list[str] = json.loads(apps_json)
-    _empty = {"total": 0, "priority": {}, "type": {}}
+    _empty = {"total": 0, "priority": {}, "type": {}, "matched_field": ""}
     if not _apps:
         return _empty
-    body = {
-        "query": {"bool": {
-            "filter":   [{"terms": {"application.keyword": _apps}}],
-            "must_not": [{"terms": {"status.keyword": CLOSED_JIRA}}],
-        }},
-        "aggs": {
-            "by_priority": {"terms": {
-                "field": "priority.keyword", "size": 20, "missing": "—",
-            }},
-            "by_type": {"terms": {
-                "field": "issuetype.keyword", "size": 20, "missing": "—",
-            }},
-        },
-        "track_total_hits": True,
-    }
-    try:
-        resp = es_search(IDX["jira"], body, size=0)
-    except Exception:
-        return _empty
-    _hits = resp.get("hits") or {}
-    _t = _hits.get("total")
-    _total = (
-        int(_t.get("value", 0)) if isinstance(_t, dict)
-        else int(_t or 0)
+
+    # (application_field, status_field, priority_field, issuetype_field)
+    _probes = (
+        # Bare keyword names — same convention as ef-cicd-* indices.
+        ("application",         "status",         "priority",         "issuetype"),
+        # ``.keyword`` subfield variant (text + keyword multi-field mapping).
+        ("application.keyword", "status.keyword", "priority.keyword", "issuetype.keyword"),
+        # Some Jira mirrors capitalise top-level fields.
+        ("Application",         "Status",         "Priority",         "IssueType"),
+        # Mixed: bare app + .keyword on the rest (common when app is the join key).
+        ("application",         "status.keyword", "priority.keyword", "issuetype.keyword"),
+        # Last-resort: try a `type` field instead of `issuetype` (some
+        # exporters flatten issuetype.name into a `type` keyword).
+        ("application",         "status",         "priority",         "type"),
     )
-    _aggs = resp.get("aggregations") or {}
-    _by_p = {
-        str(_b.get("key", "")): int(_b.get("doc_count") or 0)
-        for _b in (_aggs.get("by_priority") or {}).get("buckets", [])
-    }
-    _by_t = {
-        str(_b.get("key", "")): int(_b.get("doc_count") or 0)
-        for _b in (_aggs.get("by_type") or {}).get("buckets", [])
-    }
-    return {"total": _total, "priority": _by_p, "type": _by_t}
+
+    _best: dict | None = None
+    for _af, _sf, _pf, _tf in _probes:
+        body = {
+            "query": {"bool": {
+                "filter":   [{"terms": {_af: _apps}}],
+                "must_not": [{"terms": {_sf: CLOSED_JIRA}}],
+            }},
+            "aggs": {
+                "by_priority": {"terms": {
+                    "field": _pf, "size": 20, "missing": "—",
+                }},
+                "by_type": {"terms": {
+                    "field": _tf, "size": 20, "missing": "—",
+                }},
+            },
+            "track_total_hits": True,
+        }
+        try:
+            resp = es_search(IDX["jira"], body, size=0)
+        except Exception:
+            continue
+        _hits = resp.get("hits") or {}
+        _t = _hits.get("total")
+        _total = (
+            int(_t.get("value", 0)) if isinstance(_t, dict)
+            else int(_t or 0)
+        )
+        _aggs = resp.get("aggregations") or {}
+        _by_p = {
+            str(_b.get("key", "")): int(_b.get("doc_count") or 0)
+            for _b in (_aggs.get("by_priority") or {}).get("buckets", [])
+        }
+        _by_t = {
+            str(_b.get("key", "")): int(_b.get("doc_count") or 0)
+            for _b in (_aggs.get("by_type") or {}).get("buckets", [])
+        }
+        # Take the first probe that yields any results. If every probe
+        # comes back zero, fall through to the diagnostic branch below.
+        if _total > 0 or _by_p or _by_t:
+            return {
+                "total": _total,
+                "priority": _by_p,
+                "type": _by_t,
+                "matched_field": f"app={_af} status={_sf} pri={_pf} type={_tf}",
+            }
+        _best = _best or {
+            "total": _total,
+            "priority": _by_p,
+            "type": _by_t,
+            "matched_field": "",
+        }
+    return _best or _empty
 
 
 def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
@@ -9593,15 +9631,28 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _rate_tag_lbl = "quiet"
 
         # Jira open-issue rollup — only for roles that actually see Jira.
-        # Returns {"total", "priority": {label: count}, "type": {label: count}}.
+        # Returns {"total", "priority": {label: count}, "type": {label: count},
+        #          "matched_field": str}.
         _jira_show = _ROLE_SHOWS_JIRA.get(_effective_role, False)
         if _jira_show:
             _jira = _fetch_jira_open(json.dumps(sorted(_post_apps)))
         else:
-            _jira = {"total": 0, "priority": {}, "type": {}}
+            _jira = {"total": 0, "priority": {}, "type": {}, "matched_field": ""}
         _jira_total: int = int(_jira.get("total") or 0)
         _jira_pri: dict[str, int] = dict(_jira.get("priority") or {})
         _jira_type: dict[str, int] = dict(_jira.get("type") or {})
+        _jira_matched: str = str(_jira.get("matched_field") or "")
+        # When no probe yielded any data, the field-naming convention in
+        # ef-bs-jira-issues doesn't match any of our guesses (or the index
+        # is empty). Surface that explicitly so users don't read "0 open"
+        # as "fleet is healthy".
+        _jira_unmapped = (
+            _jira_show
+            and _jira_total == 0
+            and not _jira_pri
+            and not _jira_type
+            and not _jira_matched
+        )
         # Severity tag — surface highest/critical first, then high.
         _pri_lower = {k.lower(): v for k, v in _jira_pri.items()}
         _highest = (
@@ -9610,7 +9661,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + _pri_lower.get("critical", 0)
         )
         _high = _pri_lower.get("high", 0)
-        if _jira_total == 0 and _jira_show:
+        if _jira_unmapped:
+            _jira_tag, _jira_tag_lbl = "warn", "field mismatch"
+        elif _jira_total == 0 and _jira_show:
             _jira_tag, _jira_tag_lbl = "ok", "clean"
         elif _highest > 0:
             _jira_tag, _jira_tag_lbl = "crit", f"{_highest} blocker"
@@ -9643,11 +9696,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if _v:
                 _pri_segments.append((_v, "var(--cc-text-mute)",
                                       _lbl if _lbl != "—" else "(no priority)"))
+        if _jira_unmapped:
+            _jira_bar_empty_msg = (
+                "Jira index reachable but no probe matched · check field "
+                "names in ef-bs-jira-issues"
+            )
+        elif _jira_show:
+            _jira_bar_empty_msg = "no open issues"
+        else:
+            _jira_bar_empty_msg = "Jira hidden for role"
         _jira_bar = (
             _svg_dist_bar(_pri_segments) if _pri_segments
-            else '<div class="iv-pulse-empty">'
-                 + ("no open issues" if _jira_show else "Jira hidden for role")
-                 + '</div>'
+            else f'<div class="iv-pulse-empty">{_jira_bar_empty_msg}</div>'
         )
 
         # Type chip strip — top six types, biggest first; "—" rendered as
@@ -9816,23 +9876,28 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Tile 2 — Jira open issues. For roles that don't see Jira (Operations
         # today) we still render the tile so the strip layout stays balanced
         # but it announces "Jira hidden for role".
-        _jira_value_html = (
-            f'<div class="iv-pulse-value">{_jira_total}</div>'
-            if _jira_show
-            else '<div class="iv-pulse-value">—</div>'
-        )
-        _jira_sub_html = (
-            '<div class="iv-pulse-sub">priority breakdown · '
-            f'<b>{len(_jira_type)}</b> issue type'
-            f'{"s" if len(_jira_type) != 1 else ""}'
-            '</div>'
-            if _jira_show and _jira_total
-            else (
-                '<div class="iv-pulse-sub">no open issues in scope</div>'
-                if _jira_show
-                else '<div class="iv-pulse-sub">role has no Jira visibility</div>'
+        if not _jira_show:
+            _jira_value_html = '<div class="iv-pulse-value">—</div>'
+            _jira_sub_html = '<div class="iv-pulse-sub">role has no Jira visibility</div>'
+        elif _jira_unmapped:
+            _jira_value_html = '<div class="iv-pulse-value">?</div>'
+            _jira_sub_html = (
+                '<div class="iv-pulse-sub">'
+                'no probe matched · expected fields: <code>application</code>, '
+                '<code>status</code>, <code>priority</code>, <code>issuetype</code>'
+                '</div>'
             )
-        )
+        elif _jira_total:
+            _jira_value_html = f'<div class="iv-pulse-value">{_jira_total}</div>'
+            _jira_sub_html = (
+                '<div class="iv-pulse-sub">priority breakdown · '
+                f'<b>{len(_jira_type)}</b> issue type'
+                f'{"s" if len(_jira_type) != 1 else ""}'
+                '</div>'
+            )
+        else:
+            _jira_value_html = '<div class="iv-pulse-value">0</div>'
+            _jira_sub_html = '<div class="iv-pulse-sub">no open issues in scope</div>'
 
         _pulse_html = (
             '<div class="iv-pulse-strip">'
