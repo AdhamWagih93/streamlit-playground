@@ -5139,7 +5139,14 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                                                 "application", "codeversion", "status",
                                                 "Vcritical", "Vhigh", "Vmedium", "Vlow",
                                                 "Ccritical", "Chigh", "Cmedium", "Clow",
-                                                "imageName", "imageTag", "enddate", "startdate",
+                                                "imageName", "imageTag",
+                                                # Date fields — different prisma index versions use
+                                                # different keys, so request every plausible name and
+                                                # let the pickler below resolve them in order.
+                                                "enddate", "startdate", "EndDate", "StartDate",
+                                                "scandate", "ScanDate", "scan_date",
+                                                "lastScanDate", "lastScannedDate",
+                                                "created", "Created", "timestamp", "@timestamp",
                                             ],
                                         }
                                     }
@@ -5166,6 +5173,23 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
             key = (_app, _ver)
             if wanted and key not in wanted:
                 continue
+            # Resolve a usable scan timestamp from whichever date field the
+            # underlying document carries. Earlier code only checked
+            # ``enddate`` / ``startdate`` — newer prisma docs sometimes only
+            # carry a ``scandate`` / ``lastScanDate`` / ``@timestamp``.
+            _when = ""
+            for _df in (
+                "enddate", "EndDate",
+                "startdate", "StartDate",
+                "scandate", "ScanDate", "scan_date",
+                "lastScanDate", "lastScannedDate",
+                "created", "Created",
+                "timestamp", "@timestamp",
+            ):
+                _dv = _s.get(_df)
+                if _dv:
+                    _when = _dv
+                    break
             out[key] = {
                 "Vcritical": int(_s.get("Vcritical") or 0),
                 "Vhigh":     int(_s.get("Vhigh")     or 0),
@@ -5178,7 +5202,7 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                 "status":    _s.get("status", "")    or "",
                 "imageName": _s.get("imageName", "") or "",
                 "imageTag":  _s.get("imageTag", "")  or "",
-                "when":      _s.get("enddate") or _s.get("startdate") or "",
+                "when":      _when,
             }
     return out
 
