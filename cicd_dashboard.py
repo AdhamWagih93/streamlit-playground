@@ -1634,50 +1634,86 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
  * table. */
 .iv-proj-ribbon {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;          /* single-line strip — no vertical bloat */
     align-items: center;
-    gap: 6px;
-    margin: 0 0 8px 0;
-    padding: 0;
+    gap: 5px;
+    margin: 0 0 6px 0;
+    padding: 4px 0 6px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--cc-border-hi) 80%, transparent) transparent;
+    /* Soft fade on the right edge hints at horizontal scroll without
+       reserving extra space. */
+    mask-image: linear-gradient(90deg, black 0%, black 92%, transparent 100%);
+    -webkit-mask-image: linear-gradient(90deg, black 0%, black 92%, transparent 100%);
+}
+.iv-proj-ribbon::-webkit-scrollbar { height: 4px; }
+.iv-proj-ribbon::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--cc-border-hi) 80%, transparent);
+    border-radius: 2px;
 }
 .iv-proj-ribbon .iv-pr-lbl {
-    font-size: 0.62rem;
+    font-size: 0.58rem;
     color: var(--cc-text-mute);
     font-weight: 700;
     letter-spacing: 0.10em;
     text-transform: uppercase;
-    margin-right: 2px;
+    margin-right: 4px;
+    white-space: nowrap;
+    flex: 0 0 auto;
 }
 .iv-proj-ribbon .iv-pr-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    border-radius: 14px;
-    font-size: 0.72rem;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.66rem;
     font-weight: 600;
     background: var(--cc-surface2);
     color: var(--cc-text-dim);
     border: 1px solid var(--cc-border);
     cursor: pointer;
     transition: transform .12s ease, box-shadow .12s ease;
+    white-space: nowrap;
+    flex: 0 0 auto;
+    line-height: 1.3;
 }
 .iv-proj-ribbon .iv-pr-chip:hover {
     transform: translateY(-1px);
     box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
 }
 .iv-proj-ribbon .iv-pr-chip .iv-pr-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     display: inline-block;
     flex: none;
 }
 .iv-proj-ribbon .iv-pr-chip .iv-pr-n {
-    font-size: 0.64rem;
+    font-size: 0.58rem;
     font-weight: 500;
     opacity: 0.65;
-    margin-left: 2px;
+    margin-left: 1px;
+    font-variant-numeric: tabular-nums;
+}
+.iv-proj-ribbon .iv-pr-more {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    background: transparent;
+    border: 1px dashed var(--cc-border-hi);
+    border-radius: 12px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    line-height: 1.3;
 }
 .iv-proj-ribbon .iv-pr-chip.is-crit  { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
 .iv-proj-ribbon .iv-pr-chip.is-high  { border-color:#fed7aa; background:#fff7ed; color:#9a3412; }
@@ -6350,8 +6386,17 @@ with st.container(key="cc_filter_rail"):
     # popover surfaces the raw session state, the mapping rules, and the
     # tie-break so "why am I detected as X" never needs a code dive.
     with _rail[0]:
-        _ident_cols = st.columns([4.2, 1], gap="small", vertical_alignment="center")
-        with _ident_cols[0]:
+        # Non-admins don't need the role-resolution explainer — they'd never
+        # change the underlying auth wiring anyway. Render the badge alone in
+        # a single column for them; admins keep the ⓘ popover beside it.
+        if _is_admin:
+            _ident_cols = st.columns([4.2, 1], gap="small", vertical_alignment="center")
+            _badge_col = _ident_cols[0]
+            _why_col = _ident_cols[1]
+        else:
+            _badge_col = st.container()
+            _why_col = None
+        with _badge_col:
             st.markdown(
                 f'<div class="cc-rail-id">'
                 f'<div class="cc-rail-id-role" '
@@ -6361,7 +6406,8 @@ with st.container(key="cc_filter_rail"):
                 f'</div>',
                 unsafe_allow_html=True,
             )
-        with _ident_cols[1]:
+        if _why_col is not None:
+          with _why_col:
             with st.popover("ⓘ", help="How was this role picked?",
                             use_container_width=True):
                 st.markdown(
@@ -6549,6 +6595,13 @@ _show_el  = True
 _show_inv = True
 st.markdown('<a class="anchor" id="sec-inventory"></a>', unsafe_allow_html=True)
 st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
+# Two top-level slots so the filter bar (controls) lives as a sibling of the
+# inventory body — both pinned at page-scope. Putting controls at the same
+# DOM depth as the rail lets `position: sticky` on the filter bar reference
+# the page's main scroll context (the natural one), instead of the
+# inventory slot's containing block which would only let the bar stick
+# WHILE the inventory tab is in view.
+_iv_top_controls_slot = st.empty()
 _inventory_slot = st.empty()
 
 
@@ -10331,8 +10384,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _pr_by_proj.items(),
             key=lambda kv: (-_pr_TIER_RANK[kv[1]["worst"]], -kv[1]["count"], kv[0]),
         )
+        # Cap visible chips so a fleet of 80+ projects doesn't push the
+        # table off-screen. Overflow surfaces as a "+N more" pill that
+        # the horizontal scroller can still reach.
+        _PR_VISIBLE_CAP = 24
+        _pr_visible = _pr_sorted[:_PR_VISIBLE_CAP]
+        _pr_overflow = len(_pr_sorted) - len(_pr_visible)
         _pr_chips: list[str] = []
-        for _proj, _b in _pr_sorted:
+        for _proj, _b in _pr_visible:
             _pid_pr = _iv_proj_pop_id(_proj) if _proj in _iv_proj_map else ""
             _t = _b["worst"]
             _n = _b["count"]
@@ -10353,6 +10412,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'<span class="iv-pr-dot is-{_t}"></span>{_proj}'
                     f'<span class="iv-pr-n">{_n}</span></span>'
                 )
+        if _pr_overflow > 0:
+            _pr_chips.append(
+                f'<span class="iv-pr-more" title="{_pr_overflow} more project'
+                f'{"s" if _pr_overflow != 1 else ""} not shown — '
+                f'narrow filters to surface them">+{_pr_overflow} more</span>'
+            )
         st.markdown(
             '<div class="iv-proj-ribbon">'
             f'<span class="iv-pr-lbl">{len(_pr_by_proj)} project'
@@ -10969,10 +11034,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 # scope is always current when the event log fragment executes, regardless
 # of which tab is visible.
 if _show_inv and _inventory_slot is not None:
+    # Slot A is now the page-level _iv_top_controls_slot (sibling of the
+    # inventory slot). Reusing the same name keeps the renderer call below
+    # unchanged — the actual st.empty() target is just located higher in
+    # the DOM so position:sticky has the page scroll as its containing
+    # block.
+    _iv_controls_slot = _iv_top_controls_slot
     with _inventory_slot.container():
-        # Slot A: filter bar + stat tiles + fleet pulse. Rendered ABOVE
-        # the tab group because both tabs inherit the same filter state.
-        _iv_controls_slot = st.empty()
 
         # Live tab badges reflect the last fragment run. On the first run of
         # a session the counters may be zero; they stabilize on the next
