@@ -5441,16 +5441,27 @@ def range_filter(field: str, start: datetime, end: datetime) -> dict:
 # COMMAND BAR
 # =============================================================================
 
-ROLES = ["Admin", "Developer", "QC", "Operations"]
-ROLE_ICONS = {"Admin": "🛡", "Developer": "⌨", "QC": "🔬", "Operations": "🚀"}
-ROLE_COLORS = {"Admin": "#4f46e5", "Developer": "#2563eb", "QC": "#7c3aed", "Operations": "#059669"}
+ROLES = ["Admin", "CLevel", "Developer", "QC", "Operations"]
+# CLevel = executive-level role with the same VIEW as Admin but a distinct
+# display identity. Treated as admin-equivalent for every gate via
+# `_is_admin`, but the rail badge / role-detection trace label it "CLevel"
+# so executives don't read as administrators in screenshots.
+ROLE_ICONS = {
+    "Admin": "🛡", "CLevel": "♛",
+    "Developer": "⌨", "QC": "🔬", "Operations": "🚀",
+}
+ROLE_COLORS = {
+    "Admin": "#4f46e5", "CLevel": "#b45309",  # warm amber for the exec view
+    "Developer": "#2563eb", "QC": "#7c3aed", "Operations": "#059669",
+}
 # Map role → inventory team field(s) used to filter projects. Each role is
 # scoped *strictly* to its own ownership field on the inventory document —
 # Developer sees only projects where dev_team ∈ their teams; QC only where
-# qc_team matches; Operations only where ops_team matches. Admin bypasses
-# this entirely.
+# qc_team matches; Operations only where ops_team matches. Admin and CLevel
+# bypass this entirely (full fleet visibility).
 ROLE_TEAM_FIELDS: dict[str, list[str]] = {
     "Admin":     [],
+    "CLevel":    [],
     "Developer": ["dev_team.keyword"],
     "QC":        ["qc_team.keyword"],
     "Operations":  ["ops_team.keyword"],
@@ -6296,6 +6307,9 @@ _user_role_keys: list[str] = (
 # can't silently elevate.
 _ROLE_STRICT: dict[str, str] = {
     "admin":           "Admin",
+    "clevel":          "CLevel",
+    "c-level":         "CLevel",
+    "executive":       "CLevel",
     "developer":       "Developer",
     "quality-control": "QC",
     "operator":        "Operations",
@@ -6318,10 +6332,20 @@ _detected_roles = list(dict.fromkeys(_detected_roles))
 
 
 # ── Resolve role early so the filter rail can style itself by role color ────
+# Priority: Admin > CLevel > anything else. Admin and CLevel both grant
+# full-fleet visibility, but Admin wins the tie-break so an admin who's
+# ALSO listed as clevel surfaces as Admin (matches the more privileged
+# label).
 if "Admin" in _detected_roles:
     role_pick = "Admin"
     _role_pick_reason = (
         "'admin' present in session_state.user_roles — highest privilege wins"
+    )
+elif "CLevel" in _detected_roles:
+    role_pick = "CLevel"
+    _role_pick_reason = (
+        "'clevel' present in session_state.user_roles — executive view "
+        "(admin-equivalent visibility, distinct identity)"
     )
 elif _detected_roles:
     role_pick = _detected_roles[0]
@@ -6344,32 +6368,42 @@ _TW_LABELS = list(PRESETS.keys())
 _preset_default_idx = _TW_LABELS.index("7d")
 
 # ── Role-scoped visibility flags — relied on by scope filters + sections ───
+# CLevel mirrors Admin in every flag below — same view, different label.
 _ROLE_SHOWS_JIRA: dict[str, bool] = {
-    "Admin": True, "Developer": True, "QC": True, "Operations": False,
+    "Admin": True, "CLevel": True,
+    "Developer": True, "QC": True, "Operations": False,
 }
 _ROLE_SHOWS_BUILDS: dict[str, bool] = {
-    "Admin": True, "Developer": True, "QC": False, "Operations": False,
+    "Admin": True, "CLevel": True,
+    "Developer": True, "QC": False, "Operations": False,
 }
 _ROLE_EVENT_TYPES: dict[str, list[str]] = {
     "Admin":     ["Build-develop", "Build-release", "Deployments", "Releases", "Requests", "Commits"],
+    "CLevel":    ["Build-develop", "Build-release", "Deployments", "Releases", "Requests", "Commits"],
     "Developer": ["Commits", "Build-develop", "Build-release", "Deployments"],
     "QC":        ["Deployments", "Releases", "Requests"],
     "Operations":  ["Deployments", "Releases", "Requests"],
 }
 _ROLE_ENVS: dict[str, list[str]] = {
     "Admin":     ["prd", "uat", "qc", "dev"],
+    "CLevel":    ["prd", "uat", "qc", "dev"],
     "Developer": ["dev"],
     "QC":        ["qc"],
     "Operations":  ["uat", "prd"],
 }
 _ROLE_APPROVAL_STAGES: dict[str, list[str]] = {
     "Admin":     [],
+    "CLevel":    [],
     "Developer": [],
     "QC":        ["qc", "request_deploy_qc", "request_promote"],
     "Operations":  ["uat", "prd", "request_deploy_uat", "request_deploy_prd", "request_promote"],
 }
 _effective_role = role_pick
-_is_admin = (_effective_role == "Admin")
+# `_is_admin` gates EVERY admin-equivalent view (full-fleet visibility,
+# admin-only Filter Console toggles, glossary expander, role-detection
+# popover, …). CLevel rides the same rails — its only distinction is the
+# display label on the rail badge.
+_is_admin = (_effective_role in ("Admin", "CLevel"))
 
 # Team auto-detection (from st.session_state.teams) — resolves team_filter and
 # the _active_teams list that drive project/company scope queries downstream.
@@ -6387,14 +6421,17 @@ else:
     _team_display = "— no team —"
 
 if team_filter:
-    if role_pick == "Admin":
+    if _is_admin:
+        # Admin / CLevel: union the team's apps across every team-field —
+        # they have full visibility regardless of which department owns
+        # the application.
         _admin_team_apps: set[str] = set()
         for _r in ["Developer", "QC", "Operations"]:
             _admin_team_apps.update(_load_team_applications(_r, team_filter))
         _team_apps = sorted(_admin_team_apps)
     else:
         _team_apps = _load_team_applications(role_pick, team_filter)
-elif role_pick != "Admin" and _active_teams:
+elif (not _is_admin) and _active_teams:
     _union: set[str] = set()
     for _t in _active_teams:
         _union.update(_load_team_applications(role_pick, _t))
@@ -6404,12 +6441,12 @@ else:
 
 # Resolve project scope before the rail so the project dropdown respects
 # admin_view_all + team assignment without re-querying per widget.
-# Admin sees every project by default on first load — they can opt out via
-# the toggle in the settings popover. Non-admins never see the toggle and
-# stay in team-scoped mode.
-if role_pick == "Admin" and "admin_view_all" not in st.session_state:
+# Admin / CLevel see every project by default on first load — they can opt
+# out via the toggle in the Filter Console. Non-admins never see the
+# toggle and stay in team-scoped mode.
+if _is_admin and "admin_view_all" not in st.session_state:
     st.session_state["admin_view_all"] = True
-admin_view_all = bool(st.session_state.get("admin_view_all", False)) if role_pick == "Admin" else False
+admin_view_all = bool(st.session_state.get("admin_view_all", False)) if _is_admin else False
 
 # Time window / global toggles — defaults seeded here so the rail can read
 # them via session_state. The actual widgets live inside the inventory's
@@ -6418,7 +6455,7 @@ st.session_state.setdefault("time_preset", _TW_LABELS[_preset_default_idx])
 st.session_state.setdefault("auto_refresh", False)
 st.session_state.setdefault("exclude_svc", True)
 st.session_state.setdefault("exclude_test_runs", True)
-if role_pick == "Admin":
+if _is_admin:
     if admin_view_all:
         _proj_scoped = _all_projects
         _proj_help = f"{len(_all_projects)} projects · view-all ON"
@@ -6432,7 +6469,7 @@ if role_pick == "Admin":
             )
         else:
             _proj_scoped = _all_projects
-            _proj_help = f"{len(_all_projects)} projects (no admin team)"
+            _proj_help = f"{len(_all_projects)} projects (no team)"
 elif _active_teams:
     _proj_scoped = _load_projects_for_role_teams(role_pick, tuple(_active_teams))
     _proj_help = (
@@ -6535,6 +6572,8 @@ with st.container(key="cc_filter_rail"):
                     '<div class="cc-role-why-sub">Mapping rules (strict)</div>'
                     '<ul class="cc-role-why-rules">'
                     '<li><code>admin</code> → <b>Admin</b></li>'
+                    '<li><code>clevel</code> / <code>c-level</code> / '
+                    '<code>executive</code> → <b>CLevel</b></li>'
                     '<li><code>developer</code> → <b>Developer</b></li>'
                     '<li><code>quality-control</code> → <b>QC</b></li>'
                     '<li><code>operator</code> / <code>operations</code> → <b>Operations</b></li>'
@@ -6544,8 +6583,8 @@ with st.container(key="cc_filter_rail"):
                     'that\'s the canonical role source across this repo. '
                     'Comparison is case-insensitive on the stripped key. '
                     'Anything not in this list is ignored (no loose aliases). '
-                    'If <code>admin</code> is a key, it wins regardless of '
-                    'order.'
+                    'Tie-break: <code>admin</code> wins, then '
+                    '<code>clevel</code>, then the first recognised role.'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -6558,7 +6597,7 @@ with st.container(key="cc_filter_rail"):
                     '<li><b>Developer</b> → <code>dev_team</code> ∈ your teams</li>'
                     '<li><b>QC</b> → <code>qc_team</code> ∈ your teams</li>'
                     '<li><b>Operations</b> → <code>ops_team</code> ∈ your teams</li>'
-                    '<li><b>Admin</b> → bypasses team scoping (view-all)</li>'
+                    '<li><b>Admin</b> / <b>CLevel</b> → bypass team scoping (full fleet)</li>'
                     '</ul>'
                     '<div class="cc-role-why-note">'
                     'Non-admin roles only see inventory projects where the '
@@ -6627,7 +6666,7 @@ with st.container(key="cc_filter_rail"):
     # upstream via `st.session_state.setdefault(...)`.
     preset       = st.session_state["time_preset"]
     auto_refresh = bool(st.session_state["auto_refresh"])
-    exclude_svc  = bool(st.session_state["exclude_svc"]) if role_pick == "Admin" else True
+    exclude_svc  = bool(st.session_state["exclude_svc"]) if _is_admin else True
 
     # Global company/project pickers were removed from the rail — the
     # Filter Console below owns scope. Defaults stay empty so every rail-level
@@ -6660,10 +6699,11 @@ with st.container(key="cc_filter_rail"):
     )
 
 # For non-admin roles with no specific project picked, restrict queries to
-# the role's visible projects. For Admin, scope the same unless view-all.
+# the role's visible projects. Admin / CLevel scope the same way unless
+# their view-all toggle is on.
 _scoped_projects: list[str] = []
 if not project_filter:
-    if role_pick != "Admin":
+    if not _is_admin:
         _scoped_projects = _proj_scoped
     elif not admin_view_all:
         _scoped_projects = _proj_scoped
@@ -6718,7 +6758,7 @@ def scope_filters() -> list[dict]:
         fs.append({"terms": {"project": _scoped_projects}})
     # Team-based application restriction — skipped for admins in view-all
     # mode so the toggle truly means "every project, every app".
-    if _team_apps and not (role_pick == "Admin" and admin_view_all):
+    if _team_apps and not (_is_admin and admin_view_all):
         fs.append({"terms": {"application": _team_apps}})
     # Refuse to run unscoped when the role's team field has zero coverage.
     if _role_team_scope_empty():
@@ -6739,7 +6779,7 @@ def scope_filters_inv() -> list[dict]:
         fs.append({"terms": {"project.keyword": _scoped_projects}})
     # Team-based application restriction — skipped for admins in view-all
     # mode so the toggle truly means "every project, every app".
-    if _team_apps and not (role_pick == "Admin" and admin_view_all):
+    if _team_apps and not (_is_admin and admin_view_all):
         fs.append({"terms": {"application.keyword": _team_apps}})
     # Refuse to run unscoped when the role's team field has zero coverage.
     if _role_team_scope_empty():
@@ -9590,13 +9630,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                              "test-flagged runs (testflag = \"Test\").",
                     )
 
-                    if role_pick == "Admin":
+                    if _is_admin:
+                        # Admin + CLevel both see the privileged toggles —
+                        # they share full-fleet visibility. The label uses
+                        # the role's icon/colour so executives don't see a
+                        # confusing "Admin" header.
+                        _adm_glyph = ROLE_ICONS.get(role_pick, "🛡")
+                        _adm_color = ROLE_COLORS.get(role_pick, "var(--cc-accent)")
                         st.markdown(
-                            '<div class="iv-fc-section">'
-                            '<span class="iv-fc-section-glyph" '
-                            'style="color:var(--cc-accent)">🛡</span>'
-                            '<span class="iv-fc-section-label">Admin</span>'
-                            '</div>', unsafe_allow_html=True)
+                            f'<div class="iv-fc-section">'
+                            f'<span class="iv-fc-section-glyph" '
+                            f'style="color:{_adm_color}">{_adm_glyph}</span>'
+                            f'<span class="iv-fc-section-label">{role_pick}</span>'
+                            f'</div>', unsafe_allow_html=True)
                         st.toggle(
                             "View all projects", key="admin_view_all",
                             help="Bypass the default team scoping — see every project",
