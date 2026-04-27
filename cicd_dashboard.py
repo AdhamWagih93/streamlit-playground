@@ -797,8 +797,9 @@ div[data-testid="stPopover"] button:hover {
     background: transparent;
     /* visible styling */
     width: min(420px, 92vw);
+    max-height: min(86vh, 880px);
+    overflow: auto;
     border-radius: 14px;
-    overflow: hidden;
     box-shadow:
         0 1px 2px rgba(26, 29, 46, .05),
         0 20px 50px -10px rgba(26, 29, 46, .25),
@@ -807,6 +808,12 @@ div[data-testid="stPopover"] button:hover {
     font-family: var(--cc-sans);
     /* subtle fade-in */
     animation: el-pop-in .18s ease-out;
+}
+/* Version popovers carry the 3-up security scan grid, so they need to be
+   wider than the app-detail popover. Falls back to viewport width on
+   narrow screens. */
+.el-app-pop.is-version {
+    width: min(820px, 96vw);
 }
 .el-app-pop::backdrop {
     background: rgba(26, 29, 46, 0.28);
@@ -2479,6 +2486,261 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border: 1px dashed color-mix(in srgb, var(--cc-border) 80%, transparent);
     border-radius: 6px;
 }
+
+/* ── Compact 3-up security scan grid (version popover) ─────────────────── */
+.el-app-pop .ap-section.ap-section--scan {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.ap-section-note {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--cc-text-mute);
+    text-align: right;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.ap-section-note .cmp-pill {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    color: var(--cc-ink);
+    background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 28%, transparent);
+    padding: 1px 7px;
+    border-radius: 999px;
+}
+.ap-section-note--live {
+    color: var(--cc-green);
+}
+
+.ap-scan-grid {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 4px;
+}
+@media (max-width: 720px) {
+    .ap-scan-grid { grid-template-columns: 1fr; }
+}
+
+.ap-scan-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px 10px 13px;
+    background: color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 4%, var(--cc-surface));
+    border: 1px solid color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 18%, var(--cc-border));
+    border-left: 3px solid var(--ap-scan-card-c, var(--cc-accent));
+    border-radius: 0 8px 8px 0;
+    min-width: 0;
+}
+.ap-scan-card--empty {
+    background: color-mix(in srgb, var(--cc-text-mute) 4%, transparent);
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--cc-border) 80%, transparent);
+    border-left-style: dashed;
+    color: var(--cc-text-mute);
+}
+.ap-scan-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    line-height: 1.2;
+}
+.ap-scan-card-glyph {
+    color: var(--ap-scan-card-c, var(--cc-accent));
+    font-size: 1.0rem;
+    line-height: 1;
+}
+.ap-scan-card-name {
+    font-family: var(--cc-data);
+    font-size: .60rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--ap-scan-card-c, var(--cc-accent));
+    flex: 1;
+    min-width: 0;
+}
+.ap-scan-card-status {
+    font-family: var(--cc-data);
+    font-size: .54rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text);
+    background: color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 26%, transparent);
+    padding: 1px 7px;
+    border-radius: 999px;
+    line-height: 1.4;
+}
+.ap-scan-card-when {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--cc-text-mute);
+    line-height: 1.2;
+}
+.ap-scan-card-empty {
+    font-size: .70rem;
+    color: var(--cc-text-mute);
+    text-align: center;
+    padding: 14px 0 10px 0;
+    letter-spacing: .04em;
+}
+
+/* Compact DAST meta strip — environment + extra counts inline */
+.ap-scan-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    margin: 2px 0 0 0;
+    font-family: var(--cc-data);
+    font-size: .56rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+}
+.ap-scan-card-env {
+    color: var(--ap-scan-card-c, var(--cc-accent));
+    font-weight: 700;
+    background: color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 14%, transparent);
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+.ap-scan-card-aux {
+    color: var(--cc-text-mute);
+}
+.ap-scan-card-aux b {
+    color: var(--cc-ink);
+    font-weight: 700;
+    margin-left: 2px;
+    font-variant-numeric: tabular-nums;
+}
+.ap-scan-card-url {
+    font-family: var(--cc-mono);
+    font-size: .58rem;
+    color: var(--cc-text-mute);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 1px;
+}
+
+/* Section subhead inside a card (Vulnerabilities / Compliance) */
+.ap-scan-card-section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding-bottom: 3px;
+    border-bottom: 1px dashed
+        color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 22%, transparent);
+    font-family: var(--cc-data);
+    font-size: .56rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+}
+.ap-scan-card-section--c { margin-top: 8px; }
+.ap-scan-card-total {
+    margin-left: auto;
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    color: var(--cc-ink);
+    font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 14%, transparent);
+    padding: 0 7px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--ap-scan-card-c, var(--cc-accent)) 26%, transparent);
+}
+.ap-scan-card-delta-chip {
+    margin-left: 6px;
+    font-family: var(--cc-data);
+    font-size: .54rem;
+    letter-spacing: .10em;
+    color: var(--cc-text-mute);
+    background: color-mix(in srgb, var(--cc-text-mute) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-border) 90%, transparent);
+    padding: 0 6px;
+    border-radius: 999px;
+}
+
+.ap-scan-card-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 3px;
+}
+.ap-scan-row {
+    display: grid;
+    grid-template-columns: 6px 1fr auto auto;
+    gap: 7px;
+    align-items: center;
+    padding: 3px 7px 3px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--cc-text-mute) 3%, transparent);
+}
+.ap-scan-row.zero {
+    opacity: .55;
+}
+.ap-scan-row.critical { background: color-mix(in srgb, var(--cc-red) 9%, transparent); }
+.ap-scan-row.high     { background: color-mix(in srgb, var(--cc-amber) 9%, transparent); }
+.ap-scan-row.medium   { background: color-mix(in srgb, var(--cc-blue) 8%, transparent); }
+.ap-scan-row.low      { background: color-mix(in srgb, var(--cc-text-mute) 4%, transparent); }
+.ap-scan-row.critical.zero,
+.ap-scan-row.high.zero,
+.ap-scan-row.medium.zero,
+.ap-scan-row.low.zero { background: color-mix(in srgb, var(--cc-text-mute) 2%, transparent); }
+.ap-scan-row-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: .7;
+}
+.ap-scan-row.critical .ap-scan-row-dot { background: var(--cc-red); }
+.ap-scan-row.high     .ap-scan-row-dot { background: var(--cc-amber); }
+.ap-scan-row.medium   .ap-scan-row-dot { background: var(--cc-blue); }
+.ap-scan-row.low      .ap-scan-row-dot { background: var(--cc-text-mute); }
+.ap-scan-row-name {
+    font-family: var(--cc-body);
+    font-size: .68rem;
+    color: var(--cc-text-dim);
+    letter-spacing: .005em;
+}
+.ap-scan-row.nonzero .ap-scan-row-name { color: var(--cc-text); font-weight: 600; }
+.ap-scan-row-num {
+    font-family: var(--cc-display);
+    font-size: .92rem;
+    font-weight: 700;
+    color: var(--cc-ink);
+    font-variant-numeric: tabular-nums lining-nums;
+    line-height: 1;
+}
+.ap-scan-row-delta {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .03em;
+    font-variant-numeric: tabular-nums;
+    padding: 1px 5px;
+    border-radius: 4px;
+    line-height: 1.4;
+    min-width: 38px;
+    text-align: right;
+}
+.ap-scan-row-delta.up   { color: var(--cc-red);   background: color-mix(in srgb, var(--cc-red)   12%, transparent); }
+.ap-scan-row-delta.down { color: var(--cc-green); background: color-mix(in srgb, var(--cc-green) 12%, transparent); }
+.ap-scan-row-delta.eq   { color: var(--cc-text-mute); background: color-mix(in srgb, var(--cc-text-mute) 6%, transparent); }
 
 .iv-pulse-axis {
     display: flex;
@@ -7590,62 +7852,150 @@ def _render_event_log() -> None:
                 f'    <span class="ap-k">Version</span><span class="ap-v empty">none on record</span>'
             )
 
-        # ── Multi-source security scan block (Prismacloud + Invicti + ZAP) ──
-        # Each scanner emits its own header strip and severity tiles.
-        # Δ vs current prd is computed per-scanner against that scanner's
-        # own prd-version baseline (apples-to-apples).
+        # ── Compact 3-up security scan grid (Prismacloud + Invicti + ZAP) ──
+        # Same shape as the inventory version popover so users build one
+        # mental model. Each scanner is a vertical card with horizontal
+        # severity rows showing inline Δ vs the live PRD version.
         _SCAN_SOURCES_EL = (
             ("prisma",  "Prismacloud", "⛟", "var(--cc-blue)",  _prisma_map,  True),
             ("invicti", "Invicti",     "⊛", "var(--cc-teal)",  _invicti_map, False),
             ("zap",     "ZAP",         "⌖", "var(--cc-amber)", _zap_map,     False),
         )
 
-        def _el_scan_block(name: str, glyph: str, color: str,
-                           this_scan: dict | None,
-                           prd_baseline: dict | None,
-                           has_compliance: bool,
-                           extra_rows_html: str = "") -> str:
-            if not this_scan:
-                return (
-                    f'<div class="ap-scan-empty-row">'
-                    f'<span style="color:{color}">{glyph}</span>'
-                    f'<b>{name}</b> · no scan on record for this version'
+        def _el_scan_sev_rows(prefix: str, scan: dict,
+                              baseline: dict | None) -> tuple[str, int]:
+            _rows: list[str] = []
+            _total = 0
+            for _lvl, _lbl in _SEV_KEYS:
+                _fld = f"{prefix}{_lvl}"
+                _n = int(scan.get(_fld, 0) or 0)
+                _total += _n
+                _delta_html = ""
+                if baseline is not None:
+                    _d = _n - int(baseline.get(_fld, 0) or 0)
+                    if _d > 0:
+                        _delta_html = (
+                            f'<span class="ap-scan-row-delta up" '
+                            f'title="up vs prd">▲ +{_d}</span>'
+                        )
+                    elif _d < 0:
+                        _delta_html = (
+                            f'<span class="ap-scan-row-delta down" '
+                            f'title="down vs prd">▼ {_d}</span>'
+                        )
+                    else:
+                        _delta_html = (
+                            '<span class="ap-scan-row-delta eq" '
+                            'title="unchanged vs prd">=</span>'
+                        )
+                _rows.append(
+                    f'<div class="ap-scan-row {_lvl}'
+                    f'{" zero" if _n == 0 else " nonzero"}">'
+                    f'  <span class="ap-scan-row-dot"></span>'
+                    f'  <span class="ap-scan-row-name">{_lbl}</span>'
+                    f'  <span class="ap-scan-row-num">{_n}</span>'
+                    f'  {_delta_html}'
                     f'</div>'
                 )
-            _stat = this_scan.get("status", "") or ""
-            _when = fmt_dt(this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
-            _v_tiles_local, _v_total_local = _sev_strip("V", this_scan, prd_baseline)
-            _block = (
-                f'<div class="ap-scan-src" style="--ap-scan-src-c:{color}">'
-                f'  <span class="ap-scan-src-glyph">{glyph}</span>'
-                f'  <span class="ap-scan-src-name">{name}</span>'
-                + (f'<span class="ap-scan-src-status">{html.escape(_stat)}</span>'
+            return "".join(_rows), _total
+
+        def _el_scan_card(name: str, glyph: str, color: str,
+                          this_scan: dict | None,
+                          prd_baseline: dict | None,
+                          has_compliance: bool,
+                          meta_html: str = "") -> str:
+            if not this_scan:
+                return (
+                    f'<div class="ap-scan-card ap-scan-card--empty" '
+                    f'style="--ap-scan-card-c:{color}">'
+                    f'  <div class="ap-scan-card-head">'
+                    f'    <span class="ap-scan-card-glyph">{glyph}</span>'
+                    f'    <span class="ap-scan-card-name">{name}</span>'
+                    f'  </div>'
+                    f'  <div class="ap-scan-card-empty">No scan on record</div>'
+                    f'</div>'
+                )
+            _stat  = this_scan.get("status", "") or ""
+            _when  = fmt_dt(this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+            _v_rows, _v_total = _el_scan_sev_rows("V", this_scan, prd_baseline)
+            _delta_chip = (
+                '<span class="ap-scan-card-delta-chip">Δ vs prd</span>'
+                if prd_baseline is not None else ''
+            )
+            _card = (
+                f'<div class="ap-scan-card" '
+                f'style="--ap-scan-card-c:{color}">'
+                f'  <div class="ap-scan-card-head">'
+                f'    <span class="ap-scan-card-glyph">{glyph}</span>'
+                f'    <span class="ap-scan-card-name">{name}</span>'
+                + (f'<span class="ap-scan-card-status" '
+                   f'title="{html.escape(_stat)}">'
+                   f'{html.escape(_stat[:8])}</span>'
                    if _stat else '')
-                + (f'<span class="ap-scan-src-when">{_when} {DISPLAY_TZ_LABEL}</span>'
+                + '  </div>'
+                + (f'<div class="ap-scan-card-when">{_when}</div>'
                    if _when else '')
+                + meta_html
+                + '<div class="ap-scan-card-section">'
+                + f'  <span>Vulnerabilities</span>'
+                + f'  <span class="ap-scan-card-total">{_v_total}</span>'
+                + _delta_chip
                 + '</div>'
-                + extra_rows_html
-                + f'    <div class="ap-sev-subhead"><span>Vulnerabilities · this version</span>'
-                f'      <span class="sev-sum">{_v_total_local} total</span></div>'
-                f'    <div class="ap-sev">{_v_tiles_local}</div>'
+                + f'<div class="ap-scan-card-rows">{_v_rows}</div>'
             )
             if has_compliance:
-                _c_tiles_local, _c_total_local = _sev_strip("C", this_scan, prd_baseline)
-                _block += (
-                    f'    <div class="ap-sev-subhead"><span>Compliance · this version</span>'
-                    f'      <span class="sev-sum">{_c_total_local} total</span></div>'
-                    f'    <div class="ap-sev">{_c_tiles_local}</div>'
+                _c_rows, _c_total = _el_scan_sev_rows("C", this_scan, prd_baseline)
+                _card += (
+                    '<div class="ap-scan-card-section ap-scan-card-section--c">'
+                    + f'  <span>Compliance</span>'
+                    + f'  <span class="ap-scan-card-total">{_c_total}</span>'
+                    + '</div>'
+                    + f'<div class="ap-scan-card-rows">{_c_rows}</div>'
                 )
-            if prd_baseline is not None:
-                _block += (
-                    f'    <div class="ap-compare-head">'
-                    f'      <span>Δ vs current prd</span>'
-                    f'      <span class="cmp-pill">{_prd_ver}</span>'
-                    f'    </div>'
-                )
-            return _block
+            _card += '</div>'
+            return _card
 
-        _scan_blocks_el: list[str] = []
+        def _el_dast_meta(src_key: str, scan: dict) -> str:
+            _env  = (scan.get("environment") or "").strip()
+            _url  = (scan.get("url") or "").strip()
+            _info = int(scan.get("Informational") or 0)
+            _bits: list[str] = []
+            if _env:
+                _bits.append(
+                    f'<span class="ap-scan-card-env">'
+                    f'{html.escape(_env.upper())}</span>'
+                )
+            if src_key == "invicti":
+                _bp = int(scan.get("BestPractice") or 0)
+                _bits.append(
+                    f'<span class="ap-scan-card-aux" title="Best practice">'
+                    f'BP <b>{_bp}</b></span>'
+                )
+            else:
+                _fp = int(scan.get("FalsePositives") or 0)
+                _bits.append(
+                    f'<span class="ap-scan-card-aux" title="False positives">'
+                    f'FP <b>{_fp}</b></span>'
+                )
+            _bits.append(
+                f'<span class="ap-scan-card-aux" title="Informational">'
+                f'INFO <b>{_info}</b></span>'
+            )
+            _meta = (
+                '<div class="ap-scan-card-meta">' + "".join(_bits) + '</div>'
+            )
+            if _url:
+                _short = _url
+                if len(_short) > 38:
+                    _short = _short[:35] + "…"
+                _meta += (
+                    f'<div class="ap-scan-card-url" '
+                    f'title="{html.escape(_url)}">'
+                    f'↗ {html.escape(_short)}</div>'
+                )
+            return _meta
+
+        _scan_cards_el: list[str] = []
         for _src_key, _src_lbl, _src_glyph, _src_color, _src_map, _has_c in _SCAN_SOURCES_EL:
             _this = _src_map.get((_app, _ver))
             _baseline_src = (
@@ -7653,39 +8003,30 @@ def _render_event_log() -> None:
                 if (_prd_ver and not _is_this_prd)
                 else None
             )
-            # DAST extras (env / url / informational / extras)
-            _extras_el = ""
-            if _this and _src_key in ("invicti", "zap"):
-                _env  = (_this.get("environment") or "").strip()
-                _url  = (_this.get("url") or "").strip()
-                _info = int(_this.get("Informational") or 0)
-                _rows: list[str] = []
-                if _env:
-                    _rows.append(f'<span class="ap-k">Environment</span>{_chip(_env)}')
-                if _url:
-                    _rows.append(
-                        f'<span class="ap-k">Target URL</span>'
-                        f'<span class="ap-v" title="{html.escape(_url)}">'
-                        f'{html.escape(_url[:60])}{"…" if len(_url) > 60 else ""}'
-                        f'</span>'
-                    )
-                if _src_key == "invicti":
-                    _bp = int(_this.get("BestPractice") or 0)
-                    _rows.append(f'<span class="ap-k">Informational</span>{_v(str(_info))}')
-                    _rows.append(f'<span class="ap-k">Best practice</span>{_v(str(_bp))}')
-                else:  # zap
-                    _fp = int(_this.get("FalsePositives") or 0)
-                    _rows.append(f'<span class="ap-k">Informational</span>{_v(str(_info))}')
-                    _rows.append(f'<span class="ap-k">False positives</span>{_v(str(_fp))}')
-                _extras_el = "".join(_rows)
-            _scan_blocks_el.append(
-                _el_scan_block(_src_lbl, _src_glyph, _src_color,
-                               _this, _baseline_src if _this else None,
-                               _has_c, _extras_el)
+            _meta = (
+                _el_dast_meta(_src_key, _this)
+                if _this and _src_key in ("invicti", "zap") else ""
             )
+            _scan_cards_el.append(
+                _el_scan_card(_src_lbl, _src_glyph, _src_color,
+                              _this, _baseline_src, _has_c, _meta)
+            )
+
+        _section_note_el = (
+            f'<span class="ap-section-note">Δ vs live · '
+            f'<span class="cmp-pill">{_prd_ver}</span></span>'
+            if (_prd_ver and not _is_this_prd)
+            else (
+                '<span class="ap-section-note ap-section-note--live">'
+                '◉ this version is live</span>'
+                if _is_this_prd else ''
+            )
+        )
         _prisma_block = (
-            f'    <div class="ap-section">Security scans</div>'
-            + "".join(_scan_blocks_el)
+            f'    <div class="ap-section ap-section--scan">'
+            f'      <span>Security scans</span>{_section_note_el}'
+            f'    </div>'
+            f'    <div class="ap-scan-grid">' + "".join(_scan_cards_el) + '</div>'
         )
 
         # Per-version provenance: always show build date; if released, show
@@ -10247,19 +10588,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     )
             _stage_block += _prov_rows
 
-            # ── Previous-stage context (for Δ baselines, used by every scanner) ─
-            _prev_stage = _STAGE_PREV.get(_stage)
-            _prev_ver: str = ""
-            if _prev_stage:
-                _prev_data = (_stages.get(_prev_stage) or {})
-                _prev_ver = _prev_data.get("version") or ""
-                if not (_prev_ver and _prev_ver != _ver):
-                    _prev_ver = ""
-
-            # ── Per-scanner block builder ────────────────────────────────────
-            # Each scanner emits a header strip (glyph + name + status + date)
-            # followed by V tiles, optional C tiles, optional environment/url,
-            # and Δ vs prd / prev-stage comparisons.
+            # ── Per-scanner card builder (compact 3-column grid layout) ──────
+            # Goal: surface every scanner's findings side-by-side with an
+            # inline Δ vs the live (PRD) version. The previous full-width
+            # vertical stack made the popover scroll past the viewport, so
+            # each scanner now collapses into a fixed-width card with
+            # horizontal severity rows.
             _SCAN_SOURCES = (
                 # (key,        label,         glyph, color,            map,             has_compliance)
                 ("prisma",  "Prismacloud", "⛟", "var(--cc-blue)",  _iv_prisma_map,  True),
@@ -10267,81 +10601,144 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 ("zap",     "ZAP",         "⌖", "var(--cc-amber)", _iv_zap_map,     False),
             )
 
-            def _iv_scan_block(name: str, glyph: str, color: str,
-                               this_scan: dict | None,
-                               prd_baseline: dict | None,
-                               prev_baseline: dict | None,
-                               has_compliance: bool,
-                               extra_rows_html: str = "") -> str:
-                if not this_scan:
-                    return (
-                        f'<div class="ap-scan-empty-row">'
-                        f'<span style="color:{color}">{glyph}</span>'
-                        f'<b>{name}</b> · no scan on record for this version'
+            def _scan_sev_rows(prefix: str, scan: dict, baseline: dict | None) -> tuple[str, int]:
+                """Render four horizontal severity rows (Crit/High/Med/Low) for
+                the V or C field family. Each row carries its count and an
+                inline Δ vs the live PRD baseline (when provided)."""
+                _rows: list[str] = []
+                _total = 0
+                for _lvl, _lbl in _IV_SEV_KEYS:
+                    _fld = f"{prefix}{_lvl}"
+                    _n = int(scan.get(_fld, 0) or 0)
+                    _total += _n
+                    _delta_html = ""
+                    if baseline is not None:
+                        _d = _n - int(baseline.get(_fld, 0) or 0)
+                        if _d > 0:
+                            _delta_html = (
+                                f'<span class="ap-scan-row-delta up" '
+                                f'title="up vs prd">▲ +{_d}</span>'
+                            )
+                        elif _d < 0:
+                            _delta_html = (
+                                f'<span class="ap-scan-row-delta down" '
+                                f'title="down vs prd">▼ {_d}</span>'
+                            )
+                        else:
+                            _delta_html = (
+                                '<span class="ap-scan-row-delta eq" '
+                                'title="unchanged vs prd">=</span>'
+                            )
+                    _rows.append(
+                        f'<div class="ap-scan-row {_lvl}'
+                        f'{" zero" if _n == 0 else " nonzero"}">'
+                        f'  <span class="ap-scan-row-dot"></span>'
+                        f'  <span class="ap-scan-row-name">{_lbl}</span>'
+                        f'  <span class="ap-scan-row-num">{_n}</span>'
+                        f'  {_delta_html}'
                         f'</div>'
                     )
-                _stat = this_scan.get("status", "") or ""
-                _when = fmt_dt(this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
-                _v_tiles_local, _v_total_local = _iv_sev_strip("V", this_scan, None, "")
-                _block = (
-                    f'<div class="ap-scan-src" style="--ap-scan-src-c:{color}">'
-                    f'  <span class="ap-scan-src-glyph">{glyph}</span>'
-                    f'  <span class="ap-scan-src-name">{name}</span>'
-                    + (f'<span class="ap-scan-src-status">{html.escape(_stat)}</span>'
+                return "".join(_rows), _total
+
+            def _iv_scan_card(name: str, glyph: str, color: str,
+                              this_scan: dict | None,
+                              prd_baseline: dict | None,
+                              has_compliance: bool,
+                              meta_html: str = "") -> str:
+                if not this_scan:
+                    return (
+                        f'<div class="ap-scan-card ap-scan-card--empty" '
+                        f'style="--ap-scan-card-c:{color}">'
+                        f'  <div class="ap-scan-card-head">'
+                        f'    <span class="ap-scan-card-glyph">{glyph}</span>'
+                        f'    <span class="ap-scan-card-name">{name}</span>'
+                        f'  </div>'
+                        f'  <div class="ap-scan-card-empty">No scan on record</div>'
+                        f'</div>'
+                    )
+                _stat  = this_scan.get("status", "") or ""
+                _when  = fmt_dt(this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+                _v_rows, _v_total = _scan_sev_rows("V", this_scan, prd_baseline)
+                _delta_chip = (
+                    '<span class="ap-scan-card-delta-chip">Δ vs prd</span>'
+                    if prd_baseline is not None else ''
+                )
+                _card = (
+                    f'<div class="ap-scan-card" '
+                    f'style="--ap-scan-card-c:{color}">'
+                    f'  <div class="ap-scan-card-head">'
+                    f'    <span class="ap-scan-card-glyph">{glyph}</span>'
+                    f'    <span class="ap-scan-card-name">{name}</span>'
+                    + (f'<span class="ap-scan-card-status" '
+                       f'title="{html.escape(_stat)}">'
+                       f'{html.escape(_stat[:8])}</span>'
                        if _stat else '')
-                    + (f'<span class="ap-scan-src-when">{_when} {DISPLAY_TZ_LABEL}</span>'
+                    + '  </div>'
+                    + (f'<div class="ap-scan-card-when">{_when}</div>'
                        if _when else '')
+                    + meta_html
+                    + '<div class="ap-scan-card-section">'
+                    + f'  <span>Vulnerabilities</span>'
+                    + f'  <span class="ap-scan-card-total">{_v_total}</span>'
+                    + _delta_chip
                     + '</div>'
-                    + extra_rows_html
-                    + f'    <div class="ap-sev-subhead"><span>Vulnerabilities · this version</span>'
-                    f'      <span class="sev-sum">{_v_total_local} total</span></div>'
-                    f'    <div class="ap-sev">{_v_tiles_local}</div>'
+                    + f'<div class="ap-scan-card-rows">{_v_rows}</div>'
                 )
                 if has_compliance:
-                    _c_tiles_local, _c_total_local = _iv_sev_strip("C", this_scan, None, "")
-                    _block += (
-                        f'    <div class="ap-sev-subhead"><span>Compliance · this version</span>'
-                        f'      <span class="sev-sum">{_c_total_local} total</span></div>'
-                        f'    <div class="ap-sev">{_c_tiles_local}</div>'
+                    _c_rows, _c_total = _scan_sev_rows("C", this_scan, prd_baseline)
+                    _card += (
+                        '<div class="ap-scan-card-section ap-scan-card-section--c">'
+                        + f'  <span>Compliance</span>'
+                        + f'  <span class="ap-scan-card-total">{_c_total}</span>'
+                        + '</div>'
+                        + f'<div class="ap-scan-card-rows">{_c_rows}</div>'
                     )
-                # Δ vs current prd
-                if prd_baseline is not None and _prd_ver and not _is_prd_ver:
-                    _vd_local, _ = _iv_sev_strip("V", this_scan, prd_baseline, "prd")
-                    _block += (
-                        f'    <div class="ap-compare-head">'
-                        f'      <span>Δ vs current prd</span>'
-                        f'      <span class="cmp-pill">{_prd_ver}</span>'
-                        f'    </div>'
-                        f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
-                        f'    <div class="ap-sev">{_vd_local}</div>'
-                    )
-                    if has_compliance:
-                        _cd_local, _ = _iv_sev_strip("C", this_scan, prd_baseline, "prd")
-                        _block += (
-                            f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
-                            f'    <div class="ap-sev">{_cd_local}</div>'
-                        )
-                # Δ vs previous stage
-                if prev_baseline is not None and _prev_ver:
-                    _prev_lbl_local = _STAGE_LABEL.get(_prev_stage, _prev_stage).lower()
-                    _vd2_local, _ = _iv_sev_strip("V", this_scan, prev_baseline, _prev_stage)
-                    _block += (
-                        f'    <div class="ap-compare-head">'
-                        f'      <span>Δ vs {_prev_lbl_local}</span>'
-                        f'      <span class="cmp-pill">{_prev_ver}</span>'
-                        f'    </div>'
-                        f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
-                        f'    <div class="ap-sev">{_vd2_local}</div>'
-                    )
-                    if has_compliance:
-                        _cd2_local, _ = _iv_sev_strip("C", this_scan, prev_baseline, _prev_stage)
-                        _block += (
-                            f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
-                            f'    <div class="ap-sev">{_cd2_local}</div>'
-                        )
-                return _block
+                _card += '</div>'
+                return _card
 
-            _scan_blocks: list[str] = []
+            def _iv_dast_meta(src_key: str, scan: dict) -> str:
+                """Compact one-line meta strip for DAST scanners (env + counts)
+                plus an optional URL link below."""
+                _env  = (scan.get("environment") or "").strip()
+                _url  = (scan.get("url") or "").strip()
+                _info = int(scan.get("Informational") or 0)
+                _bits: list[str] = []
+                if _env:
+                    _bits.append(
+                        f'<span class="ap-scan-card-env">'
+                        f'{html.escape(_env.upper())}</span>'
+                    )
+                if src_key == "invicti":
+                    _bp = int(scan.get("BestPractice") or 0)
+                    _bits.append(
+                        f'<span class="ap-scan-card-aux" title="Best practice">'
+                        f'BP <b>{_bp}</b></span>'
+                    )
+                else:  # zap
+                    _fp = int(scan.get("FalsePositives") or 0)
+                    _bits.append(
+                        f'<span class="ap-scan-card-aux" title="False positives">'
+                        f'FP <b>{_fp}</b></span>'
+                    )
+                _bits.append(
+                    f'<span class="ap-scan-card-aux" title="Informational">'
+                    f'INFO <b>{_info}</b></span>'
+                )
+                _meta = (
+                    '<div class="ap-scan-card-meta">' + "".join(_bits) + '</div>'
+                )
+                if _url:
+                    _short = _url
+                    if len(_short) > 38:
+                        _short = _short[:35] + "…"
+                    _meta += (
+                        f'<div class="ap-scan-card-url" '
+                        f'title="{html.escape(_url)}">'
+                        f'↗ {html.escape(_short)}</div>'
+                    )
+                return _meta
+
+            _scan_cards: list[str] = []
             for _src_key, _src_lbl, _src_glyph, _src_color, _src_map, _has_c in _SCAN_SOURCES:
                 _this = _src_map.get((_app, _ver))
                 _prd_b = (
@@ -10349,53 +10746,32 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     if (_prd_ver and not _is_prd_ver)
                     else None
                 )
-                _prev_b = (
-                    _src_map.get((_app, _prev_ver))
-                    if _prev_ver else None
+                _meta = (
+                    _iv_dast_meta(_src_key, _this)
+                    if _this and _src_key in ("invicti", "zap") else ""
                 )
-                # DAST scanners surface environment + url + extra counts
-                _extras = ""
-                if _this and _src_key in ("invicti", "zap"):
-                    _env  = (_this.get("environment") or "").strip()
-                    _url  = (_this.get("url") or "").strip()
-                    _info = int(_this.get("Informational") or 0)
-                    _extra_rows: list[str] = []
-                    if _env:
-                        _extra_rows.append(
-                            f'<span class="ap-k">Environment</span>{_iv_chip(_env)}'
-                        )
-                    if _url:
-                        _extra_rows.append(
-                            f'<span class="ap-k">Target URL</span>'
-                            f'<span class="ap-v" title="{html.escape(_url)}">'
-                            f'{html.escape(_url[:60])}{"…" if len(_url) > 60 else ""}'
-                            f'</span>'
-                        )
-                    if _src_key == "invicti":
-                        _bp = int(_this.get("BestPractice") or 0)
-                        _extra_rows.append(
-                            f'<span class="ap-k">Informational</span>{_iv_v(str(_info))}'
-                        )
-                        _extra_rows.append(
-                            f'<span class="ap-k">Best practice</span>{_iv_v(str(_bp))}'
-                        )
-                    elif _src_key == "zap":
-                        _fp = int(_this.get("FalsePositives") or 0)
-                        _extra_rows.append(
-                            f'<span class="ap-k">Informational</span>{_iv_v(str(_info))}'
-                        )
-                        _extra_rows.append(
-                            f'<span class="ap-k">False positives</span>{_iv_v(str(_fp))}'
-                        )
-                    _extras = "".join(_extra_rows)
-                _scan_blocks.append(
-                    _iv_scan_block(_src_lbl, _src_glyph, _src_color,
-                                   _this, _prd_b, _prev_b, _has_c, _extras)
+                _scan_cards.append(
+                    _iv_scan_card(_src_lbl, _src_glyph, _src_color,
+                                  _this, _prd_b, _has_c, _meta)
                 )
 
+            # Header note clarifies what the inline Δ refers to so users
+            # don't have to inspect each row's tooltip.
+            _section_note = (
+                f'<span class="ap-section-note">Δ vs live · '
+                f'<span class="cmp-pill">{_prd_ver}</span></span>'
+                if (_prd_ver and not _is_prd_ver)
+                else (
+                    '<span class="ap-section-note ap-section-note--live">'
+                    '◉ this version is live</span>'
+                    if _is_prd_ver else ''
+                )
+            )
             _prisma_block = (
-                f'    <div class="ap-section">Security scans</div>'
-                + "".join(_scan_blocks)
+                f'    <div class="ap-section ap-section--scan">'
+                f'      <span>Security scans</span>{_section_note}'
+                f'    </div>'
+                f'    <div class="ap-scan-grid">' + "".join(_scan_cards) + '</div>'
             )
 
             _iv_popovers.append(
