@@ -809,10 +809,12 @@ div[data-testid="stPopover"] button:hover {
     /* subtle fade-in */
     animation: el-pop-in .18s ease-out;
 }
-/* Version popovers carry the 3-up security scan grid, so they need to be
-   wider than the app-detail popover. Falls back to viewport width on
-   narrow screens. */
-.el-app-pop.is-version {
+/* Version + application popovers both carry the 3-up security scan grid,
+   so they need to be wider than the project-detail popover. Falls back to
+   viewport width on narrow screens. The is-project variant inherits the
+   default 420px (no scan grid, mostly text rows). */
+.el-app-pop.is-version,
+.el-app-pop.is-app {
     width: min(820px, 96vw);
 }
 .el-app-pop::backdrop {
@@ -2410,6 +2412,74 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .iv-pulse-tile--jira::before {
     background: linear-gradient(180deg, #2684ff 0%, #7048e8 100%) !important;
 }
+
+/* Twin stat block — builds + deploys side by side inside the build tile */
+.iv-pulse-twin {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 6px 0 8px 0;
+    padding: 8px 0 0 0;
+    border-top: 1px dashed
+        color-mix(in srgb, var(--cc-border) 80%, transparent);
+}
+.iv-pulse-twin-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.iv-pulse-twin-stat + .iv-pulse-twin-stat {
+    padding-left: 10px;
+    border-left: 1px dashed
+        color-mix(in srgb, var(--cc-border) 80%, transparent);
+}
+.iv-pulse-twin-rate {
+    font-family: var(--cc-display);
+    font-variation-settings: "opsz" 144;
+    font-size: 1.65rem;
+    font-weight: 600;
+    line-height: 1.0;
+    color: var(--cc-ink);
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums lining-nums;
+}
+.iv-pulse-twin-rate .iv-pulse-unit {
+    font-family: var(--cc-body);
+    font-size: .68rem;
+    font-weight: 500;
+    color: var(--cc-text-mute);
+    margin-left: 2px;
+    letter-spacing: 0;
+}
+.iv-pulse-twin-lbl {
+    font-family: var(--cc-data);
+    font-size: .54rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    margin-top: 1px;
+}
+.iv-pulse-twin-meta {
+    font-family: var(--cc-body);
+    font-size: .64rem;
+    color: var(--cc-text-dim);
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
+}
+.iv-pulse-twin-meta b {
+    color: var(--cc-ink);
+    font-weight: 700;
+}
+.iv-pulse-twin-meta--quiet {
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-size: .60rem;
+}
+.iv-pulse-ok   { color: var(--cc-green); font-weight: 600; }
+.iv-pulse-fail { color: var(--cc-red);   font-weight: 600; }
+
 .iv-jira-scope {
     display: inline-block;
     margin-left: 2px;
@@ -8316,8 +8386,14 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14,
     "deploy_prd": [counts]}`` with one entry per calendar day (oldest first).
     """
     _apps: list[str] = json.loads(apps_json)
-    _empty = {"build": [0] * days, "deploy_prd": [0] * days,
-              "build_success": [0] * days, "build_failure": [0] * days}
+    _empty = {
+        "build":          [0] * days,
+        "build_success":  [0] * days,
+        "build_failure":  [0] * days,
+        "deploy_prd":     [0] * days,
+        "deploy_success": [0] * days,
+        "deploy_failure": [0] * days,
+    }
     if not _apps:
         return _empty
     _now = datetime.now(timezone.utc)
@@ -8390,7 +8466,8 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14,
                                 "min": int(_start.timestamp() * 1000),
                                 "max": int(_now.timestamp() * 1000),
                             },
-                        }
+                        },
+                        "aggs": {"s": {"terms": {"field": "status", "size": 10}}},
                     }
                 },
             },
@@ -8398,10 +8475,23 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14,
         )
     except Exception:
         _dr = {}
-    _dep_counts = [
-        int(_b.get("doc_count") or 0)
-        for _b in _dr.get("aggregations", {}).get("tl", {}).get("buckets", [])
-    ]
+    _dep_succ: list[int] = []
+    _dep_fail: list[int] = []
+    _dep_other: list[int] = []
+    for _b in _dr.get("aggregations", {}).get("tl", {}).get("buckets", []):
+        _ds = _df = _do = 0
+        for _s in _b.get("s", {}).get("buckets", []):
+            _k = _s.get("key") or ""
+            _n = int(_s.get("doc_count") or 0)
+            if _k in SUCCESS_STATUSES:
+                _ds += _n
+            elif _k in FAILED_STATUSES:
+                _df += _n
+            else:
+                _do += _n
+        _dep_succ.append(_ds)
+        _dep_fail.append(_df)
+        _dep_other.append(_do)
     # Pad to exactly ``days`` slots (histograms may return ±1 bucket depending
     # on bounds alignment).
     def _pad(xs: list[int]) -> list[int]:
@@ -8409,10 +8499,12 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14,
             return xs[-days:]
         return [0] * (days - len(xs)) + xs
     return {
-        "build_success": _pad(_build_succ),
-        "build_failure": _pad(_build_fail),
-        "build":         _pad([s + f + o for s, f, o in zip(_build_succ, _build_fail, _build_other)]),
-        "deploy_prd":    _pad(_dep_counts),
+        "build_success":  _pad(_build_succ),
+        "build_failure":  _pad(_build_fail),
+        "build":          _pad([s + f + o for s, f, o in zip(_build_succ, _build_fail, _build_other)]),
+        "deploy_success": _pad(_dep_succ),
+        "deploy_failure": _pad(_dep_fail),
+        "deploy_prd":     _pad([s + f + o for s, f, o in zip(_dep_succ, _dep_fail, _dep_other)]),
     }
 
 
@@ -8521,11 +8613,11 @@ def _fetch_jira_open(projects_json: str) -> dict:
 def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
     """Daily stacked bars — success (green) on bottom, failure (red) on top."""
     if not success and not failure:
-        return '<div class="iv-pulse-empty">no builds in 14d</div>'
+        return '<div class="iv-pulse-empty">no builds in 30d</div>'
     _W, _H = 240.0, 38.0
     _n = max(len(success), len(failure))
     if _n == 0:
-        return '<div class="iv-pulse-empty">no builds in 14d</div>'
+        return '<div class="iv-pulse-empty">no builds in 30d</div>'
     _max = max((s + f) for s, f in zip(success, failure)) or 1
     _slot = _W / _n
     _bw = _slot * 0.72
@@ -8563,7 +8655,7 @@ def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
 def _svg_area_spark(values: list[int], color: str = "var(--cc-blue)") -> str:
     """Filled area sparkline with endpoint dot."""
     if not values or not any(v > 0 for v in values):
-        return '<div class="iv-pulse-empty">no deploys in 14d</div>'
+        return '<div class="iv-pulse-empty">no deploys in 30d</div>'
     _W, _H = 240.0, 38.0
     _n = len(values)
     _max = max(values) or 1
@@ -9681,35 +9773,56 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     st.markdown(_tile_html, unsafe_allow_html=True)
 
     # ── Fleet pulse strip — four subtle visualizations of scope state ──────
-    # Two temporal sparklines (14d build success, PRD deploy cadence) + two
-    # distribution bars (PRD freshness, security posture). Everything reflects
-    # the current filtered scope so users can redirect the narrative by
-    # changing any filter above.
+    # 30d build + PRD-deploy success rates (twin stat block) + Jira open
+    # issues + PRD freshness + security posture distribution bars. Every
+    # tile reflects the current filtered scope.
     if _post_apps:
         _pulse = _fetch_inv_pulse(
-            json.dumps(sorted(_post_apps)), days=14,
+            json.dumps(sorted(_post_apps)), days=30,
             exclude_test=bool(st.session_state.get("exclude_test_runs", True)),
         )
         _bs = _pulse.get("build_success", [])
         _bf = _pulse.get("build_failure", [])
+        _ds = _pulse.get("deploy_success", [])
+        _df = _pulse.get("deploy_failure", [])
         _bs_sum = sum(_bs)
         _bf_sum = sum(_bf)
+        _ds_sum = sum(_ds)
+        _df_sum = sum(_df)
         _b_total = _bs_sum + _bf_sum
+        _d_total = _ds_sum + _df_sum
+        # Per-stream rates (build / deploy)
         if _b_total:
             _rate_pct = _bs_sum / _b_total * 100
             _rate = f"{_rate_pct:.0f}"
+        else:
+            _rate_pct = 0.0
+            _rate = "—"
+        if _d_total:
+            _drate_pct = _ds_sum / _d_total * 100
+            _drate = f"{_drate_pct:.0f}"
+        else:
+            _drate_pct = 0.0
+            _drate = "—"
+        # Combined rate for the tile-level severity tag — degraded if EITHER
+        # stream is unhealthy (we don't want a stellar build rate to hide a
+        # deploy failure spike).
+        _combined_pcts = [
+            _r for _r, _t in ((_rate_pct, _b_total), (_drate_pct, _d_total)) if _t
+        ]
+        if _combined_pcts:
+            _worst_pct = min(_combined_pcts)
             _rate_tag = (
-                "ok" if _rate_pct >= 90
-                else "warn" if _rate_pct >= 75
+                "ok" if _worst_pct >= 90
+                else "warn" if _worst_pct >= 75
                 else "crit"
             )
             _rate_tag_lbl = (
-                "healthy" if _rate_pct >= 90
-                else "watch" if _rate_pct >= 75
+                "healthy" if _worst_pct >= 90
+                else "watch" if _worst_pct >= 75
                 else "degraded"
             )
         else:
-            _rate = "—"
             _rate_tag = ""
             _rate_tag_lbl = "quiet"
 
@@ -9987,23 +10100,58 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _jira_value_html = '<div class="iv-pulse-value">0</div>'
             _jira_sub_html = '<div class="iv-pulse-sub">no open issues</div>'
 
+        # Build twin-stat block (Builds % | Deploys %) — replaces the old
+        # single big number so build success and PRD-deploy success appear
+        # side by side. The stacked spark below tracks the build stream
+        # (deploys are quieter so they live in the inline meta lines).
+        _twin_html = (
+            '<div class="iv-pulse-twin">'
+            # Builds
+            '<div class="iv-pulse-twin-stat">'
+            f'  <div class="iv-pulse-twin-rate">{_rate}'
+            + ('<span class="iv-pulse-unit">%</span>' if _b_total else '')
+            + '</div>'
+            + '<div class="iv-pulse-twin-lbl">Builds</div>'
+            + (
+                f'<div class="iv-pulse-twin-meta">'
+                f'<b>{_b_total}</b> · '
+                f'<span class="iv-pulse-ok">{_bs_sum} ok</span> · '
+                f'<span class="iv-pulse-fail">{_bf_sum} ✗</span>'
+                f'</div>' if _b_total else
+                '<div class="iv-pulse-twin-meta iv-pulse-twin-meta--quiet">no builds in 30d</div>'
+            )
+            + '</div>'
+            # Deploys (PRD only)
+            + '<div class="iv-pulse-twin-stat">'
+            f'  <div class="iv-pulse-twin-rate">{_drate}'
+            + ('<span class="iv-pulse-unit">%</span>' if _d_total else '')
+            + '</div>'
+            + '<div class="iv-pulse-twin-lbl">Deploys · PRD</div>'
+            + (
+                f'<div class="iv-pulse-twin-meta">'
+                f'<b>{_d_total}</b> · '
+                f'<span class="iv-pulse-ok">{_ds_sum} ok</span> · '
+                f'<span class="iv-pulse-fail">{_df_sum} ✗</span>'
+                f'</div>' if _d_total else
+                '<div class="iv-pulse-twin-meta iv-pulse-twin-meta--quiet">no PRD deploys in 30d</div>'
+            )
+            + '</div>'
+            + '</div>'
+        )
+
         _pulse_html = (
             '<div class="iv-pulse-strip">'
-            # Tile 1: Build success rate
+            # Tile 1: Pipeline health (builds + deploys, 30d)
             '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
             'linear-gradient(90deg,var(--cc-green),var(--cc-teal))">'
             '<div class="iv-pulse-label">'
-            '<span>Build success · 14d</span>'
+            '<span>Pipeline health · 30d</span>'
             + (f'<span class="iv-pulse-tag {_rate_tag}">{_rate_tag_lbl}</span>'
                if _rate_tag else '')
             + '</div>'
-            + f'<div class="iv-pulse-value">{_rate}'
-            + ('<span class="iv-pulse-unit">%</span>' if _b_total else '')
-            + '</div>'
-            + f'<div class="iv-pulse-sub"><b>{_b_total}</b> builds · '
-              f'<b>{_bs_sum}</b> ok · <b>{_bf_sum}</b> fail</div>'
+            + _twin_html
             + _spark_build
-            + '<div class="iv-pulse-axis"><span>14d ago</span><span>today</span></div>'
+            + '<div class="iv-pulse-axis"><span>30d ago</span><span>today</span></div>'
             + '</div>'
             # Tile 2: Jira open issues
             + '<div class="iv-pulse-tile iv-pulse-tile--jira" style="--iv-pulse-accent:'
@@ -10556,49 +10704,153 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'</div>'
             )
 
-        # Prismacloud section
-        _scan = _iv_prisma_map.get((_app, _prd_ver)) if _prd_ver else None
-        if _scan:
-            _SEV_KEYS_IV = [("critical", "Critical"), ("high", "High"),
-                            ("medium", "Medium"), ("low", "Low")]
-            def _mini_tiles(prefix: str, scan: dict) -> str:
-                tiles: list[str] = []
-                for _lvl, _lbl in _SEV_KEYS_IV:
-                    _fld = f"{prefix}{_lvl}"
-                    _n = int(scan.get(_fld, 0) or 0)
-                    _nz = "nonzero" if _n > 0 else "zero"
-                    tiles.append(
-                        f'<div class="ap-sev-tile {_lvl} {_nz}">'
-                        f'  <div class="sev-num">{_n}</div>'
-                        f'  <div class="sev-label">{_lbl}</div>'
-                        f'</div>'
-                    )
-                return "".join(tiles)
-            _v_tiles = _mini_tiles("V", _scan)
-            _c_tiles = _mini_tiles("C", _scan)
-            _scan_when = fmt_dt(_scan.get("when"), "%Y-%m-%d %H:%M") or ""
-            _scan_stat = _scan.get("status", "") or ""
-            _prisma_html = (
-                f'    <div class="ap-section">Prismacloud scan · {_prd_ver}</div>'
-                f'    <span class="ap-k">Scan status</span>{_iv_v(_scan_stat)}'
-                f'    <span class="ap-k">Scanned ({DISPLAY_TZ_LABEL})</span>{_iv_v(_scan_when)}'
-                f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
-                f'    <div class="ap-sev">{_v_tiles}</div>'
-                f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
-                f'    <div class="ap-sev">{_c_tiles}</div>'
+        # ── Multi-source security scan grid (Prismacloud + Invicti + ZAP) ──
+        # Mirrors the version popover's compact 3-up layout. Since the app
+        # popover is anchored to the live PRD version, no Δ-vs-baseline is
+        # needed — each scanner is a display-only card.
+        _APP_SCAN_SOURCES = (
+            ("prisma",  "Prismacloud", "⛟", "var(--cc-blue)",  _iv_prisma_map,  True),
+            ("invicti", "Invicti",     "⊛", "var(--cc-teal)",  _iv_invicti_map, False),
+            ("zap",     "ZAP",         "⌖", "var(--cc-amber)", _iv_zap_map,     False),
+        )
+        _APP_SEV_KEYS = [("critical", "Critical"), ("high", "High"),
+                         ("medium", "Medium"), ("low", "Low")]
+
+        def _app_scan_rows(prefix: str, scan: dict) -> tuple[str, int]:
+            _rows: list[str] = []
+            _total = 0
+            for _lvl, _lbl in _APP_SEV_KEYS:
+                _n = int(scan.get(f"{prefix}{_lvl}", 0) or 0)
+                _total += _n
+                _rows.append(
+                    f'<div class="ap-scan-row {_lvl}'
+                    f'{" zero" if _n == 0 else " nonzero"}">'
+                    f'  <span class="ap-scan-row-dot"></span>'
+                    f'  <span class="ap-scan-row-name">{_lbl}</span>'
+                    f'  <span class="ap-scan-row-num">{_n}</span>'
+                    f'</div>'
+                )
+            return "".join(_rows), _total
+
+        def _app_dast_meta(src_key: str, scan: dict) -> str:
+            _env  = (scan.get("environment") or "").strip()
+            _url  = (scan.get("url") or "").strip()
+            _info = int(scan.get("Informational") or 0)
+            _bits: list[str] = []
+            if _env:
+                _bits.append(
+                    f'<span class="ap-scan-card-env">'
+                    f'{html.escape(_env.upper())}</span>'
+                )
+            if src_key == "invicti":
+                _bp = int(scan.get("BestPractice") or 0)
+                _bits.append(
+                    f'<span class="ap-scan-card-aux" title="Best practice">'
+                    f'BP <b>{_bp}</b></span>'
+                )
+            else:
+                _fp = int(scan.get("FalsePositives") or 0)
+                _bits.append(
+                    f'<span class="ap-scan-card-aux" title="False positives">'
+                    f'FP <b>{_fp}</b></span>'
+                )
+            _bits.append(
+                f'<span class="ap-scan-card-aux" title="Informational">'
+                f'INFO <b>{_info}</b></span>'
+            )
+            _meta = '<div class="ap-scan-card-meta">' + "".join(_bits) + '</div>'
+            if _url:
+                _short = _url if len(_url) <= 38 else _url[:35] + "…"
+                _meta += (
+                    f'<div class="ap-scan-card-url" '
+                    f'title="{html.escape(_url)}">'
+                    f'↗ {html.escape(_short)}</div>'
+                )
+            return _meta
+
+        def _app_scan_card(name: str, glyph: str, color: str,
+                           scan: dict | None, has_compliance: bool,
+                           meta_html: str = "") -> str:
+            if not scan:
+                return (
+                    f'<div class="ap-scan-card ap-scan-card--empty" '
+                    f'style="--ap-scan-card-c:{color}">'
+                    f'  <div class="ap-scan-card-head">'
+                    f'    <span class="ap-scan-card-glyph">{glyph}</span>'
+                    f'    <span class="ap-scan-card-name">{name}</span>'
+                    f'  </div>'
+                    f'  <div class="ap-scan-card-empty">No scan on record</div>'
+                    f'</div>'
+                )
+            _stat = scan.get("status", "") or ""
+            _when = fmt_dt(scan.get("when"), "%Y-%m-%d %H:%M") or ""
+            _v_rows, _v_total = _app_scan_rows("V", scan)
+            _card = (
+                f'<div class="ap-scan-card" '
+                f'style="--ap-scan-card-c:{color}">'
+                f'  <div class="ap-scan-card-head">'
+                f'    <span class="ap-scan-card-glyph">{glyph}</span>'
+                f'    <span class="ap-scan-card-name">{name}</span>'
+                + (f'<span class="ap-scan-card-status" '
+                   f'title="{html.escape(_stat)}">'
+                   f'{html.escape(_stat[:8])}</span>' if _stat else '')
+                + '  </div>'
+                + (f'<div class="ap-scan-card-when">{_when}</div>'
+                   if _when else '')
+                + meta_html
+                + '<div class="ap-scan-card-section">'
+                + f'  <span>Vulnerabilities</span>'
+                + f'  <span class="ap-scan-card-total">{_v_total}</span>'
+                + '</div>'
+                + f'<div class="ap-scan-card-rows">{_v_rows}</div>'
+            )
+            if has_compliance:
+                _c_rows, _c_total = _app_scan_rows("C", scan)
+                _card += (
+                    '<div class="ap-scan-card-section ap-scan-card-section--c">'
+                    + f'  <span>Compliance</span>'
+                    + f'  <span class="ap-scan-card-total">{_c_total}</span>'
+                    + '</div>'
+                    + f'<div class="ap-scan-card-rows">{_c_rows}</div>'
+                )
+            _card += '</div>'
+            return _card
+
+        _app_scan_cards: list[str] = []
+        for _src_key, _src_lbl, _src_glyph, _src_color, _src_map, _has_c in _APP_SCAN_SOURCES:
+            _scan_app = _src_map.get((_app, _prd_ver)) if _prd_ver else None
+            _meta_app = (
+                _app_dast_meta(_src_key, _scan_app)
+                if _scan_app and _src_key in ("invicti", "zap") else ""
+            )
+            _app_scan_cards.append(
+                _app_scan_card(_src_lbl, _src_glyph, _src_color,
+                               _scan_app, _has_c, _meta_app)
+            )
+
+        if _prd_ver:
+            _scan_section_note = (
+                f'<span class="ap-section-note ap-section-note--live">'
+                f'◉ live · <span class="cmp-pill">{_prd_ver}</span></span>'
             )
         else:
-            _prisma_html = (
-                f'    <div class="ap-section">Prismacloud scan</div>'
-                f'    <div class="ap-sev-empty">No scan on record.</div>'
+            _scan_section_note = (
+                '<span class="ap-section-note">no live PRD version</span>'
             )
+        _prisma_html = (
+            f'    <div class="ap-section ap-section--scan">'
+            f'      <span>Security scans</span>{_scan_section_note}'
+            f'    </div>'
+            f'    <div class="ap-scan-grid">'
+            + "".join(_app_scan_cards) + '</div>'
+        )
 
         # Team rows intentionally omitted — ownership is surfaced by the
         # project popover, which the project chip in the Identity section
         # links into. Duplicating it here just clutters the app view.
 
         _iv_popovers.append(
-            f'<div id="{_pid}" popover="auto" class="el-app-pop">'
+            f'<div id="{_pid}" popover="auto" class="el-app-pop is-app">'
             f'  <div class="ap-head">'
             f'    <div class="ap-icon">◆</div>'
             f'    <div class="ap-title-wrap">'
@@ -10624,7 +10876,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <span class="ap-k">Image tag</span>{_iv_v(r.get("deploy_image_tag", ""))}'
             f'    {_prisma_html}'
             f'  </div>'
-            f'  <div class="ap-foot">Source: ef-devops-inventory · ef-cicd-deployments · ef-cicd-prismacloud</div>'
+            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
             f'</div>'
         )
 
