@@ -65,7 +65,9 @@ IDX = {
     "builds":      "ef-cicd-builds",
     "deployments": "ef-cicd-deployments",
     "releases":    "ef-cicd-releases",
-    "prismacloud": "ef-cicd-prismacloud",
+    "prismacloud": "ef-cicd-prismacloud",   # container image scan
+    "invicti":     "ef-cicd-invicti",       # DAST web scan
+    "zap":         "ef-cicd-zap",           # DAST OWASP-ZAP scan
 }
 
 CACHE_TTL = 300  # seconds — 5 minutes balances freshness vs cluster load
@@ -2364,6 +2366,118 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 /* Jira tile accent — slightly cooler edge accent than the build tile */
 .iv-pulse-tile--jira::before {
     background: linear-gradient(180deg, #2684ff 0%, #7048e8 100%) !important;
+}
+
+/* Security tile — per-scanner attribution chip strip below the V* bar */
+.iv-sec-srcs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 4px;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px dashed
+        color-mix(in srgb, var(--cc-border) 80%, transparent);
+}
+.iv-sec-src {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px 2px 7px;
+    font-family: var(--cc-body);
+    font-size: .68rem;
+    line-height: 1.4;
+    color: var(--cc-text);
+    background: color-mix(in srgb, var(--iv-sec-src-c, var(--cc-accent)) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--iv-sec-src-c, var(--cc-accent)) 22%, var(--cc-border));
+    border-radius: 999px;
+    letter-spacing: .005em;
+}
+.iv-sec-src-g {
+    color: var(--iv-sec-src-c, var(--cc-accent));
+    font-size: .82rem;
+    line-height: 1;
+    width: 14px;
+    text-align: center;
+}
+.iv-sec-src-n {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--iv-sec-src-c, var(--cc-accent));
+}
+.iv-sec-src b {
+    font-family: var(--cc-data);
+    font-weight: 700;
+    color: var(--cc-ink);
+    margin-left: 1px;
+    font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--iv-sec-src-c, var(--cc-accent)) 14%, transparent);
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: .64rem;
+}
+.iv-sec-src-apps {
+    font-size: .60rem;
+    color: var(--cc-text-mute);
+    letter-spacing: .02em;
+}
+
+/* Multi-source scan section inside the version popover */
+.ap-scan-src {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 12px 0 6px 0;
+    padding: 6px 10px;
+    border-left: 3px solid var(--ap-scan-src-c, var(--cc-accent));
+    background: color-mix(in srgb, var(--ap-scan-src-c, var(--cc-accent)) 5%, transparent);
+    border-radius: 0 6px 6px 0;
+}
+.ap-scan-src-glyph {
+    font-size: 1.05rem;
+    color: var(--ap-scan-src-c, var(--cc-accent));
+    line-height: 1;
+}
+.ap-scan-src-name {
+    font-family: var(--cc-data);
+    font-size: .66rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--ap-scan-src-c, var(--cc-accent));
+}
+.ap-scan-src-status {
+    margin-left: auto;
+    font-family: var(--cc-data);
+    font-size: .60rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--cc-text-mute);
+    background: color-mix(in srgb, var(--ap-scan-src-c, var(--cc-accent)) 12%, transparent);
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--ap-scan-src-c, var(--cc-accent)) 28%, transparent);
+}
+.ap-scan-src-when {
+    font-family: var(--cc-data);
+    font-size: .62rem;
+    color: var(--cc-text-mute);
+    font-variant-numeric: tabular-nums;
+}
+.ap-scan-empty-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    margin: 6px 0;
+    color: var(--cc-text-mute);
+    font-size: .74rem;
+    background: color-mix(in srgb, var(--cc-text-mute) 4%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--cc-border) 80%, transparent);
+    border-radius: 6px;
 }
 
 .iv-pulse-axis {
@@ -5140,13 +5254,7 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                                                 "Vcritical", "Vhigh", "Vmedium", "Vlow",
                                                 "Ccritical", "Chigh", "Cmedium", "Clow",
                                                 "imageName", "imageTag",
-                                                # Date fields — different prisma index versions use
-                                                # different keys, so request every plausible name and
-                                                # let the pickler below resolve them in order.
-                                                "enddate", "startdate", "EndDate", "StartDate",
-                                                "scandate", "ScanDate", "scan_date",
-                                                "lastScanDate", "lastScannedDate",
-                                                "created", "Created", "timestamp", "@timestamp",
+                                                "enddate", "startdate", "environment",
                                             ],
                                         }
                                     }
@@ -5173,23 +5281,6 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
             key = (_app, _ver)
             if wanted and key not in wanted:
                 continue
-            # Resolve a usable scan timestamp from whichever date field the
-            # underlying document carries. Earlier code only checked
-            # ``enddate`` / ``startdate`` — newer prisma docs sometimes only
-            # carry a ``scandate`` / ``lastScanDate`` / ``@timestamp``.
-            _when = ""
-            for _df in (
-                "enddate", "EndDate",
-                "startdate", "StartDate",
-                "scandate", "ScanDate", "scan_date",
-                "lastScanDate", "lastScannedDate",
-                "created", "Created",
-                "timestamp", "@timestamp",
-            ):
-                _dv = _s.get(_df)
-                if _dv:
-                    _when = _dv
-                    break
             out[key] = {
                 "Vcritical": int(_s.get("Vcritical") or 0),
                 "Vhigh":     int(_s.get("Vhigh")     or 0),
@@ -5202,7 +5293,172 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                 "status":    _s.get("status", "")    or "",
                 "imageName": _s.get("imageName", "") or "",
                 "imageTag":  _s.get("imageTag", "")  or "",
-                "when":      _when,
+                "environment": _s.get("environment", "") or "",
+                # Prisma index has both enddate + startdate as date fields.
+                # enddate is the scan completion timestamp; fall back to
+                # startdate only if a document somehow lacks enddate.
+                "when":      _s.get("enddate") or _s.get("startdate") or "",
+            }
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Latest Invicti DAST scan per ``(app, version)`` pair.
+
+    Returns ``{(app, version): {Vcritical, Vhigh, Vmedium, Vlow, BestPractice,
+    Informational, status, environment, url, when}}``. Pairs with no scan are
+    omitted — callers treat that as "never DAST-scanned by Invicti".
+    """
+    if not app_versions:
+        return {}
+    apps = sorted({_a for _a, _ in app_versions if _a})
+    if not apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["invicti"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": apps}}]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application", "size": len(apps)},
+                        "aggs": {
+                            "by_ver": {
+                                "terms": {"field": "codeversion", "size": 200},
+                                "aggs": {
+                                    "latest": {
+                                        "top_hits": {
+                                            "size": 1,
+                                            "sort": [{"enddate": {"order": "desc", "unmapped_type": "date"}}],
+                                            "_source": [
+                                                "application", "codeversion", "status",
+                                                "Vcritical", "Vhigh", "Vmedium", "Vlow",
+                                                "BestPractice", "Informational",
+                                                "environment", "url",
+                                                "enddate", "startdate",
+                                            ],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+    except Exception:
+        return {}
+    wanted = {(a, v) for a, v in app_versions if a and v}
+    out: dict[tuple[str, str], dict] = {}
+    for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _app = _ab.get("key")
+        for _vb in _ab.get("by_ver", {}).get("buckets", []):
+            _ver = _vb.get("key")
+            _hits = _vb.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            key = (_app, _ver)
+            if wanted and key not in wanted:
+                continue
+            out[key] = {
+                "Vcritical":     int(_s.get("Vcritical") or 0),
+                "Vhigh":         int(_s.get("Vhigh")     or 0),
+                "Vmedium":       int(_s.get("Vmedium")   or 0),
+                "Vlow":          int(_s.get("Vlow")      or 0),
+                "BestPractice":  int(_s.get("BestPractice") or 0),
+                "Informational": int(_s.get("Informational") or 0),
+                "status":        _s.get("status", "")      or "",
+                "environment":   _s.get("environment", "") or "",
+                "url":           _s.get("url", "")         or "",
+                "when":          _s.get("enddate") or _s.get("startdate") or "",
+            }
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Latest OWASP-ZAP DAST scan per ``(app, version)`` pair.
+
+    ZAP doesn't surface a critical bucket — only ``Vhigh`` / ``Vmedium`` /
+    ``Vlow`` plus ``Informational`` and ``FalsePositives`` (both keyword in
+    the index, but cast to int defensively for counting).
+    """
+    if not app_versions:
+        return {}
+    apps = sorted({_a for _a, _ in app_versions if _a})
+    if not apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["zap"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": apps}}]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application", "size": len(apps)},
+                        "aggs": {
+                            "by_ver": {
+                                "terms": {"field": "codeversion", "size": 200},
+                                "aggs": {
+                                    "latest": {
+                                        "top_hits": {
+                                            "size": 1,
+                                            "sort": [{"enddate": {"order": "desc", "unmapped_type": "date"}}],
+                                            "_source": [
+                                                "application", "codeversion", "status",
+                                                "Vhigh", "Vmedium", "Vlow",
+                                                "FalsePositives", "Informational",
+                                                "environment", "url",
+                                                "enddate", "startdate",
+                                            ],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+    except Exception:
+        return {}
+
+    def _coerce_int(v) -> int:
+        try:
+            return int(v) if v not in (None, "") else 0
+        except (TypeError, ValueError):
+            return 0
+
+    wanted = {(a, v) for a, v in app_versions if a and v}
+    out: dict[tuple[str, str], dict] = {}
+    for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _app = _ab.get("key")
+        for _vb in _ab.get("by_ver", {}).get("buckets", []):
+            _ver = _vb.get("key")
+            _hits = _vb.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            key = (_app, _ver)
+            if wanted and key not in wanted:
+                continue
+            out[key] = {
+                # ZAP has no critical bucket — we still expose the field as 0 so
+                # downstream code can sum across scanners with a uniform shape.
+                "Vcritical":      0,
+                "Vhigh":          int(_s.get("Vhigh")   or 0),
+                "Vmedium":        int(_s.get("Vmedium") or 0),
+                "Vlow":           int(_s.get("Vlow")    or 0),
+                "Informational":  _coerce_int(_s.get("Informational")),
+                "FalsePositives": _coerce_int(_s.get("FalsePositives")),
+                "status":         _s.get("status", "")      or "",
+                "environment":    _s.get("environment", "") or "",
+                "url":            _s.get("url", "")         or "",
+                "when":           _s.get("enddate") or _s.get("startdate") or "",
             }
     return out
 
@@ -6891,9 +7147,12 @@ def _render_event_log() -> None:
         _pv = (_prd or {}).get("version") or ""
         if _pv:
             _prisma_keys.add((_a, _pv))
-    _prisma_map = _fetch_prismacloud(tuple(sorted(_prisma_keys))) if _prisma_keys else {}
+    _prisma_keys_t = tuple(sorted(_prisma_keys))
+    _prisma_map  = _fetch_prismacloud(_prisma_keys_t) if _prisma_keys else {}
+    _invicti_map = _fetch_invicti(_prisma_keys_t)     if _prisma_keys else {}
+    _zap_map     = _fetch_zap(_prisma_keys_t)         if _prisma_keys else {}
     # Per-version build/release provenance for the event-log version popovers.
-    _ver_meta_map = _fetch_version_meta(tuple(sorted(_prisma_keys))) if _prisma_keys else {}
+    _ver_meta_map = _fetch_version_meta(_prisma_keys_t) if _prisma_keys else {}
 
     def _slug(val: str, prefix: str) -> str:
         return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
@@ -7311,50 +7570,103 @@ def _render_event_log() -> None:
                 f'    <span class="ap-k">Version</span><span class="ap-v empty">none on record</span>'
             )
 
-        # Prismacloud block ---------------------------------------------------
-        _this_scan = _prisma_map.get((_app, _ver))
-        _prd_scan  = _prisma_map.get((_app, _prd_ver)) if _prd_ver else None
-        # Only compute deltas when this version != prd version AND prd scan exists.
-        _baseline = _prd_scan if (_prd_ver and not _is_this_prd and _prd_scan) else None
+        # ── Multi-source security scan block (Prismacloud + Invicti + ZAP) ──
+        # Each scanner emits its own header strip and severity tiles.
+        # Δ vs current prd is computed per-scanner against that scanner's
+        # own prd-version baseline (apples-to-apples).
+        _SCAN_SOURCES_EL = (
+            ("prisma",  "Prismacloud", "⛟", "var(--cc-blue)",  _prisma_map,  True),
+            ("invicti", "Invicti",     "⊛", "var(--cc-teal)",  _invicti_map, False),
+            ("zap",     "ZAP",         "⌖", "var(--cc-amber)", _zap_map,     False),
+        )
 
-        if _this_scan:
-            _v_tiles, _v_total = _sev_strip("V", _this_scan, _baseline)
-            _c_tiles, _c_total = _sev_strip("C", _this_scan, _baseline)
-            _scan_when = fmt_dt(_this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
-            _scan_stat = _this_scan.get("status", "") or ""
-            _sec_subhead_v = (
-                f'<div class="ap-sev-subhead">'
-                f'  <span>Vulnerabilities · this version</span>'
-                f'  <span class="sev-sum">{_v_total} total</span>'
-                f'</div>'
+        def _el_scan_block(name: str, glyph: str, color: str,
+                           this_scan: dict | None,
+                           prd_baseline: dict | None,
+                           has_compliance: bool,
+                           extra_rows_html: str = "") -> str:
+            if not this_scan:
+                return (
+                    f'<div class="ap-scan-empty-row">'
+                    f'<span style="color:{color}">{glyph}</span>'
+                    f'<b>{name}</b> · no scan on record for this version'
+                    f'</div>'
+                )
+            _stat = this_scan.get("status", "") or ""
+            _when = fmt_dt(this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+            _v_tiles_local, _v_total_local = _sev_strip("V", this_scan, prd_baseline)
+            _block = (
+                f'<div class="ap-scan-src" style="--ap-scan-src-c:{color}">'
+                f'  <span class="ap-scan-src-glyph">{glyph}</span>'
+                f'  <span class="ap-scan-src-name">{name}</span>'
+                + (f'<span class="ap-scan-src-status">{html.escape(_stat)}</span>'
+                   if _stat else '')
+                + (f'<span class="ap-scan-src-when">{_when} {DISPLAY_TZ_LABEL}</span>'
+                   if _when else '')
+                + '</div>'
+                + extra_rows_html
+                + f'    <div class="ap-sev-subhead"><span>Vulnerabilities · this version</span>'
+                f'      <span class="sev-sum">{_v_total_local} total</span></div>'
+                f'    <div class="ap-sev">{_v_tiles_local}</div>'
             )
-            _sec_subhead_c = (
-                f'<div class="ap-sev-subhead">'
-                f'  <span>Compliance · this version</span>'
-                f'  <span class="sev-sum">{_c_total} total</span>'
-                f'</div>'
-            )
-            _prisma_block = (
-                f'    <div class="ap-section">Prismacloud scan</div>'
-                f'    <span class="ap-k">Scan status</span>{_v(_scan_stat)}'
-                f'    <span class="ap-k">Scanned ({DISPLAY_TZ_LABEL})</span>{_v(_scan_when)}'
-                f'    {_sec_subhead_v}'
-                f'    <div class="ap-sev">{_v_tiles}</div>'
-                f'    {_sec_subhead_c}'
-                f'    <div class="ap-sev">{_c_tiles}</div>'
-            )
-            if _baseline is not None:
-                _prisma_block += (
+            if has_compliance:
+                _c_tiles_local, _c_total_local = _sev_strip("C", this_scan, prd_baseline)
+                _block += (
+                    f'    <div class="ap-sev-subhead"><span>Compliance · this version</span>'
+                    f'      <span class="sev-sum">{_c_total_local} total</span></div>'
+                    f'    <div class="ap-sev">{_c_tiles_local}</div>'
+                )
+            if prd_baseline is not None:
+                _block += (
                     f'    <div class="ap-compare-head">'
                     f'      <span>Δ vs current prd</span>'
                     f'      <span class="cmp-pill">{_prd_ver}</span>'
                     f'    </div>'
                 )
-        else:
-            _prisma_block = (
-                f'    <div class="ap-section">Prismacloud scan</div>'
-                f'    <div class="ap-sev-empty">No prismacloud scan on record for this version.</div>'
+            return _block
+
+        _scan_blocks_el: list[str] = []
+        for _src_key, _src_lbl, _src_glyph, _src_color, _src_map, _has_c in _SCAN_SOURCES_EL:
+            _this = _src_map.get((_app, _ver))
+            _baseline_src = (
+                _src_map.get((_app, _prd_ver))
+                if (_prd_ver and not _is_this_prd)
+                else None
             )
+            # DAST extras (env / url / informational / extras)
+            _extras_el = ""
+            if _this and _src_key in ("invicti", "zap"):
+                _env  = (_this.get("environment") or "").strip()
+                _url  = (_this.get("url") or "").strip()
+                _info = int(_this.get("Informational") or 0)
+                _rows: list[str] = []
+                if _env:
+                    _rows.append(f'<span class="ap-k">Environment</span>{_chip(_env)}')
+                if _url:
+                    _rows.append(
+                        f'<span class="ap-k">Target URL</span>'
+                        f'<span class="ap-v" title="{html.escape(_url)}">'
+                        f'{html.escape(_url[:60])}{"…" if len(_url) > 60 else ""}'
+                        f'</span>'
+                    )
+                if _src_key == "invicti":
+                    _bp = int(_this.get("BestPractice") or 0)
+                    _rows.append(f'<span class="ap-k">Informational</span>{_v(str(_info))}')
+                    _rows.append(f'<span class="ap-k">Best practice</span>{_v(str(_bp))}')
+                else:  # zap
+                    _fp = int(_this.get("FalsePositives") or 0)
+                    _rows.append(f'<span class="ap-k">Informational</span>{_v(str(_info))}')
+                    _rows.append(f'<span class="ap-k">False positives</span>{_v(str(_fp))}')
+                _extras_el = "".join(_rows)
+            _scan_blocks_el.append(
+                _el_scan_block(_src_lbl, _src_glyph, _src_color,
+                               _this, _baseline_src if _this else None,
+                               _has_c, _extras_el)
+            )
+        _prisma_block = (
+            f'    <div class="ap-section">Security scans</div>'
+            + "".join(_scan_blocks_el)
+        )
 
         # Per-version provenance: always show build date; if released, show
         # release date + RLM.
@@ -7389,7 +7701,7 @@ def _render_event_log() -> None:
             f'    {_prd_block}'
             f'    {_prisma_block}'
             f'  </div>'
-            f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud</div>'
+            f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
             f'</div>'
         )
 
@@ -8132,8 +8444,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _v = (_st_data or {}).get("version") or ""
             if _v:
                 _iv_prisma_keys.add((_a, _v))
-    _iv_prisma_map = _fetch_prismacloud(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
-    _iv_vermeta_map = _fetch_version_meta(tuple(sorted(_iv_prisma_keys))) if _iv_prisma_keys else {}
+    _iv_prisma_keys_t = tuple(sorted(_iv_prisma_keys))
+    _iv_prisma_map  = _fetch_prismacloud(_iv_prisma_keys_t) if _iv_prisma_keys else {}
+    _iv_invicti_map = _fetch_invicti(_iv_prisma_keys_t)     if _iv_prisma_keys else {}
+    _iv_zap_map     = _fetch_zap(_iv_prisma_keys_t)         if _iv_prisma_keys else {}
+    _iv_vermeta_map = _fetch_version_meta(_iv_prisma_keys_t) if _iv_prisma_keys else {}
 
     # ── Team extraction helper (inventory rows may carry multiple *_team fields) ─
     # For admins we surface every *_team field so the Teams tile reflects the
@@ -9015,9 +9330,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             (_never,  "var(--cc-text-mute)", "never"),
         ])
 
-        # Security posture — sum critical/high/medium/low across PRD versions
+        # Security posture — sum critical/high/medium/low across the PRD
+        # version of every in-scope app, combining findings from THREE
+        # scanners: Prismacloud (container), Invicti (DAST web), ZAP (DAST
+        # OWASP). ZAP has no critical bucket — its high+medium+low add into
+        # the totals normally and only the critical column reflects prisma +
+        # invicti.
         _vc = 0; _vh = 0; _vm = 0; _vl = 0
-        _apps_scanned = 0
+        # Per-source aggregates so the tile can attribute findings to a
+        # specific scanner. Each is an independent (V*, app-count) tuple.
+        _src_totals = {
+            "prisma":  {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+            "invicti": {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+            "zap":     {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+        }
+        _apps_scanned: set[str] = set()  # any scanner has data
         _apps_with_ver = 0
         for _ap in _post_apps:
             _prd = _iv_prd_map.get(_ap) or {}
@@ -9025,25 +9352,44 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if not _pv:
                 continue
             _apps_with_ver += 1
-            _sc = _iv_prisma_map.get((_ap, _pv))
-            if not _sc:
-                continue
-            _apps_scanned += 1
-            _vc += int(_sc.get("Vcritical") or 0)
-            _vh += int(_sc.get("Vhigh")     or 0)
-            _vm += int(_sc.get("Vmedium")   or 0)
-            _vl += int(_sc.get("Vlow")      or 0)
+            _did_scan = False
+            for _src, _src_map in (
+                ("prisma",  _iv_prisma_map),
+                ("invicti", _iv_invicti_map),
+                ("zap",     _iv_zap_map),
+            ):
+                _sc = _src_map.get((_ap, _pv))
+                if not _sc:
+                    continue
+                _did_scan = True
+                _src_totals[_src]["apps"] += 1
+                _src_totals[_src]["vc"] += int(_sc.get("Vcritical") or 0)
+                _src_totals[_src]["vh"] += int(_sc.get("Vhigh")     or 0)
+                _src_totals[_src]["vm"] += int(_sc.get("Vmedium")   or 0)
+                _src_totals[_src]["vl"] += int(_sc.get("Vlow")      or 0)
+            if _did_scan:
+                _apps_scanned.add(_ap)
+                _vc += _src_totals["prisma"]["vc"] + _src_totals["invicti"]["vc"] + _src_totals["zap"]["vc"]
+                # The sum-on-each-app-loop double-counts; reset using current
+                # source totals after the loop instead. Continue here.
+        # Recompute final totals from per-source aggregates (avoids the
+        # progressive overcount inside the per-app loop above).
+        _vc = sum(_src_totals[_s]["vc"] for _s in _src_totals)
+        _vh = sum(_src_totals[_s]["vh"] for _s in _src_totals)
+        _vm = sum(_src_totals[_s]["vm"] for _s in _src_totals)
+        _vl = sum(_src_totals[_s]["vl"] for _s in _src_totals)
         _v_crit_high = _vc + _vh
+        _apps_scanned_n = len(_apps_scanned)
         _sec_tag = (
             "crit" if _vc > 0
             else "warn" if _vh > 0
-            else "ok" if _apps_scanned
+            else "ok" if _apps_scanned_n
             else ""
         )
         _sec_tag_lbl = (
             f"{_vc} crit" if _vc > 0
             else f"{_vh} high" if _vh > 0
-            else "clean" if _apps_scanned
+            else "clean" if _apps_scanned_n
             else "unscanned"
         )
         _sec_bar = _svg_dist_bar([
@@ -9052,6 +9398,32 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             (_vm, "var(--cc-blue)",      "medium"),
             (_vl, "var(--cc-text-mute)", "low"),
         ])
+        # Per-scanner attribution chip strip. Surfaces which tools actually
+        # produced these findings so a "30 high" total isn't ambiguous.
+        _SRC_META = {
+            "prisma":  ("⛟",  "Prismacloud", "var(--cc-blue)"),
+            "invicti": ("⊛",  "Invicti",     "var(--cc-teal)"),
+            "zap":     ("⌖",  "ZAP",         "var(--cc-amber)"),
+        }
+        _sec_src_chips: list[str] = []
+        for _src in ("prisma", "invicti", "zap"):
+            _t = _src_totals[_src]
+            _findings = _t["vc"] + _t["vh"] + _t["vm"] + _t["vl"]
+            if _t["apps"] == 0:
+                continue
+            _glyph, _name, _color = _SRC_META[_src]
+            _sec_src_chips.append(
+                f'<span class="iv-sec-src" style="--iv-sec-src-c:{_color}">'
+                f'<span class="iv-sec-src-g">{_glyph}</span>'
+                f'<span class="iv-sec-src-n">{_name}</span>'
+                f'<b>{_findings}</b>'
+                f'<span class="iv-sec-src-apps">on {_t["apps"]} app{"s" if _t["apps"] != 1 else ""}</span>'
+                f'</span>'
+            )
+        _sec_src_html = (
+            '<div class="iv-sec-srcs">' + "".join(_sec_src_chips) + '</div>'
+            if _sec_src_chips else ''
+        )
 
         _spark_build = _svg_stacked_spark(_bs, _bf)
 
@@ -9121,8 +9493,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + f'<div class="iv-pulse-sub">apps deployed to PRD in the last year</div>'
             + _fresh_bar
             + '</div>'
-            # Tile 4: Security posture
-            + '<div class="iv-pulse-tile" style="--iv-pulse-accent:'
+            # Tile 4: Security posture (Prismacloud + Invicti + ZAP)
+            + '<div class="iv-pulse-tile iv-pulse-tile--sec" style="--iv-pulse-accent:'
               'linear-gradient(90deg,var(--cc-red),var(--cc-amber))">'
             '<div class="iv-pulse-label">'
             '<span>Security posture</span>'
@@ -9130,9 +9502,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                if _sec_tag else '')
             + '</div>'
             + f'<div class="iv-pulse-value">{_v_crit_high}</div>'
-            + f'<div class="iv-pulse-sub">crit + high · <b>{_apps_scanned}</b>/'
-              f'<b>{_apps_with_ver}</b> PRD versions scanned</div>'
+            + f'<div class="iv-pulse-sub">crit + high · <b>{_apps_scanned_n}</b>/'
+              f'<b>{_apps_with_ver}</b> PRD versions scanned (any source)</div>'
             + _sec_bar
+            + _sec_src_html
             + '</div>'
             + '</div>'
         )
@@ -9829,70 +10202,156 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     )
             _stage_block += _prov_rows
 
-            # ── Previous-stage context (for Δ baseline) ─────────────────────
+            # ── Previous-stage context (for Δ baselines, used by every scanner) ─
             _prev_stage = _STAGE_PREV.get(_stage)
             _prev_ver: str = ""
-            _prev_scan: dict | None = None
             if _prev_stage:
                 _prev_data = (_stages.get(_prev_stage) or {})
                 _prev_ver = _prev_data.get("version") or ""
-                if _prev_ver and _prev_ver != _ver:
-                    _prev_scan = _iv_prisma_map.get((_app, _prev_ver))
+                if not (_prev_ver and _prev_ver != _ver):
+                    _prev_ver = ""
 
-            # ── Prismacloud for this version ────────────────────────────────
-            _this_scan = _iv_prisma_map.get((_app, _ver))
-            if _this_scan:
-                _v_tiles, _v_total = _iv_sev_strip("V", _this_scan, None, "")
-                _c_tiles, _c_total = _iv_sev_strip("C", _this_scan, None, "")
-                _scan_when = fmt_dt(_this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
-                _scan_stat = _this_scan.get("status", "") or ""
-                _prisma_block = (
-                    f'    <div class="ap-section">Prismacloud scan</div>'
-                    f'    <span class="ap-k">Scan status</span>{_iv_v(_scan_stat)}'
-                    f'    <span class="ap-k">Scanned ({DISPLAY_TZ_LABEL})</span>{_iv_v(_scan_when)}'
-                    f'    <div class="ap-sev-subhead"><span>Vulnerabilities · this version</span>'
-                    f'      <span class="sev-sum">{_v_total} total</span></div>'
-                    f'    <div class="ap-sev">{_v_tiles}</div>'
-                    f'    <div class="ap-sev-subhead"><span>Compliance · this version</span>'
-                    f'      <span class="sev-sum">{_c_total} total</span></div>'
-                    f'    <div class="ap-sev">{_c_tiles}</div>'
+            # ── Per-scanner block builder ────────────────────────────────────
+            # Each scanner emits a header strip (glyph + name + status + date)
+            # followed by V tiles, optional C tiles, optional environment/url,
+            # and Δ vs prd / prev-stage comparisons.
+            _SCAN_SOURCES = (
+                # (key,        label,         glyph, color,            map,             has_compliance)
+                ("prisma",  "Prismacloud", "⛟", "var(--cc-blue)",  _iv_prisma_map,  True),
+                ("invicti", "Invicti",     "⊛", "var(--cc-teal)",  _iv_invicti_map, False),
+                ("zap",     "ZAP",         "⌖", "var(--cc-amber)", _iv_zap_map,     False),
+            )
+
+            def _iv_scan_block(name: str, glyph: str, color: str,
+                               this_scan: dict | None,
+                               prd_baseline: dict | None,
+                               prev_baseline: dict | None,
+                               has_compliance: bool,
+                               extra_rows_html: str = "") -> str:
+                if not this_scan:
+                    return (
+                        f'<div class="ap-scan-empty-row">'
+                        f'<span style="color:{color}">{glyph}</span>'
+                        f'<b>{name}</b> · no scan on record for this version'
+                        f'</div>'
+                    )
+                _stat = this_scan.get("status", "") or ""
+                _when = fmt_dt(this_scan.get("when"), "%Y-%m-%d %H:%M") or ""
+                _v_tiles_local, _v_total_local = _iv_sev_strip("V", this_scan, None, "")
+                _block = (
+                    f'<div class="ap-scan-src" style="--ap-scan-src-c:{color}">'
+                    f'  <span class="ap-scan-src-glyph">{glyph}</span>'
+                    f'  <span class="ap-scan-src-name">{name}</span>'
+                    + (f'<span class="ap-scan-src-status">{html.escape(_stat)}</span>'
+                       if _stat else '')
+                    + (f'<span class="ap-scan-src-when">{_when} {DISPLAY_TZ_LABEL}</span>'
+                       if _when else '')
+                    + '</div>'
+                    + extra_rows_html
+                    + f'    <div class="ap-sev-subhead"><span>Vulnerabilities · this version</span>'
+                    f'      <span class="sev-sum">{_v_total_local} total</span></div>'
+                    f'    <div class="ap-sev">{_v_tiles_local}</div>'
                 )
-
+                if has_compliance:
+                    _c_tiles_local, _c_total_local = _iv_sev_strip("C", this_scan, None, "")
+                    _block += (
+                        f'    <div class="ap-sev-subhead"><span>Compliance · this version</span>'
+                        f'      <span class="sev-sum">{_c_total_local} total</span></div>'
+                        f'    <div class="ap-sev">{_c_tiles_local}</div>'
+                    )
                 # Δ vs current prd
-                if _prd_scan is not None and _prd_ver and not _is_prd_ver:
-                    _vd, _ = _iv_sev_strip("V", _this_scan, _prd_scan, "prd")
-                    _cd, _ = _iv_sev_strip("C", _this_scan, _prd_scan, "prd")
-                    _prisma_block += (
+                if prd_baseline is not None and _prd_ver and not _is_prd_ver:
+                    _vd_local, _ = _iv_sev_strip("V", this_scan, prd_baseline, "prd")
+                    _block += (
                         f'    <div class="ap-compare-head">'
                         f'      <span>Δ vs current prd</span>'
                         f'      <span class="cmp-pill">{_prd_ver}</span>'
                         f'    </div>'
                         f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
-                        f'    <div class="ap-sev">{_vd}</div>'
-                        f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
-                        f'    <div class="ap-sev">{_cd}</div>'
+                        f'    <div class="ap-sev">{_vd_local}</div>'
                     )
-
+                    if has_compliance:
+                        _cd_local, _ = _iv_sev_strip("C", this_scan, prd_baseline, "prd")
+                        _block += (
+                            f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
+                            f'    <div class="ap-sev">{_cd_local}</div>'
+                        )
                 # Δ vs previous stage
-                if _prev_scan is not None and _prev_ver and _prev_ver != _ver:
-                    _prev_lbl = _STAGE_LABEL.get(_prev_stage, _prev_stage).lower()
-                    _vd2, _ = _iv_sev_strip("V", _this_scan, _prev_scan, _prev_stage)
-                    _cd2, _ = _iv_sev_strip("C", _this_scan, _prev_scan, _prev_stage)
-                    _prisma_block += (
+                if prev_baseline is not None and _prev_ver:
+                    _prev_lbl_local = _STAGE_LABEL.get(_prev_stage, _prev_stage).lower()
+                    _vd2_local, _ = _iv_sev_strip("V", this_scan, prev_baseline, _prev_stage)
+                    _block += (
                         f'    <div class="ap-compare-head">'
-                        f'      <span>Δ vs {_prev_lbl}</span>'
+                        f'      <span>Δ vs {_prev_lbl_local}</span>'
                         f'      <span class="cmp-pill">{_prev_ver}</span>'
                         f'    </div>'
                         f'    <div class="ap-sev-subhead"><span>Vulnerabilities</span></div>'
-                        f'    <div class="ap-sev">{_vd2}</div>'
-                        f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
-                        f'    <div class="ap-sev">{_cd2}</div>'
+                        f'    <div class="ap-sev">{_vd2_local}</div>'
                     )
-            else:
-                _prisma_block = (
-                    f'    <div class="ap-section">Prismacloud scan</div>'
-                    f'    <div class="ap-sev-empty">No prismacloud scan on record for this version.</div>'
+                    if has_compliance:
+                        _cd2_local, _ = _iv_sev_strip("C", this_scan, prev_baseline, _prev_stage)
+                        _block += (
+                            f'    <div class="ap-sev-subhead"><span>Compliance</span></div>'
+                            f'    <div class="ap-sev">{_cd2_local}</div>'
+                        )
+                return _block
+
+            _scan_blocks: list[str] = []
+            for _src_key, _src_lbl, _src_glyph, _src_color, _src_map, _has_c in _SCAN_SOURCES:
+                _this = _src_map.get((_app, _ver))
+                _prd_b = (
+                    _src_map.get((_app, _prd_ver))
+                    if (_prd_ver and not _is_prd_ver)
+                    else None
                 )
+                _prev_b = (
+                    _src_map.get((_app, _prev_ver))
+                    if _prev_ver else None
+                )
+                # DAST scanners surface environment + url + extra counts
+                _extras = ""
+                if _this and _src_key in ("invicti", "zap"):
+                    _env  = (_this.get("environment") or "").strip()
+                    _url  = (_this.get("url") or "").strip()
+                    _info = int(_this.get("Informational") or 0)
+                    _extra_rows: list[str] = []
+                    if _env:
+                        _extra_rows.append(
+                            f'<span class="ap-k">Environment</span>{_iv_chip(_env)}'
+                        )
+                    if _url:
+                        _extra_rows.append(
+                            f'<span class="ap-k">Target URL</span>'
+                            f'<span class="ap-v" title="{html.escape(_url)}">'
+                            f'{html.escape(_url[:60])}{"…" if len(_url) > 60 else ""}'
+                            f'</span>'
+                        )
+                    if _src_key == "invicti":
+                        _bp = int(_this.get("BestPractice") or 0)
+                        _extra_rows.append(
+                            f'<span class="ap-k">Informational</span>{_iv_v(str(_info))}'
+                        )
+                        _extra_rows.append(
+                            f'<span class="ap-k">Best practice</span>{_iv_v(str(_bp))}'
+                        )
+                    elif _src_key == "zap":
+                        _fp = int(_this.get("FalsePositives") or 0)
+                        _extra_rows.append(
+                            f'<span class="ap-k">Informational</span>{_iv_v(str(_info))}'
+                        )
+                        _extra_rows.append(
+                            f'<span class="ap-k">False positives</span>{_iv_v(str(_fp))}'
+                        )
+                    _extras = "".join(_extra_rows)
+                _scan_blocks.append(
+                    _iv_scan_block(_src_lbl, _src_glyph, _src_color,
+                                   _this, _prd_b, _prev_b, _has_c, _extras)
+                )
+
+            _prisma_block = (
+                f'    <div class="ap-section">Security scans</div>'
+                + "".join(_scan_blocks)
+            )
 
             _iv_popovers.append(
                 f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
@@ -9909,7 +10368,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'    {_stage_block}'
                 f'    {_prisma_block}'
                 f'  </div>'
-                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud</div>'
+                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
                 f'</div>'
             )
 
@@ -10128,6 +10587,19 @@ join CI/CD events to business context.
 
 **ef-cicd-versions-lookup** — auto-versioning lookup: given `project + branch`,
 returns the next version to stamp on a build.
+
+**ef-cicd-prismacloud** — container-image scan results. Per `(application,
+codeversion)` pair: `Vcritical` / `Vhigh` / `Vmedium` / `Vlow` (vulnerabilities)
+plus `Ccritical` / `Chigh` / `Cmedium` / `Clow` (compliance), `imageName`,
+`imageTag`, `enddate`.
+
+**ef-cicd-invicti** — DAST web-app scan (Invicti). Per `(application,
+codeversion)`: `Vcritical` / `Vhigh` / `Vmedium` / `Vlow`, plus `BestPractice`
+and `Informational` counts, `environment`, `url`, `enddate`.
+
+**ef-cicd-zap** — DAST web-app scan (OWASP ZAP). Per `(application,
+codeversion)`: `Vhigh` / `Vmedium` / `Vlow` (no critical bucket) plus
+`Informational` and `FalsePositives`, `environment`, `url`, `enddate`.
 
             """
         )
