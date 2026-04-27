@@ -1891,21 +1891,19 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-family: var(--cc-body);
 }
 
-/* ----- Atmospheric sticky rail ----- */
+/* ----- Whisper-thin identity rail. Just enough surface to anchor the role
+   pill — no panel chrome, no heavy gradients, no glow. The rail scrolls
+   away with the page; the Filter Console (position: fixed below) keeps
+   active state visible. */
 .st-key-cc_filter_rail {
-    background:
-        radial-gradient(120% 160% at 0% 0%, rgba(79,70,229,.10) 0%, transparent 55%),
-        radial-gradient(110% 140% at 100% 0%, rgba(13,148,136,.08) 0%, transparent 58%),
-        radial-gradient(100% 120% at 55% 100%, rgba(245,158,11,.05) 0%, transparent 62%),
-        rgba(255,255,255,.94) !important;
-    border: 1px solid rgba(15,13,38,.10) !important;
-    border-radius: 18px !important;
-    padding: 16px 20px 12px 20px !important;
-    box-shadow:
-        0 1px 0 rgba(255,255,255,.9) inset,
-        0 22px 48px -26px rgba(15,13,38,.22),
-        0 1px 2px rgba(15,13,38,.03) !important;
-    overflow: hidden;
+    background: transparent !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(15,13,38,.06) !important;
+    border-radius: 0 !important;
+    padding: 6px 4px 6px 4px !important;
+    box-shadow: none !important;
+    overflow: visible;
+    margin-bottom: 4px !important;
 }
 .st-key-cc_filter_rail::before {
     content: '';
@@ -2204,8 +2202,68 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 /* Inline mono on the meta range/bucket values — they read as data, not copy */
 .cc-rail-meta span > b + :is(:not(span)) { font-family: var(--cc-data); }
 
-/* ----- Rail identity badge — editorial serif on role name ----- */
-.cc-rail-id-role {
+/* ----- Rail identity — compact, whisper-style. Pill carries role + team
+   inline, kerned tight, no shadows, semi-translucent so it doesn't
+   compete with the data below. ----- */
+.cc-rail-id--whisper {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 8px;
+    line-height: 1.1;
+    padding: 0;
+    margin: 0;
+}
+.cc-rail-id--whisper .cc-rail-id-role {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--cc-body) !important;
+    font-weight: 600 !important;
+    font-size: 0.66rem !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 9px !important;
+    border-radius: 999px !important;
+    border: 1px solid currentColor;
+    border-color: rgba(0,0,0,.10) !important;
+    box-shadow: none !important;
+    line-height: 1.2;
+}
+.cc-rail-id--whisper .cc-rail-id-icon {
+    font-size: 0.78rem;
+    line-height: 1;
+    opacity: .85;
+}
+.cc-rail-id--whisper .cc-rail-id-team {
+    font-family: var(--cc-body) !important;
+    font-size: 0.62rem !important;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.02em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 18ch;
+    opacity: .80;
+}
+
+/* The ⓘ explainer popover trigger should also be whisper-light — small
+   ghost button so it's not the visual centre of the rail. */
+.st-key-cc_filter_rail [data-testid="stPopover"] button,
+.st-key-cc_filter_rail [data-testid="stPopoverButton"] button {
+    min-height: 22px !important;
+    padding: 1px 6px !important;
+    font-size: 0.72rem !important;
+    background: transparent !important;
+    border: 1px solid rgba(0,0,0,.08) !important;
+    color: var(--cc-text-mute) !important;
+    box-shadow: none !important;
+    border-radius: 999px !important;
+}
+
+.cc-rail-spacer { display: block; height: 1px; }
+
+/* Legacy selector kept for any markup we haven't migrated yet. */
+.cc-rail-id-role:not(.cc-rail-id--whisper *) {
     font-family: var(--cc-display) !important;
     font-variation-settings: "opsz" 60;
     font-weight: 600 !important;
@@ -2213,7 +2271,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-size: 0.82rem !important;
     padding: 4px 12px !important;
 }
-.cc-rail-id-team {
+.cc-rail-id-team:not(.cc-rail-id--whisper *) {
     font-family: var(--cc-body) !important;
     font-size: 0.70rem !important;
     letter-spacing: 0.04em;
@@ -2568,6 +2626,60 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 
 /* Security tile — per-scanner attribution chip strip below the V* bar */
+/* Per-stage rows inside the security-posture tile (admin / CLevel only).
+   Three compact rows stacked: DEV / QC / PRD, each with its own
+   crit·high·med·low quick-read and a mini distribution bar. */
+.iv-sec-stages {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px dashed
+        color-mix(in srgb, var(--cc-border) 80%, transparent);
+}
+.iv-sec-stage-row { display: flex; flex-direction: column; gap: 3px; }
+.iv-sec-stage-row-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    line-height: 1.2;
+}
+.iv-sec-stage-name {
+    font-family: var(--cc-data);
+    font-size: .58rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-ink);
+    background: color-mix(in srgb, var(--cc-text-mute) 8%, transparent);
+    padding: 1px 7px;
+    border-radius: 4px;
+    line-height: 1.4;
+    flex: 0 0 auto;
+}
+.iv-sec-stage-count {
+    font-family: var(--cc-data);
+    font-size: .60rem;
+    color: var(--cc-text-dim);
+    font-variant-numeric: tabular-nums;
+    flex: 1;
+}
+.iv-sec-stage-count b {
+    color: var(--cc-red);
+    font-weight: 700;
+    margin-right: 1px;
+}
+.iv-sec-stage-apps {
+    font-family: var(--cc-data);
+    font-size: .56rem;
+    letter-spacing: .04em;
+    color: var(--cc-text-mute);
+    flex: 0 0 auto;
+}
+.iv-sec-stages .iv-pulse-bar { margin-top: 0; height: 7px; }
+.iv-sec-stages .iv-pulse-legend { display: none; }
+
 .iv-sec-srcs {
     display: flex;
     flex-wrap: wrap;
@@ -5025,20 +5137,11 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
    Streamlit's known wrappers to guarantee the rail pins to the viewport.
    ========================================================================== */
 
-/* Force the rail to stick no matter how many CSS blocks above declared it.
-   -webkit-sticky fallback for older Safari. */
-.st-key-cc_filter_rail {
-    position: -webkit-sticky !important;
-    position: sticky !important;
-    top: 0 !important;
-    z-index: 950 !important;
-}
-
-/* Strip clipping/transform ONLY on the inner block wrappers between the rail
-   and the scroll root. The scroll root itself (stAppViewContainer / stMain /
-   section.main) MUST keep its overflow — otherwise the page stops scrolling.
-   These inner wrappers are the ones that break sticky; the outer scroller
-   provides the scroll axis and the sticky viewport. */
+/* The rail is intentionally NOT sticky any more — it scrolls away with
+   the page as part of the "subtler header" cleanup. Filter Console
+   visibility is owned by the position-fixed cc_filter_secondary below.
+   Leaving overflow overrides in place because other layout pieces still
+   benefit (popover positioning, etc.). */
 [data-testid="stMainBlockContainer"],
 .main .block-container,
 [data-testid="stVerticalBlock"],
@@ -5049,13 +5152,29 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     filter: none !important;
 }
 
-/* The secondary filter bar sits below the rail. Its `top` must clear the
-   rail's actual painted height (padding + borders). Re-pin it explicitly. */
+/* Filter Console — pinned to the viewport with `position: fixed`. We
+   tried `position: sticky` twice and it kept losing its anchor when
+   nested in Streamlit's flex wrappers. Fixed positioning is unambiguous:
+   the bar floats at the top, every other layout block flows under it
+   normally, and we add a global padding-top below to compensate for the
+   removed flow space.
+
+   Width centres inside the typical Streamlit content column (max ~1200px
+   on a wide desktop, full width minus margins below). */
 .st-key-cc_filter_secondary {
-    position: -webkit-sticky !important;
-    position: sticky !important;
-    top: 96px !important;
-    z-index: 900 !important;
+    position: fixed !important;
+    top: 8px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    width: min(1240px, calc(100vw - 32px)) !important;
+    z-index: 1100 !important;
+}
+/* Compensate for the removed flow space — push the body content down by
+   roughly the bar's painted height so the page doesn't scroll under
+   the fixed bar on first paint. The rail above the bar still scrolls
+   away naturally when the user scrolls down. */
+[data-testid="stMainBlockContainer"] {
+    padding-top: 84px !important;
 }
 
 </style>
@@ -6628,27 +6747,21 @@ _role_icon = ROLE_ICONS[role_pick]
 # it with a blurred surface so the stat tiles + table (and nested event log)
 # flow beneath it as one continuous surface.
 with st.container(key="cc_filter_rail"):
-    # Minimal rail: role identity only. Every filter (search, time window,
-    # auto-refresh, admin toggles, sort, per-project view, dimensional
-    # multiselects, clear cache) was consolidated into a single "Filter
-    # Console" popover that sits in the inventory's secondary bar below.
-    # The rail intentionally carries zero filterable widgets — this keeps
-    # identity and scope visually distinct.
+    # Whisper-thin identity rail. The role badge + (admin-only) ⓘ
+    # explainer popover sit on the left as a compact pill; the right
+    # column is empty by design — the visible Filter Console button
+    # (in cc_filter_secondary, position-fixed below the rail) makes
+    # the previous "filters live in the console below" hint redundant.
     _rail = st.columns(
-        [1.6, 6.4],
-        vertical_alignment="bottom",
+        [2.0, 6.0],
+        vertical_alignment="center",
     )
 
-    # ── Col 0: compact identity badge (role + team) + "how was this role
-    # picked?" explainer popover. The badge is visible at a glance; the
-    # popover surfaces the raw session state, the mapping rules, and the
-    # tie-break so "why am I detected as X" never needs a code dive.
+    # ── Col 0: compact identity pill + (admin) ⓘ explainer ──────────
+    # The whole pill is laid out as one row to keep the rail one-line tall.
     with _rail[0]:
-        # Non-admins don't need the role-resolution explainer — they'd never
-        # change the underlying auth wiring anyway. Render the badge alone in
-        # a single column for them; admins keep the ⓘ popover beside it.
         if _is_admin:
-            _ident_cols = st.columns([4.2, 1], gap="small", vertical_alignment="center")
+            _ident_cols = st.columns([5, 1], gap="small", vertical_alignment="center")
             _badge_col = _ident_cols[0]
             _why_col = _ident_cols[1]
         else:
@@ -6656,11 +6769,14 @@ with st.container(key="cc_filter_rail"):
             _why_col = None
         with _badge_col:
             st.markdown(
-                f'<div class="cc-rail-id">'
-                f'<div class="cc-rail-id-role" '
-                f'style="color:{_role_clr};border-color:{_role_clr}55;'
-                f'background:{_role_clr}0F">{_role_icon} {role_pick}</div>'
-                f'<div class="cc-rail-id-team" title="{_team_display}">{_team_display}</div>'
+                f'<div class="cc-rail-id cc-rail-id--whisper">'
+                f'<span class="cc-rail-id-role" '
+                f'style="color:{_role_clr};border-color:{_role_clr}40;'
+                f'background:{_role_clr}0A">'
+                f'<span class="cc-rail-id-icon">{_role_icon}</span>'
+                f'{role_pick}</span>'
+                f'<span class="cc-rail-id-team" title="{_team_display}">'
+                f'{_team_display}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -6779,19 +6895,13 @@ with st.container(key="cc_filter_rail"):
                         unsafe_allow_html=True,
                     )
 
-    # ── Col 1: scope-summary line (no widgets — everything filterable lives
-    # in the unified Filter Console below). The line is purely informational:
-    # it nods at the active window + role scope so the rail still feels
-    # contextual without re-introducing widget state.
+    # ── Col 1: intentionally empty. The rail used to carry a "Filters live
+    # in the Filter Console below" hint here, but the Filter Console button
+    # is pinned to the viewport (position: fixed) so the hint is redundant
+    # and was just adding noise.
     with _rail[1]:
         st.markdown(
-            '<div class="cc-rail-scope-line">'
-            '<span class="cc-rail-scope-dot"></span>'
-            '<span class="cc-rail-scope-text">'
-            'Filters live in the <b>Filter Console</b> below — '
-            'every scope (search, time, dimensions, sort) is consolidated there.'
-            '</span>'
-            '</div>',
+            '<div class="cc-rail-spacer" aria-hidden="true"></div>',
             unsafe_allow_html=True,
         )
 
@@ -10185,100 +10295,183 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             (_never,  "var(--cc-text-mute)", "never"),
         ])
 
-        # Security posture — sum critical/high/medium/low across the PRD
-        # version of every in-scope app, combining findings from THREE
-        # scanners: Prismacloud (container), Invicti (DAST web), ZAP (DAST
-        # OWASP). ZAP has no critical bucket — its high+medium+low add into
-        # the totals normally and only the critical column reflects prisma +
-        # invicti.
-        _vc = 0; _vh = 0; _vm = 0; _vl = 0
-        # Per-source aggregates so the tile can attribute findings to a
-        # specific scanner. Each is an independent (V*, app-count) tuple.
-        _src_totals = {
-            "prisma":  {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
-            "invicti": {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
-            "zap":     {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+        # ── Per-stage security posture ─────────────────────────────────
+        # The role determines which stage(s) to show:
+        #   Developer   → DEV   (own pipeline)
+        #   QC          → QC    (own pipeline)
+        #   Operations  → PRD   (own pipeline)
+        #   Admin/CLevel→ DEV + QC + PRD side by side
+        # For each stage we sum V* (critical/high/medium/low) across all
+        # three scanners (Prismacloud + Invicti + ZAP) for the version that
+        # actually shipped to that stage on each in-scope app.
+        _SEC_STAGE_LABEL = {"dev": "Dev", "qc": "QC", "prd": "PRD"}
+        _ROLE_SEC_STAGE = {
+            "Developer":  "dev",
+            "QC":         "qc",
+            "Operations": "prd",
         }
-        _apps_scanned: set[str] = set()  # any scanner has data
-        _apps_with_ver = 0
-        for _ap in _post_apps:
-            _prd = _iv_prd_map.get(_ap) or {}
-            _pv = (_prd.get("version") or "")
-            if not _pv:
-                continue
-            _apps_with_ver += 1
-            _did_scan = False
-            for _src, _src_map in (
-                ("prisma",  _iv_prisma_map),
-                ("invicti", _iv_invicti_map),
-                ("zap",     _iv_zap_map),
-            ):
-                _sc = _src_map.get((_ap, _pv))
-                if not _sc:
+        if _is_admin:
+            _sec_stages: list[str] = ["dev", "qc", "prd"]
+        else:
+            _sec_stages = [_ROLE_SEC_STAGE.get(_effective_role, "prd")]
+
+        def _sec_aggregate(stage: str) -> dict:
+            """Sum V* across all 3 scanners for the given stage's version
+            of every in-scope app. Returns ``{vc, vh, vm, vl, src_totals,
+            apps_scanned, apps_with_ver}``."""
+            _src = {
+                "prisma":  {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+                "invicti": {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+                "zap":     {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+            }
+            _scanned: set[str] = set()
+            _with_ver = 0
+            for _ap in _post_apps:
+                _stages = _iv_stages_map.get(_ap) or {}
+                _sd = _stages.get(stage) or {}
+                _ver = (_sd or {}).get("version") or ""
+                if not _ver:
                     continue
-                _did_scan = True
-                _src_totals[_src]["apps"] += 1
-                _src_totals[_src]["vc"] += int(_sc.get("Vcritical") or 0)
-                _src_totals[_src]["vh"] += int(_sc.get("Vhigh")     or 0)
-                _src_totals[_src]["vm"] += int(_sc.get("Vmedium")   or 0)
-                _src_totals[_src]["vl"] += int(_sc.get("Vlow")      or 0)
-            if _did_scan:
-                _apps_scanned.add(_ap)
-                _vc += _src_totals["prisma"]["vc"] + _src_totals["invicti"]["vc"] + _src_totals["zap"]["vc"]
-                # The sum-on-each-app-loop double-counts; reset using current
-                # source totals after the loop instead. Continue here.
-        # Recompute final totals from per-source aggregates (avoids the
-        # progressive overcount inside the per-app loop above).
-        _vc = sum(_src_totals[_s]["vc"] for _s in _src_totals)
-        _vh = sum(_src_totals[_s]["vh"] for _s in _src_totals)
-        _vm = sum(_src_totals[_s]["vm"] for _s in _src_totals)
-        _vl = sum(_src_totals[_s]["vl"] for _s in _src_totals)
-        _v_crit_high = _vc + _vh
-        _apps_scanned_n = len(_apps_scanned)
-        _sec_tag = (
-            "crit" if _vc > 0
-            else "warn" if _vh > 0
-            else "ok" if _apps_scanned_n
-            else ""
-        )
-        _sec_tag_lbl = (
-            f"{_vc} crit" if _vc > 0
-            else f"{_vh} high" if _vh > 0
-            else "clean" if _apps_scanned_n
-            else "unscanned"
-        )
-        _sec_bar = _svg_dist_bar([
-            (_vc, "var(--cc-red)",       "critical"),
-            (_vh, "var(--cc-amber)",     "high"),
-            (_vm, "var(--cc-blue)",      "medium"),
-            (_vl, "var(--cc-text-mute)", "low"),
-        ])
-        # Per-scanner attribution chip strip. Surfaces which tools actually
-        # produced these findings so a "30 high" total isn't ambiguous.
+                _with_ver += 1
+                for _name, _smap in (
+                    ("prisma",  _iv_prisma_map),
+                    ("invicti", _iv_invicti_map),
+                    ("zap",     _iv_zap_map),
+                ):
+                    _sc = _smap.get((_ap, _ver))
+                    if not _sc:
+                        continue
+                    _scanned.add(_ap)
+                    _src[_name]["apps"] += 1
+                    _src[_name]["vc"]   += int(_sc.get("Vcritical") or 0)
+                    _src[_name]["vh"]   += int(_sc.get("Vhigh")     or 0)
+                    _src[_name]["vm"]   += int(_sc.get("Vmedium")   or 0)
+                    _src[_name]["vl"]   += int(_sc.get("Vlow")      or 0)
+            return {
+                "vc": sum(_src[s]["vc"] for s in _src),
+                "vh": sum(_src[s]["vh"] for s in _src),
+                "vm": sum(_src[s]["vm"] for s in _src),
+                "vl": sum(_src[s]["vl"] for s in _src),
+                "src_totals":   _src,
+                "apps_scanned": len(_scanned),
+                "apps_with_ver": _with_ver,
+            }
+
+        _sec_per_stage = {st: _sec_aggregate(st) for st in _sec_stages}
+
         _SRC_META = {
             "prisma":  ("⛟",  "Prismacloud", "var(--cc-blue)"),
             "invicti": ("⊛",  "Invicti",     "var(--cc-teal)"),
             "zap":     ("⌖",  "ZAP",         "var(--cc-amber)"),
         }
-        _sec_src_chips: list[str] = []
-        for _src in ("prisma", "invicti", "zap"):
-            _t = _src_totals[_src]
-            _findings = _t["vc"] + _t["vh"] + _t["vm"] + _t["vl"]
-            if _t["apps"] == 0:
-                continue
-            _glyph, _name, _color = _SRC_META[_src]
-            _sec_src_chips.append(
-                f'<span class="iv-sec-src" style="--iv-sec-src-c:{_color}">'
-                f'<span class="iv-sec-src-g">{_glyph}</span>'
-                f'<span class="iv-sec-src-n">{_name}</span>'
-                f'<b>{_findings}</b>'
-                f'<span class="iv-sec-src-apps">on {_t["apps"]} app{"s" if _t["apps"] != 1 else ""}</span>'
-                f'</span>'
-            )
-        _sec_src_html = (
-            '<div class="iv-sec-srcs">' + "".join(_sec_src_chips) + '</div>'
-            if _sec_src_chips else ''
+
+        # Tile-level severity tag: pick the WORST stage's worst severity
+        # so a clean prd doesn't visually mask a critical-flooded dev.
+        _worst_vc = max((_sec_per_stage[s]["vc"] for s in _sec_stages), default=0)
+        _worst_vh = max((_sec_per_stage[s]["vh"] for s in _sec_stages), default=0)
+        _any_scanned = any(_sec_per_stage[s]["apps_scanned"] for s in _sec_stages)
+        _sec_tag = (
+            "crit" if _worst_vc > 0
+            else "warn" if _worst_vh > 0
+            else "ok" if _any_scanned
+            else ""
         )
+        _sec_tag_lbl = (
+            f"{_worst_vc} crit" if _worst_vc > 0
+            else f"{_worst_vh} high" if _worst_vh > 0
+            else "clean" if _any_scanned
+            else "unscanned"
+        )
+
+        # Hero number: total crit+high across all rendered stages.
+        _v_crit_high = sum(
+            _sec_per_stage[s]["vc"] + _sec_per_stage[s]["vh"]
+            for s in _sec_stages
+        )
+
+        def _stage_bar(stage: str) -> str:
+            _ag = _sec_per_stage[stage]
+            return _svg_dist_bar([
+                (_ag["vc"], "var(--cc-red)",       "critical"),
+                (_ag["vh"], "var(--cc-amber)",     "high"),
+                (_ag["vm"], "var(--cc-blue)",      "medium"),
+                (_ag["vl"], "var(--cc-text-mute)", "low"),
+            ])
+
+        def _stage_src_chips(stage: str) -> str:
+            _ag = _sec_per_stage[stage]
+            _chips: list[str] = []
+            for _src in ("prisma", "invicti", "zap"):
+                _t = _ag["src_totals"][_src]
+                _findings = _t["vc"] + _t["vh"] + _t["vm"] + _t["vl"]
+                if _t["apps"] == 0:
+                    continue
+                _glyph, _name, _color = _SRC_META[_src]
+                _chips.append(
+                    f'<span class="iv-sec-src" style="--iv-sec-src-c:{_color}">'
+                    f'<span class="iv-sec-src-g">{_glyph}</span>'
+                    f'<span class="iv-sec-src-n">{_name}</span>'
+                    f'<b>{_findings}</b>'
+                    f'<span class="iv-sec-src-apps">on {_t["apps"]} '
+                    f'app{"s" if _t["apps"] != 1 else ""}</span>'
+                    f'</span>'
+                )
+            return (
+                '<div class="iv-sec-srcs">' + "".join(_chips) + '</div>'
+                if _chips else ''
+            )
+
+        if len(_sec_stages) == 1:
+            # Single-stage view — keep the old tile shape (one bar + one
+            # scanner-attribution chip strip below). Title gains the stage
+            # name so "PRD" / "QC" / "DEV" is unambiguous.
+            _sec_only = _sec_stages[0]
+            _sec_bar = _stage_bar(_sec_only)
+            _sec_src_html = _stage_src_chips(_sec_only)
+            _sec_stage_label = _SEC_STAGE_LABEL[_sec_only]
+            _sec_apps_scanned_n = _sec_per_stage[_sec_only]["apps_scanned"]
+            _sec_apps_with_ver  = _sec_per_stage[_sec_only]["apps_with_ver"]
+            _sec_multi_html = ""
+        else:
+            # Admin / CLevel — three mini-rows stacked, one per stage.
+            # The hero number sums all three stages; each row has its own
+            # label, count, and per-stage scanner-attribution.
+            _multi_rows: list[str] = []
+            for _st_key in _sec_stages:
+                _ag = _sec_per_stage[_st_key]
+                _stage_total = _ag["vc"] + _ag["vh"] + _ag["vm"] + _ag["vl"]
+                _multi_rows.append(
+                    f'<div class="iv-sec-stage-row">'
+                    f'  <div class="iv-sec-stage-row-head">'
+                    f'    <span class="iv-sec-stage-name">'
+                    f'{_SEC_STAGE_LABEL[_st_key]}</span>'
+                    f'    <span class="iv-sec-stage-count">'
+                    f'<b>{_ag["vc"]}</b>·{_ag["vh"]}·{_ag["vm"]}·{_ag["vl"]}'
+                    f'</span>'
+                    f'    <span class="iv-sec-stage-apps">'
+                    f'{_ag["apps_scanned"]}/{_ag["apps_with_ver"]} apps'
+                    f'</span>'
+                    f'  </div>'
+                    f'  {_stage_bar(_st_key)}'
+                    f'</div>'
+                )
+            _sec_bar = ""              # the per-stage rows include their own bars
+            _sec_src_html = ""         # scanner attribution moves below the rows
+            _sec_stage_label = "all stages"
+            _sec_apps_scanned_n = sum(
+                _sec_per_stage[s]["apps_scanned"] for s in _sec_stages
+            )
+            _sec_apps_with_ver = sum(
+                _sec_per_stage[s]["apps_with_ver"] for s in _sec_stages
+            )
+            _sec_multi_html = (
+                '<div class="iv-sec-stages">' + "".join(_multi_rows) + '</div>'
+            )
+
+        # Compatibility shim — keep `_apps_scanned_n` / `_apps_with_ver`
+        # names for the existing tile sub-line template.
+        _apps_scanned_n = _sec_apps_scanned_n
+        _apps_with_ver  = _sec_apps_with_ver
 
         _spark_build = _svg_stacked_spark(_bs, _bf)
 
@@ -10397,17 +10590,23 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + f'<div class="iv-pulse-sub">apps deployed to PRD in the last year</div>'
             + _fresh_bar
             + '</div>'
-            # Tile 4: Security posture (Prismacloud + Invicti + ZAP)
+            # Tile 4: Security posture (Prismacloud + Invicti + ZAP) —
+            # per-stage for non-admin roles, stacked dev/qc/prd for admin.
             + '<div class="iv-pulse-tile iv-pulse-tile--sec" style="--iv-pulse-accent:'
               'linear-gradient(90deg,var(--cc-red),var(--cc-amber))">'
             '<div class="iv-pulse-label">'
-            '<span>Security posture</span>'
+            + f'<span>Security posture · {_sec_stage_label}</span>'
             + (f'<span class="iv-pulse-tag {_sec_tag}">{_sec_tag_lbl}</span>'
                if _sec_tag else '')
             + '</div>'
             + f'<div class="iv-pulse-value">{_v_crit_high}</div>'
             + f'<div class="iv-pulse-sub">crit + high · <b>{_apps_scanned_n}</b>/'
-              f'<b>{_apps_with_ver}</b> PRD versions scanned (any source)</div>'
+              f'<b>{_apps_with_ver}</b> '
+            + ('stage-version' if len(_sec_stages) == 1 else 'cross-stage')
+            + ' scan'
+            + ('' if _apps_with_ver == 1 else 's')
+            + '</div>'
+            + _sec_multi_html
             + _sec_bar
             + _sec_src_html
             + '</div>'
