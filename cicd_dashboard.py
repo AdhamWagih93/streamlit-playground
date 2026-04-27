@@ -68,6 +68,9 @@ IDX = {
     "prismacloud": "ef-cicd-prismacloud",   # container image scan
     "invicti":     "ef-cicd-invicti",       # DAST web scan
     "zap":         "ef-cicd-zap",           # DAST OWASP-ZAP scan
+    # Per-app metadata: dev / qc URLs, Remedy product info, recommended
+    # build & deploy image versions for outdated-image detection.
+    "devops_projects": "ef-devops-projects",
 }
 
 CACHE_TTL = 300  # seconds — 5 minutes balances freshness vs cluster load
@@ -907,6 +910,44 @@ div[data-testid="stPopover"] button:hover {
     font-size: .72rem;
     font-weight: 600;
 }
+/* Outdated-image chip rendered inline next to the build / deploy
+   image-tag rows in the application popover. Amber so it reads as
+   advisory, not error. */
+.el-app-pop .ap-outdated-chip {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    font-family: var(--cc-mono);
+    font-size: .60rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--cc-amber);
+    background: color-mix(in srgb, var(--cc-amber) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 35%, transparent);
+    border-radius: 3px;
+    vertical-align: middle;
+    cursor: help;
+}
+/* "Recommended version" chip — green to signal "go here" */
+.el-app-pop .ap-chip.ap-chip--rec {
+    background: color-mix(in srgb, var(--cc-green) 12%, transparent);
+    color: var(--cc-green);
+    border: 1px solid color-mix(in srgb, var(--cc-green) 35%, transparent);
+}
+/* Stage URL link inside version popovers — monospace, accent-coloured,
+   underline only on hover so it stays calm next to the other rows. */
+.el-app-pop .ap-url {
+    font-family: var(--cc-mono);
+    font-size: .76rem;
+    color: var(--cc-blue);
+    text-decoration: none;
+    word-break: break-all;
+    transition: color .12s ease;
+}
+.el-app-pop .ap-url:hover {
+    color: var(--cc-accent);
+    text-decoration: underline;
+}
 .el-app-pop .ap-foot {
     background: var(--cc-surface2);
     padding: 8px 18px;
@@ -1744,6 +1785,37 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border-radius: 3px;
     padding: 2px 6px;
     white-space: nowrap;
+}
+
+/* Inline outdated-image pills appended to the inventory's application
+   cell. Subtle amber tag (⬆ B / ⬆ D) so an admin scanning the table
+   spots upgrade candidates without the row screaming. The popover shows
+   the exact current → recommended path. */
+.iv-outdated-row {
+    display: inline-flex;
+    gap: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.iv-outdated-pill {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--cc-mono);
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--cc-amber);
+    background: color-mix(in srgb, var(--cc-amber) 11%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 35%, transparent);
+    border-radius: 3px;
+    padding: 1px 4px;
+    line-height: 1.25;
+    cursor: help;
+    transition: background .15s ease, color .15s ease;
+}
+.iv-outdated-pill:hover {
+    color: #fff;
+    background: var(--cc-amber);
 }
 /* "Not reached" — subtle warning for App apps that haven't hit this stage */
 .iv-stage-gap {
@@ -6267,6 +6339,71 @@ def _fetch_project_details(projects: tuple[str, ...]) -> dict[str, dict]:
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_devops_projects(apps_json: str) -> dict[str, dict]:
+    """Per-application metadata from ``ef-devops-projects``.
+
+    Index fields are all ``text`` (no ``.keyword`` subfields), so we
+    can't use a ``terms`` query for application scoping. Instead emit
+    ``match_phrase`` clauses in a ``should`` (OR) bool — works for the
+    typical 50-300 in-scope apps without fanning out.
+
+    Returns ``{App: {raw _source}}``. Callers pluck per-stage URLs
+    (``qcRouteUrl``, ``qcServiceUrl``, ``devRouteUrl``, ``devServiceUrl``),
+    Remedy product fields (``RemedyProductName``,
+    ``RemedyProductTier1`` … ``Tier3``), and recommended-vs-current
+    image versions (``BuildCurrentVer`` / ``BuildRecommendationVer``,
+    ``DeployCurrentVer`` / ``DeployRecommendationVer``) from the
+    returned dict.
+    """
+    _apps: list[str] = json.loads(apps_json)
+    if not _apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["devops_projects"],
+            {
+                "query": {"bool": {
+                    "should": [{"match_phrase": {"App": _a}} for _a in _apps],
+                    "minimum_should_match": 1,
+                }},
+                "_source": [
+                    "App", "AppType", "Project", "Company",
+                    "BuildImageName", "BuildImageTag", "BuildTechnology",
+                    "BuildCurrentVer", "BuildRecommendationVer", "BuildOutdatedVer",
+                    "DeployImageName", "DeployImageTag", "DeployTechnology", "DeployPlatform",
+                    "DeployCurrentVer", "DeployRecommendationVer", "DeployOutdatedVer",
+                    "DeployThroughInternet",
+                    "ArchiveImageName", "ArchiveImageTag",
+                    "DockerfileName", "NFSUsage",
+                    "qcRouteUrl", "qcServiceUrl",
+                    "qcRouteConsumers", "qcServiceConsumers",
+                    "devRouteUrl", "devServiceUrl",
+                    "devRouteConsumers", "devServiceConsumers",
+                    "RemedyProductName",
+                    "RemedyProductTier1", "RemedyProductTier2", "RemedyProductTier3",
+                    "DevTeam", "QcTeam", "PrdTeam",
+                    "JiraProjectKey",
+                ],
+            },
+            # Buffer for any duplicate / stale rows the index may carry.
+            size=max(len(_apps) * 2, 100),
+        )
+    except Exception:
+        return {}
+    out: dict[str, dict] = {}
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        _app = (_s.get("App") or "").strip()
+        if not _app:
+            continue
+        # Last write wins — if the index has multiple records for an app,
+        # later docs in the result overwrite earlier ones. The index is
+        # supposed to be one-row-per-app, so this is normally a no-op.
+        out[_app] = _s
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str]:
     """Return inventory projects where the role's team field(s) match any of ``teams``.
 
@@ -9073,6 +9210,40 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_invicti_map = _fetch_invicti(_iv_prisma_keys_t)     if _iv_prisma_keys else {}
     _iv_zap_map     = _fetch_zap(_iv_prisma_keys_t)         if _iv_prisma_keys else {}
     _iv_vermeta_map = _fetch_version_meta(_iv_prisma_keys_t) if _iv_prisma_keys else {}
+    # Per-app metadata from ef-devops-projects: dev/qc URLs, Remedy
+    # product info, recommended build/deploy image versions used to
+    # flag outdated images. Cached by the in-scope app set.
+    _iv_devproj_map = (
+        _fetch_devops_projects(json.dumps(sorted(_iv_apps)))
+        if _iv_apps else {}
+    )
+
+    def _iv_image_outdated(current: str, recommended: str) -> bool:
+        """True when the recommended image version is set and differs from
+        the current — both stripped + case-insensitive. An empty recommended
+        means "no advisory" → not flagged."""
+        _cur = (current or "").strip()
+        _rec = (recommended or "").strip()
+        if not _rec:
+            return False
+        return _cur.lower() != _rec.lower()
+
+    def _iv_outdated_flags(app: str) -> tuple[bool, bool, dict]:
+        """Return ``(build_outdated, deploy_outdated, raw_dict)`` for an
+        app, where raw_dict carries the four versions for tooltips."""
+        _dp = _iv_devproj_map.get(app) or {}
+        _bc = (_dp.get("BuildCurrentVer") or "").strip()
+        _br = (_dp.get("BuildRecommendationVer") or "").strip()
+        _dc = (_dp.get("DeployCurrentVer") or "").strip()
+        _dr = (_dp.get("DeployRecommendationVer") or "").strip()
+        return (
+            _iv_image_outdated(_bc, _br),
+            _iv_image_outdated(_dc, _dr),
+            {
+                "build_current": _bc, "build_recommended": _br,
+                "deploy_current": _dc, "deploy_recommended": _dr,
+            },
+        )
 
     # ── Team extraction helper (inventory rows may carry multiple *_team fields) ─
     # For admins we surface every *_team field so the Teams tile reflects the
@@ -10513,12 +10684,46 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'</span>'
         )
 
+    def _iv_outdated_pills(app: str) -> str:
+        """Tiny inline pills appended to the app cell when the app's build
+        or deploy image trails the recommended version. Hovering the pill
+        surfaces "current → recommended" so users see the upgrade path
+        without opening the popover."""
+        _b_old, _d_old, _ver = _iv_outdated_flags(app)
+        if not (_b_old or _d_old):
+            return ""
+        _pills: list[str] = []
+        if _b_old:
+            _tip = (
+                f"Build image — current "
+                f"{_ver['build_current'] or '—'} → recommended "
+                f"{_ver['build_recommended']}"
+            )
+            _pills.append(
+                f'<span class="iv-outdated-pill" title="{html.escape(_tip)}">'
+                f'⬆ B</span>'
+            )
+        if _d_old:
+            _tip = (
+                f"Deploy image — current "
+                f"{_ver['deploy_current'] or '—'} → recommended "
+                f"{_ver['deploy_recommended']}"
+            )
+            _pills.append(
+                f'<span class="iv-outdated-pill" title="{html.escape(_tip)}">'
+                f'⬆ D</span>'
+            )
+        return (
+            '<span class="iv-outdated-row">' + "".join(_pills) + '</span>'
+        )
+
     def _iv_app_cell(app: str) -> str:
         return (
             f'<div class="iv-app-cell">'
             f'<button type="button" class="el-app-trigger" '
             f'popovertarget="{_iv_app_pop_id(app)}" '
             f'title="Click for full inventory details">{app}</button>'
+            f'{_iv_outdated_pills(app)}'
             f'{_iv_app_posture_html(app)}'
             f'</div>'
         )
@@ -10895,6 +11100,36 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # project popover, which the project chip in the Identity section
         # links into. Duplicating it here just clutters the app view.
 
+        # Outdated-image hints next to the build / deploy image-tag rows.
+        # Pulls current + recommended versions from ef-devops-projects;
+        # surfaces a small amber tag when they diverge plus a separate
+        # "Recommended" row so the upgrade target is obvious.
+        _ap_b_old, _ap_d_old, _ap_ver_info = _iv_outdated_flags(_app)
+        _build_tag_chip = (
+            f'<span class="ap-outdated-chip" '
+            f'title="Recommended: {html.escape(_ap_ver_info["build_recommended"])}">'
+            f'⬆ outdated</span>'
+            if _ap_b_old else ""
+        )
+        _deploy_tag_chip = (
+            f'<span class="ap-outdated-chip" '
+            f'title="Recommended: {html.escape(_ap_ver_info["deploy_recommended"])}">'
+            f'⬆ outdated</span>'
+            if _ap_d_old else ""
+        )
+        _build_recommend_row = (
+            f'    <span class="ap-k">Recommended</span>'
+            f'<span class="ap-v"><span class="ap-chip ap-chip--rec">'
+            f'{html.escape(_ap_ver_info["build_recommended"])}</span></span>'
+            if _ap_b_old else ""
+        )
+        _deploy_recommend_row = (
+            f'    <span class="ap-k">Recommended</span>'
+            f'<span class="ap-v"><span class="ap-chip ap-chip--rec">'
+            f'{html.escape(_ap_ver_info["deploy_recommended"])}</span></span>'
+            if _ap_d_old else ""
+        )
+
         _iv_popovers.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop is-app">'
             f'  <div class="ap-head">'
@@ -10914,15 +11149,25 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <div class="ap-section">Build</div>'
             f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("build_technology", ""))}'
             f'    <span class="ap-k">Image name</span>{_iv_v(r.get("build_image_name", ""))}'
-            f'    <span class="ap-k">Image tag</span>{_iv_v(r.get("build_image_tag", ""))}'
+            f'    <span class="ap-k">Image tag</span>'
+            f'<span class="ap-v">'
+            f'{html.escape(r.get("build_image_tag", "") or "—")}'
+            f'{_build_tag_chip}'
+            f'</span>'
+            f'{_build_recommend_row}'
             f'    <div class="ap-section">Deploy</div>'
             f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("deploy_technology", ""))}'
             f'    <span class="ap-k">Platform</span>{_iv_chip(r.get("deploy_platform", ""))}'
             f'    <span class="ap-k">Image name</span>{_iv_v(r.get("deploy_image_name", ""))}'
-            f'    <span class="ap-k">Image tag</span>{_iv_v(r.get("deploy_image_tag", ""))}'
+            f'    <span class="ap-k">Image tag</span>'
+            f'<span class="ap-v">'
+            f'{html.escape(r.get("deploy_image_tag", "") or "—")}'
+            f'{_deploy_tag_chip}'
+            f'</span>'
+            f'{_deploy_recommend_row}'
             f'    {_prisma_html}'
             f'  </div>'
-            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
+            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
             f'</div>'
         )
 
@@ -11022,13 +11267,39 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'</div>'
                 )
 
-            # ── Stage-detail block (version + date + status) ────────────────
+            # ── Stage-detail block (version + date + status + URLs) ─────────
             _stage_block = (
                 f'    <div class="ap-section">{_stage_lbl}</div>'
                 f'    <span class="ap-k">Version</span>{_iv_chip(_ver)}'
                 f'    <span class="ap-k">Status</span>{_iv_v(_status)}'
                 f'    <span class="ap-k">When ({DISPLAY_TZ_LABEL})</span>{_iv_v(_when_disp)}'
             )
+
+            # Application URLs — only meaningful for `dev` / `qc` stages.
+            # ef-devops-projects carries `qcRouteUrl` / `qcServiceUrl`, and
+            # the dev URLs follow the same naming convention with the
+            # prefix swapped (`devRouteUrl` / `devServiceUrl`). UAT / PRD
+            # don't expose URLs in this index, so we skip them.
+            if _stage in ("dev", "qc"):
+                _dp_proj = _iv_devproj_map.get(_app) or {}
+                _route_url   = (_dp_proj.get(f"{_stage}RouteUrl")   or "").strip()
+                _service_url = (_dp_proj.get(f"{_stage}ServiceUrl") or "").strip()
+
+                def _iv_url_row(label: str, url: str) -> str:
+                    if not url:
+                        return ""
+                    _href = html.escape(url, quote=True)
+                    _short = url if len(url) <= 56 else url[:53] + "…"
+                    return (
+                        f'    <span class="ap-k">{label}</span>'
+                        f'<span class="ap-v">'
+                        f'<a class="ap-url" href="{_href}" target="_blank" '
+                        f'rel="noopener noreferrer" title="{_href}">'
+                        f'↗ {html.escape(_short)}</a>'
+                        f'</span>'
+                    )
+                _stage_block += _iv_url_row("Route URL", _route_url)
+                _stage_block += _iv_url_row("Service URL", _service_url)
 
             # ── Version provenance — always show build date for this version,
             # plus release date & RLM when this version has been released.
@@ -11294,6 +11565,50 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <div class="ap-section">Company</div>'
             f'    <span class="ap-k">Name</span>{_iv_chip(_co_p) if _co_p else _iv_v("")}'
         )
+
+        # Remedy product info — aggregated across the project's apps. The
+        # ef-devops-projects index carries one row per app; for shared
+        # Remedy tiers we collapse identical values to a single chip so
+        # multi-product projects surface every distinct tier.
+        def _remedy_collect(field: str) -> list[str]:
+            _vals: list[str] = []
+            for _a in _apps_p:
+                _v = ((_iv_devproj_map.get(_a) or {}).get(field) or "").strip()
+                if _v and _v not in _vals:
+                    _vals.append(_v)
+            return _vals
+
+        _rem_name  = _remedy_collect("RemedyProductName")
+        _rem_tier1 = _remedy_collect("RemedyProductTier1")
+        _rem_tier2 = _remedy_collect("RemedyProductTier2")
+        _rem_tier3 = _remedy_collect("RemedyProductTier3")
+
+        def _remedy_row(label: str, vals: list[str]) -> str:
+            if not vals:
+                return ""
+            _chips = "".join(
+                f'<span class="ap-chip">{html.escape(_v)}</span>'
+                for _v in vals
+            )
+            return (
+                f'<span class="ap-k">{label}</span>'
+                f'<span class="ap-v" style="display:flex;flex-wrap:wrap;gap:4px">'
+                f'{_chips}</span>'
+            )
+
+        _remedy_block_p = ""
+        if any([_rem_name, _rem_tier1, _rem_tier2, _rem_tier3]):
+            _remedy_rows = (
+                _remedy_row("Product", _rem_name)
+                + _remedy_row("Tier 1", _rem_tier1)
+                + _remedy_row("Tier 2", _rem_tier2)
+                + _remedy_row("Tier 3", _rem_tier3)
+            )
+            _remedy_block_p = (
+                '    <div class="ap-section">Remedy</div>'
+                + _remedy_rows
+            )
+
         _iv_popovers.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -11307,11 +11622,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  <div class="ap-body">'
             f'    {_company_block_p}'
             f'    <div class="ap-section">Teams</div>'
-            + "".join(_team_rows_p) +
+            + "".join(_team_rows_p)
+            + _remedy_block_p +
             f'    <div class="ap-section">Applications <span style="text-transform:none;font-weight:600;color:var(--cc-text-mute);letter-spacing:0;margin-left:4px">· {len(_apps_p)}</span></div>'
             f'    <div class="ap-applist">{_apps_block_p}</div>'
             f'  </div>'
-            f'  <div class="ap-foot">Source: ef-devops-inventory · click an app for full details</div>'
+            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · click an app for full details</div>'
             f'</div>'
         )
 
