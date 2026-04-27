@@ -2410,6 +2410,20 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .iv-pulse-tile--jira::before {
     background: linear-gradient(180deg, #2684ff 0%, #7048e8 100%) !important;
 }
+.iv-jira-scope {
+    display: inline-block;
+    margin-left: 2px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-family: var(--cc-data);
+    font-size: .56rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: #2684ff;
+    background: color-mix(in srgb, #2684ff 12%, transparent);
+    border: 1px solid color-mix(in srgb, #2684ff 28%, transparent);
+}
 
 /* Security tile — per-scanner attribution chip strip below the V* bar */
 .iv-sec-srcs {
@@ -8403,89 +8417,105 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14,
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_jira_open(apps_json: str) -> dict:
-    """Aggregate open Jira issues for the given application scope.
+def _fetch_jira_open(projects_json: str) -> dict:
+    """Aggregate open Jira issues, scoped to a set of inventory projects.
+
+    The ef-bs-jira-issues index has no ``application`` field — its schema
+    is keyword-typed ``project`` / ``projectkey`` (Jira project keys),
+    plus a ``components`` keyword and an unrelated ``remedyappname`` text
+    field. We use ``project`` to scope to whatever subset of Jira projects
+    overlap with the in-scope inventory projects, and fall back to a
+    fleet-wide view when the two namespaces don't intersect.
 
     Open = ``status`` not in ``CLOSED_JIRA``. Returns
     ``{"total": int, "priority": {label: count}, "type": {label: count},
-    "matched_field": str}``. The Jira index field-naming convention is
-    unknown a priori, so we probe a small set of plausible field combos
-    (matching prisma's bare-keyword convention first, then ``.keyword``
-    subfields, then capitalised variants) and pick the first combo that
-    actually returns data — a single ES round-trip per probe.
+    "scope": "projects" | "fleet" | ""}``.
     """
-    _apps: list[str] = json.loads(apps_json)
-    _empty = {"total": 0, "priority": {}, "type": {}, "matched_field": ""}
-    if not _apps:
-        return _empty
+    _projects: list[str] = json.loads(projects_json)
+    _empty = {"total": 0, "priority": {}, "type": {}, "scope": ""}
 
-    # (application_field, status_field, priority_field, issuetype_field)
-    _probes = (
-        # Bare keyword names — same convention as ef-cicd-* indices.
-        ("application",         "status",         "priority",         "issuetype"),
-        # ``.keyword`` subfield variant (text + keyword multi-field mapping).
-        ("application.keyword", "status.keyword", "priority.keyword", "issuetype.keyword"),
-        # Some Jira mirrors capitalise top-level fields.
-        ("Application",         "Status",         "Priority",         "IssueType"),
-        # Mixed: bare app + .keyword on the rest (common when app is the join key).
-        ("application",         "status.keyword", "priority.keyword", "issuetype.keyword"),
-        # Last-resort: try a `type` field instead of `issuetype` (some
-        # exporters flatten issuetype.name into a `type` keyword).
-        ("application",         "status",         "priority",         "type"),
-    )
+    _aggs = {
+        "by_priority": {"terms": {
+            "field": "priority", "size": 20, "missing": "—",
+        }},
+        "by_type": {"terms": {
+            "field": "issuetype", "size": 20, "missing": "—",
+        }},
+    }
+    _must_not_closed = [{"terms": {"status": CLOSED_JIRA}}]
 
-    _best: dict | None = None
-    for _af, _sf, _pf, _tf in _probes:
-        body = {
-            "query": {"bool": {
-                "filter":   [{"terms": {_af: _apps}}],
-                "must_not": [{"terms": {_sf: CLOSED_JIRA}}],
-            }},
-            "aggs": {
-                "by_priority": {"terms": {
-                    "field": _pf, "size": 20, "missing": "—",
-                }},
-                "by_type": {"terms": {
-                    "field": _tf, "size": 20, "missing": "—",
-                }},
-            },
-            "track_total_hits": True,
-        }
-        try:
-            resp = es_search(IDX["jira"], body, size=0)
-        except Exception:
-            continue
+    def _extract(resp: dict | None) -> tuple[int, dict[str, int], dict[str, int]]:
+        if not resp:
+            return 0, {}, {}
         _hits = resp.get("hits") or {}
         _t = _hits.get("total")
         _total = (
             int(_t.get("value", 0)) if isinstance(_t, dict)
             else int(_t or 0)
         )
-        _aggs = resp.get("aggregations") or {}
+        _agg = resp.get("aggregations") or {}
         _by_p = {
             str(_b.get("key", "")): int(_b.get("doc_count") or 0)
-            for _b in (_aggs.get("by_priority") or {}).get("buckets", [])
+            for _b in (_agg.get("by_priority") or {}).get("buckets", [])
         }
         _by_t = {
             str(_b.get("key", "")): int(_b.get("doc_count") or 0)
-            for _b in (_aggs.get("by_type") or {}).get("buckets", [])
+            for _b in (_agg.get("by_type") or {}).get("buckets", [])
         }
-        # Take the first probe that yields any results. If every probe
-        # comes back zero, fall through to the diagnostic branch below.
+        return _total, _by_p, _by_t
+
+    # ── Pass 1 — scope by project (preferred) ────────────────────────────
+    if _projects:
+        try:
+            resp = es_search(
+                IDX["jira"],
+                {
+                    "query": {"bool": {
+                        "filter":   [{"terms": {"project": _projects}}],
+                        "must_not": _must_not_closed,
+                    }},
+                    "aggs": _aggs,
+                    "track_total_hits": True,
+                },
+                size=0,
+            )
+        except Exception:
+            resp = None
+        _total, _by_p, _by_t = _extract(resp)
         if _total > 0 or _by_p or _by_t:
             return {
                 "total": _total,
                 "priority": _by_p,
                 "type": _by_t,
-                "matched_field": f"app={_af} status={_sf} pri={_pf} type={_tf}",
+                "scope": "projects",
             }
-        _best = _best or {
+
+    # ── Pass 2 — fleet-wide fallback ─────────────────────────────────────
+    # Jira project keys (e.g. "PLAT") rarely match CI/CD inventory project
+    # names (e.g. "platform-frontend") character-for-character, so the
+    # project filter often returns zero. Surface the open-issue count for
+    # the entire Jira instance instead of a misleading "0 / clean".
+    try:
+        resp = es_search(
+            IDX["jira"],
+            {
+                "query": {"bool": {"must_not": _must_not_closed}},
+                "aggs": _aggs,
+                "track_total_hits": True,
+            },
+            size=0,
+        )
+    except Exception:
+        return _empty
+    _total, _by_p, _by_t = _extract(resp)
+    if _total > 0 or _by_p or _by_t:
+        return {
             "total": _total,
             "priority": _by_p,
             "type": _by_t,
-            "matched_field": "",
+            "scope": "fleet",
         }
-    return _best or _empty
+    return _empty
 
 
 def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
@@ -9684,27 +9714,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _rate_tag_lbl = "quiet"
 
         # Jira open-issue rollup — only for roles that actually see Jira.
-        # Returns {"total", "priority": {label: count}, "type": {label: count},
-        #          "matched_field": str}.
+        # Scoped by project (Jira's `project` keyword) intersected with the
+        # inventory projects currently in view; falls back to fleet-wide
+        # when the two namespaces don't overlap.
         _jira_show = _ROLE_SHOWS_JIRA.get(_effective_role, False)
         if _jira_show:
-            _jira = _fetch_jira_open(json.dumps(sorted(_post_apps)))
+            _jira = _fetch_jira_open(json.dumps(sorted(_post_projects)))
         else:
-            _jira = {"total": 0, "priority": {}, "type": {}, "matched_field": ""}
+            _jira = {"total": 0, "priority": {}, "type": {}, "scope": ""}
         _jira_total: int = int(_jira.get("total") or 0)
         _jira_pri: dict[str, int] = dict(_jira.get("priority") or {})
         _jira_type: dict[str, int] = dict(_jira.get("type") or {})
-        _jira_matched: str = str(_jira.get("matched_field") or "")
-        # When no probe yielded any data, the field-naming convention in
-        # ef-bs-jira-issues doesn't match any of our guesses (or the index
-        # is empty). Surface that explicitly so users don't read "0 open"
-        # as "fleet is healthy".
+        _jira_scope: str = str(_jira.get("scope") or "")
+        # An empty scope means even the fleet-wide pass returned zero
+        # buckets — the index is unreachable / empty / mapping mismatch.
         _jira_unmapped = (
             _jira_show
             and _jira_total == 0
             and not _jira_pri
             and not _jira_type
-            and not _jira_matched
+            and not _jira_scope
         )
         # Severity tag — surface highest/critical first, then high.
         _pri_lower = {k.lower(): v for k, v in _jira_pri.items()}
@@ -9750,10 +9779,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 _pri_segments.append((_v, "var(--cc-text-mute)",
                                       _lbl if _lbl != "—" else "(no priority)"))
         if _jira_unmapped:
-            _jira_bar_empty_msg = (
-                "Jira index reachable but no probe matched · check field "
-                "names in ef-bs-jira-issues"
-            )
+            _jira_bar_empty_msg = "Jira index empty or unreachable"
         elif _jira_show:
             _jira_bar_empty_msg = "no open issues"
         else:
@@ -9929,6 +9955,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Tile 2 — Jira open issues. For roles that don't see Jira (Operations
         # today) we still render the tile so the strip layout stays balanced
         # but it announces "Jira hidden for role".
+        _jira_scope_lbl = (
+            "in scope projects" if _jira_scope == "projects"
+            else "fleet-wide" if _jira_scope == "fleet"
+            else ""
+        )
         if not _jira_show:
             _jira_value_html = '<div class="iv-pulse-value">—</div>'
             _jira_sub_html = '<div class="iv-pulse-sub">role has no Jira visibility</div>'
@@ -9936,21 +9967,25 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _jira_value_html = '<div class="iv-pulse-value">?</div>'
             _jira_sub_html = (
                 '<div class="iv-pulse-sub">'
-                'no probe matched · expected fields: <code>application</code>, '
-                '<code>status</code>, <code>priority</code>, <code>issuetype</code>'
+                'Jira index empty or unreachable'
                 '</div>'
             )
         elif _jira_total:
+            _scope_pill = (
+                f' · <span class="iv-jira-scope">{_jira_scope_lbl}</span>'
+                if _jira_scope_lbl else ''
+            )
             _jira_value_html = f'<div class="iv-pulse-value">{_jira_total}</div>'
             _jira_sub_html = (
                 '<div class="iv-pulse-sub">priority breakdown · '
                 f'<b>{len(_jira_type)}</b> issue type'
                 f'{"s" if len(_jira_type) != 1 else ""}'
+                f'{_scope_pill}'
                 '</div>'
             )
         else:
             _jira_value_html = '<div class="iv-pulse-value">0</div>'
-            _jira_sub_html = '<div class="iv-pulse-sub">no open issues in scope</div>'
+            _jira_sub_html = '<div class="iv-pulse-sub">no open issues</div>'
 
         _pulse_html = (
             '<div class="iv-pulse-strip">'
