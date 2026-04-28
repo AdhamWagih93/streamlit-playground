@@ -5650,7 +5650,7 @@ ROLE_COLORS = {
 # scoped *strictly* to its own ownership field(s) on the inventory document:
 #   Developer  → projects where dev_team ∈ user's teams
 #   QC         → projects where qc_team ∈ user's teams
-#   Operations → projects where uat_team OR ops_team ∈ user's teams
+#   Operations → projects where uat_team OR prd_team ∈ user's teams
 #                (Operations runs both UAT and PRD, so they need
 #                visibility into both ownership lanes)
 #   Admin/CLevel → bypass entirely (full fleet visibility)
@@ -5659,7 +5659,7 @@ ROLE_TEAM_FIELDS: dict[str, list[str]] = {
     "CLevel":    [],
     "Developer": ["dev_team.keyword"],
     "QC":        ["qc_team.keyword"],
-    "Operations":  ["uat_team.keyword", "ops_team.keyword"],
+    "Operations":  ["uat_team.keyword", "prd_team.keyword"],
 }
 
 
@@ -6531,7 +6531,7 @@ def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str
     """Return inventory projects where the role's team field(s) match any of ``teams``.
 
     Developer → ``dev_team``; QC → ``qc_team``; Operations → ``uat_team``
-    OR ``ops_team`` (both ownership lanes — Operations runs UAT + PRD).
+    OR ``prd_team`` (both ownership lanes — Operations runs UAT + PRD).
     Admin (or an empty team list) returns an empty list to signal "no scoping".
     """
     fields = ROLE_TEAM_FIELDS.get(role, [])
@@ -6855,7 +6855,7 @@ with st.container(key="cc_filter_rail"):
                     '<li><b>Developer</b> → <code>dev_team</code> ∈ your teams</li>'
                     '<li><b>QC</b> → <code>qc_team</code> ∈ your teams</li>'
                     '<li><b>Operations</b> → <code>uat_team</code> ∨ '
-                    '<code>ops_team</code> ∈ your teams</li>'
+                    '<code>prd_team</code> ∈ your teams</li>'
                     '<li><b>Admin</b> / <b>CLevel</b> → bypass team scoping (full fleet)</li>'
                     '</ul>'
                     '<div class="cc-role-why-note">'
