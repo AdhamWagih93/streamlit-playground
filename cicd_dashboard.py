@@ -2209,11 +2209,15 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .cc-rail-id--whisper {
     display: inline-flex !important;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: wrap;
     line-height: 1.1;
     padding: 0;
     margin: 0;
 }
+/* Multi-role badge: tighter pill spacing so several roles fit inline */
+.cc-rail-id--multi { gap: 4px; }
+.cc-rail-id--multi .cc-rail-id-role { padding: 2px 7px !important; }
 .cc-rail-id--whisper .cc-rail-id-role {
     display: inline-flex !important;
     align-items: center;
@@ -6688,6 +6692,86 @@ _effective_role = role_pick
 # display label on the rail badge.
 _is_admin = (_effective_role in ("Admin", "CLevel"))
 
+# ── Multi-role aggregation ──────────────────────────────────────────────────
+# A single user can carry several non-admin role tokens at once
+# (Developer + QC + Operations on the same team, for example, when the
+# same group is registered as dev_team / qc_team / uat_team / prd_team
+# across projects). The display label `role_pick` keeps the priority
+# pick (Admin > CLevel > first detected), but every SCOPING decision
+# below — visible team fields, allowed event types / envs / approval
+# stages, security-posture stages — must consider the UNION of every
+# detected role's row in the corresponding table. These `_user_*`
+# aggregates live next to `_is_admin` so downstream consumers stay
+# single-lookup but read the unioned set instead of a single role.
+_NON_ADMIN_DETECTED: list[str] = [
+    _r for _r in _detected_roles if _r not in ("Admin", "CLevel")
+]
+
+
+def _union_role_list(table: dict[str, list], default_for_admin: list) -> list:
+    """Order-preserving union of every detected role's row in ``table``.
+    Admin / CLevel users get the Admin row directly (it already grants
+    full access). Non-admin users union every detected role's entries.
+    Falls back to ``default_for_admin`` only when the union is empty."""
+    if _is_admin:
+        return list(table.get("Admin") or default_for_admin)
+    seen: list = []
+    for _r in _NON_ADMIN_DETECTED or [_effective_role]:
+        for _v in (table.get(_r) or []):
+            if _v not in seen:
+                seen.append(_v)
+    return seen if seen else list(default_for_admin)
+
+
+_user_team_fields = (
+    [] if _is_admin
+    else _union_role_list(ROLE_TEAM_FIELDS, [])
+)
+_user_event_types     = _union_role_list(_ROLE_EVENT_TYPES,     _ROLE_EVENT_TYPES["Admin"])
+_user_envs            = _union_role_list(_ROLE_ENVS,            _ROLE_ENVS["Admin"])
+_user_approval_stages = _union_role_list(_ROLE_APPROVAL_STAGES, [])
+_user_shows_jira = (
+    _is_admin or any(_ROLE_SHOWS_JIRA.get(_r, False)   for _r in _NON_ADMIN_DETECTED)
+)
+_user_shows_builds = (
+    _is_admin or any(_ROLE_SHOWS_BUILDS.get(_r, False) for _r in _NON_ADMIN_DETECTED)
+)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_apps_for_user_teams(team: str, fields_json: str) -> list[str]:
+    """Apps where ANY of the user's role-team fields contains ``team``.
+    ``fields_json`` is a JSON-encoded list because Streamlit's cache key
+    requires a hashable arg. Falls back to an empty list when the user
+    has no role-team fields (admin / unknown role)."""
+    fields: list[str] = json.loads(fields_json)
+    if not fields or not team:
+        return []
+    should = [{"term": {f: team}} for f in fields]
+    query = {"bool": {"should": should, "minimum_should_match": 1}}
+    try:
+        return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_projects_for_user_teams(teams_json: str, fields_json: str) -> list[str]:
+    """Projects where ANY of the user's role-team fields contains
+    ANY team in ``teams_json``. Same JSON-encoded args pattern as
+    ``_load_apps_for_user_teams``."""
+    fields: list[str] = json.loads(fields_json)
+    teams:  list[str] = json.loads(teams_json)
+    if not fields or not teams:
+        return []
+    should = [{"terms": {f: teams}} for f in fields]
+    query = {"bool": {"should": should, "minimum_should_match": 1}}
+    try:
+        return sorted(composite_terms(IDX["inventory"], "project.keyword", query).keys())
+    except Exception:
+        return []
+
+
 # Team auto-detection (from st.session_state.teams) — resolves team_filter and
 # the _active_teams list that drive project/company scope queries downstream.
 if _session_teams:
@@ -6703,6 +6787,7 @@ else:
     _active_teams = []
     _team_display = "— no team —"
 
+_user_fields_json = json.dumps(_user_team_fields)
 if team_filter:
     if _is_admin:
         # Admin / CLevel: union the team's apps across every team-field —
@@ -6713,11 +6798,13 @@ if team_filter:
             _admin_team_apps.update(_load_team_applications(_r, team_filter))
         _team_apps = sorted(_admin_team_apps)
     else:
-        _team_apps = _load_team_applications(role_pick, team_filter)
+        # Non-admin: union across every detected role's team field
+        # (e.g. Developer+QC user → dev_team OR qc_team match).
+        _team_apps = _load_apps_for_user_teams(team_filter, _user_fields_json)
 elif (not _is_admin) and _active_teams:
     _union: set[str] = set()
     for _t in _active_teams:
-        _union.update(_load_team_applications(role_pick, _t))
+        _union.update(_load_apps_for_user_teams(_t, _user_fields_json))
     _team_apps = sorted(_union)
 else:
     _team_apps = []
@@ -6754,9 +6841,15 @@ if _is_admin:
             _proj_scoped = _all_projects
             _proj_help = f"{len(_all_projects)} projects (no team)"
 elif _active_teams:
-    _proj_scoped = _load_projects_for_role_teams(role_pick, tuple(_active_teams))
+    _proj_scoped = _load_projects_for_user_teams(
+        json.dumps(sorted(_active_teams)),
+        _user_fields_json,
+    )
+    _scope_field_lbls = ", ".join(
+        _f.replace(".keyword", "") for _f in _user_team_fields
+    ) or "team"
     _proj_help = (
-        f"{len(_proj_scoped)} project(s) where {role_pick.lower()} team ∈ "
+        f"{len(_proj_scoped)} project(s) where {_scope_field_lbls} ∈ "
         f"{', '.join(_active_teams)}"
     )
 else:
@@ -6795,33 +6888,67 @@ with st.container(key="cc_filter_rail"):
             _badge_col = st.container()
             _why_col = None
         with _badge_col:
+            # Multi-role users get one pill per detected role (priority
+            # pick first), each tinted with its own role colour. Single-
+            # role users see exactly one pill — same shape as before.
+            _badge_roles = _detected_roles or [role_pick]
+            _badge_pills: list[str] = []
+            for _br in _badge_roles:
+                _br_clr  = ROLE_COLORS.get(_br, _role_clr)
+                _br_icon = ROLE_ICONS.get(_br, "")
+                _badge_pills.append(
+                    f'<span class="cc-rail-id-role" '
+                    f'style="color:{_br_clr};border-color:{_br_clr}40;'
+                    f'background:{_br_clr}0A">'
+                    f'<span class="cc-rail-id-icon">{_br_icon}</span>'
+                    f'{_br}</span>'
+                )
+            _multi_class = (
+                ' cc-rail-id--multi' if len(_badge_roles) > 1 else ''
+            )
             st.markdown(
-                f'<div class="cc-rail-id cc-rail-id--whisper">'
-                f'<span class="cc-rail-id-role" '
-                f'style="color:{_role_clr};border-color:{_role_clr}40;'
-                f'background:{_role_clr}0A">'
-                f'<span class="cc-rail-id-icon">{_role_icon}</span>'
-                f'{role_pick}</span>'
-                f'<span class="cc-rail-id-team" title="{_team_display}">'
-                f'{_team_display}</span>'
-                f'</div>',
+                f'<div class="cc-rail-id cc-rail-id--whisper{_multi_class}">'
+                + "".join(_badge_pills)
+                + f'<span class="cc-rail-id-team" title="{_team_display}">'
+                  f'{_team_display}</span>'
+                + '</div>',
                 unsafe_allow_html=True,
             )
         if _why_col is not None:
           with _why_col:
             with st.popover("ⓘ", help="How was this role picked?",
                             use_container_width=True):
-                st.markdown(
-                    '<div class="cc-role-why">'
-                    '<div class="cc-role-why-head">Role detection</div>'
-                    f'<div class="cc-role-why-pick">'
+                # Header: priority pick + ALL detected roles when there's
+                # more than one (so multi-role users can verify the union
+                # of their permissions at a glance).
+                _why_pick_chips = "".join(
+                    f'<span class="cc-role-why-icon" '
+                    f'style="color:{ROLE_COLORS.get(_r, _role_clr)}">'
+                    f'{ROLE_ICONS.get(_r, "")}</span>'
+                    f'<span class="cc-role-why-name" '
+                    f'style="color:{ROLE_COLORS.get(_r, _role_clr)}">'
+                    f'{_r}</span>'
+                    for _r in _detected_roles
+                ) or (
                     f'<span class="cc-role-why-icon" '
                     f'style="color:{_role_clr}">{_role_icon}</span>'
                     f'<span class="cc-role-why-name" '
                     f'style="color:{_role_clr}">{role_pick}</span>'
-                    '</div>'
-                    f'<div class="cc-role-why-reason">{_role_pick_reason}</div>'
-                    '</div>',
+                )
+                _why_extra_note = (
+                    '<div class="cc-role-why-reason"><b>'
+                    f'{len(_detected_roles)} roles detected</b> — scope is '
+                    'the UNION of every role\'s permissions; the pill above '
+                    'lists each one in priority order.</div>'
+                    if len(_detected_roles) > 1 else ''
+                )
+                st.markdown(
+                    '<div class="cc-role-why">'
+                    '<div class="cc-role-why-head">Role detection</div>'
+                    + f'<div class="cc-role-why-pick">{_why_pick_chips}</div>'
+                    + f'<div class="cc-role-why-reason">{_role_pick_reason}</div>'
+                    + _why_extra_note
+                    + '</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -7113,28 +7240,28 @@ def idx_scope(index: str) -> list[dict]:
 
 
 # ── Role-scoped event type / env / stage helpers ──────────────────────────
-# The dicts themselves (_ROLE_EVENT_TYPES, _ROLE_ENVS, _ROLE_APPROVAL_STAGES,
-# _ROLE_SHOWS_JIRA, _ROLE_SHOWS_BUILDS) are defined near the top of the page
-# so downstream filtering can reuse them.
+# These helpers read from the multi-role unioned aggregates
+# (_user_event_types / _user_envs / _user_approval_stages) so users with
+# multiple non-admin role tokens see the union of every role's allowed
+# values, not just the priority-picked role's row.
 
 
 def _role_allows_type(t: str) -> bool:
-    return t in _ROLE_EVENT_TYPES.get(_effective_role, _ROLE_EVENT_TYPES["Admin"])
+    return t in _user_event_types
 
 
 def _role_allows_env(env: str) -> bool:
-    return env in _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
+    return env in _user_envs
 
 
 def _role_stage_filter() -> dict | None:
-    """Return an ES filter that restricts approval stages to the role's scope,
-    or None for Admin (no restriction).
-    """
-    stages = _ROLE_APPROVAL_STAGES.get(_effective_role, [])
-    if not stages:
+    """Return an ES filter that restricts approval stages to the user's
+    scope (union across every detected role), or None for Admin / CLevel
+    where there is no restriction."""
+    if not _user_approval_stages:
         return None
     shoulds: list[dict] = []
-    for s in stages:
+    for s in _user_approval_stages:
         shoulds.append({"prefix": {"stage": s}})
     return {"bool": {"should": shoulds, "minimum_should_match": 1}}
 
@@ -7333,8 +7460,9 @@ def _render_event_log() -> None:
     Without ``run_every`` the decoupling concern goes away — only the
     interaction-isolation benefit remains.
     """
-    # Role-allowed environments for the Env selector.
-    _allowed_envs = _ROLE_ENVS.get(_effective_role, _ROLE_ENVS["Admin"])
+    # Role-allowed environments for the Env selector — UNION across every
+    # detected role (Developer + Operations user → ["dev", "uat", "prd"]).
+    _allowed_envs = list(_user_envs)
     _env_options = ["(all)"] + _allowed_envs
 
     # ── Shared controls (Project / Search / Per-project) live above the
@@ -9440,11 +9568,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Developer, qc_team for QC, ops_team for Operations) — otherwise a
     # co-assigned team on a shared project would leak into the Team tile and
     # let the user pick teams they don't actually belong to.
+    # Role-scoped row team fields. Walks the UNION across every detected
+    # role (multi-role users see every team field they own, no leakage).
     _iv_row_team_fields: list[str] = []
     if not _is_admin:
         _iv_row_team_fields = [
-            _f.replace(".keyword", "")
-            for _f in ROLE_TEAM_FIELDS.get(_effective_role, [])
+            _f.replace(".keyword", "") for _f in _user_team_fields
         ]
 
     def _iv_row_teams(_r: dict) -> set[str]:
@@ -10235,7 +10364,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Scoped by project (Jira's `project` keyword) intersected with the
         # inventory projects currently in view; falls back to fleet-wide
         # when the two namespaces don't overlap.
-        _jira_show = _ROLE_SHOWS_JIRA.get(_effective_role, False)
+        _jira_show = _user_shows_jira
         if _jira_show:
             _jira = _fetch_jira_open(json.dumps(sorted(_post_projects)))
         else:
@@ -10393,12 +10522,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             "QC":         ["qc"],
             "Operations": ["uat", "prd"],
         }
+        # Stage list per user — admins see the full ladder; non-admin users
+        # union every detected role's stages so a Developer+QC user reads
+        # both "dev" and "qc" rows. Order is enforced by _SEC_STAGE_LABEL
+        # iteration (dev → qc → uat → prd) for visual stability.
         if _is_admin:
             _sec_stages: list[str] = ["dev", "qc", "uat", "prd"]
         else:
-            _sec_stages = list(
-                _ROLE_SEC_STAGES.get(_effective_role) or ["prd"]
-            )
+            _seen_sec: set[str] = set()
+            for _r in (_NON_ADMIN_DETECTED or [_effective_role]):
+                for _s in _ROLE_SEC_STAGES.get(_r) or []:
+                    _seen_sec.add(_s)
+            _sec_stages = [
+                _s for _s in ("dev", "qc", "uat", "prd")
+                if _s in _seen_sec
+            ] or ["prd"]
 
         def _sec_aggregate(stage: str) -> dict:
             """Sum V* across all 3 scanners for the given stage's version
