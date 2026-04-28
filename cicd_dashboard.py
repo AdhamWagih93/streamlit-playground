@@ -5160,20 +5160,27 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
    normally, and we add a global padding-top below to compensate for the
    removed flow space.
 
-   Width centres inside the typical Streamlit content column (max ~1200px
+   ``--header-height`` is set on :root by Streamlit and reflects the
+   real height of the top header (which grows when the page is hosted
+   inside a multipage app with ``st.navigation(position="top")``). We
+   anchor the bar 8px below it so the host's nav stays visible and
+   our bar doesn't slide under it. Fallback value (88px) is the
+   typical height of a multipage nav row.
+
+   Width centres inside the typical Streamlit content column (max ~1240px
    on a wide desktop, full width minus margins below). */
 .st-key-cc_filter_secondary {
     position: fixed !important;
-    top: 8px !important;
+    top: calc(var(--header-height, 88px) + 8px) !important;
     left: 50% !important;
     transform: translateX(-50%) !important;
     width: min(1240px, calc(100vw - 32px)) !important;
     z-index: 1100 !important;
 }
-/* Compensate for the removed flow space — push the body content down by
-   roughly the bar's painted height so the page doesn't scroll under
-   the fixed bar on first paint. The rail above the bar still scrolls
-   away naturally when the user scrolls down. */
+/* Compensate for the removed flow space — the main block container
+   already starts BELOW the header (Streamlit handles that), so this
+   padding only needs to clear the FIXED bar's height plus a small
+   buffer. Independent of --header-height. */
 [data-testid="stMainBlockContainer"] {
     padding-top: 84px !important;
 }
