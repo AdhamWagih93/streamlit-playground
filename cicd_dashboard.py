@@ -6658,7 +6658,7 @@ _preset_default_idx = _TW_LABELS.index("7d")
 # CLevel mirrors Admin in every flag below — same view, different label.
 _ROLE_SHOWS_JIRA: dict[str, bool] = {
     "Admin": True, "CLevel": True,
-    "Developer": True, "QC": True, "Operations": False,
+    "Developer": True, "QC": True, "Operations": True,
 }
 _ROLE_SHOWS_BUILDS: dict[str, bool] = {
     "Admin": True, "CLevel": True,
@@ -8990,14 +8990,24 @@ def _fetch_inv_pulse(apps_json: str, days: int = 14,
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_jira_open(projects_json: str) -> dict:
-    """Aggregate open Jira issues, scoped to a set of inventory projects.
+    """Aggregate open Jira issues, scoped strictly to a set of inventory
+    projects.
 
-    The ef-bs-jira-issues index has no ``application`` field — its schema
-    is keyword-typed ``project`` / ``projectkey`` (Jira project keys),
-    plus a ``components`` keyword and an unrelated ``remedyappname`` text
-    field. We use ``project`` to scope to whatever subset of Jira projects
-    overlap with the in-scope inventory projects, and fall back to a
-    fleet-wide view when the two namespaces don't intersect.
+    Two filter columns are matched in parallel via ``bool.should``:
+      - ``project``    — Jira project name (e.g. "Engineering")
+      - ``projectkey`` — Jira project key  (e.g. "ENG")
+    Either match counts, so an inventory project name that lines up with
+    EITHER side surfaces its issues correctly.
+
+    No silent fleet fallback: if the project filter returns zero issues,
+    the tile shows zero. The previous version fell back to the entire
+    Jira fleet when the project pass came up empty, which broke the
+    superset invariant — selecting a SINGLE project that happened to
+    match could return MORE issues than the "all projects" view (which
+    returned the whole fleet because no inventory name matched). The
+    fleet-wide query is now ONLY emitted when the caller passes an
+    empty projects list (typically: admin with no team / project
+    scope active).
 
     Open = ``status`` not in ``CLOSED_JIRA``. Returns
     ``{"total": int, "priority": {label: count}, "type": {label: count},
@@ -9036,14 +9046,23 @@ def _fetch_jira_open(projects_json: str) -> dict:
         }
         return _total, _by_p, _by_t
 
-    # ── Pass 1 — scope by project (preferred) ────────────────────────────
+    # ── Project-scoped pass — the canonical path for any non-empty
+    # projects list. Returns whatever the filter actually matches,
+    # including zero. Mathematical invariant restored: counts for a
+    # subset of projects are always ≤ counts for the superset.
     if _projects:
         try:
             resp = es_search(
                 IDX["jira"],
                 {
                     "query": {"bool": {
-                        "filter":   [{"terms": {"project": _projects}}],
+                        "filter": [{"bool": {
+                            "should": [
+                                {"terms": {"project":    _projects}},
+                                {"terms": {"projectkey": _projects}},
+                            ],
+                            "minimum_should_match": 1,
+                        }}],
                         "must_not": _must_not_closed,
                     }},
                     "aggs": _aggs,
@@ -9052,21 +9071,17 @@ def _fetch_jira_open(projects_json: str) -> dict:
                 size=0,
             )
         except Exception:
-            resp = None
+            return _empty
         _total, _by_p, _by_t = _extract(resp)
-        if _total > 0 or _by_p or _by_t:
-            return {
-                "total": _total,
-                "priority": _by_p,
-                "type": _by_t,
-                "scope": "projects",
-            }
+        return {
+            "total": _total,
+            "priority": _by_p,
+            "type": _by_t,
+            "scope": "projects",
+        }
 
-    # ── Pass 2 — fleet-wide fallback ─────────────────────────────────────
-    # Jira project keys (e.g. "PLAT") rarely match CI/CD inventory project
-    # names (e.g. "platform-frontend") character-for-character, so the
-    # project filter often returns zero. Surface the open-issue count for
-    # the entire Jira instance instead of a misleading "0 / clean".
+    # ── Fleet pass — only when no projects were passed at all.
+    # Typically: admin with no team / project scope active.
     try:
         resp = es_search(
             IDX["jira"],
