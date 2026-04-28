@@ -10355,16 +10355,23 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # For each stage we sum V* (critical/high/medium/low) across all
         # three scanners (Prismacloud + Invicti + ZAP) for the version that
         # actually shipped to that stage on each in-scope app.
-        _SEC_STAGE_LABEL = {"dev": "Dev", "qc": "QC", "prd": "PRD"}
-        _ROLE_SEC_STAGE = {
-            "Developer":  "dev",
-            "QC":         "qc",
-            "Operations": "prd",
+        # Stage list per role:
+        #   Developer  → dev (own pipeline only)
+        #   QC         → qc
+        #   Operations → uat + prd (matches _ROLE_ENVS["Operations"])
+        #   Admin/CLevel → dev + qc + uat + prd (full ladder)
+        _SEC_STAGE_LABEL = {"dev": "Dev", "qc": "QC", "uat": "UAT", "prd": "PRD"}
+        _ROLE_SEC_STAGES = {
+            "Developer":  ["dev"],
+            "QC":         ["qc"],
+            "Operations": ["uat", "prd"],
         }
         if _is_admin:
-            _sec_stages: list[str] = ["dev", "qc", "prd"]
+            _sec_stages: list[str] = ["dev", "qc", "uat", "prd"]
         else:
-            _sec_stages = [_ROLE_SEC_STAGE.get(_effective_role, "prd")]
+            _sec_stages = list(
+                _ROLE_SEC_STAGES.get(_effective_role) or ["prd"]
+            )
 
         def _sec_aggregate(stage: str) -> dict:
             """Sum V* across all 3 scanners for the given stage's version
