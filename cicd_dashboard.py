@@ -5160,22 +5160,37 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
    normally, and we add a global padding-top below to compensate for the
    removed flow space.
 
-   ``--header-height`` is set on :root by Streamlit and reflects the
-   real height of the top header (which grows when the page is hosted
-   inside a multipage app with ``st.navigation(position="top")``). We
-   anchor the bar 8px below it so the host's nav stays visible and
-   our bar doesn't slide under it. Fallback value (88px) is the
-   typical height of a multipage nav row.
+   Vertical anchor: ``--header-height`` is set on :root by Streamlit and
+   reflects the real height of the top header (which grows when the page
+   is hosted inside a multipage app with ``st.navigation(position="top")``).
+   We anchor the bar 8px below it so the host's nav stays visible.
+   Fallback value (88px) is the typical multipage nav-row height.
 
-   Width centres inside the typical Streamlit content column (max ~1240px
-   on a wide desktop, full width minus margins below). */
+   Horizontal anchor: by default the bar spans the whole content column
+   (left/right both set, with max-width centring it within wide
+   viewports). When the host's sidebar is EXPANDED, we slide its left
+   edge past the sidebar so the bar fits inside the content area
+   instead of being clipped underneath. The :has() selector reads
+   ``[data-testid="stSidebar"][aria-expanded="true"]`` — the attribute
+   Streamlit sets on the sidebar container in recent versions. When the
+   sidebar is collapsed (or the host has none), the default rule wins
+   and the bar extends across the full page width. */
 .st-key-cc_filter_secondary {
     position: fixed !important;
     top: calc(var(--header-height, 88px) + 8px) !important;
-    left: 50% !important;
-    transform: translateX(-50%) !important;
-    width: min(1240px, calc(100vw - 32px)) !important;
+    left: 16px !important;
+    right: 16px !important;
+    width: auto !important;
+    max-width: 1240px !important;
+    margin: 0 auto !important;
+    transform: none !important;
     z-index: 1100 !important;
+}
+body:has([data-testid="stSidebar"][aria-expanded="true"])
+    .st-key-cc_filter_secondary,
+[data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"])
+    .st-key-cc_filter_secondary {
+    left: calc(var(--sidebar-width, 244px) + 16px) !important;
 }
 /* Compensate for the removed flow space — the main block container
    already starts BELOW the header (Streamlit handles that), so this
