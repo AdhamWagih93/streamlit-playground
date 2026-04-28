@@ -5647,16 +5647,19 @@ ROLE_COLORS = {
     "Developer": "#2563eb", "QC": "#7c3aed", "Operations": "#059669",
 }
 # Map role → inventory team field(s) used to filter projects. Each role is
-# scoped *strictly* to its own ownership field on the inventory document —
-# Developer sees only projects where dev_team ∈ their teams; QC only where
-# qc_team matches; Operations only where ops_team matches. Admin and CLevel
-# bypass this entirely (full fleet visibility).
+# scoped *strictly* to its own ownership field(s) on the inventory document:
+#   Developer  → projects where dev_team ∈ user's teams
+#   QC         → projects where qc_team ∈ user's teams
+#   Operations → projects where uat_team OR ops_team ∈ user's teams
+#                (Operations runs both UAT and PRD, so they need
+#                visibility into both ownership lanes)
+#   Admin/CLevel → bypass entirely (full fleet visibility)
 ROLE_TEAM_FIELDS: dict[str, list[str]] = {
     "Admin":     [],
     "CLevel":    [],
     "Developer": ["dev_team.keyword"],
     "QC":        ["qc_team.keyword"],
-    "Operations":  ["ops_team.keyword"],
+    "Operations":  ["uat_team.keyword", "ops_team.keyword"],
 }
 
 
@@ -6527,7 +6530,8 @@ def _fetch_devops_projects(apps_json: str) -> dict[str, dict]:
 def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str]:
     """Return inventory projects where the role's team field(s) match any of ``teams``.
 
-    Developer → ``dev_team``; QC → ``qc_team``; Operations → ``ops_team``.
+    Developer → ``dev_team``; QC → ``qc_team``; Operations → ``uat_team``
+    OR ``ops_team`` (both ownership lanes — Operations runs UAT + PRD).
     Admin (or an empty team list) returns an empty list to signal "no scoping".
     """
     fields = ROLE_TEAM_FIELDS.get(role, [])
@@ -6850,7 +6854,8 @@ with st.container(key="cc_filter_rail"):
                     '<ul class="cc-role-why-rules">'
                     '<li><b>Developer</b> → <code>dev_team</code> ∈ your teams</li>'
                     '<li><b>QC</b> → <code>qc_team</code> ∈ your teams</li>'
-                    '<li><b>Operations</b> → <code>ops_team</code> ∈ your teams</li>'
+                    '<li><b>Operations</b> → <code>uat_team</code> ∨ '
+                    '<code>ops_team</code> ∈ your teams</li>'
                     '<li><b>Admin</b> / <b>CLevel</b> → bypass team scoping (full fleet)</li>'
                     '</ul>'
                     '<div class="cc-role-why-note">'
