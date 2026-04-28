@@ -1,12 +1,12 @@
 """
-Ollama Document Chatbot — Streamlit Page
+Ollama Document Chatbot — Agent UI Streamlit Page
 Chat with your documents using local Ollama models.
 Supports TXT, MD, PDF, and DOCX files.
 Queue-based access: one user at a time.
+Agent Mode: routes prompts through a LangChain agent with shell tool middleware.
 Designed as a page within a multi-page Streamlit app.
 """
 
-import base64
 import json
 import os
 import re
@@ -63,9 +63,10 @@ except ImportError:
     psycopg2 = None
 
 try:
-    from utils.mail import send_email
+    from agent import run_agent
+    AGENT_AVAILABLE = True
 except ImportError:
-    send_email = None
+    AGENT_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -73,12 +74,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 OLLAMA_URL = "http://ef-nexus-03:8081"
 MODEL = "qwen3.5:9b"
-ENABLE_VISION = True                # set True to enable image upload (jpg, png, bmp)
-VISION_MODEL = "qwen3-vl:4b"        # model with vision support (qwen3.5 is text-only)
 ENABLE_DANGER_ZONE = False          # set True to show the "Clear All History" button in admin view
-ENABLE_INTENT_SCORING = True        # set True to enable LLM-based intent scoring + guardrails
-ENABLE_ERROR_ALERTS = True          # send email to DEVOPS on chat errors
-DEVOPS_EMAIL = "devops@example.com" # recipient(s) for error alerts (comma-separated)
 HISTORY_SCHEMA = "public"           # postgres schema
 HISTORY_TABLE  = "chatbot_history"  # postgres table name
 
@@ -833,26 +829,69 @@ div[data-testid="stPopover"] > div {
     color: var(--accent);
     border: 1px solid rgba(74, 144, 217, 0.25);
 }
-.mode-pill.mode-error {
-    background: rgba(220, 53, 69, 0.1);
-    color: #dc3545;
-    border: 1px solid rgba(220, 53, 69, 0.25);
+.mode-pill.mode-agent {
+    background: rgba(156, 39, 176, 0.1);
+    color: #9c27b0;
+    border: 1px solid rgba(156, 39, 176, 0.25);
 }
-.history-row.has-error {
-    border-left: 3px solid #dc3545;
-    background: rgba(220, 53, 69, 0.04);
+
+/* ---------- Agent activity ---------- */
+.agent-step {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
 }
-.error-badge {
-    display: inline-flex;
+.agent-step-header {
+    display: flex;
     align-items: center;
-    gap: 3px;
-    font-size: 0.65rem;
-    padding: 1px 6px;
-    border-radius: 10px;
-    background: rgba(220, 53, 69, 0.1);
-    color: #dc3545;
-    border: 1px solid rgba(220, 53, 69, 0.2);
+    gap: 8px;
     font-weight: 600;
+    margin-bottom: 0.35rem;
+    color: var(--text-primary);
+}
+.agent-step-type {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.agent-step-type-tool {
+    background: rgba(156, 39, 176, 0.1);
+    color: #9c27b0;
+    border: 1px solid rgba(156, 39, 176, 0.2);
+}
+.agent-step-type-thought {
+    background: rgba(74, 144, 217, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(74, 144, 217, 0.2);
+}
+.agent-step-type-result {
+    background: rgba(45, 138, 78, 0.1);
+    color: var(--success);
+    border: 1px solid rgba(45, 138, 78, 0.2);
+}
+.agent-step-type-error {
+    background: rgba(192, 57, 43, 0.1);
+    color: var(--danger);
+    border: 1px solid rgba(192, 57, 43, 0.2);
+}
+.agent-step-body {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.agent-step-time {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    margin-left: auto;
 }
 </style>
 """
@@ -981,23 +1020,6 @@ def db_ensure_table():
                 CREATE INDEX IF NOT EXISTS idx_{HISTORY_TABLE}_username
                     ON {HISTORY_SCHEMA}.{HISTORY_TABLE} (username)
             """)
-            # Migration: add chat_mode and has_images columns
-            cur.execute(f"""
-                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    ADD COLUMN IF NOT EXISTS chat_mode TEXT DEFAULT 'normal'
-            """)
-            cur.execute(f"""
-                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    ADD COLUMN IF NOT EXISTS has_images BOOLEAN DEFAULT FALSE
-            """)
-            cur.execute(f"""
-                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    ADD COLUMN IF NOT EXISTS has_error BOOLEAN DEFAULT FALSE
-            """)
-            cur.execute(f"""
-                ALTER TABLE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    ADD COLUMN IF NOT EXISTS intent_score INTEGER
-            """)
     except Exception as e:
         import sys
         print(f"[db_ensure_table] ERROR: {e}", file=sys.stderr)
@@ -1006,9 +1028,7 @@ def db_ensure_table():
             conn.close()
 
 
-def db_save_message(msg: dict, session_id: str, username: str, documents: list[str],
-                    chat_mode: str = "normal", has_images: bool = False,
-                    has_error: bool = False, intent_score: int | None = None):
+def db_save_message(msg: dict, session_id: str, username: str, documents: list[str]):
     """Persist a single message to postgres."""
     conn = _get_conn()
     if conn is None:
@@ -1020,9 +1040,8 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                 f"""
                 INSERT INTO {HISTORY_SCHEMA}.{HISTORY_TABLE}
                     (session_id, username, role, content, timestamp_utc,
-                     duration_s, tokens_est, model, documents, chat_mode, has_images,
-                     has_error, intent_score)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     duration_s, tokens_est, model, documents)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
@@ -1034,82 +1053,12 @@ def db_save_message(msg: dict, session_id: str, username: str, documents: list[s
                     msg.get("tokens"),
                     MODEL,
                     documents or [],
-                    chat_mode,
-                    has_images,
-                    has_error,
-                    intent_score,
                 ),
             )
     except Exception as e:
         import sys
         print(f"[db_save_message] ERROR: {e}", file=sys.stderr)
         st.toast(f"DB save error: {e}", icon="⚠️")
-    finally:
-        conn.close()
-
-
-def db_update_intent_score(session_id: str, role: str, intent_score: int):
-    """Update intent_score on the most recent message for a session+role."""
-    conn = _get_conn()
-    if conn is None:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                UPDATE {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                SET intent_score = %s
-                WHERE id = (
-                    SELECT id FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                    WHERE session_id = %s AND role = %s
-                    ORDER BY timestamp_utc DESC LIMIT 1
-                )
-                """,
-                (intent_score, session_id, role),
-            )
-    except Exception as e:
-        import sys
-        print(f"[db_update_intent_score] ERROR: {e}", file=sys.stderr)
-    finally:
-        conn.close()
-
-
-def db_fetch_unscored_messages(limit: int = 200) -> list[dict]:
-    """Fetch user messages that have no intent_score, grouped by session."""
-    conn = _get_conn()
-    if conn is None:
-        return []
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(f"""
-                SELECT id, session_id, username, content, timestamp_utc
-                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                WHERE role = 'user' AND intent_score IS NULL
-                ORDER BY timestamp_utc DESC
-                LIMIT %s
-            """, (limit,))
-            return [dict(r) for r in cur.fetchall()]
-    except Exception:
-        return []
-    finally:
-        if conn:
-            conn.close()
-
-
-def db_set_intent_score(msg_id: int, score: int):
-    """Set intent_score on a specific message by id."""
-    conn = _get_conn()
-    if conn is None:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"UPDATE {HISTORY_SCHEMA}.{HISTORY_TABLE} SET intent_score = %s WHERE id = %s",
-                (score, msg_id),
-            )
-    except Exception as e:
-        import sys
-        print(f"[db_set_intent_score] ERROR: {e}", file=sys.stderr)
     finally:
         conn.close()
 
@@ -1150,8 +1099,7 @@ def db_fetch_history(
             cur.execute(
                 f"""
                 SELECT id, session_id, username, role, content, timestamp_utc,
-                       duration_s, tokens_est, model, documents,
-                       chat_mode, has_images, has_error, intent_score
+                       duration_s, tokens_est, model, documents
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where}
                 ORDER BY timestamp_utc DESC
@@ -1190,50 +1138,15 @@ def db_fetch_stats(
                 SELECT
                     COUNT(*)                                        AS total_messages,
                     COUNT(DISTINCT session_id)                      AS total_sessions,
-                    COUNT(DISTINCT username) FILTER (WHERE username IS NOT NULL AND username != '')
-                                                                   AS unique_users,
                     COUNT(*) FILTER (WHERE role = 'user')          AS user_messages,
                     COUNT(*) FILTER (WHERE role = 'assistant')     AS assistant_messages,
                     COALESCE(SUM(tokens_est), 0)                   AS total_tokens,
-                    COALESCE(SUM(tokens_est) FILTER (WHERE role = 'user'), 0)
-                                                                   AS user_tokens,
-                    COALESCE(SUM(tokens_est) FILTER (WHERE role = 'assistant'), 0)
-                                                                   AS assistant_tokens,
                     COALESCE(AVG(duration_s)
                         FILTER (WHERE role = 'assistant'), 0)      AS avg_duration_s,
                     COALESCE(MAX(duration_s)
                         FILTER (WHERE role = 'assistant'), 0)      AS max_duration_s,
-                    COALESCE(
-                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_s)
-                        FILTER (WHERE role = 'assistant' AND duration_s IS NOT NULL), 0
-                    )                                              AS median_duration_s,
-                    COALESCE(
-                        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_s)
-                        FILTER (WHERE role = 'assistant' AND duration_s IS NOT NULL), 0
-                    )                                              AS p95_duration_s,
-                    COUNT(*) FILTER (WHERE role = 'assistant' AND duration_s <= 5)
-                                                                   AS fast_responses,
-                    COUNT(*) FILTER (WHERE role = 'assistant' AND duration_s > 5 AND duration_s <= 15)
-                                                                   AS normal_responses,
-                    COUNT(*) FILTER (WHERE role = 'assistant' AND duration_s > 15)
-                                                                   AS slow_responses,
                     MIN(timestamp_utc)                             AS first_message,
-                    MAX(timestamp_utc)                             AS last_message,
-                    COUNT(*) FILTER (WHERE has_error = TRUE)       AS error_count,
-                    COUNT(*) FILTER (WHERE chat_mode = 'page_builder')
-                                                                   AS page_builder_msgs,
-                    COUNT(*) FILTER (WHERE COALESCE(has_images, FALSE) = TRUE)
-                                                                   AS vision_msgs,
-                    COUNT(*) FILTER (WHERE documents IS NOT NULL AND array_length(documents, 1) > 0)
-                                                                   AS doc_msgs,
-                    ROUND(AVG(intent_score) FILTER (WHERE intent_score IS NOT NULL))::INT
-                                                                   AS avg_intent_score,
-                    MIN(intent_score) FILTER (WHERE intent_score IS NOT NULL)
-                                                                   AS min_intent_score,
-                    MAX(intent_score) FILTER (WHERE intent_score IS NOT NULL)
-                                                                   AS max_intent_score,
-                    COUNT(*) FILTER (WHERE intent_score IS NOT NULL)
-                                                                   AS scored_prompts
+                    MAX(timestamp_utc)                             AS last_message
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 {where_clause}
             """, params)
@@ -1261,15 +1174,7 @@ def db_fetch_sessions() -> list[dict]:
                     COUNT(*)            AS message_count,
                     SUM(tokens_est)     AS total_tokens,
                     AVG(duration_s)
-                        FILTER (WHERE role = 'assistant') AS avg_duration_s,
-                    COALESCE(
-                        MAX(chat_mode) FILTER (WHERE chat_mode IS NOT NULL AND chat_mode != 'normal'),
-                        'normal'
-                    ) AS chat_mode,
-                    BOOL_OR(COALESCE(has_images, FALSE)) AS has_images,
-                    BOOL_OR(documents IS NOT NULL AND array_length(documents, 1) > 0) AS has_documents,
-                    BOOL_OR(COALESCE(has_error, FALSE)) AS has_error,
-                    ROUND(AVG(intent_score) FILTER (WHERE intent_score IS NOT NULL))::INT AS avg_intent_score
+                        FILTER (WHERE role = 'assistant') AS avg_duration_s
                 FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
                 GROUP BY session_id
                 ORDER BY last_at DESC
@@ -1480,10 +1385,11 @@ def _init_state():
         "chat_session_id": "",
         "chat_messages": [],  # each: {role, content, timestamp, duration?, tokens?}
         "documents": {},      # name -> {content, word_count, token_count}
-        "images": {},         # name -> {b64: str, mime: str}  (vision mode)
         "chat_active": False,
         "code_mode": False,
+        "agent_mode": False,
         "_generated_code": None,  # latest generated Streamlit code
+        "_agent_activity": [],    # list of agent steps: {type, content, timestamp}
         "_pending_prompt": None,  # prompt text waiting in queue
         "_pending_prompt_id": None,  # unique id for the queued prompt
     }
@@ -1713,48 +1619,6 @@ def prompt_cancel(prompt_id: str):
         conn.close()
 
 
-def prompt_force_cancel(prompt_id: str):
-    """Admin force-cancel: delete any prompt (active or waiting) and promote next."""
-    conn = _get_conn()
-    if conn is None:
-        return
-    try:
-        conn.autocommit = False
-        with conn.cursor() as cur:
-            cur.execute(f"LOCK TABLE {HISTORY_SCHEMA}.{QUEUE_TABLE} IN EXCLUSIVE MODE")
-            cur.execute(f"""
-                DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}
-                WHERE prompt_id = %s
-            """, (prompt_id,))
-            _queue_cleanup(cur)  # promotes next in line
-            conn.commit()
-    except Exception as e:
-        import sys
-        print(f"[prompt_force_cancel] ERROR: {e}", file=sys.stderr)
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-    finally:
-        conn.autocommit = True
-        conn.close()
-
-
-def prompt_clear_all():
-    """Admin: flush the entire queue."""
-    conn = _get_conn()
-    if conn is None:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"DELETE FROM {HISTORY_SCHEMA}.{QUEUE_TABLE}")
-    except Exception as e:
-        import sys
-        print(f"[prompt_clear_all] ERROR: {e}", file=sys.stderr)
-    finally:
-        conn.close()
-
-
 def prompt_heartbeat(prompt_id: str):
     """Refresh the heartbeat timestamp for the active prompt (keep-alive)."""
     conn = _get_conn()
@@ -1845,22 +1709,9 @@ def ollama_is_running() -> bool:
         return False
 
 
-def _ollama_model_exists(model_name: str) -> bool:
-    """Check if a specific model is available on the Ollama instance."""
-    try:
-        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
-        if r.status_code != 200:
-            return False
-        models = [m["name"] for m in r.json().get("models", [])]
-        # Match exact or without tag (e.g. "qwen2.5-vl:7b" matches "qwen2.5-vl:7b")
-        return model_name in models or any(m.startswith(model_name.split(":")[0] + ":") for m in models if model_name.split(":")[0] in m)
-    except Exception:
-        return False
-
-
-def chat_stream(messages: list[dict], model: str | None = None):
-    payload = {"model": model or MODEL, "messages": messages, "stream": True}
-    with requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=(10, 300)) as r:
+def chat_stream(messages: list[dict]):
+    payload = {"model": MODEL, "messages": messages, "stream": True}
+    with requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120) as r:
         r.raise_for_status()
         for line in r.iter_lines():
             if line:
@@ -2680,11 +2531,12 @@ def render_toolbar():
     is_admin = "admin" in st.session_state.get("user_roles", {})
     total_tokens = sum(d["token_count"] for d in st.session_state.documents.values())
     code_mode = st.session_state.code_mode
+    agent_mode = st.session_state.agent_mode
 
     # --- Top bar: brand + action buttons ---
     cols = []
     if is_admin:
-        cols = st.columns([3, 1.2, 1.2, 1.2, 1.2, 1.2])
+        cols = st.columns([2.4, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1])
     else:
         cols = st.columns([4, 1.2, 1.2, 1.2, 1.2])
 
@@ -2701,8 +2553,8 @@ def render_toolbar():
         )
         if is_admin and code_mode:
             brand_parts += ' <span class="mode-pill mode-code">Page Builder</span>'
-        if _vision_enabled() and st.session_state.images:
-            brand_parts += f' <span class="status-badge status-active">Vision · {VISION_MODEL}</span>'
+        if is_admin and agent_mode:
+            brand_parts += ' <span class="mode-pill mode-agent">Agent</span>'
         # Queue indicator
         q_status = prompt_queue_status()
         q_active = q_status.get("active")
@@ -2720,6 +2572,7 @@ def render_toolbar():
                           help="Switch to Streamlit page generation mode"):
                 if not st.session_state.code_mode:
                     st.session_state.code_mode = True
+                    st.session_state.agent_mode = False  # mutually exclusive
                     st.rerun()
             else:
                 if st.session_state.code_mode:
@@ -2727,10 +2580,28 @@ def render_toolbar():
                     st.rerun()
         col_idx += 1
 
+    # Agent Mode toggle (admin only)
+    if is_admin:
+        with cols[col_idx]:
+            agent_disabled = not AGENT_AVAILABLE
+            if st.toggle("Agent Mode", value=agent_mode, key="agent_mode_toggle",
+                          help="Route prompts through LangChain agent" if AGENT_AVAILABLE else "agent.py not found",
+                          disabled=agent_disabled):
+                if not st.session_state.agent_mode:
+                    st.session_state.agent_mode = True
+                    st.session_state.code_mode = False  # mutually exclusive
+                    st.rerun()
+            else:
+                if st.session_state.agent_mode:
+                    st.session_state.agent_mode = False
+                    st.rerun()
+        col_idx += 1
+
     # Clear conversation
     with cols[col_idx]:
         if st.button("Clear Chat", use_container_width=True, key="chat_clear"):
             st.session_state.chat_messages = []
+            st.session_state._agent_activity = []
             st.session_state.pop("_export_md", None)
             st.session_state.pop("_export_xlsx", None)
             st.rerun()
@@ -2754,9 +2625,9 @@ def render_toolbar():
             st.session_state.chat_active = False
             st.session_state.chat_messages = []
             st.session_state.documents = {}
-            st.session_state.images = {}
             st.session_state._pending_prompt = None
             st.session_state._pending_prompt_id = None
+            st.session_state._agent_activity = []
             st.session_state.pop("_export_md", None)
             st.session_state.pop("_export_xlsx", None)
             st.rerun()
@@ -2790,13 +2661,9 @@ def render_toolbar():
                 )
 
     # --- Upload row ---
-    _upload_types = ["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"]
-    _vis = _vision_enabled()
-    if _vis:
-        _upload_types += ["jpg", "jpeg", "png", "bmp"]
     uploaded = st.file_uploader(
-        "Upload documents" + (" & images" if _vis else ""),
-        type=_upload_types,
+        "Upload documents",
+        type=["txt", "md", "pdf", "doc", "docx", "xlsx", "xls"],
         accept_multiple_files=True,
         key="chat_doc_uploader",
         label_visibility="collapsed",
@@ -2804,69 +2671,32 @@ def render_toolbar():
     if uploaded:
         new_added = False
         for f in uploaded:
-            ext = Path(f.name).suffix.lower()
-            if ext in (".jpg", ".jpeg", ".png", ".bmp") and _vis:
-                # Store image as base64 for vision API
-                if f.name not in st.session_state.images:
-                    if not hasattr(st.session_state, "_vision_model_warned") and not _ollama_model_exists(VISION_MODEL):
-                        st.toast(f"Vision model **{VISION_MODEL}** not found. Pull it with: `ollama pull {VISION_MODEL}`", icon="⚠️")
-                        st.session_state._vision_model_warned = True
-                    raw = f.read()
-                    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
-                            "png": "image/png", "bmp": "image/bmp"}.get(ext.lstrip("."), "image/jpeg")
-                    st.session_state.images[f.name] = {
-                        "b64": base64.b64encode(raw).decode("utf-8"),
-                        "mime": mime,
-                        "size": len(raw),
-                    }
-                    new_added = True
-            else:
-                if add_document(f):
-                    new_added = True
+            if add_document(f):
+                new_added = True
         if new_added:
             st.rerun()
 
-    # --- Document & image chips bar with remove buttons ---
-    has_docs = bool(st.session_state.documents)
-    has_imgs = bool(st.session_state.images)
-    if has_docs or has_imgs:
-        chips_html = '<div class="doc-bar">'
-        if has_docs:
-            chips_html += '<span class="doc-bar-label">Docs:</span>'
-            for doc_name, doc_info in st.session_state.documents.items():
-                ext = Path(doc_name).suffix.lower()
-                icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
-                chips_html += (
-                    f'<span class="doc-chip">{icon} {doc_name}'
-                    f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">'
-                    f'{format_number(doc_info["word_count"])}w · ~{format_number(doc_info["token_count"])}tok</span></span>'
-                )
-        if has_imgs:
-            chips_html += '<span class="doc-bar-label" style="margin-left:8px;">Images:</span>'
-            for img_name, img_info in st.session_state.images.items():
-                size_kb = img_info["size"] / 1024
-                size_str = f"{size_kb:.0f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
-                chips_html += (
-                    f'<span class="doc-chip">🖼️ {img_name}'
-                    f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">{size_str}</span></span>'
-                )
+    # --- Document chips bar with remove buttons ---
+    if st.session_state.documents:
+        chips_html = '<div class="doc-bar"><span class="doc-bar-label">Docs:</span>'
+        for doc_name, doc_info in st.session_state.documents.items():
+            ext = Path(doc_name).suffix.lower()
+            icon = {".txt": "📄", ".md": "📝", ".pdf": "📕", ".doc": "📙", ".docx": "📘", ".xlsx": "📊", ".xls": "📊"}.get(ext, "📎")
+            chips_html += (
+                f'<span class="doc-chip">{icon} {doc_name}'
+                f'<span style="color:var(--text-muted);font-size:0.7rem;margin-left:4px;">'
+                f'{format_number(doc_info["word_count"])}w · ~{format_number(doc_info["token_count"])}tok</span></span>'
+            )
         chips_html += "</div>"
         st.markdown(chips_html, unsafe_allow_html=True)
 
         # Remove buttons row
-        all_items = (
-            [(n, "doc") for n in st.session_state.documents]
-            + [(n, "img") for n in st.session_state.images]
-        )
-        rm_cols = st.columns(len(all_items))
-        for i, (name, kind) in enumerate(all_items):
+        rm_cols = st.columns(len(st.session_state.documents))
+        for i, doc_name in enumerate(list(st.session_state.documents.keys())):
             with rm_cols[i]:
-                if st.button(f"✕ {name[:20]}", key=f"rm_{kind}_{name}",
-                             use_container_width=True, help=f"Remove {name}"):
-                    if kind == "doc":
-                        del st.session_state.documents[name]
-                    else:
-                        del st.session_state.images[name]
+                if st.button(f"✕ {doc_name[:20]}", key=f"rm_{doc_name}",
+                             use_container_width=True, help=f"Remove {doc_name}"):
+                    del st.session_state.documents[doc_name]
                     st.rerun()
 
     st.markdown('<hr class="divider" style="margin:0.25rem 0 0.5rem;">', unsafe_allow_html=True)
@@ -2875,257 +2705,6 @@ def render_toolbar():
 # ---------------------------------------------------------------------------
 # CHAT AREA
 # ---------------------------------------------------------------------------
-def _current_chat_mode() -> str:
-    """Return the current chat mode string for DB logging."""
-    if st.session_state.get("code_mode"):
-        return "page_builder"
-    return "normal"
-
-
-def _vision_enabled() -> bool:
-    """Vision is available only to admins when the feature flag is on."""
-    return ENABLE_VISION and "admin" in st.session_state.get("user_roles", {})
-
-
-def _current_has_images() -> bool:
-    """Return whether images are currently attached."""
-    return _vision_enabled() and bool(st.session_state.get("images"))
-
-
-_ERROR_PREFIXES = ("Error:", "Connection to Ollama lost", "[ERROR]")
-
-
-def _is_error_response(content: str) -> bool:
-    """Return True if an assistant response indicates an error."""
-    return any(content.startswith(p) for p in _ERROR_PREFIXES)
-
-
-def _score_intent(prompt: str, *,
-                   title: str | None = None,
-                   teams: list | None = None,
-                   roles: list | None = None) -> int | None:
-    """Score how relevant a user prompt is to their role/title (0-100).
-
-    Uses a separate, non-streaming LLM call with a focused system prompt.
-    Returns an integer score or None if scoring fails.
-
-    When title/teams/roles are not passed explicitly, falls back to
-    st.session_state (live chat context).
-    """
-    _title = title if title is not None else st.session_state.get("title", "")
-    _teams = teams if teams is not None else st.session_state.get("teams", [])
-    _roles = roles if roles is not None else st.session_state.get("roles", [])
-
-    # Build context about the user's role
-    role_parts = []
-    if _title:
-        role_parts.append(f"Job Title: {_title}")
-    if _teams:
-        teams_str = ", ".join(_teams) if isinstance(_teams, list) else str(_teams)
-        role_parts.append(f"Teams: {teams_str}")
-    if _roles:
-        roles_str = ", ".join(_roles) if isinstance(_roles, list) else str(_roles)
-        role_parts.append(f"Roles: {roles_str}")
-
-    if not role_parts:
-        return None  # cannot score without role context
-
-    role_context = "\n".join(role_parts)
-
-    scoring_prompt = f"""\
-You are an intent relevance scorer. Given a user's company role and their prompt to a chatbot, score how relevant and in-scope the prompt is to their professional responsibilities.
-
-USER PROFILE:
-{role_context}
-
-SCORING GUIDELINES:
-- 90-100: Directly related to their job function, team responsibilities, or daily work tasks
-- 70-89: Related to their professional domain or adjacent work topics
-- 50-69: General professional/workplace query, loosely related to their role
-- 30-49: General knowledge question, not specific to their role but potentially useful at work
-- 10-29: Personal or off-topic query, unrelated to their professional role
-- 0-9: Completely irrelevant, inappropriate, or spam
-
-USER PROMPT:
-{prompt[:1000]}
-
-Respond with ONLY a single integer between 0 and 100. No explanation, no text, just the number."""
-
-    try:
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": "You output only a single integer."},
-                {"role": "user", "content": scoring_prompt},
-            ],
-            "stream": False,
-        }
-        r = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=(5, 30))
-        r.raise_for_status()
-        content = r.json().get("message", {}).get("content", "").strip()
-        # Extract the first integer found in the response
-        match = re.search(r"\b(\d{1,3})\b", content)
-        if match:
-            score = int(match.group(1))
-            return max(0, min(100, score))
-        return None
-    except Exception as e:
-        import sys
-        print(f"[_score_intent] Scoring failed: {e}", file=sys.stderr)
-        return None
-
-
-# -- Intent thresholds for LLM guardrails --
-INTENT_REFUSE_THRESHOLD  = 15   # hard refuse — do not call LLM at all
-INTENT_REDIRECT_THRESHOLD = 40  # inject a firm redirect into the system prompt
-INTENT_NUDGE_THRESHOLD    = 70  # inject a gentle nudge to stay on topic
-
-
-def _build_intent_guardrail(score: int) -> str:
-    """Return extra system-prompt text based on the intent score."""
-    title = st.session_state.get("title", "")
-    teams = st.session_state.get("teams", [])
-    role_desc = title or "their professional role"
-    teams_str = ", ".join(teams) if isinstance(teams, list) and teams else ""
-
-    if score < INTENT_REDIRECT_THRESHOLD:
-        return (
-            "\n\n--- IMPORTANT GUARDRAIL ---\n"
-            f"The user's latest message has been scored as largely off-topic "
-            f"(relevance {score}/100) relative to their role as {role_desc}"
-            f"{f' on the {teams_str} team(s)' if teams_str else ''}.\n"
-            "You MUST:\n"
-            "1. Politely but firmly decline to answer the off-topic request.\n"
-            "2. Briefly explain that this chatbot is intended for work-related tasks "
-            f"aligned with the user's responsibilities as {role_desc}.\n"
-            "3. Suggest they rephrase their question in a work-relevant context, "
-            "or offer to help with something related to their role.\n"
-            "Do NOT provide the off-topic answer. Keep your response short and professional."
-        )
-
-    if score < INTENT_NUDGE_THRESHOLD:
-        return (
-            "\n\n--- GUIDANCE ---\n"
-            f"The user's latest message is only partially related to their role as {role_desc} "
-            f"(relevance {score}/100). "
-            "Answer their question helpfully, but naturally steer the conversation back toward "
-            "topics relevant to their professional responsibilities. "
-            "You may add a brief, friendly note suggesting how this topic could connect to their work."
-        )
-
-    return ""
-
-
-def _intent_refuse_message() -> str:
-    """Build the refusal message shown when intent score is below the refuse threshold."""
-    title = st.session_state.get("title", "")
-    role_desc = f"your role as **{title}**" if title else "your professional responsibilities"
-    return (
-        "I appreciate your message, but this request falls outside the scope of "
-        f"{role_desc}. This chatbot is designed to assist with work-related tasks "
-        "and questions aligned with your position.\n\n"
-        "Could you rephrase your question in a work-related context? "
-        "I'm happy to help with anything relevant to your responsibilities."
-    )
-
-
-def _send_error_alert(session_id: str, username: str, error_content: str, prompt: str):
-    """Send a professional HTML error alert email to DEVOPS."""
-    if not ENABLE_ERROR_ALERTS or send_email is None or not DEVOPS_EMAIL:
-        return
-    try:
-        ts = now_local().strftime("%Y-%m-%d %H:%M:%S %Z")
-        safe_error = (
-            error_content[:1000]
-            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        )
-        safe_prompt = (
-            prompt[:500]
-            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        )
-        chat_mode = _current_chat_mode()
-        mode_label = {"page_builder": "Page Builder", "agent": "Agent"}.get(chat_mode, "Normal Chat")
-        has_images = _current_has_images()
-        doc_names = ", ".join(list(st.session_state.documents.keys())[:5]) or "None"
-
-        html_body = f"""\
-<html>
-<head>
-<style>
-  body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background: #f4f5f7; }}
-  .container {{ max-width: 640px; margin: 24px auto; background: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }}
-  .header {{ background: linear-gradient(135deg, #dc3545 0%, #a71d2a 100%); padding: 28px 32px; }}
-  .header h1 {{ color: #ffffff; font-size: 20px; margin: 0 0 4px; font-weight: 600; }}
-  .header p {{ color: rgba(255,255,255,0.85); font-size: 13px; margin: 0; }}
-  .body {{ padding: 28px 32px; }}
-  .section-title {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #6c757d; margin: 0 0 10px; }}
-  .detail-table {{ width: 100%; border-collapse: collapse; margin-bottom: 24px; }}
-  .detail-table td {{ padding: 9px 12px; font-size: 13.5px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }}
-  .detail-table td:first-child {{ font-weight: 600; color: #495057; width: 130px; white-space: nowrap; }}
-  .detail-table td:last-child {{ color: #212529; }}
-  .error-box {{ background: #fff5f5; border: 1px solid #f5c6cb; border-left: 4px solid #dc3545; border-radius: 6px; padding: 16px 18px; margin-bottom: 24px; }}
-  .error-box pre {{ margin: 0; font-family: 'Consolas', 'Courier New', monospace; font-size: 12.5px; color: #721c24; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }}
-  .prompt-box {{ background: #f8f9fa; border: 1px solid #e9ecef; border-left: 4px solid #6c757d; border-radius: 6px; padding: 16px 18px; margin-bottom: 24px; }}
-  .prompt-box pre {{ margin: 0; font-family: 'Consolas', 'Courier New', monospace; font-size: 12.5px; color: #495057; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }}
-  .footer {{ padding: 18px 32px; background: #f8f9fa; border-top: 1px solid #e9ecef; text-align: center; }}
-  .footer p {{ margin: 0; font-size: 11.5px; color: #868e96; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }}
-  .badge-mode {{ background: rgba(74,144,217,0.1); color: #4a90d9; border: 1px solid rgba(74,144,217,0.2); }}
-  .badge-img {{ background: rgba(184,134,11,0.08); color: #b8860b; border: 1px solid rgba(184,134,11,0.15); }}
-</style>
-</head>
-<body>
-<div class="container">
-  <div class="header">
-    <h1>Chatbot Error Alert</h1>
-    <p>An error occurred during a chat session on the Ollama Document Chatbot.</p>
-  </div>
-  <div class="body">
-    <p class="section-title">Session Details</p>
-    <table class="detail-table">
-      <tr><td>Timestamp</td><td>{ts}</td></tr>
-      <tr><td>User</td><td>{username or '—'}</td></tr>
-      <tr><td>Session ID</td><td><code>{session_id}</code></td></tr>
-      <tr><td>Mode</td><td><span class="badge badge-mode">{mode_label}</span></td></tr>
-      <tr><td>Model</td><td>{MODEL}</td></tr>
-      <tr><td>Documents</td><td>{doc_names}</td></tr>
-      <tr><td>Images Attached</td><td>{'Yes' if has_images else 'No'}</td></tr>
-    </table>
-
-    <p class="section-title">User Prompt</p>
-    <div class="prompt-box"><pre>{safe_prompt}</pre></div>
-
-    <p class="section-title">Error Response</p>
-    <div class="error-box"><pre>{safe_error}</pre></div>
-  </div>
-  <div class="footer">
-    <p>This is an automated alert from the Ollama Document Chatbot &middot; {OLLAMA_URL}</p>
-  </div>
-</div>
-</body>
-</html>"""
-
-        send_email(
-            subject=f"[Chatbot Error] {error_content[:80]}",
-            message_body=html_body,
-            to_email=DEVOPS_EMAIL,
-        )
-    except Exception as e:
-        import sys
-        print(f"[_send_error_alert] Failed to send email: {e}", file=sys.stderr)
-
-
-def _db_save_kwargs() -> dict:
-    """Common kwargs for db_save_message calls."""
-    return {
-        "session_id": st.session_state.chat_session_id,
-        "username": st.session_state.get("username", ""),
-        "documents": list(st.session_state.documents.keys()),
-        "chat_mode": _current_chat_mode(),
-        "has_images": _current_has_images(),
-    }
-
-
 def _generate_greeting():
     """Stream a personalized greeting from the LLM based on user identity."""
     username = st.session_state.get("username", "")
@@ -3190,7 +2769,9 @@ def _generate_greeting():
         )
 
     st.session_state.chat_messages.append(assistant_msg)
-    db_save_message(assistant_msg, **_db_save_kwargs())
+    db_save_message(assistant_msg, st.session_state.chat_session_id,
+                    st.session_state.get("username", ""),
+                    list(st.session_state.documents.keys()))
 
 
 def _render_chat_conversation():
@@ -3198,6 +2779,7 @@ def _render_chat_conversation():
     doc_count = len(st.session_state.documents)
     username = st.session_state.get("username", "")
     code_mode = st.session_state.code_mode
+    agent_mode = st.session_state.agent_mode
 
     if not st.session_state.chat_messages:
         if code_mode:
@@ -3206,6 +2788,16 @@ def _render_chat_conversation():
                 '<h2>Page Builder Mode</h2>'
                 '<p>Describe the Streamlit page you want and I\'ll generate it live. '
                 'Try: "Build a sales dashboard with KPI cards and charts"</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        elif agent_mode:
+            st.markdown(
+                '<div class="empty-state">'
+                '<h2>Agent Mode</h2>'
+                '<p>Your prompts are routed through a LangChain agent with tool access. '
+                'The agent can read files, execute shell commands, and generate data. '
+                'Try: "Read the config.json file and summarize it"</p>'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -3226,17 +2818,6 @@ def _render_chat_conversation():
         if msg["role"] == "user":
             with st.chat_message("user"):
                 render_message_content(msg["content"], f"usr_{idx}")
-                # Show attached image thumbnails
-                attached = msg.get("_images", [])
-                if attached:
-                    img_cols = st.columns(min(len(attached), 4))
-                    for j, img_data in enumerate(attached):
-                        with img_cols[j % len(img_cols)]:
-                            st.image(
-                                base64.b64decode(img_data["b64"]),
-                                caption=img_data.get("name", ""),
-                                use_container_width=True,
-                            )
                 render_msg_meta(msg)
         else:
             if code_mode and _extract_code_block(msg["content"]):
@@ -3266,6 +2847,62 @@ def _render_generated_page():
     with st.expander("View source code", expanded=False):
         st.code(code, language="python")
     _execute_generated_code(code)
+
+
+def _render_agent_activity():
+    """Render the Agent Activity tab showing tool calls and intermediate steps."""
+    activity = st.session_state.get("_agent_activity", [])
+    if not activity:
+        st.markdown(
+            '<div class="empty-state">'
+            '<h2>No agent activity yet</h2>'
+            '<p>Switch to the Chat tab and send a message in Agent Mode. '
+            'Tool calls and intermediate steps will appear here.</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(f"**{len(activity)} step{'s' if len(activity) != 1 else ''}** recorded")
+
+    for i, step in enumerate(reversed(activity)):
+        step_type = step.get("type", "info")
+        type_cls = {
+            "tool_call": "tool",
+            "tool_result": "result",
+            "thought": "thought",
+            "error": "error",
+        }.get(step_type, "thought")
+
+        type_label = {
+            "tool_call": "Tool Call",
+            "tool_result": "Result",
+            "thought": "Thought",
+            "error": "Error",
+            "final": "Final Answer",
+        }.get(step_type, step_type.title())
+
+        ts = step.get("timestamp", "")
+        name = step.get("name", "")
+        header_name = f" — {name}" if name else ""
+
+        st.markdown(
+            f'<div class="agent-step">'
+            f'<div class="agent-step-header">'
+            f'<span class="agent-step-type agent-step-type-{type_cls}">{type_label}</span>'
+            f'<span>{header_name}</span>'
+            f'<span class="agent-step-time">{ts}</span>'
+            f'</div>'
+            f'<div class="agent-step-body">{step.get("content", "")[:2000]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Show full content in expander if it's long
+        content = step.get("content", "")
+        if len(content) > 2000:
+            with st.expander("Show full content", expanded=False):
+                st.code(content, language="json" if step_type == "tool_result" else "text")
 
 
 def _render_queue_wait(position: int, prompt_id: str):
@@ -3308,6 +2945,7 @@ def _render_queue_wait(position: int, prompt_id: str):
 def render_chat():
     doc_count = len(st.session_state.documents)
     code_mode = st.session_state.code_mode
+    agent_mode = st.session_state.agent_mode
     has_page = bool(st.session_state.get("_generated_code"))
 
     # When in code mode, show Chat and Generated Page as separate tabs
@@ -3318,6 +2956,13 @@ def render_chat():
             _render_chat_conversation()
         with tab_page:
             _render_generated_page()
+    elif agent_mode:
+        tab_labels = ["Chat", "Agent Activity"]
+        tab_chat, tab_activity = st.tabs(tab_labels)
+        with tab_chat:
+            _render_chat_conversation()
+        with tab_activity:
+            _render_agent_activity()
     else:
         _render_chat_conversation()
 
@@ -3331,13 +2976,10 @@ def render_chat():
     )
 
     # Chat input (always visible below tabs)
-    has_images = _vision_enabled() and bool(st.session_state.images)
     if code_mode:
         placeholder_text = "Describe the page you want to build..."
-    elif has_images and doc_count:
-        placeholder_text = "Ask about your documents and images..."
-    elif has_images:
-        placeholder_text = "Ask about your images..."
+    elif agent_mode:
+        placeholder_text = "Ask the agent to do something..."
     elif doc_count:
         placeholder_text = "Ask about your documents..."
     else:
@@ -3361,7 +3003,7 @@ def render_chat():
                 available_prompts.append((sp["label"], sp["prompt"]))
                 seen_labels.add(sp["label"])
 
-    if available_prompts and not code_mode:
+    if available_prompts and not code_mode and not agent_mode:
         st.markdown(
             '<div class="saved-prompts-bar">'
             '<div class="saved-prompts-label">Quick Prompts</div>'
@@ -3389,15 +3031,10 @@ def render_chat():
             _render_queue_wait(pos, pending_pid)
             return
         elif pos == -1:
-            # Expired / cancelled by admin — clear pending state
+            # Expired / cancelled — clear pending state
             st.session_state._pending_prompt = None
             st.session_state._pending_prompt_id = None
             pending_pid = None
-            # Remove the unanswered user message if it's the last one
-            if (st.session_state.chat_messages
-                    and st.session_state.chat_messages[-1]["role"] == "user"):
-                st.session_state.chat_messages.pop()
-            st.toast("Your prompt was cancelled or expired. Please try again.", icon="ℹ️")
         # pos == 0 → it's our turn — fall through to process below
 
     # ------------------------------------------------------------------
@@ -3419,28 +3056,14 @@ def render_chat():
             "timestamp": user_ts,
             "tokens": user_tokens,
         }
-        # Attach images snapshot to message for re-rendering
-        if _vision_enabled() and st.session_state.images:
-            user_msg["_images"] = [
-                {"name": n, "b64": info["b64"], "mime": info["mime"]}
-                for n, info in st.session_state.images.items()
-            ]
-
         st.session_state.chat_messages.append(user_msg)
-        db_save_message(user_msg, **_db_save_kwargs())
+        db_save_message(user_msg, st.session_state.chat_session_id,
+                        st.session_state.get("username", ""),
+                        list(st.session_state.documents.keys()))
 
         # Render user message immediately (conversation loop already ran above)
         with st.chat_message("user"):
             st.markdown(prompt)
-            if user_msg.get("_images"):
-                img_cols = st.columns(min(len(user_msg["_images"]), 4))
-                for j, img_data in enumerate(user_msg["_images"]):
-                    with img_cols[j % len(img_cols)]:
-                        st.image(
-                            base64.b64decode(img_data["b64"]),
-                            caption=img_data.get("name", ""),
-                            use_container_width=True,
-                        )
             render_msg_meta(user_msg)
 
         # Enqueue the prompt
@@ -3472,127 +3095,165 @@ def render_chat():
             unsafe_allow_html=True,
         )
 
-        # --- Intent scoring (runs during "Processing" phase, invisible to user) ---
-        intent_score = None
-        if ENABLE_INTENT_SCORING:
-            intent_score = _score_intent(pending_prompt)
-            if intent_score is not None:
-                # Persist score to the already-saved user message
-                db_update_intent_score(
-                    st.session_state.chat_session_id, "user", intent_score,
-                )
-                # Also store in session for admin view consistency
-                for m in reversed(st.session_state.chat_messages):
-                    if m["role"] == "user":
-                        m["intent_score"] = intent_score
-                        break
+        if agent_mode and AGENT_AVAILABLE:
+            # ---- Agent Mode: route through LangChain agent ----
+            from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
-            # --- Hard refuse for extremely off-topic prompts ---
-            if intent_score is not None and intent_score < INTENT_REFUSE_THRESHOLD:
-                with st.chat_message("assistant"):
-                    refuse_msg = _intent_refuse_message()
-                    st.markdown(refuse_msg)
+            # Build history for agent
+            history: list[BaseMessage] = []
+            for m in st.session_state.chat_messages[:-1]:  # exclude current prompt
+                if m["role"] == "user":
+                    history.append(HumanMessage(content=m["content"]))
+                else:
+                    history.append(AIMessage(content=m["content"]))
+
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                meta_placeholder = st.empty()
+                placeholder.markdown("Agent is thinking... ▌")
+                t_start = time.time()
+
+                try:
+                    prompt_heartbeat(pending_prompt_id)
+                    result = run_agent(pending_prompt, history)
+                    full_response = result.content if hasattr(result, "content") else str(result)
+
+                    # Extract agent activity from the result
+                    activity_steps = []
+                    step_ts = now_local().strftime("%H:%M:%S")
+
+                    # Check for tool calls in the result (LangChain agent messages)
+                    if hasattr(result, "additional_kwargs"):
+                        tool_calls = result.additional_kwargs.get("tool_calls", [])
+                        for tc in tool_calls:
+                            activity_steps.append({
+                                "type": "tool_call",
+                                "name": tc.get("function", {}).get("name", "unknown"),
+                                "content": tc.get("function", {}).get("arguments", ""),
+                                "timestamp": step_ts,
+                            })
+
+                    # Try to extract intermediate steps if the agent returned them
+                    if hasattr(result, "response_metadata"):
+                        meta = result.response_metadata
+                        if "intermediate_steps" in meta:
+                            for step in meta["intermediate_steps"]:
+                                if hasattr(step, "__len__") and len(step) >= 2:
+                                    action, observation = step[0], step[1]
+                                    tool_name = getattr(action, "tool", "unknown")
+                                    tool_input = getattr(action, "tool_input", "")
+                                    activity_steps.append({
+                                        "type": "tool_call",
+                                        "name": tool_name,
+                                        "content": str(tool_input),
+                                        "timestamp": step_ts,
+                                    })
+                                    activity_steps.append({
+                                        "type": "tool_result",
+                                        "name": tool_name,
+                                        "content": str(observation),
+                                        "timestamp": step_ts,
+                                    })
+
+                    # Always record the final answer
+                    activity_steps.append({
+                        "type": "final",
+                        "name": "Final Answer",
+                        "content": full_response[:500],
+                        "timestamp": step_ts,
+                    })
+
+                    st.session_state["_agent_activity"].extend(activity_steps)
+                    placeholder.markdown(full_response)
+
+                except Exception as e:
+                    import traceback
+                    full_response = f"Agent error: {e}"
+                    placeholder.error(full_response)
+                    st.session_state["_agent_activity"].append({
+                        "type": "error",
+                        "name": "Exception",
+                        "content": traceback.format_exc(),
+                        "timestamp": now_local().strftime("%H:%M:%S"),
+                    })
+
+                duration = time.time() - t_start
+                resp_tokens = estimate_tokens(full_response)
+                resp_ts = now_local().strftime("%H:%M")
                 assistant_msg = {
                     "role": "assistant",
-                    "content": refuse_msg,
-                    "timestamp": now_local().strftime("%H:%M"),
-                    "duration": 0,
-                    "tokens": estimate_tokens(refuse_msg),
+                    "content": full_response,
+                    "timestamp": resp_ts,
+                    "duration": duration,
+                    "tokens": resp_tokens,
                 }
-                st.session_state.chat_messages.append(assistant_msg)
-                db_save_message(assistant_msg, **_db_save_kwargs())
-                processing_bar.empty()
-                prompt_release(pending_prompt_id)
-                st.session_state._pending_prompt = None
-                st.session_state._pending_prompt_id = None
-                return
+                meta_placeholder.markdown(
+                    f'<div class="msg-meta">'
+                    f'<span>{resp_ts}</span>'
+                    f'<span>{format_duration(duration)}</span>'
+                    f'<span>~{format_number(resp_tokens)} tokens</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
-        # Build API messages
-        if code_mode:
-            system_content = build_code_system_prompt()
         else:
-            system_content = build_system_prompt()
+            # ---- Normal / Code Mode: stream from Ollama ----
+            if code_mode:
+                system_content = build_code_system_prompt()
+            else:
+                system_content = build_system_prompt()
+            system_msg = {"role": "system", "content": system_content}
+            api_messages = [system_msg] + [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.chat_messages
+            ]
 
-        # Inject intent guardrail into system prompt
-        if intent_score is not None:
-            system_content += _build_intent_guardrail(intent_score)
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                meta_placeholder = st.empty()
+                full_response = ""
+                t_start = time.time()
+                try:
+                    for token in chat_stream(api_messages):
+                        full_response += token
+                        placeholder.markdown(full_response + "▌")
+                        # Keep-alive heartbeat every ~10 tokens
+                        if len(full_response) % 40 == 0:
+                            prompt_heartbeat(pending_prompt_id)
+                    placeholder.markdown(full_response)
+                except requests.exceptions.ConnectionError:
+                    full_response = "Connection to Ollama lost. Please check that it is running."
+                    placeholder.error(full_response)
+                except Exception as e:
+                    full_response = f"Error: {e}"
+                    placeholder.error(full_response)
 
-        system_msg = {"role": "system", "content": system_content}
-
-        # Determine if we should use vision model
-        use_vision = _vision_enabled() and bool(st.session_state.images)
-        if use_vision and not _ollama_model_exists(VISION_MODEL):
-            st.warning(
-                f"Vision model **{VISION_MODEL}** is not available on Ollama. "
-                f"Images will be ignored. Pull it with: `ollama pull {VISION_MODEL}`"
-            )
-            use_vision = False
-        stream_model = VISION_MODEL if use_vision else None  # None = default MODEL
-
-        # Build conversation messages, attaching images to the latest user message
-        api_messages = [system_msg]
-        for i, m in enumerate(st.session_state.chat_messages):
-            msg_entry = {"role": m["role"], "content": m["content"]}
-            # Attach images to the last user message only
-            if use_vision and m["role"] == "user" and i == len(st.session_state.chat_messages) - 1:
-                msg_entry["images"] = [
-                    img["b64"] for img in st.session_state.images.values()
-                ]
-            api_messages.append(msg_entry)
-
-        with st.chat_message("assistant"):
-            placeholder = st.empty()
-            meta_placeholder = st.empty()
-            full_response = ""
-            t_start = time.time()
-            try:
-                for token in chat_stream(api_messages, model=stream_model):
-                    full_response += token
-                    placeholder.markdown(full_response + "▌")
-                    # Keep-alive heartbeat every ~10 tokens
-                    if len(full_response) % 40 == 0:
-                        prompt_heartbeat(pending_prompt_id)
-                placeholder.markdown(full_response)
-            except requests.exceptions.ConnectionError:
-                full_response = "Connection to Ollama lost. Please check that it is running."
-                placeholder.error(full_response)
-            except Exception as e:
-                full_response = f"Error: {e}"
-                placeholder.error(full_response)
-
-            duration = time.time() - t_start
-            resp_tokens = estimate_tokens(full_response)
-            resp_ts = now_local().strftime("%H:%M")
-            assistant_msg = {
-                "role": "assistant",
-                "content": full_response,
-                "timestamp": resp_ts,
-                "duration": duration,
-                "tokens": resp_tokens,
-            }
-            meta_placeholder.markdown(
-                f'<div class="msg-meta">'
-                f'<span>{resp_ts}</span>'
-                f'<span>{format_duration(duration)}</span>'
-                f'<span>~{format_number(resp_tokens)} tokens</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+                duration = time.time() - t_start
+                resp_tokens = estimate_tokens(full_response)
+                resp_ts = now_local().strftime("%H:%M")
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": full_response,
+                    "timestamp": resp_ts,
+                    "duration": duration,
+                    "tokens": resp_tokens,
+                }
+                meta_placeholder.markdown(
+                    f'<div class="msg-meta">'
+                    f'<span>{resp_ts}</span>'
+                    f'<span>{format_duration(duration)}</span>'
+                    f'<span>~{format_number(resp_tokens)} tokens</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
         # Clear the processing bar
         processing_bar.empty()
 
-        is_error = _is_error_response(full_response)
         st.session_state.chat_messages.append(assistant_msg)
-        db_save_message(assistant_msg, **_db_save_kwargs(), has_error=is_error)
-
-        if is_error:
-            _send_error_alert(
-                session_id=st.session_state.chat_session_id,
-                username=st.session_state.get("username", ""),
-                error_content=full_response,
-                prompt=pending_prompt,
-            )
+        db_save_message(assistant_msg, st.session_state.chat_session_id,
+                        st.session_state.get("username", ""),
+                        list(st.session_state.documents.keys()))
 
         # Release the queue slot
         prompt_release(pending_prompt_id)
@@ -3607,61 +3268,6 @@ def render_chat():
                 st.rerun()
             else:
                 st.warning("No code block found in the response. Try rephrasing your request.")
-
-
-def _render_intent_distribution(fkw: dict):
-    """Render a compact horizontal bar showing intent score distribution."""
-    conn = _get_conn()
-    if conn is None:
-        return
-    try:
-        wheres, params = [], []
-        if fkw.get("session_filter"):
-            wheres.append("session_id = %s"); params.append(fkw["session_filter"])
-        if fkw.get("username_filter"):
-            wheres.append("username = %s"); params.append(fkw["username_filter"])
-        if fkw.get("date_from"):
-            wheres.append("timestamp_utc >= %s"); params.append(fkw["date_from"])
-        if fkw.get("date_to"):
-            wheres.append("timestamp_utc <= %s"); params.append(fkw["date_to"])
-        wheres.append("intent_score IS NOT NULL")
-        where_clause = " WHERE " + " AND ".join(wheres)
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    COUNT(*) FILTER (WHERE intent_score >= 70) AS high,
-                    COUNT(*) FILTER (WHERE intent_score >= 40 AND intent_score < 70) AS medium,
-                    COUNT(*) FILTER (WHERE intent_score < 40) AS low,
-                    COUNT(*) AS total
-                FROM {HISTORY_SCHEMA}.{HISTORY_TABLE}
-                {where_clause}
-            """, params)
-            row = cur.fetchone()
-        if not row or row[3] == 0:
-            return
-        high, med, low, total = row
-        h_pct = round(high / total * 100)
-        m_pct = round(med / total * 100)
-        l_pct = round(low / total * 100)
-        st.markdown(
-            f'<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;width:100%;'
-            f'background:rgba(128,128,128,0.1);">'
-            f'<div style="width:{h_pct}%;background:#2d8a4e;" title="High ({high})"></div>'
-            f'<div style="width:{m_pct}%;background:#b8860b;" title="Medium ({med})"></div>'
-            f'<div style="width:{l_pct}%;background:#dc3545;" title="Low ({low})"></div>'
-            f'</div>'
-            f'<div class="stat-sub" style="margin-top:6px;">'
-            f'<span style="color:#2d8a4e;">High {h_pct}%</span> · '
-            f'<span style="color:#b8860b;">Med {m_pct}%</span> · '
-            f'<span style="color:#dc3545;">Low {l_pct}%</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        pass
-    finally:
-        if conn:
-            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -3708,21 +3314,13 @@ def render_admin():
     total_in_queue = (1 if q_active else 0) + len(q_waiting)
     title_extra = f" — {total_in_queue} prompt{'s' if total_in_queue != 1 else ''}" if total_in_queue else " — idle"
 
-    qm_title_col, qm_action_col = st.columns([5, 1.5])
-    with qm_title_col:
-        st.markdown(
-            f'<div class="queue-monitor">'
-            f'<div class="queue-monitor-title">'
-            f'<span class="{dot_cls}"></span> Prompt Queue{title_extra}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    with qm_action_col:
-        if total_in_queue > 0:
-            if st.button("Clear All", key="admin_clear_queue", type="secondary",
-                         use_container_width=True, help="Force-clear the entire queue"):
-                prompt_clear_all()
-                st.rerun()
+    st.markdown(
+        f'<div class="queue-monitor">'
+        f'<div class="queue-monitor-title">'
+        f'<span class="{dot_cls}"></span> Prompt Queue{title_extra}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     if not q_active and not q_waiting:
         st.markdown(
@@ -3739,22 +3337,14 @@ def render_admin():
                 time_str = f"started {elapsed}s ago"
             except Exception:
                 time_str = ""
-            ac1, ac2 = st.columns([5, 1.5])
-            with ac1:
-                st.markdown(
-                    f'<div class="qm-entry qm-entry-active">'
-                    f'<span class="qm-pos qm-pos-active">NOW</span>'
-                    f'<span class="qm-user">Active prompt</span>'
-                    f'<span class="qm-detail">{time_str}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with ac2:
-                if st.button("Cancel", key=f"admin_cancel_{q_active['prompt_id']}",
-                             use_container_width=True, type="primary",
-                             help="Force-cancel this active prompt"):
-                    prompt_force_cancel(q_active["prompt_id"])
-                    st.rerun()
+            st.markdown(
+                f'<div class="qm-entry qm-entry-active">'
+                f'<span class="qm-pos qm-pos-active">NOW</span>'
+                f'<span class="qm-user">Active prompt</span>'
+                f'<span class="qm-detail">{time_str}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         for i, entry in enumerate(q_waiting):
             try:
@@ -3763,22 +3353,14 @@ def render_admin():
                 wait_str = f"waiting {wait}s"
             except Exception:
                 wait_str = ""
-            wc1, wc2 = st.columns([5, 1.5])
-            with wc1:
-                st.markdown(
-                    f'<div class="qm-entry qm-entry-waiting">'
-                    f'<span class="qm-pos qm-pos-waiting">#{i + 1}</span>'
-                    f'<span class="qm-user">Queued prompt</span>'
-                    f'<span class="qm-detail">{wait_str}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with wc2:
-                if st.button("Cancel", key=f"admin_cancel_{entry['prompt_id']}",
-                             use_container_width=True,
-                             help="Remove this prompt from the queue"):
-                    prompt_force_cancel(entry["prompt_id"])
-                    st.rerun()
+            st.markdown(
+                f'<div class="qm-entry qm-entry-waiting">'
+                f'<span class="qm-pos qm-pos-waiting">#{i + 1}</span>'
+                f'<span class="qm-user">Queued prompt</span>'
+                f'<span class="qm-detail">{wait_str}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -3862,193 +3444,37 @@ def render_admin():
     last_msg  = stats.get("last_message")
 
     if stats:
-        total_msgs  = int(stats.get("total_messages") or 0)
-        total_sess  = int(stats.get("total_sessions") or 0)
-        unique_users = int(stats.get("unique_users") or 0)
-        user_msgs   = int(stats.get("user_messages") or 0)
-        asst_msgs   = int(stats.get("assistant_messages") or 0)
-        total_tok   = int(stats.get("total_tokens") or 0)
-        user_tok    = int(stats.get("user_tokens") or 0)
-        asst_tok    = int(stats.get("assistant_tokens") or 0)
-        error_count = int(stats.get("error_count") or 0)
-        median_dur  = float(stats.get("median_duration_s") or 0)
-        p95_dur     = float(stats.get("p95_duration_s") or 0)
-        fast_n      = int(stats.get("fast_responses") or 0)
-        normal_n    = int(stats.get("normal_responses") or 0)
-        slow_n      = int(stats.get("slow_responses") or 0)
-        pb_msgs     = int(stats.get("page_builder_msgs") or 0)
-        vis_msgs    = int(stats.get("vision_msgs") or 0)
-        doc_msgs    = int(stats.get("doc_msgs") or 0)
-        avg_intent  = stats.get("avg_intent_score")
-        min_intent  = stats.get("min_intent_score")
-        max_intent  = stats.get("max_intent_score")
-        scored_n    = int(stats.get("scored_prompts") or 0)
-
-        msgs_per_session = round(total_msgs / total_sess, 1) if total_sess else 0
-        error_rate = round(error_count / asst_msgs * 100, 1) if asst_msgs else 0
-        user_pct = round(user_msgs / total_msgs * 100) if total_msgs else 0
-        asst_pct = 100 - user_pct if total_msgs else 0
-
-        def _bar_html(segments: list[tuple[float, str, str]], height: int = 14) -> str:
-            """Build a horizontal stacked bar from (pct, color, label) tuples."""
-            parts = []
-            for pct, color, _label in segments:
-                if pct > 0:
-                    parts.append(
-                        f'<div style="width:{pct}%;background:{color};height:{height}px;" '
-                        f'title="{_label} ({pct}%)"></div>'
-                    )
-            return (
-                f'<div style="display:flex;border-radius:{height // 2}px;overflow:hidden;'
-                f'width:100%;background:rgba(128,128,128,0.1);">{"".join(parts)}</div>'
-            )
-
-        # ── Row 1: headline KPIs ──
-        k1, k2, k3, k4 = st.columns(4)
-        with k1:
-            st.markdown(
-                f'<div class="stat-card">'
-                f'<div class="stat-value">{format_number(total_sess)}</div>'
-                f'<div class="stat-label">Sessions</div>'
-                f'<div class="stat-sub">{unique_users} user{"s" if unique_users != 1 else ""} · '
-                f'{msgs_per_session} msgs/session</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        with k2:
-            st.markdown(
-                f'<div class="stat-card">'
-                f'<div class="stat-value">{format_number(total_msgs)}</div>'
-                f'<div class="stat-label">Total Messages</div>'
-                f'<div class="stat-sub" style="margin-bottom:6px;">'
-                f'User {user_pct}% · Assistant {asst_pct}%</div>'
-                f'{_bar_html([(user_pct, "#4a90d9", "User"), (asst_pct, "#2d8a4e", "Assistant")])}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        with k3:
-            user_tok_pct = round(user_tok / total_tok * 100) if total_tok else 0
-            asst_tok_pct = 100 - user_tok_pct if total_tok else 0
-            st.markdown(
-                f'<div class="stat-card">'
-                f'<div class="stat-value">{format_number(total_tok)}</div>'
-                f'<div class="stat-label">Total Tokens</div>'
-                f'<div class="stat-sub" style="margin-bottom:6px;">'
-                f'User {user_tok_pct}% · Assistant {asst_tok_pct}%</div>'
-                f'{_bar_html([(user_tok_pct, "#4a90d9", "User"), (asst_tok_pct, "#2d8a4e", "Assistant")])}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        with k4:
-            first_str = to_local(first_msg).strftime('%b %d, %Y') if first_msg else '—'
-            last_str  = to_local(last_msg).strftime('%b %d, %Y') if last_msg else '—'
-            span_days = (last_msg - first_msg).days if first_msg and last_msg else 0
-            st.markdown(
-                f'<div class="stat-card">'
-                f'<div class="stat-value">{span_days}d</div>'
-                f'<div class="stat-label">Active Span</div>'
-                f'<div class="stat-sub">{first_str} — {last_str}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-        # ── Row 2: response performance ──
-        p1, p2, p3 = st.columns(3)
-        with p1:
-            # Response time breakdown
-            resp_total = fast_n + normal_n + slow_n
-            fast_pct   = round(fast_n / resp_total * 100) if resp_total else 0
-            normal_pct = round(normal_n / resp_total * 100) if resp_total else 0
-            slow_pct   = 100 - fast_pct - normal_pct if resp_total else 0
-            st.markdown(
-                f'<div class="stat-card">'
-                f'<div class="stat-label" style="margin-bottom:4px;">Response Time</div>'
-                f'<div class="stat-sub" style="margin-bottom:8px;">'
-                f'Median <strong>{format_duration(median_dur)}</strong> · '
-                f'P95 <strong>{format_duration(p95_dur)}</strong> · '
-                f'Max <strong>{format_duration(max_dur)}</strong></div>'
-                f'{_bar_html([(fast_pct, "#2d8a4e", "Fast ≤5s"), (normal_pct, "#b8860b", "Normal 5-15s"), (slow_pct, "#dc3545", "Slow >15s")])}'
-                f'<div class="stat-sub" style="margin-top:6px;">'
-                f'<span style="color:#2d8a4e;">≤5s {fast_pct}%</span> · '
-                f'<span style="color:#b8860b;">5-15s {normal_pct}%</span> · '
-                f'<span style="color:#dc3545;">>15s {slow_pct}%</span>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        with p2:
-            # Error rate + feature usage
-            err_ok_pct = 100 - round(error_rate)
-            err_pct_bar = round(error_rate)
-            normal_chat = total_msgs - pb_msgs - vis_msgs - doc_msgs
-            if normal_chat < 0:
-                normal_chat = 0
-            feat_total = max(total_msgs, 1)
-            chat_pct = round(normal_chat / feat_total * 100)
-            pb_pct   = round(pb_msgs / feat_total * 100)
-            doc_pct  = round(doc_msgs / feat_total * 100)
-            vis_pct  = round(vis_msgs / feat_total * 100)
-            # Ensure they sum to ~100
-            remainder = 100 - chat_pct - pb_pct - doc_pct - vis_pct
-            chat_pct += remainder
-
-            st.markdown(
-                f'<div class="stat-card">'
-                f'<div class="stat-label" style="margin-bottom:4px;">Reliability & Usage</div>'
-                f'<div class="stat-sub" style="margin-bottom:6px;">'
-                f'Error rate: <strong style="color:{"#dc3545" if error_rate > 5 else "#2d8a4e"}">'
-                f'{error_rate}%</strong> ({error_count} of {asst_msgs} responses)</div>'
-                f'{_bar_html([(err_ok_pct, "#2d8a4e", "Success"), (err_pct_bar, "#dc3545", "Errors")])}'
-                f'<div class="stat-sub" style="margin-top:10px;margin-bottom:6px;">Feature usage</div>'
-                f'{_bar_html([(chat_pct, "#6c757d", "Chat"), (pb_pct, "#4a90d9", "Page Builder"), (doc_pct, "#b8860b", "Docs"), (vis_pct, "#9c27b0", "Vision")])}'
-                f'<div class="stat-sub" style="margin-top:6px;">'
-                f'<span style="color:#6c757d;">Chat {chat_pct}%</span> · '
-                f'<span style="color:#4a90d9;">PB {pb_pct}%</span> · '
-                f'<span style="color:#b8860b;">Docs {doc_pct}%</span> · '
-                f'<span style="color:#9c27b0;">Vision {vis_pct}%</span>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        with p3:
-            # Intent score
-            if avg_intent is not None:
-                intent_val = int(avg_intent)
-                intent_color = (
-                    "#2d8a4e" if intent_val >= 70 else
-                    "#b8860b" if intent_val >= 40 else
-                    "#dc3545"
-                )
-                range_str = f"Range: {min_intent} – {max_intent}" if min_intent is not None else ""
+        cs = st.columns(6)
+        cards = [
+            ("Sessions",       format_number(int(stats.get("total_sessions", 0))),
+             f"First: {to_local(first_msg).strftime('%b %d') if first_msg else '—'}"),
+            ("Total Messages", format_number(int(stats.get("total_messages", 0))),
+             f"Last: {to_local(last_msg).strftime('%b %d') if last_msg else '—'}"),
+            ("User",           format_number(int(stats.get("user_messages", 0))),
+             "messages sent"),
+            ("Assistant",      format_number(int(stats.get("assistant_messages", 0))),
+             "responses given"),
+            ("Avg Response",   format_duration(avg_dur),
+             f"Max: {format_duration(max_dur)}"),
+            ("Total Tokens",   format_number(int(stats.get("total_tokens", 0))),
+             "estimated"),
+        ]
+        for col, (label, value, sub) in zip(cs, cards):
+            with col:
                 st.markdown(
                     f'<div class="stat-card">'
-                    f'<div class="stat-label" style="margin-bottom:4px;">Intent Relevance</div>'
-                    f'<div class="stat-value" style="color:{intent_color};font-size:1.8rem;">'
-                    f'{intent_val}/100</div>'
-                    f'<div class="stat-sub" style="margin-bottom:8px;">'
-                    f'{scored_n} scored · {range_str}</div>',
-                    unsafe_allow_html=True,
-                )
-                _render_intent_distribution(fkw)
-                st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(
-                    '<div class="stat-card">'
-                    '<div class="stat-label" style="margin-bottom:4px;">Intent Relevance</div>'
-                    '<div class="stat-value" style="color:var(--text-muted);font-size:1.8rem;">—</div>'
-                    '<div class="stat-sub">No scored prompts yet</div>'
-                    '</div>',
+                    f'<div class="stat-value">{value}</div>'
+                    f'<div class="stat-label">{label}</div>'
+                    f'<div class="stat-sub">{sub}</div>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 
     # ==========================================================
-    # CHARTS — filtered (fragment for independent re-rendering)
+    # CHARTS — filtered
     # ==========================================================
-    @st.fragment
-    def _admin_charts():
-        ts_rows = db_fetch_timeseries(**fkw)
-        if not ts_rows:
-            return
+    ts_rows = db_fetch_timeseries(**fkw)
+    if ts_rows:
         try:
             import pandas as pd
             df = pd.DataFrame(ts_rows)
@@ -4063,6 +3489,7 @@ def render_admin():
             )
 
             ch1, ch2 = st.columns(2)
+
             with ch1:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Messages per Day</div>', unsafe_allow_html=True)
@@ -4071,47 +3498,49 @@ def render_admin():
                 )
                 st.bar_chart(chart_df, color=["#4a90d9", "#2d8a4e"], height=200)
                 st.markdown('</div>', unsafe_allow_html=True)
+
             with ch2:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Avg Response Time (s)</div>', unsafe_allow_html=True)
                 st.line_chart(
                     df.set_index("day")[["avg_duration"]].rename(columns={"avg_duration": "Avg (s)"}),
-                    color=["#4a90d9"], height=200,
+                    color=["#4a90d9"],
+                    height=200,
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
 
             ch3, ch4 = st.columns(2)
+
             with ch3:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Sessions per Day</div>', unsafe_allow_html=True)
                 st.bar_chart(
                     df.set_index("day")[["sessions"]].rename(columns={"sessions": "Sessions"}),
-                    color=["#4a90d9"], height=180,
+                    color=["#4a90d9"],
+                    height=180,
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
+
             with ch4:
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
                 st.markdown('<div class="chart-card-title">Tokens per Day (estimated)</div>', unsafe_allow_html=True)
                 st.area_chart(
                     df.set_index("day")[["tokens"]].rename(columns={"tokens": "Tokens"}),
-                    color=["#4a90d9"], height=180,
+                    color=["#4a90d9"],
+                    height=180,
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
+
         except Exception:
             pass
 
-    _admin_charts()
-
     # ==========================================================
-    # USER ACTIVITY & TOPICS — filtered (fragment)
+    # USER ACTIVITY & TOPICS — filtered
     # ==========================================================
-    @st.fragment
-    def _admin_activity_topics():
-        user_rows = db_fetch_user_activity(**fkw)
-        session_topics = db_fetch_session_topics(**fkw)
+    user_rows = db_fetch_user_activity(**fkw)
+    session_topics = db_fetch_session_topics(**fkw)
 
-        if not user_rows and not session_topics:
-            return
+    if user_rows or session_topics:
         try:
             import pandas as pd
 
@@ -4120,30 +3549,45 @@ def render_admin():
                     '<div class="chart-section-divider"><span>User Activity</span></div>',
                     unsafe_allow_html=True,
                 )
+
                 ua1, ua2 = st.columns(2)
+
                 with ua1:
                     st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="chart-card-title">Messages by User</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="chart-card-title">Messages by User</div>',
+                        unsafe_allow_html=True,
+                    )
                     udf = pd.DataFrame(user_rows)
                     chart_udf = udf.set_index("username")[["user_msgs", "assistant_msgs"]].rename(
                         columns={"user_msgs": "Sent", "assistant_msgs": "Received"}
                     )
                     st.bar_chart(chart_udf, color=["#4a90d9", "#2d8a4e"], horizontal=True, height=max(160, len(udf) * 38))
                     st.markdown('</div>', unsafe_allow_html=True)
+
                 with ua2:
                     st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="chart-card-title">Tokens by User</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="chart-card-title">Tokens by User</div>',
+                        unsafe_allow_html=True,
+                    )
                     st.bar_chart(
                         udf.set_index("username")[["tokens"]].rename(columns={"tokens": "Tokens"}),
-                        color=["#4a90d9"], horizontal=True, height=max(160, len(udf) * 38),
+                        color=["#4a90d9"],
+                        horizontal=True,
+                        height=max(160, len(udf) * 38),
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 # User detail table
                 st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                st.markdown('<div class="chart-card-title">User Details</div>', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="chart-card-title">User Details</div>',
+                    unsafe_allow_html=True,
+                )
                 table_data = []
                 for u in user_rows:
+                    last_ts = u["last_active"]
                     table_data.append({
                         "User": u["username"],
                         "Sessions": int(u["sessions"]),
@@ -4152,30 +3596,45 @@ def render_admin():
                         "Received": int(u["assistant_msgs"]),
                         "Tokens": format_number(int(u["tokens"])),
                         "First Active": to_local(u["first_active"]).strftime("%Y-%m-%d %H:%M") if u["first_active"] else "—",
-                        "Last Active": to_local(u["last_active"]).strftime("%Y-%m-%d %H:%M") if u["last_active"] else "—",
+                        "Last Active": to_local(last_ts).strftime("%Y-%m-%d %H:%M") if last_ts else "—",
                     })
-                st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    pd.DataFrame(table_data),
+                    use_container_width=True,
+                    hide_index=True,
+                )
                 st.markdown('</div>', unsafe_allow_html=True)
 
+            # Topic analysis
             if session_topics:
                 st.markdown(
                     '<div class="chart-section-divider"><span>Topics &amp; Keywords</span></div>',
                     unsafe_allow_html=True,
                 )
+
                 tp1, tp2 = st.columns(2)
+
                 with tp1:
                     keywords = _extract_topic_keywords(session_topics, top_n=15)
                     if keywords:
                         st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                        st.markdown('<div class="chart-card-title">Top Keywords (from user prompts)</div>', unsafe_allow_html=True)
+                        st.markdown(
+                            '<div class="chart-card-title">Top Keywords (from user prompts)</div>',
+                            unsafe_allow_html=True,
+                        )
+                        # Sort by count descending so the chart renders highest first
                         kw_df = pd.DataFrame(keywords, columns=["Keyword", "Count"])
-                        kw_df = kw_df.sort_values("Count", ascending=True)
+                        kw_df = kw_df.sort_values("Count", ascending=True)  # ascending for horizontal bar (top = highest)
                         kw_df = kw_df.set_index("Keyword")
                         st.bar_chart(kw_df, color=["#4a90d9"], horizontal=True, height=max(180, len(keywords) * 28))
                         st.markdown('</div>', unsafe_allow_html=True)
+
                 with tp2:
                     st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="chart-card-title">Session Openers (first question per session)</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="chart-card-title">Session Openers (first question per session)</div>',
+                        unsafe_allow_html=True,
+                    )
                     for t in sorted(session_topics, key=lambda x: x["timestamp_utc"] or datetime.min, reverse=True)[:15]:
                         preview = t["content"][:120].replace("\n", " ").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                         if len(t["content"]) > 120:
@@ -4195,130 +3654,21 @@ def render_admin():
         except Exception:
             pass
 
-    _admin_activity_topics()
-
     # ==========================================================
-    # INTENT ANALYSIS — admin tool for scoring unanalyzed prompts
+    # MESSAGE HISTORY — filtered
     # ==========================================================
-    @st.fragment
-    def _admin_intent_analysis():
-        unscored = db_fetch_unscored_messages(limit=500)
-        n_unscored = len(unscored)
-
-        # Group by session for display
-        unscored_sessions: dict[str, list[dict]] = {}
-        for row in unscored:
-            unscored_sessions.setdefault(row["session_id"], []).append(row)
-        n_sessions = len(unscored_sessions)
-
-        st.markdown(
-            '<div class="chart-section-divider"><span>Intent Analysis</span></div>',
-            unsafe_allow_html=True,
-        )
-
-        if n_unscored == 0:
-            st.markdown(
-                '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:0.85rem;">'
-                'All user prompts have been scored. No pending analysis.'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            return
-
-        st.markdown(
-            f'<div class="stat-meta-row">'
-            f'<span><strong>{n_unscored}</strong> unscored prompts</span>'
-            f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Role context for scoring — admin can override
-        default_title = st.session_state.get("title", "")
-        default_teams = ", ".join(st.session_state.get("teams", []))
-        role_ctx = st.text_input(
-            "Role context for scoring (job title, teams — applies to all prompts in this batch)",
-            value=f"{default_title}{' · ' + default_teams if default_teams else ''}",
-            key="intent_role_ctx",
-        )
-
-        # Preview unscored sessions
-        with st.expander(f"Preview unscored sessions ({n_sessions})", expanded=False):
-            for sid, msgs in list(unscored_sessions.items())[:20]:
-                uname = msgs[0].get("username") or "—"
-                n = len(msgs)
-                preview = msgs[0]["content"][:120].replace("\n", " ")
-                st.markdown(
-                    f"**{uname}** · `{sid[:14]}…` · {n} msg{'s' if n != 1 else ''}\n\n"
-                    f"> {preview}{'…' if len(msgs[0]['content']) > 120 else ''}",
-                )
-
-        # Action buttons
-        col_a, col_b = st.columns(2)
-        with col_a:
-            run_all = st.button(
-                f"Analyze all {n_unscored} prompts",
-                type="primary",
-                use_container_width=True,
-                key="intent_run_all",
-            )
-        with col_b:
-            run_session_filter = f_session  # from the admin filters above
-            run_filtered = st.button(
-                f"Analyze filtered session only",
-                disabled=not f_session,
-                use_container_width=True,
-                key="intent_run_filtered",
-            )
-
-        msgs_to_score = []
-        if run_all:
-            msgs_to_score = unscored
-        elif run_filtered and f_session:
-            msgs_to_score = [m for m in unscored if m["session_id"] == f_session]
-
-        if msgs_to_score:
-            # Parse role context
-            parts = [p.strip() for p in role_ctx.split("·") if p.strip()]
-            ctx_title = parts[0] if parts else ""
-            ctx_teams = [t.strip() for t in parts[1].split(",") if t.strip()] if len(parts) > 1 else []
-
-            progress = st.progress(0, text="Scoring prompts...")
-            scored = 0
-            failed = 0
-            for idx, msg in enumerate(msgs_to_score):
-                score = _score_intent(
-                    msg["content"],
-                    title=ctx_title,
-                    teams=ctx_teams,
-                    roles=[],
-                )
-                if score is not None:
-                    db_set_intent_score(msg["id"], score)
-                    scored += 1
-                else:
-                    failed += 1
-                progress.progress(
-                    (idx + 1) / len(msgs_to_score),
-                    text=f"Scored {scored}/{idx + 1} prompts...",
-                )
-            progress.empty()
-            if failed:
-                st.warning(f"Scored **{scored}** prompts. **{failed}** could not be scored (no role context or LLM error).")
-            else:
-                st.success(f"Scored **{scored}** prompts successfully.")
-            st.rerun()
-
-    _admin_intent_analysis()
-
-    # ==========================================================
-    # MESSAGE HISTORY — only when filters are applied
-    # ==========================================================
-    has_filter = bool(f_session or f_username or (sel_date_range and sel_date_range != "All Time"))
-
     st.markdown(
         '<div class="chart-section-divider"><span>Message History</span></div>',
         unsafe_allow_html=True,
+    )
+
+    rows = db_fetch_history(
+        limit=500,
+        session_filter=f_session,
+        username_filter=f_username,
+        role_filter=sel_role,
+        date_from=f_date_from,
+        date_to=f_date_to,
     )
 
     # -- Danger zone (admin only, behind flag) --
@@ -4339,244 +3689,119 @@ def render_admin():
                 else:
                     st.error("Failed to delete history. Check DB connection.")
 
-    if not has_filter:
+    # -- Result count --
+    if not rows:
         st.markdown(
             '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:0.85rem;">'
-            'Select a session, user, or time period above to view message history.'
+            'No messages match the selected filters.'
             '</div>',
             unsafe_allow_html=True,
         )
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    @st.fragment
-    def _admin_message_history():
-        rows = db_fetch_history(
-            limit=500,
-            session_filter=f_session,
-            username_filter=f_username,
-            role_filter=sel_role,
-            date_from=f_date_from,
-            date_to=f_date_to,
-        )
+    n_sessions = len({r["session_id"] for r in rows})
+    st.markdown(
+        f'<div class="stat-meta-row">'
+        f'<span><strong>{len(rows)}</strong> messages</span>'
+        f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-        if not rows:
-            st.markdown(
-                '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:0.85rem;">'
-                'No messages match the selected filters.'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            return
+    # -- Tabs --
+    tab_sessions, tab_flat = st.tabs(["By Session", "Flat Log"])
 
-        n_sessions = len({r["session_id"] for r in rows})
-        st.markdown(
-            f'<div class="stat-meta-row">'
-            f'<span><strong>{len(rows)}</strong> messages</span>'
-            f'<span><strong>{n_sessions}</strong> session{"s" if n_sessions != 1 else ""}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    # ---- By Session tab ----
+    with tab_sessions:
+        grouped: dict[str, list[dict]] = {}
+        for r in rows:
+            grouped.setdefault(r["session_id"], []).append(r)
 
-        tab_sessions, tab_flat = st.tabs(["By Session", "Flat Log"])
+        for sid, msgs in grouped.items():
+            n_msgs    = len(msgs)
+            first_ts  = msgs[-1]["timestamp_utc"]
+            last_ts   = msgs[0]["timestamp_utc"]
+            total_tok = sum(m["tokens_est"] or 0 for m in msgs)
+            uname     = msgs[0].get("username") or "—"
+            docs_list = msgs[0].get("documents") or []
 
-        # ---- By Session tab ----
-        with tab_sessions:
-            grouped: dict[str, list[dict]] = {}
-            for r in rows:
-                grouped.setdefault(r["session_id"], []).append(r)
+            date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
+            time_range = ""
+            if first_ts and last_ts:
+                time_range = f"{to_local(first_ts).strftime('%H:%M')} – {to_local(last_ts).strftime('%H:%M')}"
 
-            for sid, msgs in grouped.items():
-                n_msgs    = len(msgs)
-                first_ts  = msgs[-1]["timestamp_utc"]
-                last_ts   = msgs[0]["timestamp_utc"]
-                total_tok = sum(m["tokens_est"] or 0 for m in msgs)
-                uname     = msgs[0].get("username") or "—"
-                docs_list = msgs[0].get("documents") or []
-
-                # Detect mode, attachments, and errors from messages
-                session_mode = "normal"
-                session_has_images = False
-                session_has_docs = bool(docs_list)
-                session_has_error = False
-                intent_scores = []
-                for m in msgs:
-                    m_mode = m.get("chat_mode") or "normal"
-                    if m_mode != "normal":
-                        session_mode = m_mode
-                    if m.get("has_images"):
-                        session_has_images = True
-                    if m.get("documents") and len(m["documents"]) > 0:
-                        session_has_docs = True
-                    if m.get("has_error"):
-                        session_has_error = True
-                    if m.get("intent_score") is not None:
-                        intent_scores.append(m["intent_score"])
-                session_avg_intent = round(sum(intent_scores) / len(intent_scores)) if intent_scores else None
-
-                date_str = to_local(first_ts).strftime("%Y-%m-%d") if first_ts else "—"
-                time_range = ""
-                if first_ts and last_ts:
-                    time_range = f"{to_local(first_ts).strftime('%H:%M')} – {to_local(last_ts).strftime('%H:%M')}"
-
-                # Build label with mode/attachment indicators
-                mode_tag = ""
-                if session_mode == "page_builder":
-                    mode_tag = " [Page Builder]"
-                elif session_mode == "agent":
-                    mode_tag = " [Agent]"
-                attach_tags = ""
-                if session_has_docs:
-                    attach_tags += " Docs"
-                if session_has_images:
-                    attach_tags += " Images"
-                error_tag = " ⚠ ERROR" if session_has_error else ""
-                intent_tag = f" [{session_avg_intent}/100]" if session_avg_intent is not None else ""
-
-                label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} msgs  ·  {date_str}{mode_tag}{attach_tags}{error_tag}{intent_tag}"
-                with st.expander(label, expanded=False):
-                    # Session metadata header
-                    meta_parts = [
-                        f'<span><strong>User:</strong> {uname}</span>',
-                        f'<span><strong>Session:</strong> <span class="session-card-id">{sid}</span></span>',
-                    ]
-                    if time_range:
-                        meta_parts.append(f'<span><strong>Time:</strong> {time_range}</span>')
-                    meta_parts.append(f'<span><strong>Tokens:</strong> ~{format_number(total_tok)}</span>')
-                    # Mode badge
-                    if session_mode == "page_builder":
-                        meta_parts.append('<span class="mode-pill mode-code">Page Builder</span>')
-                    elif session_mode == "agent":
-                        meta_parts.append('<span class="mode-pill mode-code" style="background:rgba(156,39,176,0.1);color:#9c27b0;border-color:rgba(156,39,176,0.25);">Agent</span>')
-                    # Attachment indicators
-                    if session_has_docs:
-                        doc_names = ", ".join(docs_list[:3]) if docs_list else ""
-                        if len(docs_list) > 3:
-                            doc_names += f" +{len(docs_list) - 3}"
-                        meta_parts.append(f'<span><strong>Docs:</strong> {doc_names}</span>')
-                    if session_has_images:
-                        meta_parts.append('<span><strong>Images:</strong> Yes</span>')
-                    if session_has_error:
-                        meta_parts.append('<span class="mode-pill mode-error">Error</span>')
-                    if session_avg_intent is not None:
-                        _ic = (
-                            "#2d8a4e" if session_avg_intent >= 70 else
-                            "#b8860b" if session_avg_intent >= 40 else
-                            "#dc3545"
-                        )
-                        _ibg = (
-                            "rgba(45,138,78,0.1)" if session_avg_intent >= 70 else
-                            "rgba(184,134,11,0.1)" if session_avg_intent >= 40 else
-                            "rgba(220,53,69,0.1)"
-                        )
-                        _ibr = (
-                            "rgba(45,138,78,0.25)" if session_avg_intent >= 70 else
-                            "rgba(184,134,11,0.25)" if session_avg_intent >= 40 else
-                            "rgba(220,53,69,0.25)"
-                        )
-                        meta_parts.append(
-                            f'<span class="mode-pill" style="background:{_ibg};color:{_ic};border:1px solid {_ibr};">'
-                            f'Intent: {session_avg_intent}/100</span>'
-                        )
-                    st.markdown(
-                        f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
-                        f'{"".join(meta_parts)}'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    # Chat replay
-                    for m in reversed(msgs):
-                        ts_str  = to_local(m["timestamp_utc"]).strftime("%H:%M:%S") if m["timestamp_utc"] else ""
-                        dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
-                        tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-                        with st.chat_message(m["role"]):
-                            st.markdown(m["content"])
-                            meta_items = [p for p in [ts_str, dur_str, tok_str] if p]
-                            m_score = m.get("intent_score")
-                            if m_score is not None:
-                                sc = (
-                                    "#2d8a4e" if m_score >= 70 else
-                                    "#b8860b" if m_score >= 40 else
-                                    "#dc3545"
-                                )
-                                meta_items.append(
-                                    f'<span style="color:{sc};font-weight:600;">'
-                                    f'Intent: {m_score}/100</span>'
-                                )
-                            if meta_items:
-                                st.markdown(
-                                    f'<div class="msg-meta">'
-                                    f'{"".join(f"<span>{p}</span>" if not p.startswith("<span") else p for p in meta_items)}'
-                                    f'</div>',
-                                    unsafe_allow_html=True,
-                                )
-
-        # ---- Flat Log tab ----
-        with tab_flat:
-            for m in rows:
-                role      = m["role"]
-                role_cls  = "role-user" if role == "user" else "role-assistant"
-                role_label = "User" if role == "user" else "Assistant"
-                ts_str    = to_local(m["timestamp_utc"]).strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
-                dur_str   = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
-                tok_str   = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
-                uname     = m.get("username") or "—"
-                preview   = m["content"][:280].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
-                if len(m["content"]) > 280:
-                    preview += " …"
-
-                # Mode and attachment tags
-                m_mode = m.get("chat_mode") or "normal"
-                mode_badge = ""
-                if m_mode == "page_builder":
-                    mode_badge = '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(74,144,217,0.1);color:var(--accent);border:1px solid rgba(74,144,217,0.2);margin-left:6px;">PB</span>'
-                elif m_mode == "agent":
-                    mode_badge = '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(156,39,176,0.1);color:#9c27b0;border:1px solid rgba(156,39,176,0.2);margin-left:6px;">Agent</span>'
-                if m.get("has_images"):
-                    mode_badge += '<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;background:rgba(184,134,11,0.08);color:var(--warning);border:1px solid rgba(184,134,11,0.15);margin-left:4px;">Img</span>'
-                if m.get("has_error"):
-                    mode_badge += '<span class="error-badge" style="margin-left:4px;">Error</span>'
-                flat_intent = m.get("intent_score")
-                if flat_intent is not None:
-                    _fic = (
-                        "#2d8a4e" if flat_intent >= 70 else
-                        "#b8860b" if flat_intent >= 40 else
-                        "#dc3545"
-                    )
-                    _fibg = (
-                        "rgba(45,138,78,0.1)" if flat_intent >= 70 else
-                        "rgba(184,134,11,0.1)" if flat_intent >= 40 else
-                        "rgba(220,53,69,0.1)"
-                    )
-                    mode_badge += (
-                        f'<span style="font-size:0.65rem;padding:1px 6px;border-radius:10px;'
-                        f'background:{_fibg};color:{_fic};border:1px solid {_fic}22;'
-                        f'margin-left:4px;font-weight:600;">{flat_intent}/100</span>'
-                    )
-
-                row_error_cls = " has-error" if m.get("has_error") else ""
-                meta_spans = "".join(
-                    f"<span>{p}</span>" for p in [ts_str, dur_str, tok_str] if p
-                )
+            label = f"{uname}  ·  {sid[:14]}…  ·  {n_msgs} messages  ·  {date_str}"
+            with st.expander(label, expanded=False):
+                # Session metadata header
+                meta_parts = [
+                    f'<span><strong>User:</strong> {uname}</span>',
+                    f'<span><strong>Session:</strong> <span class="session-card-id">{sid}</span></span>',
+                ]
+                if time_range:
+                    meta_parts.append(f'<span><strong>Time:</strong> {time_range}</span>')
+                meta_parts.append(f'<span><strong>Tokens:</strong> ~{format_number(total_tok)}</span>')
+                if docs_list:
+                    doc_names = ", ".join(docs_list[:3])
+                    if len(docs_list) > 3:
+                        doc_names += f" +{len(docs_list) - 3} more"
+                    meta_parts.append(f'<span><strong>Docs:</strong> {doc_names}</span>')
                 st.markdown(
-                    f'<div class="history-row {role_cls}{row_error_cls}">'
-                    f'<div class="history-row-header">'
-                    f'<div style="display:flex;align-items:center;gap:8px;">'
-                    f'<span class="history-role-badge {role_cls}">{role_label}</span>'
-                    f'<span style="font-size:0.78rem;font-weight:600;color:var(--text-primary);">{uname}{mode_badge}</span>'
-                    f'</div>'
-                    f'<div class="history-row-ident">'
-                    f'<span class="session-card-id">{m["session_id"][:16]}</span>'
-                    f'</div>'
-                    f'</div>'
-                    f'<div class="history-content">{preview}</div>'
-                    f'<div class="history-row-meta">{meta_spans}</div>'
+                    f'<div class="stat-meta-row" style="margin-bottom:0.75rem;">'
+                    f'{"".join(meta_parts)}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-    _admin_message_history()
+                # Chat replay
+                for m in reversed(msgs):
+                    ts_str  = to_local(m["timestamp_utc"]).strftime("%H:%M:%S") if m["timestamp_utc"] else ""
+                    dur_str = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
+                    tok_str = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
+                    with st.chat_message(m["role"]):
+                        st.markdown(m["content"])
+                        meta_items = [p for p in [ts_str, dur_str, tok_str] if p]
+                        if meta_items:
+                            st.markdown(
+                                f'<div class="msg-meta">'
+                                f'{"".join(f"<span>{p}</span>" for p in meta_items)}'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+    # ---- Flat Log tab ----
+    with tab_flat:
+        for m in rows:
+            role      = m["role"]
+            role_cls  = "role-user" if role == "user" else "role-assistant"
+            role_label = "User" if role == "user" else "Assistant"
+            ts_str    = to_local(m["timestamp_utc"]).strftime("%Y-%m-%d %H:%M:%S") if m["timestamp_utc"] else ""
+            dur_str   = format_duration(float(m["duration_s"])) if m["duration_s"] else ""
+            tok_str   = f"~{format_number(m['tokens_est'])} tok" if m["tokens_est"] else ""
+            uname     = m.get("username") or "—"
+            preview   = m["content"][:280].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
+            if len(m["content"]) > 280:
+                preview += " …"
+
+            meta_spans = "".join(
+                f"<span>{p}</span>" for p in [ts_str, dur_str, tok_str] if p
+            )
+            st.markdown(
+                f'<div class="history-row {role_cls}">'
+                f'<div class="history-row-header">'
+                f'<div style="display:flex;align-items:center;gap:8px;">'
+                f'<span class="history-role-badge {role_cls}">{role_label}</span>'
+                f'<span style="font-size:0.78rem;font-weight:600;color:var(--text-primary);">{uname}</span>'
+                f'</div>'
+                f'<div class="history-row-ident">'
+                f'<span class="session-card-id">{m["session_id"][:16]}</span>'
+                f'</div>'
+                f'</div>'
+                f'<div class="history-content">{preview}</div>'
+                f'<div class="history-row-meta">{meta_spans}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -4587,9 +3812,11 @@ def render_admin():
 def main():
     is_admin = "admin" in st.session_state.get("user_roles", {})
 
-    # Code mode is admin-only — force off for non-admins
+    # Code mode and agent mode are admin-only — force off for non-admins
     if not is_admin and st.session_state.get("code_mode"):
         st.session_state.code_mode = False
+    if not is_admin and st.session_state.get("agent_mode"):
+        st.session_state.agent_mode = False
 
     if not st.session_state.chat_active:
         render_lobby()

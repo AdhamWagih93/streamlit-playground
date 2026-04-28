@@ -29,6 +29,7 @@ def get_page_catalog() -> List[PageSpec]:
         PageSpec("pages/8_Docker_MCP_Test.py", "Docker MCP Test", "🐳", "AI Playground"),
         PageSpec("pages/9_Nexus_Explorer.py", "Nexus Explorer", "📦", "AI Playground"),
         PageSpec("pages/11_Database.py", "Database", "🗄️", "Admin"),
+        PageSpec("pages/12_Log_Explorer.py", "Log Explorer", "📜", "DevOps"),
     ]
 
 
