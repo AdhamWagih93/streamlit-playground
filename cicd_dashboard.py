@@ -5869,7 +5869,16 @@ _LOOSE_VER_SENTINEL = object()
 
 class _LooseVerDict(dict):
     """Dict keyed by ``(app, version)`` tuples that tolerates whitespace
-    and case drift in either component on both write and read."""
+    and case drift in either component on both write and read.
+
+    NOTE: instances of this subclass cannot be returned from a function
+    decorated with ``@st.cache_data`` — Streamlit's cache rejects custom
+    classes defined in ``__main__`` because pickle can't reliably re-import
+    them. The pattern in this file is therefore: cached fetchers return
+    plain ``dict`` objects (which DO pickle), and a thin uncached wrapper
+    around each fetcher hands the result to ``_LooseVerDict(...)`` so
+    consumers still see a tolerant view.
+    """
 
     @staticmethod
     def _norm_key(key):
@@ -5880,6 +5889,28 @@ class _LooseVerDict(dict):
             a.strip().lower() if isinstance(a, str) else a,
             v.strip().lower() if isinstance(v, str) else v,
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        # Re-route bulk init through our overridden __setitem__ so the
+        # normalised-variant keys actually get inserted. ``dict.__init__``
+        # bypasses Python-level __setitem__, which would otherwise leave us
+        # with literal-only keys when wrapping a plain dict.
+        if len(args) == 1:
+            src = args[0]
+            if hasattr(src, "items"):
+                for _k, _v in src.items():
+                    self[_k] = _v
+            else:
+                for _k, _v in src:
+                    self[_k] = _v
+        elif args:
+            raise TypeError(
+                f"_LooseVerDict expected at most 1 positional argument, "
+                f"got {len(args)}"
+            )
+        for _k, _v in kwargs.items():
+            self[_k] = _v
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
@@ -5913,12 +5944,17 @@ class _LooseVerDict(dict):
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
-    """Fetch the most-recent prismacloud scan for each ``(app, version)`` pair.
+def _fetch_prismacloud_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Cached, plain-``dict`` body of :func:`_fetch_prismacloud`.
 
     Returns ``{(app, version): {Vcritical, Vhigh, Vmedium, Vlow, Ccritical,
     Chigh, Cmedium, Clow, status, when, imageName, imageTag}}``. Pairs with no
     matching scan are omitted — the caller treats that as "no prisma data".
+
+    Returns a *plain* ``dict`` so Streamlit's ``cache_data`` (which pickles
+    return values) doesn't choke on a custom subclass. The public
+    :func:`_fetch_prismacloud` wraps this in :class:`_LooseVerDict` for
+    whitespace/case tolerance on consumer lookups.
     """
     if not app_versions:
         return {}
@@ -5973,7 +6009,7 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
     wanted_norm = {
         _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
     }
-    out: _LooseVerDict = _LooseVerDict()
+    out: dict[tuple[str, str], dict] = {}
     for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _ab.get("key")
         for _vb in _ab.get("by_ver", {}).get("buckets", []):
@@ -6006,13 +6042,21 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
     return out
 
 
+def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDict:
+    """Whitespace/case-tolerant wrapper around the cached raw fetcher."""
+    return _LooseVerDict(_fetch_prismacloud_raw(app_versions))
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
-    """Latest Invicti DAST scan per ``(app, version)`` pair.
+def _fetch_invicti_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Cached, plain-``dict`` body of :func:`_fetch_invicti`.
 
     Returns ``{(app, version): {Vcritical, Vhigh, Vmedium, Vlow, BestPractice,
     Informational, status, environment, url, when}}``. Pairs with no scan are
     omitted — callers treat that as "never DAST-scanned by Invicti".
+
+    Returns a plain ``dict`` for ``st.cache_data`` compatibility; the public
+    :func:`_fetch_invicti` wraps it in :class:`_LooseVerDict`.
     """
     if not app_versions:
         return {}
@@ -6057,7 +6101,7 @@ def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str,
     wanted_norm = {
         _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
     }
-    out: _LooseVerDict = _LooseVerDict()
+    out: dict[tuple[str, str], dict] = {}
     for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _ab.get("key")
         for _vb in _ab.get("by_ver", {}).get("buckets", []):
@@ -6084,13 +6128,21 @@ def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str,
     return out
 
 
+def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDict:
+    """Whitespace/case-tolerant wrapper around the cached raw fetcher."""
+    return _LooseVerDict(_fetch_invicti_raw(app_versions))
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
-    """Latest OWASP-ZAP DAST scan per ``(app, version)`` pair.
+def _fetch_zap_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Cached, plain-``dict`` body of :func:`_fetch_zap`.
 
     ZAP doesn't surface a critical bucket — only ``Vhigh`` / ``Vmedium`` /
     ``Vlow`` plus ``Informational`` and ``FalsePositives`` (both keyword in
     the index, but cast to int defensively for counting).
+
+    Returns a plain ``dict`` for ``st.cache_data`` compatibility; the public
+    :func:`_fetch_zap` wraps it in :class:`_LooseVerDict`.
     """
     if not app_versions:
         return {}
@@ -6142,7 +6194,7 @@ def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str
     wanted_norm = {
         _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
     }
-    out: _LooseVerDict = _LooseVerDict()
+    out: dict[tuple[str, str], dict] = {}
     for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _ab.get("key")
         for _vb in _ab.get("by_ver", {}).get("buckets", []):
@@ -6169,6 +6221,11 @@ def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str
                 "when":           _s.get("enddate") or _s.get("startdate") or "",
             }
     return out
+
+
+def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDict:
+    """Whitespace/case-tolerant wrapper around the cached raw fetcher."""
+    return _LooseVerDict(_fetch_zap_raw(app_versions))
 
 
 # Stage ordering drives the inventory columns and the "previous stage" chain
@@ -6348,13 +6405,16 @@ def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_version_meta(app_versions: tuple[tuple[str, str], ...]
-                        ) -> dict[tuple[str, str], dict]:
-    """For each ``(app, version)`` pair, return build-date, release-date, RLM.
+def _fetch_version_meta_raw(app_versions: tuple[tuple[str, str], ...]
+                            ) -> dict[tuple[str, str], dict]:
+    """Cached, plain-``dict`` body of :func:`_fetch_version_meta`.
 
     Returns ``{(app, ver): {"build_when": str, "release_when": str,
     "rlm": str, "rlm_status": str}}`` — missing lookups are simply absent
     (callers treat that as "no record").
+
+    Returns a plain ``dict`` for ``st.cache_data`` compatibility; the public
+    :func:`_fetch_version_meta` wraps it in :class:`_LooseVerDict`.
     """
     if not app_versions:
         return {}
@@ -6364,7 +6424,7 @@ def _fetch_version_meta(app_versions: tuple[tuple[str, str], ...]
     wanted_norm = {
         _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
     }
-    out: _LooseVerDict = _LooseVerDict()
+    out: dict[tuple[str, str], dict] = {}
 
     def _set(key: tuple[str, str], field: str, val: str) -> None:
         # Membership test on normalised form so a whitespace/case drift in
@@ -6471,6 +6531,11 @@ def _fetch_version_meta(app_versions: tuple[tuple[str, str], ...]
         pass
 
     return out
+
+
+def _fetch_version_meta(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDict:
+    """Whitespace/case-tolerant wrapper around the cached raw fetcher."""
+    return _LooseVerDict(_fetch_version_meta_raw(app_versions))
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
