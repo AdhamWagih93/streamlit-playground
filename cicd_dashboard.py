@@ -1509,6 +1509,30 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border-color: var(--cc-accent);
     transform: translateY(-1px);
 }
+/* Containerised app (OCP / K8s) is missing Prismacloud scan data for this
+   version — an actual gap. Switches the chip to an amber warning palette
+   so it stands apart from the regular violet chips, without being as loud
+   as a critical-severity treatment. */
+.iv-stage-ver.is-no-scan {
+    background: rgba(245, 158, 11, .12);
+    color: #b45309;
+    border-color: rgba(245, 158, 11, .42);
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, .18);
+}
+.iv-stage-ver.is-no-scan:hover {
+    background: #f59e0b;
+    color: #fff;
+    border-color: #f59e0b;
+}
+.iv-stage-noscan {
+    font-size: 0.74rem;
+    line-height: 1;
+    color: #b45309;
+    flex-shrink: 0;
+}
+.iv-stage-ver.is-no-scan:hover .iv-stage-noscan {
+    color: #fff;
+}
 .iv-stage-dot {
     display: inline-block;
     width: 7px; height: 7px;
@@ -6496,9 +6520,11 @@ def _fetch_devops_projects(apps_json: str) -> dict[str, dict]:
     ``match_phrase`` clauses in a ``should`` (OR) bool — works for the
     typical 50-300 in-scope apps without fanning out.
 
-    Returns ``{App: {raw _source}}``. Callers pluck per-stage URLs
-    (``qcRouteUrl``, ``qcServiceUrl``, ``devRouteUrl``, ``devServiceUrl``),
-    Remedy product fields (``RemedyProductName``,
+    Returns ``{App: {raw _source}}``. Callers pluck QC URLs
+    (``qcRouteUrl`` / ``qcServiceUrl``) — the dev URLs are NOT carried by
+    this index and are derived at render time by swapping ``qc`` → ``dev``
+    in the QC URL string. Also exposes Remedy product fields
+    (``RemedyProductName``,
     ``RemedyProductTier1`` … ``Tier3``), and recommended-vs-current
     image versions (``BuildCurrentVer`` / ``BuildRecommendationVer``,
     ``DeployCurrentVer`` / ``DeployRecommendationVer``) from the
@@ -6526,8 +6552,6 @@ def _fetch_devops_projects(apps_json: str) -> dict[str, dict]:
                     "DockerfileName", "NFSUsage",
                     "qcRouteUrl", "qcServiceUrl",
                     "qcRouteConsumers", "qcServiceConsumers",
-                    "devRouteUrl", "devServiceUrl",
-                    "devRouteConsumers", "devServiceConsumers",
                     "RemedyProductName",
                     "RemedyProductTier1", "RemedyProductTier2", "RemedyProductTier3",
                     "DevTeam", "QcTeam", "PrdTeam",
@@ -9576,6 +9600,27 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             },
         )
 
+    # OCP / K8s apps are containerised and so MUST have a Prismacloud image
+    # scan for every shipped version. Other platforms (VM, serverless, etc.)
+    # aren't covered by Prismacloud, so missing scans there are expected and
+    # not flagged. Match is case-insensitive and tolerant of "Kubernetes",
+    # "OpenShift", and the short "K8s" / "OCP" forms.
+    _IV_CONTAINER_PLATFORMS = {"ocp", "openshift", "k8s", "kubernetes"}
+
+    def _iv_container_platform(app: str) -> str:
+        """Return a normalised container-platform label (``"OCP"`` / ``"K8s"``)
+        for an app, or ``""`` when the app doesn't run on a Prismacloud-covered
+        platform. Used to decide whether a missing image scan is a gap or
+        simply out-of-scope."""
+        _p = ((_iv_devproj_map.get(app) or {}).get("DeployPlatform") or "").strip().lower()
+        if not _p:
+            return ""
+        if _p in ("ocp", "openshift"):
+            return "OCP"
+        if _p in ("k8s", "kubernetes"):
+            return "K8s"
+        return ""
+
     # ── Team extraction helper (inventory rows may carry multiple *_team fields) ─
     # For admins we surface every *_team field so the Teams tile reflects the
     # full ownership graph. For scoped roles we restrict the "teams" of a row
@@ -9591,8 +9636,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _f.replace(".keyword", "") for _f in _user_team_fields
         ]
 
-    def _iv_row_teams(_r: dict) -> set[str]:
+    # `_iv_row_teams` runs in HOT loops — once per row × 8 leave-one-out
+    # aggregations + the post-filter aggregate + the table renderer's haystack
+    # walk. For a 2k-row fleet that's ~20k+ calls per rerun, each doing dict
+    # lookups + set construction. Memoize per-row using id() (rows are dict
+    # objects with stable identity for the duration of a single render) so the
+    # work happens exactly once per unique row regardless of how many code
+    # paths consult it.
+    _iv_row_teams_cache: dict[int, frozenset[str]] = {}
+
+    def _iv_row_teams(_r: dict) -> frozenset[str]:
         """Team values on a row — role-scoped for non-admin users."""
+        _rid = id(_r)
+        _hit = _iv_row_teams_cache.get(_rid)
+        if _hit is not None:
+            return _hit
         _out: set[str] = set()
         _teams_blob = _r.get("teams") or {}
         if _iv_row_team_fields:
@@ -9610,7 +9668,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         _out.add(str(_x))
             elif _tv:
                 _out.add(str(_tv))
-        return _out
+        _frozen = frozenset(_out)
+        _iv_row_teams_cache[_rid] = _frozen
+        return _frozen
 
     # ── Filter keys + non-admin lock rules ─────────────────────────────────
     # Non-admins: company auto-scopes to st.session_state.company. The
@@ -11052,10 +11112,31 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             elif _prd and not _prd.get("live"):
                 _dot = ('<span class="iv-stage-dot is-fail" '
                         'title="Last prd attempt failed"></span>')
+        # Flag a missing Prismacloud image scan for containerised apps
+        # (OCP / K8s). Other platforms aren't covered by Prismacloud, so a
+        # missing scan there is expected — only flag where the absence is a
+        # real gap. The flag is per-version: if THIS version has no scan in
+        # `_iv_prisma_map`, mark this chip individually.
+        _platform = _iv_container_platform(app)
+        _no_scan_warn = ""
+        _btn_classes = "iv-stage-ver"
+        if _platform and not _iv_prisma_map.get((app, _ver)):
+            _btn_classes += " is-no-scan"
+            _ns_tip = (
+                f"No Prismacloud scan on record for {app}@{_ver} — "
+                f"app runs on {_platform} so an image scan is expected."
+            )
+            _no_scan_warn = (
+                f'<span class="iv-stage-noscan" title="{html.escape(_ns_tip)}">⚠</span>'
+            )
+        _btn_title = (
+            "Click for version details" if not _no_scan_warn
+            else f"Click for version details · No Prismacloud scan ({_platform})"
+        )
         _btn = (
-            f'<button type="button" class="iv-stage-ver" '
+            f'<button type="button" class="{_btn_classes}" '
             f'popovertarget="{_iv_ver_pop_id(app, stage, _ver)}" '
-            f'title="Click for version details">{_dot}{_ver}</button>'
+            f'title="{_btn_title}">{_dot}{_no_scan_warn}{_ver}</button>'
         )
         # Table row shows the relative age only — the version popover carries
         # the exact absolute timestamp for anyone who needs it.
@@ -11331,16 +11412,45 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _iv_main = _iv_table_shell(_rows, include_project=True, max_h="60vh")
 
     # ── Build popovers — app detail + project detail ────────────────────────
-    # Popover HTML is stable across widget interactions (search / sort / pill
-    # toggles don't change the underlying ES data), so we memoize the full
-    # concatenated HTML in session_state keyed on scope + TTL bucket. The
-    # bucket expires naturally every CACHE_TTL seconds, aligned with the ES
-    # fetch caches, so stale data never lingers past a single refresh cycle.
+    # Popover HTML is bulky (each version popover carries 3 security cards +
+    # provenance + URLs ≈ 4-8 KB; a 2k-app scope can produce 50+ MB). Even with
+    # the server-side cache, Streamlit re-emits the entire markdown payload on
+    # every rerun, so a giant blob freezes the browser on every filter click.
+    # We therefore restrict popover construction to the elements actually
+    # REACHABLE from the visible page slice:
+    #   · table rows on the current page  →  app + project + version popovers
+    #   · project ribbon (top 24 chips)   →  project popovers + their app lists
+    # Anything outside these sets isn't clickable on this render anyway.
+    _visible_page_apps: set[str] = {
+        r["application"] for r in _inv_rows if r.get("application")
+    }
+    _visible_page_projects: set[str] = {
+        r["project"] for r in _inv_rows if r.get("project")
+    }
+    _ribbon_projects: set[str] = (
+        {p for p, _ in _pr_visible} if _pr_by_proj else set()
+    )
+    # Project popovers list every app that belongs to the project, so we need
+    # an app popover for each of those even if the row isn't on this page.
+    _visible_projects_reach: set[str] = _visible_page_projects | _ribbon_projects
+    _visible_apps_reach: set[str] = set(_visible_page_apps)
+    for _pj in _visible_projects_reach:
+        _pdata_v = _iv_proj_map.get(_pj) or {}
+        for _a_v in (_pdata_v.get("apps") or []):
+            _visible_apps_reach.add(_a_v)
+
     _iv_popovers: list[str] = []
     _IV_POP_SS = "_iv_pop_html_cache_v1"
     _iv_pop_store: dict = st.session_state.setdefault(_IV_POP_SS, {})
     _iv_pop_bucket = int(datetime.now(timezone.utc).timestamp() // CACHE_TTL)
-    _iv_pop_cache_key = (_iv_scope_key, _iv_pop_bucket)
+    # Cache key now also tracks the visible reach. Page changes (pager,
+    # search, pill filters that narrow which rows render) all alter this
+    # signature, so the popover blob is rebuilt only when the reach actually
+    # changes — and stays small instead of growing with the full scope.
+    _iv_pop_visible_sig = json.dumps(
+        [sorted(_visible_apps_reach), sorted(_visible_projects_reach)],
+    )
+    _iv_pop_cache_key = (_iv_scope_key, _iv_pop_bucket, _iv_pop_visible_sig)
     _iv_cached_pop_html = _iv_pop_store.get(_iv_pop_cache_key)
     _build_popovers_flag = _iv_cached_pop_html is None
 
@@ -11356,11 +11466,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _base = field[:-5] if field.endswith("_team") else field
         return _base.replace("_", " ").strip().upper() + " team"
 
-    # App popovers (built for FULL scope so cached HTML works across filter
-    # changes — hidden popovers are cheap in the DOM and this lets the
-    # popover cache key on scope alone).
+    # App popovers — only for apps reachable from the current page (visible
+    # rows + apps inside visible project popovers). Anything outside that set
+    # has no clickable trigger on this render, so emitting it would just
+    # bloat the markdown payload without unlocking new UX.
     for r in (_inv_rows_all if _build_popovers_flag else []):
         _app = r["application"]
+        if _app not in _visible_apps_reach:
+            continue
         _pid = _iv_app_pop_id(_app)
         _prd = _iv_prd_map.get(_app)
         _prd_ver = (_prd or {}).get("version") or ""
@@ -11653,8 +11766,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         return "".join(tiles), _total
 
     for _app, _stages in (_iv_stages_map.items() if _build_popovers_flag else []):
-        # Only build popovers for apps that are in the rendered rows.
-        if _app not in _iv_apps:
+        # Version popovers are triggered ONLY by version chips in the
+        # paginated rows — apps reached purely via project popovers don't
+        # expose stage chips, so skip them. (`_iv_apps` is the full scope set;
+        # `_visible_page_apps` is the page slice — version popovers belong to
+        # the latter only.)
+        if _app not in _visible_page_apps:
             continue
         _prd_data = _iv_prd_map.get(_app) or {}
         _prd_ver  = _prd_data.get("version") or ""
@@ -11713,14 +11830,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             )
 
             # Application URLs — only meaningful for `dev` / `qc` stages.
-            # ef-devops-projects carries `qcRouteUrl` / `qcServiceUrl`, and
-            # the dev URLs follow the same naming convention with the
-            # prefix swapped (`devRouteUrl` / `devServiceUrl`). UAT / PRD
-            # don't expose URLs in this index, so we skip them.
+            # ef-devops-projects carries `qcRouteUrl` / `qcServiceUrl` only;
+            # the dev variants are NOT populated in the index, so derive the
+            # dev URL from the qc value by swapping the literal "qc" → "dev"
+            # everywhere it appears (matches the host-naming convention).
+            # UAT / PRD don't expose URLs in this index, so we skip them.
             if _stage in ("dev", "qc"):
                 _dp_proj = _iv_devproj_map.get(_app) or {}
-                _route_url   = (_dp_proj.get(f"{_stage}RouteUrl")   or "").strip()
-                _service_url = (_dp_proj.get(f"{_stage}ServiceUrl") or "").strip()
+                _qc_route_url   = (_dp_proj.get("qcRouteUrl")   or "").strip()
+                _qc_service_url = (_dp_proj.get("qcServiceUrl") or "").strip()
+                if _stage == "qc":
+                    _route_url   = _qc_route_url
+                    _service_url = _qc_service_url
+                else:
+                    _route_url   = _qc_route_url.replace("qc", "dev")
+                    _service_url = _qc_service_url.replace("qc", "dev")
 
                 def _iv_url_row(label: str, url: str) -> str:
                     if not url:
@@ -11964,8 +12088,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'</div>'
             )
 
-    # Project popovers
+    # Project popovers — only for projects reachable on this render: rows on
+    # the current page + the up-to-24 chips in the project ribbon.
     for _proj in (_iv_pop_projects if _build_popovers_flag else []):
+        if _proj not in _visible_projects_reach:
+            continue
         _pdata = _iv_proj_map.get(_proj)
         if not _pdata:
             continue
@@ -12071,11 +12198,27 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # ── Finalize popover cache ──────────────────────────────────────────────
     if _build_popovers_flag:
         _iv_popovers_html = "".join(_iv_popovers)
-        # Retain only the most recent scope+bucket to bound session memory.
-        _iv_pop_store.clear()
+        # Drop entries from older TTL buckets first (stale data), then trim
+        # to a bounded LRU so flipping between recent pages / filter sets
+        # is instant. Each entry is now a page-sized blob (≈1-3 MB worst
+        # case) instead of the full-scope multi-MB blob.
+        for _stale_key in [
+            _k for _k in _iv_pop_store
+            if isinstance(_k, tuple) and len(_k) >= 2 and _k[1] != _iv_pop_bucket
+        ]:
+            _iv_pop_store.pop(_stale_key, None)
+        _IV_POP_LRU = 6
+        while len(_iv_pop_store) >= _IV_POP_LRU:
+            try:
+                _iv_pop_store.pop(next(iter(_iv_pop_store)))
+            except StopIteration:
+                break
         _iv_pop_store[_iv_pop_cache_key] = _iv_popovers_html
     else:
         _iv_popovers_html = _iv_cached_pop_html
+        # Touch: move this key to the end so LRU eviction favours stale ones.
+        _iv_pop_store.pop(_iv_pop_cache_key, None)
+        _iv_pop_store[_iv_pop_cache_key] = _iv_popovers_html
 
     # ── Final render ────────────────────────────────────────────────────────
     _iv_visible_badge = (
