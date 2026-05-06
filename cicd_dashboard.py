@@ -5853,6 +5853,65 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
     return out
 
 
+# ── Loose-version dict for security/scan result maps ────────────────────────
+# Different indices store the same logical version slightly differently:
+# `ef-cicd-builds` may write "1.2.3", `ef-cicd-prismacloud` may write "1.2.3 "
+# (trailing space) or "V1.2.3" (different case). Exact tuple equality on
+# (app, codeversion) then drops perfectly real scans on the floor — the user
+# saw apps with prisma data in the index that didn't appear in the dashboard.
+#
+# This subclass auto-inserts a stripped+lowercased variant key alongside the
+# literal one, and `.get()` / `__contains__` lookups also fall back to the
+# normalised form when the literal misses. Net effect: consumers don't have
+# to know which side of the version-string drift they're on.
+_LOOSE_VER_SENTINEL = object()
+
+
+class _LooseVerDict(dict):
+    """Dict keyed by ``(app, version)`` tuples that tolerates whitespace
+    and case drift in either component on both write and read."""
+
+    @staticmethod
+    def _norm_key(key):
+        if not isinstance(key, tuple) or len(key) != 2:
+            return key
+        a, v = key
+        return (
+            a.strip().lower() if isinstance(a, str) else a,
+            v.strip().lower() if isinstance(v, str) else v,
+        )
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        nk = self._norm_key(key)
+        if nk != key:
+            super().setdefault(nk, value)
+
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            nk = self._norm_key(key)
+            if nk != key:
+                return super().__getitem__(nk)
+            raise
+
+    def get(self, key, default=None):
+        v = super().get(key, _LOOSE_VER_SENTINEL)
+        if v is not _LOOSE_VER_SENTINEL:
+            return v
+        nk = self._norm_key(key)
+        if nk != key:
+            return super().get(nk, default)
+        return default
+
+    def __contains__(self, key):
+        if super().__contains__(key):
+            return True
+        nk = self._norm_key(key)
+        return nk != key and super().__contains__(nk)
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
     """Fetch the most-recent prismacloud scan for each ``(app, version)`` pair.
@@ -5906,8 +5965,15 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
         )
     except Exception:
         return {}
-    wanted = {(a, v) for a, v in app_versions if a and v}
-    out: dict[tuple[str, str], dict] = {}
+    # Compare against a NORMALISED wanted-set (whitespace/case-tolerant) so
+    # a version drift between ef-cicd-builds and ef-cicd-prismacloud doesn't
+    # silently drop the scan. The result map is itself a _LooseVerDict, so
+    # consumers' literal-key lookups also fall through to the normalised
+    # variant when needed.
+    wanted_norm = {
+        _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
+    }
+    out: _LooseVerDict = _LooseVerDict()
     for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _ab.get("key")
         for _vb in _ab.get("by_ver", {}).get("buckets", []):
@@ -5917,7 +5983,7 @@ def _fetch_prismacloud(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                 continue
             _s = _hits[0].get("_source", {}) or {}
             key = (_app, _ver)
-            if wanted and key not in wanted:
+            if wanted_norm and _LooseVerDict._norm_key(key) not in wanted_norm:
                 continue
             out[key] = {
                 "Vcritical": int(_s.get("Vcritical") or 0),
@@ -5988,8 +6054,10 @@ def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str,
         )
     except Exception:
         return {}
-    wanted = {(a, v) for a, v in app_versions if a and v}
-    out: dict[tuple[str, str], dict] = {}
+    wanted_norm = {
+        _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
+    }
+    out: _LooseVerDict = _LooseVerDict()
     for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _ab.get("key")
         for _vb in _ab.get("by_ver", {}).get("buckets", []):
@@ -5999,7 +6067,7 @@ def _fetch_invicti(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str,
                 continue
             _s = _hits[0].get("_source", {}) or {}
             key = (_app, _ver)
-            if wanted and key not in wanted:
+            if wanted_norm and _LooseVerDict._norm_key(key) not in wanted_norm:
                 continue
             out[key] = {
                 "Vcritical":     int(_s.get("Vcritical") or 0),
@@ -6071,8 +6139,10 @@ def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str
         except (TypeError, ValueError):
             return 0
 
-    wanted = {(a, v) for a, v in app_versions if a and v}
-    out: dict[tuple[str, str], dict] = {}
+    wanted_norm = {
+        _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
+    }
+    out: _LooseVerDict = _LooseVerDict()
     for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
         _app = _ab.get("key")
         for _vb in _ab.get("by_ver", {}).get("buckets", []):
@@ -6082,7 +6152,7 @@ def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str
                 continue
             _s = _hits[0].get("_source", {}) or {}
             key = (_app, _ver)
-            if wanted and key not in wanted:
+            if wanted_norm and _LooseVerDict._norm_key(key) not in wanted_norm:
                 continue
             out[key] = {
                 # ZAP has no critical bucket — we still expose the field as 0 so
@@ -6291,11 +6361,16 @@ def _fetch_version_meta(app_versions: tuple[tuple[str, str], ...]
     apps = sorted({_a for _a, _ in app_versions if _a})
     if not apps:
         return {}
-    wanted = {(a, v) for a, v in app_versions if a and v}
-    out: dict[tuple[str, str], dict] = {}
+    wanted_norm = {
+        _LooseVerDict._norm_key((a, v)) for a, v in app_versions if a and v
+    }
+    out: _LooseVerDict = _LooseVerDict()
 
     def _set(key: tuple[str, str], field: str, val: str) -> None:
-        if not val or key not in wanted:
+        # Membership test on normalised form so a whitespace/case drift in
+        # `codeversion` between ef-cicd-builds and ef-cicd-releases doesn't
+        # discard legitimate version metadata.
+        if not val or _LooseVerDict._norm_key(key) not in wanted_norm:
             return
         out.setdefault(key, {})[field] = val
 
