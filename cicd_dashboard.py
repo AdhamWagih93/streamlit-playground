@@ -27,12 +27,16 @@ Performance notes
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import os
 import pathlib
 import shutil
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -120,6 +124,46 @@ INVENTORY_REPO_PATH = "/tmp/inventories"
 INVENTORY_BRANCH = "main"
 INVENTORY_SYNC_TTL = 60  # seconds between origin fetches
 INVENTORY_REPO_URL_TEMPLATE = "http://{host}/DevOps/Platform/_git/inventories"
+
+# =============================================================================
+# JENKINS PIPELINE STATUS — smart-loaded panel
+# =============================================================================
+# Three pipelines drive the platform's build/deploy/promote loop:
+#   CICD/Build              — kicks off an app build (project, application, branch)
+#   CICD/Request_deploy     — opens a deploy request (project, application, env, version)
+#   CICD/Request_promote    — opens a release request (project, application, version)
+# We surface their reachability + last-build status + currently-running runs
+# so an operator knows at a glance whether the platform is healthy and what's
+# already queued. Triggering happens elsewhere (deferred); here we observe.
+JENKINS_HOSTNAME = os.environ.get("JENKINS_HOSTNAME", "").strip()
+JENKINS_USER = os.environ.get("JENKINS_USER", "").strip()
+JENKINS_TOKEN = os.environ.get("JENKINS_TOKEN", "").strip()
+JENKINS_TIMEOUT = 10  # seconds — the panel calls 4 endpoints per refresh
+JENKINS_TTL = 30      # seconds — how long status results are cached
+
+JENKINS_PIPELINES: dict[str, dict] = {
+    "build": {
+        "label":   "Build",
+        "path":    "CICD/Build",
+        "glyph":   "⚒",
+        "params":  ("project", "application", "branch"),
+        "summary": "Kicks off CI for an app's branch (developer / release).",
+    },
+    "deploy_request": {
+        "label":   "Deploy request",
+        "path":    "CICD/Request_deploy",
+        "glyph":   "⇪",
+        "params":  ("project", "application", "environment", "version"),
+        "summary": "Opens a deploy request to push a version into an environment.",
+    },
+    "release_request": {
+        "label":   "Release request",
+        "path":    "CICD/Request_promote",
+        "glyph":   "✦",
+        "params":  ("project", "application", "version"),
+        "summary": "Opens a release request to promote a version.",
+    },
+}
 
 # Field-alias table — maps the canonical row field names the rest of the
 # dashboard reads onto the variable keys you may find in the merged Ansible
@@ -1840,6 +1884,357 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-weight: 700;
     letter-spacing: 0.04em;
     cursor: help;
+}
+
+/* ── JENKINS PANEL ─────────────────────────────────────────────────────────
+   Gate (idle), connection header, pipeline cards, status pills, params.
+   ----------------------------------------------------------------------- */
+
+/* Idle gate — shown until the operator opts to load. Soft glassy card so
+ * the "click to load" CTA reads as deliberate rather than a placeholder. */
+.jk-gate {
+    text-align: center;
+    padding: 26px 22px 14px 22px;
+    margin: 0 0 12px 0;
+    border-radius: 18px;
+    background: linear-gradient(180deg,
+                rgba(79,70,229,.04) 0%,
+                rgba(79,70,229,.01) 100%);
+    border: 1px dashed var(--cc-border-hi);
+}
+.jk-gate-glyph {
+    font-size: 2.4rem;
+    line-height: 1;
+    color: var(--cc-accent);
+    opacity: .8;
+}
+.jk-gate-title {
+    font-family: var(--cc-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--cc-text);
+    margin: 10px 0 4px 0;
+}
+.jk-gate-body {
+    font-size: 0.82rem;
+    color: var(--cc-text-dim);
+    max-width: 520px;
+    margin: 0 auto;
+    line-height: 1.45;
+}
+.jk-empty {
+    text-align: center;
+    padding: 22px 18px;
+    border: 1px dashed var(--cc-border);
+    border-radius: 14px;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+}
+.jk-empty-glyph { font-size: 2rem; opacity: .55; }
+.jk-empty-title {
+    font-family: var(--cc-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    margin: 8px 0 4px 0;
+}
+.jk-empty-body { font-size: 0.78rem; line-height: 1.5; }
+.jk-empty code {
+    font-family: var(--cc-mono);
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.74rem;
+}
+
+/* Connection header — full-width banner so reachability state is the
+ * loudest signal in the panel. Pulses softly on the healthy path. */
+.jk-hdr {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-radius: 12px;
+    margin: 6px 0 12px 0;
+    font-family: var(--cc-mono);
+    font-size: 0.78rem;
+    border: 1px solid var(--cc-border);
+}
+.jk-hdr.is-ok {
+    background: linear-gradient(90deg,
+                rgba(5,150,105,.06), rgba(5,150,105,.02));
+    border-color: rgba(5,150,105,.30);
+    color: #047857;
+}
+.jk-hdr.is-down {
+    background: linear-gradient(90deg,
+                rgba(220,38,38,.06), rgba(220,38,38,.02));
+    border-color: rgba(220,38,38,.32);
+    color: #b91c1c;
+}
+.jk-hdr-glyph { font-size: 1rem; line-height: 1; }
+.jk-hdr.is-ok .jk-hdr-glyph {
+    animation: jkHdrPulse 2.6s ease-in-out infinite;
+}
+@keyframes jkHdrPulse {
+    0%, 100% { text-shadow: 0 0 0 rgba(5,150,105,.55); }
+    50%      { text-shadow: 0 0 8px rgba(5,150,105,.7); }
+}
+.jk-hdr-host {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.jk-hdr-stat {
+    color: var(--cc-text-mute);
+    font-size: 0.72rem;
+    margin-left: auto;
+    font-weight: 500;
+}
+
+/* Card grid — 3 pipelines side-by-side on wide viewports, stacks on narrow. */
+.jk-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+    margin: 4px 0 8px 0;
+}
+.jk-card {
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 14px 14px 12px 14px;
+    box-shadow: 0 2px 6px rgba(10,14,30,.04);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    transition: border-color .15s, box-shadow .15s;
+}
+.jk-card:hover {
+    border-color: var(--cc-border-hi);
+    box-shadow: 0 6px 18px rgba(10,14,30,.07);
+}
+.jk-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.jk-card-glyph {
+    width: 34px; height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    border-radius: 9px;
+    flex-shrink: 0;
+}
+.jk-card-title-wrap { flex: 1; min-width: 0; }
+.jk-card-kicker {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+}
+.jk-card-title {
+    font-family: var(--cc-sans);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    letter-spacing: -0.01em;
+}
+.jk-card-summary {
+    font-size: 0.74rem;
+    color: var(--cc-text-dim);
+    line-height: 1.45;
+    margin: 0 0 2px 0;
+}
+
+/* "Ready to trigger" indicator on each card */
+.jk-ready {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid;
+    cursor: default;
+    flex-shrink: 0;
+}
+.jk-ready.is-ready {
+    background: var(--cc-green-bg);
+    border-color: rgba(5,150,105,.36);
+    color: var(--cc-green);
+}
+.jk-ready.is-blocked {
+    background: var(--cc-red-bg);
+    border-color: rgba(220,38,38,.34);
+    color: var(--cc-red);
+    cursor: help;
+}
+
+/* Status pills (also reused for inline running state) */
+.jk-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+}
+.jk-pill.is-ok {
+    background: var(--cc-green-bg);
+    border-color: rgba(5,150,105,.32);
+    color: var(--cc-green);
+}
+.jk-pill.is-fail {
+    background: var(--cc-red-bg);
+    border-color: rgba(220,38,38,.32);
+    color: var(--cc-red);
+}
+.jk-pill.is-warn {
+    background: var(--cc-amber-bg);
+    border-color: rgba(217,119,6,.32);
+    color: var(--cc-amber);
+}
+.jk-pill.is-mute {
+    background: rgba(136,144,164,.10);
+    border-color: rgba(136,144,164,.30);
+    color: var(--cc-text-mute);
+}
+.jk-pill.is-running {
+    background: var(--cc-blue-bg);
+    border-color: rgba(37,99,235,.34);
+    color: var(--cc-blue);
+}
+.jk-pill-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: jkRunDot 1.1s ease-in-out infinite;
+}
+@keyframes jkRunDot {
+    0%, 100% { opacity: .3; transform: scale(.8); }
+    50%      { opacity: 1;  transform: scale(1.1); }
+}
+
+/* Last-build summary row */
+.jk-last {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px dashed var(--cc-border);
+    border-bottom: 1px dashed var(--cc-border);
+}
+.jk-last-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+}
+.jk-last-meta {
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    color: var(--cc-text-dim);
+    margin-left: auto;
+    font-weight: 500;
+}
+
+/* In-flight runs */
+.jk-running-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.jk-running-block.is-quiet {
+    text-align: center;
+    color: var(--cc-text-mute);
+    font-size: 0.74rem;
+    padding: 6px 0 4px 0;
+}
+.jk-running-quiet { font-style: italic; }
+.jk-running-head {
+    display: flex;
+    align-items: center;
+    margin-top: 2px;
+}
+.jk-running-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-blue);
+    font-weight: 700;
+}
+.jk-running-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 7px 9px 9px 9px;
+    background: var(--cc-blue-bg);
+    border: 1px solid rgba(37,99,235,.18);
+    border-radius: 10px;
+}
+.jk-running-meta {
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    color: var(--cc-text-dim);
+    font-weight: 500;
+}
+.jk-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+}
+.jk-param-empty {
+    font-size: 0.68rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+}
+.jk-param-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px 2px 7px;
+    background: rgba(255,255,255,.7);
+    border: 1px solid rgba(37,99,235,.20);
+    border-radius: 6px;
+    font-size: 0.68rem;
+}
+.jk-param-chip.is-other {
+    background: rgba(136,144,164,.08);
+    border-color: rgba(136,144,164,.22);
+}
+.jk-param-k {
+    font-family: var(--cc-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+}
+.jk-param-v {
+    font-family: var(--cc-mono);
+    color: var(--cc-text);
+    font-weight: 700;
 }
 
 /* Project-health ribbon — one subtle chip per project, colored by the worst
@@ -7750,6 +8145,300 @@ def _status_chip(raw: str | None) -> str:
             f'padding:1px 7px;font-size:0.72rem;font-weight:600">{raw}</span>')
 
 
+# =============================================================================
+# JENKINS PANEL — smart-loaded, auto-refreshing
+# =============================================================================
+# UX contract:
+#   1. On first render the panel is *idle* — no API calls fire. A single
+#      "▶ Load Jenkins panel" button is shown. This honours the user's
+#      "smart loading" requirement: opening the page never costs a Jenkins
+#      round-trip unless the operator actually wants to look.
+#   2. Clicking the load button flips a session_state flag that sticks for
+#      the rest of the session, so navigating away and back doesn't make
+#      the user re-arm it.
+#   3. Once active the panel runs as a fragment with run_every="30s" so
+#      Jenkins state refreshes itself without a full page rerun. A manual
+#      "↻ Refresh now" button busts the cache for users who want it
+#      immediately.
+
+_JK_LOAD_FLAG = "_jenkins_panel_loaded_v1"
+
+
+def _jk_status_pill(result: str, is_running: bool) -> str:
+    """Map a Jenkins build result/color into a small status pill."""
+    if is_running:
+        return ('<span class="jk-pill is-running">'
+                '<span class="jk-pill-dot"></span>RUNNING</span>')
+    if result == "SUCCESS":
+        return '<span class="jk-pill is-ok">SUCCESS</span>'
+    if result in ("FAILURE", "FAILED"):
+        return '<span class="jk-pill is-fail">FAILURE</span>'
+    if result == "ABORTED":
+        return '<span class="jk-pill is-mute">ABORTED</span>'
+    if result == "UNSTABLE":
+        return '<span class="jk-pill is-warn">UNSTABLE</span>'
+    if result:
+        return f'<span class="jk-pill is-mute">{html.escape(result)}</span>'
+    return '<span class="jk-pill is-mute">NO RUNS</span>'
+
+
+def _jk_param_chips(params: dict) -> str:
+    """Render the (project / application / branch / env / version) parameter
+    set as compact chips. Empty/missing keys are silently skipped."""
+    if not params:
+        return '<span class="jk-param-empty">no parameters</span>'
+    chips: list[str] = []
+    for k in ("project", "application", "branch", "environment", "version"):
+        v = params.get(k) or params.get(k.upper()) or params.get(k.capitalize())
+        if v:
+            chips.append(
+                f'<span class="jk-param-chip">'
+                f'<span class="jk-param-k">{k}</span>'
+                f'<span class="jk-param-v">{html.escape(str(v))}</span>'
+                f'</span>'
+            )
+    # Surface any unknown params verbatim so we don't hide useful metadata.
+    for k, v in params.items():
+        if k.lower() in ("project", "application", "branch", "environment", "version"):
+            continue
+        if not v:
+            continue
+        chips.append(
+            f'<span class="jk-param-chip is-other">'
+            f'<span class="jk-param-k">{html.escape(str(k))}</span>'
+            f'<span class="jk-param-v">{html.escape(str(v))}</span>'
+            f'</span>'
+        )
+    return "".join(chips) if chips else '<span class="jk-param-empty">no parameters</span>'
+
+
+def _jk_relative(when_ms: int) -> str:
+    """Convert a Jenkins millisecond timestamp into a short relative phrase."""
+    if not when_ms:
+        return ""
+    try:
+        dt = datetime.fromtimestamp(when_ms / 1000, tz=timezone.utc)
+    except (ValueError, OSError):
+        return ""
+    return _relative_age(dt) or ""
+
+
+def _jk_duration(ms: int) -> str:
+    """Render a duration in ms as a compact human label."""
+    if not ms or ms < 0:
+        return ""
+    s = ms // 1000
+    if s < 60:
+        return f"{s}s"
+    m = s // 60
+    if m < 60:
+        return f"{m}m {s % 60}s"
+    h = m // 60
+    return f"{h}h {m % 60}m"
+
+
+@st.fragment(run_every="30s")
+def _render_jenkins_panel_active() -> None:
+    """Active half of the Jenkins panel — fires the API call + draws the
+    pipeline cards. Lives in its own fragment so the 30s refresh cadence
+    doesn't redraw the rest of the page.
+
+    NOTE: the ``run_every`` here is safe because every widget the fragment
+    owns (the manual refresh button, the unload toggle) lives inside this
+    function. The "fragment + run_every gotcha" only applies when filter
+    state is mutated outside the fragment — not the case here.
+    """
+    # Manual controls row (refresh + collapse back to idle).
+    _ctrl1, _ctrl2, _ctrl3 = st.columns([1, 1, 6])
+    with _ctrl1:
+        if st.button("↻ Refresh now", key="_jk_refresh_now",
+                     use_container_width=True):
+            _fetch_jenkins_status_raw.clear()
+            st.rerun(scope="fragment")
+    with _ctrl2:
+        if st.button("⏸ Pause panel", key="_jk_pause",
+                     use_container_width=True,
+                     help="Stops the 30s auto-refresh until reopened"):
+            st.session_state[_JK_LOAD_FLAG] = False
+            st.rerun()
+    with _ctrl3:
+        st.caption(
+            f"auto-refresh every {JENKINS_TTL}s · cached server-side · "
+            f"all values via Jenkins REST API"
+        )
+
+    status = _fetch_jenkins_status_raw()
+
+    # ── Header row: connection state + queue ───────────────────────────────
+    if status["ok"]:
+        _hdr_cls = "jk-hdr is-ok"
+        _hdr_glyph = "●"
+    else:
+        _hdr_cls = "jk-hdr is-down"
+        _hdr_glyph = "○"
+    st.markdown(
+        f'<div class="{_hdr_cls}">'
+        f'  <span class="jk-hdr-glyph">{_hdr_glyph}</span>'
+        f'  <span class="jk-hdr-host">{html.escape(status.get("url") or "—")}</span>'
+        f'  <span class="jk-hdr-stat">{html.escape(status.get("status_msg") or "")}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if not status["ok"]:
+        inline_note(
+            "Jenkins is not reachable. The panel will retry on the next "
+            "refresh; check the hostname / token / network path.",
+            "warning",
+        )
+        return
+
+    # ── Pipeline cards ─────────────────────────────────────────────────────
+    pipelines_state = status.get("pipelines") or {}
+    cards: list[str] = []
+    for key, cfg in JENKINS_PIPELINES.items():
+        s = pipelines_state.get(key) or {}
+        running = s.get("running") or []
+        last = s.get("last_build")
+        ready = (
+            s.get("exists") and s.get("buildable") and not s.get("error")
+        )
+        ready_chip = (
+            '<span class="jk-ready is-ready">✓ ready to trigger</span>'
+            if ready else
+            f'<span class="jk-ready is-blocked" title="'
+            f'{html.escape(s.get("error") or "not buildable")}">'
+            f'✕ not ready</span>'
+        )
+
+        # Last-build summary
+        if last:
+            _r = last.get("result") or ""
+            _last_html = (
+                f'<div class="jk-last">'
+                f'  <span class="jk-last-lbl">last build</span>'
+                f'  {_jk_status_pill(_r, False)}'
+                f'  <span class="jk-last-meta">'
+                f'    #{html.escape(str(last.get("number") or "—"))}'
+                f'    · {_jk_relative(last.get("timestamp") or 0)}'
+                f'    · {_jk_duration(last.get("duration") or 0)}'
+                f'  </span>'
+                f'</div>'
+            )
+        else:
+            _last_html = (
+                '<div class="jk-last">'
+                '  <span class="jk-last-lbl">last build</span>'
+                '  <span class="jk-pill is-mute">NO RUNS</span>'
+                '</div>'
+            )
+
+        # Running builds
+        if running:
+            _rows: list[str] = []
+            for r in running:
+                _started = _jk_relative(r.get("started") or 0)
+                _est = r.get("estimated") or 0
+                _dur = r.get("duration") or 0
+                _eta = ""
+                if _est > 0:
+                    _eta = f" · ETA {_jk_duration(max(_est - _dur, 0))}"
+                _rows.append(
+                    f'<div class="jk-running-row">'
+                    f'  <span class="jk-pill is-running">'
+                    f'    <span class="jk-pill-dot"></span>'
+                    f'    #{html.escape(str(r.get("number") or "?"))}'
+                    f'  </span>'
+                    f'  <span class="jk-running-meta">'
+                    f'    started {_started}{_eta}'
+                    f'  </span>'
+                    f'  <div class="jk-params">{_jk_param_chips(r.get("params") or {})}</div>'
+                    f'</div>'
+                )
+            _running_html = (
+                f'<div class="jk-running-block">'
+                f'  <div class="jk-running-head">'
+                f'    <span class="jk-running-lbl">'
+                f'      ⏵ {len(running)} in flight'
+                f'    </span>'
+                f'  </div>'
+                + "".join(_rows)
+                + '</div>'
+            )
+        else:
+            _running_html = (
+                '<div class="jk-running-block is-quiet">'
+                '  <span class="jk-running-quiet">no runs in flight</span>'
+                '</div>'
+            )
+
+        cards.append(
+            f'<div class="jk-card">'
+            f'  <div class="jk-card-head">'
+            f'    <span class="jk-card-glyph">{cfg["glyph"]}</span>'
+            f'    <div class="jk-card-title-wrap">'
+            f'      <div class="jk-card-kicker">{html.escape(cfg["path"])}</div>'
+            f'      <div class="jk-card-title">{cfg["label"]}</div>'
+            f'    </div>'
+            f'    {ready_chip}'
+            f'  </div>'
+            f'  <div class="jk-card-summary">{html.escape(cfg["summary"])}</div>'
+            f'  {_last_html}'
+            f'  {_running_html}'
+            f'</div>'
+        )
+
+    st.markdown(
+        '<div class="jk-grid">' + "".join(cards) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_jenkins_panel() -> None:
+    """Outer half of the Jenkins panel — handles the load gate. Idle until
+    the operator clicks the load button; once flipped, hands off to the
+    fragment-decorated active half so the 30s auto-refresh doesn't drag
+    the rest of the page along with it."""
+    if not JENKINS_HOSTNAME:
+        st.markdown(
+            '<div class="jk-empty">'
+            '  <div class="jk-empty-glyph">⚙</div>'
+            '  <div class="jk-empty-title">Jenkins not configured</div>'
+            '  <div class="jk-empty-body">Set <code>JENKINS_HOSTNAME</code> '
+            '  (and <code>JENKINS_USER</code> / <code>JENKINS_TOKEN</code> if '
+            '  the instance requires auth) in the environment to enable this '
+            '  panel. While unconfigured the panel costs nothing.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    if not st.session_state.get(_JK_LOAD_FLAG):
+        # Idle state — purely decorative until the user opts in.
+        _g1, _g2, _g3 = st.columns([1, 2, 1])
+        with _g2:
+            st.markdown(
+                '<div class="jk-gate">'
+                '  <div class="jk-gate-glyph">⏵</div>'
+                '  <div class="jk-gate-title">Jenkins panel paused</div>'
+                '  <div class="jk-gate-body">'
+                '    Click below to fetch the live status of the build, '
+                '    deploy-request, and release-request pipelines. '
+                '    While paused the panel makes zero API calls.'
+                '  </div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("▶  Load Jenkins panel",
+                         key="_jk_load_btn",
+                         use_container_width=True,
+                         type="primary"):
+                st.session_state[_JK_LOAD_FLAG] = True
+                st.rerun()
+        return
+
+    _render_jenkins_panel_active()
+
+
 @st.fragment
 def _render_event_log() -> None:
     """Inline event log — role-scoped, fragmented for internal-widget perf.
@@ -9487,6 +10176,203 @@ def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
     # Fallback: legacy ES projection
     rows = _fetch_full_inventory(scope_json)
     return rows, "es", "ES fallback", warnings
+
+
+# =============================================================================
+# JENKINS API — read-only status surface
+# =============================================================================
+# Tiny urllib-based client (no extra dependency). All endpoints used:
+#   /api/json                                — root probe + queue size
+#   /job/{folder}/job/{name}/api/json        — pipeline metadata
+#   /job/{folder}/job/{name}/lastBuild/api/json
+#   /job/{folder}/job/{name}/lastCompletedBuild/api/json
+# We deliberately DON'T call wfapi or sse endpoints — the cost/value of
+# in-flight stage detail is not worth a second round-trip from the panel.
+
+def _jenkins_path_segments(path: str) -> str:
+    """Convert a folder-style path like ``CICD/Build`` into Jenkins'
+    nested ``/job/CICD/job/Build`` form. Each segment is URL-encoded
+    so spaces/specials in folder names don't break the URL."""
+    parts = [urllib.parse.quote(p, safe="") for p in path.split("/") if p]
+    return "/" + "/".join("job/" + p for p in parts)
+
+
+def _jenkins_request(url: str) -> Any:
+    """Run a Jenkins GET with optional Basic auth. Returns the parsed JSON
+    body or raises on any HTTP / network / decode failure. Raises a
+    distinguishable ``RuntimeError`` for the unauthenticated / 404 cases
+    so the panel can label them precisely."""
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Accept", "application/json")
+    if JENKINS_USER and JENKINS_TOKEN:
+        token = base64.b64encode(
+            f"{JENKINS_USER}:{JENKINS_TOKEN}".encode()
+        ).decode()
+        req.add_header("Authorization", f"Basic {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=JENKINS_TIMEOUT) as resp:
+            body = resp.read()
+        if not body:
+            return {}
+        return json.loads(body.decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"unreachable: {e.reason}") from e
+    except json.JSONDecodeError:
+        raise RuntimeError("non-JSON response from Jenkins")
+
+
+def _jenkins_root_url() -> str:
+    if not JENKINS_HOSTNAME:
+        return ""
+    h = JENKINS_HOSTNAME
+    if not h.startswith(("http://", "https://")):
+        h = "https://" + h
+    return h.rstrip("/")
+
+
+def _jenkins_extract_params(actions: list) -> dict:
+    """Pull build parameters out of a Jenkins build's ``actions`` list.
+    Matches both ``ParametersAction`` and the newer flat-form. Returns
+    a plain ``{name: value}`` dict; missing actions yield ``{}``."""
+    out: dict[str, str] = {}
+    for act in actions or []:
+        if not isinstance(act, dict):
+            continue
+        params = act.get("parameters")
+        if not params:
+            continue
+        for p in params:
+            if not isinstance(p, dict):
+                continue
+            name = p.get("name") or ""
+            value = p.get("value")
+            if name and value not in (None, ""):
+                out[name] = str(value)
+    return out
+
+
+def _jenkins_extract_running_builds(job_data: dict) -> list[dict]:
+    """``builds`` from /job/.../api/json contains the most-recent N builds;
+    we filter to those still in progress and return their parameter sets."""
+    out: list[dict] = []
+    for b in job_data.get("builds") or []:
+        if not isinstance(b, dict):
+            continue
+        if b.get("building"):
+            out.append({
+                "number":   b.get("number"),
+                "url":      b.get("url"),
+                "duration": b.get("duration") or 0,
+                "estimated": b.get("estimatedDuration") or 0,
+                "started":  b.get("timestamp") or 0,
+                "params":   _jenkins_extract_params(b.get("actions") or []),
+            })
+    return out
+
+
+@st.cache_data(ttl=JENKINS_TTL, show_spinner=False)
+def _fetch_jenkins_status_raw() -> dict:
+    """One-shot status fetch for the Jenkins panel. Returns a plain dict
+    (so ``@st.cache_data`` can pickle it safely):
+
+        {
+          "ok":            bool,            # root probe succeeded
+          "status_msg":    str,             # human-readable health line
+          "url":           str,             # configured hostname
+          "queue_size":    int,
+          "fetched_at":    iso-string,
+          "pipelines": {
+              key: {
+                  "exists":         bool,
+                  "buildable":      bool,
+                  "last_build":     {...} | None,
+                  "running":        [{...}, ...],
+                  "color":          "blue"|"red"|"disabled"|"notbuilt"|...,
+                  "error":          str,        # set when this pipeline failed
+              },
+              ...
+          },
+        }
+    """
+    out: dict[str, Any] = {
+        "ok": False,
+        "status_msg": "",
+        "url": JENKINS_HOSTNAME,
+        "queue_size": 0,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "pipelines": {},
+    }
+    root = _jenkins_root_url()
+    if not root:
+        out["status_msg"] = "JENKINS_HOSTNAME not set"
+        return out
+    # Root probe — ALSO yields the queue depth so we can surface backlog.
+    try:
+        root_data = _jenkins_request(f"{root}/api/json?tree=mode,nodeName")
+        # Queue depth: light secondary call; if it fails, we still report ok.
+        try:
+            q = _jenkins_request(f"{root}/queue/api/json?tree=items[id]")
+            out["queue_size"] = len(q.get("items") or [])
+        except Exception:
+            pass
+        out["ok"] = True
+        out["status_msg"] = (
+            f"connected · {root_data.get('mode','?')} · queue {out['queue_size']}"
+        )
+    except RuntimeError as e:
+        out["status_msg"] = str(e)
+        return out
+
+    # Per-pipeline metadata + last build + in-flight builds. Fetched in
+    # parallel because every call is an independent HTTP round-trip.
+    def _pipeline_status(key: str, cfg: dict) -> tuple[str, dict]:
+        seg = _jenkins_path_segments(cfg["path"])
+        pdata: dict[str, Any] = {
+            "exists": False, "buildable": False, "color": "",
+            "last_build": None, "running": [], "error": "",
+        }
+        try:
+            job = _jenkins_request(
+                f"{root}{seg}/api/json"
+                f"?tree=buildable,color,inQueue,builds[number,building,timestamp,duration,estimatedDuration,url,actions[parameters[name,value]]]"
+            )
+            pdata["exists"] = True
+            pdata["buildable"] = bool(job.get("buildable"))
+            pdata["color"] = job.get("color") or ""
+            pdata["running"] = _jenkins_extract_running_builds(job)
+        except RuntimeError as e:
+            pdata["error"] = str(e)
+            return key, pdata
+        try:
+            last = _jenkins_request(
+                f"{root}{seg}/lastCompletedBuild/api/json"
+                f"?tree=number,result,timestamp,duration,url,displayName,actions[parameters[name,value]]"
+            )
+            pdata["last_build"] = {
+                "number":      last.get("number"),
+                "result":      last.get("result") or "",
+                "timestamp":   last.get("timestamp") or 0,
+                "duration":    last.get("duration") or 0,
+                "url":         last.get("url") or "",
+                "display":     last.get("displayName") or "",
+                "params":      _jenkins_extract_params(last.get("actions") or []),
+            }
+        except RuntimeError:
+            # No completed build yet — leave last_build as None, not an error.
+            pass
+        return key, pdata
+
+    with ThreadPoolExecutor(max_workers=len(JENKINS_PIPELINES)) as ex:
+        futures = [
+            ex.submit(_pipeline_status, k, c)
+            for k, c in JENKINS_PIPELINES.items()
+        ]
+        for fut in futures:
+            key, pdata = fut.result()
+            out["pipelines"][key] = pdata
+    return out
 
 
 # =============================================================================
@@ -12995,11 +13881,17 @@ if _show_inv and _inventory_slot is not None:
         _el_badge_txt = (
             f"  ·  {_el_badge_n:,} apps" if _el_badge_n else ""
         )
+        # Jenkins panel badge — only relevant when configured. Shows a tiny
+        # pulse + queue depth so the user knows the panel is "live".
+        _jk_configured = bool(JENKINS_HOSTNAME)
+        _jk_badge_txt = "  ·  ⏵" if _jk_configured else ""
         with st.container(key="cc_surface_tabs"):
-            _tab_inv, _tab_log = st.tabs([
+            _tabs = st.tabs([
                 f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
                 f"⧗  EVENT LOG{_el_badge_txt}",
+                f"⚙  JENKINS{_jk_badge_txt}",
             ])
+            _tab_inv, _tab_log, _tab_jenkins = _tabs
             with _tab_inv:
                 st.markdown(
                     '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
@@ -13023,6 +13915,16 @@ if _show_inv and _inventory_slot is not None:
                 # inventory fragment publishes `_el_inv_scope_apps`, so the
                 # event log always reflects the current filter state.
                 _el_slot = st.empty()
+            with _tab_jenkins:
+                st.markdown(
+                    '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                    'Jenkins pipelines · build / deploy request / release '
+                    'request · live status of in-flight runs · click ▶ to '
+                    'load — refreshes every 30s once active'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                _jk_slot = st.empty()
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes the scope keys the event log needs.
@@ -13031,6 +13933,12 @@ if _show_inv and _inventory_slot is not None:
         # Now the event log reads a fresh scope and fills slot C.
         with _el_slot.container():
             _render_event_log()
+
+        # Jenkins panel — smart-loaded: nothing fetches until the user
+        # clicks "Load". After first load the panel runs as a fragment
+        # with run_every="30s" so it keeps itself fresh independently.
+        with _jk_slot.container():
+            _render_jenkins_panel()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
