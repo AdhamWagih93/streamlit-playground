@@ -29,9 +29,29 @@ from __future__ import annotations
 
 import html
 import json
+import os
+import pathlib
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+# Inventory git source — lazy/optional dependencies. We import them up front so
+# the availability flags can drive a single admin-visible status banner; the
+# loader degrades gracefully when either is missing.
+try:
+    import yaml as _yaml  # PyYAML
+    _YAML_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _yaml = None  # type: ignore
+    _YAML_AVAILABLE = False
+try:
+    from ansible.parsing.vault import VaultLib as _VaultLib, VaultSecret as _VaultSecret
+    _ANSIBLE_VAULT_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _VaultLib = _VaultSecret = None  # type: ignore
+    _ANSIBLE_VAULT_AVAILABLE = False
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:  # pragma: no cover
@@ -76,6 +96,49 @@ IDX = {
 
 CACHE_TTL = 300  # seconds — 5 minutes balances freshness vs cluster load
 ES_TIMEOUT = 60  # seconds for individual search calls
+
+# =============================================================================
+# INVENTORY GIT SOURCE — primary; ES is fallback
+# =============================================================================
+# The CI/CD platform's source-of-truth inventory lives in an Azure DevOps git
+# repo (one Ansible inventory per app, plus group_vars / host_vars trees with
+# optional Ansible Vault encryption). Reading it directly is faster than the
+# ES projection AND lets us write back later. Configure via env vars so the
+# repo never carries the PAT or vault password in source.
+#
+# • ADO_HOSTNAME           — e.g. "dev.example.com"; required for git path.
+# • ADO_PAT                — Azure DevOps personal access token, optional.
+#                            When set, embedded into the clone URL as
+#                            http://{pat}@{host}/... so cron-style refresh
+#                            works without an interactive auth prompt.
+# • ANSIBLE_VAULT_PASSWORD — single password for vaulted YAMLs, optional.
+ADO_HOSTNAME = os.environ.get("ADO_HOSTNAME", "").strip()
+ADO_PAT = os.environ.get("ADO_PAT", "").strip()
+ANSIBLE_VAULT_PASSWORD = os.environ.get("ANSIBLE_VAULT_PASSWORD", "")
+
+INVENTORY_REPO_PATH = "/tmp/inventories"
+INVENTORY_BRANCH = "main"
+INVENTORY_SYNC_TTL = 60  # seconds between origin fetches
+INVENTORY_REPO_URL_TEMPLATE = "http://{host}/DevOps/Platform/_git/inventories"
+
+# Field-alias table — maps the canonical row field names the rest of the
+# dashboard reads onto the variable keys you may find in the merged Ansible
+# group_vars. The first key that resolves to a non-empty value wins. Order
+# in each tuple = priority. Adjust freely once you share real samples.
+_INV_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "company":           ("company",),
+    "app_type":          ("app_type", "appType", "application_type", "type"),
+    "build_technology":  ("build_technology", "buildTechnology", "build_tech"),
+    "deploy_technology": ("deploy_technology", "deployTechnology", "deploy_tech"),
+    "deploy_platform":   ("deploy_platform", "deployPlatform", "platform"),
+    "build_image_name":  ("build_image_name", "build_image.name", "buildImageName"),
+    "build_image_tag":   ("build_image_tag", "build_image.tag", "buildImageTag"),
+    "deploy_image_name": ("deploy_image_name", "deploy_image.name", "deployImageName"),
+    "deploy_image_tag":  ("deploy_image_tag", "deploy_image.tag", "deployImageTag"),
+}
+# Environments we'll merge group_vars/{env}_{app} for. Same set used by
+# the existing dashboard stages.
+_INV_ENVIRONMENTS = ("dev", "qc", "uat", "prd")
 
 # Bright vivid palette — high contrast on white
 C_SUCCESS = "#059669"
@@ -1696,6 +1759,89 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-weight: 600;
     letter-spacing: 0.04em;
 }
+/* Inventory data-source pill — admin-only telemetry. Sits as a quiet
+ * teal capsule when the git checkout is healthy; flips amber + glyph
+ * when we fall back to the ES projection. The dot pulses subtly on the
+ * git path so the eye registers "live source" without distracting from
+ * the table. Hidden entirely for non-admins (rendered conditionally). */
+.iv-src-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 6px 0;
+    flex-wrap: wrap;
+}
+.iv-src {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 11px 3px 9px;
+    border-radius: 999px;
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+    transition: filter .15s, transform .15s;
+}
+.iv-src:hover { filter: brightness(1.04); transform: translateY(-0.5px); }
+.iv-src.is-git {
+    background: linear-gradient(135deg,
+                rgba(13,148,136,.10), rgba(13,148,136,.04));
+    border-color: rgba(13,148,136,.32);
+    color: #0f766e;
+}
+.iv-src.is-es {
+    background: linear-gradient(135deg,
+                rgba(217,119,6,.12), rgba(217,119,6,.05));
+    border-color: rgba(217,119,6,.42);
+    color: #b45309;
+}
+.iv-src .iv-src-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+}
+.iv-src.is-git .iv-src-dot {
+    box-shadow: 0 0 0 0 currentColor;
+    animation: ivSrcPulse 2.4s ease-in-out infinite;
+}
+@keyframes ivSrcPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(13,148,136,.45); }
+    50%      { box-shadow: 0 0 0 5px rgba(13,148,136,0); }
+}
+.iv-src .iv-src-glyph {
+    font-size: 0.78rem;
+    line-height: 1;
+}
+.iv-src .iv-src-lbl {
+    letter-spacing: 0.07em;
+}
+.iv-src .iv-src-stat {
+    color: var(--cc-text-mute);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    margin-left: 2px;
+}
+.iv-src.is-es .iv-src-stat { color: #92400e; opacity: .92; }
+.iv-src-warn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(220,38,38,.07);
+    border: 1px solid rgba(220,38,38,.32);
+    color: var(--cc-red);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: help;
+}
+
 /* Project-health ribbon — one subtle chip per project, colored by the worst
  * security tier across its applications. Replaces the old landscape treemap
  * with a compact always-visible alternative that sits above the inventory
@@ -8961,6 +9107,389 @@ def _shared_per_project() -> bool:
 
 
 # =============================================================================
+# INVENTORY GIT LOADER — primary source; ES is the fallback
+# =============================================================================
+# The dashboard prefers the on-disk git checkout because:
+#   1. it's the authoritative source operators edit (ES is a projection),
+#   2. local FS reads are an order of magnitude faster than ES round-trips,
+#   3. it lets us write variables back through `git commit + push` later.
+# We still call into ES on any failure path so an empty $ADO_HOSTNAME, a
+# clone error, or a missing dependency degrades to the previous behaviour
+# rather than blanking the page.
+# -----------------------------------------------------------------------------
+
+def _inv_repo_url() -> str:
+    """Build the clone URL, optionally embedding the PAT for non-interactive
+    refresh. The PAT NEVER touches disk in plaintext — git stores it inside
+    `.git/config` for the local clone, and the URL is recomputed on every
+    sync from the env var."""
+    if not ADO_HOSTNAME:
+        return ""
+    base = INVENTORY_REPO_URL_TEMPLATE.format(host=ADO_HOSTNAME)
+    if ADO_PAT:
+        # Inject as user:pat — most ADO Server / Cloud setups accept either
+        # `pat@host` or `user:pat@host`. Using bare PAT keeps it user-agnostic.
+        return base.replace("http://", f"http://{ADO_PAT}@", 1)
+    return base
+
+
+def _run_git(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
+    """Run a git subcommand quietly and capture both streams. We refuse to
+    leak the PAT through error messages by sanitising stderr on the way out."""
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    # Replace the PAT with '***' in any captured output so admin-visible
+    # error banners can't accidentally leak the secret.
+    if ADO_PAT and proc.stderr:
+        proc.stderr = proc.stderr.replace(ADO_PAT, "***")
+    if ADO_PAT and proc.stdout:
+        proc.stdout = proc.stdout.replace(ADO_PAT, "***")
+    return proc
+
+
+@st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
+    """Idempotent clone-or-pull of the inventories repo onto INVENTORY_BRANCH.
+
+    Returns ``(ok, head_sha, status_msg)``. ``host_marker`` is included only
+    so changing ADO_HOSTNAME invalidates the cached resource — its value is
+    not otherwise used, the URL is rebuilt from env each call.
+
+    Cached as a *resource* (not data) because it has filesystem side-effects
+    and we want exactly one sync per TTL window per Streamlit process.
+    """
+    if not ADO_HOSTNAME:
+        return False, "", "ADO_HOSTNAME not set"
+    url = _inv_repo_url()
+    repo_path = INVENTORY_REPO_PATH
+    git_dir = os.path.join(repo_path, ".git")
+    try:
+        if os.path.isdir(git_dir):
+            # Existing checkout — fetch + hard-reset to the remote head so a
+            # local edit (e.g. a future write-back retry that aborted halfway)
+            # never wedges the dashboard on a stale tip.
+            r = _run_git("remote", "set-url", "origin", url, cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git remote set-url failed: {r.stderr.strip()}"
+            r = _run_git("fetch", "--depth", "1", "origin", INVENTORY_BRANCH, cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git fetch failed: {r.stderr.strip()}"
+            r = _run_git("checkout", INVENTORY_BRANCH, cwd=repo_path)
+            if r.returncode != 0:
+                # Branch may not exist locally yet on a freshly-shallow-cloned
+                # repo; create it from FETCH_HEAD.
+                r = _run_git("checkout", "-B", INVENTORY_BRANCH, "FETCH_HEAD", cwd=repo_path)
+                if r.returncode != 0:
+                    return False, "", f"git checkout failed: {r.stderr.strip()}"
+            r = _run_git("reset", "--hard", f"origin/{INVENTORY_BRANCH}", cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git reset failed: {r.stderr.strip()}"
+        else:
+            # Fresh clone. Wipe any partial directory so we never inherit
+            # half-applied state from a previous failed clone.
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path, ignore_errors=True)
+            os.makedirs(os.path.dirname(repo_path) or "/", exist_ok=True)
+            r = _run_git(
+                "clone", "--depth", "1", "--branch", INVENTORY_BRANCH,
+                url, repo_path,
+            )
+            if r.returncode != 0:
+                return False, "", f"git clone failed: {r.stderr.strip()}"
+        # Resolve HEAD for cache-busting downstream.
+        r = _run_git("rev-parse", "HEAD", cwd=repo_path)
+        if r.returncode != 0:
+            return False, "", f"git rev-parse failed: {r.stderr.strip()}"
+        head = (r.stdout or "").strip()
+        return True, head, f"OK · {head[:8]}"
+    except subprocess.TimeoutExpired:
+        return False, "", "git operation timed out (120s)"
+    except FileNotFoundError:
+        return False, "", "git executable not found on PATH"
+    except Exception as e:  # pragma: no cover — last-resort safety net
+        return False, "", f"unexpected: {type(e).__name__}: {e}"
+
+
+def _decrypt_vault(blob: bytes) -> bytes:
+    """Decrypt an Ansible-vault-encrypted file. Returns the plaintext bytes,
+    or raises if the dependency / password is missing or the decrypt fails.
+
+    The dashboard catches the exception at the YAML-read layer and surfaces
+    the failing path in the admin banner — we deliberately don't blanket-
+    suppress so a wrong vault password is visible rather than silent."""
+    if not _ANSIBLE_VAULT_AVAILABLE:
+        raise RuntimeError("ansible.parsing.vault not installed")
+    if not ANSIBLE_VAULT_PASSWORD:
+        raise RuntimeError("ANSIBLE_VAULT_PASSWORD not set")
+    vault = _VaultLib([("default", _VaultSecret(ANSIBLE_VAULT_PASSWORD.encode()))])
+    return vault.decrypt(blob)
+
+
+def _read_yaml_file(path: pathlib.Path,
+                    warnings: list[str]) -> dict:
+    """Load a YAML file, transparently decrypting Ansible vault payloads.
+
+    Returns ``{}`` on any error; appends a one-line diagnostic to *warnings*
+    so the admin banner can surface the offending paths."""
+    if not _YAML_AVAILABLE:
+        warnings.append("PyYAML not installed — git inventory disabled")
+        return {}
+    try:
+        raw = path.read_bytes()
+    except Exception as e:
+        warnings.append(f"read {path}: {type(e).__name__}")
+        return {}
+    # Vault detection — official header is `$ANSIBLE_VAULT;<version>;<cipher>`
+    if raw.lstrip().startswith(b"$ANSIBLE_VAULT;"):
+        try:
+            raw = _decrypt_vault(raw)
+        except Exception as e:
+            warnings.append(f"vault {path.name}: {type(e).__name__}: {e}")
+            return {}
+    try:
+        loaded = _yaml.safe_load(raw)
+    except Exception as e:
+        warnings.append(f"yaml {path}: {type(e).__name__}")
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _load_yaml_dir(directory: pathlib.Path,
+                   warnings: list[str]) -> dict:
+    """Merge every ``*.yml`` / ``*.yaml`` file in *directory* into one dict.
+    Later files overwrite earlier ones (alphabetical order — matches Ansible
+    precedence within a single group_vars subdirectory)."""
+    if not directory.is_dir():
+        return {}
+    merged: dict = {}
+    for f in sorted(directory.iterdir()):
+        if f.is_file() and f.suffix.lower() in (".yml", ".yaml"):
+            data = _read_yaml_file(f, warnings)
+            if isinstance(data, dict):
+                merged.update(data)
+    return merged
+
+
+def _resolve_field(merged: dict, field: str) -> str:
+    """Given the canonical row field name, scan the alias list and return the
+    first non-empty string value found. Tolerates dotted aliases by walking
+    nested dicts (so ``build_image.name`` reaches ``{'build_image': {'name': X}}``)."""
+    aliases = _INV_FIELD_ALIASES.get(field, (field,))
+    for alias in aliases:
+        if "." in alias:
+            cur: Any = merged
+            for part in alias.split("."):
+                if isinstance(cur, dict):
+                    cur = cur.get(part)
+                else:
+                    cur = None
+                    break
+            if cur not in (None, "", []):
+                return str(cur)
+        else:
+            v = merged.get(alias)
+            if v not in (None, "", []):
+                return str(v)
+    return ""
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _load_inventory_from_git(head_sha: str) -> tuple[list[dict], list[str]]:
+    """Walk the cloned inventories repo and produce inventory rows in the
+    same shape as :func:`_fetch_full_inventory`.
+
+    Cached on the git HEAD SHA — the cache invalidates only when the repo
+    actually moves, so consecutive Streamlit reruns within the same git
+    revision pay zero parse cost.
+
+    Returns ``(rows, warnings)``. Warnings surface missing dependencies,
+    decrypt failures, and parse errors for the admin banner.
+    """
+    warnings: list[str] = []
+    rows: list[dict] = []
+    base = pathlib.Path(INVENTORY_REPO_PATH)
+    if not base.is_dir() or not head_sha:
+        return rows, warnings
+    if not _YAML_AVAILABLE:
+        warnings.append("PyYAML missing — `pip install pyyaml`")
+        return rows, warnings
+
+    # group_vars/all is shared baseline across every app/project.
+    group_vars_root = base / "group_vars"
+    all_vars = _load_yaml_dir(group_vars_root / "all", warnings)
+
+    # Iterate projects (top-level directories that are not group_vars / host_vars / .git)
+    skip_dirs = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
+    for project_dir in sorted(p for p in base.iterdir()
+                              if p.is_dir() and p.name not in skip_dirs and not p.name.startswith(".")):
+        project = project_dir.name
+        # Each {application}.yml at the project root defines an app's inventory.
+        for inv_file in sorted(project_dir.glob("*.yml")):
+            app = inv_file.stem
+            # Per-app group_vars live at the REPO root, not under the project
+            # directory (Ansible convention). Same for env-scoped vars.
+            app_vars = _load_yaml_dir(group_vars_root / app, warnings)
+            env_vars: dict[str, dict] = {}
+            for env in _INV_ENVIRONMENTS:
+                env_vars[env] = _load_yaml_dir(group_vars_root / f"{env}_{app}", warnings)
+
+            # Merge precedence: all → app → env-specific (env-specific wins).
+            # We expose the app-level merge for the row's primary fields and
+            # the env-specific merges for image/team fields where it matters.
+            app_merged: dict = {**all_vars, **app_vars}
+
+            # Teams: collect *_team keys from every level. Env-specific values
+            # override app-level for that env's team key, matching how
+            # ef-devops-inventory currently surfaces them.
+            teams: dict[str, list[str]] = {}
+            for src in (all_vars, app_vars):
+                for k, v in (src or {}).items():
+                    if k.endswith("_team") and v not in (None, "", []):
+                        teams[k] = sorted([str(x) for x in v]) if isinstance(v, list) else [str(v)]
+            for env, ev in env_vars.items():
+                for k, v in (ev or {}).items():
+                    if k.endswith("_team") and v not in (None, "", []):
+                        teams[k] = sorted([str(x) for x in v]) if isinstance(v, list) else [str(v)]
+                # Also accept a bare `team` key under env_app and map it onto {env}_team.
+                _bare = (ev or {}).get("team")
+                if _bare and not teams.get(f"{env}_team"):
+                    teams[f"{env}_team"] = [str(_bare)] if not isinstance(_bare, list) else sorted(str(x) for x in _bare)
+
+            # Image fields can be env-specific. Pick the best signal: prd
+            # first (production is the canonical version), then dev → qc →
+            # uat. Falls back to the app-level value if no env carries it.
+            def _pick_env_field(field: str) -> str:
+                for env in ("prd", "uat", "qc", "dev"):
+                    v = _resolve_field(env_vars.get(env, {}) or {}, field)
+                    if v:
+                        return v
+                return _resolve_field(app_merged, field)
+
+            row = {
+                "application":       app,
+                "project":           project,
+                "company":           _resolve_field(app_merged, "company"),
+                "app_type":          _resolve_field(app_merged, "app_type").strip(),
+                "build_technology":  _resolve_field(app_merged, "build_technology"),
+                "deploy_technology": _resolve_field(app_merged, "deploy_technology"),
+                "deploy_platform":   _resolve_field(app_merged, "deploy_platform"),
+                "build_image_name":  _pick_env_field("build_image_name"),
+                "build_image_tag":   _pick_env_field("build_image_tag"),
+                "deploy_image_name": _pick_env_field("deploy_image_name"),
+                "deploy_image_tag":  _pick_env_field("deploy_image_tag"),
+                "teams":             teams,
+            }
+            rows.append(row)
+
+    rows.sort(key=lambda r: (r["project"].lower(), r["application"].lower()))
+    return rows, warnings
+
+
+def _row_matches_es_filters(row: dict, filters: list) -> bool:
+    """Apply the small subset of ES filter clauses produced by the dashboard's
+    own ``scope_filters_inv`` (term/terms on company/project/application,
+    must_not on excluded projects, the match-none sentinel) to a single row.
+
+    Anything outside that vocabulary is ignored — falling open is safer than
+    silently dropping data when the filter shape evolves; the ES path retains
+    full fidelity as the fallback."""
+
+    def _accept(clause: dict) -> bool:
+        if not isinstance(clause, dict):
+            return True
+        # Match-none sentinel
+        if (
+            "bool" in clause
+            and clause["bool"].get("must_not") == [{"match_all": {}}]
+            and not clause["bool"].get("filter")
+            and not clause["bool"].get("should")
+        ):
+            return False
+        if "term" in clause:
+            for k, v in clause["term"].items():
+                if not _row_field_match(row, k, [v]):
+                    return False
+            return True
+        if "terms" in clause:
+            for k, vs in clause["terms"].items():
+                if not _row_field_match(row, k, list(vs)):
+                    return False
+            return True
+        if "bool" in clause:
+            b = clause["bool"]
+            for sub in (b.get("filter") or []):
+                if not _accept(sub):
+                    return False
+            for sub in (b.get("must_not") or []):
+                if _accept(sub):
+                    return False
+            shoulds = b.get("should") or []
+            if shoulds:
+                msm = b.get("minimum_should_match", 1)
+                hits = sum(1 for sub in shoulds if _accept(sub))
+                if hits < msm:
+                    return False
+            return True
+        return True
+
+    return all(_accept(c) for c in filters)
+
+
+def _row_field_match(row: dict, key: str, values: list[Any]) -> bool:
+    """Read a row field by ES key (strips ``.keyword``) and check membership."""
+    bare = key[:-8] if key.endswith(".keyword") else key
+    val = row.get(bare)
+    # *_team fields can be a list (we store under row["teams"][bare]) — but
+    # the standard scope filters target application / project / company, so
+    # the simple scalar path covers the common case. Fall through to the
+    # teams dict for *_team scoping.
+    if val is None and bare.endswith("_team"):
+        teams = row.get("teams") or {}
+        val = teams.get(bare) or []
+    if isinstance(val, (list, tuple, set)):
+        return any(str(v) in {str(x) for x in values} for v in val)
+    return str(val or "") in {str(x) for x in values}
+
+
+def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
+    """Resolve the inventory rows for the current scope.
+
+    Strategy: try the git checkout first. If anything goes wrong — repo not
+    configured, clone failure, missing PyYAML, parse errors — fall back to
+    the ES projection so the page never goes blank. Returns
+    ``(rows, source, status, warnings)`` where ``source`` is one of
+    ``"git"`` / ``"es"`` and ``status`` is a short human-readable phrase
+    suitable for the source pill.
+    """
+    warnings: list[str] = []
+    if ADO_HOSTNAME:
+        ok, head, status_msg = _ensure_inventory_repo(ADO_HOSTNAME)
+        if ok and _YAML_AVAILABLE:
+            rows, parse_warnings = _load_inventory_from_git(head)
+            warnings.extend(parse_warnings)
+            if rows:
+                # Apply the same scope filters locally so role/company/project
+                # scoping behaves identically to the ES path.
+                try:
+                    sf = json.loads(scope_json) if scope_json else []
+                    rows = [r for r in rows if _row_matches_es_filters(r, sf)]
+                except Exception as e:
+                    warnings.append(f"scope filter: {type(e).__name__}")
+                return rows, "git", status_msg, warnings
+            warnings.append("git checkout parsed 0 apps — check field aliases")
+        else:
+            warnings.append(status_msg or "git unavailable")
+    # Fallback: legacy ES projection
+    rows = _fetch_full_inventory(scope_json)
+    return rows, "es", "ES fallback", warnings
+
+
+# =============================================================================
 # PIPELINES INVENTORY — one row per registered pipeline, RBAC-scoped
 # =============================================================================
 
@@ -9631,9 +10160,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _iv_sf.append({"term": {"project.keyword": iv_project_filter}})
 
     _iv_scope_key = json.dumps(_iv_sf, sort_keys=True, default=str)
-    # Full scope rows — stable across search/pill/sort interactions so the
-    # expensive ES fetches and popover HTML cache key on scope alone.
-    _inv_rows_all = _fetch_full_inventory(_iv_scope_key)
+    # Full scope rows — git checkout first (faster + authoritative), ES is
+    # the safety net if the clone or parse fails. The source & status are
+    # stashed for the admin-only source pill rendered just below the
+    # inventory tab header.
+    _inv_rows_all, _iv_source, _iv_source_status, _iv_source_warnings = _inventory_load(_iv_scope_key)
+    st.session_state["_iv_source_v1"] = _iv_source
+    st.session_state["_iv_source_status_v1"] = _iv_source_status
+    st.session_state["_iv_source_warnings_v1"] = list(_iv_source_warnings)
     # Mutable view that search/pills/sort narrow. Popovers are always built
     # from _inv_rows_all, so cached HTML remains correct when filters change.
     _inv_rows = list(_inv_rows_all)
@@ -12359,6 +12893,45 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Touch: move this key to the end so LRU eviction favours stale ones.
         _iv_pop_store.pop(_iv_pop_cache_key, None)
         _iv_pop_store[_iv_pop_cache_key] = _iv_popovers_html
+
+    # ── Source pill — admin-only, surfaces git vs ES path + warnings ────────
+    # Non-admins never need to know the dashboard talks to git OR ES; the
+    # pill stays hidden for them. Admins get either a quiet teal "git · sha8"
+    # confirmation, or an amber fallback chip with the failing reason inline
+    # plus the first parse warning so misconfigured field aliases / vault
+    # passwords surface immediately rather than silently producing thin rows.
+    if _is_admin:
+        _src = _iv_source
+        _stat = html.escape(_iv_source_status or "")
+        _warn_count = len(_iv_source_warnings)
+        _first_warn = (
+            html.escape(_iv_source_warnings[0]) if _iv_source_warnings else ""
+        )
+        if _src == "git":
+            _pill_cls = "iv-src is-git"
+            _pill_glyph = "✦"
+            _pill_lbl = "Git source"
+        else:
+            _pill_cls = "iv-src is-es"
+            _pill_glyph = "⚠"
+            _pill_lbl = "ES fallback"
+        _warn_chip = (
+            f'<span class="iv-src-warn" title="{_first_warn}">'
+            f'⚠ {_warn_count} warning{"s" if _warn_count != 1 else ""}</span>'
+            if _warn_count else ""
+        )
+        st.markdown(
+            f'<div class="iv-src-row">'
+            f'  <span class="{_pill_cls}">'
+            f'    <span class="iv-src-dot"></span>'
+            f'    <span class="iv-src-glyph">{_pill_glyph}</span>'
+            f'    <span class="iv-src-lbl">{_pill_lbl}</span>'
+            f'    <span class="iv-src-stat">{_stat}</span>'
+            f'  </span>'
+            f'  {_warn_chip}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Final render ────────────────────────────────────────────────────────
     _iv_visible_badge = (
