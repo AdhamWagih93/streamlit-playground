@@ -13881,17 +13881,23 @@ if _show_inv and _inventory_slot is not None:
         _el_badge_txt = (
             f"  ·  {_el_badge_n:,} apps" if _el_badge_n else ""
         )
-        # Jenkins panel badge — only relevant when configured. Shows a tiny
-        # pulse + queue depth so the user knows the panel is "live".
+        # Jenkins panel — admin-only for now. Other roles eventually get a
+        # role-scoped variant (developer triggers Build, operations triggers
+        # Deploy / Release request) but the read-only status surface is
+        # intentionally gated to admins until that role-scoping lands.
+        _jk_show = _is_admin
         _jk_configured = bool(JENKINS_HOSTNAME)
-        _jk_badge_txt = "  ·  ⏵" if _jk_configured else ""
+        _jk_badge_txt = "  ·  ⏵" if (_jk_show and _jk_configured) else ""
+        _tab_labels = [
+            f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
+            f"⧗  EVENT LOG{_el_badge_txt}",
+        ]
+        if _jk_show:
+            _tab_labels.append(f"⚙  JENKINS{_jk_badge_txt}")
         with st.container(key="cc_surface_tabs"):
-            _tabs = st.tabs([
-                f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
-                f"⧗  EVENT LOG{_el_badge_txt}",
-                f"⚙  JENKINS{_jk_badge_txt}",
-            ])
-            _tab_inv, _tab_log, _tab_jenkins = _tabs
+            _tabs = st.tabs(_tab_labels)
+            _tab_inv, _tab_log = _tabs[0], _tabs[1]
+            _tab_jenkins = _tabs[2] if _jk_show else None
             with _tab_inv:
                 st.markdown(
                     '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
@@ -13915,16 +13921,19 @@ if _show_inv and _inventory_slot is not None:
                 # inventory fragment publishes `_el_inv_scope_apps`, so the
                 # event log always reflects the current filter state.
                 _el_slot = st.empty()
-            with _tab_jenkins:
-                st.markdown(
-                    '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
-                    'Jenkins pipelines · build / deploy request / release '
-                    'request · live status of in-flight runs · click ▶ to '
-                    'load — refreshes every 30s once active'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-                _jk_slot = st.empty()
+            if _tab_jenkins is not None:
+                with _tab_jenkins:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Jenkins pipelines · build / deploy request / release '
+                        'request · live status of in-flight runs · click ▶ to '
+                        'load — refreshes every 30s once active'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _jk_slot = st.empty()
+            else:
+                _jk_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes the scope keys the event log needs.
@@ -13937,8 +13946,9 @@ if _show_inv and _inventory_slot is not None:
         # Jenkins panel — smart-loaded: nothing fetches until the user
         # clicks "Load". After first load the panel runs as a fragment
         # with run_every="30s" so it keeps itself fresh independently.
-        with _jk_slot.container():
-            _render_jenkins_panel()
+        if _jk_slot is not None:
+            with _jk_slot.container():
+                _render_jenkins_panel()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
