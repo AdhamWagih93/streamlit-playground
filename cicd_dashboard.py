@@ -1996,6 +1996,88 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-weight: 500;
 }
 
+/* Jenkins version pill — sits inside the connection header. Three states:
+ *   .is-current  → quiet teal, "✓ v2.450 · LATEST"
+ *   .is-outdated → amber, animated arrow, "⬆ v2.440 → 2.450 · UPDATE"
+ *   .is-unknown  → muted, "? v2.440 · CHECK·N/A"
+ * The UPDATE tag pulses softly so the eye registers a maintenance signal
+ * without it screaming for attention every refresh. */
+.jk-ver {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px 3px 7px;
+    border-radius: 999px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border: 1px solid;
+    cursor: help;
+    margin: 0 4px;
+}
+.jk-ver.is-current {
+    background: rgba(13,148,136,.08);
+    border-color: rgba(13,148,136,.32);
+    color: #0f766e;
+}
+.jk-ver.is-outdated {
+    background: linear-gradient(135deg,
+                rgba(217,119,6,.14), rgba(217,119,6,.04));
+    border-color: rgba(217,119,6,.45);
+    color: #b45309;
+}
+.jk-ver.is-unknown {
+    background: rgba(136,144,164,.10);
+    border-color: rgba(136,144,164,.30);
+    color: var(--cc-text-mute);
+}
+.jk-ver-glyph {
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.jk-ver.is-outdated .jk-ver-glyph {
+    animation: jkVerArrow 2.2s ease-in-out infinite;
+}
+@keyframes jkVerArrow {
+    0%, 100% { transform: translateY(0); opacity: .85; }
+    50%      { transform: translateY(-1.5px); opacity: 1; }
+}
+.jk-ver-arrow {
+    color: var(--cc-text-mute);
+    opacity: .7;
+    margin: 0 1px;
+}
+.jk-ver-target {
+    color: #b45309;
+    font-weight: 700;
+}
+.jk-ver-tag {
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.56rem;
+    letter-spacing: 0.10em;
+    font-weight: 700;
+}
+.jk-ver.is-current .jk-ver-tag {
+    background: rgba(13,148,136,.14);
+    color: #0f766e;
+}
+.jk-ver.is-outdated .jk-ver-tag {
+    background: rgba(217,119,6,.20);
+    color: #92400e;
+    animation: jkVerTagPulse 2.6s ease-in-out infinite;
+}
+@keyframes jkVerTagPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(217,119,6,.35); }
+    50%      { box-shadow: 0 0 0 4px rgba(217,119,6,0); }
+}
+.jk-ver.is-unknown .jk-ver-tag {
+    background: rgba(136,144,164,.18);
+    color: var(--cc-text-mute);
+}
+
 /* Card grid — 3 pipelines side-by-side on wide viewports, stacks on narrow. */
 .jk-grid {
     display: grid;
@@ -8276,10 +8358,60 @@ def _render_jenkins_panel_active() -> None:
     else:
         _hdr_cls = "jk-hdr is-down"
         _hdr_glyph = "○"
+
+    # Version pill — admin-only by feature requirement, but ALSO inherently
+    # gated here because the entire Jenkins tab is admin-only. Three states:
+    #   current  → quiet teal "v2.450"
+    #   outdated → amber "v2.440 → 2.450 available"
+    #   unknown  → muted "v2.440 · update check unavailable" (or just v? when
+    #              the running version itself wasn't reported)
+    _ver = status.get("version") or {}
+    _running, _latest, _cmp = (
+        (_ver.get("running") or "").strip(),
+        (_ver.get("latest") or "").strip(),
+        _ver.get("compare") or "unknown",
+    )
+    _ver_check_err = (_ver.get("check_error") or "").strip()
+    if _running and _cmp == "outdated":
+        _ver_pill = (
+            f'<span class="jk-ver is-outdated" '
+            f'title="Latest available: {html.escape(_latest)}">'
+            f'<span class="jk-ver-glyph">⬆</span>'
+            f'v{html.escape(_running)}'
+            f'<span class="jk-ver-arrow">→</span>'
+            f'<span class="jk-ver-target">{html.escape(_latest)}</span>'
+            f'<span class="jk-ver-tag">UPDATE</span>'
+            f'</span>'
+        )
+    elif _running and _cmp == "current":
+        _ver_pill = (
+            f'<span class="jk-ver is-current" '
+            f'title="Up to date with the latest LTS / weekly core advertised '
+            f'by the configured update site">'
+            f'<span class="jk-ver-glyph">✓</span>'
+            f'v{html.escape(_running)}'
+            f'<span class="jk-ver-tag">LATEST</span>'
+            f'</span>'
+        )
+    elif _running:
+        _tip = _ver_check_err or "update site not reachable from Jenkins"
+        _ver_pill = (
+            f'<span class="jk-ver is-unknown" '
+            f'title="Update check unavailable: {html.escape(_tip)}">'
+            f'<span class="jk-ver-glyph">?</span>'
+            f'v{html.escape(_running)}'
+            f'<span class="jk-ver-tag">CHECK·N/A</span>'
+            f'</span>'
+        )
+    else:
+        # No X-Jenkins header — extremely unusual; degrade silently.
+        _ver_pill = ""
+
     st.markdown(
         f'<div class="{_hdr_cls}">'
         f'  <span class="jk-hdr-glyph">{_hdr_glyph}</span>'
         f'  <span class="jk-hdr-host">{html.escape(status.get("url") or "—")}</span>'
+        f'  {_ver_pill}'
         f'  <span class="jk-hdr-stat">{html.escape(status.get("status_msg") or "")}</span>'
         f'</div>',
         unsafe_allow_html=True,
@@ -10197,11 +10329,12 @@ def _jenkins_path_segments(path: str) -> str:
     return "/" + "/".join("job/" + p for p in parts)
 
 
-def _jenkins_request(url: str) -> Any:
-    """Run a Jenkins GET with optional Basic auth. Returns the parsed JSON
-    body or raises on any HTTP / network / decode failure. Raises a
-    distinguishable ``RuntimeError`` for the unauthenticated / 404 cases
-    so the panel can label them precisely."""
+def _jenkins_request_full(url: str) -> tuple[Any, dict]:
+    """Run a Jenkins GET with optional Basic auth. Returns ``(body, headers)``
+    where headers is a plain ``dict`` (case-insensitive lookups handled by
+    callers via ``.lower()`` keys). Raises ``RuntimeError`` on any HTTP /
+    network / decode failure with a distinguishable phrase so the panel
+    can label them precisely."""
     req = urllib.request.Request(url, method="GET")
     req.add_header("Accept", "application/json")
     if JENKINS_USER and JENKINS_TOKEN:
@@ -10212,15 +10345,52 @@ def _jenkins_request(url: str) -> Any:
     try:
         with urllib.request.urlopen(req, timeout=JENKINS_TIMEOUT) as resp:
             body = resp.read()
+            headers = {k.lower(): v for k, v in resp.headers.items()}
         if not body:
-            return {}
-        return json.loads(body.decode("utf-8", errors="replace"))
+            return {}, headers
+        return json.loads(body.decode("utf-8", errors="replace")), headers
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code} {e.reason}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"unreachable: {e.reason}") from e
     except json.JSONDecodeError:
         raise RuntimeError("non-JSON response from Jenkins")
+
+
+def _jenkins_request(url: str) -> Any:
+    """Body-only variant kept for the per-pipeline calls that don't need
+    headers — keeps those callsites tidy."""
+    body, _ = _jenkins_request_full(url)
+    return body
+
+
+def _jk_version_tuple(ver: str) -> tuple:
+    """Parse a Jenkins version string (e.g. ``2.440.1``, ``2.440``) into a
+    tuple suitable for comparison. Non-numeric segments fall through as
+    strings so lexicographic comparison still does something reasonable for
+    pre-release suffixes; an empty string sorts to a ``(-1,)`` sentinel so
+    "unknown" is never treated as up-to-date."""
+    if not ver:
+        return (-1,)
+    out: list[Any] = []
+    for part in ver.strip().split("."):
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(part)
+    return tuple(out)
+
+
+def _jk_compare_versions(running: str, latest: str) -> str:
+    """Return ``"current"``, ``"outdated"``, or ``"unknown"``.
+
+    "unknown" covers the case where either side is missing — we never want
+    to falsely claim "up to date" when we couldn't actually check."""
+    if not running or not latest:
+        return "unknown"
+    if running.strip() == latest.strip():
+        return "current"
+    return "outdated" if _jk_version_tuple(running) < _jk_version_tuple(latest) else "current"
 
 
 def _jenkins_root_url() -> str:
@@ -10303,14 +10473,28 @@ def _fetch_jenkins_status_raw() -> dict:
         "queue_size": 0,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "pipelines": {},
+        # Version telemetry — admin-only in the UI even when the wider
+        # panel eventually opens up to other roles.
+        "version": {
+            "running":     "",   # X-Jenkins header from the root probe
+            "latest":      "",   # latest core advertised by /updateCenter
+            "compare":     "unknown",   # current / outdated / unknown
+            "check_error": "",   # populated if the update-center probe failed
+        },
     }
     root = _jenkins_root_url()
     if not root:
         out["status_msg"] = "JENKINS_HOSTNAME not set"
         return out
-    # Root probe — ALSO yields the queue depth so we can surface backlog.
+    # Root probe — ALSO yields the queue depth + the running version
+    # (Jenkins always sets X-Jenkins on /api/json regardless of auth state).
     try:
-        root_data = _jenkins_request(f"{root}/api/json?tree=mode,nodeName")
+        root_data, root_headers = _jenkins_request_full(
+            f"{root}/api/json?tree=mode,nodeName"
+        )
+        out["version"]["running"] = (
+            (root_headers.get("x-jenkins") or "").strip()
+        )
         # Queue depth: light secondary call; if it fails, we still report ok.
         try:
             q = _jenkins_request(f"{root}/queue/api/json?tree=items[id]")
@@ -10324,6 +10508,25 @@ def _fetch_jenkins_status_raw() -> dict:
     except RuntimeError as e:
         out["status_msg"] = str(e)
         return out
+
+    # Latest-core probe via the configured update site. This may fail on
+    # air-gapped instances or fresh installs that haven't refreshed their
+    # update sites yet — we record the failure reason but keep the rest of
+    # the panel rendering normally.
+    try:
+        uc = _jenkins_request(
+            f"{root}/updateCenter/site/default/api/json"
+            f"?tree=data[core[name,version,buildDate]]"
+        )
+        core = (((uc or {}).get("data") or {}).get("core") or {})
+        out["version"]["latest"] = (core.get("version") or "").strip()
+    except RuntimeError as e:
+        out["version"]["check_error"] = str(e)
+    except Exception as e:
+        out["version"]["check_error"] = f"{type(e).__name__}: {e}"
+    out["version"]["compare"] = _jk_compare_versions(
+        out["version"]["running"], out["version"]["latest"]
+    )
 
     # Per-pipeline metadata + last build + in-flight builds. Fetched in
     # parallel because every call is an independent HTTP round-trip.
