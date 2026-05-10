@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover
     _VaultLib = _VaultSecret = None  # type: ignore
     _ANSIBLE_VAULT_AVAILABLE = False
 try:
-    import boto3 as _boto3  # AWS S3 client for the Prisma scan viewer
+    import boto3 as _boto3  # S3-compatible client for the Prisma scan viewer
     from botocore.exceptions import (
         BotoCoreError as _BotoCoreError,
         ClientError as _BotoClientError,
@@ -67,6 +67,12 @@ except ImportError:  # pragma: no cover
     _boto3 = None  # type: ignore
     _BotoCoreError = _BotoClientError = Exception  # type: ignore
     _BOTO3_AVAILABLE = False
+try:
+    from utils.vault import VaultClient as _VaultClient  # platform vault SDK
+    _VAULT_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _VaultClient = None  # type: ignore
+    _VAULT_AVAILABLE = False
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:  # pragma: no cover
@@ -146,9 +152,17 @@ INVENTORY_REPO_URL_TEMPLATE = "http://{host}/DevOps/Platform/_git/inventories"
 # We surface their reachability + last-build status + currently-running runs
 # so an operator knows at a glance whether the platform is healthy and what's
 # already queued. Triggering happens elsewhere (deferred); here we observe.
-JENKINS_HOSTNAME = os.environ.get("JENKINS_HOSTNAME", "").strip()
-JENKINS_USER = os.environ.get("JENKINS_USER", "").strip()
-JENKINS_TOKEN = os.environ.get("JENKINS_TOKEN", "").strip()
+#
+# Credentials come from the platform's vault via ``utils.vault.VaultClient``:
+#
+#     vc = VaultClient()
+#     cfg = vc.read_all_nested_secrets("jenkins")
+#     # cfg → {"host": ..., "public_name": ..., "username": ..., "api_token": ...}
+#
+# The vault path itself is env-driven so it can be retargeted per
+# environment without code changes. Env-var creds are kept as a thin
+# fallback so dev boxes / CI without vault access still light up.
+JENKINS_VAULT_PATH = os.environ.get("JENKINS_VAULT_PATH", "jenkins").strip()
 JENKINS_TIMEOUT = 10  # seconds — the panel calls 4 endpoints per refresh
 JENKINS_TTL = 30      # seconds — how long status results are cached
 
@@ -156,24 +170,30 @@ JENKINS_TTL = 30      # seconds — how long status results are cached
 # PRISMA SCAN VIEWER — S3-backed full-report HTML
 # =============================================================================
 # Each scanned (project, application, version) has a Prismacloud HTML report
-# stored in an S3 bucket. We never list the bucket and never bulk-download —
-# fetches are explicitly user-initiated through the Scan Viewer tab. The
-# fetched HTML is cached in-process for ``PRISMA_SCAN_TTL`` seconds so a user
-# flipping between tabs / scrolling away and back doesn't re-pay the round
-# trip.
+# stored in an S3-compatible bucket (custom host + port — likely MinIO or a
+# similar on-prem S3 service rather than AWS). We never list the bucket and
+# never bulk-download — fetches are explicitly user-initiated through the
+# Scan Viewer tab. Cached in-process for PRISMA_SCAN_TTL so a user flipping
+# tabs doesn't re-pay the round trip.
 #
-# Configure via env vars:
-#   PRISMA_S3_BUCKET       — bucket holding the reports.
-#   PRISMA_S3_REGION       — AWS region (defaults to us-east-1).
-#   PRISMA_S3_KEY_PATTERN  — object-key template with {project}, {application},
-#                            and {version} placeholders. Default reflects a
-#                            common layout; override to match your bucket.
+# Connection details (host / port / access_key / secret_key) come from vault:
+#
+#     cfg = vc.read_all_nested_secrets(PRISMA_S3_VAULT_PATH)
+#     # cfg → {"host": ..., "port": "443", "access_key": ..., "secret_key": ...}
+#
+# Bucket name and the object-key template stay env-driven — they aren't
+# secrets, and they're typically per-environment configuration the operator
+# wants to retarget without touching vault entries.
+PRISMA_S3_VAULT_PATH = os.environ.get("PRISMA_S3_VAULT_PATH", "s3/prisma").strip()
 PRISMA_S3_BUCKET = os.environ.get("PRISMA_S3_BUCKET", "").strip()
-PRISMA_S3_REGION = os.environ.get("PRISMA_S3_REGION", "us-east-1").strip()
 PRISMA_S3_KEY_PATTERN = os.environ.get(
     "PRISMA_S3_KEY_PATTERN",
     "prisma-scans/{project}/{application}/{version}.html",
 ).strip()
+# S3-compatible services (MinIO etc.) don't really care about the region but
+# boto3 won't sign requests without one. Default to us-east-1 unless an env
+# var explicitly overrides — purely a boto3 plumbing concern.
+PRISMA_S3_REGION = os.environ.get("PRISMA_S3_REGION", "us-east-1").strip()
 PRISMA_SCAN_TTL = 600  # seconds — scans are immutable per version, longer TTL OK
 
 JENKINS_PIPELINES: dict[str, dict] = {
@@ -8609,10 +8629,17 @@ def _render_jenkins_panel_active() -> None:
         # No X-Jenkins header — extremely unusual; degrade silently.
         _ver_pill = ""
 
+    # Prefer the friendly public name from vault when present; fall back to
+    # the host URL. Tooltip carries the actual host so the operator can
+    # confirm which instance the panel is talking to.
+    _label = status.get("public_name") or status.get("url") or "—"
+    _label_tip = status.get("url") or _label
     st.markdown(
         f'<div class="{_hdr_cls}">'
         f'  <span class="jk-hdr-glyph">{_hdr_glyph}</span>'
-        f'  <span class="jk-hdr-host">{html.escape(status.get("url") or "—")}</span>'
+        f'  <span class="jk-hdr-host" title="{html.escape(_label_tip, quote=True)}">'
+        f'    {html.escape(_label)}'
+        f'  </span>'
         f'  {_ver_pill}'
         f'  <span class="jk-hdr-stat">{html.escape(status.get("status_msg") or "")}</span>'
         f'</div>',
@@ -8782,7 +8809,7 @@ def _psv_inventory_options() -> tuple[list[str], dict, dict]:
 def _render_prisma_scan_viewer() -> None:
     """Admin-only Prisma scan viewer. See module-level UX contract above."""
     # Empty-state when configuration is missing — keep it actionable so
-    # the operator knows exactly which env var to set.
+    # the operator knows exactly which env var / vault path to set.
     if not _BOTO3_AVAILABLE:
         st.markdown(
             '<div class="psv-empty">'
@@ -8801,14 +8828,32 @@ def _render_prisma_scan_viewer() -> None:
             '  <div class="psv-empty-glyph">🔬</div>'
             '  <div class="psv-empty-title">Prisma scan viewer not configured</div>'
             '  <div class="psv-empty-body">Set <code>PRISMA_S3_BUCKET</code> '
-            '  (and optionally <code>PRISMA_S3_REGION</code> / '
-            '  <code>PRISMA_S3_KEY_PATTERN</code>) in the environment to '
-            '  enable this viewer. While unconfigured the panel costs '
-            '  nothing.</div>'
+            '  (and optionally <code>PRISMA_S3_KEY_PATTERN</code> / '
+            '  <code>PRISMA_S3_REGION</code>) in the environment, plus a '
+            '  vault entry at <code>' + html.escape(PRISMA_S3_VAULT_PATH) +
+            '  </code> with <code>host</code>, <code>port</code>, '
+            '  <code>access_key</code>, <code>secret_key</code>. While '
+            '  unconfigured the panel costs nothing.</div>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
+    s3_creds = _prisma_s3_creds()
+    if not s3_creds:
+        st.markdown(
+            '<div class="psv-empty">'
+            '  <div class="psv-empty-glyph">🔐</div>'
+            '  <div class="psv-empty-title">S3 credentials not resolved</div>'
+            '  <div class="psv-empty-body">No vault entry found at '
+            '  <code>' + html.escape(PRISMA_S3_VAULT_PATH) + '</code>. '
+            '  Expected keys: <code>host</code>, <code>port</code>, '
+            '  <code>access_key</code>, <code>secret_key</code> '
+            '  (or <code>secret_id</code>).</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+    s3_endpoint = _prisma_s3_endpoint(s3_creds["host"], s3_creds["port"])
 
     apps, app_to_project, app_to_versions = _psv_inventory_options()
     if not apps:
@@ -8886,7 +8931,8 @@ def _render_prisma_scan_viewer() -> None:
     # ── Fetch on demand ────────────────────────────────────────────────────
     if load and app and version:
         html_doc, size, err = _fetch_prisma_scan_html(
-            PRISMA_S3_BUCKET, s3_key, PRISMA_S3_REGION,
+            PRISMA_S3_BUCKET, s3_key, s3_endpoint, PRISMA_S3_REGION,
+            s3_creds["access_key"], s3_creds["secret_key"],
         )
         if err:
             inline_note(
@@ -8896,14 +8942,14 @@ def _render_prisma_scan_viewer() -> None:
             )
         else:
             st.session_state[_PSV_LOADED_KEY] = {
-                "app":     app,
-                "ver":     version,
-                "project": project,
-                "html":    html_doc,
-                "size":    size,
-                "key":     s3_key,
-                "bucket":  PRISMA_S3_BUCKET,
-                "region":  PRISMA_S3_REGION,
+                "app":      app,
+                "ver":      version,
+                "project":  project,
+                "html":     html_doc,
+                "size":     size,
+                "key":      s3_key,
+                "bucket":   PRISMA_S3_BUCKET,
+                "endpoint": s3_endpoint,
             }
             st.rerun()
 
@@ -8924,7 +8970,7 @@ def _render_prisma_scan_viewer() -> None:
     # Header chrome — beautiful frame around the iframe.
     _kib = max(1, (loaded.get("size") or 0) // 1024)
     _open_url = _prisma_scan_console_url(
-        loaded["bucket"], loaded["key"], loaded["region"],
+        loaded.get("endpoint", ""), loaded["bucket"], loaded["key"],
     )
     # Build the optional "open in console" link OUTSIDE the f-string —
     # f-string expressions can't contain backslash escapes, and the
@@ -8984,15 +9030,19 @@ def _render_jenkins_panel() -> None:
     the operator clicks the load button; once flipped, hands off to the
     fragment-decorated active half so the 30s auto-refresh doesn't drag
     the rest of the page along with it."""
-    if not JENKINS_HOSTNAME:
+    if not _jenkins_creds().get("host"):
         st.markdown(
             '<div class="jk-empty">'
             '  <div class="jk-empty-glyph">⚙</div>'
             '  <div class="jk-empty-title">Jenkins not configured</div>'
-            '  <div class="jk-empty-body">Set <code>JENKINS_HOSTNAME</code> '
-            '  (and <code>JENKINS_USER</code> / <code>JENKINS_TOKEN</code> if '
-            '  the instance requires auth) in the environment to enable this '
-            '  panel. While unconfigured the panel costs nothing.</div>'
+            '  <div class="jk-empty-body">No Jenkins host resolved from '
+            '  vault path <code>' + html.escape(JENKINS_VAULT_PATH) + '</code> '
+            '  (expected keys: <code>host</code>, <code>username</code>, '
+            '  <code>api_token</code>; optional <code>public_name</code>). '
+            '  Falls back to <code>JENKINS_HOSTNAME</code> / '
+            '  <code>JENKINS_USER</code> / <code>JENKINS_TOKEN</code> env '
+            '  vars when vault isn\'t reachable. Until configured the panel '
+            '  costs nothing.</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -10765,6 +10815,94 @@ def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
 
 
 # =============================================================================
+# VAULT — shared credential resolver for Jenkins + S3
+# =============================================================================
+# `utils.vault.VaultClient` exposes `read_all_nested_secrets(path)`. We cache
+# the client as a Streamlit *resource* (one per process — auth happens inside
+# the SDK from ambient creds) and the resolved secret blobs as cached *data*
+# with a short TTL so a vault rotation surfaces within minutes.
+
+@st.cache_resource(show_spinner=False)
+def _vault_client():
+    """One VaultClient per process. Returns ``None`` when the SDK isn't
+    importable so callers fall back to env-var creds without crashing."""
+    if not _VAULT_AVAILABLE:
+        return None
+    try:
+        return _VaultClient()
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _vault_secrets(path: str) -> dict:
+    """Read all nested secrets at *path*. Returns ``{}`` on any error so
+    callers can substitute env-var defaults without exception handling."""
+    vc = _vault_client()
+    if vc is None or not path:
+        return {}
+    try:
+        cfg = vc.read_all_nested_secrets(path) or {}
+        return dict(cfg) if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _jenkins_creds() -> dict:
+    """Resolved Jenkins credentials. Vault is the primary source; env vars
+    (JENKINS_HOSTNAME / JENKINS_USER / JENKINS_TOKEN) are honored as a
+    fallback so dev boxes without vault access still light up.
+
+    Returns ``{"host": str, "public_name": str, "username": str,
+    "token": str}`` — all strings, all may be empty on a misconfig.
+    """
+    cfg = _vault_secrets(JENKINS_VAULT_PATH)
+    host = (cfg.get("host") or os.environ.get("JENKINS_HOSTNAME", "")).strip()
+    public = (cfg.get("public_name") or host).strip() or host
+    user = (cfg.get("username") or os.environ.get("JENKINS_USER", "")).strip()
+    # The vault key is documented as `api_token`; env-var fallback uses the
+    # legacy `JENKINS_TOKEN` name for consistency with existing deployments.
+    token = (cfg.get("api_token") or os.environ.get("JENKINS_TOKEN", "")).strip()
+    return {"host": host, "public_name": public, "username": user, "token": token}
+
+
+def _prisma_s3_creds() -> dict:
+    """Resolved S3 connection details for the scan-viewer bucket. Empty
+    dict means "not configured" — viewer renders an actionable empty-state
+    instead of trying to fetch."""
+    cfg = _vault_secrets(PRISMA_S3_VAULT_PATH)
+    if not cfg:
+        return {}
+    host = (cfg.get("host") or "").strip()
+    if not host:
+        return {}
+    return {
+        "host":       host,
+        "port":       str(cfg.get("port") or "443").strip(),
+        "access_key": (cfg.get("access_key") or "").strip(),
+        # The platform mixes naming conventions — `secret_key` is canonical
+        # but some entries write `secret_id`. Accept either.
+        "secret_key": (cfg.get("secret_key") or cfg.get("secret_id") or "").strip(),
+    }
+
+
+def _prisma_s3_endpoint(host: str, port: str) -> str:
+    """Build an S3-compatible endpoint URL from host + port. Defaults to
+    HTTPS; only port 80 produces an HTTP URL. The host string may already
+    include a scheme — we trust that and pass it through unchanged."""
+    if not host:
+        return ""
+    if host.startswith(("http://", "https://")):
+        return host.rstrip("/")
+    p = (port or "443").strip()
+    if p == "80":
+        return f"http://{host}"
+    if p in ("", "443"):
+        return f"https://{host}"
+    return f"https://{host}:{p}"
+
+
+# =============================================================================
 # JENKINS API — read-only status surface
 # =============================================================================
 # Tiny urllib-based client (no extra dependency). All endpoints used:
@@ -10789,11 +10927,12 @@ def _jenkins_request_full(url: str) -> tuple[Any, dict]:
     callers via ``.lower()`` keys). Raises ``RuntimeError`` on any HTTP /
     network / decode failure with a distinguishable phrase so the panel
     can label them precisely."""
+    creds = _jenkins_creds()
     req = urllib.request.Request(url, method="GET")
     req.add_header("Accept", "application/json")
-    if JENKINS_USER and JENKINS_TOKEN:
+    if creds["username"] and creds["token"]:
         token = base64.b64encode(
-            f"{JENKINS_USER}:{JENKINS_TOKEN}".encode()
+            f"{creds['username']}:{creds['token']}".encode()
         ).decode()
         req.add_header("Authorization", f"Basic {token}")
     try:
@@ -10848,9 +10987,11 @@ def _jk_compare_versions(running: str, latest: str) -> str:
 
 
 def _jenkins_root_url() -> str:
-    if not JENKINS_HOSTNAME:
+    """Normalise the resolved host into a fully-qualified URL. The vault
+    entry MAY include a scheme; if not, we assume HTTPS."""
+    h = (_jenkins_creds().get("host") or "").strip()
+    if not h:
         return ""
-    h = JENKINS_HOSTNAME
     if not h.startswith(("http://", "https://")):
         h = "https://" + h
     return h.rstrip("/")
@@ -10920,10 +11061,12 @@ def _fetch_jenkins_status_raw() -> dict:
           },
         }
     """
+    creds = _jenkins_creds()
     out: dict[str, Any] = {
         "ok": False,
         "status_msg": "",
-        "url": JENKINS_HOSTNAME,
+        "url": creds.get("host") or "",
+        "public_name": creds.get("public_name") or creds.get("host") or "",
         "queue_size": 0,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "pipelines": {},
@@ -10938,7 +11081,10 @@ def _fetch_jenkins_status_raw() -> dict:
     }
     root = _jenkins_root_url()
     if not root:
-        out["status_msg"] = "JENKINS_HOSTNAME not set"
+        out["status_msg"] = (
+            "Jenkins host not resolved — check vault path "
+            f"`{JENKINS_VAULT_PATH}` or env JENKINS_HOSTNAME"
+        )
         return out
     # Root probe — ALSO yields the queue depth + the running version
     # (Jenkins always sets X-Jenkins on /api/json regardless of auth state).
@@ -11049,22 +11195,25 @@ def _prisma_scan_s3_key(project: str, application: str, version: str) -> str:
     )
 
 
-def _prisma_scan_console_url(bucket: str, key: str, region: str) -> str:
-    """Permalink to the object in the AWS console — used by the "↗ Open raw"
-    affordance so users with bucket access can pop the file out of the
-    iframe and into a real browser tab."""
-    if not bucket or not key:
+def _prisma_scan_console_url(endpoint: str, bucket: str, key: str) -> str:
+    """Build a "view in browser" URL for the loaded scan. The S3-compatible
+    service is custom (likely MinIO), so we point at the direct GET URL on
+    the endpoint rather than the AWS console — the operator opening that
+    link still needs valid creds against the service, but the URL itself
+    is a usable permalink for sharing across their network."""
+    if not endpoint or not bucket or not key:
         return ""
     safe_key = urllib.parse.quote(key, safe="/")
-    return (
-        f"https://s3.console.aws.amazon.com/s3/object/{bucket}"
-        f"?region={region or 'us-east-1'}&prefix={safe_key}"
-    )
+    return f"{endpoint.rstrip('/')}/{urllib.parse.quote(bucket, safe='')}/{safe_key}"
 
 
 @st.cache_data(ttl=PRISMA_SCAN_TTL, show_spinner=False, max_entries=20)
-def _fetch_prisma_scan_html(bucket: str, key: str, region: str) -> tuple[str, int, str]:
-    """Fetch the HTML report for one ``(bucket, key)`` pair.
+def _fetch_prisma_scan_html(
+    bucket: str, key: str, endpoint: str, region: str,
+    access_key: str, secret_key: str,
+) -> tuple[str, int, str]:
+    """Fetch the HTML report for one ``(bucket, key)`` pair against the
+    S3-compatible ``endpoint`` (host:port pulled from vault).
 
     Returns ``(html, content_length, error)``. On success ``error`` is empty;
     on failure ``html`` is empty and ``error`` carries a short label suitable
@@ -11076,13 +11225,28 @@ def _fetch_prisma_scan_html(bucket: str, key: str, region: str) -> tuple[str, in
       - ``max_entries`` : 20 — bounds memory if a user pages through many
                           scans in a single session. The least-recently-used
                           entry is evicted automatically by Streamlit.
+
+    All credential fields are part of the cache key so a vault rotation
+    invalidates the cached scans on the next read.
     """
     if not _BOTO3_AVAILABLE:
         return "", 0, "boto3 not installed (pip install boto3)"
     if not bucket or not key:
         return "", 0, "S3 bucket / key not configured"
+    if not endpoint:
+        return "", 0, "S3 endpoint not resolved (check vault path)"
     try:
-        s3 = _boto3.client("s3", region_name=region or "us-east-1")
+        # ``endpoint_url`` lets boto3 talk to S3-compatible services (MinIO,
+        # Ceph, etc.). We don't pass a session_token — the vault here
+        # exposes only access_key + secret_key, which is the access pattern
+        # for static service credentials.
+        s3 = _boto3.client(
+            "s3",
+            region_name=region or "us-east-1",
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key or None,
+            aws_secret_access_key=secret_key or None,
+        )
         obj = s3.get_object(Bucket=bucket, Key=key)
         body_bytes = obj["Body"].read()
         size = int(obj.get("ContentLength") or len(body_bytes))
@@ -11095,7 +11259,7 @@ def _fetch_prisma_scan_html(bucket: str, key: str, region: str) -> tuple[str, in
         code = err.get("Code") or "ClientError"
         return "", 0, f"S3 {code}: {err.get('Message') or '(no detail)'}"
     except _BotoCoreError as e:
-        return "", 0, f"AWS connection: {type(e).__name__}"
+        return "", 0, f"S3 connection: {type(e).__name__}"
     except Exception as e:
         return "", 0, f"unexpected: {type(e).__name__}: {e}"
 
@@ -14621,7 +14785,7 @@ if _show_inv and _inventory_slot is not None:
         # Deploy / Release request) but the read-only status surface is
         # intentionally gated to admins until that role-scoping lands.
         _jk_show = _is_admin
-        _jk_configured = bool(JENKINS_HOSTNAME)
+        _jk_configured = bool(_jenkins_creds().get("host"))
         _jk_badge_txt = "  ·  ⏵" if (_jk_show and _jk_configured) else ""
         # Scan Viewer — admin-only too. Doesn't add a badge until configured.
         _psv_show = _is_admin
