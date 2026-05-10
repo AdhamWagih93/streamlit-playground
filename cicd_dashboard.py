@@ -57,6 +57,17 @@ except ImportError:  # pragma: no cover
     _VaultLib = _VaultSecret = None  # type: ignore
     _ANSIBLE_VAULT_AVAILABLE = False
 try:
+    import boto3 as _boto3  # AWS S3 client for the Prisma scan viewer
+    from botocore.exceptions import (
+        BotoCoreError as _BotoCoreError,
+        ClientError as _BotoClientError,
+    )
+    _BOTO3_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _boto3 = None  # type: ignore
+    _BotoCoreError = _BotoClientError = Exception  # type: ignore
+    _BOTO3_AVAILABLE = False
+try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:  # pragma: no cover
     from backports.zoneinfo import ZoneInfo  # type: ignore
@@ -140,6 +151,30 @@ JENKINS_USER = os.environ.get("JENKINS_USER", "").strip()
 JENKINS_TOKEN = os.environ.get("JENKINS_TOKEN", "").strip()
 JENKINS_TIMEOUT = 10  # seconds — the panel calls 4 endpoints per refresh
 JENKINS_TTL = 30      # seconds — how long status results are cached
+
+# =============================================================================
+# PRISMA SCAN VIEWER — S3-backed full-report HTML
+# =============================================================================
+# Each scanned (project, application, version) has a Prismacloud HTML report
+# stored in an S3 bucket. We never list the bucket and never bulk-download —
+# fetches are explicitly user-initiated through the Scan Viewer tab. The
+# fetched HTML is cached in-process for ``PRISMA_SCAN_TTL`` seconds so a user
+# flipping between tabs / scrolling away and back doesn't re-pay the round
+# trip.
+#
+# Configure via env vars:
+#   PRISMA_S3_BUCKET       — bucket holding the reports.
+#   PRISMA_S3_REGION       — AWS region (defaults to us-east-1).
+#   PRISMA_S3_KEY_PATTERN  — object-key template with {project}, {application},
+#                            and {version} placeholders. Default reflects a
+#                            common layout; override to match your bucket.
+PRISMA_S3_BUCKET = os.environ.get("PRISMA_S3_BUCKET", "").strip()
+PRISMA_S3_REGION = os.environ.get("PRISMA_S3_REGION", "us-east-1").strip()
+PRISMA_S3_KEY_PATTERN = os.environ.get(
+    "PRISMA_S3_KEY_PATTERN",
+    "prisma-scans/{project}/{application}/{version}.html",
+).strip()
+PRISMA_SCAN_TTL = 600  # seconds — scans are immutable per version, longer TTL OK
 
 JENKINS_PIPELINES: dict[str, dict] = {
     "build": {
@@ -2076,6 +2111,173 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .jk-ver.is-unknown .jk-ver-tag {
     background: rgba(136,144,164,.18);
     color: var(--cc-text-mute);
+}
+
+/* ── PRISMA SCAN VIEWER ────────────────────────────────────────────────────
+ * Empty / hint states + the framed iframe header. The iframe itself is
+ * Streamlit-rendered (components.v1.html) and lives sandboxed below.
+ * ----------------------------------------------------------------------- */
+.psv-empty {
+    text-align: center;
+    padding: 26px 22px 18px 22px;
+    border: 1px dashed var(--cc-border-hi);
+    border-radius: 16px;
+    color: var(--cc-text-mute);
+    background: linear-gradient(180deg,
+                rgba(13,148,136,.04) 0%,
+                rgba(13,148,136,.01) 100%);
+}
+.psv-empty-glyph {
+    font-size: 2.4rem;
+    line-height: 1;
+    color: var(--cc-teal);
+    opacity: .85;
+}
+.psv-empty-title {
+    font-family: var(--cc-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    margin: 10px 0 4px 0;
+}
+.psv-empty-body {
+    font-size: 0.82rem;
+    color: var(--cc-text-dim);
+    max-width: 540px;
+    margin: 0 auto;
+    line-height: 1.45;
+}
+.psv-empty code {
+    font-family: var(--cc-mono);
+    background: var(--cc-teal-lt);
+    color: var(--cc-teal);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.74rem;
+}
+.psv-hint {
+    margin-top: 12px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: var(--cc-accent-bg);
+    border: 1px dashed rgba(79,70,229,.30);
+    color: var(--cc-text-dim);
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+.psv-hint b { color: var(--cc-accent); }
+
+/* Frame header — sits ABOVE the iframe and gives the report a polished
+ * surround instead of dumping raw HTML into the page. */
+.psv-frame-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    margin: 12px 0 0 0;
+    border: 1px solid var(--cc-border);
+    border-bottom: none;
+    border-radius: 12px 12px 0 0;
+    background: linear-gradient(135deg,
+                rgba(37,99,235,.06), rgba(37,99,235,.01));
+}
+.psv-frame-icon {
+    width: 36px; height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    background: var(--cc-blue-lt);
+    color: var(--cc-blue);
+    border-radius: 9px;
+    flex-shrink: 0;
+}
+.psv-frame-title-wrap { flex: 1; min-width: 0; }
+.psv-frame-kicker {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+}
+.psv-frame-title {
+    font-family: var(--cc-sans);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    letter-spacing: -0.01em;
+}
+.psv-frame-ver {
+    font-family: var(--cc-mono);
+    color: var(--cc-blue);
+    font-weight: 600;
+    margin-left: 6px;
+    font-size: 0.95rem;
+}
+.psv-frame-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+.psv-meta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 6px;
+    background: rgba(255,255,255,.7);
+    border: 1px solid var(--cc-border);
+    font-size: 0.7rem;
+    cursor: default;
+}
+.psv-meta-k {
+    font-family: var(--cc-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--cc-text-mute);
+    font-weight: 600;
+}
+.psv-meta-v {
+    font-family: var(--cc-mono);
+    color: var(--cc-text);
+    font-weight: 600;
+}
+.psv-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: var(--cc-blue);
+    color: #fff !important;
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-decoration: none !important;
+    border: 1px solid var(--cc-blue);
+    transition: filter .12s, transform .12s;
+}
+.psv-open:hover {
+    filter: brightness(1.08);
+    transform: translateY(-0.5px);
+}
+
+/* The iframe Streamlit injects — give it a matching bottom-radius and the
+ * sibling border so the framed effect spans the whole component. */
+[data-testid="stIFrame"] iframe {
+    border: 1px solid var(--cc-border);
+    border-top: none;
+    border-radius: 0 0 12px 12px;
+    box-shadow: 0 4px 14px rgba(10,14,30,.05);
+    background: var(--cc-surface);
 }
 
 /* Card grid — 3 pipelines side-by-side on wide viewports, stacks on narrow. */
@@ -8525,6 +8727,258 @@ def _render_jenkins_panel_active() -> None:
     )
 
 
+# =============================================================================
+# PRISMA SCAN VIEWER PANEL — admin-only, lazy fetch
+# =============================================================================
+# UX contract:
+#   - The viewer never auto-loads. The user picks (project →) application →
+#     version, clicks "▶ Load full scan", THEN we fetch the S3 object.
+#   - The picker pulls choices from the inventory data already in memory
+#     (rows + ``_iv_prisma_map``), so no extra API traffic just to populate
+#     the selectors.
+#   - The fetched HTML is rendered inside a sandboxed iframe via
+#     ``st.components.v1.html`` — Prisma reports embed scripts/styles, and
+#     the iframe isolation keeps them from polluting the parent page.
+#   - We persist the loaded scan in session state keyed on (app, version),
+#     so flipping tabs / scrolling doesn't redownload it.
+
+_PSV_LOADED_KEY = "_psv_loaded_v1"  # holds {"app": …, "ver": …, "html": …, "size": …, "key": …, "bucket": …, "region": …}
+
+
+def _psv_inventory_options() -> tuple[list[str], dict, dict]:
+    """Resolve the (project, app, version) options from already-loaded
+    inventory + scan data so the viewer picker doesn't make extra API calls.
+
+    Returns ``(apps_sorted, app_to_project, app_to_versions)`` where:
+      ``app_to_project[app]``  → project string (best-effort) used to render
+                                 the {project} placeholder in the key pattern.
+      ``app_to_versions[app]`` → list of version strings known to have a
+                                 prismacloud scan (sourced from session-state
+                                 telemetry the inventory tab publishes), with
+                                 a fallback to "any version we've heard of"
+                                 if the scan map isn't present yet.
+    """
+    apps_meta: dict[str, str] = {}
+    versions_by_app: dict[str, set[str]] = {}
+    # The inventory fragment publishes the scoped app list every render; that
+    # set is the right floor for the picker.
+    for r in (st.session_state.get("_psv_app_rows") or []):
+        a = r.get("application") or ""
+        if not a:
+            continue
+        apps_meta.setdefault(a, r.get("project") or "")
+    for (a, v) in (st.session_state.get("_psv_prisma_keys") or []):
+        if not a or not v:
+            continue
+        apps_meta.setdefault(a, "")
+        versions_by_app.setdefault(a, set()).add(v)
+    return (
+        sorted(apps_meta.keys(), key=str.lower),
+        apps_meta,
+        {a: sorted(vs, key=str.lower) for a, vs in versions_by_app.items()},
+    )
+
+
+def _render_prisma_scan_viewer() -> None:
+    """Admin-only Prisma scan viewer. See module-level UX contract above."""
+    # Empty-state when configuration is missing — keep it actionable so
+    # the operator knows exactly which env var to set.
+    if not _BOTO3_AVAILABLE:
+        st.markdown(
+            '<div class="psv-empty">'
+            '  <div class="psv-empty-glyph">⚠</div>'
+            '  <div class="psv-empty-title">boto3 not installed</div>'
+            '  <div class="psv-empty-body">Install with '
+            '  <code>pip install boto3</code> on the streamlit host '
+            '  to enable the Prisma scan viewer.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+    if not PRISMA_S3_BUCKET:
+        st.markdown(
+            '<div class="psv-empty">'
+            '  <div class="psv-empty-glyph">🔬</div>'
+            '  <div class="psv-empty-title">Prisma scan viewer not configured</div>'
+            '  <div class="psv-empty-body">Set <code>PRISMA_S3_BUCKET</code> '
+            '  (and optionally <code>PRISMA_S3_REGION</code> / '
+            '  <code>PRISMA_S3_KEY_PATTERN</code>) in the environment to '
+            '  enable this viewer. While unconfigured the panel costs '
+            '  nothing.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    apps, app_to_project, app_to_versions = _psv_inventory_options()
+    if not apps:
+        st.markdown(
+            '<div class="psv-empty">'
+            '  <div class="psv-empty-glyph">⏳</div>'
+            '  <div class="psv-empty-title">Inventory not loaded yet</div>'
+            '  <div class="psv-empty-body">Open the Pipelines Inventory tab '
+            '  once so the viewer can populate its picker — the version list '
+            '  is sourced from the same data the inventory uses, no extra '
+            '  API calls.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Picker row: app → version → load ──────────────────────────────────
+    _c1, _c2, _c3 = st.columns([3, 2, 1])
+    with _c1:
+        app = st.selectbox(
+            "Application",
+            options=apps,
+            key="_psv_app_v1",
+            help="Pulled from the currently-loaded inventory scope.",
+        )
+    _versions = app_to_versions.get(app or "", [])
+    with _c2:
+        if _versions:
+            version = st.selectbox(
+                "Version",
+                options=_versions,
+                key="_psv_ver_v1",
+                help="Versions that have a known Prismacloud scan record.",
+            )
+        else:
+            version = st.text_input(
+                "Version",
+                key="_psv_ver_v1_free",
+                placeholder="e.g. 1.4.2",
+                help=(
+                    "No scanned versions surfaced for this app yet — type "
+                    "one manually; the viewer will try to fetch the matching "
+                    "S3 object."
+                ),
+            ).strip()
+    with _c3:
+        st.markdown('<div style="height: 1.65rem"></div>', unsafe_allow_html=True)
+        load = st.button(
+            "▶  Load",
+            key="_psv_load_btn",
+            type="primary",
+            use_container_width=True,
+            disabled=not (app and version),
+        )
+
+    project = app_to_project.get(app or "", "")
+    s3_key = _prisma_scan_s3_key(project, app, version) if (app and version) else ""
+
+    # Optional cache-bust + reset row
+    if st.session_state.get(_PSV_LOADED_KEY):
+        _r1, _r2, _r3 = st.columns([1, 1, 6])
+        with _r1:
+            if st.button("↻ Re-fetch", key="_psv_refetch_btn",
+                         use_container_width=True,
+                         help="Bypasses the local cache for this scan"):
+                _fetch_prisma_scan_html.clear()
+                load = True  # fall through into the fetch block below
+        with _r2:
+            if st.button("✕ Clear", key="_psv_clear_btn",
+                         use_container_width=True,
+                         help="Drops the loaded scan from view"):
+                st.session_state.pop(_PSV_LOADED_KEY, None)
+                st.rerun()
+
+    # ── Fetch on demand ────────────────────────────────────────────────────
+    if load and app and version:
+        html_doc, size, err = _fetch_prisma_scan_html(
+            PRISMA_S3_BUCKET, s3_key, PRISMA_S3_REGION,
+        )
+        if err:
+            inline_note(
+                f"Couldn't load the scan for {app} @ {version}: {err}. "
+                f"S3 key tried: `{s3_key}`",
+                "warning",
+            )
+        else:
+            st.session_state[_PSV_LOADED_KEY] = {
+                "app":     app,
+                "ver":     version,
+                "project": project,
+                "html":    html_doc,
+                "size":    size,
+                "key":     s3_key,
+                "bucket":  PRISMA_S3_BUCKET,
+                "region":  PRISMA_S3_REGION,
+            }
+            st.rerun()
+
+    # ── Render loaded scan ─────────────────────────────────────────────────
+    loaded = st.session_state.get(_PSV_LOADED_KEY)
+    if not loaded:
+        st.markdown(
+            '<div class="psv-hint">'
+            '  Pick an application and version, then click '
+            '  <b>▶ Load</b> to fetch the full Prismacloud HTML report from '
+            '  S3. The viewer never touches the bucket until you click — '
+            '  even tabbing here costs zero requests.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Header chrome — beautiful frame around the iframe.
+    _kib = max(1, (loaded.get("size") or 0) // 1024)
+    _open_url = _prisma_scan_console_url(
+        loaded["bucket"], loaded["key"], loaded["region"],
+    )
+    # Build the optional "open in console" link OUTSIDE the f-string —
+    # f-string expressions can't contain backslash escapes, and the
+    # attribute quoting needs them.
+    _open_link_html = ""
+    if _open_url:
+        _open_link_html = (
+            '<a class="psv-open" href="'
+            + html.escape(_open_url, quote=True)
+            + '" target="_blank" rel="noopener noreferrer">'
+            '↗ Open in console</a>'
+        )
+    _key_safe = html.escape(loaded["key"])
+    _key_tail = html.escape(loaded["key"][-48:])
+    _app_safe = html.escape(loaded["app"])
+    _ver_safe = html.escape(loaded["ver"])
+    st.markdown(
+        f'<div class="psv-frame-head">'
+        f'  <div class="psv-frame-icon">⛟</div>'
+        f'  <div class="psv-frame-title-wrap">'
+        f'    <div class="psv-frame-kicker">Prismacloud full scan</div>'
+        f'    <div class="psv-frame-title">'
+        f'      {_app_safe}'
+        f'      <span class="psv-frame-ver">@ {_ver_safe}</span>'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="psv-frame-meta">'
+        f'    <span class="psv-meta-chip">'
+        f'      <span class="psv-meta-k">size</span>'
+        f'      <span class="psv-meta-v">{_kib} KiB</span>'
+        f'    </span>'
+        f'    <span class="psv-meta-chip" title="{_key_safe}">'
+        f'      <span class="psv-meta-k">key</span>'
+        f'      <span class="psv-meta-v">{_key_tail}</span>'
+        f'    </span>'
+        f'    {_open_link_html}'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Sandboxed iframe with the report HTML. Streamlit's components.v1.html
+    # generates a sandboxed iframe with srcdoc — perfect for embedded HTML
+    # that may include its own <script> tags.
+    try:
+        import streamlit.components.v1 as _components
+        _components.html(loaded["html"], height=900, scrolling=True)
+    except Exception as e:
+        inline_note(
+            f"Failed to render the scan iframe: {type(e).__name__}: {e}",
+            "warning",
+        )
+
+
 def _render_jenkins_panel() -> None:
     """Outer half of the Jenkins panel — handles the load gate. Idle until
     the operator clicks the load button; once flipped, hands off to the
@@ -10579,6 +11033,74 @@ def _fetch_jenkins_status_raw() -> dict:
 
 
 # =============================================================================
+# PRISMA SCAN VIEWER — S3 fetch helpers
+# =============================================================================
+
+def _prisma_scan_s3_key(project: str, application: str, version: str) -> str:
+    """Render the configured key template into a concrete S3 object key.
+
+    Empty placeholders are tolerated (some bucket layouts only key on app +
+    version) — the resulting key may have ``//`` collapses that S3 will
+    reject, which the caller surfaces as a useful error rather than a 404."""
+    return PRISMA_S3_KEY_PATTERN.format(
+        project=project or "",
+        application=application or "",
+        version=version or "",
+    )
+
+
+def _prisma_scan_console_url(bucket: str, key: str, region: str) -> str:
+    """Permalink to the object in the AWS console — used by the "↗ Open raw"
+    affordance so users with bucket access can pop the file out of the
+    iframe and into a real browser tab."""
+    if not bucket or not key:
+        return ""
+    safe_key = urllib.parse.quote(key, safe="/")
+    return (
+        f"https://s3.console.aws.amazon.com/s3/object/{bucket}"
+        f"?region={region or 'us-east-1'}&prefix={safe_key}"
+    )
+
+
+@st.cache_data(ttl=PRISMA_SCAN_TTL, show_spinner=False, max_entries=20)
+def _fetch_prisma_scan_html(bucket: str, key: str, region: str) -> tuple[str, int, str]:
+    """Fetch the HTML report for one ``(bucket, key)`` pair.
+
+    Returns ``(html, content_length, error)``. On success ``error`` is empty;
+    on failure ``html`` is empty and ``error`` carries a short label suitable
+    for the viewer's error banner.
+
+    Cache settings:
+      - ``ttl``         : reports are immutable per (app, version), so a
+                          long TTL is safe; 10 minutes lets us absorb retries.
+      - ``max_entries`` : 20 — bounds memory if a user pages through many
+                          scans in a single session. The least-recently-used
+                          entry is evicted automatically by Streamlit.
+    """
+    if not _BOTO3_AVAILABLE:
+        return "", 0, "boto3 not installed (pip install boto3)"
+    if not bucket or not key:
+        return "", 0, "S3 bucket / key not configured"
+    try:
+        s3 = _boto3.client("s3", region_name=region or "us-east-1")
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        body_bytes = obj["Body"].read()
+        size = int(obj.get("ContentLength") or len(body_bytes))
+        # decode with replace so a single bad byte in the report doesn't
+        # blow up rendering — viewers tolerate substituted glyphs better
+        # than a stack trace.
+        return body_bytes.decode("utf-8", errors="replace"), size, ""
+    except _BotoClientError as e:
+        err = e.response.get("Error", {}) if hasattr(e, "response") else {}
+        code = err.get("Code") or "ClientError"
+        return "", 0, f"S3 {code}: {err.get('Message') or '(no detail)'}"
+    except _BotoCoreError as e:
+        return "", 0, f"AWS connection: {type(e).__name__}"
+    except Exception as e:
+        return "", 0, f"unexpected: {type(e).__name__}: {e}"
+
+
+# =============================================================================
 # PIPELINES INVENTORY — one row per registered pipeline, RBAC-scoped
 # =============================================================================
 
@@ -11323,6 +11845,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if _v:
                 _iv_prisma_keys.add((_a, _v))
     _iv_prisma_keys_t = tuple(sorted(_iv_prisma_keys))
+    # Publish for the Prisma Scan Viewer's picker — the viewer pulls
+    # (app, version) options from these without firing any extra ES /
+    # S3 calls. Restricted to (project, app) tuples actually present in
+    # this scope so the picker stays scope-aware.
+    st.session_state["_psv_app_rows"] = [
+        {"application": r.get("application", ""), "project": r.get("project", "")}
+        for r in _inv_rows_all
+        if r.get("application")
+    ]
+    st.session_state["_psv_prisma_keys"] = list(_iv_prisma_keys)
     if _iv_prisma_keys:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="iv-stage3") as _ex:
             _f_pri = _ex.submit(_fetch_prismacloud,  _iv_prisma_keys_t)
@@ -14091,16 +14623,26 @@ if _show_inv and _inventory_slot is not None:
         _jk_show = _is_admin
         _jk_configured = bool(JENKINS_HOSTNAME)
         _jk_badge_txt = "  ·  ⏵" if (_jk_show and _jk_configured) else ""
+        # Scan Viewer — admin-only too. Doesn't add a badge until configured.
+        _psv_show = _is_admin
+        _psv_configured = bool(PRISMA_S3_BUCKET) and _BOTO3_AVAILABLE
+        _psv_badge_txt = "  ·  S3" if (_psv_show and _psv_configured) else ""
         _tab_labels = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
             f"⧗  EVENT LOG{_el_badge_txt}",
         ]
         if _jk_show:
             _tab_labels.append(f"⚙  JENKINS{_jk_badge_txt}")
+        if _psv_show:
+            _tab_labels.append(f"🔬  SCAN VIEWER{_psv_badge_txt}")
         with st.container(key="cc_surface_tabs"):
             _tabs = st.tabs(_tab_labels)
             _tab_inv, _tab_log = _tabs[0], _tabs[1]
-            _tab_jenkins = _tabs[2] if _jk_show else None
+            _next_idx = 2
+            _tab_jenkins = _tabs[_next_idx] if _jk_show else None
+            if _jk_show:
+                _next_idx += 1
+            _tab_psv = _tabs[_next_idx] if _psv_show else None
             with _tab_inv:
                 st.markdown(
                     '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
@@ -14137,6 +14679,19 @@ if _show_inv and _inventory_slot is not None:
                     _jk_slot = st.empty()
             else:
                 _jk_slot = None
+            if _tab_psv is not None:
+                with _tab_psv:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Prisma scan viewer · pick an app + version · '
+                        'click ▶ Load to fetch the full HTML report from S3 — '
+                        'never auto-loads, never lists the bucket'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _psv_slot = st.empty()
+            else:
+                _psv_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes the scope keys the event log needs.
@@ -14152,6 +14707,13 @@ if _show_inv and _inventory_slot is not None:
         if _jk_slot is not None:
             with _jk_slot.container():
                 _render_jenkins_panel()
+
+        # Prisma scan viewer — picker pulls options from the inventory
+        # fragment's published session state, so this runs LAST so the
+        # picker is already populated.
+        if _psv_slot is not None:
+            with _psv_slot.container():
+                _render_prisma_scan_viewer()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
