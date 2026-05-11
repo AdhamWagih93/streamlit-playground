@@ -2144,6 +2144,356 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .iv-src-alarm-warns li { word-break: break-all; margin-bottom: 1px; }
 
+/* Source-selector radio strip — admin-only inline control above the
+ * source pill / banner. Tight + horizontal so it reads as a toggle, not a
+ * full form. */
+.st-key-cc_inv_src_pref {
+    margin: 0 0 6px 0;
+}
+.iv-src-pref-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text-mute);
+    padding-top: 6px;
+}
+.st-key-cc_inv_src_pref [role="radiogroup"] {
+    gap: 14px !important;
+}
+.st-key-cc_inv_src_pref [role="radiogroup"] label {
+    font-size: 0.78rem;
+    color: var(--cc-text-dim);
+}
+
+/* ── SYNC CHECK PANEL ──────────────────────────────────────────────────────
+ * Idle gate, summary tiles, only-in-X chip lists, and per-app diff cards.
+ * ----------------------------------------------------------------------- */
+.sync-gate {
+    text-align: center;
+    padding: 22px 22px 14px 22px;
+    margin: 4px 0 12px 0;
+    border-radius: 16px;
+    background: linear-gradient(180deg,
+                rgba(79,70,229,.05) 0%,
+                rgba(79,70,229,.01) 100%);
+    border: 1px dashed var(--cc-border-hi);
+}
+.sync-gate-glyph {
+    font-size: 2.4rem;
+    line-height: 1;
+    color: var(--cc-accent);
+    opacity: .82;
+}
+.sync-gate-title {
+    font-family: var(--cc-mono);
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    margin: 10px 0 6px 0;
+}
+.sync-gate-body {
+    font-size: 0.82rem;
+    color: var(--cc-text-dim);
+    max-width: 560px;
+    margin: 0 auto;
+    line-height: 1.5;
+    text-align: left;
+}
+.sync-gate-body ul {
+    margin: 6px 0 2px 18px;
+    padding: 0;
+}
+.sync-gate-body li { margin-bottom: 1px; }
+.sync-gate-body b { color: var(--cc-accent); }
+
+.sync-errs {
+    background: rgba(220,38,38,.05);
+    border: 1px solid rgba(220,38,38,.30);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin: 6px 0 10px 0;
+    font-size: 0.78rem;
+    color: #991b1b;
+}
+.sync-errs-line { margin: 2px 0; word-break: break-word; }
+.sync-errs-k {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: var(--cc-red);
+    margin-right: 6px;
+}
+.sync-errs code {
+    font-family: var(--cc-mono);
+    background: rgba(255,255,255,.55);
+    color: #7f1d1d;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.sync-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin: 10px 0 12px 0;
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    transition: border-color .15s;
+}
+.sync-summary.is-clean { border-color: rgba(13,148,136,.36); }
+.sync-summary.is-drift { border-color: rgba(217,119,6,.42); }
+.sync-tile {
+    text-align: center;
+    padding: 8px 6px;
+    background: var(--cc-surface2);
+    border-radius: 10px;
+    border: 1px solid var(--cc-border);
+}
+.sync-tile.is-only-git { border-color: rgba(13,148,136,.28); background: rgba(13,148,136,.04); }
+.sync-tile.is-only-es  { border-color: rgba(37,99,235,.28);  background: rgba(37,99,235,.04); }
+.sync-tile.is-field    { border-color: rgba(217,119,6,.34);  background: rgba(217,119,6,.04); }
+.sync-tile-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.sync-tile-val {
+    font-family: var(--cc-mono);
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    line-height: 1.2;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+}
+.sync-tile.is-only-git .sync-tile-val { color: #0f766e; }
+.sync-tile.is-only-es  .sync-tile-val { color: #1d4ed8; }
+.sync-tile.is-field    .sync-tile-val { color: #b45309; }
+
+.sync-clean {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: var(--cc-green-bg);
+    border: 1px solid rgba(5,150,105,.30);
+    color: #047857;
+    font-size: 0.86rem;
+    line-height: 1.45;
+}
+.sync-clean-glyph {
+    font-size: 1.3rem;
+    color: var(--cc-green);
+    flex-shrink: 0;
+}
+
+.sync-section {
+    margin-top: 10px;
+    border-radius: 12px;
+    border: 1px solid var(--cc-border);
+    background: var(--cc-surface);
+    overflow: hidden;
+}
+.sync-section.is-only-git { border-color: rgba(13,148,136,.30); }
+.sync-section.is-only-es  { border-color: rgba(37,99,235,.30); }
+.sync-section.is-field    { border-color: rgba(217,119,6,.32); }
+.sync-section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--cc-border);
+    background: var(--cc-surface2);
+}
+.sync-section.is-only-git .sync-section-head { background: rgba(13,148,136,.04); }
+.sync-section.is-only-es  .sync-section-head { background: rgba(37,99,235,.04); }
+.sync-section.is-field    .sync-section-head { background: rgba(217,119,6,.04); }
+.sync-section-glyph {
+    width: 24px; height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    border-radius: 6px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+}
+.sync-section.is-only-git .sync-section-glyph { color: #0f766e; }
+.sync-section.is-only-es  .sync-section-glyph { color: #1d4ed8; }
+.sync-section.is-field    .sync-section-glyph { color: #b45309; }
+.sync-section-title {
+    font-family: var(--cc-sans);
+    font-weight: 700;
+    font-size: 0.88rem;
+    color: var(--cc-text);
+}
+.sync-section-count {
+    margin-left: auto;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface);
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--cc-border);
+}
+
+.sync-only-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 10px 12px;
+}
+.sync-only-chip {
+    display: inline-flex;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    border: 1px solid;
+}
+.sync-only-chip.is-only-git {
+    color: #0f766e;
+    background: rgba(13,148,136,.06);
+    border-color: rgba(13,148,136,.30);
+}
+.sync-only-chip.is-only-es {
+    color: #1d4ed8;
+    background: rgba(37,99,235,.06);
+    border-color: rgba(37,99,235,.30);
+}
+.sync-only-more {
+    display: inline-flex;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+}
+
+/* Per-app diff cards — collapsed by default */
+.sync-diff-card {
+    margin: 6px 0;
+    border: 1px solid rgba(217,119,6,.28);
+    border-radius: 10px;
+    background: var(--cc-surface);
+    overflow: hidden;
+}
+.sync-diff-card summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: rgba(217,119,6,.04);
+}
+.sync-diff-card summary::-webkit-details-marker { display: none; }
+.sync-diff-card summary::before {
+    content: "▸";
+    color: var(--cc-amber);
+    font-size: 0.78rem;
+    transition: transform .12s;
+}
+.sync-diff-card[open] summary::before { transform: rotate(90deg); }
+.sync-diff-app {
+    font-family: var(--cc-mono);
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--cc-text);
+}
+.sync-diff-proj {
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    margin-left: 4px;
+}
+.sync-diff-count {
+    margin-left: auto;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-amber);
+    background: rgba(217,119,6,.10);
+    padding: 1px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(217,119,6,.30);
+}
+.sync-diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    background: var(--cc-surface);
+}
+.sync-diff-table th {
+    text-align: left;
+    padding: 6px 12px;
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    border-bottom: 1px solid var(--cc-border);
+}
+.sync-diff-table th.is-git { color: #0f766e; }
+.sync-diff-table th.is-es  { color: #1d4ed8; }
+.sync-diff-table td {
+    padding: 6px 12px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--cc-border);
+}
+.sync-diff-table tr:last-child td { border-bottom: none; }
+.sync-diff-k {
+    font-family: var(--cc-mono);
+    color: var(--cc-text-dim);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.sync-diff-side.is-git { background: rgba(13,148,136,.03); }
+.sync-diff-side.is-es  { background: rgba(37,99,235,.03); }
+.sync-cell-val {
+    font-family: var(--cc-mono);
+    color: var(--cc-text);
+    font-weight: 600;
+    word-break: break-word;
+}
+.sync-cell-val.is-git { color: #0f766e; }
+.sync-cell-val.is-es  { color: #1d4ed8; }
+.sync-cell-chip {
+    display: inline-block;
+    margin: 1px 3px 1px 0;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+.sync-cell-chip.is-git { color: #0f766e; background: rgba(13,148,136,.08); border: 1px solid rgba(13,148,136,.24); }
+.sync-cell-chip.is-es  { color: #1d4ed8; background: rgba(37,99,235,.08);  border: 1px solid rgba(37,99,235,.24); }
+.sync-cell-empty {
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-family: var(--cc-mono);
+}
+
 /* ── INTEGRATIONS HEALTH STRIP ─────────────────────────────────────────────
  * Compact admin-only chip row that summarises every external integration's
  * state. Collapsed (default) shows: label · count summary · chip row · ▾
@@ -9211,7 +9561,51 @@ def _integrations_health() -> list[dict]:
                 "tip": f"endpoint: {ep} · bucket: {PRISMA_S3_BUCKET}",
             })
 
-    # 6. Optional deps — soft signal so admins know which features
+    # 6. Inventory sync check — surfaces the last-known diff count so
+    # admins see drift across sources without opening the dedicated tab.
+    sync_sum = st.session_state.get("_sync_summary_v1") or {}
+    if not sync_sum:
+        out.append({
+            "key": "sync", "label": "Sync check", "glyph": "🔀",
+            "state": "skip",
+            "detail": "not run",
+            "tip": (
+                "Open the SYNC CHECK tab and click ▶ Run to diff the git "
+                "inventory against the Elasticsearch projection for the "
+                "current scope."
+            ),
+        })
+    else:
+        total = int(sync_sum.get("total") or 0)
+        errs  = sync_sum.get("errors") or {}
+        if errs.get("git") or errs.get("es"):
+            out.append({
+                "key": "sync", "label": "Sync check", "glyph": "🔀",
+                "state": "down",
+                "detail": "fetch errors",
+                "tip": " · ".join(
+                    f"{k}: {v}" for k, v in errs.items() if v
+                ) or "see SYNC CHECK tab",
+            })
+        elif total == 0:
+            out.append({
+                "key": "sync", "label": "Sync check", "glyph": "🔀",
+                "state": "ok",
+                "detail": "clean",
+                "tip": "Last comparison: git and ES agree completely.",
+            })
+        else:
+            out.append({
+                "key": "sync", "label": "Sync check", "glyph": "🔀",
+                "state": "warn",
+                "detail": f"{total} drift",
+                "tip": (
+                    f"{total} discrepancy/ies recorded in the last run — "
+                    f"open the SYNC CHECK tab for the breakdown."
+                ),
+            })
+
+    # 7. Optional deps — soft signal so admins know which features
     # would light up if a missing package were installed.
     missing_deps: list[str] = []
     if not _YAML_AVAILABLE:
@@ -9304,6 +9698,282 @@ def _render_integrations_strip() -> None:
         f'</details>',
         unsafe_allow_html=True,
     )
+
+
+# =============================================================================
+# SYNC CHECK PANEL — admin-only, smart-loaded
+# =============================================================================
+# When both git and Elasticsearch are reachable, the platform exposes the
+# inventory twice. Drift between the two is normal until the projection
+# refreshes, and pathological when an app exists in one but not the other,
+# or a row's metadata disagrees. This panel lets the admin run the diff on
+# demand. Each run does two full fetches + a comparison — too heavy for an
+# auto-refresh, so we gate it behind an explicit ▶ Run button. The result
+# is stashed in session_state for the rest of the session, with manual
+# "↻ Re-run" / "✕ Clear" controls.
+
+_SYNC_LOADED_KEY = "_sync_check_loaded_v1"  # holds the last diff dict
+
+
+def _sync_count_total_diffs(diff: dict) -> int:
+    """Number of distinct discrepancies for the integrations strip / badge."""
+    return (
+        len(diff.get("only_in_git") or [])
+        + len(diff.get("only_in_es") or [])
+        + len(diff.get("field_diffs") or [])
+    )
+
+
+def _render_sync_value(val: Any, side: str) -> str:
+    """Render a value cell for the diff list. List / sequence values
+    collapse to chips; missing values become a muted "—"."""
+    if isinstance(val, (list, tuple)):
+        if not val:
+            return f'<span class="sync-cell-empty {side}">—</span>'
+        return "".join(
+            f'<span class="sync-cell-chip {side}">{html.escape(str(v))}</span>'
+            for v in val
+        )
+    if val in (None, ""):
+        return f'<span class="sync-cell-empty {side}">—</span>'
+    return f'<span class="sync-cell-val {side}">{html.escape(str(val))}</span>'
+
+
+def _render_sync_check_panel(scope_json: str) -> None:
+    """Admin-only sync-check panel. See section header for the UX contract."""
+    # ── Idle gate ──────────────────────────────────────────────────────────
+    if not st.session_state.get(_SYNC_LOADED_KEY):
+        st.markdown(
+            '<div class="sync-gate">'
+            '  <div class="sync-gate-glyph">🔀</div>'
+            '  <div class="sync-gate-title">Run inventory sync check</div>'
+            '  <div class="sync-gate-body">'
+            '    Compares the git inventory against the Elasticsearch '
+            '    projection for the <b>current scope</b> and surfaces:'
+            '    <ul>'
+            '      <li>applications present only in git</li>'
+            '      <li>applications present only in Elasticsearch</li>'
+            '      <li>applications in both that disagree on company / '
+            '          tech / image / teams</li>'
+            '    </ul>'
+            '    Two full inventory fetches per run — gated behind the '
+            '    button so the rest of the page never pays this cost.'
+            '  </div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _gc1, _gc2, _gc3 = st.columns([1, 2, 1])
+        with _gc2:
+            if st.button("▶  Run sync check",
+                         key="_sync_run_btn",
+                         type="primary",
+                         use_container_width=True):
+                with st.spinner("Comparing git vs Elasticsearch..."):
+                    diff = _inventory_compare(scope_json)
+                st.session_state[_SYNC_LOADED_KEY] = diff
+                # Publish a tiny summary so the Integrations strip can
+                # show "sync clean" / "N diffs" without re-running.
+                st.session_state["_sync_summary_v1"] = {
+                    "total":   _sync_count_total_diffs(diff),
+                    "checked_at": diff.get("checked_at", ""),
+                    "errors":  diff.get("errors", {}),
+                }
+                st.rerun()
+        return
+
+    diff = st.session_state.get(_SYNC_LOADED_KEY) or {}
+
+    # ── Control row ────────────────────────────────────────────────────────
+    _cc1, _cc2, _cc3 = st.columns([1, 1, 6])
+    with _cc1:
+        if st.button("↻ Re-run", key="_sync_rerun_btn",
+                     use_container_width=True):
+            with st.spinner("Re-comparing..."):
+                diff = _inventory_compare(scope_json)
+            st.session_state[_SYNC_LOADED_KEY] = diff
+            st.session_state["_sync_summary_v1"] = {
+                "total": _sync_count_total_diffs(diff),
+                "checked_at": diff.get("checked_at", ""),
+                "errors": diff.get("errors", {}),
+            }
+            st.rerun()
+    with _cc2:
+        if st.button("✕ Clear", key="_sync_clear_btn",
+                     use_container_width=True):
+            st.session_state.pop(_SYNC_LOADED_KEY, None)
+            st.session_state.pop("_sync_summary_v1", None)
+            st.rerun()
+    with _cc3:
+        _ts = (diff.get("checked_at") or "").replace("T", " ")[:19]
+        st.caption(
+            f"comparison run at {_ts} UTC · result kept in session until "
+            f"cleared or re-run · scope mirrors every active filter"
+        )
+
+    # ── Error-state shortcuts ──────────────────────────────────────────────
+    errors = diff.get("errors") or {}
+    err_git, err_es = errors.get("git") or "", errors.get("es") or ""
+    if err_git or err_es:
+        st.markdown(
+            f'<div class="sync-errs">'
+            + (f'<div class="sync-errs-line"><span class="sync-errs-k">Git:</span>'
+               f'<code>{html.escape(err_git)}</code></div>' if err_git else "")
+            + (f'<div class="sync-errs-line"><span class="sync-errs-k">ES:</span>'
+               f'<code>{html.escape(err_es)}</code></div>' if err_es else "")
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+        if err_git and err_es:
+            # Both sides failed — nothing useful to compare.
+            inline_note(
+                "Both sources failed to load. The Integrations strip at the "
+                "top has the per-source detail; sync check can't proceed.",
+                "warning",
+            )
+            return
+
+    # ── Summary tiles ──────────────────────────────────────────────────────
+    git_total  = diff.get("git_total", 0)
+    es_total   = diff.get("es_total", 0)
+    common     = diff.get("common", 0)
+    only_git   = diff.get("only_in_git", []) or []
+    only_es    = diff.get("only_in_es", []) or []
+    field_diffs = diff.get("field_diffs", []) or []
+    total_drift = len(only_git) + len(only_es) + len(field_diffs)
+    drift_state = "clean" if total_drift == 0 else "drift"
+
+    st.markdown(
+        f'<div class="sync-summary is-{drift_state}">'
+        f'  <div class="sync-tile">'
+        f'    <div class="sync-tile-lbl">Git</div>'
+        f'    <div class="sync-tile-val">{git_total:,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile">'
+        f'    <div class="sync-tile-lbl">Elasticsearch</div>'
+        f'    <div class="sync-tile-val">{es_total:,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile">'
+        f'    <div class="sync-tile-lbl">In both</div>'
+        f'    <div class="sync-tile-val">{common:,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile is-only is-only-git">'
+        f'    <div class="sync-tile-lbl">Only in git</div>'
+        f'    <div class="sync-tile-val">{len(only_git):,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile is-only is-only-es">'
+        f'    <div class="sync-tile-lbl">Only in ES</div>'
+        f'    <div class="sync-tile-val">{len(only_es):,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile is-field">'
+        f'    <div class="sync-tile-lbl">Field diffs</div>'
+        f'    <div class="sync-tile-val">{len(field_diffs):,}</div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if total_drift == 0:
+        st.markdown(
+            '<div class="sync-clean">'
+            '  <span class="sync-clean-glyph">✓</span>'
+            '  <span>The two sources agree completely for the current '
+            '  scope. Every app exists in both and every compared field '
+            '  matches.</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Only-in-X lists ────────────────────────────────────────────────────
+    def _render_only_list(title: str, glyph: str, cls: str, apps: list[str]) -> str:
+        if not apps:
+            return ""
+        chips = "".join(
+            f'<span class="sync-only-chip {cls}">{html.escape(a)}</span>'
+            for a in apps[:200]
+        )
+        overflow = (
+            f'<span class="sync-only-more">+{len(apps) - 200} more</span>'
+            if len(apps) > 200 else ""
+        )
+        return (
+            f'<div class="sync-section {cls}">'
+            f'  <div class="sync-section-head">'
+            f'    <span class="sync-section-glyph">{glyph}</span>'
+            f'    <span class="sync-section-title">{title}</span>'
+            f'    <span class="sync-section-count">{len(apps):,}</span>'
+            f'  </div>'
+            f'  <div class="sync-only-chips">{chips}{overflow}</div>'
+            f'</div>'
+        )
+
+    only_html = _render_only_list(
+        "Only in git", "⎇", "is-only-git", only_git,
+    ) + _render_only_list(
+        "Only in Elasticsearch", "Σ", "is-only-es", only_es,
+    )
+    if only_html:
+        st.markdown(only_html, unsafe_allow_html=True)
+
+    # ── Field-diff list — collapsible per app ──────────────────────────────
+    if field_diffs:
+        st.markdown(
+            f'<div class="sync-section is-field">'
+            f'  <div class="sync-section-head">'
+            f'    <span class="sync-section-glyph">≠</span>'
+            f'    <span class="sync-section-title">Field discrepancies</span>'
+            f'    <span class="sync-section-count">{len(field_diffs):,}</span>'
+            f'  </div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        for d in field_diffs[:200]:
+            _app = html.escape(d["application"])
+            _proj = html.escape(d["project"] or "—")
+            _diff_rows: list[str] = []
+            for f, val in d["differences"].items():
+                if f == "__teams__":
+                    for tk, tv in (val or {}).items():
+                        _diff_rows.append(
+                            f'<tr>'
+                            f'  <td class="sync-diff-k">{html.escape(tk)}</td>'
+                            f'  <td class="sync-diff-side is-git">{_render_sync_value(tv["git"], "is-git")}</td>'
+                            f'  <td class="sync-diff-side is-es">{_render_sync_value(tv["es"], "is-es")}</td>'
+                            f'</tr>'
+                        )
+                else:
+                    _diff_rows.append(
+                        f'<tr>'
+                        f'  <td class="sync-diff-k">{html.escape(f)}</td>'
+                        f'  <td class="sync-diff-side is-git">{_render_sync_value(val["git"], "is-git")}</td>'
+                        f'  <td class="sync-diff-side is-es">{_render_sync_value(val["es"], "is-es")}</td>'
+                        f'</tr>'
+                    )
+            st.markdown(
+                f'<details class="sync-diff-card">'
+                f'  <summary>'
+                f'    <span class="sync-diff-app">{_app}</span>'
+                f'    <span class="sync-diff-proj">{_proj}</span>'
+                f'    <span class="sync-diff-count">{len(d["differences"])} field'
+                f'{"s" if len(d["differences"]) != 1 else ""} differ</span>'
+                f'  </summary>'
+                f'  <table class="sync-diff-table">'
+                f'    <thead><tr>'
+                f'      <th>Field</th>'
+                f'      <th class="is-git">Git</th>'
+                f'      <th class="is-es">Elasticsearch</th>'
+                f'    </tr></thead>'
+                f'    <tbody>{"".join(_diff_rows)}</tbody>'
+                f'  </table>'
+                f'</details>',
+                unsafe_allow_html=True,
+            )
+        if len(field_diffs) > 200:
+            inline_note(
+                f"Showing first 200 of {len(field_diffs)} field-discrepant "
+                f"apps — narrow filters to inspect the rest.",
+                "info",
+            )
 
 
 @st.fragment(run_every="30s")
@@ -11622,58 +12292,228 @@ def _row_field_match(row: dict, key: str, values: list[Any]) -> bool:
     return str(val or "") in {str(x) for x in values}
 
 
-def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
-    """Resolve the inventory rows for the current scope.
+# Admin-controlled source preference. Default ``"auto"`` keeps the legacy
+# behaviour (git → ES on failure). ``"git"`` forces git and surfaces the
+# error loudly instead of silently falling back; ``"es"`` bypasses git
+# entirely. Stored in session_state so a sticky toggle persists across
+# reruns without polluting URL state.
+_INV_SRC_PREF_KEY = "_inv_source_pref_v1"
 
-    Strategy: try the git checkout first. If anything goes wrong — vault
-    unreachable, clone failure, missing PyYAML, parse errors — fall back
-    to the ES projection so the page never goes blank. Returns
-    ``(rows, source, status, warnings)`` where ``source`` is one of
-    ``"git"`` / ``"es"`` and ``status`` is a short human-readable phrase
-    suitable for the source pill.
-    """
+
+def _inv_source_pref() -> str:
+    """Resolved source preference. ``"auto"`` unless the admin selected
+    otherwise. Non-admins never get to set this — non-admin sessions
+    silently coerce to ``"auto"`` so role escalation isn't a path."""
+    pref = st.session_state.get(_INV_SRC_PREF_KEY)
+    return pref if pref in ("auto", "git", "es") else "auto"
+
+
+def _load_inventory_from_git_scoped(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
+    """Run the git inventory pipeline end-to-end (clone + parse + scope
+    filter + author sync). Returns ``(rows, status_msg, head_sha, warnings)``
+    where an empty ``head_sha`` indicates a hard failure (vault / clone /
+    yaml). Centralised so :func:`_inventory_load` and
+    :func:`_inventory_compare` share the same code path."""
     warnings: list[str] = []
     creds = _git_creds()
     host = creds["hostname"]
-    if host:
-        ok, head, status_msg = _ensure_inventory_repo(host)
-        if ok:
-            # Sync git author identity on every successful sync so future
-            # write-back commits carry the current operator's identity
-            # (the credentials in vault only handle transport).
-            _git_set_author(
-                INVENTORY_REPO_PATH,
-                (st.session_state.get("username") or "").strip(),
-                (st.session_state.get("email") or "").strip(),
-            )
-            if _YAML_AVAILABLE:
-                rows, parse_warnings = _load_inventory_from_git(head)
-                warnings.extend(parse_warnings)
-                if rows:
-                    # Apply the same scope filters locally so role/company/project
-                    # scoping behaves identically to the ES path.
-                    try:
-                        sf = json.loads(scope_json) if scope_json else []
-                        rows = [r for r in rows if _row_matches_es_filters(r, sf)]
-                    except Exception as e:
-                        warnings.append(f"scope filter: {type(e).__name__}")
-                    return rows, "git", status_msg, warnings
-                warnings.append("git checkout parsed 0 apps — check field aliases")
-            else:
-                warnings.append("PyYAML not installed")
-        else:
-            warnings.append(status_msg or "git unavailable")
-    else:
-        # Hostname couldn't be resolved — surface either the vault error
-        # or a "not configured" hint so the fallback banner can be precise.
+    if not host:
         v_err = _vault_last_error(GIT_VAULT_PATH)
         warnings.append(
             f"Git host not resolved from vault `{GIT_VAULT_PATH}`"
             + (f": {v_err}" if v_err else "")
         )
-    # Fallback: legacy ES projection
+        return [], "host unresolved", "", warnings
+    ok, head, status_msg = _ensure_inventory_repo(host)
+    if not ok:
+        return [], status_msg or "git unavailable", "", warnings
+    # Sync git author identity on every successful sync.
+    _git_set_author(
+        INVENTORY_REPO_PATH,
+        (st.session_state.get("username") or "").strip(),
+        (st.session_state.get("email") or "").strip(),
+    )
+    if not _YAML_AVAILABLE:
+        warnings.append("PyYAML not installed")
+        return [], "PyYAML missing", head, warnings
+    rows, parse_warnings = _load_inventory_from_git(head)
+    warnings.extend(parse_warnings)
+    if not rows:
+        warnings.append("git checkout parsed 0 apps — check field aliases")
+        return [], "0 apps parsed", head, warnings
+    # Apply the same scope filters locally so role/company/project scoping
+    # behaves identically across both paths.
+    try:
+        sf = json.loads(scope_json) if scope_json else []
+        rows = [r for r in rows if _row_matches_es_filters(r, sf)]
+    except Exception as e:
+        warnings.append(f"scope filter: {type(e).__name__}")
+    return rows, status_msg, head, warnings
+
+
+def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
+    """Resolve the inventory rows for the current scope.
+
+    Honors the admin source-preference toggle:
+      * ``"auto"`` — try git first; fall back to ES on any failure
+        (the legacy behaviour).
+      * ``"git"``  — force git; on failure, return zero rows with an
+        emphatic status message rather than silently degrading.
+      * ``"es"``   — bypass git entirely.
+
+    Returns ``(rows, source, status, warnings)`` where ``source`` is one of
+    ``"git"`` / ``"es"`` / ``"git-forced-failed"`` and ``status`` is a
+    short human-readable phrase suitable for the source pill / banner.
+    """
+    pref = _inv_source_pref()
+
+    # ``es`` — admin asked to ignore git outright. No-op clone, no diff.
+    if pref == "es":
+        rows = _fetch_full_inventory(scope_json)
+        return rows, "es", "ES (admin chose)", []
+
+    # ``git`` or ``auto`` — attempt the git path first.
+    rows, status_msg, head, warnings = _load_inventory_from_git_scoped(scope_json)
+    if rows:
+        return rows, "git", status_msg, warnings
+
+    # Git produced nothing. Branch on preference for what to do next.
+    if pref == "git":
+        # Forced git mode — DON'T silently fall back to ES. Return zero
+        # rows so the inventory table empties and the alarm banner names
+        # exactly what failed.
+        return [], "git-forced-failed", status_msg or "git unavailable", warnings
+
+    # Auto mode — fall through to the legacy ES projection.
     rows = _fetch_full_inventory(scope_json)
     return rows, "es", "ES fallback", warnings
+
+
+# =============================================================================
+# INVENTORY SYNC CHECK — git vs ES discrepancy detection
+# =============================================================================
+# When both sources are reachable, an admin should be able to spot rows that
+# are in one but not the other, and rows that exist in both but disagree on
+# specific fields. This is a deliberate manual operation (smart-loaded
+# behind a button) — two full inventory fetches + a diff isn't something we
+# want firing on every rerun. The result is stashed in session_state for
+# the rest of the session so flipping tabs doesn't lose it.
+
+# Fields compared 1:1 between the git row and the ES row.
+_INV_COMPARE_FIELDS: tuple[str, ...] = (
+    "project", "company", "app_type",
+    "build_technology", "deploy_technology", "deploy_platform",
+    "build_image_name", "build_image_tag",
+    "deploy_image_name", "deploy_image_tag",
+)
+
+
+def _inv_norm(v: Any) -> str:
+    """Normalise a row field for diff comparison — strips whitespace and
+    lowercases. We don't want to flag '1.4.2 ' vs '1.4.2' as a real
+    discrepancy, but we DO want to flag 'Active' vs 'active' since case
+    might matter elsewhere; this normaliser only lowercases for the
+    comparison, the surfaced VALUES preserve the original casing."""
+    if isinstance(v, str):
+        return v.strip().lower()
+    if v is None:
+        return ""
+    return str(v).strip().lower()
+
+
+def _inv_teams_norm(t: Any) -> dict[str, tuple[str, ...]]:
+    """Render a row's teams dict into a comparable shape:
+    ``{team_field: tuple(sorted unique values, case-folded)}``."""
+    out: dict[str, tuple[str, ...]] = {}
+    if not isinstance(t, dict):
+        return out
+    for k, vs in t.items():
+        if isinstance(vs, (list, tuple, set)):
+            uniq = sorted({str(v).strip().lower() for v in vs if v})
+        elif vs:
+            uniq = [str(vs).strip().lower()]
+        else:
+            uniq = []
+        if uniq:
+            out[k] = tuple(uniq)
+    return out
+
+
+def _inventory_compare(scope_json: str) -> dict:
+    """Fetch from BOTH git and ES then compute a per-app discrepancy report.
+
+    Pure computation on top of cached fetchers — both sides hit
+    ``@st.cache_data``-memoised results, so calling this is cheap once the
+    individual loaders are warm. Returns ``{"errors": {...}, "git_total":
+    int, "es_total": int, "common": int, "only_in_git": [...],
+    "only_in_es": [...], "field_diffs": [...]}``."""
+    errors: dict[str, str] = {"git": "", "es": ""}
+
+    # ── Git side ───────────────────────────────────────────────────────────
+    git_rows, git_status, _head, git_warnings = _load_inventory_from_git_scoped(scope_json)
+    if not git_rows:
+        errors["git"] = git_status or "no git rows"
+
+    # ── ES side ────────────────────────────────────────────────────────────
+    try:
+        es_rows = _fetch_full_inventory(scope_json)
+    except Exception as e:
+        es_rows = []
+        errors["es"] = f"{type(e).__name__}: {e}"
+    if not es_rows and not errors["es"]:
+        errors["es"] = "no es rows"
+
+    git_by_app = {r["application"]: r for r in git_rows if r.get("application")}
+    es_by_app  = {r["application"]: r for r in es_rows  if r.get("application")}
+
+    only_in_git = sorted(set(git_by_app) - set(es_by_app), key=str.lower)
+    only_in_es  = sorted(set(es_by_app) - set(git_by_app),  key=str.lower)
+    common      = sorted(set(git_by_app) & set(es_by_app),  key=str.lower)
+
+    field_diffs: list[dict] = []
+    for app in common:
+        g, e = git_by_app[app], es_by_app[app]
+        diffs: dict[str, dict] = {}
+        for f in _INV_COMPARE_FIELDS:
+            gv, ev = g.get(f), e.get(f)
+            if _inv_norm(gv) != _inv_norm(ev):
+                diffs[f] = {"git": (gv or ""), "es": (ev or "")}
+        gt = _inv_teams_norm(g.get("teams"))
+        et = _inv_teams_norm(e.get("teams"))
+        team_keys = sorted(set(gt) | set(et))
+        team_diffs: dict[str, dict] = {}
+        for tk in team_keys:
+            if gt.get(tk, ()) != et.get(tk, ()):
+                team_diffs[tk] = {
+                    "git": sorted([
+                        v for v in (g.get("teams") or {}).get(tk, [])
+                    ] if isinstance((g.get("teams") or {}).get(tk), list)
+                    else [(g.get("teams") or {}).get(tk, "")] if (g.get("teams") or {}).get(tk) else []),
+                    "es": sorted([
+                        v for v in (e.get("teams") or {}).get(tk, [])
+                    ] if isinstance((e.get("teams") or {}).get(tk), list)
+                    else [(e.get("teams") or {}).get(tk, "")] if (e.get("teams") or {}).get(tk) else []),
+                }
+        if team_diffs:
+            diffs["__teams__"] = team_diffs
+        if diffs:
+            field_diffs.append({
+                "application": app,
+                "project": g.get("project") or e.get("project") or "",
+                "differences": diffs,
+            })
+
+    return {
+        "errors":       errors,
+        "git_total":    len(git_by_app),
+        "es_total":     len(es_by_app),
+        "common":       len(common),
+        "only_in_git":  only_in_git,
+        "only_in_es":   only_in_es,
+        "field_diffs":  field_diffs,
+        "warnings":     git_warnings,
+        "checked_at":   datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # =============================================================================
@@ -12834,6 +13674,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _iv_sf.append({"term": {"project.keyword": iv_project_filter}})
 
     _iv_scope_key = json.dumps(_iv_sf, sort_keys=True, default=str)
+    # Published so the Sync Check panel can run its dual fetch against the
+    # SAME scope the inventory table is showing — otherwise the panel's
+    # diff would silently mix scopes and produce false positives.
+    st.session_state["_iv_scope_key_v1"] = _iv_scope_key
     # Full scope rows — git checkout first (faster + authoritative), ES is
     # the safety net if the clone or parse fails. The source & status are
     # stashed for the admin-only source pill rendered just below the
@@ -15598,7 +16442,88 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _stat = _iv_source_status or ""
         _warns = list(_iv_source_warnings)
 
-        if _src == "git":
+        # ── Source-selector radio — sticky in session_state, drives
+        # _inventory_load on the NEXT rerun. The current resolution
+        # (git/es/git-forced-failed) drives the pill / banner below.
+        st.session_state.setdefault(_INV_SRC_PREF_KEY, "auto")
+        _SRC_LABELS = {
+            "auto": "Auto (git, fall back to ES)",
+            "git":  "Git only (no fallback)",
+            "es":   "Elasticsearch only",
+        }
+        with st.container(key="cc_inv_src_pref"):
+            _c1, _c2 = st.columns([1, 6])
+            with _c1:
+                st.markdown(
+                    '<div class="iv-src-pref-lbl">Inventory source</div>',
+                    unsafe_allow_html=True,
+                )
+            with _c2:
+                st.radio(
+                    "Inventory source",
+                    options=("auto", "git", "es"),
+                    format_func=lambda v: _SRC_LABELS.get(v, v),
+                    horizontal=True,
+                    key=_INV_SRC_PREF_KEY,
+                    label_visibility="collapsed",
+                    help=(
+                        "Auto prefers git, falls back to Elasticsearch on any "
+                        "failure. Git-only refuses to fall back so a failure "
+                        "is visible. Elasticsearch-only bypasses git entirely."
+                    ),
+                )
+
+        if _src == "git-forced-failed":
+            # Admin explicitly forced git but git failed. Don't fall back
+            # silently — show a loud banner with the failure reason. The
+            # inventory table will be empty until git recovers OR the admin
+            # switches back to auto.
+            _reason = _stat or "git source returned no rows"
+            _warn_items_f = "".join(
+                f'<li>{html.escape(w)}</li>' for w in _warns[:20]
+            )
+            _warn_overflow_f = (
+                f'<li class="iv-src-detail-overflow">'
+                f'… +{len(_warns) - 20} more (truncated)</li>'
+                if len(_warns) > 20 else ""
+            )
+            _warn_block_f = (
+                f'<div class="iv-src-alarm-warns">'
+                f'  <div class="iv-src-alarm-warns-head">'
+                f'    Loader emitted {len(_warns)} warning'
+                f'{"s" if len(_warns) != 1 else ""}:'
+                f'  </div>'
+                f'  <ul>{_warn_items_f}{_warn_overflow_f}</ul>'
+                f'</div>'
+                if _warns else ""
+            )
+            st.markdown(
+                f'<div class="iv-src-alarm" role="alert">'
+                f'  <div class="iv-src-alarm-stripe"></div>'
+                f'  <div class="iv-src-alarm-body">'
+                f'    <div class="iv-src-alarm-head">'
+                f'      <span class="iv-src-alarm-glyph">⚠</span>'
+                f'      <span class="iv-src-alarm-tag">GIT FORCED · FAILED</span>'
+                f'      <span class="iv-src-alarm-title">'
+                f'        Inventory is empty — git source unavailable and '
+                f'        "Git only" is selected (no fallback).'
+                f'      </span>'
+                f'    </div>'
+                f'    <div class="iv-src-alarm-reason">'
+                f'      <span class="iv-src-alarm-reason-k">Reason:</span>'
+                f'      <code>{html.escape(_reason)}</code>'
+                f'    </div>'
+                f'    <div class="iv-src-alarm-hint">'
+                f'      Switch the source selector above to <b>Auto</b> to '
+                f'      fall back to Elasticsearch, or fix the git path. '
+                f'      The Integrations strip shows what failed.'
+                f'    </div>'
+                f'    {_warn_block_f}'
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        elif _src == "git":
             # Quiet success pill stays.
             st.markdown(
                 f'<div class="iv-src-row">'
@@ -15826,6 +16751,17 @@ if _show_inv and _inventory_slot is not None:
         _psv_show = _is_admin
         _psv_configured = bool(PRISMA_S3_BUCKET) and _BOTO3_AVAILABLE
         _psv_badge_txt = "  ·  S3" if (_psv_show and _psv_configured) else ""
+        # Sync check — admin-only. Badge surfaces the last-known diff count
+        # so the tab telegraphs whether drift exists without forcing the
+        # admin to open it.
+        _sync_show = _is_admin
+        _sync_summary = st.session_state.get("_sync_summary_v1") or {}
+        _sync_badge_txt = ""
+        if _sync_show and _sync_summary:
+            _t = int(_sync_summary.get("total") or 0)
+            _sync_badge_txt = (
+                "  ·  ✓ clean" if _t == 0 else f"  ·  ⚠ {_t} drift"
+            )
         _tab_labels = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
             f"⧗  EVENT LOG{_el_badge_txt}",
@@ -15834,6 +16770,8 @@ if _show_inv and _inventory_slot is not None:
             _tab_labels.append(f"⚙  JENKINS{_jk_badge_txt}")
         if _psv_show:
             _tab_labels.append(f"🔬  SCAN VIEWER{_psv_badge_txt}")
+        if _sync_show:
+            _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         with st.container(key="cc_surface_tabs"):
             _tabs = st.tabs(_tab_labels)
             _tab_inv, _tab_log = _tabs[0], _tabs[1]
@@ -15842,6 +16780,9 @@ if _show_inv and _inventory_slot is not None:
             if _jk_show:
                 _next_idx += 1
             _tab_psv = _tabs[_next_idx] if _psv_show else None
+            if _psv_show:
+                _next_idx += 1
+            _tab_sync = _tabs[_next_idx] if _sync_show else None
             with _tab_inv:
                 st.markdown(
                     '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
@@ -15891,6 +16832,19 @@ if _show_inv and _inventory_slot is not None:
                     _psv_slot = st.empty()
             else:
                 _psv_slot = None
+            if _tab_sync is not None:
+                with _tab_sync:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Compare the git inventory against the Elasticsearch '
+                        'projection · click ▶ Run to run a full diff for the '
+                        'current scope · results stay until cleared or re-run'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _sync_slot = st.empty()
+            else:
+                _sync_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes the scope keys the event log needs.
@@ -15913,6 +16867,14 @@ if _show_inv and _inventory_slot is not None:
         if _psv_slot is not None:
             with _psv_slot.container():
                 _render_prisma_scan_viewer()
+
+        # Sync check — smart-loaded; uses the scope key the inventory
+        # fragment publishes so its diff matches the visible scope.
+        if _sync_slot is not None:
+            with _sync_slot.container():
+                _render_sync_check_panel(
+                    st.session_state.get("_iv_scope_key_v1", "")
+                )
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
