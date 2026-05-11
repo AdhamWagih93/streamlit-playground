@@ -2135,6 +2135,202 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .iv-src-alarm-warns li { word-break: break-all; margin-bottom: 1px; }
 
+/* ── INTEGRATIONS HEALTH STRIP ─────────────────────────────────────────────
+ * Compact admin-only chip row that summarises every external integration's
+ * state. Collapsed (default) shows: label · count summary · chip row · ▾
+ * Expanded shows a small detail card per integration with the full tip.
+ * Stays quiet on healthy days; outer hue + a soft pulsing dot signal when
+ * something needs attention. */
+.ih-strip {
+    margin: 0 0 10px 0;
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    background: var(--cc-surface);
+    overflow: hidden;
+    transition: border-color .15s, box-shadow .15s;
+}
+.ih-strip.is-outer-ok       { border-color: rgba(13,148,136,.28); }
+.ih-strip.is-outer-warn     { border-color: rgba(217,119,6,.38); }
+.ih-strip.is-outer-down     { border-color: rgba(220,38,38,.46); box-shadow: 0 4px 14px rgba(220,38,38,.06); }
+.ih-strip.is-outer-mixed    { border-color: var(--cc-border-hi); }
+.ih-strip:hover {
+    border-color: var(--cc-border-hi);
+}
+
+.ih-strip-head {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    flex-wrap: wrap;
+}
+.ih-strip-head::-webkit-details-marker { display: none; }
+.ih-strip-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    flex-shrink: 0;
+}
+.ih-strip-counts {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-right: 4px;
+}
+.ih-sum {
+    font-family: var(--cc-mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid;
+}
+.ih-sum.is-ok    { color: #047857; background: rgba(5,150,105,.08);  border-color: rgba(5,150,105,.30); }
+.ih-sum.is-warn  { color: #92400e; background: rgba(217,119,6,.10);  border-color: rgba(217,119,6,.34); }
+.ih-sum.is-down  { color: #b91c1c; background: rgba(220,38,38,.08);  border-color: rgba(220,38,38,.34); }
+.ih-sum.is-skip  { color: var(--cc-text-mute); background: rgba(136,144,164,.10); border-color: rgba(136,144,164,.30); }
+
+.ih-strip-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.ih-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 6px;
+    border-radius: 999px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    font-size: 0.7rem;
+    cursor: help;
+    transition: filter .12s, transform .12s, border-color .12s;
+}
+.ih-chip:hover { filter: brightness(1.05); transform: translateY(-0.5px); }
+.ih-chip-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.ih-chip.is-ok    .ih-chip-dot { background: var(--cc-green); box-shadow: 0 0 0 0 var(--cc-green);
+                                  animation: ihDotPulseOk 2.6s ease-in-out infinite; }
+.ih-chip.is-warn  .ih-chip-dot { background: var(--cc-amber); }
+.ih-chip.is-down  .ih-chip-dot { background: var(--cc-red);   animation: ihDotPulseDown 1.4s ease-in-out infinite; }
+.ih-chip.is-skip  .ih-chip-dot { background: var(--cc-text-mute); opacity: .5; }
+@keyframes ihDotPulseOk {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(5,150,105,.4); }
+    50%      { box-shadow: 0 0 0 4px rgba(5,150,105,0); }
+}
+@keyframes ihDotPulseDown {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,.55); }
+    50%      { box-shadow: 0 0 0 5px rgba(220,38,38,0); }
+}
+.ih-chip-glyph { font-size: 0.78rem; line-height: 1; opacity: .85; }
+.ih-chip-lbl {
+    font-weight: 600;
+    color: var(--cc-text);
+    letter-spacing: 0.005em;
+}
+.ih-chip-detail {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.03em;
+}
+.ih-chip.is-ok    { border-color: rgba(13,148,136,.30); }
+.ih-chip.is-warn  { border-color: rgba(217,119,6,.34); background: rgba(217,119,6,.04); }
+.ih-chip.is-down  { border-color: rgba(220,38,38,.36); background: rgba(220,38,38,.04); }
+.ih-chip.is-skip  { border-color: var(--cc-border); opacity: .80; }
+
+.ih-strip-toggle {
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    transition: transform .12s;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+.ih-strip[open] .ih-strip-toggle { transform: rotate(180deg); }
+
+/* Expanded cards — one per integration */
+.ih-strip-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    padding: 8px 12px 12px 12px;
+    border-top: 1px dashed var(--cc-border);
+    background: var(--cc-surface2);
+}
+.ih-card {
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 9px;
+    padding: 8px 10px;
+}
+.ih-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+.ih-card-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.ih-card.is-ok    { border-color: rgba(13,148,136,.30); }
+.ih-card.is-ok    .ih-card-dot { background: var(--cc-green); }
+.ih-card.is-warn  { border-color: rgba(217,119,6,.34); background: rgba(217,119,6,.02); }
+.ih-card.is-warn  .ih-card-dot { background: var(--cc-amber); }
+.ih-card.is-down  { border-color: rgba(220,38,38,.40); background: rgba(220,38,38,.03); }
+.ih-card.is-down  .ih-card-dot { background: var(--cc-red); }
+.ih-card.is-skip  { border-color: var(--cc-border); opacity: .92; }
+.ih-card.is-skip  .ih-card-dot { background: var(--cc-text-mute); opacity: .55; }
+.ih-card-glyph { font-size: 0.85rem; line-height: 1; }
+.ih-card-lbl {
+    font-weight: 700;
+    font-size: 0.78rem;
+    color: var(--cc-text);
+    flex: 1;
+}
+.ih-card-state {
+    font-family: var(--cc-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.10em;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(136,144,164,.15);
+    color: var(--cc-text-mute);
+}
+.ih-card.is-ok   .ih-card-state { background: rgba(5,150,105,.14);  color: #047857; }
+.ih-card.is-warn .ih-card-state { background: rgba(217,119,6,.16);  color: #92400e; }
+.ih-card.is-down .ih-card-state { background: rgba(220,38,38,.14);  color: #b91c1c; }
+.ih-card-detail {
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text);
+    font-weight: 600;
+    margin-bottom: 3px;
+    word-break: break-word;
+}
+.ih-card-tip {
+    font-size: 0.72rem;
+    color: var(--cc-text-dim);
+    line-height: 1.45;
+    word-break: break-word;
+}
+
 /* ── JENKINS PANEL ─────────────────────────────────────────────────────────
    Gate (idle), connection header, pipeline cards, status pills, params.
    ----------------------------------------------------------------------- */
@@ -8791,6 +8987,312 @@ def _jk_duration(ms: int) -> str:
     return f"{h}h {m % 60}m"
 
 
+# =============================================================================
+# INTEGRATIONS HEALTH STRIP — admin-only, "clearly but subtly"
+# =============================================================================
+# A single compact chip row that reports the state of every external
+# integration the dashboard depends on:
+#   • Elasticsearch  — the legacy projection + the fallback path for inventory
+#   • Git inventories — the authoritative Ansible repo (when configured)
+#   • Vault          — credential source for Jenkins + S3
+#   • Jenkins        — pipeline status panel
+#   • S3 (Prisma)    — scan-report viewer
+#   • Optional deps  — PyYAML / ansible.parsing.vault availability
+#
+# Each integration has one of four states:
+#   ok    → working, green dot
+#   warn  → degraded but usable, amber dot
+#   down  → broken, red dot
+#   skip  → not configured / not loaded yet, muted dot
+#
+# The row collapses behind a <details>: the always-visible header carries
+# the small count summary (e.g. "5 ok · 1 skip"); expanding it reveals a
+# per-integration detail card with the message and a hover tip. Designed
+# to stay quiet on a healthy day and visibly surface a failing integration
+# without dominating the page.
+
+def _integrations_health() -> list[dict]:
+    """Probe every integration the dashboard depends on. Each call is
+    cheap (no network round-trips beyond what was already cached) so the
+    strip can re-render on every page rerun without measurable cost.
+
+    Returns a list of dicts each carrying ``key``, ``label``, ``glyph``,
+    ``state`` (one of ok/warn/down/skip), ``detail`` (one-line),
+    ``tip`` (longer hover text)."""
+    out: list[dict] = []
+
+    # 1. Elasticsearch — peek at the inventory-choices loader which is
+    # already cached. If it returned data, ES is reachable & populated.
+    try:
+        comps, projs = _load_inventory_choices()
+        if comps or projs:
+            out.append({
+                "key": "es", "label": "Elasticsearch", "glyph": "Σ",
+                "state": "ok",
+                "detail": f"{len(comps)} companies · {len(projs)} projects",
+                "tip": "Inventory index reachable; aggregates flowing.",
+            })
+        else:
+            out.append({
+                "key": "es", "label": "Elasticsearch", "glyph": "Σ",
+                "state": "warn",
+                "detail": "0 aggregates returned",
+                "tip": "ES is reachable but the inventory index is empty.",
+            })
+    except Exception as e:
+        out.append({
+            "key": "es", "label": "Elasticsearch", "glyph": "Σ",
+            "state": "down",
+            "detail": type(e).__name__,
+            "tip": f"ES query failed: {e}",
+        })
+
+    # 2. Git inventories — only meaningful when ADO_HOSTNAME is set.
+    if not ADO_HOSTNAME:
+        out.append({
+            "key": "git", "label": "Git inventories", "glyph": "⎇",
+            "state": "skip",
+            "detail": "ADO_HOSTNAME unset",
+            "tip": (
+                "Set ADO_HOSTNAME (and ADO_PAT if auth-gated) to read "
+                "inventory from the authoritative Ansible repo. While "
+                "unset the page reads from the ES projection."
+            ),
+        })
+    else:
+        ok, head, msg = _ensure_inventory_repo(ADO_HOSTNAME)
+        if ok:
+            out.append({
+                "key": "git", "label": "Git inventories", "glyph": "⎇",
+                "state": "ok",
+                "detail": (head[:8] if head else "OK"),
+                "tip": (
+                    f"clone path: {INVENTORY_REPO_PATH} · "
+                    f"branch: {INVENTORY_BRANCH} · {msg}"
+                ),
+            })
+        else:
+            out.append({
+                "key": "git", "label": "Git inventories", "glyph": "⎇",
+                "state": "down",
+                "detail": "sync failed",
+                "tip": msg or "Git sync failed — page is on ES fallback.",
+            })
+
+    # 3. Vault — single status across all known paths.
+    if not _VAULT_AVAILABLE:
+        out.append({
+            "key": "vault", "label": "Vault", "glyph": "🔐",
+            "state": "skip",
+            "detail": "utils.vault missing",
+            "tip": (
+                "VaultClient not importable. Jenkins/S3 fall through to "
+                "env-var creds when present."
+            ),
+        })
+    else:
+        store = st.session_state.get(_VAULT_ERR_KEY) or {}
+        errors = [(p, e) for p, e in store.items() if e]
+        if errors:
+            tip = " · ".join(f"{p}: {e}" for p, e in errors)
+            out.append({
+                "key": "vault", "label": "Vault", "glyph": "🔐",
+                "state": "down",
+                "detail": f"{len(errors)} path err",
+                "tip": tip[:280],
+            })
+        else:
+            out.append({
+                "key": "vault", "label": "Vault", "glyph": "🔐",
+                "state": "ok",
+                "detail": "resolving cleanly",
+                "tip": "All recent vault reads succeeded.",
+            })
+
+    # 4. Jenkins — three states: skip (host unset), skip (panel idle),
+    # ok / warn / down (panel loaded; mirror its cached status).
+    creds = _jenkins_creds()
+    j_host = creds.get("host")
+    if not j_host:
+        out.append({
+            "key": "jenkins", "label": "Jenkins", "glyph": "⚙",
+            "state": "skip",
+            "detail": "host unresolved",
+            "tip": (
+                f"No Jenkins host from vault path {JENKINS_VAULT_PATH!r} "
+                "or JENKINS_HOSTNAME env var."
+            ),
+        })
+    elif not st.session_state.get(_JK_LOAD_FLAG):
+        out.append({
+            "key": "jenkins", "label": "Jenkins", "glyph": "⚙",
+            "state": "skip",
+            "detail": "panel idle",
+            "tip": (
+                f"Configured for {creds.get('public_name') or j_host}. "
+                f"Open the JENKINS tab and click ▶ Load to probe."
+            ),
+        })
+    else:
+        try:
+            status = _fetch_jenkins_status_raw()
+            if status.get("ok"):
+                out.append({
+                    "key": "jenkins", "label": "Jenkins", "glyph": "⚙",
+                    "state": "ok",
+                    "detail": status.get("status_msg", "connected"),
+                    "tip": (
+                        f"{status.get('public_name') or j_host} · "
+                        f"running v{status.get('version', {}).get('running', '?')}"
+                    ),
+                })
+            else:
+                out.append({
+                    "key": "jenkins", "label": "Jenkins", "glyph": "⚙",
+                    "state": "down",
+                    "detail": "unreachable",
+                    "tip": status.get("status_msg") or j_host,
+                })
+        except Exception as e:
+            out.append({
+                "key": "jenkins", "label": "Jenkins", "glyph": "⚙",
+                "state": "warn",
+                "detail": type(e).__name__,
+                "tip": str(e),
+            })
+
+    # 5. S3 (Prisma scans).
+    if not _BOTO3_AVAILABLE:
+        out.append({
+            "key": "s3", "label": "S3 (prisma)", "glyph": "⛟",
+            "state": "skip",
+            "detail": "boto3 missing",
+            "tip": "Install boto3 to enable the scan viewer.",
+        })
+    elif not PRISMA_S3_BUCKET:
+        out.append({
+            "key": "s3", "label": "S3 (prisma)", "glyph": "⛟",
+            "state": "skip",
+            "detail": "bucket unset",
+            "tip": "Set PRISMA_S3_BUCKET to enable.",
+        })
+    else:
+        s3_creds = _prisma_s3_creds()
+        if not s3_creds:
+            err = _vault_last_error(PRISMA_S3_VAULT_PATH)
+            out.append({
+                "key": "s3", "label": "S3 (prisma)", "glyph": "⛟",
+                "state": "down",
+                "detail": "creds unresolved",
+                "tip": (
+                    err
+                    or f"No vault entry at {PRISMA_S3_VAULT_PATH!r}."
+                ),
+            })
+        else:
+            ep = _prisma_s3_endpoint(s3_creds["host"], s3_creds["port"])
+            out.append({
+                "key": "s3", "label": "S3 (prisma)", "glyph": "⛟",
+                "state": "ok",
+                "detail": "ready",
+                "tip": f"endpoint: {ep} · bucket: {PRISMA_S3_BUCKET}",
+            })
+
+    # 6. Optional deps — soft signal so admins know which features
+    # would light up if a missing package were installed.
+    missing_deps: list[str] = []
+    if not _YAML_AVAILABLE:
+        missing_deps.append("PyYAML")
+    if not _ANSIBLE_VAULT_AVAILABLE:
+        missing_deps.append("ansible.parsing.vault")
+    if missing_deps:
+        out.append({
+            "key": "deps", "label": "Optional deps", "glyph": "📦",
+            "state": "warn",
+            "detail": f"{len(missing_deps)} missing",
+            "tip": "Missing: " + ", ".join(missing_deps),
+        })
+    else:
+        out.append({
+            "key": "deps", "label": "Optional deps", "glyph": "📦",
+            "state": "ok",
+            "detail": "all present",
+            "tip": "PyYAML + ansible.parsing.vault both importable.",
+        })
+
+    return out
+
+
+def _render_integrations_strip() -> None:
+    """Admin-only chip row + collapsible detail block. See section header."""
+    health = _integrations_health()
+    counts = {s: sum(1 for h in health if h["state"] == s)
+              for s in ("ok", "warn", "skip", "down")}
+
+    # Worst state drives the strip's outer hue — green when everything's
+    # ok, amber on warn/skip-only, red as soon as anything's down.
+    if counts["down"]:
+        outer = "down"
+    elif counts["warn"]:
+        outer = "warn"
+    elif counts["ok"] and not counts["skip"]:
+        outer = "ok"
+    else:
+        outer = "mixed"
+
+    sum_bits: list[str] = []
+    for state, label in (("down", "down"), ("warn", "warn"),
+                         ("ok", "ok"), ("skip", "skip")):
+        if counts[state]:
+            sum_bits.append(
+                f'<span class="ih-sum is-{state}">{counts[state]} {label}</span>'
+            )
+
+    # Always-visible chip row inside the <summary>. Each chip carries the
+    # tip as title= so the operator can hover for full detail without
+    # expanding the section.
+    chip_html: list[str] = []
+    for h in health:
+        chip_html.append(
+            f'<span class="ih-chip is-{h["state"]}" '
+            f'title="{html.escape(h["tip"], quote=True)}">'
+            f'  <span class="ih-chip-dot"></span>'
+            f'  <span class="ih-chip-glyph">{html.escape(h["glyph"])}</span>'
+            f'  <span class="ih-chip-lbl">{html.escape(h["label"])}</span>'
+            f'  <span class="ih-chip-detail">{html.escape(h["detail"])}</span>'
+            f'</span>'
+        )
+
+    # Expanded detail — one card per integration with the full tip.
+    card_html: list[str] = []
+    for h in health:
+        card_html.append(
+            f'<div class="ih-card is-{h["state"]}">'
+            f'  <div class="ih-card-head">'
+            f'    <span class="ih-card-dot"></span>'
+            f'    <span class="ih-card-glyph">{html.escape(h["glyph"])}</span>'
+            f'    <span class="ih-card-lbl">{html.escape(h["label"])}</span>'
+            f'    <span class="ih-card-state">{h["state"].upper()}</span>'
+            f'  </div>'
+            f'  <div class="ih-card-detail">{html.escape(h["detail"])}</div>'
+            f'  <div class="ih-card-tip">{html.escape(h["tip"])}</div>'
+            f'</div>'
+        )
+
+    st.markdown(
+        f'<details class="ih-strip is-outer-{outer}">'
+        f'  <summary class="ih-strip-head">'
+        f'    <span class="ih-strip-lbl">Integrations</span>'
+        f'    <span class="ih-strip-counts">{"".join(sum_bits)}</span>'
+        f'    <span class="ih-strip-chips">{"".join(chip_html)}</span>'
+        f'    <span class="ih-strip-toggle">▾</span>'
+        f'  </summary>'
+        f'  <div class="ih-strip-cards">{"".join(card_html)}</div>'
+        f'</details>',
+        unsafe_allow_html=True,
+    )
+
+
 @st.fragment(run_every="30s")
 def _render_jenkins_panel_active() -> None:
     """Active half of the Jenkins panel — fires the API call + draws the
@@ -15188,6 +15690,15 @@ if _show_inv and _inventory_slot is not None:
     # block.
     _iv_controls_slot = _iv_top_controls_slot
     with _inventory_slot.container():
+
+        # ── Integrations health strip — admin-only ─────────────────────────
+        # Compact chip row showing the state of every external integration
+        # the dashboard talks to (ES, git inventories, vault, Jenkins, S3,
+        # optional deps). Subtle by default — a one-line strip with colored
+        # dots; click the strip to expand a per-integration detail card so
+        # admins can dig in when something's off without the row screaming.
+        if _is_admin:
+            _render_integrations_strip()
 
         # Live tab badges reflect the last fragment run. On the first run of
         # a session the counters may be zero; they stabilize on the next
