@@ -2185,6 +2185,186 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .iv-src-alarm-warns li { word-break: break-all; margin-bottom: 1px; }
 
+/* ── GIT DIAGNOSTIC PANEL ──────────────────────────────────────────────────
+ * Monospace, terminal-style block rendered under the source-alarm banner
+ * when the admin clicks 🔍 Diagnose git. Sections: git binary · vault read
+ * shape · resolved URL (redacted) · filesystem snapshot · step-by-step
+ * trace of the last sync attempt · final outcome. */
+.gd-panel {
+    margin: 10px 0 12px 0;
+    border: 1px solid var(--cc-border-hi);
+    border-radius: 12px;
+    background: var(--cc-surface);
+    overflow: hidden;
+}
+.gd-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: linear-gradient(90deg,
+                rgba(79,70,229,.06), rgba(79,70,229,.01));
+    border-bottom: 1px solid var(--cc-border);
+}
+.gd-panel-glyph { font-size: 1.05rem; color: var(--cc-accent); }
+.gd-panel-title {
+    font-family: var(--cc-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--cc-text);
+}
+.gd-panel-ts {
+    margin-left: auto;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+}
+.gd-section {
+    padding: 8px 14px 12px 14px;
+    border-bottom: 1px dashed var(--cc-border);
+}
+.gd-section:last-child { border-bottom: none; }
+.gd-section-title {
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+.gd-section-title code {
+    font-family: var(--cc-mono);
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: 0.66rem;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.gd-kv {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 2px 14px;
+    padding: 4px 0;
+    font-size: 0.78rem;
+}
+.gd-kv--ok   { border-left: 3px solid rgba(5,150,105,.45);  padding-left: 8px; }
+.gd-kv--warn { border-left: 3px solid rgba(217,119,6,.45);  padding-left: 8px; }
+.gd-kv--bad  { border-left: 3px solid rgba(220,38,38,.50);  padding-left: 8px; }
+.gd-kv-row {
+    display: contents;
+}
+.gd-kv-k {
+    font-family: var(--cc-mono);
+    color: var(--cc-text-mute);
+    font-size: 0.72rem;
+}
+.gd-kv-v {
+    font-family: var(--cc-mono);
+    color: var(--cc-text);
+    font-weight: 600;
+    word-break: break-all;
+}
+.gd-url {
+    margin: 0;
+    padding: 6px 10px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text);
+    overflow-x: auto;
+    word-break: break-all;
+}
+.gd-trace {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.gd-step {
+    display: grid;
+    grid-template-columns: 14px auto auto auto;
+    grid-auto-rows: auto;
+    column-gap: 8px;
+    padding: 6px 10px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    align-items: baseline;
+}
+.gd-step.ok    { border-color: rgba(5,150,105,.32); background: rgba(5,150,105,.04); }
+.gd-step.bad   { border-color: rgba(220,38,38,.42); background: rgba(220,38,38,.04); }
+.gd-step.warn  { border-color: rgba(217,119,6,.38); background: rgba(217,119,6,.04); }
+.gd-step-glyph {
+    font-weight: 700;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.gd-step.ok  .gd-step-glyph { color: var(--cc-green); }
+.gd-step.bad .gd-step-glyph { color: var(--cc-red); }
+.gd-step.warn .gd-step-glyph { color: var(--cc-amber); }
+.gd-step-name {
+    font-weight: 700;
+    color: var(--cc-text);
+    word-break: break-all;
+}
+.gd-step-rc {
+    color: var(--cc-text-mute);
+    font-size: 0.66rem;
+}
+.gd-step-dur {
+    color: var(--cc-text-mute);
+    font-size: 0.66rem;
+    text-align: right;
+}
+.gd-step-head {
+    margin-left: 8px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+}
+.gd-step-cmd {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    padding: 4px 8px;
+    background: rgba(0,0,0,.04);
+    border-radius: 4px;
+    color: var(--cc-text-dim);
+    font-size: 0.7rem;
+    word-break: break-all;
+}
+.gd-stderr,
+.gd-stdout {
+    grid-column: 1 / -1;
+    margin: 4px 0 0 0;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-height: 180px;
+}
+.gd-stderr {
+    background: rgba(220,38,38,.06);
+    border: 1px solid rgba(220,38,38,.22);
+    color: #7f1d1d;
+}
+.gd-stdout {
+    background: rgba(5,150,105,.05);
+    border: 1px solid rgba(5,150,105,.18);
+    color: #065f46;
+}
+
 /* Source-selector radio strip — admin-only inline control above the
  * source pill / banner. Tight + horizontal so it reads as a toggle, not a
  * full form. */
@@ -12445,12 +12625,79 @@ def _inv_repo_url() -> str:
     return base
 
 
-def _run_git(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
+def _git_diag_redact(s: str) -> str:
+    """Scrub every form of the git password out of a string.
+
+    The standard ``_run_git`` already redacts stdout/stderr, but the
+    diagnostic path also captures the raw command-line + the resolved
+    URL, neither of which goes through that sanitisation. Apply this
+    helper anywhere admin-visible debug data is rendered.
+
+    Redacts:
+      • the raw password
+      • the URL-encoded password
+      • any ``user:***@host`` segment when only the username is visible
+    """
+    if not s:
+        return s
+    pw = _git_creds().get("password") or ""
+    if not pw:
+        return s
+    out = s
+    out = out.replace(pw, "***")
+    pw_enc = urllib.parse.quote(pw, safe="")
+    if pw_enc and pw_enc != pw:
+        out = out.replace(pw_enc, "***")
+    return out
+
+
+def _git_diag_capture_step(
+    trace: list, step: str, cmd: list[str],
+    proc: subprocess.CompletedProcess, started_at: float,
+) -> None:
+    """Append a single git invocation's redacted summary to *trace*.
+
+    Streams are truncated at 2 KB so a chatty git error doesn't blow up
+    session_state size; the diagnostic UI shows the most-recent slice,
+    which is where every real error lives. The command list itself is
+    redacted in case the URL (and its embedded password) was passed as
+    a positional argument."""
+    import time
+    _max = 2048
+    _stdout = (proc.stdout or "")
+    _stderr = (proc.stderr or "")
+    if len(_stdout) > _max:
+        _stdout = _stdout[-_max:]
+    if len(_stderr) > _max:
+        _stderr = _stderr[-_max:]
+    trace.append({
+        "step":         step,
+        "cmd_redacted": [_git_diag_redact(c) for c in cmd],
+        "returncode":   int(proc.returncode if proc.returncode is not None else -1),
+        "stdout_short": _git_diag_redact(_stdout).rstrip(),
+        "stderr_short": _git_diag_redact(_stderr).rstrip(),
+        "duration_ms":  int(max(0.0, (time.monotonic() - started_at) * 1000)),
+    })
+
+
+def _run_git(
+    *args: str,
+    cwd: str | None = None,
+    trace_into: list | None = None,
+) -> subprocess.CompletedProcess:
     """Run a git subcommand quietly and capture both streams. We refuse to
     leak the password through error messages by sanitising stdout/stderr
-    on the way out."""
+    on the way out.
+
+    When *trace_into* is provided, also append a redacted record of this
+    invocation to that list so the admin diagnostic panel can render a
+    step-by-step trace. Default behaviour (``trace_into=None``) is
+    unchanged."""
+    import time
+    cmd = ["git", *args]
+    _started = time.monotonic()
     proc = subprocess.run(
-        ["git", *args],
+        cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -12470,6 +12717,13 @@ def _run_git(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
             if pw_enc and pw_enc in s and pw_enc != pw:
                 s = s.replace(pw_enc, "***")
             setattr(proc, stream_attr, s)
+    if trace_into is not None:
+        # The git args may include the clone URL; redact via the diag
+        # helper which handles both raw + url-encoded password.
+        _git_diag_capture_step(
+            trace_into, step=args[0] if args else "git",
+            cmd=cmd, proc=proc, started_at=_started,
+        )
     return proc
 
 
@@ -12488,7 +12742,7 @@ def _git_set_author(repo_path: str, username: str, email: str) -> None:
 
 
 @st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
-def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
+def _ensure_inventory_repo(host_marker: str, trace_into: list | None = None) -> tuple[bool, str, str]:
     """Idempotent clone-or-pull of the inventories repo onto INVENTORY_BRANCH.
 
     Returns ``(ok, head_sha, status_msg)``. ``host_marker`` is the
@@ -12498,6 +12752,14 @@ def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
 
     Cached as a *resource* (not data) because it has filesystem side-effects
     and we want exactly one sync per TTL window per Streamlit process.
+
+    *trace_into* — optional list that ``_run_git`` will append a redacted
+    per-step record to. Used by the admin diagnostic panel to render a
+    step-by-step trace. Streamlit's ``cache_resource`` keys ONLY on the
+    positional ``host_marker`` arg (mutable default-less kwargs are not
+    part of the key), so a diagnostic call that supplies ``trace_into=[]``
+    still benefits from / pollutes the same cache entry; callers must
+    invoke ``.clear()`` first when they want a fresh execution.
     """
     if not host_marker:
         return False, "", "Git host not resolved (vault unreachable?)"
@@ -12511,20 +12773,25 @@ def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
             # Existing checkout — fetch + hard-reset to the remote head so a
             # local edit (e.g. a future write-back retry that aborted halfway)
             # never wedges the dashboard on a stale tip.
-            r = _run_git("remote", "set-url", "origin", url, cwd=repo_path)
+            r = _run_git("remote", "set-url", "origin", url, cwd=repo_path,
+                         trace_into=trace_into)
             if r.returncode != 0:
                 return False, "", f"git remote set-url failed: {r.stderr.strip()}"
-            r = _run_git("fetch", "--depth", "1", "origin", INVENTORY_BRANCH, cwd=repo_path)
+            r = _run_git("fetch", "--depth", "1", "origin", INVENTORY_BRANCH,
+                         cwd=repo_path, trace_into=trace_into)
             if r.returncode != 0:
                 return False, "", f"git fetch failed: {r.stderr.strip()}"
-            r = _run_git("checkout", INVENTORY_BRANCH, cwd=repo_path)
+            r = _run_git("checkout", INVENTORY_BRANCH, cwd=repo_path,
+                         trace_into=trace_into)
             if r.returncode != 0:
                 # Branch may not exist locally yet on a freshly-shallow-cloned
                 # repo; create it from FETCH_HEAD.
-                r = _run_git("checkout", "-B", INVENTORY_BRANCH, "FETCH_HEAD", cwd=repo_path)
+                r = _run_git("checkout", "-B", INVENTORY_BRANCH, "FETCH_HEAD",
+                             cwd=repo_path, trace_into=trace_into)
                 if r.returncode != 0:
                     return False, "", f"git checkout failed: {r.stderr.strip()}"
-            r = _run_git("reset", "--hard", f"origin/{INVENTORY_BRANCH}", cwd=repo_path)
+            r = _run_git("reset", "--hard", f"origin/{INVENTORY_BRANCH}",
+                         cwd=repo_path, trace_into=trace_into)
             if r.returncode != 0:
                 return False, "", f"git reset failed: {r.stderr.strip()}"
         else:
@@ -12536,11 +12803,12 @@ def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
             r = _run_git(
                 "clone", "--depth", "1", "--branch", INVENTORY_BRANCH,
                 url, repo_path,
+                trace_into=trace_into,
             )
             if r.returncode != 0:
                 return False, "", f"git clone failed: {r.stderr.strip()}"
         # Resolve HEAD for cache-busting downstream.
-        r = _run_git("rev-parse", "HEAD", cwd=repo_path)
+        r = _run_git("rev-parse", "HEAD", cwd=repo_path, trace_into=trace_into)
         if r.returncode != 0:
             return False, "", f"git rev-parse failed: {r.stderr.strip()}"
         head = (r.stdout or "").strip()
@@ -12551,6 +12819,345 @@ def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
         return False, "", "git executable not found on PATH"
     except Exception as e:  # pragma: no cover — last-resort safety net
         return False, "", f"unexpected: {type(e).__name__}: {e}"
+
+
+# =============================================================================
+# GIT DIAGNOSTIC PROBE — admin-only on-demand
+# =============================================================================
+# Distinguishes "vault unreachable" from "credentials malformed" from "host
+# unreachable" from "auth failed" from "stale checkout" without the admin
+# having to read tea leaves out of a single short status phrase. Never
+# auto-fires — the result is only populated when the admin clicks one of
+# the diagnostic buttons inside the source-failure alarm banner.
+
+def _git_diag_probe() -> dict:
+    """Run every cheap probe relevant to diagnosing a git-source failure.
+
+    Returns a structured dict; see ``_render_git_diag_panel`` for the
+    consumed shape. Safe to call even when vault is unreachable / git is
+    not installed — every probe is wrapped in its own try block so a
+    single failure surfaces as a populated error field rather than
+    aborting the whole report. The password is NEVER captured."""
+
+    out: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "git_version": {"available": False, "version": "", "error": ""},
+        "vault": {
+            "ok": False, "keys_top": [], "has_ado": False,
+            "ado_keys": [], "host_present": False,
+            "user_present": False, "pw_present": False, "pw_len": 0,
+            "last_error": "",
+        },
+        "resolved_url_redacted": "",
+        "fs": {
+            "repo_path": INVENTORY_REPO_PATH,
+            "exists": False, "git_dir_exists": False,
+            "head_sha": "",
+        },
+        "trace": [],
+        "final": {"ok": False, "head": "", "status_msg": ""},
+    }
+
+    # 1. git --version — runs without cwd, captures stdout directly.
+    try:
+        gv = subprocess.run(
+            ["git", "--version"], capture_output=True, text=True, timeout=5,
+        )
+        out["git_version"]["available"] = (gv.returncode == 0)
+        out["git_version"]["version"] = (gv.stdout or gv.stderr or "").strip()
+    except FileNotFoundError:
+        out["git_version"]["error"] = "git binary not on PATH"
+    except subprocess.TimeoutExpired:
+        out["git_version"]["error"] = "git --version timed out"
+    except Exception as e:
+        out["git_version"]["error"] = f"{type(e).__name__}: {e}"
+
+    # 2. Vault read shape — never includes the password value.
+    try:
+        cfg = _vault_secrets(GIT_VAULT_PATH) or {}
+        out["vault"]["ok"] = bool(cfg)
+        out["vault"]["keys_top"] = sorted(cfg.keys())
+        ado = cfg.get("ado") if isinstance(cfg.get("ado"), dict) else {}
+        out["vault"]["has_ado"] = bool(ado)
+        out["vault"]["ado_keys"] = sorted(ado.keys()) if ado else []
+        out["vault"]["host_present"] = bool((ado.get("hostname") or "").strip())
+        out["vault"]["user_present"] = bool((ado.get("username") or "").strip())
+        _pw = (ado.get("password") or "")
+        out["vault"]["pw_present"] = bool(_pw.strip())
+        out["vault"]["pw_len"] = len(_pw)
+    except Exception as e:
+        out["vault"]["last_error"] = f"{type(e).__name__}: {e}"
+    # Surface any stashed vault error for this path even if THIS call worked
+    # (stale state from a prior render is still useful for diagnosis).
+    out["vault"]["last_error"] = (
+        out["vault"]["last_error"]
+        or _vault_last_error(GIT_VAULT_PATH)
+        or ""
+    )
+
+    # 3. Resolved URL — redacted.
+    try:
+        out["resolved_url_redacted"] = _git_diag_redact(_inv_repo_url())
+    except Exception as e:
+        out["resolved_url_redacted"] = f"<URL build failed: {type(e).__name__}: {e}>"
+
+    # 4. Filesystem snapshot.
+    try:
+        rp = INVENTORY_REPO_PATH
+        out["fs"]["exists"] = os.path.isdir(rp)
+        out["fs"]["git_dir_exists"] = os.path.isdir(os.path.join(rp, ".git"))
+        if out["fs"]["git_dir_exists"]:
+            try:
+                r = _run_git("rev-parse", "HEAD", cwd=rp)
+                if r.returncode == 0:
+                    out["fs"]["head_sha"] = (r.stdout or "").strip()
+            except Exception:
+                pass
+    except Exception as e:
+        out["fs"]["error"] = f"{type(e).__name__}: {e}"
+
+    # 5. Step trace — clear the cached resource so we get a FRESH execution,
+    # then call _ensure_inventory_repo with trace_into to capture every step.
+    trace: list[dict] = []
+    try:
+        _ensure_inventory_repo.clear()
+    except Exception:
+        pass
+    try:
+        host = _git_creds().get("hostname", "")
+        ok, head, status_msg = _ensure_inventory_repo(host, trace_into=trace)
+        out["final"] = {"ok": ok, "head": head, "status_msg": status_msg}
+    except Exception as e:
+        out["final"]["status_msg"] = f"{type(e).__name__}: {e}"
+    out["trace"] = trace
+
+    return out
+
+
+def _render_git_diag_panel(result: dict) -> None:
+    """Render the diagnostic dict as an admin-readable monospace block.
+
+    The result is stashed in ``st.session_state["_git_diag_result_v1"]`` —
+    callers populate it via ``_git_diag_probe()`` and clear it via the
+    "✕ Clear" button inside this panel."""
+    if not result:
+        return
+
+    # ── Step trace
+    trace = result.get("trace") or []
+    if trace:
+        step_rows: list[str] = []
+        for s in trace:
+            rc = s.get("returncode", -1)
+            cls = "gd-step ok" if rc == 0 else "gd-step bad"
+            glyph = "✓" if rc == 0 else "✗"
+            _cmd = " ".join(s.get("cmd_redacted") or [])
+            _stderr = s.get("stderr_short") or ""
+            _stdout = s.get("stdout_short") or ""
+            _streams = ""
+            if _stderr:
+                _streams += (
+                    f'<pre class="gd-stderr">{html.escape(_stderr)}</pre>'
+                )
+            if _stdout and rc == 0:
+                _streams += (
+                    f'<pre class="gd-stdout">{html.escape(_stdout)}</pre>'
+                )
+            step_rows.append(
+                f'<div class="{cls}">'
+                f'  <span class="gd-step-glyph">{glyph}</span>'
+                f'  <span class="gd-step-name">{html.escape(s.get("step", "?"))}</span>'
+                f'  <span class="gd-step-rc">rc={rc}</span>'
+                f'  <span class="gd-step-dur">{s.get("duration_ms", 0)}ms</span>'
+                f'  <div class="gd-step-cmd">{html.escape(_cmd)}</div>'
+                f'  {_streams}'
+                f'</div>'
+            )
+        trace_html = "".join(step_rows)
+    else:
+        trace_html = (
+            '<div class="gd-step bad">'
+            '  <span class="gd-step-glyph">✗</span>'
+            '  <span class="gd-step-name">'
+            '    no git commands ran — failure was earlier in the pipeline'
+            '  </span>'
+            '</div>'
+        )
+
+    # ── Vault summary
+    v = result.get("vault") or {}
+    _vault_state_cls = (
+        "ok" if v.get("ok") and v.get("has_ado") and v.get("host_present")
+        else ("bad" if v.get("last_error") or not v.get("ok") else "warn")
+    )
+    _keys_top = ", ".join(v.get("keys_top") or []) or "—"
+    _ado_keys = ", ".join(v.get("ado_keys") or []) or "—"
+    _vault_err = v.get("last_error") or ""
+    _vault_kv = [
+        ("path", html.escape(GIT_VAULT_PATH)),
+        ("top-level keys", html.escape(_keys_top)),
+        ("has `ado` sub-dict", "yes" if v.get("has_ado") else "no"),
+        ("`ado` keys", html.escape(_ado_keys)),
+        ("hostname present", "yes" if v.get("host_present") else "no"),
+        ("username present", "yes" if v.get("user_present") else "no"),
+        ("password present",
+         f"yes (len={v.get('pw_len',0)})" if v.get("pw_present") else "no"),
+    ]
+    if _vault_err:
+        _vault_kv.append(("last error", html.escape(_vault_err)))
+    _vault_kv_html = "".join(
+        f'<div class="gd-kv-row">'
+        f'  <span class="gd-kv-k">{k}</span>'
+        f'  <span class="gd-kv-v">{val}</span>'
+        f'</div>'
+        for k, val in _vault_kv
+    )
+
+    # ── Filesystem snapshot
+    fs = result.get("fs") or {}
+    _fs_kv = [
+        ("repo path", html.escape(fs.get("repo_path") or "")),
+        ("dir exists", "yes" if fs.get("exists") else "no"),
+        ("`.git/` present", "yes" if fs.get("git_dir_exists") else "no"),
+        ("HEAD sha",
+         html.escape(fs.get("head_sha") or "—")[:40]),
+    ]
+    _fs_kv_html = "".join(
+        f'<div class="gd-kv-row">'
+        f'  <span class="gd-kv-k">{k}</span>'
+        f'  <span class="gd-kv-v">{val}</span>'
+        f'</div>'
+        for k, val in _fs_kv
+    )
+
+    # ── Git binary
+    gv = result.get("git_version") or {}
+    _gv_state = (
+        "ok" if gv.get("available") else "bad"
+    )
+    _gv_line = html.escape(
+        gv.get("version") or gv.get("error") or "no information"
+    )
+
+    # ── URL
+    _url = result.get("resolved_url_redacted") or "(not resolved)"
+
+    # ── Final outcome
+    final = result.get("final") or {}
+    _final_cls = "ok" if final.get("ok") else "bad"
+    _final_msg = html.escape(final.get("status_msg") or "—")
+    _final_head = html.escape(final.get("head") or "")
+    # f-strings can't embed backslash escapes inside expressions — build the
+    # optional head-sha span out-of-band.
+    _final_head_html = (
+        f'<span class="gd-step-head">{_final_head[:8]}</span>'
+        if _final_head else ""
+    )
+    _final_glyph = "✓" if final.get("ok") else "✗"
+    _gv_glyph = "✓" if gv.get("available") else "✗"
+
+    _ts = (result.get("timestamp") or "").replace("T", " ")[:19]
+
+    st.markdown(
+        f'<div class="gd-panel">'
+        f'  <div class="gd-panel-head">'
+        f'    <span class="gd-panel-glyph">🔍</span>'
+        f'    <span class="gd-panel-title">Git diagnostic</span>'
+        f'    <span class="gd-panel-ts">{_ts} UTC</span>'
+        f'  </div>'
+        f'  <div class="gd-section">'
+        f'    <div class="gd-section-title">git binary</div>'
+        f'    <div class="gd-step {_gv_state}">'
+        f'      <span class="gd-step-glyph">{_gv_glyph}</span>'
+        f'      <span class="gd-step-name">{_gv_line}</span>'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="gd-section">'
+        f'    <div class="gd-section-title">vault read · '
+        f'<code>{html.escape(GIT_VAULT_PATH)}</code></div>'
+        f'    <div class="gd-kv gd-kv--{_vault_state_cls}">{_vault_kv_html}</div>'
+        f'  </div>'
+        f'  <div class="gd-section">'
+        f'    <div class="gd-section-title">resolved URL (redacted)</div>'
+        f'    <pre class="gd-url">{html.escape(_url)}</pre>'
+        f'  </div>'
+        f'  <div class="gd-section">'
+        f'    <div class="gd-section-title">filesystem · '
+        f'<code>{html.escape(INVENTORY_REPO_PATH)}</code></div>'
+        f'    <div class="gd-kv">{_fs_kv_html}</div>'
+        f'  </div>'
+        f'  <div class="gd-section">'
+        f'    <div class="gd-section-title">git steps · last attempt</div>'
+        f'    <div class="gd-trace">{trace_html}</div>'
+        f'  </div>'
+        f'  <div class="gd-section">'
+        f'    <div class="gd-section-title">final outcome</div>'
+        f'    <div class="gd-step {_final_cls}">'
+        f'      <span class="gd-step-glyph">{_final_glyph}</span>'
+        f'      <span class="gd-step-name">{_final_msg}</span>'
+        f'      {_final_head_html}'
+        f'    </div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+_GIT_DIAG_RESULT_KEY = "_git_diag_result_v1"
+
+
+def _render_git_diag_controls() -> None:
+    """Render the diagnostic button row + (when populated) the result panel.
+
+    Sits directly under the source alarm banner in the inventory tab.
+    Three buttons:
+      • 🔍 Diagnose git — runs ``_git_diag_probe()`` and stashes the result.
+      • ↻ Force re-sync — clears the cached ``_ensure_inventory_repo`` and
+        re-renders so :func:`_inventory_load` runs fresh on the next call.
+      • ✕ Clear         — drops the stashed diagnostic result.
+
+    The expensive probe runs only on the button click — the panel itself
+    just renders the cached dict on subsequent reruns."""
+    _b1, _b2, _b3, _spacer = st.columns([1, 1, 1, 4])
+    with _b1:
+        if st.button("🔍 Diagnose git",
+                     key="cc_git_diag_btn",
+                     use_container_width=True,
+                     help=(
+                         "Runs every diagnostic probe (git binary, vault "
+                         "shape, resolved URL, filesystem state, per-step "
+                         "git trace). Password is never captured. Safe to "
+                         "click repeatedly."
+                     )):
+            with st.spinner("Running git diagnostic probe..."):
+                st.session_state[_GIT_DIAG_RESULT_KEY] = _git_diag_probe()
+            st.rerun()
+    with _b2:
+        if st.button("↻ Force re-sync",
+                     key="cc_git_diag_resync_btn",
+                     use_container_width=True,
+                     help=(
+                         "Drops the 60-second cached repo state and "
+                         "immediately re-runs the inventory load with the "
+                         "active source preference. Use after fixing vault "
+                         "config so you don't have to wait for the TTL."
+                     )):
+            try:
+                _ensure_inventory_repo.clear()
+            except Exception:
+                pass
+            st.rerun()
+    with _b3:
+        if st.session_state.get(_GIT_DIAG_RESULT_KEY):
+            if st.button("✕ Clear",
+                         key="cc_git_diag_clear_btn",
+                         use_container_width=True,
+                         help="Drops the displayed diagnostic result."):
+                st.session_state.pop(_GIT_DIAG_RESULT_KEY, None)
+                st.rerun()
+    result = st.session_state.get(_GIT_DIAG_RESULT_KEY)
+    if result:
+        _render_git_diag_panel(result)
 
 
 def _decrypt_vault(blob: bytes) -> bytes:
@@ -17375,6 +17982,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'</div>',
                 unsafe_allow_html=True,
             )
+            # ── Diagnostic affordance ──────────────────────────────────────
+            _render_git_diag_controls()
         elif _src == "git":
             # Quiet success pill stays.
             st.markdown(
@@ -17520,6 +18129,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'</div>',
                 unsafe_allow_html=True,
             )
+            # ── Diagnostic affordance ──────────────────────────────────────
+            _render_git_diag_controls()
 
     # ── Final render ────────────────────────────────────────────────────────
     _iv_visible_badge = (
