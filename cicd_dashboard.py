@@ -73,6 +73,21 @@ try:
 except ImportError:  # pragma: no cover
     _VaultClient = None  # type: ignore
     _VAULT_AVAILABLE = False
+# Postgres driver — psycopg v3 is preferred; fall back to v2 since both
+# are common in this org. Either is fine for our read-only access.
+try:
+    import psycopg as _psycopg  # type: ignore  # v3
+    _PSYCOPG_VARIANT = "v3"
+    _POSTGRES_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    try:
+        import psycopg2 as _psycopg  # type: ignore
+        _PSYCOPG_VARIANT = "v2"
+        _POSTGRES_AVAILABLE = True
+    except ImportError:
+        _psycopg = None  # type: ignore
+        _PSYCOPG_VARIANT = ""
+        _POSTGRES_AVAILABLE = False
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:  # pragma: no cover
@@ -204,6 +219,32 @@ PRISMA_S3_KEY_PATTERN = os.environ.get(
 # var explicitly overrides — purely a boto3 plumbing concern.
 PRISMA_S3_REGION = os.environ.get("PRISMA_S3_REGION", "us-east-1").strip()
 PRISMA_SCAN_TTL = 600  # seconds — scans are immutable per version, longer TTL OK
+
+# =============================================================================
+# POSTGRES — authoritative devops_projects table (per-project teams)
+# =============================================================================
+# A small Postgres table holds the canonical (company, project) → teams
+# mapping with consolidated ``ops_team`` (the team owning UAT / PRD /
+# PREPROD). Useful for cross-referencing against the inventory, which
+# carries per-environment ``uat_team`` / ``prd_team`` / ``preprod_team``
+# fields — inventory MAY disagree internally across envs, and even when
+# consistent it may disagree with the Postgres record.
+#
+# Vault layout matches the platform's existing pattern:
+#
+#     postgres_env = os.environ.get("postgres_env", "dev")
+#     vc = VaultClient()
+#     if postgres_env == "dev":
+#         cfg = vc.read_all_nested_secrets("postgres", "dev")
+#     else:
+#         cfg = vc.read_all_nested_secrets("postgres")
+#     # cfg → {host, port, database, username, password}
+POSTGRES_ENV = os.environ.get("postgres_env", "dev").strip()
+POSTGRES_VAULT_PATH = os.environ.get("POSTGRES_VAULT_PATH", "postgres").strip()
+POSTGRES_TABLE = os.environ.get("POSTGRES_TABLE", "devops_projects").strip()
+POSTGRES_CONNECT_TIMEOUT = 10  # seconds
+POSTGRES_DATA_TTL = 300        # seconds
+
 
 JENKINS_PIPELINES: dict[str, dict] = {
     "build": {
@@ -2493,6 +2534,76 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-style: italic;
     font-family: var(--cc-mono);
 }
+.sync-cell-val.is-warn,
+.sync-cell-chip.is-warn {
+    color: #92400e;
+    background: rgba(217,119,6,.10);
+    border: 1px solid rgba(217,119,6,.30);
+}
+
+/* Divider between the two sync-check sub-sections */
+.sync-section-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 18px 0 8px 0;
+    padding: 4px 0;
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    border-bottom: 1px dashed var(--cc-border);
+}
+.sync-section-divider:first-child { margin-top: 4px; }
+.sync-section-divider-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    font-size: 0.85rem;
+}
+
+/* Postgres-specific accents */
+.sync-tile.pg-inconsistent {
+    border-color: rgba(220,38,38,.36);
+    background: rgba(220,38,38,.04);
+}
+.sync-tile.pg-inconsistent .sync-tile-val { color: var(--cc-red); }
+
+.pg-apps-n {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    color: var(--cc-text-mute);
+    margin-left: 4px;
+    font-weight: 500;
+}
+
+.sync-diff-card.pg-card-inconsistent {
+    border-color: rgba(220,38,38,.40);
+}
+.sync-diff-card.pg-card-inconsistent summary {
+    background: rgba(220,38,38,.05);
+}
+.pg-ops-inconsistent {
+    padding: 8px 14px;
+    background: rgba(220,38,38,.06);
+    border-bottom: 1px dashed rgba(220,38,38,.32);
+    color: var(--cc-red);
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    font-weight: 700;
+    cursor: help;
+}
+.pg-ops-breakdown {
+    margin-top: 4px;
+    border-top: 1px dashed var(--cc-border);
+}
+.pg-ops-breakdown th { background: rgba(217,119,6,.04); }
 
 /* ── INTEGRATIONS HEALTH STRIP ─────────────────────────────────────────────
  * Compact admin-only chip row that summarises every external integration's
@@ -9561,7 +9672,49 @@ def _integrations_health() -> list[dict]:
                 "tip": f"endpoint: {ep} · bucket: {PRISMA_S3_BUCKET}",
             })
 
-    # 6. Inventory sync check — surfaces the last-known diff count so
+    # 6. Postgres devops_projects — only meaningful when configured.
+    if not _POSTGRES_AVAILABLE:
+        out.append({
+            "key": "postgres", "label": "Postgres", "glyph": "🗂",
+            "state": "skip",
+            "detail": "driver missing",
+            "tip": "pip install psycopg[binary] or psycopg2 to enable.",
+        })
+    else:
+        pg_creds = _postgres_creds()
+        if not pg_creds.get("host"):
+            v_err_key = (
+                f"{POSTGRES_VAULT_PATH}/dev"
+                if POSTGRES_ENV == "dev" else POSTGRES_VAULT_PATH
+            )
+            v_err = _vault_last_error(v_err_key)
+            out.append({
+                "key": "postgres", "label": "Postgres", "glyph": "🗂",
+                "state": "down" if v_err else "skip",
+                "detail": "creds unresolved",
+                "tip": (
+                    v_err or
+                    f"No vault entry at {POSTGRES_VAULT_PATH!r}"
+                    + (f" (sub: dev)" if POSTGRES_ENV == "dev" else "") + "."
+                ),
+            })
+        else:
+            # Don't actually connect on every render — too expensive. Trust
+            # that creds resolution succeeded and surface "ready" until the
+            # admin runs the comparison panel (which is where real errors
+            # show up).
+            out.append({
+                "key": "postgres", "label": "Postgres", "glyph": "🗂",
+                "state": "ok",
+                "detail": "creds resolved",
+                "tip": (
+                    f"{pg_creds['username']}@{pg_creds['host']}:"
+                    f"{pg_creds['port']}/{pg_creds['database']} · "
+                    f"table {POSTGRES_TABLE}"
+                ),
+            })
+
+    # 7. Inventory sync check — surfaces the last-known diff count so
     # admins see drift across sources without opening the dedicated tab.
     sync_sum = st.session_state.get("_sync_summary_v1") or {}
     if not sync_sum:
@@ -9605,7 +9758,7 @@ def _integrations_health() -> list[dict]:
                 ),
             })
 
-    # 7. Optional deps — soft signal so admins know which features
+    # 8. Optional deps — soft signal so admins know which features
     # would light up if a missing package were installed.
     missing_deps: list[str] = []
     if not _YAML_AVAILABLE:
@@ -9972,6 +10125,355 @@ def _render_sync_check_panel(scope_json: str) -> None:
             inline_note(
                 f"Showing first 200 of {len(field_diffs)} field-discrepant "
                 f"apps — narrow filters to inspect the rest.",
+                "info",
+            )
+
+
+# =============================================================================
+# INVENTORY ↔ POSTGRES PANEL — admin-only, smart-loaded
+# =============================================================================
+# Second comparison panel inside the SYNC CHECK tab. Diffs (company, project)
+# coverage and per-project teams between the live inventory (whichever source
+# is active) and the Postgres ``devops_projects`` table. Surfaces the
+# inventory's internal ops-team inconsistency separately when uat / prd /
+# preprod teams disagree within a single project.
+
+_PG_CHECK_LOADED_KEY = "_pg_check_loaded_v1"
+
+
+def _render_pg_team_value(val: Any, side: str) -> str:
+    """Reuse the sync-check value cell renderer for Postgres comparison."""
+    return _render_sync_value(val, side)
+
+
+def _render_postgres_compare_panel(scope_json: str) -> None:
+    """Admin-only inventory ↔ Postgres comparison. Same smart-load pattern
+    as the git-vs-ES panel — gated behind ▶ Run."""
+
+    if not _POSTGRES_AVAILABLE:
+        st.markdown(
+            '<div class="sync-gate">'
+            '  <div class="sync-gate-glyph">🗂</div>'
+            '  <div class="sync-gate-title">Postgres driver not installed</div>'
+            '  <div class="sync-gate-body">Install psycopg v3 '
+            '  (<code>pip install psycopg[binary]</code>) or psycopg2 '
+            '  on the streamlit host to enable this comparison.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    if not st.session_state.get(_PG_CHECK_LOADED_KEY):
+        st.markdown(
+            '<div class="sync-gate">'
+            '  <div class="sync-gate-glyph">🗂</div>'
+            '  <div class="sync-gate-title">'
+            '    Run inventory ↔ Postgres check'
+            '  </div>'
+            '  <div class="sync-gate-body">'
+            '    Compares the live inventory (current scope, current source) '
+            '    against the Postgres <code>devops_projects</code> table at '
+            '    the <b>(company, project)</b> granularity. Surfaces:'
+            '    <ul>'
+            '      <li>projects present only in inventory or only in Postgres</li>'
+            '      <li>per-project team mismatches on <code>dev_team</code>, '
+            '          <code>qc_team</code>, <code>ops_team</code></li>'
+            '      <li><b>Ops inconsistency</b> within the inventory — when '
+            '          <code>uat_team</code>, <code>prd_team</code>, '
+            '          <code>preprod_team</code> disagree, that\'s flagged '
+            '          regardless of what Postgres says.</li>'
+            '    </ul>'
+            '    One Postgres SELECT + one inventory aggregation per run. '
+            '    Gated so the rest of the page never pays this cost.'
+            '  </div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _gc1, _gc2, _gc3 = st.columns([1, 2, 1])
+        with _gc2:
+            if st.button("▶  Run Postgres check",
+                         key="_pg_check_run_btn",
+                         type="primary",
+                         use_container_width=True):
+                with st.spinner("Comparing inventory vs Postgres..."):
+                    diff = _inventory_vs_postgres_compare(scope_json)
+                st.session_state[_PG_CHECK_LOADED_KEY] = diff
+                st.session_state["_pg_check_summary_v1"] = {
+                    "total": (
+                        len(diff.get("only_in_inv") or [])
+                        + len(diff.get("only_in_pg") or [])
+                        + len(diff.get("diffs") or [])
+                    ),
+                    "checked_at": diff.get("checked_at", ""),
+                    "errors": diff.get("errors", {}),
+                    "ops_inconsistent": sum(
+                        1 for d in (diff.get("diffs") or [])
+                        if d.get("ops_inconsistent")
+                    ),
+                }
+                st.rerun()
+        return
+
+    diff = st.session_state.get(_PG_CHECK_LOADED_KEY) or {}
+
+    # ── Control row ────────────────────────────────────────────────────────
+    _cc1, _cc2, _cc3 = st.columns([1, 1, 6])
+    with _cc1:
+        if st.button("↻ Re-run", key="_pg_check_rerun_btn",
+                     use_container_width=True):
+            with st.spinner("Re-comparing..."):
+                diff = _inventory_vs_postgres_compare(scope_json)
+            st.session_state[_PG_CHECK_LOADED_KEY] = diff
+            st.session_state["_pg_check_summary_v1"] = {
+                "total": (
+                    len(diff.get("only_in_inv") or [])
+                    + len(diff.get("only_in_pg") or [])
+                    + len(diff.get("diffs") or [])
+                ),
+                "checked_at": diff.get("checked_at", ""),
+                "errors": diff.get("errors", {}),
+                "ops_inconsistent": sum(
+                    1 for d in (diff.get("diffs") or [])
+                    if d.get("ops_inconsistent")
+                ),
+            }
+            st.rerun()
+    with _cc2:
+        if st.button("✕ Clear", key="_pg_check_clear_btn",
+                     use_container_width=True):
+            st.session_state.pop(_PG_CHECK_LOADED_KEY, None)
+            st.session_state.pop("_pg_check_summary_v1", None)
+            st.rerun()
+    with _cc3:
+        _ts = (diff.get("checked_at") or "").replace("T", " ")[:19]
+        _src = diff.get("inv_source") or "?"
+        st.caption(
+            f"comparison run at {_ts} UTC · inventory source: {_src} · "
+            f"Postgres table: {POSTGRES_TABLE}"
+        )
+
+    errors = diff.get("errors") or {}
+    err_inv, err_pg = errors.get("inventory") or "", errors.get("postgres") or ""
+    if err_inv or err_pg:
+        st.markdown(
+            f'<div class="sync-errs">'
+            + (f'<div class="sync-errs-line"><span class="sync-errs-k">Inventory:</span>'
+               f'<code>{html.escape(err_inv)}</code></div>' if err_inv else "")
+            + (f'<div class="sync-errs-line"><span class="sync-errs-k">Postgres:</span>'
+               f'<code>{html.escape(err_pg)}</code></div>' if err_pg else "")
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+        if err_inv and err_pg:
+            inline_note(
+                "Both sources failed to load — see the Integrations strip "
+                "for per-source detail.",
+                "warning",
+            )
+            return
+
+    inv_total = diff.get("inv_total", 0)
+    pg_total = diff.get("pg_total", 0)
+    common = diff.get("common", 0)
+    only_inv = diff.get("only_in_inv", []) or []
+    only_pg = diff.get("only_in_pg", []) or []
+    diffs = diff.get("diffs", []) or []
+    n_inconsistent = sum(1 for d in diffs if d.get("ops_inconsistent"))
+    total_drift = len(only_inv) + len(only_pg) + len(diffs)
+    drift_state = "clean" if total_drift == 0 else "drift"
+
+    st.markdown(
+        f'<div class="sync-summary is-{drift_state}">'
+        f'  <div class="sync-tile">'
+        f'    <div class="sync-tile-lbl">Inventory</div>'
+        f'    <div class="sync-tile-val">{inv_total:,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile">'
+        f'    <div class="sync-tile-lbl">Postgres</div>'
+        f'    <div class="sync-tile-val">{pg_total:,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile">'
+        f'    <div class="sync-tile-lbl">In both</div>'
+        f'    <div class="sync-tile-val">{common:,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile is-only is-only-git">'
+        f'    <div class="sync-tile-lbl">Only inv.</div>'
+        f'    <div class="sync-tile-val">{len(only_inv):,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile is-only is-only-es">'
+        f'    <div class="sync-tile-lbl">Only pg</div>'
+        f'    <div class="sync-tile-val">{len(only_pg):,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile is-field">'
+        f'    <div class="sync-tile-lbl">Team diffs</div>'
+        f'    <div class="sync-tile-val">{len(diffs):,}</div>'
+        f'  </div>'
+        f'  <div class="sync-tile pg-inconsistent">'
+        f'    <div class="sync-tile-lbl">Ops inconsistent</div>'
+        f'    <div class="sync-tile-val">{n_inconsistent:,}</div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if total_drift == 0:
+        st.markdown(
+            '<div class="sync-clean">'
+            '  <span class="sync-clean-glyph">✓</span>'
+            '  <span>Inventory and Postgres agree on every project in '
+            '  scope. <code>dev_team</code>, <code>qc_team</code>, and the '
+            '  consolidated <code>ops_team</code> all match — and the '
+            '  inventory itself is internally consistent on '
+            '  uat / prd / preprod team ownership.</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Only-in-X lists ────────────────────────────────────────────────────
+    if only_inv:
+        chips = "".join(
+            f'<span class="sync-only-chip is-only-git" '
+            f'title="{html.escape(o["company"] or "—")}">'
+            f'{html.escape(o["project"])}'
+            f'<span class="pg-apps-n"> · {o["apps_n"]} app{"s" if o["apps_n"] != 1 else ""}</span>'
+            f'</span>'
+            for o in only_inv[:200]
+        )
+        overflow = (
+            f'<span class="sync-only-more">+{len(only_inv) - 200} more</span>'
+            if len(only_inv) > 200 else ""
+        )
+        st.markdown(
+            f'<div class="sync-section is-only-git">'
+            f'  <div class="sync-section-head">'
+            f'    <span class="sync-section-glyph">⎇</span>'
+            f'    <span class="sync-section-title">Only in inventory</span>'
+            f'    <span class="sync-section-count">{len(only_inv):,}</span>'
+            f'  </div>'
+            f'  <div class="sync-only-chips">{chips}{overflow}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    if only_pg:
+        chips = "".join(
+            f'<span class="sync-only-chip is-only-es" '
+            f'title="dev: {html.escape(o["dev_team"] or "—")} · '
+            f'qc: {html.escape(o["qc_team"] or "—")} · '
+            f'ops: {html.escape(o["ops_team"] or "—")}">'
+            f'{html.escape(o["project"])}'
+            f'<span class="pg-apps-n"> · {html.escape(o["company"] or "—")}</span>'
+            f'</span>'
+            for o in only_pg[:200]
+        )
+        overflow = (
+            f'<span class="sync-only-more">+{len(only_pg) - 200} more</span>'
+            if len(only_pg) > 200 else ""
+        )
+        st.markdown(
+            f'<div class="sync-section is-only-es">'
+            f'  <div class="sync-section-head">'
+            f'    <span class="sync-section-glyph">🗂</span>'
+            f'    <span class="sync-section-title">Only in Postgres</span>'
+            f'    <span class="sync-section-count">{len(only_pg):,}</span>'
+            f'  </div>'
+            f'  <div class="sync-only-chips">{chips}{overflow}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Field-diff cards ───────────────────────────────────────────────────
+    if diffs:
+        st.markdown(
+            f'<div class="sync-section is-field">'
+            f'  <div class="sync-section-head">'
+            f'    <span class="sync-section-glyph">≠</span>'
+            f'    <span class="sync-section-title">Team discrepancies</span>'
+            f'    <span class="sync-section-count">{len(diffs):,}</span>'
+            f'  </div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        for d in diffs[:200]:
+            _co = html.escape(d["company"] or "—")
+            _pj = html.escape(d["project"])
+            _ops_warn = ""
+            _ops_breakdown_html = ""
+            if d.get("ops_inconsistent"):
+                _ob = d.get("ops_breakdown") or {}
+                _breakdown_rows = "".join(
+                    f'<tr>'
+                    f'  <td class="sync-diff-k">{env}_team</td>'
+                    f'  <td class="sync-diff-side is-warn" colspan="2">'
+                    f'    {_render_sync_value(_ob.get(env + "_team", []), "is-warn")}'
+                    f'  </td>'
+                    f'</tr>'
+                    for env in ("uat", "prd", "preprod")
+                )
+                _ops_warn = (
+                    '<div class="pg-ops-inconsistent" '
+                    'title="Inventory rows in this project disagree on '
+                    'who owns uat / prd / preprod — Postgres folds these '
+                    'into one ops_team, so the inventory should too.">'
+                    '⚠ ops teams differ across uat / prd / preprod'
+                    '</div>'
+                )
+                _ops_breakdown_html = (
+                    f'<table class="sync-diff-table pg-ops-breakdown">'
+                    f'  <thead><tr>'
+                    f'    <th>Env field</th>'
+                    f'    <th colspan="2">Inventory team(s)</th>'
+                    f'  </tr></thead>'
+                    f'  <tbody>{_breakdown_rows}</tbody>'
+                    f'</table>'
+                )
+            _field_rows: list[str] = []
+            for fname, val in (d.get("fields") or {}).items():
+                _field_rows.append(
+                    f'<tr>'
+                    f'  <td class="sync-diff-k">{html.escape(fname)}</td>'
+                    f'  <td class="sync-diff-side is-git">'
+                    f'    {_render_sync_value(val["inventory"], "is-git")}'
+                    f'  </td>'
+                    f'  <td class="sync-diff-side is-es">'
+                    f'    {_render_sync_value(val["postgres"], "is-es")}'
+                    f'  </td>'
+                    f'</tr>'
+                )
+            _field_table = (
+                f'<table class="sync-diff-table">'
+                f'  <thead><tr>'
+                f'    <th>Field</th>'
+                f'    <th class="is-git">Inventory (union)</th>'
+                f'    <th class="is-es">Postgres</th>'
+                f'  </tr></thead>'
+                f'  <tbody>{"".join(_field_rows)}</tbody>'
+                f'</table>'
+                if _field_rows else ""
+            )
+            _diff_count = (
+                len(d.get("fields") or {})
+                + (1 if d.get("ops_inconsistent") else 0)
+            )
+            st.markdown(
+                f'<details class="sync-diff-card{" pg-card-inconsistent" if d.get("ops_inconsistent") else ""}">'
+                f'  <summary>'
+                f'    <span class="sync-diff-app">{_pj}</span>'
+                f'    <span class="sync-diff-proj">{_co}</span>'
+                f'    <span class="sync-diff-count">{_diff_count} issue'
+                f'{"s" if _diff_count != 1 else ""}</span>'
+                f'  </summary>'
+                f'  {_ops_warn}'
+                f'  {_field_table}'
+                f'  {_ops_breakdown_html}'
+                f'</details>',
+                unsafe_allow_html=True,
+            )
+        if len(diffs) > 200:
+            inline_note(
+                f"Showing first 200 of {len(diffs)} team-discrepant "
+                f"projects — narrow filters to inspect the rest.",
                 "info",
             )
 
@@ -12517,6 +13019,228 @@ def _inventory_compare(scope_json: str) -> dict:
 
 
 # =============================================================================
+# INVENTORY ↔ POSTGRES COMPARISON
+# =============================================================================
+# The Postgres ``devops_projects`` table holds the canonical (company,
+# project) → teams mapping. The inventory's per-environment team fields
+# (uat_team / prd_team / preprod_team) are MEANT to collapse to a single
+# "ops" team — when they don't, both internal inconsistency and Postgres
+# disagreement are surfaced separately. The comparison is run on demand
+# from the SYNC CHECK tab.
+
+# Inventory team fields that fold together into the canonical "ops team"
+# value compared against Postgres. uat/prd/preprod are typically the same
+# squad; differences within this set trigger the "ops_inconsistency" flag.
+_INV_OPS_FIELDS: tuple[str, ...] = ("uat_team", "prd_team", "preprod_team")
+
+
+def _row_teams_for_field(row: dict, field: str) -> list[str]:
+    """Pull a team field's values from an inventory row. Tolerates both
+    list-valued (multi-team) and scalar-valued shapes."""
+    blob = (row.get("teams") or {}).get(field)
+    if isinstance(blob, (list, tuple, set)):
+        return sorted({str(v).strip() for v in blob if v})
+    if blob:
+        return [str(blob).strip()]
+    return []
+
+
+def _aggregate_inv_by_project(rows: list[dict]) -> dict[tuple[str, str], dict]:
+    """Group inventory rows under ``(company, project)`` and union the
+    *_team values across the project's apps. Returns a dict keyed on the
+    tuple, with team sets per field plus the derived ``ops_*`` view:
+
+        {
+          (company, project): {
+            "apps":         [app, ...],
+            "dev_team":     [t, ...],
+            "qc_team":      [t, ...],
+            "uat_team":     [t, ...],
+            "prd_team":     [t, ...],
+            "preprod_team": [t, ...],
+            # derived
+            "ops_union":           [t, ...],   # all distinct values across uat/prd/preprod
+            "ops_inconsistent":    bool,        # True when env-specific values differ
+          }
+        }
+    """
+    by_proj: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        co = (r.get("company") or "").strip()
+        pj = (r.get("project") or "").strip()
+        if not pj:
+            continue
+        key = (co, pj)
+        bucket = by_proj.setdefault(key, {
+            "apps": [],
+            "dev_team": set(),
+            "qc_team": set(),
+            "uat_team": set(),
+            "prd_team": set(),
+            "preprod_team": set(),
+        })
+        app = r.get("application") or ""
+        if app and app not in bucket["apps"]:
+            bucket["apps"].append(app)
+        for f in ("dev_team", "qc_team") + _INV_OPS_FIELDS:
+            for t in _row_teams_for_field(r, f):
+                bucket[f].add(t)
+    # Finalise per-bucket — sort sets, derive ops union/inconsistency.
+    out: dict[tuple[str, str], dict] = {}
+    for k, b in by_proj.items():
+        per_env: dict[str, list[str]] = {
+            f: sorted(b[f]) for f in _INV_OPS_FIELDS
+        }
+        # Non-empty env sets only — an env with no team isn't part of the
+        # consistency check (you can't disagree with "absent").
+        non_empty = [tuple(v) for v in per_env.values() if v]
+        ops_inconsistent = len({tuple(v) for v in non_empty}) > 1
+        ops_union = sorted({t for vs in per_env.values() for t in vs})
+        out[k] = {
+            "apps":            list(b["apps"]),
+            "dev_team":        sorted(b["dev_team"]),
+            "qc_team":         sorted(b["qc_team"]),
+            "uat_team":        per_env["uat_team"],
+            "prd_team":        per_env["prd_team"],
+            "preprod_team":    per_env["preprod_team"],
+            "ops_union":       ops_union,
+            "ops_inconsistent": ops_inconsistent,
+        }
+    return out
+
+
+def _team_set_norm(values: list[str] | str | None) -> tuple[str, ...]:
+    """Normalise a team value to a comparable tuple of stripped+lowercase
+    distinct strings. ``""`` / ``None`` / ``[]`` all map to ``()``."""
+    if isinstance(values, (list, tuple, set)):
+        return tuple(sorted({str(v).strip().lower() for v in values if v}))
+    if values:
+        return (str(values).strip().lower(),)
+    return ()
+
+
+def _inventory_vs_postgres_compare(scope_json: str) -> dict:
+    """Compare the inventory (in scope) against the Postgres
+    ``devops_projects`` table at the (company, project) granularity.
+
+    Returns a structured diff:
+
+        {
+          "errors":      {"inventory": str, "postgres": str},
+          "inv_total":   int,    # distinct (company, project) in inventory
+          "pg_total":    int,    # distinct (company, project) in postgres
+          "common":      int,
+          "only_in_inv": [{"company", "project", "apps_n"}, ...],
+          "only_in_pg":  [{"company", "project", "dev_team", "qc_team", "ops_team"}, ...],
+          "diffs":       [{
+              "company", "project",
+              "apps":     [app, ...],
+              "ops_inconsistent": bool,
+              "ops_breakdown":    {"uat_team": [...], "prd_team": [...], "preprod_team": [...]},
+              "fields": {
+                  "dev_team": {"inventory": [...], "postgres": "..."},
+                  "qc_team":  {...},
+                  "ops_team": {"inventory": [...], "postgres": "..."},
+              },
+          }, ...],
+          "checked_at":  iso-string,
+        }
+    """
+    errors = {"inventory": "", "postgres": ""}
+
+    # ── Inventory side — re-use whichever source is currently active so
+    # the comparison matches what the operator is actually viewing.
+    inv_rows, inv_source, inv_status, _inv_warnings = _inventory_load(scope_json)
+    if not inv_rows:
+        errors["inventory"] = inv_status or f"no inventory rows ({inv_source})"
+
+    # ── Postgres side
+    pg_rows, pg_err = _fetch_devops_projects_from_postgres()
+    if pg_err:
+        errors["postgres"] = pg_err
+
+    inv_by_proj = _aggregate_inv_by_project(inv_rows)
+    pg_by_proj: dict[tuple[str, str], dict] = {}
+    for r in pg_rows:
+        key = (r["company"], r["project"])
+        # Postgres has one row per (company, project); duplicate rows would
+        # be a data quality issue but we tolerate by last-wins.
+        pg_by_proj[key] = r
+
+    inv_keys = set(inv_by_proj.keys())
+    pg_keys = set(pg_by_proj.keys())
+
+    only_in_inv = sorted(inv_keys - pg_keys, key=lambda k: (k[0].lower(), k[1].lower()))
+    only_in_pg  = sorted(pg_keys - inv_keys, key=lambda k: (k[0].lower(), k[1].lower()))
+    common      = sorted(inv_keys & pg_keys, key=lambda k: (k[0].lower(), k[1].lower()))
+
+    only_in_inv_out = [
+        {
+            "company": co, "project": pj,
+            "apps_n":  len(inv_by_proj[(co, pj)]["apps"]),
+        }
+        for (co, pj) in only_in_inv
+    ]
+    only_in_pg_out = [
+        {
+            "company":  co, "project": pj,
+            "dev_team": pg_by_proj[(co, pj)]["dev_team"],
+            "qc_team":  pg_by_proj[(co, pj)]["qc_team"],
+            "ops_team": pg_by_proj[(co, pj)]["ops_team"],
+        }
+        for (co, pj) in only_in_pg
+    ]
+
+    diffs: list[dict] = []
+    for key in common:
+        co, pj = key
+        inv = inv_by_proj[key]
+        pg  = pg_by_proj[key]
+        per_field: dict[str, dict] = {}
+        # dev / qc — straight comparison (inventory union vs postgres scalar)
+        if _team_set_norm(inv["dev_team"]) != _team_set_norm(pg["dev_team"]):
+            per_field["dev_team"] = {
+                "inventory": inv["dev_team"],
+                "postgres":  pg["dev_team"],
+            }
+        if _team_set_norm(inv["qc_team"]) != _team_set_norm(pg["qc_team"]):
+            per_field["qc_team"] = {
+                "inventory": inv["qc_team"],
+                "postgres":  pg["qc_team"],
+            }
+        # ops — derived ops_union vs postgres ops_team
+        if _team_set_norm(inv["ops_union"]) != _team_set_norm(pg["ops_team"]):
+            per_field["ops_team"] = {
+                "inventory": inv["ops_union"],
+                "postgres":  pg["ops_team"],
+            }
+        if per_field or inv["ops_inconsistent"]:
+            diffs.append({
+                "company": co, "project": pj,
+                "apps":    inv["apps"],
+                "ops_inconsistent": inv["ops_inconsistent"],
+                "ops_breakdown": {
+                    "uat_team":     inv["uat_team"],
+                    "prd_team":     inv["prd_team"],
+                    "preprod_team": inv["preprod_team"],
+                },
+                "fields": per_field,
+            })
+
+    return {
+        "errors":      errors,
+        "inv_total":   len(inv_keys),
+        "pg_total":    len(pg_keys),
+        "common":      len(common),
+        "only_in_inv": only_in_inv_out,
+        "only_in_pg":  only_in_pg_out,
+        "diffs":       diffs,
+        "inv_source":  inv_source,
+        "checked_at":  datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# =============================================================================
 # VAULT — shared credential resolver for Jenkins + S3
 # =============================================================================
 # `utils.vault.VaultClient` exposes `read_all_nested_secrets(path)`. We MUST
@@ -12603,6 +13327,134 @@ def _jenkins_creds() -> dict:
     # legacy `JENKINS_TOKEN` name for consistency with existing deployments.
     token = (cfg.get("api_token") or os.environ.get("JENKINS_TOKEN", "")).strip()
     return {"host": host, "public_name": public, "username": user, "token": token}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _vault_secrets_nested_raw(path: str, sub: str) -> dict:
+    """Cached two-arg vault read. Mirrors the platform's pattern:
+    ``vc.read_all_nested_secrets(path, sub)``. Same caching contract as
+    :func:`_vault_secrets_raw` — raises on failure so a transient token
+    issue doesn't get memoised as ``{}``."""
+    if not _VAULT_AVAILABLE or not path:
+        return {}
+    vc = _VaultClient()
+    cfg = (
+        vc.read_all_nested_secrets(path, sub) if sub
+        else vc.read_all_nested_secrets(path)
+    ) or {}
+    return dict(cfg) if isinstance(cfg, dict) else {}
+
+
+def _vault_secrets_nested(path: str, sub: str) -> dict:
+    """Public wrapper. Catches and stashes errors keyed on ``path/sub``."""
+    if not _VAULT_AVAILABLE or not path:
+        return {}
+    key = f"{path}/{sub}" if sub else path
+    try:
+        result = _vault_secrets_nested_raw(path, sub)
+        store = st.session_state.get(_VAULT_ERR_KEY)
+        if isinstance(store, dict):
+            store.pop(key, None)
+        return result
+    except Exception as e:
+        _vault_remember_error(key, e)
+        return {}
+
+
+def _postgres_creds() -> dict:
+    """Resolve Postgres credentials. Honors the ``postgres_env`` env-var
+    by sourcing from the ``"dev"`` sub-path when set to ``"dev"``, mirroring
+    the platform's existing convention. Returns ``{host, port, database,
+    username, password}``; an empty ``host`` means "not configured"."""
+    if POSTGRES_ENV == "dev":
+        cfg = _vault_secrets_nested(POSTGRES_VAULT_PATH, "dev")
+    else:
+        cfg = _vault_secrets(POSTGRES_VAULT_PATH)
+    if not cfg:
+        return {}
+    return {
+        "host":     (cfg.get("host") or "").strip(),
+        "port":     str(cfg.get("port") or "5432").strip(),
+        "database": (cfg.get("database") or "").strip(),
+        "username": (cfg.get("username") or "").strip(),
+        "password": (cfg.get("password") or "").strip(),
+    }
+
+
+@st.cache_data(ttl=POSTGRES_DATA_TTL, show_spinner=False)
+def _fetch_devops_projects_from_postgres() -> tuple[list[dict], str]:
+    """Read the ``devops_projects`` table. Returns ``(rows, error)``.
+
+    Connection details come fresh from vault on every cache miss; the
+    rows themselves cache for ``POSTGRES_DATA_TTL`` since the table
+    changes slowly (project assignments don't shift minute-to-minute).
+    Errors are NOT cached — they surface and the next render retries.
+
+    Each returned row is a plain dict with the five columns specified:
+    ``company``, ``project``, ``dev_team``, ``qc_team``, ``ops_team``.
+    All values are coerced to stripped strings; missing values become
+    empty strings so downstream comparison code can treat them uniformly.
+    """
+    if not _POSTGRES_AVAILABLE:
+        return [], "psycopg / psycopg2 not installed"
+    creds = _postgres_creds()
+    if not creds or not creds.get("host"):
+        return [], "postgres creds not resolved (check vault)"
+    conn = None
+    try:
+        try:
+            _port = int(creds["port"])
+        except (ValueError, TypeError):
+            _port = 5432
+        conn = _psycopg.connect(
+            host=creds["host"],
+            port=_port,
+            dbname=creds["database"],
+            user=creds["username"],
+            password=creds["password"],
+            connect_timeout=POSTGRES_CONNECT_TIMEOUT,
+        )
+        # We never write — explicit read-only intent for the connection
+        # so a stray UPDATE wouldn't slip through if the SQL ever drifts.
+        try:
+            conn.set_session(readonly=True, autocommit=True)  # psycopg2 API
+        except Exception:
+            try:
+                conn.read_only = True  # psycopg v3 API
+            except Exception:
+                pass
+        # Quote the table identifier defensively. We deliberately do NOT
+        # f-string it into the SQL itself — the env-var-driven name lives
+        # in code-trusted config, but the explicit allow-list keeps SQLi
+        # one more layer away.
+        safe_table = POSTGRES_TABLE.strip()
+        if not all(c.isalnum() or c in "_." for c in safe_table):
+            return [], f"refusing unsafe table identifier: {safe_table!r}"
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT company, project, dev_team, qc_team, ops_team "
+            f"FROM {safe_table}"
+        )
+        rows_raw = cur.fetchall()
+        cur.close()
+        out: list[dict] = []
+        for r in rows_raw:
+            out.append({
+                "company":   (str(r[0]) if r[0] is not None else "").strip(),
+                "project":   (str(r[1]) if r[1] is not None else "").strip(),
+                "dev_team":  (str(r[2]) if r[2] is not None else "").strip(),
+                "qc_team":   (str(r[3]) if r[3] is not None else "").strip(),
+                "ops_team":  (str(r[4]) if r[4] is not None else "").strip(),
+            })
+        return out, ""
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _prisma_s3_creds() -> dict:
@@ -16751,16 +17603,19 @@ if _show_inv and _inventory_slot is not None:
         _psv_show = _is_admin
         _psv_configured = bool(PRISMA_S3_BUCKET) and _BOTO3_AVAILABLE
         _psv_badge_txt = "  ·  S3" if (_psv_show and _psv_configured) else ""
-        # Sync check — admin-only. Badge surfaces the last-known diff count
-        # so the tab telegraphs whether drift exists without forcing the
-        # admin to open it.
+        # Sync check — admin-only. Badge surfaces the last-known drift
+        # across BOTH internal panels (git↔ES + inventory↔Postgres).
         _sync_show = _is_admin
         _sync_summary = st.session_state.get("_sync_summary_v1") or {}
+        _pg_summary = st.session_state.get("_pg_check_summary_v1") or {}
         _sync_badge_txt = ""
-        if _sync_show and _sync_summary:
-            _t = int(_sync_summary.get("total") or 0)
+        if _sync_show and (_sync_summary or _pg_summary):
+            _t_total = (
+                int(_sync_summary.get("total") or 0)
+                + int(_pg_summary.get("total") or 0)
+            )
             _sync_badge_txt = (
-                "  ·  ✓ clean" if _t == 0 else f"  ·  ⚠ {_t} drift"
+                "  ·  ✓ clean" if _t_total == 0 else f"  ·  ⚠ {_t_total} drift"
             )
         _tab_labels = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
@@ -16870,11 +17725,26 @@ if _show_inv and _inventory_slot is not None:
 
         # Sync check — smart-loaded; uses the scope key the inventory
         # fragment publishes so its diff matches the visible scope.
+        # Houses two independent panels: git↔ES first, then inventory↔Postgres.
         if _sync_slot is not None:
             with _sync_slot.container():
-                _render_sync_check_panel(
-                    st.session_state.get("_iv_scope_key_v1", "")
+                _scope_key_for_check = st.session_state.get("_iv_scope_key_v1", "")
+                st.markdown(
+                    '<div class="sync-section-divider">'
+                    '  <span class="sync-section-divider-glyph">⎇</span>'
+                    '  Git ↔ Elasticsearch'
+                    '</div>',
+                    unsafe_allow_html=True,
                 )
+                _render_sync_check_panel(_scope_key_for_check)
+                st.markdown(
+                    '<div class="sync-section-divider">'
+                    '  <span class="sync-section-divider-glyph">🗂</span>'
+                    '  Inventory ↔ Postgres devops_projects'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                _render_postgres_compare_panel(_scope_key_for_check)
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
