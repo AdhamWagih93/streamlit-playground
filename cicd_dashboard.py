@@ -1941,6 +1941,200 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     cursor: help;
 }
 
+/* Expandable detail strip — shown alongside the quiet success pill when
+ * git WORKED but emitted parse warnings. Open by default so admins can't
+ * miss it on first render. */
+.iv-src-detail {
+    margin: 4px 0 10px 0;
+    padding: 0;
+    border: 1px solid rgba(217,119,6,.36);
+    background: linear-gradient(90deg,
+                rgba(217,119,6,.07), rgba(217,119,6,.02));
+    border-radius: 10px;
+    font-size: 0.8rem;
+    color: #92400e;
+}
+.iv-src-detail summary {
+    cursor: pointer;
+    padding: 7px 12px;
+    font-weight: 600;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.iv-src-detail summary::-webkit-details-marker { display: none; }
+.iv-src-detail summary::before {
+    content: "▸";
+    font-size: 0.7rem;
+    transition: transform .12s;
+    color: var(--cc-amber);
+}
+.iv-src-detail[open] summary::before { transform: rotate(90deg); }
+.iv-src-detail-glyph {
+    color: var(--cc-amber);
+    font-size: 0.95rem;
+}
+.iv-src-detail summary em {
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-weight: 500;
+    margin-left: auto;
+}
+.iv-src-detail-list {
+    margin: 0;
+    padding: 4px 16px 10px 32px;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: #78350f;
+    line-height: 1.55;
+}
+.iv-src-detail-list li {
+    margin-bottom: 2px;
+    word-break: break-all;
+}
+.iv-src-detail-overflow {
+    color: var(--cc-text-mute);
+    font-style: italic;
+}
+
+/* ── ES-FALLBACK ALARM BANNER ────────────────────────────────────────────
+ * The user explicitly asked for the fallback case to be UNMISSABLE. This
+ * is a full-width red/amber gradient block with a pulsing left stripe,
+ * an explicit FALLBACK tag, the failing reason, a remediation hint, and
+ * the full warning list. Hidden for non-admins. */
+.iv-src-alarm {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    margin: 4px 0 12px 0;
+    border: 1px solid rgba(220,38,38,.42);
+    border-radius: 12px;
+    background: linear-gradient(135deg,
+                rgba(220,38,38,.10) 0%,
+                rgba(217,119,6,.08) 60%,
+                rgba(217,119,6,.04) 100%);
+    box-shadow: 0 6px 18px rgba(220,38,38,.08);
+    overflow: hidden;
+}
+.iv-src-alarm-stripe {
+    flex: 0 0 5px;
+    background: linear-gradient(180deg, #dc2626, #d97706);
+    animation: ivSrcAlarmPulse 2.2s ease-in-out infinite;
+}
+@keyframes ivSrcAlarmPulse {
+    0%, 100% { box-shadow: inset 0 0 0 0 rgba(220,38,38,.5); }
+    50%      { box-shadow: inset 0 0 12px 0 rgba(220,38,38,.6); }
+}
+.iv-src-alarm-body {
+    flex: 1;
+    padding: 11px 14px 13px 14px;
+    color: #7f1d1d;
+}
+.iv-src-alarm-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 5px;
+}
+.iv-src-alarm-glyph {
+    font-size: 1.1rem;
+    color: var(--cc-red);
+    animation: ivSrcAlarmGlyph 2.2s ease-in-out infinite;
+}
+@keyframes ivSrcAlarmGlyph {
+    0%, 100% { opacity: .85; transform: scale(1); }
+    50%      { opacity: 1;   transform: scale(1.1); }
+}
+.iv-src-alarm-tag {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #fff;
+    background: var(--cc-red);
+    padding: 2px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.iv-src-alarm-title {
+    font-family: var(--cc-sans);
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #7f1d1d;
+    letter-spacing: -0.005em;
+    line-height: 1.3;
+}
+.iv-src-alarm-reason {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 6px 0 4px 0;
+    font-size: 0.8rem;
+    flex-wrap: wrap;
+}
+.iv-src-alarm-reason-k {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.iv-src-alarm-reason code {
+    font-family: var(--cc-mono);
+    background: rgba(255,255,255,.7);
+    color: #7f1d1d;
+    padding: 1px 7px;
+    border-radius: 4px;
+    border: 1px solid rgba(220,38,38,.30);
+    font-size: 0.78rem;
+    font-weight: 600;
+    word-break: break-all;
+}
+.iv-src-alarm-hint {
+    font-size: 0.8rem;
+    color: var(--cc-text-dim);
+    line-height: 1.5;
+    margin-top: 4px;
+}
+.iv-src-alarm-hint code {
+    font-family: var(--cc-mono);
+    background: rgba(255,255,255,.85);
+    color: var(--cc-red);
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    border: 1px solid rgba(220,38,38,.22);
+}
+.iv-src-alarm-warns {
+    margin-top: 10px;
+    padding: 8px 10px 10px 10px;
+    background: rgba(255,255,255,.55);
+    border: 1px dashed rgba(220,38,38,.30);
+    border-radius: 8px;
+    font-size: 0.74rem;
+}
+.iv-src-alarm-warns-head {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.iv-src-alarm-warns ul {
+    margin: 0;
+    padding: 0 0 0 20px;
+    font-family: var(--cc-mono);
+    color: #78350f;
+    line-height: 1.55;
+}
+.iv-src-alarm-warns li { word-break: break-all; margin-bottom: 1px; }
+
 /* ── JENKINS PANEL ─────────────────────────────────────────────────────────
    Gate (idle), connection header, pipeline cards, status pills, params.
    ----------------------------------------------------------------------- */
@@ -14679,44 +14873,159 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _iv_pop_store.pop(_iv_pop_cache_key, None)
         _iv_pop_store[_iv_pop_cache_key] = _iv_popovers_html
 
-    # ── Source pill — admin-only, surfaces git vs ES path + warnings ────────
-    # Non-admins never need to know the dashboard talks to git OR ES; the
-    # pill stays hidden for them. Admins get either a quiet teal "git · sha8"
-    # confirmation, or an amber fallback chip with the failing reason inline
-    # plus the first parse warning so misconfigured field aliases / vault
-    # passwords surface immediately rather than silently producing thin rows.
+    # ── Source telemetry — admin-only, calibrated to severity ──────────────
+    # Non-admins never need to know the dashboard talks to git OR ES; this
+    # whole block stays hidden for them. For admins we render at three
+    # severity levels so signal/noise stays right:
+    #
+    #   1. Git source, no warnings              → quiet teal pill (existing).
+    #   2. Git source WITH parse warnings       → quiet pill + amber detail
+    #      strip listing each warning so misconfigured field aliases /
+    #      vault passwords surface immediately rather than producing thin
+    #      rows that look correct.
+    #   3. ES fallback                          → loud full-width banner +
+    #      the failing reason + every warning + remediation hints. This is
+    #      the case the user explicitly asked to be unmissable: the page
+    #      is operating off the projection, not the authoritative source,
+    #      and admins need to know AT A GLANCE.
     if _is_admin:
         _src = _iv_source
-        _stat = html.escape(_iv_source_status or "")
-        _warn_count = len(_iv_source_warnings)
-        _first_warn = (
-            html.escape(_iv_source_warnings[0]) if _iv_source_warnings else ""
-        )
+        _stat = _iv_source_status or ""
+        _warns = list(_iv_source_warnings)
+
         if _src == "git":
-            _pill_cls = "iv-src is-git"
-            _pill_glyph = "✦"
-            _pill_lbl = "Git source"
+            # Quiet success pill stays.
+            st.markdown(
+                f'<div class="iv-src-row">'
+                f'  <span class="iv-src is-git">'
+                f'    <span class="iv-src-dot"></span>'
+                f'    <span class="iv-src-glyph">✦</span>'
+                f'    <span class="iv-src-lbl">Git source</span>'
+                f'    <span class="iv-src-stat">{html.escape(_stat)}</span>'
+                f'  </span>'
+                + (
+                    f'<span class="iv-src-warn" title="{html.escape(_warns[0])}">'
+                    f'⚠ {len(_warns)} parse warning'
+                    f'{"s" if len(_warns) != 1 else ""}</span>'
+                    if _warns else ""
+                )
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+            # When git works but emitted warnings, surface every one so
+            # admins can fix the underlying YAML / vault issue.
+            if _warns:
+                _detail_items = "".join(
+                    f'<li>{html.escape(w)}</li>' for w in _warns[:20]
+                )
+                _overflow = (
+                    f'<li class="iv-src-detail-overflow">'
+                    f'… +{len(_warns) - 20} more (truncated)</li>'
+                    if len(_warns) > 20 else ""
+                )
+                st.markdown(
+                    f'<details class="iv-src-detail" open>'
+                    f'  <summary>'
+                    f'    <span class="iv-src-detail-glyph">⚠</span>'
+                    f'    Git checkout parsed with {len(_warns)} warning'
+                    f'{"s" if len(_warns) != 1 else ""} — '
+                    f'    <em>some rows may be missing fields</em>'
+                    f'  </summary>'
+                    f'  <ul class="iv-src-detail-list">'
+                    f'    {_detail_items}{_overflow}'
+                    f'  </ul>'
+                    f'</details>',
+                    unsafe_allow_html=True,
+                )
         else:
-            _pill_cls = "iv-src is-es"
-            _pill_glyph = "⚠"
-            _pill_lbl = "ES fallback"
-        _warn_chip = (
-            f'<span class="iv-src-warn" title="{_first_warn}">'
-            f'⚠ {_warn_count} warning{"s" if _warn_count != 1 else ""}</span>'
-            if _warn_count else ""
-        )
-        st.markdown(
-            f'<div class="iv-src-row">'
-            f'  <span class="{_pill_cls}">'
-            f'    <span class="iv-src-dot"></span>'
-            f'    <span class="iv-src-glyph">{_pill_glyph}</span>'
-            f'    <span class="iv-src-lbl">{_pill_lbl}</span>'
-            f'    <span class="iv-src-stat">{_stat}</span>'
-            f'  </span>'
-            f'  {_warn_chip}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+            # ES fallback — the loud case. Compute a remediation hint based
+            # on the failure category so admins know exactly what to fix.
+            _reason = _stat or "unknown reason"
+            _r_lower = _reason.lower()
+            if "ado_hostname not set" in _r_lower:
+                _hint = (
+                    "Set the <code>ADO_HOSTNAME</code> environment variable "
+                    "(plus <code>ADO_PAT</code> if the repo needs auth) "
+                    "and restart the page."
+                )
+            elif "git executable" in _r_lower:
+                _hint = (
+                    "Install <code>git</code> on the streamlit host — "
+                    "the repo clone helper shells out to the standard binary."
+                )
+            elif "pyyaml" in _r_lower:
+                _hint = (
+                    "Install PyYAML on the streamlit host "
+                    "(<code>pip install pyyaml</code>) — the loader needs it "
+                    "to parse Ansible inventory files."
+                )
+            elif "git clone failed" in _r_lower or "git fetch failed" in _r_lower:
+                _hint = (
+                    "Network / auth path to the inventories repo is broken. "
+                    "Check the ADO host is reachable from this pod, the PAT "
+                    "is still valid, and the <code>main</code> branch exists."
+                )
+            elif "0 apps" in _r_lower:
+                _hint = (
+                    "The git repo cloned but produced no rows — most likely "
+                    "the field-alias table doesn't match your YAML keys. "
+                    "Adjust <code>_INV_FIELD_ALIASES</code> in code, or "
+                    "share a sample <code>.yml</code> so the mapping can be "
+                    "tuned."
+                )
+            elif "timed out" in _r_lower:
+                _hint = (
+                    "Repo fetch exceeded its 120-second budget. The repo may "
+                    "have grown too large for a shallow clone, or the network "
+                    "path is slow."
+                )
+            else:
+                _hint = (
+                    "Page is operating off the Elasticsearch projection "
+                    "rather than the authoritative git source. Inventory "
+                    "writes won't be possible until git is restored."
+                )
+
+            _warn_items = "".join(
+                f'<li>{html.escape(w)}</li>' for w in _warns[:20]
+            )
+            _warn_overflow = (
+                f'<li class="iv-src-detail-overflow">'
+                f'… +{len(_warns) - 20} more (truncated)</li>'
+                if len(_warns) > 20 else ""
+            )
+            _warn_block = (
+                f'<div class="iv-src-alarm-warns">'
+                f'  <div class="iv-src-alarm-warns-head">'
+                f'    Loader emitted {len(_warns)} additional warning'
+                f'{"s" if len(_warns) != 1 else ""}:'
+                f'  </div>'
+                f'  <ul>{_warn_items}{_warn_overflow}</ul>'
+                f'</div>'
+                if _warns else ""
+            )
+
+            st.markdown(
+                f'<div class="iv-src-alarm" role="alert">'
+                f'  <div class="iv-src-alarm-stripe"></div>'
+                f'  <div class="iv-src-alarm-body">'
+                f'    <div class="iv-src-alarm-head">'
+                f'      <span class="iv-src-alarm-glyph">⚠</span>'
+                f'      <span class="iv-src-alarm-tag">FALLBACK</span>'
+                f'      <span class="iv-src-alarm-title">'
+                f'        Inventory loaded from Elasticsearch — git source unavailable'
+                f'      </span>'
+                f'    </div>'
+                f'    <div class="iv-src-alarm-reason">'
+                f'      <span class="iv-src-alarm-reason-k">Reason:</span>'
+                f'      <code>{html.escape(_reason)}</code>'
+                f'    </div>'
+                f'    <div class="iv-src-alarm-hint">{_hint}</div>'
+                f'    {_warn_block}'
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     # ── Final render ────────────────────────────────────────────────────────
     _iv_visible_badge = (
