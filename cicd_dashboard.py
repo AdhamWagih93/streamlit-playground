@@ -124,17 +124,26 @@ ES_TIMEOUT = 60  # seconds for individual search calls
 # The CI/CD platform's source-of-truth inventory lives in an Azure DevOps git
 # repo (one Ansible inventory per app, plus group_vars / host_vars trees with
 # optional Ansible Vault encryption). Reading it directly is faster than the
-# ES projection AND lets us write back later. Configure via env vars so the
-# repo never carries the PAT or vault password in source.
+# ES projection AND lets us write back later.
 #
-# • ADO_HOSTNAME           — e.g. "dev.example.com"; required for git path.
-# • ADO_PAT                — Azure DevOps personal access token, optional.
-#                            When set, embedded into the clone URL as
-#                            http://{pat}@{host}/... so cron-style refresh
-#                            works without an interactive auth prompt.
-# • ANSIBLE_VAULT_PASSWORD — single password for vaulted YAMLs, optional.
-ADO_HOSTNAME = os.environ.get("ADO_HOSTNAME", "").strip()
-ADO_PAT = os.environ.get("ADO_PAT", "").strip()
+# Credentials come from the platform vault at the configured path. The shape
+# matches the platform's existing GitHandler convention:
+#
+#     vc = VaultClient()
+#     cfg = vc.read_all_nested_secrets("new_git")
+#     hostname = cfg.get("ado", {}).get("hostname", "")
+#     git_user = cfg.get("ado", {}).get("username", "")
+#     password = cfg.get("ado", {}).get("password", "")
+#
+# Write-back commits (future) will be authored as the current dashboard
+# operator — `st.session_state.username` / `st.session_state.email` are
+# applied to the local repo's `user.name` / `user.email` config after each
+# clone or fetch, so the service-account credentials only handle transport
+# while the commits carry the real author.
+GIT_VAULT_PATH = os.environ.get("GIT_VAULT_PATH", "new_git").strip()
+# Ansible Vault password (for decrypting any vaulted YAML in the inventories
+# repo) is a separate concern — kept env-driven for now since it isn't part
+# of the GitHandler's vault entry.
 ANSIBLE_VAULT_PASSWORD = os.environ.get("ANSIBLE_VAULT_PASSWORD", "")
 
 INVENTORY_REPO_PATH = "/tmp/inventories"
@@ -9047,20 +9056,24 @@ def _integrations_health() -> list[dict]:
             "tip": f"ES query failed: {e}",
         })
 
-    # 2. Git inventories — only meaningful when ADO_HOSTNAME is set.
-    if not ADO_HOSTNAME:
+    # 2. Git inventories — host comes from vault path GIT_VAULT_PATH.
+    _git_host = _git_creds().get("hostname", "")
+    if not _git_host:
+        v_err = _vault_last_error(GIT_VAULT_PATH)
         out.append({
             "key": "git", "label": "Git inventories", "glyph": "⎇",
-            "state": "skip",
-            "detail": "ADO_HOSTNAME unset",
+            "state": "down" if v_err else "skip",
+            "detail": "host unresolved",
             "tip": (
-                "Set ADO_HOSTNAME (and ADO_PAT if auth-gated) to read "
-                "inventory from the authoritative Ansible repo. While "
-                "unset the page reads from the ES projection."
+                (f"Vault error at {GIT_VAULT_PATH!r}: {v_err}" if v_err else
+                 f"Add an ADO entry to vault path {GIT_VAULT_PATH!r} "
+                 "(nested keys: ado.hostname / ado.username / ado.password) "
+                 "to read inventory from the authoritative Ansible repo. "
+                 "While unset the page reads from the ES projection.")
             ),
         })
     else:
-        ok, head, msg = _ensure_inventory_repo(ADO_HOSTNAME)
+        ok, head, msg = _ensure_inventory_repo(_git_host)
         if ok:
             out.append({
                 "key": "git", "label": "Git inventories", "glyph": "⎇",
@@ -11208,29 +11221,62 @@ def _shared_per_project() -> bool:
 #   1. it's the authoritative source operators edit (ES is a projection),
 #   2. local FS reads are an order of magnitude faster than ES round-trips,
 #   3. it lets us write variables back through `git commit + push` later.
-# We still call into ES on any failure path so an empty $ADO_HOSTNAME, a
-# clone error, or a missing dependency degrades to the previous behaviour
-# rather than blanking the page.
+# We still call into ES on any failure path — vault unreachable, missing
+# ADO entry, clone error, or a missing dependency all degrade to the
+# previous behaviour rather than blanking the page.
 # -----------------------------------------------------------------------------
 
+def _git_creds() -> dict:
+    """Resolve the ADO credentials from vault.
+
+    Mirrors the platform's GitHandler convention exactly: a nested
+    ``ado`` dict under the vault path holds ``hostname`` / ``username``
+    / ``password``. All three may be empty when vault is unreachable —
+    callers gate on the hostname before doing any git work.
+
+    Returns ``{"hostname": str, "username": str, "password": str}``.
+    """
+    cfg = _vault_secrets(GIT_VAULT_PATH) or {}
+    ado = (cfg.get("ado") or {}) if isinstance(cfg.get("ado"), dict) else {}
+    return {
+        "hostname": (ado.get("hostname") or "").strip(),
+        "username": (ado.get("username") or "").strip(),
+        "password": (ado.get("password") or "").strip(),
+    }
+
+
 def _inv_repo_url() -> str:
-    """Build the clone URL, optionally embedding the PAT for non-interactive
-    refresh. The PAT NEVER touches disk in plaintext — git stores it inside
-    `.git/config` for the local clone, and the URL is recomputed on every
-    sync from the env var."""
-    if not ADO_HOSTNAME:
+    """Build the clone URL, embedding the vault-resolved username:password
+    for non-interactive refresh. The password NEVER ships back to the
+    operator — git stores it inside ``.git/config`` for the local clone,
+    and ``_run_git`` sanitises it out of any captured stdout/stderr before
+    surfacing to the admin banner."""
+    creds = _git_creds()
+    host = creds["hostname"]
+    if not host:
         return ""
-    base = INVENTORY_REPO_URL_TEMPLATE.format(host=ADO_HOSTNAME)
-    if ADO_PAT:
-        # Inject as user:pat — most ADO Server / Cloud setups accept either
-        # `pat@host` or `user:pat@host`. Using bare PAT keeps it user-agnostic.
-        return base.replace("http://", f"http://{ADO_PAT}@", 1)
+    base = INVENTORY_REPO_URL_TEMPLATE.format(host=host)
+    user, pw = creds["username"], creds["password"]
+    if user and pw:
+        # url-encode the password so special characters (':', '/', '@') in
+        # the secret don't corrupt the URL parsing.
+        return base.replace(
+            "http://",
+            f"http://{urllib.parse.quote(user, safe='')}:"
+            f"{urllib.parse.quote(pw, safe='')}@",
+            1,
+        )
+    if pw:
+        return base.replace(
+            "http://", f"http://{urllib.parse.quote(pw, safe='')}@", 1,
+        )
     return base
 
 
 def _run_git(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
     """Run a git subcommand quietly and capture both streams. We refuse to
-    leak the PAT through error messages by sanitising stderr on the way out."""
+    leak the password through error messages by sanitising stdout/stderr
+    on the way out."""
     proc = subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -11238,29 +11284,54 @@ def _run_git(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
         text=True,
         timeout=120,
     )
-    # Replace the PAT with '***' in any captured output so admin-visible
-    # error banners can't accidentally leak the secret.
-    if ADO_PAT and proc.stderr:
-        proc.stderr = proc.stderr.replace(ADO_PAT, "***")
-    if ADO_PAT and proc.stdout:
-        proc.stdout = proc.stdout.replace(ADO_PAT, "***")
+    # Replace the password (raw + url-encoded) with '***' in captured
+    # output so admin-visible error banners can't accidentally leak the
+    # secret. The URL-encoded form catches the case where git surfaces the
+    # remote URL in an error message.
+    pw = _git_creds().get("password") or ""
+    if pw:
+        pw_enc = urllib.parse.quote(pw, safe="")
+        for stream_attr in ("stdout", "stderr"):
+            s = getattr(proc, stream_attr, None) or ""
+            if pw in s:
+                s = s.replace(pw, "***")
+            if pw_enc and pw_enc in s and pw_enc != pw:
+                s = s.replace(pw_enc, "***")
+            setattr(proc, stream_attr, s)
     return proc
+
+
+def _git_set_author(repo_path: str, username: str, email: str) -> None:
+    """Apply the current dashboard operator's identity to the local repo's
+    git config so future write-back commits are authored as them, not the
+    service-account credentials used for transport. Silent no-op when
+    username/email are empty or the repo isn't checked out yet. Cheap (two
+    local config writes), safe to call on every render."""
+    if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
+        return
+    if username:
+        _run_git("config", "user.name", username, cwd=repo_path)
+    if email:
+        _run_git("config", "user.email", email, cwd=repo_path)
 
 
 @st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
 def _ensure_inventory_repo(host_marker: str) -> tuple[bool, str, str]:
     """Idempotent clone-or-pull of the inventories repo onto INVENTORY_BRANCH.
 
-    Returns ``(ok, head_sha, status_msg)``. ``host_marker`` is included only
-    so changing ADO_HOSTNAME invalidates the cached resource — its value is
-    not otherwise used, the URL is rebuilt from env each call.
+    Returns ``(ok, head_sha, status_msg)``. ``host_marker`` is the
+    vault-resolved hostname; it's included in the cache key so a hostname
+    change (e.g. vault rotation pointing to a new ADO server) invalidates
+    the cached clone state and triggers a fresh sync.
 
     Cached as a *resource* (not data) because it has filesystem side-effects
     and we want exactly one sync per TTL window per Streamlit process.
     """
-    if not ADO_HOSTNAME:
-        return False, "", "ADO_HOSTNAME not set"
+    if not host_marker:
+        return False, "", "Git host not resolved (vault unreachable?)"
     url = _inv_repo_url()
+    if not url:
+        return False, "", "Git URL could not be built (missing credentials)"
     repo_path = INVENTORY_REPO_PATH
     git_dir = os.path.join(repo_path, ".git")
     try:
@@ -11554,31 +11625,52 @@ def _row_field_match(row: dict, key: str, values: list[Any]) -> bool:
 def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
     """Resolve the inventory rows for the current scope.
 
-    Strategy: try the git checkout first. If anything goes wrong — repo not
-    configured, clone failure, missing PyYAML, parse errors — fall back to
-    the ES projection so the page never goes blank. Returns
+    Strategy: try the git checkout first. If anything goes wrong — vault
+    unreachable, clone failure, missing PyYAML, parse errors — fall back
+    to the ES projection so the page never goes blank. Returns
     ``(rows, source, status, warnings)`` where ``source`` is one of
     ``"git"`` / ``"es"`` and ``status`` is a short human-readable phrase
     suitable for the source pill.
     """
     warnings: list[str] = []
-    if ADO_HOSTNAME:
-        ok, head, status_msg = _ensure_inventory_repo(ADO_HOSTNAME)
-        if ok and _YAML_AVAILABLE:
-            rows, parse_warnings = _load_inventory_from_git(head)
-            warnings.extend(parse_warnings)
-            if rows:
-                # Apply the same scope filters locally so role/company/project
-                # scoping behaves identically to the ES path.
-                try:
-                    sf = json.loads(scope_json) if scope_json else []
-                    rows = [r for r in rows if _row_matches_es_filters(r, sf)]
-                except Exception as e:
-                    warnings.append(f"scope filter: {type(e).__name__}")
-                return rows, "git", status_msg, warnings
-            warnings.append("git checkout parsed 0 apps — check field aliases")
+    creds = _git_creds()
+    host = creds["hostname"]
+    if host:
+        ok, head, status_msg = _ensure_inventory_repo(host)
+        if ok:
+            # Sync git author identity on every successful sync so future
+            # write-back commits carry the current operator's identity
+            # (the credentials in vault only handle transport).
+            _git_set_author(
+                INVENTORY_REPO_PATH,
+                (st.session_state.get("username") or "").strip(),
+                (st.session_state.get("email") or "").strip(),
+            )
+            if _YAML_AVAILABLE:
+                rows, parse_warnings = _load_inventory_from_git(head)
+                warnings.extend(parse_warnings)
+                if rows:
+                    # Apply the same scope filters locally so role/company/project
+                    # scoping behaves identically to the ES path.
+                    try:
+                        sf = json.loads(scope_json) if scope_json else []
+                        rows = [r for r in rows if _row_matches_es_filters(r, sf)]
+                    except Exception as e:
+                        warnings.append(f"scope filter: {type(e).__name__}")
+                    return rows, "git", status_msg, warnings
+                warnings.append("git checkout parsed 0 apps — check field aliases")
+            else:
+                warnings.append("PyYAML not installed")
         else:
             warnings.append(status_msg or "git unavailable")
+    else:
+        # Hostname couldn't be resolved — surface either the vault error
+        # or a "not configured" hint so the fallback banner can be precise.
+        v_err = _vault_last_error(GIT_VAULT_PATH)
+        warnings.append(
+            f"Git host not resolved from vault `{GIT_VAULT_PATH}`"
+            + (f": {v_err}" if v_err else "")
+        )
     # Fallback: legacy ES projection
     rows = _fetch_full_inventory(scope_json)
     return rows, "es", "ES fallback", warnings
@@ -15555,11 +15647,22 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # on the failure category so admins know exactly what to fix.
             _reason = _stat or "unknown reason"
             _r_lower = _reason.lower()
-            if "ado_hostname not set" in _r_lower:
+            if "host not resolved" in _r_lower or "vault" in _r_lower:
                 _hint = (
-                    "Set the <code>ADO_HOSTNAME</code> environment variable "
-                    "(plus <code>ADO_PAT</code> if the repo needs auth) "
-                    "and restart the page."
+                    "The ADO hostname couldn't be read from vault path "
+                    f"<code>{html.escape(GIT_VAULT_PATH)}</code>. Verify "
+                    "the entry exists with the nested keys "
+                    "<code>ado.hostname</code>, <code>ado.username</code>, "
+                    "<code>ado.password</code>, and that the dashboard's "
+                    "vault token is still valid (see the Integrations "
+                    "strip for the exact vault error)."
+                )
+            elif "credentials" in _r_lower or "missing credentials" in _r_lower:
+                _hint = (
+                    "Vault returned a partial entry — hostname is present "
+                    "but <code>ado.username</code> / <code>ado.password</code> "
+                    "are missing. Re-issue the credential entry under "
+                    f"<code>{html.escape(GIT_VAULT_PATH)}</code>."
                 )
             elif "git executable" in _r_lower:
                 _hint = (
@@ -15575,8 +15678,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             elif "git clone failed" in _r_lower or "git fetch failed" in _r_lower:
                 _hint = (
                     "Network / auth path to the inventories repo is broken. "
-                    "Check the ADO host is reachable from this pod, the PAT "
-                    "is still valid, and the <code>main</code> branch exists."
+                    "Check that the ADO host from vault is reachable from this "
+                    "pod, the vault-stored credentials are still valid, and "
+                    "the <code>main</code> branch exists."
                 )
             elif "0 apps" in _r_lower:
                 _hint = (
