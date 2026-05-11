@@ -2281,6 +2281,20 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     overflow-x: auto;
     word-break: break-all;
 }
+.gd-auth-note {
+    margin-top: 6px;
+    font-size: 0.7rem;
+    color: var(--cc-text-dim);
+    line-height: 1.5;
+}
+.gd-auth-note code {
+    font-family: var(--cc-mono);
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+}
 .gd-trace {
     display: flex;
     flex-direction: column;
@@ -12598,31 +12612,48 @@ def _git_creds() -> dict:
 
 
 def _inv_repo_url() -> str:
-    """Build the clone URL, embedding the vault-resolved username:password
-    for non-interactive refresh. The password NEVER ships back to the
-    operator — git stores it inside ``.git/config`` for the local clone,
-    and ``_run_git`` sanitises it out of any captured stdout/stderr before
-    surfacing to the admin banner."""
+    """Build the clean clone URL — no credentials embedded.
+
+    We deliberately keep the URL plaintext (no ``user:pw@host`` prefix)
+    because Azure DevOps Server reliably rejects URL-form auth over plain
+    HTTP when special characters are involved, and any stale credentials
+    cached in ``.git/config`` can also intercept the request. Auth is
+    instead injected per-invocation via ``-c http.extraHeader=...`` in
+    :func:`_run_git`, which is the canonical form for ADO Server's basic
+    auth and survives password rotations cleanly."""
     creds = _git_creds()
     host = creds["hostname"]
     if not host:
         return ""
-    base = INVENTORY_REPO_URL_TEMPLATE.format(host=host)
-    user, pw = creds["username"], creds["password"]
-    if user and pw:
-        # url-encode the password so special characters (':', '/', '@') in
-        # the secret don't corrupt the URL parsing.
-        return base.replace(
-            "http://",
-            f"http://{urllib.parse.quote(user, safe='')}:"
-            f"{urllib.parse.quote(pw, safe='')}@",
-            1,
-        )
-    if pw:
-        return base.replace(
-            "http://", f"http://{urllib.parse.quote(pw, safe='')}@", 1,
-        )
-    return base
+    return INVENTORY_REPO_URL_TEMPLATE.format(host=host)
+
+
+def _git_http_auth_args() -> tuple[list[str], str]:
+    """Build the ``-c`` args that carry HTTP basic auth to git AND the
+    base64 token that those args contain, so callers can register it
+    with the redactor.
+
+    Returned args, in order:
+      1. ``-c credential.helper=``      — disables any active credential
+         helper that might intercept and use stale stored credentials.
+      2. ``-c http.extraHeader=Authorization: Basic <b64>`` — the actual
+         credential carrier, applied per-invocation, NEVER persisted in
+         ``.git/config``.
+
+    When the vault doesn't yield a password we still emit the empty
+    credential helper override (defensive against a system-level helper
+    holding bad creds) but skip the header so git falls through to a
+    standard unauthenticated request."""
+    creds = _git_creds()
+    user = creds.get("username", "")
+    pw = creds.get("password", "")
+    args = ["-c", "credential.helper="]
+    if not pw:
+        return args, ""
+    pair = f"{user}:{pw}"
+    b64 = base64.b64encode(pair.encode("utf-8")).decode("ascii")
+    args.extend(["-c", f"http.extraHeader=Authorization: Basic {b64}"])
+    return args, b64
 
 
 def _git_diag_redact(s: str) -> str:
@@ -12636,11 +12667,13 @@ def _git_diag_redact(s: str) -> str:
     Redacts:
       • the raw password
       • the URL-encoded password
-      • any ``user:***@host`` segment when only the username is visible
+      • the base64-encoded ``user:pw`` form carried by ``http.extraHeader``
     """
     if not s:
         return s
-    pw = _git_creds().get("password") or ""
+    creds = _git_creds()
+    pw = creds.get("password") or ""
+    user = creds.get("username") or ""
     if not pw:
         return s
     out = s
@@ -12648,6 +12681,12 @@ def _git_diag_redact(s: str) -> str:
     pw_enc = urllib.parse.quote(pw, safe="")
     if pw_enc and pw_enc != pw:
         out = out.replace(pw_enc, "***")
+    try:
+        b64 = base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+        if b64 and b64 != pw and b64 not in ("***",):
+            out = out.replace(b64, "***")
+    except Exception:
+        pass
     return out
 
 
@@ -12684,17 +12723,32 @@ def _run_git(
     *args: str,
     cwd: str | None = None,
     trace_into: list | None = None,
+    inject_auth: bool = True,
 ) -> subprocess.CompletedProcess:
-    """Run a git subcommand quietly and capture both streams. We refuse to
-    leak the password through error messages by sanitising stdout/stderr
-    on the way out.
+    """Run a git subcommand quietly and capture both streams.
 
-    When *trace_into* is provided, also append a redacted record of this
-    invocation to that list so the admin diagnostic panel can render a
-    step-by-step trace. Default behaviour (``trace_into=None``) is
-    unchanged."""
+    The auth credentials are injected per-invocation via
+    ``-c http.extraHeader=Authorization: Basic <b64>`` (the canonical
+    Azure DevOps form) AND any active credential helper is disabled via
+    ``-c credential.helper=`` so a system-stored bad credential can't
+    intercept the request. This NEVER persists into ``.git/config`` —
+    the auth context exists only for the lifetime of this subprocess.
+
+    Captured stdout/stderr are scrubbed of the password (raw + url-encoded
+    + base64 form) before returning. When *trace_into* is non-None, the
+    redacted command + streams + duration are appended to it for the
+    diagnostic panel.
+
+    Pass ``inject_auth=False`` for purely local commands (``config``,
+    ``rev-parse``, etc.) where the auth header is irrelevant — keeps
+    the trace cleaner."""
     import time
-    cmd = ["git", *args]
+
+    auth_args, b64 = ([], "")
+    if inject_auth:
+        auth_args, b64 = _git_http_auth_args()
+
+    cmd = ["git", *auth_args, *args]
     _started = time.monotonic()
     proc = subprocess.run(
         cmd,
@@ -12703,23 +12757,35 @@ def _run_git(
         text=True,
         timeout=120,
     )
-    # Replace the password (raw + url-encoded) with '***' in captured
-    # output so admin-visible error banners can't accidentally leak the
-    # secret. The URL-encoded form catches the case where git surfaces the
-    # remote URL in an error message.
-    pw = _git_creds().get("password") or ""
+    # Replace every form of the secret with '***' so admin-visible error
+    # banners can't accidentally leak it.
+    creds = _git_creds()
+    pw = creds.get("password") or ""
+    user = creds.get("username") or ""
     if pw:
         pw_enc = urllib.parse.quote(pw, safe="")
+        b64_full = ""
+        if user or pw:
+            try:
+                b64_full = base64.b64encode(
+                    f"{user}:{pw}".encode("utf-8")
+                ).decode("ascii")
+            except Exception:
+                b64_full = ""
         for stream_attr in ("stdout", "stderr"):
             s = getattr(proc, stream_attr, None) or ""
             if pw in s:
                 s = s.replace(pw, "***")
-            if pw_enc and pw_enc in s and pw_enc != pw:
+            if pw_enc and pw_enc != pw and pw_enc in s:
                 s = s.replace(pw_enc, "***")
+            if b64 and b64 in s:
+                s = s.replace(b64, "***")
+            if b64_full and b64_full != b64 and b64_full in s:
+                s = s.replace(b64_full, "***")
             setattr(proc, stream_attr, s)
     if trace_into is not None:
-        # The git args may include the clone URL; redact via the diag
-        # helper which handles both raw + url-encoded password.
+        # The captured cmd list will contain the b64 in the extraHeader
+        # arg; redact via the diag helper which handles every form.
         _git_diag_capture_step(
             trace_into, step=args[0] if args else "git",
             cmd=cmd, proc=proc, started_at=_started,
@@ -12736,9 +12802,11 @@ def _git_set_author(repo_path: str, username: str, email: str) -> None:
     if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
         return
     if username:
-        _run_git("config", "user.name", username, cwd=repo_path)
+        _run_git("config", "user.name", username, cwd=repo_path,
+                 inject_auth=False)
     if email:
-        _run_git("config", "user.email", email, cwd=repo_path)
+        _run_git("config", "user.email", email, cwd=repo_path,
+                 inject_auth=False)
 
 
 @st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
@@ -12808,7 +12876,8 @@ def _ensure_inventory_repo(host_marker: str, trace_into: list | None = None) -> 
             if r.returncode != 0:
                 return False, "", f"git clone failed: {r.stderr.strip()}"
         # Resolve HEAD for cache-busting downstream.
-        r = _run_git("rev-parse", "HEAD", cwd=repo_path, trace_into=trace_into)
+        r = _run_git("rev-parse", "HEAD", cwd=repo_path,
+                     trace_into=trace_into, inject_auth=False)
         if r.returncode != 0:
             return False, "", f"git rev-parse failed: {r.stderr.strip()}"
         head = (r.stdout or "").strip()
@@ -12908,7 +12977,7 @@ def _git_diag_probe() -> dict:
         out["fs"]["git_dir_exists"] = os.path.isdir(os.path.join(rp, ".git"))
         if out["fs"]["git_dir_exists"]:
             try:
-                r = _run_git("rev-parse", "HEAD", cwd=rp)
+                r = _run_git("rev-parse", "HEAD", cwd=rp, inject_auth=False)
                 if r.returncode == 0:
                     out["fs"]["head_sha"] = (r.stdout or "").strip()
             except Exception:
@@ -13080,6 +13149,12 @@ def _render_git_diag_panel(result: dict) -> None:
         f'  <div class="gd-section">'
         f'    <div class="gd-section-title">resolved URL (redacted)</div>'
         f'    <pre class="gd-url">{html.escape(_url)}</pre>'
+        f'    <div class="gd-auth-note">'
+        f'      auth carried via <code>-c http.extraHeader=Authorization: '
+        f'Basic ***</code> per-invocation · NOT embedded in URL · system '
+        f'credential helpers disabled per-invocation via '
+        f'<code>-c credential.helper=</code>'
+        f'    </div>'
         f'  </div>'
         f'  <div class="gd-section">'
         f'    <div class="gd-section-title">filesystem · '
