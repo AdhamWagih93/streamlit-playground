@@ -230,16 +230,13 @@ PRISMA_SCAN_TTL = 600  # seconds — scans are immutable per version, longer TTL
 # fields — inventory MAY disagree internally across envs, and even when
 # consistent it may disagree with the Postgres record.
 #
-# Vault layout matches the platform's existing pattern:
+# The dashboard always talks to the PRD postgres instance (the
+# authoritative table). The vault entry lives at a single path with the
+# usual host/port/database/username/password keys:
 #
-#     postgres_env = os.environ.get("postgres_env", "dev")
 #     vc = VaultClient()
-#     if postgres_env == "dev":
-#         cfg = vc.read_all_nested_secrets("postgres", "dev")
-#     else:
-#         cfg = vc.read_all_nested_secrets("postgres")
+#     cfg = vc.read_all_nested_secrets("postgres")
 #     # cfg → {host, port, database, username, password}
-POSTGRES_ENV = os.environ.get("postgres_env", "dev").strip()
 POSTGRES_VAULT_PATH = os.environ.get("POSTGRES_VAULT_PATH", "postgres").strip()
 POSTGRES_TABLE = os.environ.get("POSTGRES_TABLE", "devops_projects").strip()
 POSTGRES_CONNECT_TIMEOUT = 10  # seconds
@@ -9877,19 +9874,13 @@ def _integrations_health() -> list[dict]:
     else:
         pg_creds = _postgres_creds()
         if not pg_creds.get("host"):
-            v_err_key = (
-                f"{POSTGRES_VAULT_PATH}/dev"
-                if POSTGRES_ENV == "dev" else POSTGRES_VAULT_PATH
-            )
-            v_err = _vault_last_error(v_err_key)
+            v_err = _vault_last_error(POSTGRES_VAULT_PATH)
             out.append({
                 "key": "postgres", "label": "Postgres", "glyph": "🗂",
                 "state": "down" if v_err else "skip",
                 "detail": "creds unresolved",
                 "tip": (
-                    v_err or
-                    f"No vault entry at {POSTGRES_VAULT_PATH!r}"
-                    + (f" (sub: dev)" if POSTGRES_ENV == "dev" else "") + "."
+                    v_err or f"No vault entry at {POSTGRES_VAULT_PATH!r}."
                 ),
             })
         else:
@@ -12614,13 +12605,14 @@ def _git_creds() -> dict:
 def _inv_repo_url() -> str:
     """Build the clean clone URL — no credentials embedded.
 
-    We deliberately keep the URL plaintext (no ``user:pw@host`` prefix)
-    because Azure DevOps Server reliably rejects URL-form auth over plain
-    HTTP when special characters are involved, and any stale credentials
-    cached in ``.git/config`` can also intercept the request. Auth is
-    instead injected per-invocation via ``-c http.extraHeader=...`` in
-    :func:`_run_git`, which is the canonical form for ADO Server's basic
-    auth and survives password rotations cleanly."""
+    The URL stays plaintext. Authentication is provided via the
+    ``store --file ~/.git-credentials`` credential helper that
+    :func:`_configure_git_credentials` installs globally. That mirrors
+    the platform's existing ``GitHandler.configure_credentials()``
+    pattern — git auto-resolves auth via the helper at request time
+    using the proper challenge / response handshake the ADO Server
+    expects, instead of relying on URL embedding or preemptive
+    ``Authorization`` headers (both of which fail in this environment)."""
     creds = _git_creds()
     host = creds["hostname"]
     if not host:
@@ -12628,32 +12620,83 @@ def _inv_repo_url() -> str:
     return INVENTORY_REPO_URL_TEMPLATE.format(host=host)
 
 
-def _git_http_auth_args() -> tuple[list[str], str]:
-    """Build the ``-c`` args that carry HTTP basic auth to git AND the
-    base64 token that those args contain, so callers can register it
-    with the redactor.
+_GIT_CREDENTIALS_PATH = os.path.expanduser("~/.git-credentials")
 
-    Returned args, in order:
-      1. ``-c credential.helper=``      — disables any active credential
-         helper that might intercept and use stale stored credentials.
-      2. ``-c http.extraHeader=Authorization: Basic <b64>`` — the actual
-         credential carrier, applied per-invocation, NEVER persisted in
-         ``.git/config``.
 
-    When the vault doesn't yield a password we still emit the empty
-    credential helper override (defensive against a system-level helper
-    holding bad creds) but skip the header so git falls through to a
-    standard unauthenticated request."""
+def _configure_git_credentials() -> tuple[bool, str]:
+    """Provision git so any HTTP basic-auth request to the ADO host uses
+    the vault-resolved credentials.
+
+    Mirrors the platform's working ``GitHandler.configure_credentials()``
+    pattern exactly:
+
+      1. Write ``~/.git-credentials`` with a ``http://user:pw@host`` line
+         (all three components URL-encoded so special characters survive).
+      2. Globally point git at that file via
+         ``credential.helper "store --file <path>"``.
+      3. Set ``user.name`` / ``user.email`` from ``st.session_state.username``
+         / ``st.session_state.email`` (the current dashboard operator) so
+         future write-back commits are authored as them.
+      4. Add the defensive ``url.https://.insteadof git://`` rewrite and
+         disable ``http.sslVerify`` (the ADO Server cert chain isn't always
+         in the container trust store).
+
+    Idempotent — every call overwrites the credentials file and re-applies
+    the global config. Returns ``(ok, error_msg)``. Streamed through
+    ``_run_git(..., inject_auth=False)`` so the config writes never carry
+    a (no-longer-emitted) ``-c http.extraHeader``."""
     creds = _git_creds()
+    host = creds.get("hostname", "")
     user = creds.get("username", "")
     pw = creds.get("password", "")
-    args = ["-c", "credential.helper="]
-    if not pw:
-        return args, ""
-    pair = f"{user}:{pw}"
-    b64 = base64.b64encode(pair.encode("utf-8")).decode("ascii")
-    args.extend(["-c", f"http.extraHeader=Authorization: Basic {b64}"])
-    return args, b64
+    if not host or not user or not pw:
+        missing = [
+            n for n, v in (("hostname", host), ("username", user), ("password", pw))
+            if not v
+        ]
+        return False, (
+            f"incomplete git config: missing {', '.join(missing)} "
+            f"(vault path {GIT_VAULT_PATH!r}, sub-key `ado`)"
+        )
+    try:
+        safe_host = urllib.parse.quote(host, safe="")
+        safe_user = urllib.parse.quote(user, safe="")
+        safe_pw = urllib.parse.quote(pw, safe="")
+        # Write the credentials file atomically (truncate-then-write).
+        with open(_GIT_CREDENTIALS_PATH, "w") as f:
+            f.write(f"http://{safe_user}:{safe_pw}@{safe_host}\n")
+        # Tighten perms so a co-tenant can't read the secret.
+        try:
+            os.chmod(_GIT_CREDENTIALS_PATH, 0o600)
+        except Exception:
+            pass
+
+        # The helper string is passed as a SINGLE argument to credential.helper.
+        # Git invokes `sh -c "<value> <action>"`, so quoting / spaces inside
+        # the value are handled by the helper-spec parser.
+        helper_value = f"store --file {_GIT_CREDENTIALS_PATH}"
+        _commands = (
+            ("config", "--global", "credential.helper", helper_value),
+            ("config", "--global", "url.https://.insteadof", "git://"),
+            ("config", "--global", "http.sslVerify", "false"),
+        )
+        for _args in _commands:
+            r = _run_git(*_args, inject_auth=False)
+            if r.returncode != 0:
+                return False, f"git {_args[0]} {_args[2]} failed: {r.stderr.strip()}"
+
+        # Author identity from session state — best-effort, optional.
+        sess_user = (st.session_state.get("username") or "").strip()
+        sess_email = (st.session_state.get("email") or "").strip()
+        if sess_user:
+            _run_git("config", "--global", "user.name", sess_user,
+                     inject_auth=False)
+        if sess_email:
+            _run_git("config", "--global", "user.email", sess_email,
+                     inject_auth=False)
+        return True, ""
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 def _git_diag_redact(s: str) -> str:
@@ -12723,32 +12766,30 @@ def _run_git(
     *args: str,
     cwd: str | None = None,
     trace_into: list | None = None,
-    inject_auth: bool = True,
+    inject_auth: bool = True,  # kept for API stability; no-op under helper auth
 ) -> subprocess.CompletedProcess:
     """Run a git subcommand quietly and capture both streams.
 
-    The auth credentials are injected per-invocation via
-    ``-c http.extraHeader=Authorization: Basic <b64>`` (the canonical
-    Azure DevOps form) AND any active credential helper is disabled via
-    ``-c credential.helper=`` so a system-stored bad credential can't
-    intercept the request. This NEVER persists into ``.git/config`` —
-    the auth context exists only for the lifetime of this subprocess.
+    Authentication is sourced from the credential helper installed by
+    :func:`_configure_git_credentials` — git auto-resolves auth via the
+    helper at request time using the challenge/response handshake the
+    ADO Server expects. No ``-c`` args are injected here (an earlier
+    attempt used ``http.extraHeader``, which Azure DevOps Server
+    rejected; the helper-based form mirrors the platform's known-working
+    pattern).
 
-    Captured stdout/stderr are scrubbed of the password (raw + url-encoded
-    + base64 form) before returning. When *trace_into* is non-None, the
-    redacted command + streams + duration are appended to it for the
-    diagnostic panel.
+    The ``inject_auth`` keyword is preserved for API stability but is
+    currently a no-op — every git command gets its auth from the
+    installed credential helper regardless. Local-only callers can still
+    pass ``inject_auth=False`` to document intent.
 
-    Pass ``inject_auth=False`` for purely local commands (``config``,
-    ``rev-parse``, etc.) where the auth header is irrelevant — keeps
-    the trace cleaner."""
+    Captured stdout/stderr are scrubbed of the password (raw + URL-encoded
+    form) before returning so admin-visible error banners never leak it.
+    When *trace_into* is non-None, a redacted command + streams + duration
+    record is appended for the diagnostic panel."""
     import time
 
-    auth_args, b64 = ([], "")
-    if inject_auth:
-        auth_args, b64 = _git_http_auth_args()
-
-    cmd = ["git", *auth_args, *args]
+    cmd = ["git", *args]
     _started = time.monotonic()
     proc = subprocess.run(
         cmd,
@@ -12757,35 +12798,21 @@ def _run_git(
         text=True,
         timeout=120,
     )
-    # Replace every form of the secret with '***' so admin-visible error
-    # banners can't accidentally leak it.
+    # Scrub the password from anything git might surface — typically not
+    # present in stderr (the helper handles auth opaquely) but a defensive
+    # pass keeps the diagnostic panel safe.
     creds = _git_creds()
     pw = creds.get("password") or ""
-    user = creds.get("username") or ""
     if pw:
         pw_enc = urllib.parse.quote(pw, safe="")
-        b64_full = ""
-        if user or pw:
-            try:
-                b64_full = base64.b64encode(
-                    f"{user}:{pw}".encode("utf-8")
-                ).decode("ascii")
-            except Exception:
-                b64_full = ""
         for stream_attr in ("stdout", "stderr"):
             s = getattr(proc, stream_attr, None) or ""
             if pw in s:
                 s = s.replace(pw, "***")
             if pw_enc and pw_enc != pw and pw_enc in s:
                 s = s.replace(pw_enc, "***")
-            if b64 and b64 in s:
-                s = s.replace(b64, "***")
-            if b64_full and b64_full != b64 and b64_full in s:
-                s = s.replace(b64_full, "***")
             setattr(proc, stream_attr, s)
     if trace_into is not None:
-        # The captured cmd list will contain the b64 in the extraHeader
-        # arg; redact via the diag helper which handles every form.
         _git_diag_capture_step(
             trace_into, step=args[0] if args else "git",
             cmd=cmd, proc=proc, started_at=_started,
@@ -12831,9 +12858,16 @@ def _ensure_inventory_repo(host_marker: str, trace_into: list | None = None) -> 
     """
     if not host_marker:
         return False, "", "Git host not resolved (vault unreachable?)"
+    # Provision the credential helper before any auth-requiring git
+    # operation. Idempotent — every call rewrites the credentials file +
+    # re-applies global config, so a vault rotation is picked up on the
+    # next ``Force re-sync`` without restart.
+    cred_ok, cred_err = _configure_git_credentials()
+    if not cred_ok:
+        return False, "", f"git auth setup failed: {cred_err}"
     url = _inv_repo_url()
     if not url:
-        return False, "", "Git URL could not be built (missing credentials)"
+        return False, "", "Git URL could not be built (host missing)"
     repo_path = INVENTORY_REPO_PATH
     git_dir = os.path.join(repo_path, ".git")
     try:
@@ -13150,10 +13184,12 @@ def _render_git_diag_panel(result: dict) -> None:
         f'    <div class="gd-section-title">resolved URL (redacted)</div>'
         f'    <pre class="gd-url">{html.escape(_url)}</pre>'
         f'    <div class="gd-auth-note">'
-        f'      auth carried via <code>-c http.extraHeader=Authorization: '
-        f'Basic ***</code> per-invocation · NOT embedded in URL · system '
-        f'credential helpers disabled per-invocation via '
-        f'<code>-c credential.helper=</code>'
+        f'      auth resolved at request-time via git\'s <code>store --file</code> '
+        f'credential helper · file at <code>{html.escape(_GIT_CREDENTIALS_PATH)}</code> '
+        f'(exists: {("yes" if os.path.exists(_GIT_CREDENTIALS_PATH) else "no")}) '
+        f'· file contains a single line <code>http://user:***@host</code> '
+        f'for the configured ADO hostname · SSL verification disabled '
+        f'(internal CA path) · matches the platform GitHandler pattern'
         f'    </div>'
         f'  </div>'
         f'  <div class="gd-section">'
@@ -14044,14 +14080,13 @@ def _vault_secrets_nested(path: str, sub: str) -> dict:
 
 
 def _postgres_creds() -> dict:
-    """Resolve Postgres credentials. Honors the ``postgres_env`` env-var
-    by sourcing from the ``"dev"`` sub-path when set to ``"dev"``, mirroring
-    the platform's existing convention. Returns ``{host, port, database,
-    username, password}``; an empty ``host`` means "not configured"."""
-    if POSTGRES_ENV == "dev":
-        cfg = _vault_secrets_nested(POSTGRES_VAULT_PATH, "dev")
-    else:
-        cfg = _vault_secrets(POSTGRES_VAULT_PATH)
+    """Resolve Postgres credentials from the PRD vault path.
+
+    Always reads the single ``POSTGRES_VAULT_PATH`` entry — the
+    dashboard never connects to a dev instance. Returns ``{host, port,
+    database, username, password}``; an empty ``host`` means "not
+    configured"."""
+    cfg = _vault_secrets(POSTGRES_VAULT_PATH)
     if not cfg:
         return {}
     return {
