@@ -2192,6 +2192,62 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     margin: 8px 0 4px 0;
 }
 .jk-empty-body { font-size: 0.78rem; line-height: 1.5; }
+.jk-empty-err {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: rgba(220,38,38,.06);
+    border: 1px solid rgba(220,38,38,.30);
+    border-radius: 8px;
+    text-align: left;
+    font-size: 0.74rem;
+    line-height: 1.5;
+    color: var(--cc-red);
+    overflow-wrap: anywhere;
+}
+.jk-empty-err-k {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: var(--cc-red);
+    margin-right: 6px;
+}
+.jk-empty-err code {
+    background: transparent;
+    color: var(--cc-red);
+    padding: 0;
+    font-weight: 600;
+    word-break: break-all;
+}
+.psv-empty-err {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: rgba(220,38,38,.06);
+    border: 1px solid rgba(220,38,38,.30);
+    border-radius: 8px;
+    text-align: left;
+    font-size: 0.74rem;
+    line-height: 1.5;
+    color: var(--cc-red);
+    overflow-wrap: anywhere;
+}
+.psv-empty-err-k {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: var(--cc-red);
+    margin-right: 6px;
+}
+.psv-empty-err code {
+    background: transparent;
+    color: var(--cc-red);
+    padding: 0;
+    font-weight: 600;
+    word-break: break-all;
+}
 .jk-empty code {
     font-family: var(--cc-mono);
     background: var(--cc-accent-lt);
@@ -9034,6 +9090,14 @@ def _render_prisma_scan_viewer() -> None:
         return
     s3_creds = _prisma_s3_creds()
     if not s3_creds:
+        _v_err = _vault_last_error(PRISMA_S3_VAULT_PATH)
+        _err_block = (
+            '<div class="psv-empty-err">'
+            '  <span class="psv-empty-err-k">Vault error:</span>'
+            f'  <code>{html.escape(_v_err)}</code>'
+            '</div>'
+            if _v_err else ""
+        )
         st.markdown(
             '<div class="psv-empty">'
             '  <div class="psv-empty-glyph">🔐</div>'
@@ -9043,6 +9107,7 @@ def _render_prisma_scan_viewer() -> None:
             '  Expected keys: <code>host</code>, <code>port</code>, '
             '  <code>access_key</code>, <code>secret_key</code> '
             '  (or <code>secret_id</code>).</div>'
+            + _err_block +
             '</div>',
             unsafe_allow_html=True,
         )
@@ -9225,6 +9290,14 @@ def _render_jenkins_panel() -> None:
     fragment-decorated active half so the 30s auto-refresh doesn't drag
     the rest of the page along with it."""
     if not _jenkins_creds().get("host"):
+        _v_err = _vault_last_error(JENKINS_VAULT_PATH)
+        _err_block = (
+            '<div class="jk-empty-err">'
+            '  <span class="jk-empty-err-k">Vault error:</span>'
+            f'  <code>{html.escape(_v_err)}</code>'
+            '</div>'
+            if _v_err else ""
+        )
         st.markdown(
             '<div class="jk-empty">'
             '  <div class="jk-empty-glyph">⚙</div>'
@@ -9237,6 +9310,7 @@ def _render_jenkins_panel() -> None:
             '  <code>JENKINS_USER</code> / <code>JENKINS_TOKEN</code> env '
             '  vars when vault isn\'t reachable. Until configured the panel '
             '  costs nothing.</div>'
+            + _err_block +
             '</div>',
             unsafe_allow_html=True,
         )
@@ -11011,34 +11085,71 @@ def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
 # =============================================================================
 # VAULT — shared credential resolver for Jenkins + S3
 # =============================================================================
-# `utils.vault.VaultClient` exposes `read_all_nested_secrets(path)`. We cache
-# the client as a Streamlit *resource* (one per process — auth happens inside
-# the SDK from ambient creds) and the resolved secret blobs as cached *data*
-# with a short TTL so a vault rotation surfaces within minutes.
+# `utils.vault.VaultClient` exposes `read_all_nested_secrets(path)`. We MUST
+# instantiate a fresh `VaultClient()` for each read — the constructor is
+# what re-initialises the auth token, so caching a single client as a
+# Streamlit resource causes its token to go stale and every subsequent read
+# fails with "permission denied / invalid token" once the original token's
+# lease expires.
+#
+# The plaintext SECRETS are cached briefly (TTL=300s) so each rerun doesn't
+# hammer vault — short enough that a rotation surfaces within minutes, long
+# enough to absorb the typical click-to-click rerun storm.
 
-@st.cache_resource(show_spinner=False)
-def _vault_client():
-    """One VaultClient per process. Returns ``None`` when the SDK isn't
-    importable so callers fall back to env-var creds without crashing."""
-    if not _VAULT_AVAILABLE:
-        return None
+_VAULT_ERR_KEY = "_vault_last_error_v1"  # session-state stash for admin UI
+
+
+def _vault_remember_error(path: str, exc: Exception) -> None:
+    """Record the most recent vault failure so admin-only empty-states can
+    surface it. Keeps the dict bounded — one entry per path."""
     try:
-        return _VaultClient()
+        store = st.session_state.setdefault(_VAULT_ERR_KEY, {})
+        store[path] = f"{type(exc).__name__}: {exc}"
     except Exception:
-        return None
+        pass
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+def _vault_last_error(path: str) -> str:
+    """Return the most recent error string for *path*, or empty if the
+    last read succeeded / the path was never read."""
+    return (st.session_state.get(_VAULT_ERR_KEY) or {}).get(path, "")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _vault_secrets_raw(path: str) -> dict:
+    """Cached vault read. RAISES on any failure — that's deliberate so
+    Streamlit doesn't memoise an empty result for 5 minutes when the
+    token is temporarily invalid. The public wrapper below catches and
+    stashes the error for admin surfacing.
+
+    Instantiates a fresh VaultClient inside the call (matches the
+    platform's documented pattern — the constructor re-initialises the
+    auth token, so a cached client would go stale and produce exactly
+    the "invalid token" symptom)."""
+    if not _VAULT_AVAILABLE or not path:
+        return {}
+    vc = _VaultClient()  # init vault token (per-call, matches platform docs)
+    cfg = vc.read_all_nested_secrets(path) or {}
+    return dict(cfg) if isinstance(cfg, dict) else {}
+
+
 def _vault_secrets(path: str) -> dict:
-    """Read all nested secrets at *path*. Returns ``{}`` on any error so
-    callers can substitute env-var defaults without exception handling."""
-    vc = _vault_client()
-    if vc is None or not path:
+    """Public resolver. Returns ``{}`` on any error, stashes the failure
+    for the admin-only empty-state, and lets a successful retry on the
+    next rerun clear the stash. Failures are NOT cached because the
+    underlying raw function re-raises — only successes hit Streamlit's
+    memoisation."""
+    if not _VAULT_AVAILABLE or not path:
         return {}
     try:
-        cfg = vc.read_all_nested_secrets(path) or {}
-        return dict(cfg) if isinstance(cfg, dict) else {}
-    except Exception:
+        result = _vault_secrets_raw(path)
+        # Clear any prior recorded error for this path on success.
+        store = st.session_state.get(_VAULT_ERR_KEY)
+        if isinstance(store, dict):
+            store.pop(path, None)
+        return result
+    except Exception as e:
+        _vault_remember_error(path, e)
         return {}
 
 
