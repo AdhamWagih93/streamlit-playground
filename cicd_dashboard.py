@@ -17715,6 +17715,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _TILE_COLORS = {
         "company":  "var(--cc-accent)",
         "team":     "var(--cc-teal)",
+        "user":     "var(--cc-amber)",
         "project":  "var(--cc-blue)",
         "app":      "var(--cc-green)",
         "build":    "var(--cc-amber)",
@@ -17722,6 +17723,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         "platform": "var(--cc-blue)",
         "combo":    "var(--cc-red)",
     }
+
+    # Users tile count — distinct people surfaced by the aggregator for
+    # the active scope + window. When team filters are active and the
+    # users have known teams, we narrow to those teams so the number
+    # tracks the rest of the row's scope; users without inferred teams
+    # still contribute (no team data → can't filter them, so they pass).
+    _users_scoped: list[dict] = []
+    for _u in _users_list:
+        _u_teams = set(_u.get("teams") or [])
+        if _post_teams and _u_teams and not (_u_teams & _post_teams):
+            continue
+        _users_scoped.append(_u)
+    _users_total = len(_users_scoped)
+    _users_with_email = sum(1 for _u in _users_scoped if _u.get("email"))
+    _users_sub = (
+        f"<b>{_users_with_email}</b> with email · reconciled across "
+        f"commits / jira / builds / deploys"
+        if _users_total else
+        "no activity in scope · widen window"
+    )
 
     # Tile specs: (dim_key, glyph, label, number, sub_markdown)
     _tile_specs: list[tuple[str, str, str, int, str]] = []
@@ -17733,6 +17754,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     elif len(_iv_session_teams) > 1:
         _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
                             f"Across your {len(_iv_session_teams)} session teams"))
+    # Users tile sits between Teams and Projects per the platform's
+    # mental model (people own teams, teams own projects).
+    _tile_specs.append(("user", "👤", "Users", _users_total, _users_sub))
     _tile_specs.append(("project", "📁", "Projects", len(_post_projects),
                         f"<b>{len(_live_projects)}</b> live in PRD ({_proj_live_pct})"))
     _tile_specs.append(("app", "▣", "Applications", _iv_total,
@@ -17750,7 +17774,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _tile_cols = st.columns(len(_tile_specs), gap="small")
         # Tiles that collapse to the single selected value when exactly one
         # entry is picked. Combo stays numeric (its label is too long).
-        _SINGLE_VAL_DIMS = {"company", "team", "project", "app",
+        _SINGLE_VAL_DIMS = {"company", "team", "user", "project", "app",
                             "build", "deploy", "platform"}
         for _idx, (_dk, _glyph, _tlabel, _tnum, _tsub_md) in enumerate(_tile_specs):
             with _tile_cols[_idx]:
@@ -17765,6 +17789,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     _solo = _selected[0]
                     if _dk in {"build", "deploy", "platform"}:
                         _solo = _pill_to_val(_solo)
+                    # Users carry an email-shaped key — resolve to the
+                    # display name so the tile shows a person's name, not
+                    # a raw lowercased email string.
+                    if _dk == "user":
+                        _solo = _iv_users_label.get(_solo, _solo)
                     _solo_esc = html.escape(str(_solo))
                     _number_html = (
                         f'<div class="iv-tile-number iv-tile-number--value" '
