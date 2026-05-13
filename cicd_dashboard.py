@@ -14290,14 +14290,30 @@ def _resolve_field(merged: dict, field: str) -> str:
     return ""
 
 
+def _vault_pw_fingerprint() -> str:
+    """Short opaque fingerprint of the current Ansible Vault password — a
+    cache-key marker so the inventory loader re-runs when the admin sets
+    or rotates the password mid-session, WITHOUT putting the secret
+    itself in any cache key. ``""`` when no password is set."""
+    import hashlib
+    _pw = _ansible_vault_password()
+    if not _pw:
+        return ""
+    return hashlib.sha256(_pw.encode("utf-8")).hexdigest()[:12]
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _load_inventory_from_git(head_sha: str) -> tuple[list[dict], list[str]]:
+def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[dict], list[str]]:
     """Walk the cloned inventories repo and produce inventory rows in the
     same shape as :func:`_fetch_full_inventory`.
 
-    Cached on the git HEAD SHA — the cache invalidates only when the repo
-    actually moves, so consecutive Streamlit reruns within the same git
-    revision pay zero parse cost.
+    Cached on (HEAD SHA, vault-password fingerprint). The fingerprint
+    fixes a subtle bug where an admin who entered the Ansible Vault
+    password mid-session would still see the cached "vault password not
+    set" result indefinitely — the loader had run once with no password,
+    parsed zero rows from the encrypted YAMLs, and the cache pinned that
+    result. Including the password fingerprint invalidates the cache the
+    moment the admin sets / clears / rotates it.
 
     Returns ``(rows, warnings)``. Warnings surface missing dependencies,
     decrypt failures, and parse errors for the admin banner — when no
@@ -14592,7 +14608,7 @@ def _load_inventory_from_git_scoped(scope_json: str) -> tuple[list[dict], str, s
     if not _YAML_AVAILABLE:
         warnings.append("PyYAML not installed")
         return [], "PyYAML missing", head, warnings
-    rows, parse_warnings = _load_inventory_from_git(head)
+    rows, parse_warnings = _load_inventory_from_git(head, _vault_pw_fingerprint())
     warnings.extend(parse_warnings)
     if not rows:
         warnings.append(
@@ -15772,112 +15788,198 @@ def _fetch_users_aggregate(
         return u
 
     # ── 1. COMMITS — primary source of (email, name) pairs ────────────────
-    try:
-        r = es_search(
-            IDX["commits"],
-            {
-                "query": {"bool": {"filter": list(commit_scope_list)
-                                   + [range_filter("commitdate", start, end)]}},
-                "size": 0,
-                "aggs": {
-                    "by_user": {
-                        "composite": {
-                            "size": _users_term_size(IDX["commits"], "authormail.keyword"),
-                            "sources": [
-                                {"email": {"terms": {"field": "authormail.keyword",
-                                                     "missing_bucket": True}}},
-                                {"name":  {"terms": {"field": "authorname.keyword",
-                                                     "missing_bucket": True}}},
-                            ],
+    # Index schema variants this org has used:
+    #   • authormail / authorname        — original convention
+    #   • author_mail / author_name      — snake-case variant
+    #   • author.mail / author.name      — nested-object variant
+    #   • commitauthormail / commitauthor — legacy
+    # Try every documented (email, name) field pair; ANY pair that yields
+    # buckets contributes. Each candidate is tried first with .keyword then
+    # bare — composite aggs require keyword fields, but some indices have
+    # the keyword as the bare field name itself.
+    _COMMIT_IDENTITY_PAIRS: list[tuple[str, str]] = [
+        ("authormail.keyword",      "authorname.keyword"),
+        ("authormail",              "authorname"),
+        ("author_mail.keyword",     "author_name.keyword"),
+        ("author_mail",             "author_name"),
+        ("author.mail.keyword",     "author.name.keyword"),
+        ("author.mail",             "author.name"),
+        ("commitauthormail.keyword","commitauthor.keyword"),
+        ("commit_author_mail.keyword","commit_author.keyword"),
+    ]
+    _commit_failures: list[str] = []
+    _commit_any_data = False
+    for _email_field, _name_field in _COMMIT_IDENTITY_PAIRS:
+        try:
+            r = es_search(
+                IDX["commits"],
+                {
+                    "query": {"bool": {"filter": list(commit_scope_list)
+                                       + [range_filter("commitdate", start, end)]}},
+                    "size": 0,
+                    "aggs": {
+                        "by_user": {
+                            "composite": {
+                                "size": _users_term_size(IDX["commits"], _email_field),
+                                "sources": [
+                                    {"email": {"terms": {"field": _email_field,
+                                                         "missing_bucket": True}}},
+                                    {"name":  {"terms": {"field": _name_field,
+                                                         "missing_bucket": True}}},
+                                ],
+                            }
                         }
-                    }
+                    },
                 },
-            },
-        )
-        for b in r.get("aggregations", {}).get("by_user", {}).get("buckets", []):
-            k = b.get("key") or {}
-            email = (k.get("email") or "").strip()
-            name = (k.get("name") or "").strip()
-            if not email and not name:
+            )
+            _buckets = r.get("aggregations", {}).get("by_user", {}).get("buckets", [])
+            if not _buckets:
                 continue
-            u = _ensure(email, name)
-            u["commits"] += int(b.get("doc_count", 0))
-            if email and name:
-                name_to_email[name.strip().lower()] = email.strip().lower()
-    except Exception as e:
-        errors["commits"] = f"{type(e).__name__}: {e}"
+            _commit_any_data = True
+            for b in _buckets:
+                k = b.get("key") or {}
+                email = (k.get("email") or "").strip()
+                name = (k.get("name") or "").strip()
+                if not email and not name:
+                    continue
+                u = _ensure(email, name)
+                u["commits"] += int(b.get("doc_count", 0))
+                if email and name:
+                    name_to_email[name.strip().lower()] = email.strip().lower()
+        except Exception as e:
+            _commit_failures.append(
+                f"({_email_field},{_name_field}): {type(e).__name__}"
+            )
+            continue
+    if not _commit_any_data and _commit_failures:
+        errors["commits"] = (
+            f"no commit identity buckets found across "
+            f"{len(_COMMIT_IDENTITY_PAIRS)} field-pair variants: "
+            + " · ".join(_commit_failures[:4])
+        )
 
     # ── 2. JIRA — assignee + reporter + creator (no email field; uses
     # display-name keys keyword fields per platform schema). Capture
     # `reporterteam` to build user → team mapping.
-    def _bucket_into(index_key, identity_field, team_field, ctr_attr,
+    def _bucket_into(index_key, identity_fields, team_field, ctr_attr,
                      filters, time_field):
-        try:
-            sources = [
-                {"id": {"terms": {"field": identity_field,
-                                  "missing_bucket": True}}},
-            ]
-            if team_field:
-                sources.append({"team": {"terms": {"field": team_field,
-                                                   "missing_bucket": True}}})
-            r = es_search(
-                IDX[index_key],
-                {
-                    "query": {"bool": {"filter": list(filters)
-                                       + [range_filter(time_field, start, end)]}},
-                    "size": 0,
-                    "aggs": {"by_user": {"composite": {
-                        "size": _users_term_size(IDX[index_key], identity_field),
-                        "sources": sources,
-                    }}},
-                },
-            )
-            for b in r.get("aggregations", {}).get("by_user", {}).get("buckets", []):
-                k = b.get("key") or {}
-                ident = (k.get("id") or "").strip()
-                tm = (k.get("team") or "").strip() if team_field else ""
-                if not ident:
+        """Try every candidate identity field; merge results from any that
+        produce buckets. Indices in this org sometimes carry the same
+        identity under multiple schema variants (e.g. ``Requester`` vs
+        ``requester`` vs ``requester.keyword``); failing the first one
+        shouldn't abandon the whole probe.
+
+        ``identity_fields`` may be a single string (legacy) or a list/tuple
+        of candidate field names. ``.keyword``-suffixed variants are tried
+        FIRST since composite aggs require keyword fields."""
+        if isinstance(identity_fields, str):
+            identity_fields = [identity_fields]
+        _any_data = False
+        _failures: list[str] = []
+        for ident_field in identity_fields:
+            try:
+                sources = [
+                    {"id": {"terms": {"field": ident_field,
+                                      "missing_bucket": True}}},
+                ]
+                if team_field:
+                    sources.append({"team": {"terms": {"field": team_field,
+                                                       "missing_bucket": True}}})
+                r = es_search(
+                    IDX[index_key],
+                    {
+                        "query": {"bool": {"filter": list(filters)
+                                           + [range_filter(time_field, start, end)]}},
+                        "size": 0,
+                        "aggs": {"by_user": {"composite": {
+                            "size": _users_term_size(IDX[index_key], ident_field),
+                            "sources": sources,
+                        }}},
+                    },
+                )
+                _buckets = r.get("aggregations", {}).get("by_user", {}).get("buckets", [])
+                if not _buckets:
                     continue
-                # Reconcile name → email when commits saw the same person
-                email = name_to_email.get(ident.lower(), "")
-                u = _ensure(email, ident)
-                u[ctr_attr] += int(b.get("doc_count", 0))
-                if tm:
-                    u["teams"].add(tm)
-        except Exception as e:
-            errors[f"{index_key}_{ctr_attr}"] = f"{type(e).__name__}: {e}"
+                _any_data = True
+                for b in _buckets:
+                    k = b.get("key") or {}
+                    ident = (k.get("id") or "").strip()
+                    tm = (k.get("team") or "").strip() if team_field else ""
+                    if not ident:
+                        continue
+                    # Reconcile name → email when commits saw the same person
+                    email = name_to_email.get(ident.lower(), "")
+                    u = _ensure(email, ident)
+                    u[ctr_attr] += int(b.get("doc_count", 0))
+                    if tm:
+                        u["teams"].add(tm)
+            except Exception as e:
+                _failures.append(f"{ident_field}: {type(e).__name__}")
+                continue
+        if not _any_data and _failures:
+            errors[f"{index_key}_{ctr_attr}"] = (
+                f"all candidate fields failed: {' · '.join(_failures[:4])}"
+            )
 
-    _bucket_into("jira", "assignee", "reporterteam", "jira_assigned",
+    # ── 2. JIRA — assignee + reporter, with multiple casing variants.
+    _bucket_into("jira",
+                 ["assignee.keyword", "assignee"],
+                 "reporterteam", "jira_assigned",
                  scope_filters_list, "created")
-    _bucket_into("jira", "reporter", "reporterteam", "jira_authored",
+    _bucket_into("jira",
+                 ["reporter.keyword", "reporter"],
+                 "reporterteam", "jira_authored",
                  scope_filters_list, "created")
 
-    # ── 3. REQUESTS — Requester field is typically a name string
-    _bucket_into("requests", "Requester.keyword", "", "requests_made",
+    # ── 3. REQUESTS — Requester field is typically a name string.
+    _bucket_into("requests",
+                 ["Requester.keyword", "requester.keyword",
+                  "Requester", "requester"],
+                 "", "requests_made",
                  scope_filters_list, "RequestDate")
 
     # ── 4. APPROVAL — split approvals vs rejections by separate aggs on
     # ApprovedBy / RejectedBy. Each carries the user identity directly.
-    _bucket_into("approval", "ApprovedBy.keyword", "", "approvals",
+    _bucket_into("approval",
+                 ["ApprovedBy.keyword", "approved_by.keyword",
+                  "ApprovedBy", "approved_by"],
+                 "", "approvals",
                  scope_filters_list, "RequestDate")
-    _bucket_into("approval", "RejectedBy.keyword", "", "rejections",
+    _bucket_into("approval",
+                 ["RejectedBy.keyword", "rejected_by.keyword",
+                  "RejectedBy", "rejected_by"],
+                 "", "rejections",
                  scope_filters_list, "RequestDate")
-    _bucket_into("approval", "RequestedBy.keyword", "", "requests_made",
+    _bucket_into("approval",
+                 ["RequestedBy.keyword", "requested_by.keyword",
+                  "Requester.keyword", "requester.keyword",
+                  "RequestedBy", "requested_by", "Requester", "requester"],
+                 "", "requests_made",
                  scope_filters_list, "RequestDate")
 
-    # ── 5. BUILDS — lowercase `requester` + `approver` per the platform
-    # schema. Both fields are plain name strings; merge into name-keyed
-    # buckets that fold back to the email canonical via the reconciliation
-    # pass below.
-    _bucket_into("builds", "requester.keyword", "", "builds_requested",
+    # ── 5. BUILDS — `requester` / `approver` plain name strings per the
+    # platform schema. Multiple casing + .keyword variants tried.
+    _bucket_into("builds",
+                 ["requester.keyword", "Requester.keyword",
+                  "requester", "Requester"],
+                 "", "builds_requested",
                  commit_scope_list, "startdate")
-    _bucket_into("builds", "approver.keyword", "", "builds_approved",
+    _bucket_into("builds",
+                 ["approver.keyword", "Approver.keyword",
+                  "approver", "Approver"],
+                 "", "builds_approved",
                  commit_scope_list, "startdate")
 
     # ── 6. DEPLOYMENTS — same field shape as builds.
-    _bucket_into("deployments", "requester.keyword", "", "deploys_requested",
+    _bucket_into("deployments",
+                 ["requester.keyword", "Requester.keyword",
+                  "requester", "Requester"],
+                 "", "deploys_requested",
                  commit_scope_list, "startdate")
-    _bucket_into("deployments", "approver.keyword", "", "deploys_approved",
+    _bucket_into("deployments",
+                 ["approver.keyword", "Approver.keyword",
+                  "approver", "Approver"],
+                 "", "deploys_approved",
                  commit_scope_list, "startdate")
 
     # ── Final reconciliation pass — merge name-only buckets into
@@ -20117,6 +20219,50 @@ and `Informational` counts, `environment`, `url`, `enddate`.
 **ef-cicd-zap** — DAST web-app scan (OWASP ZAP). Per `(application,
 codeversion)`: `Vhigh` / `Vmedium` / `Vlow` (no critical bucket) plus
 `Informational` and `FalsePositives`, `environment`, `url`, `enddate`.
+
+---
+
+### User identity — every field the aggregator examines
+
+Per-user statistics are reconciled across every index that carries an
+identity. Each index is tried against MULTIPLE candidate field names
+(both `.keyword` and bare variants, plus snake-case + camelCase
++ nested-object forms). Any candidate that returns buckets contributes;
+all values fold into a single per-user record keyed on lowercased
+email (commits supply most email ↔ name pairs; other indices merge in
+by name match).
+
+| Index | Identity fields probed | Counts toward |
+|---|---|---|
+| `ef-git-commits` | `authormail` + `authorname`, `author_mail` + `author_name`, `author.mail` + `author.name`, `commitauthormail` + `commitauthor`, `commit_author_mail` + `commit_author` (each with and without `.keyword`) | `commits` |
+| `ef-bs-jira-issues` | `assignee`, `reporter` (each with and without `.keyword`); `reporterteam` for team inference | `jira_assigned`, `jira_authored` |
+| `ef-devops-requests` | `Requester`, `requester` (with / without `.keyword`) | `requests_made` |
+| `ef-cicd-approval` | `ApprovedBy` / `approved_by`, `RejectedBy` / `rejected_by`, `RequestedBy` / `requested_by` / `Requester` / `requester` (each with / without `.keyword`) | `approvals`, `rejections`, `requests_made` |
+| `ef-cicd-builds` | `requester` / `Requester`, `approver` / `Approver` (with / without `.keyword`) | `builds_requested`, `builds_approved` |
+| `ef-cicd-deployments` | `requester` / `Requester`, `approver` / `Approver` (with / without `.keyword`) | `deploys_requested`, `deploys_approved` |
+
+Reconciliation key is the canonical lowercased email. Names from indices
+without an email field merge into the email-keyed record via the
+`name → email` index that commits builds (one entry per
+`(authormail, authorname)` pair seen). Names without any known email
+remain keyed on the lowercased name.
+
+LDAP enrichment runs on top of the aggregate via
+`utils.ldap.get_user_info_by_email`, populating per-user `title`,
+`department`, `company`, `manager`, and `sAMAccountName`. LDAP queries
+are cached for 5 hours inside `utils.ldap`.
+
+### Vault-encrypted YAML files (inventories repo)
+
+When a `group_vars/{app}/*.yml` or similar inventory file begins with
+`$ANSIBLE_VAULT;` it's decrypted in-memory using the password an admin
+enters via the **Ansible Vault password** input near the source selector.
+The password never touches disk and never goes into an env var or vault
+entry; it's session-scoped only.
+
+The inventory-loader cache key includes a short fingerprint of the
+password so setting / clearing / rotating it invalidates the loader on
+the next render — no need to wait for a TTL.
 
             """
         )
