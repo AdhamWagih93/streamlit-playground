@@ -1,30 +1,26 @@
 """
-Jira Permission Schemes — One-Stop Mass Console
+Jira Permission Schemes — RBAC Access Lens
 
-A faster, smarter, audited alternative to the native Jira DC permission-scheme UI:
+A single-page console that turns the native Jira DC permission scheme UI
+into a role-aware access management surface. The page is built around three
+ideas:
 
-  📊 Overview        — instance-wide stats: schemes, grants, holders, top users / groups
-  🔭 Browse          — full grant table per scheme + project-binding lookup
-  🔍 Discrepancies   — dead schemes, duplicate schemes, shadow grants, orphan holders
-  👥 Teams           — saved named groupings (users + groups) reused as filters
-  ➕ Grant           — one or many holders × N permissions × M schemes
-  ➖ Revoke          — pivot to "where does X have anything?" and tick to revoke
-  ⇄ Copy / Move     — clone or hand-off all grants from holder A to holder B
-  🔎 Locate          — cross-scheme search for a single holder
-  🔐 Approvals       — DB-persisted approval queue (self-approve OR two-person)
-  📋 Audit           — every write this page made, queryable from Postgres
+  1. Look up access by *role* first. The org policy is grant-by-LDAP-group;
+     a user's roles are resolved from utils.rbac (VALID_USERS / VALID_GROUPS)
+     intersected with their utils.ldap group memberships. Every per-user view
+     answers "what can this user do AND why".
 
-Backends:
-  • Jira DC REST API v2 — credentials via the project's VaultClient
-    pattern (``vc.read_all_nested_secrets("jira")``)
-  • Postgres — same vault entry & connection pattern as cicd_dashboard.py
-    (``vc.read_all_nested_secrets("postgres")``). Bootstraps the three
-    tables (``jira_perm_approvals``, ``jira_perm_audit``, ``jira_perm_teams``)
-    automatically on first use.
+  2. Surface anomalies inline. A direct user-grant counts as stray (policy
+     says grant by group). Holders that don't exist in LDAP are stray.
+     Each anomaly has a one-click fix-it button with a popover confirm.
 
-Every Jira write goes through a DB approval gate first; nothing is sent to
-Jira until an approval row reaches status='approved'. Every actual call is
-written to the audit table with actor, target, ok/err, status code.
+  3. Everything is filterable from popovers wired into the stat strip —
+     project / scheme / role / holder. No tab gymnastics; the same page
+     responds to whatever filter combination you set.
+
+Every Jira write hits `jira_perm_audit` so the change history survives the
+session. Approval workflow / pending queue / draft preview are gone — every
+action takes effect as soon as you click through its inline confirm popover.
 """
 
 from __future__ import annotations
@@ -35,17 +31,15 @@ import csv
 import json
 import time
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, Iterable
 
 import requests
 from requests.auth import HTTPBasicAuth
 import streamlit as st
 
-# Project-internal modules — present in the production env, absent locally.
-# Fall through to env-var / no-op fallbacks so the page is still runnable
-# from a dev box.
+# --- Project-internal modules (present in prod, optional locally) ----------
 try:
     from utils.vault import VaultClient  # type: ignore
 except ImportError:
@@ -60,41 +54,66 @@ except ImportError:
     if not logger.handlers:
         logging.basicConfig(level=logging.INFO)
 
-# Postgres driver — psycopg v3 preferred, v2 fallback. Mirrors the pattern
-# in cicd_dashboard.py so the page lights up on either deployment.
+# --- RBAC source-of-truth dictionaries -------------------------------------
+# VALID_GROUPS maps LDAP group CN → list of role names.
+# VALID_USERS  maps Jira/LDAP username → list of role names (direct override).
+# Both come from utils.rbac in the deployment; locally we degrade gracefully.
 try:
-    import psycopg as _psycopg  # type: ignore  # v3
-    _PSYCOPG_VARIANT = "v3"
+    from utils.rbac import VALID_GROUPS, VALID_USERS  # type: ignore
+    _RBAC_AVAILABLE = True
+except ImportError:
+    VALID_GROUPS: dict[str, list[str]] = {}
+    VALID_USERS: dict[str, list[str]] = {}
+    _RBAC_AVAILABLE = False
+
+# --- LDAP helpers (read-only; vault-backed bind) ---------------------------
+# Importing utils.ldap eagerly resolves a Vault client at module load, so we
+# guard it behind a try and fall back to stubs in local dev.
+try:
+    from utils.ldap import (  # type: ignore
+        get_user_info as _ldap_get_user_info,
+        get_team_members as _ldap_get_team_members,
+        get_user_email as _ldap_get_user_email,
+    )
+    _LDAP_AVAILABLE = True
+except Exception:
+    _LDAP_AVAILABLE = False
+
+    def _ldap_get_user_info(username):  # type: ignore
+        return None
+
+    def _ldap_get_team_members(team_name):  # type: ignore
+        return []
+
+    def _ldap_get_user_email(username, preferred_domain=None):  # type: ignore
+        return ""
+
+
+def _extract_cn(dn: str) -> str:
+    """Pull the CN out of a DN string ('CN=DEVOPS,OU=…' → 'DEVOPS').
+    Local copy so we don't depend on utils.ldap private helpers."""
+    if not dn:
+        return ""
+    m = re.search(r"CN=([^,]+)", dn)
+    return m.group(1) if m else dn
+
+
+# --- Postgres driver (v3 preferred, v2 fallback) ---------------------------
+try:
+    import psycopg as _psycopg  # type: ignore
     _POSTGRES_AVAILABLE = True
 except ImportError:
     try:
         import psycopg2 as _psycopg  # type: ignore
-        _PSYCOPG_VARIANT = "v2"
         _POSTGRES_AVAILABLE = True
     except ImportError:
         _psycopg = None  # type: ignore
-        _PSYCOPG_VARIANT = ""
         _POSTGRES_AVAILABLE = False
-
-# Plotly / pandas — used for the Overview tab charts. Optional; tab degrades
-# to plain markdown counters if missing.
-try:
-    import pandas as pd
-except ImportError:
-    pd = None  # type: ignore
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    _PLOTLY = True
-except ImportError:
-    px = None  # type: ignore
-    go = None  # type: ignore
-    _PLOTLY = False
 
 
 # ---------------------------------------------------------------------------
-# JiraAPI — user's canonical snippet (Vault-backed basic auth), with a local
-# env-var fallback when VaultClient isn't importable.
+# JiraAPI — verbatim from the user's snippet (vault-backed basic auth), plus
+# env-var fallback for local dev.
 # ---------------------------------------------------------------------------
 class JiraAPI:
     def __init__(self):
@@ -127,10 +146,10 @@ class JiraAPI:
 
 
 # ---------------------------------------------------------------------------
-# Page config + styling.
+# Page config + CSS
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Jira Permission Schemes",
+    page_title="Jira Access Lens",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -140,6 +159,7 @@ CUSTOM_CSS = """
 :root {
     --jp-surface:   #ffffff;
     --jp-surface2:  #f7f8fb;
+    --jp-surface3:  #eef1f8;
     --jp-border:    #e3e6ee;
     --jp-border-hi: #c7cce0;
     --jp-text:      #1a1d2e;
@@ -157,163 +177,185 @@ CUSTOM_CSS = """
     --jp-purple-lt: #ede9fe;
     --jp-teal:      #0d9488;
     --jp-teal-lt:   #ccfbf1;
-    --jp-mono:      'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    --jp-pink:      #be185d;
+    --jp-pink-lt:   #fce7f3;
+    --jp-mono:      'SF Mono','Cascadia Code','Fira Code','Consolas',monospace;
 }
 
-.block-container { padding-top: 1rem; padding-bottom: 3rem; max-width: 1500px; }
+.block-container { padding-top: 1rem; padding-bottom: 3rem; max-width: 1550px; }
+h1,h2,h3,h4 { color: var(--jp-text); letter-spacing: -.01em; }
 
-h1, h2, h3, h4 { color: var(--jp-text); letter-spacing: -.01em; }
-
+/* Header strip */
 .jp-header {
     display: flex; align-items: baseline; gap: .8rem;
     padding-bottom: .4rem; margin-bottom: 1rem;
     border-bottom: 1px solid var(--jp-border);
 }
 .jp-header h1 { margin: 0; font-size: 1.55rem; font-weight: 600; }
-.jp-header .jp-host {
-    font-family: var(--jp-mono); font-size: .78rem; color: var(--jp-text-mute);
-    padding: .15rem .5rem; background: var(--jp-surface2);
-    border: 1px solid var(--jp-border); border-radius: 4px;
+.jp-header .jp-chip {
+    font-size: .76rem; padding: .15rem .55rem; border-radius: 4px;
+    border: 1px solid var(--jp-border); background: var(--jp-surface2);
+    color: var(--jp-text-dim); font-family: var(--jp-mono);
 }
-.jp-header .jp-actor {
-    font-size: .78rem; color: var(--jp-text-dim);
-    padding: .15rem .55rem; background: var(--jp-accent-lt);
-    border: 1px solid #b3d4ff; border-radius: 4px;
-}
+.jp-header .jp-chip.jp-actor { background: var(--jp-accent-lt); color: var(--jp-accent); border-color: #b3d4ff; }
 
+/* Pills, used everywhere */
 .jp-pill {
     display: inline-block; padding: .14rem .55rem; border-radius: 999px;
     font-size: .72rem; font-weight: 500; line-height: 1.3;
     background: var(--jp-surface2); color: var(--jp-text-dim);
-    border: 1px solid var(--jp-border); margin-right: .25rem;
+    border: 1px solid var(--jp-border); margin: .05rem .2rem .05rem 0;
 }
-.jp-pill.jp-grant  { background: var(--jp-green-lt);  color: var(--jp-green); border-color: #a7f3d0; }
-.jp-pill.jp-revoke { background: var(--jp-red-lt);    color: var(--jp-red);   border-color: #fecaca; }
-.jp-pill.jp-warn   { background: var(--jp-amber-lt);  color: var(--jp-amber); border-color: #fde68a; }
-.jp-pill.jp-info   { background: var(--jp-accent-lt); color: var(--jp-accent); border-color: #b3d4ff; }
-.jp-pill.jp-purple { background: var(--jp-purple-lt); color: var(--jp-purple); border-color: #ddd6fe; }
-.jp-pill.jp-teal   { background: var(--jp-teal-lt);   color: var(--jp-teal); border-color: #99f6e4; }
+.jp-pill.jp-role     { background: var(--jp-accent-lt); color: var(--jp-accent); border-color: #b3d4ff; }
+.jp-pill.jp-user     { background: var(--jp-purple-lt); color: var(--jp-purple); border-color: #ddd6fe; }
+.jp-pill.jp-group    { background: var(--jp-teal-lt);   color: var(--jp-teal); border-color: #99f6e4; }
+.jp-pill.jp-stray    { background: var(--jp-red-lt);    color: var(--jp-red); border-color: #fecaca; }
+.jp-pill.jp-warn     { background: var(--jp-amber-lt);  color: var(--jp-amber); border-color: #fde68a; }
+.jp-pill.jp-ok       { background: var(--jp-green-lt);  color: var(--jp-green); border-color: #a7f3d0; }
+.jp-pill.jp-info     { background: var(--jp-accent-lt); color: var(--jp-accent); border-color: #b3d4ff; }
+.jp-pill.jp-mono     { font-family: var(--jp-mono); font-size: .68rem; }
 
-.jp-card {
+/* KPI cards — bright big numbers */
+.jp-kpi {
     background: var(--jp-surface); border: 1px solid var(--jp-border);
-    border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: .8rem;
+    border-radius: 10px; padding: .8rem 1rem; height: 100%;
 }
-.jp-card-head {
-    display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: .5rem;
+.jp-kpi .jp-kpi-label {
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--jp-text-mute);
 }
-.jp-card-head .jp-title { font-weight: 600; font-size: 1.02rem; color: var(--jp-text); }
-.jp-card-head .jp-sub   { font-size: .8rem; color: var(--jp-text-mute); }
-
-/* Stats — bright "big number" cards on the Overview tab */
-.jp-stat {
-    background: var(--jp-surface); border: 1px solid var(--jp-border);
-    border-radius: 10px; padding: .9rem 1rem; height: 100%;
-}
-.jp-stat .jp-stat-label {
-    font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--jp-text-mute); margin-bottom: .2rem;
-}
-.jp-stat .jp-stat-num {
+.jp-kpi .jp-kpi-num {
     font-family: var(--jp-mono); font-size: 1.9rem; font-weight: 700;
     line-height: 1.1; color: var(--jp-text);
 }
-.jp-stat .jp-stat-sub {
-    font-size: .76rem; color: var(--jp-text-dim); margin-top: .2rem;
-}
-.jp-stat.jp-stat-accent { border-left: 4px solid var(--jp-accent); }
-.jp-stat.jp-stat-green  { border-left: 4px solid var(--jp-green); }
-.jp-stat.jp-stat-amber  { border-left: 4px solid var(--jp-amber); }
-.jp-stat.jp-stat-purple { border-left: 4px solid var(--jp-purple); }
-.jp-stat.jp-stat-teal   { border-left: 4px solid var(--jp-teal); }
+.jp-kpi .jp-kpi-sub  { font-size: .73rem; color: var(--jp-text-dim); }
+.jp-kpi.jp-kpi-accent { border-left: 4px solid var(--jp-accent); }
+.jp-kpi.jp-kpi-green  { border-left: 4px solid var(--jp-green); }
+.jp-kpi.jp-kpi-amber  { border-left: 4px solid var(--jp-amber); }
+.jp-kpi.jp-kpi-purple { border-left: 4px solid var(--jp-purple); }
+.jp-kpi.jp-kpi-red    { border-left: 4px solid var(--jp-red); }
+.jp-kpi.jp-kpi-teal   { border-left: 4px solid var(--jp-teal); }
 
-.jp-grant-row {
-    display: flex; align-items: center; gap: .6rem;
-    padding: .35rem .55rem; border-radius: 6px;
-    background: var(--jp-surface2); margin-bottom: .25rem;
+/* Filter strip — sits above KPIs */
+.jp-filterbar {
+    background: var(--jp-surface2); border: 1px solid var(--jp-border);
+    border-radius: 10px; padding: .6rem .8rem; margin-bottom: .8rem;
+}
+.jp-filter-chips {
+    display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem;
+    min-height: 1.4rem;
+}
+
+/* Big section headers */
+.jp-section-head {
+    margin: 1.2rem 0 .6rem 0;
+    padding-bottom: .4rem; border-bottom: 1px solid var(--jp-border);
+    display: flex; align-items: baseline; gap: .6rem;
+}
+.jp-section-head h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.jp-section-head .jp-section-sub {
+    font-size: .82rem; color: var(--jp-text-mute);
+}
+
+/* Compliance cards: a row per role */
+.jp-role-card {
+    background: var(--jp-surface); border: 1px solid var(--jp-border);
+    border-radius: 10px; padding: .75rem 1rem; margin-bottom: .5rem;
+    border-left: 4px solid var(--jp-accent);
+}
+.jp-role-card.jp-has-stray { border-left-color: var(--jp-red); background: linear-gradient(90deg, #fff7f7 0%, #fff 12%); }
+.jp-role-card .jp-role-head {
+    display: flex; align-items: baseline; gap: .5rem;
+    justify-content: space-between;
+}
+.jp-role-card .jp-role-name {
+    font-weight: 700; font-size: 1.05rem; color: var(--jp-text);
+    font-family: var(--jp-mono);
+}
+.jp-role-card .jp-role-stats {
+    color: var(--jp-text-mute); font-size: .8rem;
+}
+
+/* Holder lens — clean detail card */
+.jp-holder-card {
+    background: var(--jp-surface); border: 1px solid var(--jp-border);
+    border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1rem;
+}
+.jp-holder-card .jp-holder-head {
+    display: flex; align-items: baseline; gap: .8rem;
+    padding-bottom: .5rem; border-bottom: 1px solid var(--jp-border);
+    margin-bottom: .8rem;
+}
+.jp-holder-card .jp-holder-name {
+    font-size: 1.2rem; font-weight: 700; color: var(--jp-text);
+}
+.jp-holder-card .jp-holder-id {
+    font-family: var(--jp-mono); font-size: .85rem; color: var(--jp-text-dim);
+}
+
+/* Access map rows — the "why" column is critical */
+.jp-access-row {
+    display: grid;
+    grid-template-columns: 1.2fr 1.5fr 1.7fr .6fr;
+    gap: .5rem; padding: .35rem .55rem; align-items: center;
+    border-bottom: 1px dashed var(--jp-border);
     font-size: .85rem;
 }
-.jp-grant-row .jp-perm  { font-family: var(--jp-mono); font-size: .75rem; color: var(--jp-accent); min-width: 220px; }
-.jp-grant-row .jp-holder { color: var(--jp-text-dim); }
-.jp-grant-row.jp-add    { background: var(--jp-green-lt);  border-left: 3px solid var(--jp-green); }
-.jp-grant-row.jp-del    { background: var(--jp-red-lt);    border-left: 3px solid var(--jp-red); }
-
-.jp-diff-num {
-    font-family: var(--jp-mono); font-size: 1.6rem; font-weight: 600;
-    line-height: 1.1; margin-bottom: 0;
+.jp-access-row.jp-stray-row { background: #fff7f7; }
+.jp-access-row.jp-shadow-row { background: #fffbeb; }
+.jp-access-row .jp-perm-cell {
+    font-family: var(--jp-mono); font-size: .78rem; color: var(--jp-accent);
 }
-.jp-diff-num.jp-add { color: var(--jp-green); }
-.jp-diff-num.jp-del { color: var(--jp-red); }
+.jp-access-row .jp-scheme-cell { color: var(--jp-text-dim); }
+.jp-access-row .jp-why-cell { color: var(--jp-text-dim); font-size: .8rem; }
 
-/* Discrepancy badges */
-.jp-disc-card {
-    background: var(--jp-surface); border: 1px solid var(--jp-border);
-    border-radius: 10px; padding: .8rem 1rem; margin-bottom: .8rem;
-    border-left: 4px solid var(--jp-amber);
+/* Banner */
+.jp-banner {
+    border-radius: 10px; padding: .75rem 1rem; margin-bottom: .8rem;
+    border-left: 4px solid var(--jp-amber); background: #fff8e6;
+    color: var(--jp-text);
 }
-.jp-disc-card.jp-sev-high { border-left-color: var(--jp-red); }
-.jp-disc-card.jp-sev-info { border-left-color: var(--jp-accent); }
-.jp-disc-card .jp-disc-title { font-weight: 600; color: var(--jp-text); }
-.jp-disc-card .jp-disc-sub   { font-size: .78rem; color: var(--jp-text-mute); margin-top: .2rem; }
+.jp-banner.jp-banner-red   { border-left-color: var(--jp-red);   background: #fff2f2; }
+.jp-banner.jp-banner-ok    { border-left-color: var(--jp-green); background: #f0fdf4; }
+.jp-banner.jp-banner-info  { border-left-color: var(--jp-accent); background: #f0f6ff; }
+.jp-banner b { color: var(--jp-text); }
 
-/* Approval card */
-.jp-approval {
-    background: var(--jp-surface); border: 1px solid var(--jp-border);
-    border-radius: 10px; padding: .9rem 1.1rem; margin-bottom: .7rem;
-    border-left: 4px solid var(--jp-amber);
+/* Empty state */
+.jp-empty {
+    text-align: center; padding: 2rem 1rem; color: var(--jp-text-mute);
+    background: var(--jp-surface2); border: 1px dashed var(--jp-border);
+    border-radius: 10px; margin: .5rem 0;
 }
-.jp-approval.jp-st-approved { border-left-color: var(--jp-green); }
-.jp-approval.jp-st-rejected { border-left-color: var(--jp-red); }
-.jp-approval.jp-st-executed { border-left-color: var(--jp-accent); }
-.jp-approval.jp-st-failed   { border-left-color: var(--jp-red); }
-.jp-approval.jp-st-partial  { border-left-color: var(--jp-amber); }
 
+/* Audit row */
 .jp-audit-row {
-    display: grid;
-    grid-template-columns: 150px 70px 80px 1fr 140px;
-    gap: .6rem; padding: .35rem .55rem;
-    font-size: .8rem; border-bottom: 1px dashed var(--jp-border);
+    display: grid; grid-template-columns: 140px 70px 70px 1fr 140px;
+    gap: .5rem; padding: .3rem .5rem;
+    font-size: .78rem; border-bottom: 1px dashed var(--jp-border);
     align-items: center;
 }
 .jp-audit-row .jp-ts { font-family: var(--jp-mono); color: var(--jp-text-mute); }
-.jp-audit-row .jp-status-ok   { color: var(--jp-green); font-weight: 600; }
-.jp-audit-row .jp-status-err  { color: var(--jp-red);   font-weight: 600; }
+.jp-audit-row .jp-status-ok  { color: var(--jp-green); font-weight: 600; }
+.jp-audit-row .jp-status-err { color: var(--jp-red); font-weight: 600; }
 
-.jp-empty {
-    text-align: center; padding: 2.5rem 1rem; color: var(--jp-text-mute);
-    background: var(--jp-surface2); border: 1px dashed var(--jp-border);
-    border-radius: 10px;
-}
-
-/* Team chip strip */
-.jp-team-chip {
-    display: inline-block; padding: .15rem .5rem; margin: .15rem .15rem 0 0;
-    background: var(--jp-teal-lt); color: var(--jp-teal);
-    border: 1px solid #99f6e4; border-radius: 4px;
-    font-size: .72rem; font-family: var(--jp-mono);
-}
-.jp-team-chip.jp-user  { background: var(--jp-accent-lt); color: var(--jp-accent); border-color: #b3d4ff; }
-.jp-team-chip.jp-group { background: var(--jp-purple-lt); color: var(--jp-purple); border-color: #ddd6fe; }
+/* Inline action mini-button row */
+.jp-actions { display: flex; gap: .3rem; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
-# Identity + admin gate. Canonical role source is st.session_state.user_roles
-# (dict). username / email come from the auth shell session.
+# Identity + admin gate
 # ---------------------------------------------------------------------------
 def _whoami() -> str:
-    """Current operator's identifier. Prefer username, fall back to email,
-    finally to OS USER. Used as the actor field on every audit row and as
-    the requester on every approval."""
     for k in ("username", "user"):
-        v = (st.session_state.get(k) or "").strip() if isinstance(st.session_state.get(k), str) else ""
-        if v:
-            return v
-    v = (st.session_state.get("email") or "").strip() if isinstance(st.session_state.get("email"), str) else ""
-    if v:
-        return v
+        v = st.session_state.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    v = st.session_state.get("email")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
     return os.environ.get("USER") or os.environ.get("USERNAME") or "anonymous"
 
 
@@ -331,22 +373,15 @@ ACTOR = _whoami()
 
 
 # ---------------------------------------------------------------------------
-# Postgres — connection + schema bootstrap. Mirrors cicd_dashboard.py:
-# credentials live at vault path "postgres" with the standard keys.
+# Postgres — minimal: one audit table.
 # ---------------------------------------------------------------------------
 POSTGRES_VAULT_PATH = os.environ.get("JIRA_PERMS_PG_VAULT_PATH", "postgres").strip()
 POSTGRES_CONNECT_TIMEOUT = 10
-POSTGRES_QUERY_TTL = 60          # short — approvals/audit move fast
-POSTGRES_HISTORY_LIMIT = 500     # audit log default ceiling
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _postgres_creds() -> dict:
-    """Resolve Postgres credentials from vault. Empty dict means
-    'unconfigured' — DB-backed features render an empty-state instead of
-    crashing."""
     if not VaultClient:
-        # Local-dev fallback via env vars (mirrors JiraAPI's pattern).
         if os.environ.get("PGHOST"):
             return {
                 "host":     os.environ.get("PGHOST", "").strip(),
@@ -374,10 +409,6 @@ def _postgres_creds() -> dict:
 
 
 def _pg_connect():
-    """Open a fresh Postgres connection. Returns (conn, error_str). Caller
-    is responsible for close. We don't pool / cache the connection — these
-    are read-or-tiny-write paths and a stale connection from psycopg2 in a
-    Streamlit rerun is more pain than the per-call connect overhead."""
     if not _POSTGRES_AVAILABLE:
         return None, "psycopg / psycopg2 not installed"
     creds = _postgres_creds()
@@ -389,10 +420,8 @@ def _pg_connect():
         except (ValueError, TypeError):
             _port = 5432
         conn = _psycopg.connect(
-            host=creds["host"],
-            port=_port,
-            dbname=creds["database"],
-            user=creds["username"],
+            host=creds["host"], port=_port,
+            dbname=creds["database"], user=creds["username"],
             password=creds["password"],
             connect_timeout=POSTGRES_CONNECT_TIMEOUT,
         )
@@ -405,32 +434,13 @@ def _pg_connect():
         return None, f"{type(e).__name__}: {e}"
 
 
+# Minimal audit table. We keep the legacy column names so any prior data
+# from the v2 schema reads back transparently. `approval_id` is kept
+# nullable for back-compat but never written by this revision.
 _SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS jira_perm_approvals (
-    id              BIGSERIAL PRIMARY KEY,
-    ts_requested    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    ts_decided      TIMESTAMPTZ,
-    ts_executed     TIMESTAMPTZ,
-    requester       TEXT        NOT NULL,
-    approver        TEXT,
-    status          TEXT        NOT NULL CHECK (status IN
-                       ('pending','approved','rejected','executed','partial','failed','cancelled')),
-    mode            TEXT        NOT NULL DEFAULT 'self',
-    op_count        INTEGER     NOT NULL,
-    grant_count     INTEGER     NOT NULL,
-    revoke_count    INTEGER     NOT NULL,
-    schemes_touched INTEGER     NOT NULL,
-    reason          TEXT,
-    decision_note   TEXT,
-    ops             JSONB       NOT NULL,
-    exec_summary    JSONB
-);
-CREATE INDEX IF NOT EXISTS jira_perm_approvals_status_idx
-    ON jira_perm_approvals (status, ts_requested DESC);
-
 CREATE TABLE IF NOT EXISTS jira_perm_audit (
     id              BIGSERIAL PRIMARY KEY,
-    approval_id     BIGINT REFERENCES jira_perm_approvals(id) ON DELETE SET NULL,
+    approval_id     BIGINT,
     ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     actor           TEXT        NOT NULL,
     action          TEXT        NOT NULL,
@@ -447,22 +457,10 @@ CREATE TABLE IF NOT EXISTS jira_perm_audit (
 CREATE INDEX IF NOT EXISTS jira_perm_audit_ts_idx     ON jira_perm_audit (ts DESC);
 CREATE INDEX IF NOT EXISTS jira_perm_audit_actor_idx  ON jira_perm_audit (actor);
 CREATE INDEX IF NOT EXISTS jira_perm_audit_scheme_idx ON jira_perm_audit (scheme_id);
-
-CREATE TABLE IF NOT EXISTS jira_perm_teams (
-    id          BIGSERIAL PRIMARY KEY,
-    name        TEXT        NOT NULL UNIQUE,
-    description TEXT,
-    members     JSONB       NOT NULL,
-    created_by  TEXT        NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 """
 
 
 def _bootstrap_schema() -> tuple[bool, str]:
-    """Idempotent CREATE TABLE IF NOT EXISTS for our three tables. Cached
-    once per session — schema doesn't change at runtime."""
     if st.session_state.get("_jp_schema_ok"):
         return True, ""
     conn, err = _pg_connect()
@@ -482,203 +480,7 @@ def _bootstrap_schema() -> tuple[bool, str]:
             pass
 
 
-def _pg_json(value) -> str:
-    """Serialise to JSON for JSONB columns. psycopg v3 accepts dicts
-    directly via the Json adapter but the SQL-as-text path is the same
-    across v2 and v3, so we stringify for portability."""
-    return json.dumps(value, default=str)
-
-
-# --- Approvals -------------------------------------------------------------
-
-def db_create_approval_request(
-    *,
-    requester: str,
-    mode: str,                   # "self" | "two-person"
-    ops: list[dict],
-    reason: str,
-) -> tuple[int | None, str]:
-    """Insert a new approval request in status='pending'. Returns
-    (approval_id, error)."""
-    conn, err = _pg_connect()
-    if err:
-        return None, err
-    try:
-        grants = sum(1 for o in ops if o.get("action") == "grant")
-        revokes = sum(1 for o in ops if o.get("action") == "revoke")
-        schemes = len({o.get("scheme_id") for o in ops})
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO jira_perm_approvals
-                  (requester, mode, status, op_count, grant_count, revoke_count,
-                   schemes_touched, reason, ops)
-                VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s::jsonb)
-                RETURNING id
-                """,
-                (requester, mode, len(ops), grants, revokes, schemes, reason or None, _pg_json(ops)),
-            )
-            row = cur.fetchone()
-            return int(row[0]), ""
-    except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def db_decide_approval(
-    approval_id: int,
-    *,
-    approver: str,
-    decision: str,         # "approved" | "rejected" | "cancelled"
-    note: str,
-) -> tuple[bool, str]:
-    conn, err = _pg_connect()
-    if err:
-        return False, err
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE jira_perm_approvals
-                SET status = %s, approver = %s, decision_note = %s, ts_decided = NOW()
-                WHERE id = %s AND status = 'pending'
-                """,
-                (decision, approver, note or None, approval_id),
-            )
-            if cur.rowcount == 0:
-                return False, "request not pending or not found"
-        return True, ""
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def db_mark_executed(
-    approval_id: int,
-    *,
-    final_status: str,     # 'executed' | 'partial' | 'failed'
-    exec_summary: dict,
-) -> tuple[bool, str]:
-    conn, err = _pg_connect()
-    if err:
-        return False, err
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE jira_perm_approvals
-                SET status = %s, ts_executed = NOW(), exec_summary = %s::jsonb
-                WHERE id = %s
-                """,
-                (final_status, _pg_json(exec_summary), approval_id),
-            )
-        return True, ""
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def db_load_approval(approval_id: int) -> tuple[dict | None, str]:
-    conn, err = _pg_connect()
-    if err:
-        return None, err
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, ts_requested, ts_decided, ts_executed, requester,
-                       approver, status, mode, op_count, grant_count, revoke_count,
-                       schemes_touched, reason, decision_note, ops, exec_summary
-                FROM jira_perm_approvals WHERE id = %s
-                """,
-                (approval_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None, "not found"
-            cols = [d[0] for d in cur.description]
-            rec = dict(zip(cols, row))
-            # Normalise JSONB → python objects (driver may return either)
-            for k in ("ops", "exec_summary"):
-                v = rec.get(k)
-                if isinstance(v, (str, bytes, bytearray)):
-                    try:
-                        rec[k] = json.loads(v)
-                    except Exception:
-                        rec[k] = None
-            return rec, ""
-    except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def db_list_approvals(
-    *,
-    statuses: list[str] | None = None,
-    limit: int = 100,
-) -> tuple[list[dict], str]:
-    conn, err = _pg_connect()
-    if err:
-        return [], err
-    try:
-        with conn.cursor() as cur:
-            if statuses:
-                cur.execute(
-                    """
-                    SELECT id, ts_requested, ts_decided, ts_executed, requester,
-                           approver, status, mode, op_count, grant_count,
-                           revoke_count, schemes_touched, reason, decision_note
-                    FROM jira_perm_approvals
-                    WHERE status = ANY(%s)
-                    ORDER BY ts_requested DESC
-                    LIMIT %s
-                    """,
-                    (statuses, limit),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT id, ts_requested, ts_decided, ts_executed, requester,
-                           approver, status, mode, op_count, grant_count,
-                           revoke_count, schemes_touched, reason, decision_note
-                    FROM jira_perm_approvals
-                    ORDER BY ts_requested DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
-            cols = [d[0] for d in cur.description]
-            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-            return rows, ""
-    except Exception as e:
-        return [], f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-# --- Audit -----------------------------------------------------------------
-
-def db_audit_insert_many(rows: list[dict]) -> tuple[int, str]:
-    """Bulk-insert audit rows. Returns (inserted_count, error)."""
+def db_audit_insert(rows: list[dict]) -> tuple[int, str]:
     if not rows:
         return 0, ""
     conn, err = _pg_connect()
@@ -686,18 +488,16 @@ def db_audit_insert_many(rows: list[dict]) -> tuple[int, str]:
         return 0, err
     try:
         with conn.cursor() as cur:
-            inserted = 0
             for r in rows:
                 cur.execute(
                     """
                     INSERT INTO jira_perm_audit
-                      (approval_id, actor, action, scheme_id, scheme_name,
-                       permission_key, holder_type, holder_param, holder_display,
-                       ok, status_code, error)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      (actor, action, scheme_id, scheme_name, permission_key,
+                       holder_type, holder_param, holder_display, ok,
+                       status_code, error)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
-                        r.get("approval_id"),
                         r.get("actor") or "",
                         r.get("action") or "",
                         int(r.get("scheme_id") or 0),
@@ -711,8 +511,7 @@ def db_audit_insert_many(rows: list[dict]) -> tuple[int, str]:
                         r.get("error"),
                     ),
                 )
-                inserted += 1
-            return inserted, ""
+        return len(rows), ""
     except Exception as e:
         return 0, f"{type(e).__name__}: {e}"
     finally:
@@ -722,55 +521,22 @@ def db_audit_insert_many(rows: list[dict]) -> tuple[int, str]:
             pass
 
 
-def db_audit_query(
-    *,
-    since: datetime | None = None,
-    until: datetime | None = None,
-    actor: str = "",
-    action: str = "",
-    scheme_id: int | None = None,
-    holder: str = "",
-    ok: str = "any",     # 'any' | 'ok' | 'err'
-    text: str = "",
-    limit: int = 500,
-) -> tuple[list[dict], str]:
+def db_audit_query(*, limit: int = 200) -> tuple[list[dict], str]:
     conn, err = _pg_connect()
     if err:
         return [], err
-    where = ["1=1"]
-    args: list[Any] = []
-    if since:
-        where.append("ts >= %s"); args.append(since)
-    if until:
-        where.append("ts <= %s"); args.append(until)
-    if actor:
-        where.append("actor ILIKE %s"); args.append(f"%{actor}%")
-    if action:
-        where.append("action = %s"); args.append(action)
-    if scheme_id:
-        where.append("scheme_id = %s"); args.append(int(scheme_id))
-    if holder:
-        where.append("(holder_param ILIKE %s OR holder_display ILIKE %s)")
-        args.extend([f"%{holder}%", f"%{holder}%"])
-    if ok == "ok":
-        where.append("ok = TRUE")
-    elif ok == "err":
-        where.append("ok = FALSE")
-    if text:
-        where.append("(COALESCE(error,'') ILIKE %s OR permission_key ILIKE %s OR scheme_name ILIKE %s)")
-        args.extend([f"%{text}%", f"%{text}%", f"%{text}%"])
-    sql = f"""
-        SELECT id, approval_id, ts, actor, action, scheme_id, scheme_name,
-               permission_key, holder_type, holder_param, holder_display,
-               ok, status_code, error
-        FROM jira_perm_audit
-        WHERE {' AND '.join(where)}
-        ORDER BY ts DESC LIMIT %s
-    """
-    args.append(int(limit))
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, args)
+            cur.execute(
+                """
+                SELECT id, ts, actor, action, scheme_id, scheme_name,
+                       permission_key, holder_type, holder_param, holder_display,
+                       ok, status_code, error
+                FROM jira_perm_audit
+                ORDER BY ts DESC LIMIT %s
+                """,
+                (int(limit),),
+            )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()], ""
     except Exception as e:
@@ -782,99 +548,8 @@ def db_audit_query(
             pass
 
 
-# --- Teams -----------------------------------------------------------------
-
-def db_teams_list() -> tuple[list[dict], str]:
-    conn, err = _pg_connect()
-    if err:
-        return [], err
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, description, members, created_by, created_at, updated_at
-                FROM jira_perm_teams ORDER BY name ASC
-                """
-            )
-            cols = [d[0] for d in cur.description]
-            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-            for r in rows:
-                v = r.get("members")
-                if isinstance(v, (str, bytes, bytearray)):
-                    try:
-                        r["members"] = json.loads(v)
-                    except Exception:
-                        r["members"] = []
-            return rows, ""
-    except Exception as e:
-        return [], f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def db_team_upsert(
-    *,
-    name: str,
-    description: str,
-    members: list[dict],
-    created_by: str,
-    team_id: int | None = None,
-) -> tuple[int | None, str]:
-    conn, err = _pg_connect()
-    if err:
-        return None, err
-    try:
-        with conn.cursor() as cur:
-            if team_id:
-                cur.execute(
-                    """
-                    UPDATE jira_perm_teams
-                    SET name = %s, description = %s, members = %s::jsonb, updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (name, description, _pg_json(members), team_id),
-                )
-                return team_id, ""
-            cur.execute(
-                """
-                INSERT INTO jira_perm_teams (name, description, members, created_by)
-                VALUES (%s, %s, %s::jsonb, %s)
-                RETURNING id
-                """,
-                (name, description, _pg_json(members), created_by),
-            )
-            return int(cur.fetchone()[0]), ""
-    except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def db_team_delete(team_id: int) -> tuple[bool, str]:
-    conn, err = _pg_connect()
-    if err:
-        return False, err
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM jira_perm_teams WHERE id = %s", (team_id,))
-        return True, ""
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
 # ---------------------------------------------------------------------------
-# Jira API — cached read helpers + write helper that surfaces server errors.
+# Jira API helpers
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _api() -> JiraAPI:
@@ -887,9 +562,8 @@ def _full(path: str) -> str:
 
 
 def _jira_write(method: str, path: str, **kwargs) -> tuple[bool, dict, int | None]:
-    """Write-path call: returns (ok, body, status) and never raises. We
-    keep the server's error body intact for accurate audit log entries
-    (Jira returns useful messages like 'permission already exists')."""
+    """Write path: returns (ok, body, status). Never raises. We keep the
+    server's error body intact so audit rows carry actionable failures."""
     api = _api()
     url = _full(path)
     try:
@@ -898,10 +572,8 @@ def _jira_write(method: str, path: str, **kwargs) -> tuple[bool, dict, int | Non
             body = r.json() if r.text else {}
         except ValueError:
             body = {"raw": r.text}
-        ok = 200 <= r.status_code < 300
-        return ok, body, r.status_code
+        return 200 <= r.status_code < 300, body, r.status_code
     except requests.exceptions.RequestException as e:
-        logger.error(f"Jira write error {method} {url}: {e}")
         return False, {"error": str(e)}, None
 
 
@@ -927,7 +599,7 @@ def fetch_scheme_detail(scheme_id: int) -> dict:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_all_permission_keys() -> list[dict]:
+def fetch_permission_catalog() -> list[dict]:
     res = _api().request("GET", _full("/rest/api/2/permissions"))
     if isinstance(res, dict) and "error" in res:
         return []
@@ -944,53 +616,15 @@ def fetch_all_permission_keys() -> list[dict]:
     return out
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_projects_for_scheme(scheme_id: int) -> list[dict]:
-    """Walk projects to find those bound to this scheme. Cached."""
-    out: list[dict] = []
-    start = 0
-    page = 50
-    while True:
-        res = _api().request(
-            "GET",
-            _full("/rest/api/2/project/search"),
-            params={"startAt": start, "maxResults": page},
-        )
-        if isinstance(res, dict) and "error" in res:
-            res2 = _api().request("GET", _full("/rest/api/2/project"))
-            if isinstance(res2, dict) and "error" in res2:
-                return []
-            projects = res2 if isinstance(res2, list) else []
-            for p in projects:
-                ps = _api().request("GET", _full(f"/rest/api/2/project/{p['key']}/permissionscheme"))
-                if isinstance(ps, dict) and int(ps.get("id") or -1) == int(scheme_id):
-                    out.append({"key": p["key"], "name": p.get("name") or p["key"]})
-            return out
-        values = res.get("values") or []
-        if not values:
-            break
-        for p in values:
-            ps = _api().request("GET", _full(f"/rest/api/2/project/{p['key']}/permissionscheme"))
-            if isinstance(ps, dict) and int(ps.get("id") or -1) == int(scheme_id):
-                out.append({"key": p["key"], "name": p.get("name") or p["key"]})
-        if res.get("isLast") or len(values) < page:
-            break
-        start += page
-    return out
-
-
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_all_project_scheme_bindings() -> dict[int, list[dict]]:
-    """One-shot pass: scheme_id → [{key, name}, …]. Cached aggressively
-    since walking /project is expensive — used by Overview and
-    Discrepancies tabs."""
+def fetch_scheme_to_projects() -> dict[int, list[dict]]:
+    """scheme_id → [{key, name}, …]. Walks /project/search once."""
     bindings: dict[int, list[dict]] = {}
     start = 0
     page = 50
     while True:
         res = _api().request(
-            "GET",
-            _full("/rest/api/2/project/search"),
+            "GET", _full("/rest/api/2/project/search"),
             params={"startAt": start, "maxResults": page},
         )
         if isinstance(res, dict) and "error" in res:
@@ -1025,8 +659,7 @@ def search_users(query: str, max_results: int = 30) -> list[dict]:
     if not q:
         return []
     res = _api().request(
-        "GET",
-        _full("/rest/api/2/user/picker"),
+        "GET", _full("/rest/api/2/user/picker"),
         params={"query": q, "maxResults": max_results, "showAvatar": False},
     )
     if isinstance(res, dict) and "error" in res:
@@ -1034,7 +667,7 @@ def search_users(query: str, max_results: int = 30) -> list[dict]:
     users = (res or {}).get("users") or []
     return [{
         "name": u.get("name") or u.get("key") or "",
-        "key": u.get("key") or u.get("name") or "",
+        "key":  u.get("key") or u.get("name") or "",
         "display": u.get("displayName") or u.get("name") or "",
         "email": u.get("emailAddress") or "",
     } for u in users]
@@ -1046,84 +679,94 @@ def search_groups(query: str, max_results: int = 30) -> list[dict]:
     if not q:
         return []
     res = _api().request(
-        "GET",
-        _full("/rest/api/2/groups/picker"),
+        "GET", _full("/rest/api/2/groups/picker"),
         params={"query": q, "maxResults": max_results},
     )
     if isinstance(res, dict) and "error" in res:
         return []
-    return [{"name": g.get("name", ""), "html": g.get("html", "")}
-            for g in (res or {}).get("groups") or []]
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_group_members(group_name: str, max_members: int = 200) -> list[str]:
-    """Return usernames in a group, capped at max_members. Used for
-    shadow-grant detection. Capped to keep huge groups from melting the
-    page."""
-    out: list[str] = []
-    start = 0
-    page = 50
-    while len(out) < max_members:
-        res = _api().request(
-            "GET",
-            _full("/rest/api/2/group/member"),
-            params={"groupname": group_name, "startAt": start, "maxResults": page},
-        )
-        if isinstance(res, dict) and "error" in res:
-            return out
-        values = res.get("values") or []
-        if not values:
-            break
-        for u in values:
-            n = u.get("name") or u.get("key") or ""
-            if n:
-                out.append(n)
-        if res.get("isLast") or len(values) < page:
-            break
-        start += page
-    return out
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def verify_user_exists(username: str) -> bool | None:
-    """True / False / None (couldn't tell). Used by orphan-holder check."""
-    if not username:
-        return None
-    res = _api().request("GET", _full("/rest/api/2/user"), params={"username": username})
-    if isinstance(res, dict) and "error" in res:
-        # 404 path arrives here too — distinguish by looking at the error
-        # string; we can't read status from the wrapper. Be conservative.
-        if "404" in str(res.get("error", "")):
-            return False
-        return None
-    return bool(res)
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def verify_group_exists(group_name: str) -> bool | None:
-    if not group_name:
-        return None
-    res = _api().request("GET", _full("/rest/api/2/group"), params={"groupname": group_name})
-    if isinstance(res, dict) and "error" in res:
-        if "404" in str(res.get("error", "")):
-            return False
-        return None
-    return bool(res)
+    return [{"name": g.get("name", "")} for g in (res or {}).get("groups") or []]
 
 
 def _invalidate_jira_cache():
     fetch_all_schemes.clear()
     fetch_scheme_detail.clear()
-    fetch_all_project_scheme_bindings.clear()
+    fetch_scheme_to_projects.clear()
 
 
 # ---------------------------------------------------------------------------
-# Domain model
+# RBAC / LDAP helpers
 # ---------------------------------------------------------------------------
-HOLDER_TYPES = ("user", "group")
+@st.cache_data(ttl=900, show_spinner=False)
+def all_roles() -> list[str]:
+    """Every distinct role name that appears anywhere in rbac.py."""
+    out: set[str] = set()
+    for v in VALID_GROUPS.values():
+        for r in (v or []):
+            if r:
+                out.add(str(r).strip())
+    for v in VALID_USERS.values():
+        for r in (v or []):
+            if r:
+                out.add(str(r).strip())
+    return sorted(out)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def groups_for_role(role: str) -> list[str]:
+    return sorted([g for g, rs in VALID_GROUPS.items() if role in (rs or [])])
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def users_for_role(role: str) -> list[str]:
+    return sorted([u for u, rs in VALID_USERS.items() if role in (rs or [])])
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ldap_user_info_safe(username: str) -> dict | None:
+    """LDAP user-info with a guard around any failure. None on miss/error."""
+    if not username or not _LDAP_AVAILABLE:
+        return None
+    try:
+        return _ldap_get_user_info(username)
+    except Exception as e:
+        logger.warning(f"LDAP get_user_info({username}) failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ldap_team_members_safe(group_cn: str) -> list[str]:
+    if not group_cn or not _LDAP_AVAILABLE:
+        return []
+    try:
+        return list(_ldap_get_team_members(group_cn) or [])
+    except Exception as e:
+        logger.warning(f"LDAP get_team_members({group_cn}) failed: {e}")
+        return []
+
+
+def roles_for_user(username: str) -> tuple[list[str], list[str]]:
+    """Return (roles, sources). `sources` is a short trace of how the
+    roles were derived — used in the UI to show provenance."""
+    roles: set[str] = set()
+    sources: list[str] = []
+    if username in VALID_USERS:
+        for r in VALID_USERS[username] or []:
+            roles.add(r)
+        sources.append(f"VALID_USERS[{username}] → {VALID_USERS[username]}")
+    info = ldap_user_info_safe(username)
+    if info:
+        for dn in (info.get("groups") or []):
+            cn = _extract_cn(dn)
+            if cn in VALID_GROUPS:
+                for r in VALID_GROUPS[cn] or []:
+                    roles.add(r)
+                sources.append(f"LDAP group {cn} → {VALID_GROUPS[cn]}")
+    return sorted(roles), sources
+
+
+# ---------------------------------------------------------------------------
+# Domain model + grant parser
+# ---------------------------------------------------------------------------
 @dataclass
 class Grant:
     scheme_id: int
@@ -1133,24 +776,6 @@ class Grant:
     holder_type: str
     holder_param: str
     holder_display: str
-
-    def matches_holder(self, htype: str, hparam: str) -> bool:
-        return self.holder_type == htype and self.holder_param == hparam
-
-
-@dataclass
-class PendingOp:
-    action: str
-    scheme_id: int
-    scheme_name: str
-    permission_key: str
-    holder_type: str
-    holder_param: str
-    holder_display: str
-    permission_id: int | None = None
-
-    def signature(self) -> tuple:
-        return (self.action, self.scheme_id, self.permission_key, self.holder_type, self.holder_param)
 
 
 def _parse_grants(scheme: dict) -> list[Grant]:
@@ -1172,246 +797,122 @@ def _parse_grants(scheme: dict) -> list[Grant]:
             scheme_id=sid, scheme_name=sname,
             permission_id=int(p.get("id") or 0),
             permission_key=str(p.get("permission") or ""),
-            holder_type=htype, holder_param=hparam, holder_display=str(display),
+            holder_type=htype, holder_param=hparam,
+            holder_display=str(display),
         ))
     return out
 
 
-def _all_grants_cached() -> tuple[list[Grant], list[dict]]:
-    """Return every grant on the instance plus the list of schemes. The
-    Overview, Discrepancies, and team-filter views all need this same
-    walk — done once per render to keep cost down."""
-    schemes = fetch_all_schemes()
-    grants: list[Grant] = []
-    for s in schemes:
+@st.cache_data(ttl=300, show_spinner=False)
+def all_grants() -> list[dict]:
+    """Every grant on the instance, returned as plain dicts so Streamlit's
+    cache layer can hash it. Converted back to Grant objects on read."""
+    out: list[dict] = []
+    for s in fetch_all_schemes():
         det = fetch_scheme_detail(int(s["id"]))
-        grants.extend(_parse_grants(det))
-    return grants, schemes
+        for g in _parse_grants(det):
+            out.append(g.__dict__.copy())
+    return out
+
+
+def _grants_as_objs(grants_dicts: list[dict]) -> list[Grant]:
+    return [Grant(**d) for d in grants_dicts]
+
+
+# ---------------------------------------------------------------------------
+# Inline actions: grant / revoke / batch revoke. Each writes its audit row
+# on completion (success or failure).
+# ---------------------------------------------------------------------------
+def do_grant(*, scheme_id: int, scheme_name: str, permission_key: str,
+             holder_type: str, holder_param: str, holder_display: str) -> tuple[bool, str]:
+    ok, body, status = _jira_write(
+        "POST",
+        f"/rest/api/2/permissionscheme/{int(scheme_id)}/permission",
+        json={"holder": {"type": holder_type, "parameter": holder_param},
+              "permission": permission_key},
+    )
+    err_str = None
+    if not ok:
+        e = body.get("errorMessages") or body.get("errors") or body.get("error") or body.get("raw")
+        err_str = (json.dumps(e, default=str) if not isinstance(e, str) else e)[:1000]
+    db_audit_insert([{
+        "actor": ACTOR, "action": "grant",
+        "scheme_id": scheme_id, "scheme_name": scheme_name,
+        "permission_key": permission_key,
+        "holder_type": holder_type, "holder_param": holder_param,
+        "holder_display": holder_display,
+        "ok": ok, "status_code": status, "error": err_str,
+    }])
+    _invalidate_jira_cache()
+    all_grants.clear()
+    return ok, err_str or ""
+
+
+def do_revoke(*, scheme_id: int, scheme_name: str, permission_id: int,
+              permission_key: str, holder_type: str, holder_param: str,
+              holder_display: str) -> tuple[bool, str]:
+    ok, body, status = _jira_write(
+        "DELETE",
+        f"/rest/api/2/permissionscheme/{int(scheme_id)}/permission/{int(permission_id)}",
+    )
+    err_str = None
+    if not ok:
+        e = body.get("errorMessages") or body.get("errors") or body.get("error") or body.get("raw")
+        err_str = (json.dumps(e, default=str) if not isinstance(e, str) else e)[:1000]
+    db_audit_insert([{
+        "actor": ACTOR, "action": "revoke",
+        "scheme_id": scheme_id, "scheme_name": scheme_name,
+        "permission_key": permission_key,
+        "holder_type": holder_type, "holder_param": holder_param,
+        "holder_display": holder_display,
+        "ok": ok, "status_code": status, "error": err_str,
+    }])
+    _invalidate_jira_cache()
+    all_grants.clear()
+    return ok, err_str or ""
+
+
+def do_batch_revoke(grants_to_revoke: list[Grant]) -> tuple[int, int]:
+    """Bulk-revoke without staging. Returns (ok, fail)."""
+    ok_n, fail_n = 0, 0
+    audit_rows: list[dict] = []
+    for g in grants_to_revoke:
+        ok, body, status = _jira_write(
+            "DELETE",
+            f"/rest/api/2/permissionscheme/{int(g.scheme_id)}/permission/{int(g.permission_id)}",
+        )
+        err_str = None
+        if not ok:
+            e = body.get("errorMessages") or body.get("errors") or body.get("error") or body.get("raw")
+            err_str = (json.dumps(e, default=str) if not isinstance(e, str) else e)[:1000]
+            fail_n += 1
+        else:
+            ok_n += 1
+        audit_rows.append({
+            "actor": ACTOR, "action": "revoke",
+            "scheme_id": g.scheme_id, "scheme_name": g.scheme_name,
+            "permission_key": g.permission_key,
+            "holder_type": g.holder_type, "holder_param": g.holder_param,
+            "holder_display": g.holder_display,
+            "ok": ok, "status_code": status, "error": err_str,
+        })
+    db_audit_insert(audit_rows)
+    _invalidate_jira_cache()
+    all_grants.clear()
+    return ok_n, fail_n
 
 
 # ---------------------------------------------------------------------------
 # Session state init
 # ---------------------------------------------------------------------------
 def _ss_init():
-    st.session_state.setdefault("jp_pending", [])
-    st.session_state.setdefault("jp_active_team_id", None)
-    st.session_state.setdefault("jp_approval_mode", "self")  # self | two-person
-    st.session_state.setdefault("jp_last_submit_id", None)
+    st.session_state.setdefault("flt_projects", [])
+    st.session_state.setdefault("flt_schemes", [])
+    st.session_state.setdefault("flt_roles", [])
+    st.session_state.setdefault("flt_holder", None)
+    st.session_state.setdefault("focus_holder", None)  # the holder currently in the lens
 
 _ss_init()
-
-
-# ---------------------------------------------------------------------------
-# Pending queue helpers
-# ---------------------------------------------------------------------------
-def _queue(op: PendingOp) -> bool:
-    sig = op.signature()
-    for existing in st.session_state["jp_pending"]:
-        if tuple(existing["_sig"]) == sig:
-            return False
-    rec = asdict(op)
-    rec["_sig"] = list(sig)
-    st.session_state["jp_pending"].append(rec)
-    return True
-
-
-def _clear_pending():
-    st.session_state["jp_pending"] = []
-
-
-def _execute_approved_request(approval: dict) -> tuple[int, int]:
-    """Walk an approved request's ops list, hit Jira, write audit rows.
-    Returns (ok_count, fail_count). Marks the approval as
-    executed/partial/failed depending on the outcome."""
-    ops = approval.get("ops") or []
-    ok_count = 0
-    fail_count = 0
-    audit_rows: list[dict] = []
-    touched_schemes: set[int] = set()
-    for o in ops:
-        action = o.get("action")
-        scheme_id = int(o.get("scheme_id") or 0)
-        permission_key = str(o.get("permission_key") or "")
-        holder_type = str(o.get("holder_type") or "")
-        holder_param = str(o.get("holder_param") or "")
-        if action == "grant":
-            ok, body, status = _jira_write(
-                "POST",
-                f"/rest/api/2/permissionscheme/{scheme_id}/permission",
-                json={
-                    "holder": {"type": holder_type, "parameter": holder_param},
-                    "permission": permission_key,
-                },
-            )
-        elif action == "revoke":
-            pid = o.get("permission_id")
-            if not pid:
-                ok, body, status = False, {"error": "missing permission_id"}, None
-            else:
-                ok, body, status = _jira_write(
-                    "DELETE",
-                    f"/rest/api/2/permissionscheme/{scheme_id}/permission/{int(pid)}",
-                )
-        else:
-            ok, body, status = False, {"error": f"unknown action {action}"}, None
-
-        if not ok:
-            err = (body.get("errorMessages") or body.get("errors") or
-                   body.get("error") or body.get("raw") or body)
-            err_str = json.dumps(err, default=str)[:1000] if not isinstance(err, str) else err[:1000]
-        else:
-            err_str = None
-
-        audit_rows.append({
-            "approval_id": approval.get("id"),
-            "actor": ACTOR,
-            "action": action,
-            "scheme_id": scheme_id,
-            "scheme_name": o.get("scheme_name"),
-            "permission_key": permission_key,
-            "holder_type": holder_type,
-            "holder_param": holder_param,
-            "holder_display": o.get("holder_display"),
-            "ok": bool(ok),
-            "status_code": status,
-            "error": err_str,
-        })
-        if ok:
-            ok_count += 1
-        else:
-            fail_count += 1
-        touched_schemes.add(scheme_id)
-
-    n_inserted, audit_err = db_audit_insert_many(audit_rows)
-    if audit_err:
-        st.error(f"Audit insert error: {audit_err}")
-
-    final = ("executed" if fail_count == 0
-             else ("failed" if ok_count == 0 else "partial"))
-    db_mark_executed(int(approval["id"]), final_status=final, exec_summary={
-        "ok": ok_count, "fail": fail_count, "audit_rows": n_inserted,
-    })
-    for sid in touched_schemes:
-        fetch_scheme_detail.clear()
-    return ok_count, fail_count
-
-
-# ---------------------------------------------------------------------------
-# Team filter — resolves a saved team to a list of expanded holder targets
-# ---------------------------------------------------------------------------
-def _team_member_predicate(members: list[dict]):
-    """Return a predicate(grant) → bool that matches a grant against the
-    team members. Users match by username; groups match by group name OR
-    if a user-member is a member of the granted group (shallow check)."""
-    user_names = {m["name"] for m in members if m.get("type") == "user"}
-    group_names = {m["name"] for m in members if m.get("type") == "group"}
-
-    def pred(g: Grant) -> bool:
-        if g.holder_type == "user" and g.holder_param in user_names:
-            return True
-        if g.holder_type == "group" and g.holder_param in group_names:
-            return True
-        return False
-    return pred
-
-
-def _parse_team_members(raw: str) -> list[dict]:
-    """One per line; `g:name` = group, `u:name` or bare = user. Dedup."""
-    out: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for ln in (raw or "").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        if ln.lower().startswith("g:"):
-            mtype, mname = "group", ln[2:].strip()
-        elif ln.lower().startswith("u:"):
-            mtype, mname = "user", ln[2:].strip()
-        else:
-            mtype, mname = "user", ln
-        if not mname:
-            continue
-        key = (mtype, mname)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"type": mtype, "name": mname})
-    return out
-
-
-def _team_form(team: dict, admin: bool):
-    """Inline edit form for an existing team."""
-    with st.form(f"edit_team_{team['id']}", clear_on_submit=False):
-        st.markdown(f"**Editing `{team['name']}`**")
-        n1, n2 = st.columns([1, 2])
-        new_name = n1.text_input("Name", value=team["name"], disabled=not admin, key=f"ten_{team['id']}")
-        new_desc = n2.text_input("Description", value=team.get("description") or "", disabled=not admin, key=f"ted_{team['id']}")
-        existing = team.get("members") or []
-        prefilled = "\n".join(
-            ("g:" if m.get("type") == "group" else "") + m.get("name", "") for m in existing
-        )
-        new_raw = st.text_area("Members", value=prefilled, height=160, disabled=not admin, key=f"tem_{team['id']}")
-        c1, c2 = st.columns(2)
-        save = c1.form_submit_button("Save changes", type="primary", disabled=not admin)
-        cancel = c2.form_submit_button("Cancel")
-        if save:
-            members = _parse_team_members(new_raw)
-            if not new_name.strip() or not members:
-                st.error("Name and at least one member required.")
-            else:
-                _, err = db_team_upsert(
-                    name=new_name.strip(),
-                    description=new_desc.strip(),
-                    members=members,
-                    created_by=team["created_by"],
-                    team_id=int(team["id"]),
-                )
-                if err:
-                    st.error(err)
-                else:
-                    st.session_state[f"team_edit_open_{team['id']}"] = False
-                    st.success("Updated.")
-                    st.rerun()
-        if cancel:
-            st.session_state[f"team_edit_open_{team['id']}"] = False
-            st.rerun()
-
-
-# ---------------------------------------------------------------------------
-# Holder picker — sticky across reruns
-# ---------------------------------------------------------------------------
-def holder_picker(key_prefix: str, *, label: str = "Target holder") -> dict | None:
-    cols = st.columns([1, 3])
-    with cols[0]:
-        htype = st.selectbox(
-            "Type",
-            HOLDER_TYPES,
-            key=f"{key_prefix}_type",
-            format_func=lambda x: {"user": "👤 User", "group": "👥 Group"}[x],
-        )
-    with cols[1]:
-        query = st.text_input(
-            label, key=f"{key_prefix}_query",
-            placeholder="Search by name… (min 2 chars)",
-        )
-    if not query or len(query.strip()) < 2:
-        return None
-
-    if htype == "user":
-        results = search_users(query)
-        labels = {f"{u['display']}  ⟨{u['name']}⟩{('  · ' + u['email']) if u['email'] else ''}": u for u in results}
-    else:
-        results = search_groups(query)
-        labels = {g["name"]: g for g in results}
-
-    if not labels:
-        st.caption(f"No matching {htype}s.")
-        return None
-    pick = st.selectbox("Select", list(labels.keys()), key=f"{key_prefix}_pick")
-    chosen = labels[pick]
-    if htype == "user":
-        return {"type": "user", "param": chosen["name"], "display": chosen["display"] or chosen["name"]}
-    return {"type": "group", "param": chosen["name"], "display": chosen["name"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1424,1487 +925,1233 @@ except Exception as e:
     st.error(f"Jira API initialization failed: {e}")
     st.stop()
 
+rbac_chip = "rbac ✓" if _RBAC_AVAILABLE else "rbac ⚠ stub"
+ldap_chip = "ldap ✓" if _LDAP_AVAILABLE else "ldap ⚠ stub"
+
 st.markdown(
     f"""
 <div class="jp-header">
-  <h1>🛡️ Jira Permission Schemes</h1>
-  <span class="jp-host">{_host}</span>
-  <span class="jp-actor">👤 {ACTOR}{'  · admin' if ADMIN else ''}</span>
+  <h1>🛡️ Jira Access Lens</h1>
+  <span class="jp-chip">{_host}</span>
+  <span class="jp-chip jp-actor">👤 {ACTOR}{' · admin' if ADMIN else ''}</span>
+  <span class="jp-chip">{rbac_chip}</span>
+  <span class="jp-chip">{ldap_chip}</span>
   <span style="margin-left:auto;font-size:.78rem;color:var(--jp-text-mute);">
-    Mass console · approval-gated · DB-audited
+    role-aware · inline confirm · audited
   </span>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-# DB bootstrap — best-effort; surface failure non-fatally so read-only Jira
-# views still work even if Postgres is unreachable.
 _schema_ok, _schema_err = _bootstrap_schema()
 if not _schema_ok:
     st.warning(
-        f"📦 Postgres unavailable — approvals, audit history, and team "
-        f"definitions won't persist this session. ({_schema_err})"
+        f"📦 Audit table unavailable — Jira reads work but writes won't be "
+        f"recorded. ({_schema_err})"
     )
 
 if not ADMIN:
-    st.warning(
-        "🔒 This page is **admin-only** for writes. You can browse, search, "
-        "and view stats / discrepancies in read-only mode."
-    )
+    st.warning("🔒 Read-only — admin role required to grant/revoke.")
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — minimal rail. Connection status, refresh, approval mode, active
-# team filter, pending op count.
+# Sidebar — minimal
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### Connection")
     st.caption(f"Jira: `{_host}`")
     pg_creds = _postgres_creds()
-    pg_label = f"`{pg_creds.get('host','—')}/{pg_creds.get('database','—')}`" if pg_creds else "_(not configured)_"
+    pg_label = f"`{pg_creds.get('host','—')}/{pg_creds.get('database','—')}`" if pg_creds else "_(none)_"
     st.caption(f"Postgres: {pg_label}")
-    if st.button("🔄 Refresh all caches", use_container_width=True):
-        fetch_all_schemes.clear()
-        fetch_scheme_detail.clear()
-        fetch_all_permission_keys.clear()
-        fetch_projects_for_scheme.clear()
-        fetch_all_project_scheme_bindings.clear()
-        search_users.clear()
-        search_groups.clear()
-        fetch_group_members.clear()
-        verify_user_exists.clear()
-        verify_group_exists.clear()
-        _postgres_creds.clear()
-        st.success("Caches cleared.")
+    st.caption(f"RBAC: {'loaded' if _RBAC_AVAILABLE else 'stubbed'} "
+               f"({len(VALID_GROUPS)} groups · {len(VALID_USERS)} users)")
+    st.caption(f"LDAP:  {'loaded' if _LDAP_AVAILABLE else 'stubbed'}")
+    if st.button("🔄 Refresh caches", use_container_width=True):
+        for fn in (fetch_all_schemes, fetch_scheme_detail, fetch_permission_catalog,
+                   fetch_scheme_to_projects, search_users, search_groups,
+                   ldap_user_info_safe, ldap_team_members_safe,
+                   all_grants, all_roles, groups_for_role, users_for_role):
+            try:
+                fn.clear()
+            except Exception:
+                pass
+        st.success("Cleared.")
         st.rerun()
 
-    st.markdown("---")
-    st.markdown("### Approval mode")
-    st.session_state["jp_approval_mode"] = st.radio(
-        "Who approves?",
-        options=["self", "two-person"],
-        index=0 if st.session_state["jp_approval_mode"] == "self" else 1,
-        format_func=lambda x: "Self-approve" if x == "self" else "Two-person (separate approver)",
-        help=(
-            "Self-approve: you submit and approve in one step (typed confirm).  "
-            "Two-person: the request lands in the Approvals tab; a *different* "
-            "admin must approve before any Jira call is made."
-        ),
-        key="jp_approval_mode_radio",
-    )
 
-    st.markdown("---")
-    st.markdown("### Team filter")
-    teams_list, teams_err = db_teams_list() if _schema_ok else ([], "schema not ready")
-    if teams_err and _schema_ok:
-        st.caption(f"_team load failed: {teams_err}_")
-    team_options = {0: "— None (show everything)"}
-    for t in teams_list:
-        team_options[int(t["id"])] = t["name"]
-    cur_pick = int(st.session_state.get("jp_active_team_id") or 0)
-    if cur_pick not in team_options:
-        cur_pick = 0
-    picked = st.selectbox(
-        "Apply team filter to Overview / Browse / Locate",
-        list(team_options.keys()),
-        index=list(team_options.keys()).index(cur_pick),
-        format_func=lambda k: team_options[k],
-        key="jp_active_team_sel",
-    )
-    st.session_state["jp_active_team_id"] = picked if picked else None
+# ---------------------------------------------------------------------------
+# Load core data
+# ---------------------------------------------------------------------------
+with st.spinner("Loading schemes & grants…"):
+    schemes = fetch_all_schemes()
+    if not schemes:
+        st.markdown(
+            '<div class="jp-empty">No permission schemes returned. '
+            'Check Vault config / Jira reachability.</div>',
+            unsafe_allow_html=True,
+        )
+        st.stop()
+    schemes_by_id: dict[int, dict] = {int(s["id"]): s for s in schemes if s.get("id") is not None}
+    perm_catalog = fetch_permission_catalog()
+    perm_name_by_key = {p["key"]: p["name"] for p in perm_catalog}
+    perm_desc_by_key = {p["key"]: p["description"] for p in perm_catalog}
+    perm_keys_sorted = [p["key"] for p in perm_catalog]
+    scheme_to_projects = fetch_scheme_to_projects()
+    grants_all = _grants_as_objs(all_grants())
 
-    st.markdown("---")
-    pending_n = len(st.session_state["jp_pending"])
+
+# ---------------------------------------------------------------------------
+# Project → scheme reverse map (used when filtering by project)
+# ---------------------------------------------------------------------------
+project_to_scheme_id: dict[str, int] = {}
+for sid, projs in scheme_to_projects.items():
+    for p in projs:
+        project_to_scheme_id[p["key"]] = sid
+
+all_project_keys = sorted(project_to_scheme_id.keys())
+all_scheme_names = [(int(s["id"]), s["name"]) for s in schemes]
+
+
+# ---------------------------------------------------------------------------
+# Stray-access analysis — per holder + per grant
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=300, show_spinner=False)
+def _build_index(_grants_dicts: list[dict]) -> dict:
+    """Compute several lookup structures over the grant set, once per
+    refresh. Cached against the raw dict list so Streamlit can hash it."""
+    g_objs = _grants_as_objs(_grants_dicts)
+
+    grants_by_user: dict[str, list[Grant]] = {}
+    grants_by_group: dict[str, list[Grant]] = {}
+    grants_by_scheme: dict[int, list[Grant]] = {}
+
+    for g in g_objs:
+        grants_by_scheme.setdefault(g.scheme_id, []).append(g)
+        if g.holder_type == "user":
+            grants_by_user.setdefault(g.holder_param, []).append(g)
+        elif g.holder_type == "group":
+            grants_by_group.setdefault(g.holder_param, []).append(g)
+
+    # Distinct usernames + groups that appear anywhere as a Jira holder
+    user_holders = sorted(grants_by_user.keys())
+    group_holders = sorted(grants_by_group.keys())
+
+    return {
+        "grants_by_user": grants_by_user,
+        "grants_by_group": grants_by_group,
+        "grants_by_scheme": grants_by_scheme,
+        "user_holders": user_holders,
+        "group_holders": group_holders,
+    }
+
+
+index = _build_index(all_grants())
+
+
+def membership_of_group(group_name: str) -> set[str]:
+    """sAMAccountNames in an LDAP group. Maps Jira group CN → LDAP team
+    members. Empty set if the group is unknown / unreachable."""
+    return set(ldap_team_members_safe(group_name))
+
+
+def user_membership_groups(username: str) -> set[str]:
+    """LDAP group CNs the user belongs to."""
+    info = ldap_user_info_safe(username)
+    if not info:
+        return set()
+    return {_extract_cn(dn) for dn in (info.get("groups") or [])}
+
+
+def detect_stray_for_user(username: str, grants: list[Grant]) -> list[dict]:
+    """For each direct user grant the user has, work out whether they also
+    receive the same permission on the same scheme via group membership.
+
+    Returns a list of dicts, each describing one direct grant with:
+      - grant (Grant)
+      - covered_by_groups: list[str] — group names that ALSO grant the same
+        scheme+permission and contain this user (so revoking the direct
+        grant doesn't actually remove access).
+      - severity: 'shadow' (covered) | 'exclusive' (would remove access)
+    """
+    user_groups = user_membership_groups(username)
+    direct_grants = [g for g in grants if g.holder_type == "user"]
+
+    flags: list[dict] = []
+    # Build a lookup: scheme+permission → list of group grants
+    group_grants_index: dict[tuple[int, str], list[Grant]] = {}
+    for g in grants_all:
+        if g.holder_type == "group":
+            group_grants_index.setdefault((g.scheme_id, g.permission_key), []).append(g)
+
+    for dg in direct_grants:
+        candidates = group_grants_index.get((dg.scheme_id, dg.permission_key), [])
+        covered = [c.holder_param for c in candidates if c.holder_param in user_groups]
+        flags.append({
+            "grant": dg,
+            "covered_by_groups": covered,
+            "severity": "shadow" if covered else "exclusive",
+        })
+    return flags
+
+
+def explain_group_grant(group_name: str, username: str) -> str:
+    """Tell the UI how a group grant connects to a specific user."""
+    members = membership_of_group(group_name)
+    if not members:
+        return "group has no LDAP members or LDAP lookup failed"
+    if username in members:
+        return f"user is a member of {group_name} in LDAP"
+    return f"user is NOT in {group_name} in LDAP — this grant doesn't actually apply"
+
+
+# ---------------------------------------------------------------------------
+# Filter resolution — what does the current filter set narrow down to?
+# ---------------------------------------------------------------------------
+def resolve_filter() -> dict:
+    """Translate the active filter selections into a single canonical
+    result — schemes_in_view, users_in_view, groups_in_view, and a label
+    set for the chip strip."""
+    flt_projects: list[str] = list(st.session_state["flt_projects"] or [])
+    flt_schemes: list[int] = list(st.session_state["flt_schemes"] or [])
+    flt_roles: list[str] = list(st.session_state["flt_roles"] or [])
+    flt_holder: dict | None = st.session_state["flt_holder"]
+
+    # Schemes-in-view
+    schemes_set: set[int] = set(schemes_by_id.keys())
+    if flt_projects:
+        schemes_set &= {project_to_scheme_id[p] for p in flt_projects if p in project_to_scheme_id}
+    if flt_schemes:
+        schemes_set &= set(flt_schemes)
+
+    # Users/groups implied by chosen roles
+    users_by_role: set[str] = set()
+    groups_by_role: set[str] = set()
+    for role in flt_roles:
+        users_by_role.update(users_for_role(role))
+        groups_by_role.update(groups_for_role(role))
+
+    # If a single holder is picked, intersect with that
+    pinned_user = None
+    pinned_group = None
+    if flt_holder:
+        if flt_holder["type"] == "user":
+            pinned_user = flt_holder["param"]
+        elif flt_holder["type"] == "group":
+            pinned_group = flt_holder["param"]
+
+    chips: list[str] = []
+    if flt_projects:
+        chips.append(f"<span class='jp-pill jp-info'>projects: {', '.join(flt_projects[:5])}{'…' if len(flt_projects)>5 else ''}</span>")
+    if flt_schemes:
+        chips.append(f"<span class='jp-pill jp-info'>schemes: {len(flt_schemes)}</span>")
+    if flt_roles:
+        chips.append(f"<span class='jp-pill jp-role'>roles: {', '.join(flt_roles)}</span>")
+    if flt_holder:
+        icon = "👤" if flt_holder["type"] == "user" else "👥"
+        chips.append(f"<span class='jp-pill jp-{flt_holder['type']}'>{icon} {flt_holder['display']}</span>")
+
+    return {
+        "schemes_in_view": schemes_set,
+        "users_by_role": users_by_role,
+        "groups_by_role": groups_by_role,
+        "pinned_user": pinned_user,
+        "pinned_group": pinned_group,
+        "chips_html": " ".join(chips),
+    }
+
+
+def grants_in_view(filt: dict) -> list[Grant]:
+    out = []
+    for g in grants_all:
+        if g.scheme_id not in filt["schemes_in_view"]:
+            continue
+        if filt["pinned_user"]:
+            # Show grants where this user is involved — direct OR via a group they belong to
+            if g.holder_type == "user" and g.holder_param == filt["pinned_user"]:
+                pass
+            elif g.holder_type == "group" and filt["pinned_user"] in membership_of_group(g.holder_param):
+                pass
+            else:
+                continue
+        if filt["pinned_group"]:
+            if not (g.holder_type == "group" and g.holder_param == filt["pinned_group"]):
+                continue
+        if filt["users_by_role"] or filt["groups_by_role"]:
+            # Role-scoped: keep direct-user grants for role-users, AND group
+            # grants whose group has the role.
+            if g.holder_type == "user" and g.holder_param in filt["users_by_role"]:
+                pass
+            elif g.holder_type == "group" and g.holder_param in filt["groups_by_role"]:
+                pass
+            else:
+                continue
+        out.append(g)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Filter bar — popovers wired into the stat strip
+# ---------------------------------------------------------------------------
+st.markdown("<div class='jp-filterbar'>", unsafe_allow_html=True)
+
+ftcols = st.columns([1, 1, 1, 1, 1, 3])
+
+with ftcols[0]:
+    with st.popover("📁 Projects", use_container_width=True):
+        sel = st.multiselect(
+            "Filter to projects (intersect with their bound schemes)",
+            all_project_keys,
+            default=st.session_state["flt_projects"],
+            key="flt_projects_pop",
+        )
+        if sel != st.session_state["flt_projects"]:
+            st.session_state["flt_projects"] = sel
+            st.rerun()
+
+with ftcols[1]:
+    with st.popover("📋 Schemes", use_container_width=True):
+        scheme_options = {sid: name for sid, name in all_scheme_names}
+        sel = st.multiselect(
+            "Filter to schemes",
+            list(scheme_options.keys()),
+            default=st.session_state["flt_schemes"],
+            format_func=lambda sid: f"{scheme_options[sid]} (id {sid})",
+            key="flt_schemes_pop",
+        )
+        if sel != st.session_state["flt_schemes"]:
+            st.session_state["flt_schemes"] = sel
+            st.rerun()
+
+with ftcols[2]:
+    with st.popover("🎭 Roles", use_container_width=True):
+        roles_known = all_roles()
+        if not roles_known:
+            st.caption("_(no roles defined in utils.rbac — running with empty stub)_")
+        sel = st.multiselect(
+            "Filter to RBAC roles (from utils.rbac)",
+            roles_known,
+            default=st.session_state["flt_roles"],
+            key="flt_roles_pop",
+        )
+        if sel != st.session_state["flt_roles"]:
+            st.session_state["flt_roles"] = sel
+            st.rerun()
+
+with ftcols[3]:
+    with st.popover("👤 Holder", use_container_width=True):
+        st.caption("Pin a single user or group to scope the view.")
+        ht = st.radio(
+            "Type", options=["user", "group"], horizontal=True,
+            key="flt_holder_type_pop",
+        )
+        q = st.text_input("Search…", key="flt_holder_q_pop")
+        if q and len(q.strip()) >= 2:
+            if ht == "user":
+                results = search_users(q)
+                opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in results}
+            else:
+                results = search_groups(q)
+                opts = {r["name"]: r for r in results}
+            if opts:
+                pick = st.selectbox("Select", list(opts.keys()), key="flt_holder_pick_pop")
+                chosen = opts[pick]
+                if st.button("Pin holder", key="flt_holder_pin_btn"):
+                    if ht == "user":
+                        st.session_state["flt_holder"] = {
+                            "type": "user", "param": chosen["name"],
+                            "display": chosen["display"] or chosen["name"],
+                        }
+                    else:
+                        st.session_state["flt_holder"] = {
+                            "type": "group", "param": chosen["name"],
+                            "display": chosen["name"],
+                        }
+                    st.rerun()
+            else:
+                st.caption(f"No matching {ht}s.")
+        if st.session_state["flt_holder"]:
+            if st.button("Unpin", key="flt_holder_unpin_btn"):
+                st.session_state["flt_holder"] = None
+                st.rerun()
+
+with ftcols[4]:
+    if st.button("❎ Reset", use_container_width=True):
+        st.session_state["flt_projects"] = []
+        st.session_state["flt_schemes"] = []
+        st.session_state["flt_roles"] = []
+        st.session_state["flt_holder"] = None
+        st.rerun()
+
+with ftcols[5]:
+    # Quick grant popover here — keeps the primary "create access" action
+    # on the same surface as the filters.
+    with st.popover("➕ Quick grant", use_container_width=True, disabled=not ADMIN):
+        st.markdown("**Grant a permission to a holder**")
+        qg_type = st.radio("Holder type", ["user", "group"], horizontal=True, key="qg_type")
+        qg_q = st.text_input("Search holder", key="qg_q")
+        qg_holder = None
+        if qg_q and len(qg_q.strip()) >= 2:
+            if qg_type == "user":
+                results = search_users(qg_q)
+                opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in results}
+            else:
+                results = search_groups(qg_q)
+                opts = {r["name"]: r for r in results}
+            if opts:
+                pick = st.selectbox("Holder", list(opts.keys()), key="qg_pick")
+                qg_holder = opts[pick]
+        qg_scheme = st.selectbox(
+            "Scheme", list(schemes_by_id.keys()),
+            format_func=lambda sid: f"{schemes_by_id[sid]['name']} (id {sid})",
+            key="qg_scheme",
+        )
+        qg_perm = st.selectbox(
+            "Permission", perm_keys_sorted,
+            format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩",
+            key="qg_perm",
+        )
+        if qg_holder:
+            display = (qg_holder.get("display") or qg_holder.get("name") or "")
+            param = qg_holder["name"]
+            st.markdown(
+                f"<div class='jp-banner jp-banner-info'>"
+                f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{qg_perm}</span> "
+                f"to <b>{qg_type}</b> <b>{display}</b> ⟨{param}⟩ "
+                f"on scheme <b>{schemes_by_id[qg_scheme]['name']}</b>."
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("✅ Apply grant", type="primary", key="qg_apply", disabled=not ADMIN):
+                ok, err = do_grant(
+                    scheme_id=qg_scheme,
+                    scheme_name=schemes_by_id[qg_scheme]["name"],
+                    permission_key=qg_perm,
+                    holder_type=qg_type, holder_param=param,
+                    holder_display=display,
+                )
+                if ok:
+                    st.success("Granted.")
+                    st.rerun()
+                else:
+                    st.error(err or "Grant failed.")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# Active filter chip line
+filt = resolve_filter()
+if filt["chips_html"]:
     st.markdown(
-        f"<div style='font-size:.85rem;color:var(--jp-text-dim);'>"
-        f"Pending draft ops: <b>{pending_n}</b><br>"
+        f"<div style='margin-top:-.4rem;margin-bottom:.7rem;'>{filt['chips_html']}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# KPI strip — responds to the filter set
+# ---------------------------------------------------------------------------
+view_grants = grants_in_view(filt)
+v_users = sorted({g.holder_param for g in view_grants if g.holder_type == "user"})
+v_groups = sorted({g.holder_param for g in view_grants if g.holder_type == "group"})
+v_schemes = sorted({g.scheme_id for g in view_grants})
+v_projects: set[str] = set()
+for sid in v_schemes:
+    for p in scheme_to_projects.get(sid, []):
+        v_projects.add(p["key"])
+
+# Stray = direct user grants in the view
+stray_grants = [g for g in view_grants if g.holder_type == "user"]
+
+kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
+def _kpi(col, label, num, sub, klass):
+    col.markdown(
+        f"<div class='jp-kpi {klass}'>"
+        f"<div class='jp-kpi-label'>{label}</div>"
+        f"<div class='jp-kpi-num'>{num:,}</div>"
+        f"<div class='jp-kpi-sub'>{sub}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
-    if pending_n and st.button("Clear pending draft", use_container_width=True):
-        _clear_pending()
-        st.rerun()
+
+_kpi(kc1, "Users",      len(v_users),    "distinct direct holders",          "jp-kpi-purple")
+_kpi(kc2, "Groups",     len(v_groups),   "distinct group holders",           "jp-kpi-teal")
+_kpi(kc3, "Schemes",    len(v_schemes),  "in current filter set",            "jp-kpi-accent")
+_kpi(kc4, "Projects",   len(v_projects), "bound to those schemes",           "jp-kpi-amber")
+_kpi(kc5, "Grants",     len(view_grants), "total in view",                    "jp-kpi-green")
+_kpi(kc6, "Stray",      len(stray_grants),
+     "direct-user grants (policy is by-group)",
+     "jp-kpi-red" if stray_grants else "jp-kpi-green")
 
 
 # ---------------------------------------------------------------------------
-# Load core data once per rerun.
+# Stray summary banner — opens an expander listing all of them with batch fix
 # ---------------------------------------------------------------------------
-schemes = fetch_all_schemes()
-schemes_by_id: dict[int, dict] = {int(s["id"]): s for s in schemes if s.get("id") is not None}
-perm_catalog = fetch_all_permission_keys()
-perm_keys_sorted = [p["key"] for p in perm_catalog]
-perm_name_by_key = {p["key"]: p["name"] for p in perm_catalog}
-perm_desc_by_key = {p["key"]: p["description"] for p in perm_catalog}
-
-if not schemes:
-    st.markdown(
-        '<div class="jp-empty">No permission schemes returned. '
-        'Check Vault config / Jira reachability.</div>',
-        unsafe_allow_html=True,
-    )
-    st.stop()
-
-# Resolve active team (if any) once per rerun.
-_active_team: dict | None = None
-_team_pred = None
-if st.session_state.get("jp_active_team_id"):
-    for t in teams_list:
-        if int(t["id"]) == int(st.session_state["jp_active_team_id"]):
-            _active_team = t
-            _team_pred = _team_member_predicate(t.get("members") or [])
-            break
-
-
-# ---------------------------------------------------------------------------
-# Tabs
-# ---------------------------------------------------------------------------
-TABS = [
-    "📊 Overview",
-    "🔭 Browse",
-    "🔍 Discrepancies",
-    "👥 Teams",
-    "➕ Grant",
-    "➖ Revoke",
-    "⇄ Copy",
-    "🔎 Locate",
-    "🔐 Approvals",
-    "📋 Audit",
-]
-(
-    tab_overview, tab_browse, tab_disc, tab_teams,
-    tab_grant, tab_revoke, tab_copy, tab_search,
-    tab_approvals, tab_audit,
-) = st.tabs(TABS)
-
-
-# ===========================================================================
-# Tab: Overview — instance-wide stats. Pulls the full grant set once and
-# slices it every which way. Filters by active team if one is selected.
-# ===========================================================================
-with tab_overview:
-    st.markdown("##### Instance-wide permissions overview")
-    sub = (
-        f"Filtered by team **{_active_team['name']}**"
-        if _active_team else "Showing every scheme on the instance"
-    )
-    st.caption(sub)
-
-    with st.spinner("Aggregating grants across schemes…"):
-        all_grants, _ = _all_grants_cached()
-        bindings = fetch_all_project_scheme_bindings()
-
-    # Apply team filter to the grant set
-    if _team_pred:
-        grants_view = [g for g in all_grants if _team_pred(g)]
-    else:
-        grants_view = all_grants
-
-    n_schemes = len(schemes)
-    n_grants = len(grants_view)
-    user_holders = {g.holder_param for g in grants_view if g.holder_type == "user"}
-    group_holders = {g.holder_param for g in grants_view if g.holder_type == "group"}
-    role_holders = {g.holder_param for g in grants_view if g.holder_type == "projectRole"}
-    special_holders = {g.holder_type for g in grants_view if g.holder_type not in ("user", "group", "projectRole")}
-    n_projects_total = sum(len(v) for v in bindings.values())
-    n_schemes_bound = sum(1 for sid in schemes_by_id if bindings.get(sid))
-
-    # ── KPI cards ───────────────────────────────────────────────────────
-    c1, c2, c3, c4, c5 = st.columns(5)
-    cards = [
-        (c1, "Permission schemes", n_schemes, f"{n_schemes_bound} bound to ≥1 project", "jp-stat-accent"),
-        (c2, "Total grants", n_grants, f"avg {n_grants / max(n_schemes,1):.1f} per scheme", "jp-stat-green"),
-        (c3, "Distinct users", len(user_holders), "named user holders", "jp-stat-purple"),
-        (c4, "Distinct groups", len(group_holders), "group holders", "jp-stat-teal"),
-        (c5, "Projects covered", n_projects_total, f"{len(bindings)} schemes have ≥1 project", "jp-stat-amber"),
-    ]
-    for col, label, num, sub, klass in cards:
-        col.markdown(
-            f"<div class='jp-stat {klass}'>"
-            f"<div class='jp-stat-label'>{label}</div>"
-            f"<div class='jp-stat-num'>{num:,}</div>"
-            f"<div class='jp-stat-sub'>{sub}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("")
-
-    # ── Holder-type breakdown chart ─────────────────────────────────────
-    type_counts: dict[str, int] = {}
-    for g in grants_view:
-        type_counts[g.holder_type] = type_counts.get(g.holder_type, 0) + 1
-
-    cA, cB = st.columns([1, 1])
-    with cA:
-        st.markdown("##### Holder-type breakdown")
-        if _PLOTLY and type_counts:
-            fig = px.bar(
-                x=list(type_counts.values()),
-                y=list(type_counts.keys()),
-                orientation="h",
-                labels={"x": "grants", "y": "holder type"},
-                color=list(type_counts.keys()),
-                color_discrete_map={
-                    "user": "#0052cc", "group": "#7c3aed",
-                    "projectRole": "#0d9488", "applicationRole": "#d97706",
-                    "anyone": "#dc2626", "currentUser": "#059669",
-                    "projectLead": "#7c2d12", "assignee": "#1e40af",
-                    "reporter": "#be185d",
-                },
-            )
-            fig.update_layout(
-                height=260, margin=dict(l=10, r=10, t=10, b=10),
-                showlegend=False, plot_bgcolor="white", paper_bgcolor="white",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            for k, v in sorted(type_counts.items(), key=lambda x: -x[1]):
-                st.markdown(f"- **{k}** · {v}")
-
-    with cB:
-        st.markdown("##### Permission popularity (top 12)")
-        perm_counts: dict[str, int] = {}
-        for g in grants_view:
-            perm_counts[g.permission_key] = perm_counts.get(g.permission_key, 0) + 1
-        top_perms = sorted(perm_counts.items(), key=lambda x: -x[1])[:12]
-        if _PLOTLY and top_perms:
-            fig = px.bar(
-                x=[v for _, v in top_perms],
-                y=[k for k, _ in top_perms],
-                orientation="h",
-                labels={"x": "grants", "y": "permission"},
-            )
-            fig.update_traces(marker_color="#0052cc")
-            fig.update_layout(
-                height=320, margin=dict(l=10, r=10, t=10, b=10),
-                plot_bgcolor="white", paper_bgcolor="white",
-                yaxis=dict(autorange="reversed"),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            for k, v in top_perms:
-                st.markdown(f"- `{k}` — {v}")
-
-    st.markdown("")
-
-    # ── Top groups + top users ──────────────────────────────────────────
-    cG, cU = st.columns(2)
-    with cG:
-        st.markdown("##### Top groups by grant count")
-        gc: dict[str, int] = {}
-        # Distinct (scheme_id, group) pairs counted once — closer to
-        # "groups granted on how many schemes". Each row in the table
-        # shows grants AND distinct schemes covered.
-        group_schemes: dict[str, set[int]] = {}
-        for g in grants_view:
-            if g.holder_type != "group":
-                continue
-            gc[g.holder_param] = gc.get(g.holder_param, 0) + 1
-            group_schemes.setdefault(g.holder_param, set()).add(g.scheme_id)
-        top_g = sorted(gc.items(), key=lambda x: -x[1])[:20]
-        if not top_g:
-            st.markdown("<div class='jp-empty'>No group grants in view.</div>", unsafe_allow_html=True)
-        else:
-            rows = []
-            for gname, n in top_g:
-                schemes_for_g = group_schemes[gname]
-                projects_covered = set()
-                for sid in schemes_for_g:
-                    for p in bindings.get(sid, []):
-                        projects_covered.add(p["key"])
-                rows.append({
-                    "Group": gname,
-                    "Grants": n,
-                    "Schemes": len(schemes_for_g),
-                    "Projects covered": len(projects_covered),
-                })
-            if pd is not None:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                for r in rows:
-                    st.markdown(f"- **{r['Group']}** — {r['Grants']} grants · {r['Schemes']} schemes · {r['Projects covered']} projects")
-
-    with cU:
-        st.markdown("##### Top users by grant count")
-        uc: dict[str, int] = {}
-        user_schemes: dict[str, set[int]] = {}
-        user_display: dict[str, str] = {}
-        for g in grants_view:
-            if g.holder_type != "user":
-                continue
-            uc[g.holder_param] = uc.get(g.holder_param, 0) + 1
-            user_schemes.setdefault(g.holder_param, set()).add(g.scheme_id)
-            user_display[g.holder_param] = g.holder_display
-        top_u = sorted(uc.items(), key=lambda x: -x[1])[:20]
-        if not top_u:
-            st.markdown("<div class='jp-empty'>No direct user grants in view.</div>", unsafe_allow_html=True)
-        else:
-            rows = []
-            for uname, n in top_u:
-                schemes_for_u = user_schemes[uname]
-                projects_covered = set()
-                for sid in schemes_for_u:
-                    for p in bindings.get(sid, []):
-                        projects_covered.add(p["key"])
-                rows.append({
-                    "User":  user_display.get(uname, uname),
-                    "Login": uname,
-                    "Grants": n,
-                    "Schemes": len(schemes_for_u),
-                    "Projects": len(projects_covered),
-                })
-            if pd is not None:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                for r in rows:
-                    st.markdown(f"- **{r['User']}** ⟨`{r['Login']}`⟩ — {r['Grants']} / {r['Schemes']}s / {r['Projects']}p")
-
-    # ── Scheme leaderboard ──────────────────────────────────────────────
-    st.markdown("##### Schemes ranked by grant volume")
-    scheme_grants: dict[int, int] = {}
-    for g in grants_view:
-        scheme_grants[g.scheme_id] = scheme_grants.get(g.scheme_id, 0) + 1
-    rows = []
-    for sid, s in schemes_by_id.items():
-        rows.append({
-            "Scheme":    s.get("name") or str(sid),
-            "ID":        sid,
-            "Grants":    scheme_grants.get(sid, 0),
-            "Projects":  len(bindings.get(sid, [])),
-        })
-    rows.sort(key=lambda r: -r["Grants"])
-    if pd is not None:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=320)
-    else:
-        for r in rows[:50]:
-            st.markdown(f"- **{r['Scheme']}** (id {r['ID']}) — {r['Grants']} grants · {r['Projects']} projects")
-
-
-# ===========================================================================
-# Tab: Browse (mostly unchanged from v1, plus team-filter awareness)
-# ===========================================================================
-with tab_browse:
-    st.markdown("##### Browse permission schemes")
-    if _active_team:
+if stray_grants:
+    with st.expander(
+        f"⚠️  {len(stray_grants)} stray access pattern(s) — direct user grants in view",
+        expanded=False,
+    ):
         st.caption(
-            f"Team filter active (**{_active_team['name']}**) — grant rows "
-            f"matching team members are highlighted; the rest dimmed."
+            "Each row below is a *direct* user grant. Org policy is to grant "
+            "access via LDAP groups, so direct grants are exceptions that "
+            "should be either justified or revoked. The right-hand chip tells "
+            "you whether the user already gets the same access via a group "
+            "(safe-to-revoke) or whether removing this grant would actually "
+            "strip their access (exclusive)."
         )
 
-    name_to_id = {f"{s['name']}  ⟨id {s['id']}⟩": int(s["id"]) for s in schemes}
-    pick = st.selectbox("Scheme", list(name_to_id.keys()), key="browse_pick")
-    sid = name_to_id[pick]
+        # Group strays by user so the user can fix one person at a time
+        by_user: dict[str, list[Grant]] = {}
+        for g in stray_grants:
+            by_user.setdefault(g.holder_param, []).append(g)
 
-    scheme = fetch_scheme_detail(sid)
-    if not scheme:
-        st.warning("Could not load scheme detail.")
-    else:
-        grants = _parse_grants(scheme)
-        desc = scheme.get("description") or ""
-        c1, c2, c3 = st.columns([2, 1, 1])
-        c1.markdown(f"**{scheme.get('name')}** &nbsp; <span class='jp-pill jp-info'>id {sid}</span>", unsafe_allow_html=True)
-        c1.caption(desc or "_(no description)_")
-        c2.metric("Total grants", len(grants))
-        c3.metric("Distinct permissions", len({g.permission_key for g in grants}))
+        for uname, ulist in sorted(by_user.items()):
+            flags = detect_stray_for_user(uname, ulist)
+            n_shadow = sum(1 for f in flags if f["severity"] == "shadow")
+            n_exclusive = sum(1 for f in flags if f["severity"] == "exclusive")
+            ucols = st.columns([3, 1, 1, 1])
+            ucols[0].markdown(
+                f"**👤 {ulist[0].holder_display}** ⟨`{uname}`⟩ — {len(ulist)} direct grant(s)"
+            )
+            if n_shadow:
+                ucols[1].markdown(f"<span class='jp-pill jp-warn'>{n_shadow} shadow</span>", unsafe_allow_html=True)
+            if n_exclusive:
+                ucols[2].markdown(f"<span class='jp-pill jp-stray'>{n_exclusive} exclusive</span>", unsafe_allow_html=True)
+            with ucols[3].popover("Lens →"):
+                st.markdown("Open this user's full access lens below.")
+                if st.button("Focus user", key=f"strayfocus_{uname}"):
+                    st.session_state["focus_holder"] = {
+                        "type": "user", "param": uname,
+                        "display": ulist[0].holder_display,
+                    }
+                    st.rerun()
 
-        with st.expander("Projects bound to this scheme", expanded=False):
-            bound = fetch_projects_for_scheme(sid)
-            if not bound:
-                st.caption("No projects use this scheme.")
-            else:
-                st.markdown(
-                    " ".join(f"<span class='jp-pill jp-info'>{p['key']} · {p['name']}</span>" for p in bound),
+            # Per-row controls
+            for f in flags:
+                g = f["grant"]
+                badge = (
+                    f"<span class='jp-pill jp-warn'>shadow · covered by {', '.join(f['covered_by_groups'][:2])}</span>"
+                    if f["severity"] == "shadow"
+                    else "<span class='jp-pill jp-stray'>exclusive · revoke removes access</span>"
+                )
+                rcols = st.columns([3, 3, 1])
+                rcols[0].markdown(
+                    f"<div class='jp-access-row jp-stray-row'>"
+                    f"<span class='jp-perm-cell'>{g.permission_key}</span>"
+                    f"<span class='jp-scheme-cell'>{g.scheme_name}</span>"
+                    f"<span class='jp-why-cell'>{badge}</span>"
+                    f"<span></span></div>",
                     unsafe_allow_html=True,
                 )
-                st.caption(f"{len(bound)} project(s)")
+                with rcols[2].popover("⊖", use_container_width=True, disabled=not ADMIN):
+                    st.markdown(
+                        f"**Confirm:** revoke `{g.permission_key}` from user "
+                        f"`{uname}` on scheme **{g.scheme_name}**."
+                    )
+                    if f["severity"] == "shadow":
+                        st.caption(f"User is in {', '.join(f['covered_by_groups'])} — access is preserved via that group.")
+                    else:
+                        st.caption("⚠️ User has no group that grants this permission. Revoking removes the access.")
+                    if st.button("Apply revoke", key=f"stray_rv_{g.scheme_id}_{g.permission_id}", type="primary", disabled=not ADMIN):
+                        ok, err = do_revoke(
+                            scheme_id=g.scheme_id, scheme_name=g.scheme_name,
+                            permission_id=g.permission_id, permission_key=g.permission_key,
+                            holder_type=g.holder_type, holder_param=g.holder_param,
+                            holder_display=g.holder_display,
+                        )
+                        if ok:
+                            st.success("Revoked.")
+                            st.rerun()
+                        else:
+                            st.error(err or "Revoke failed.")
 
-        f1, f2, f3 = st.columns([2, 2, 1])
-        with f1:
-            perm_filter = st.multiselect(
-                "Filter permissions",
-                sorted({g.permission_key for g in grants}),
-                key=f"browse_pf_{sid}",
+            # Per-user batch action: revoke all shadows
+            shadows_only = [f["grant"] for f in flags if f["severity"] == "shadow"]
+            if shadows_only and ADMIN:
+                with st.popover(f"Revoke all {len(shadows_only)} shadow grant(s)", disabled=not ADMIN):
+                    st.markdown(
+                        f"**Confirm batch revoke:** drop {len(shadows_only)} "
+                        f"redundant direct grant(s) for `{uname}`. Each is "
+                        f"already covered by a group the user belongs to."
+                    )
+                    if st.button("Apply batch revoke", key=f"stray_batch_{uname}", type="primary"):
+                        ok_n, fail_n = do_batch_revoke(shadows_only)
+                        if fail_n == 0:
+                            st.success(f"Revoked {ok_n} grant(s).")
+                        else:
+                            st.warning(f"{ok_n} ok, {fail_n} failed.")
+                        st.rerun()
+            st.divider()
+
+
+# ---------------------------------------------------------------------------
+# Section: Compliance by role — one card per RBAC role
+# ---------------------------------------------------------------------------
+st.markdown(
+    "<div class='jp-section-head'><h3>🎭 Compliance by role</h3>"
+    "<span class='jp-section-sub'>From utils.rbac · click a card to inspect "
+    "members and their Jira access</span></div>",
+    unsafe_allow_html=True,
+)
+
+roles_in_view = st.session_state["flt_roles"] or all_roles()
+if not roles_in_view:
+    st.markdown(
+        "<div class='jp-empty'>No roles defined in utils.rbac — the page "
+        "still works for raw Jira access management, but role-based "
+        "compliance views are empty until VALID_GROUPS / VALID_USERS are populated.</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    role_cols = st.columns(2)
+    for i, role in enumerate(roles_in_view):
+        col = role_cols[i % 2]
+        with col:
+            users = users_for_role(role)
+            groups = groups_for_role(role)
+            # Aggregate grants for the role: direct-user grants + group grants
+            role_user_grants = [g for g in view_grants if g.holder_type == "user" and g.holder_param in users]
+            role_group_grants = [g for g in view_grants if g.holder_type == "group" and g.holder_param in groups]
+            stray_for_role = role_user_grants  # by policy
+            has_stray = bool(stray_for_role)
+
+            klass = "jp-has-stray" if has_stray else ""
+            stray_chip = (
+                f"<span class='jp-pill jp-stray'>{len(stray_for_role)} stray</span>"
+                if has_stray else "<span class='jp-pill jp-ok'>clean</span>"
             )
-        with f2:
-            holder_filter = st.text_input(
-                "Filter holder (substring)", key=f"browse_hf_{sid}",
-                placeholder="username, group name, role…",
-            )
-        with f3:
-            htype_filter = st.multiselect(
-                "Holder type",
-                sorted({g.holder_type for g in grants}),
-                key=f"browse_htf_{sid}",
-            )
-
-        def _passes(g: Grant) -> bool:
-            if perm_filter and g.permission_key not in perm_filter:
-                return False
-            if htype_filter and g.holder_type not in htype_filter:
-                return False
-            if holder_filter:
-                hl = holder_filter.lower()
-                if hl not in g.holder_param.lower() and hl not in g.holder_display.lower():
-                    return False
-            return True
-
-        visible = [g for g in grants if _passes(g)]
-        by_perm: dict[str, list[Grant]] = {}
-        for g in visible:
-            by_perm.setdefault(g.permission_key, []).append(g)
-
-        st.markdown(f"Showing **{len(visible)}** of {len(grants)} grants across **{len(by_perm)}** permissions.")
-
-        for pkey in sorted(by_perm.keys()):
-            holders = by_perm[pkey]
-            st.markdown(
-                f"<div class='jp-card'><div class='jp-card-head'>"
-                f"<div><span class='jp-title'>{perm_name_by_key.get(pkey, pkey)}</span>"
-                f"  <span class='jp-pill'>{pkey}</span></div>"
-                f"<div class='jp-sub'>{len(holders)} holder(s)</div></div>",
+            col.markdown(
+                f"<div class='jp-role-card {klass}'>"
+                f"<div class='jp-role-head'>"
+                f"<div><span class='jp-role-name'>{role}</span></div>"
+                f"<div class='jp-role-stats'>"
+                f"<span class='jp-pill jp-user'>{len(users)} users</span>"
+                f"<span class='jp-pill jp-group'>{len(groups)} groups</span>"
+                f"{stray_chip}"
+                f"</div></div>",
                 unsafe_allow_html=True,
             )
-            if perm_desc_by_key.get(pkey):
-                st.caption(perm_desc_by_key[pkey])
-            rows = []
-            for g in holders:
-                badge = {
-                    "user": "👤", "group": "👥", "projectRole": "🎭",
-                    "applicationRole": "🧩", "assignee": "📌", "reporter": "🗣️",
-                    "projectLead": "👑", "currentUser": "🙋", "anyone": "🌐",
-                }.get(g.holder_type, "•")
-                dim = ""
-                if _team_pred and not _team_pred(g):
-                    dim = "opacity:.45;"
-                rows.append(
-                    f"<div class='jp-grant-row' style='{dim}'>"
-                    f"<span class='jp-perm'>{g.holder_type}</span>"
-                    f"<span class='jp-holder'>{badge} {g.holder_display} "
-                    f"<span style='color:var(--jp-text-mute);'>⟨{g.holder_param or '—'}⟩</span></span>"
-                    f"</div>"
-                )
-            st.markdown("".join(rows), unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ===========================================================================
-# Tab: Discrepancies — detect dead schemes, duplicate schemes, shadow grants,
-# orphan holders. Each section is independently runnable so a slow scan
-# doesn't block the cheap ones.
-# ===========================================================================
-with tab_disc:
-    st.markdown("##### Detect misconfigurations across schemes")
-    st.caption("Cheap checks run automatically; expensive ones are gated behind a button.")
-
-    all_grants, _ = _all_grants_cached()
-    bindings = fetch_all_project_scheme_bindings()
-
-    # ── 1. Dead schemes (no project binding) ────────────────────────────
-    dead = [s for s in schemes if not bindings.get(int(s["id"]))]
-    st.markdown(
-        f"<div class='jp-disc-card {'jp-sev-info' if not dead else ''}'>"
-        f"<div class='jp-disc-title'>Dead schemes — no project bound</div>"
-        f"<div class='jp-disc-sub'>{len(dead)} of {len(schemes)} scheme(s) "
-        f"have zero projects pointing at them. Safe to archive or delete "
-        f"if you've stopped using them.</div></div>",
-        unsafe_allow_html=True,
-    )
-    if dead:
-        with st.expander(f"Show {len(dead)} dead scheme(s)", expanded=False):
-            for s in dead:
-                st.markdown(f"- **{s['name']}** ⟨id {s['id']}⟩ — _{s.get('description') or 'no description'}_")
-
-    # ── 2. Duplicate schemes (identical grant set) ──────────────────────
-    grant_sig_by_scheme: dict[int, frozenset] = {}
-    for g in all_grants:
-        grant_sig_by_scheme.setdefault(g.scheme_id, set()).add(
-            (g.permission_key, g.holder_type, g.holder_param)
-        )
-    sig_buckets: dict[frozenset, list[int]] = {}
-    for sid, sig in grant_sig_by_scheme.items():
-        fs = frozenset(sig)
-        sig_buckets.setdefault(fs, []).append(sid)
-    dupes = [ids for ids in sig_buckets.values() if len(ids) > 1]
-    st.markdown(
-        f"<div class='jp-disc-card {'jp-sev-info' if not dupes else ''}'>"
-        f"<div class='jp-disc-title'>Duplicate schemes — identical grants</div>"
-        f"<div class='jp-disc-sub'>{len(dupes)} group(s) of schemes share an "
-        f"identical grant set. Candidates for consolidation — bind their "
-        f"projects to a single scheme and delete the rest.</div></div>",
-        unsafe_allow_html=True,
-    )
-    if dupes:
-        with st.expander(f"Show {len(dupes)} duplicate group(s)", expanded=False):
-            for grp in dupes:
-                names = [
-                    f"**{schemes_by_id.get(i, {}).get('name', i)}** (id {i})"
-                    for i in grp
-                ]
-                projects = sum(len(bindings.get(i, [])) for i in grp)
-                st.markdown(f"- {' · '.join(names)}  —  combined {projects} project(s)")
-
-    # ── 3. Orphan holders (on-demand) ───────────────────────────────────
-    st.markdown(
-        "<div class='jp-disc-card'>"
-        "<div class='jp-disc-title'>Orphan holders — user/group no longer exists</div>"
-        "<div class='jp-disc-sub'>Verifies every distinct user / group "
-        "holder against the Jira API. Slow on large instances; results "
-        "cached 10 min.</div></div>",
-        unsafe_allow_html=True,
-    )
-    if st.button("Run orphan-holder scan", key="disc_orphan_btn"):
-        users_to_check = sorted({g.holder_param for g in all_grants if g.holder_type == "user"})
-        groups_to_check = sorted({g.holder_param for g in all_grants if g.holder_type == "group"})
-        progress = st.progress(0, text=f"Checking {len(users_to_check) + len(groups_to_check)} holder(s)…")
-        orphans_user: list[str] = []
-        orphans_group: list[str] = []
-        unknown: list[str] = []
-        total = len(users_to_check) + len(groups_to_check)
-        done = 0
-        for u in users_to_check:
-            ok = verify_user_exists(u)
-            if ok is False:
-                orphans_user.append(u)
-            elif ok is None:
-                unknown.append(f"user:{u}")
-            done += 1
-            progress.progress(done / max(total, 1), text=f"Verified {done}/{total}")
-        for g in groups_to_check:
-            ok = verify_group_exists(g)
-            if ok is False:
-                orphans_group.append(g)
-            elif ok is None:
-                unknown.append(f"group:{g}")
-            done += 1
-            progress.progress(done / max(total, 1), text=f"Verified {done}/{total}")
-        progress.empty()
-        st.session_state["jp_orphan_scan"] = {
-            "users": orphans_user, "groups": orphans_group, "unknown": unknown,
-        }
-
-    scan = st.session_state.get("jp_orphan_scan")
-    if scan:
-        cu, cg, ck = st.columns(3)
-        cu.metric("Orphan users", len(scan["users"]))
-        cg.metric("Orphan groups", len(scan["groups"]))
-        ck.metric("Unknown (lookup errored)", len(scan["unknown"]))
-        if scan["users"]:
-            with st.expander("Orphan users", expanded=False):
-                grants_by_orphan: dict[str, list[Grant]] = {}
-                for g in all_grants:
-                    if g.holder_type == "user" and g.holder_param in scan["users"]:
-                        grants_by_orphan.setdefault(g.holder_param, []).append(g)
-                for u in scan["users"]:
-                    glist = grants_by_orphan.get(u, [])
-                    st.markdown(f"- `{u}` — {len(glist)} stale grant(s) across {len({x.scheme_id for x in glist})} scheme(s)")
-        if scan["groups"]:
-            with st.expander("Orphan groups", expanded=False):
-                for g in scan["groups"]:
-                    st.markdown(f"- `{g}`")
-
-    # ── 4. Shadow grants ────────────────────────────────────────────────
-    st.markdown(
-        "<div class='jp-disc-card'>"
-        "<div class='jp-disc-title'>Shadow grants — user has both direct + via-group access</div>"
-        "<div class='jp-disc-sub'>For each scheme, finds users granted "
-        "a permission directly AND through a group they belong to. The "
-        "direct grant is redundant — consider removing it to keep group "
-        "membership as the single source of truth.</div></div>",
-        unsafe_allow_html=True,
-    )
-    if st.button("Run shadow-grant scan", key="disc_shadow_btn"):
-        # Resolve group → members for every group referenced in any grant.
-        groups_used = sorted({g.holder_param for g in all_grants if g.holder_type == "group"})
-        progress = st.progress(0, text=f"Resolving {len(groups_used)} group membership(s)…")
-        group_to_members: dict[str, set[str]] = {}
-        for i, gname in enumerate(groups_used):
-            group_to_members[gname] = set(fetch_group_members(gname))
-            progress.progress((i + 1) / max(len(groups_used), 1))
-        progress.empty()
-        # For each scheme × permission, check direct-user-grant + any
-        # group-grant on same permission whose member set includes that user.
-        shadows: list[tuple[int, str, str, str, str]] = []
-        # (scheme_id, perm, user, via_group, display)
-        by_scheme: dict[int, list[Grant]] = {}
-        for g in all_grants:
-            by_scheme.setdefault(g.scheme_id, []).append(g)
-        for sid, gs in by_scheme.items():
-            # bucket by permission
-            by_perm: dict[str, dict] = {}
-            for g in gs:
-                slot = by_perm.setdefault(g.permission_key, {"users": [], "groups": []})
-                if g.holder_type == "user":
-                    slot["users"].append(g)
-                elif g.holder_type == "group":
-                    slot["groups"].append(g)
-            for pkey, slot in by_perm.items():
-                for u in slot["users"]:
-                    for gr in slot["groups"]:
-                        if u.holder_param in group_to_members.get(gr.holder_param, set()):
-                            shadows.append((sid, pkey, u.holder_param, gr.holder_param, u.holder_display))
-        st.session_state["jp_shadow_scan"] = shadows
-
-    shadows = st.session_state.get("jp_shadow_scan")
-    if shadows is not None:
-        st.metric("Shadow grants detected", len(shadows))
-        if shadows:
-            with st.expander(f"Show {len(shadows)} shadow grant(s)", expanded=False):
-                for sid, pkey, uname, gname, udisp in shadows[:300]:
-                    s_name = schemes_by_id.get(sid, {}).get("name", sid)
+            with col.expander(f"Inspect role: {role}", expanded=False):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    st.markdown("**Users in this role** (via VALID_USERS)")
+                    if not users:
+                        st.caption("_none_")
+                    for u in users:
+                        info = ldap_user_info_safe(u) or {}
+                        disp = info.get("username") or u
+                        b = st.button(
+                            f"👤 {disp}  ⟨{u}⟩",
+                            key=f"rolelens_u_{role}_{u}",
+                            use_container_width=True,
+                        )
+                        if b:
+                            st.session_state["focus_holder"] = {
+                                "type": "user", "param": u, "display": disp,
+                            }
+                            st.rerun()
+                with ec2:
+                    st.markdown("**LDAP groups → this role** (via VALID_GROUPS)")
+                    if not groups:
+                        st.caption("_none_")
+                    for g in groups:
+                        members = membership_of_group(g)
+                        b = st.button(
+                            f"👥 {g}  ({len(members)} member{'s' if len(members)!=1 else ''})",
+                            key=f"rolelens_g_{role}_{g}",
+                            use_container_width=True,
+                        )
+                        if b:
+                            st.session_state["focus_holder"] = {
+                                "type": "group", "param": g, "display": g,
+                            }
+                            st.rerun()
+                if stray_for_role:
                     st.markdown(
-                        f"- **{s_name}** · `{pkey}` — `{uname}` (via group `{gname}`) — _{udisp}_"
+                        f"**⚠️ Stray direct grants for this role:** {len(stray_for_role)}"
                     )
-                if len(shadows) > 300:
-                    st.caption(f"…and {len(shadows) - 300} more (truncated for display).")
+                    for g in stray_for_role[:12]:
+                        st.markdown(
+                            f"- `{g.permission_key}` on **{g.scheme_name}** "
+                            f"to `{g.holder_param}`"
+                        )
+                    if len(stray_for_role) > 12:
+                        st.caption(f"…and {len(stray_for_role) - 12} more (use the stray banner above for full list).")
 
 
-# ===========================================================================
-# Tab: Teams — CRUD for saved holder groupings
-# ===========================================================================
-with tab_teams:
-    st.markdown("##### Saved teams / filters")
-    st.caption(
-        "A *team* is a named set of users and/or groups. Once saved it "
-        "shows up in the sidebar filter and narrows the Overview, Browse, "
-        "and Locate tabs to that team's members."
+# ---------------------------------------------------------------------------
+# Section: Per-holder access lens
+# ---------------------------------------------------------------------------
+st.markdown(
+    "<div class='jp-section-head'><h3>🔬 Holder access lens</h3>"
+    "<span class='jp-section-sub'>Search any user or group — see exactly what "
+    "they can do, why, and whether it's right for their role</span></div>",
+    unsafe_allow_html=True,
+)
+
+ls1, ls2 = st.columns([1, 3])
+with ls1:
+    lens_type = st.radio(
+        "Lens for", ["user", "group"], horizontal=True, key="lens_type",
     )
-    if not _schema_ok:
-        st.markdown(
-            "<div class='jp-empty'>Postgres unavailable — teams can't be persisted.</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        teams_list_fresh, terr = db_teams_list()
-        if terr:
-            st.error(f"Load failed: {terr}")
+with ls2:
+    lens_q = st.text_input("Search…", key="lens_q", placeholder="2+ chars")
+    if lens_q and len(lens_q.strip()) >= 2:
+        if lens_type == "user":
+            res = search_users(lens_q)
+            opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in res}
         else:
-            # Existing teams
-            for t in teams_list_fresh:
-                with st.container():
+            res = search_groups(lens_q)
+            opts = {r["name"]: r for r in res}
+        if opts:
+            pick = st.selectbox("Open", list(opts.keys()), key="lens_pick")
+            if st.button("Open lens", key="lens_open"):
+                if lens_type == "user":
+                    chosen = opts[pick]
+                    st.session_state["focus_holder"] = {
+                        "type": "user", "param": chosen["name"],
+                        "display": chosen["display"] or chosen["name"],
+                    }
+                else:
+                    chosen = opts[pick]
+                    st.session_state["focus_holder"] = {
+                        "type": "group", "param": chosen["name"],
+                        "display": chosen["name"],
+                    }
+                st.rerun()
+
+
+# --- Render the focus holder (if any) --------------------------------------
+focus = st.session_state.get("focus_holder")
+if focus:
+    htype = focus["type"]
+    hparam = focus["param"]
+    hdisplay = focus["display"]
+    st.markdown(f"<div class='jp-holder-card'>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='jp-holder-head'>"
+        f"<div>"
+        f"<div class='jp-holder-name'>{'👤' if htype=='user' else '👥'} {hdisplay}</div>"
+        f"<div class='jp-holder-id'>{htype}: <span class='jp-pill jp-mono jp-{htype}'>{hparam}</span></div>"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if htype == "user":
+        # Identity card from LDAP + roles from RBAC
+        info = ldap_user_info_safe(hparam)
+        roles, role_sources = roles_for_user(hparam)
+        idc1, idc2, idc3 = st.columns([2, 2, 2])
+        with idc1:
+            if info:
+                st.markdown(f"**Email** · {info.get('email') or '—'}")
+                st.markdown(f"**Title** · {info.get('title') or '—'}")
+                st.markdown(f"**Dept**  · {info.get('department') or '—'}")
+                if info.get("manager"):
+                    st.markdown(f"**Manager** · {info['manager']}")
+            else:
+                if _LDAP_AVAILABLE:
                     st.markdown(
-                        f"<div class='jp-card'><div class='jp-card-head'>"
-                        f"<div><span class='jp-title'>{t['name']}</span>"
-                        f"  <span class='jp-pill'>id {t['id']}</span></div>"
-                        f"<div class='jp-sub'>by {t['created_by']} · "
-                        f"updated {t['updated_at'].strftime('%Y-%m-%d %H:%M') if hasattr(t['updated_at'], 'strftime') else t['updated_at']}</div>"
-                        f"</div>",
+                        "<span class='jp-pill jp-stray'>not found in LDAP</span>",
                         unsafe_allow_html=True,
                     )
-                    if t.get("description"):
-                        st.caption(t["description"])
-                    members = t.get("members") or []
-                    chip_html = " ".join(
-                        f"<span class='jp-team-chip jp-{m.get('type','')}'>"
-                        f"{'👤' if m.get('type')=='user' else '👥'} {m.get('name','')}</span>"
-                        for m in members
-                    )
-                    st.markdown(chip_html, unsafe_allow_html=True)
                     st.caption(
-                        f"{sum(1 for m in members if m.get('type')=='user')} user(s) · "
-                        f"{sum(1 for m in members if m.get('type')=='group')} group(s)"
+                        "User has Jira grants but doesn't resolve in LDAP — "
+                        "likely a decommissioned account. Audit + clean up."
                     )
-
-                    cc1, cc2, cc3 = st.columns([1, 1, 2])
-                    if cc1.button("Edit", key=f"team_edit_{t['id']}", disabled=not ADMIN):
-                        st.session_state[f"team_edit_open_{t['id']}"] = True
-                    if cc2.button("Delete", key=f"team_del_{t['id']}", disabled=not ADMIN):
-                        ok, err = db_team_delete(int(t["id"]))
-                        if ok:
-                            st.success(f"Deleted team '{t['name']}'.")
-                            st.rerun()
-                        else:
-                            st.error(err)
-                    if st.session_state.get(f"team_edit_open_{t['id']}"):
-                        _team_form(t, ADMIN)
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-            if not teams_list_fresh:
+                else:
+                    st.caption("_(LDAP unavailable in this environment)_")
+        with idc2:
+            st.markdown("**RBAC roles**")
+            if roles:
                 st.markdown(
-                    "<div class='jp-empty'>No teams saved yet — create the first one below.</div>",
+                    " ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in roles),
                     unsafe_allow_html=True,
                 )
-
-            st.markdown("---")
-            st.markdown("#### Create new team")
-            if not ADMIN:
-                st.info("Read-only — admin role required to save teams.")
-            with st.form("new_team_form", clear_on_submit=True):
-                n1, n2 = st.columns([1, 2])
-                new_name = n1.text_input("Team name", placeholder="e.g. payments-devs", disabled=not ADMIN)
-                new_desc = n2.text_input("Description", placeholder="optional", disabled=not ADMIN)
-                st.markdown("**Members** — paste usernames + group names below, one per line. "
-                            "Prefix with `g:` for groups (default is user).")
-                new_members_raw = st.text_area(
-                    "Members",
-                    height=160,
-                    placeholder="jdoe\nasmith\ng:payments-developers\ng:payments-admins",
-                    disabled=not ADMIN,
-                )
-                submitted = st.form_submit_button("Save team", type="primary", disabled=not ADMIN)
-                if submitted:
-                    members = _parse_team_members(new_members_raw)
-                    if not new_name.strip():
-                        st.error("Team name is required.")
-                    elif not members:
-                        st.error("Add at least one member.")
-                    else:
-                        tid, err = db_team_upsert(
-                            name=new_name.strip(),
-                            description=new_desc.strip(),
-                            members=members,
-                            created_by=ACTOR,
-                        )
-                        if err:
-                            st.error(err)
-                        else:
-                            st.success(f"Team #{tid} '{new_name.strip()}' saved.")
-                            st.rerun()
-
-
-# ===========================================================================
-# Tab: Grant — bulk grant flow (unchanged shape; routes through approval)
-# ===========================================================================
-with tab_grant:
-    st.markdown("##### Grant permissions in bulk")
-    st.caption(
-        "Pick one holder (or paste many), select the permissions, select the "
-        "schemes. Operations queue into a draft; submitting opens an approval "
-        "request in Postgres."
-    )
-    if not ADMIN:
-        st.info("Read-only — admin role required to queue writes.")
-
-    mode = st.radio(
-        "Holder input", ["Single (search)", "Paste many"],
-        horizontal=True, key="grant_mode", disabled=not ADMIN,
-    )
-    chosen_holders: list[dict] = []
-    if mode == "Single (search)":
-        h = holder_picker("grant_single", label="Holder to grant to")
-        if h:
-            chosen_holders = [h]
-    else:
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            paste_type = st.selectbox(
-                "Type", HOLDER_TYPES,
-                format_func=lambda x: {"user": "👤 Users", "group": "👥 Groups"}[x],
-                key="grant_paste_type",
-            )
-        with c2:
-            pasted = st.text_area(
-                "One name per line", key="grant_paste_text", height=110,
-                placeholder="jdoe\nasmith\nfgarcia",
-            )
-        seen = set()
-        for ln in [ln.strip() for ln in (pasted or "").splitlines() if ln.strip()]:
-            if ln in seen:
-                continue
-            seen.add(ln)
-            chosen_holders.append({"type": paste_type, "param": ln, "display": ln})
-        if chosen_holders:
-            st.markdown(
-                " ".join(f"<span class='jp-pill'>{h['display']}</span>" for h in chosen_holders),
-                unsafe_allow_html=True,
-            )
-            st.caption(f"{len(chosen_holders)} holder(s) parsed.")
-
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        perm_sel = st.multiselect(
-            "Permissions to grant",
-            perm_keys_sorted,
-            format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩",
-            key="grant_perms",
-        )
-    with c2:
-        all_scheme_labels = [f"{s['name']}  ⟨id {s['id']}⟩" for s in schemes]
-        scheme_sel = st.multiselect(
-            "Schemes to apply to", all_scheme_labels, key="grant_schemes",
-        )
-        if st.button("Select all schemes", key="grant_all_schemes"):
-            st.session_state["grant_schemes"] = all_scheme_labels
-            st.rerun()
-
-    selected_sids: list[int] = []
-    for lbl in scheme_sel or []:
-        m = re.search(r"⟨id (\d+)⟩", lbl)
-        if m:
-            selected_sids.append(int(m.group(1)))
-
-    can_queue = ADMIN and chosen_holders and perm_sel and selected_sids
-    op_count = len(chosen_holders) * len(perm_sel or []) * len(selected_sids or [])
-    st.markdown(
-        f"<div class='jp-card'><b>Plan:</b> "
-        f"{len(chosen_holders)} holder(s) × {len(perm_sel or [])} permission(s) × "
-        f"{len(selected_sids or [])} scheme(s) = "
-        f"<span class='jp-pill jp-grant'>{op_count} grant(s)</span> queued</div>",
-        unsafe_allow_html=True,
-    )
-
-    skip_existing = st.checkbox(
-        "Skip grants that already exist", value=True, key="grant_skip_existing"
-    )
-    if st.button("➕ Queue grants for preview", type="primary", disabled=not can_queue):
-        existing_keysets: dict[int, set[tuple[str, str, str]]] = {}
-        if skip_existing:
-            for sid in selected_sids:
-                det = fetch_scheme_detail(sid)
-                existing_keysets[sid] = {
-                    (g.permission_key, g.holder_type, g.holder_param)
-                    for g in _parse_grants(det)
-                }
-        queued = 0
-        skipped = 0
-        already = 0
-        for h in chosen_holders:
-            for sid in selected_sids:
-                sname = schemes_by_id.get(sid, {}).get("name", str(sid))
-                for pkey in perm_sel:
-                    if skip_existing and (pkey, h["type"], h["param"]) in existing_keysets.get(sid, set()):
-                        skipped += 1
-                        continue
-                    op = PendingOp(
-                        action="grant", scheme_id=sid, scheme_name=sname,
-                        permission_key=pkey, holder_type=h["type"],
-                        holder_param=h["param"], holder_display=h["display"],
-                    )
-                    if _queue(op):
-                        queued += 1
-                    else:
-                        already += 1
-        msg = f"Queued **{queued}** new op(s)."
-        if skipped:
-            msg += f" Skipped {skipped} already present."
-        if already:
-            msg += f" {already} were already in draft."
-        st.success(msg)
-
-
-# ===========================================================================
-# Tab: Revoke — scan one holder across schemes and tick to revoke
-# ===========================================================================
-with tab_revoke:
-    st.markdown("##### Revoke permissions in bulk")
-    if not ADMIN:
-        st.info("Read-only — admin role required to queue writes.")
-
-    h = holder_picker("revoke_single", label="Holder to revoke from")
-    if h:
-        progress = st.progress(0, text="Scanning schemes…")
-        matching: list[Grant] = []
-        for i, s in enumerate(schemes):
-            det = fetch_scheme_detail(int(s["id"]))
-            for g in _parse_grants(det):
-                if g.matches_holder(h["type"], h["param"]):
-                    matching.append(g)
-            progress.progress((i + 1) / max(len(schemes), 1), text=f"Scanned {i + 1}/{len(schemes)}")
-        progress.empty()
-
-        if not matching:
-            st.markdown(
-                f"<div class='jp-empty'>No grants found for <b>{h['display']}</b>.</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f"Found <span class='jp-pill jp-info'>{len(matching)}</span> grant(s) for "
-                f"<b>{h['display']}</b> across "
-                f"<span class='jp-pill jp-info'>{len({g.scheme_id for g in matching})}</span> scheme(s).",
-                unsafe_allow_html=True,
-            )
-            by_scheme: dict[int, list[Grant]] = {}
-            for g in matching:
-                by_scheme.setdefault(g.scheme_id, []).append(g)
-            sel_all = st.checkbox("Select all", key="revoke_sel_all")
-            ticked: list[Grant] = []
-            for sid in sorted(by_scheme.keys()):
-                gs = by_scheme[sid]
-                sname = gs[0].scheme_name
-                st.markdown(f"**{sname}**  <span class='jp-pill'>id {sid}</span>", unsafe_allow_html=True)
-                for g in gs:
-                    chk = st.checkbox(
-                        f"`{g.permission_key}` — {perm_name_by_key.get(g.permission_key, '')}",
-                        value=sel_all,
-                        key=f"revoke_chk_{sid}_{g.permission_id}",
-                        disabled=not ADMIN,
-                    )
-                    if chk:
-                        ticked.append(g)
-            st.markdown("---")
-            st.markdown(
-                f"<div class='jp-card'><b>Plan:</b> revoke "
-                f"<span class='jp-pill jp-revoke'>{len(ticked)} grant(s)</span> "
-                f"from <b>{h['display']}</b></div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("➖ Queue revokes for preview", type="primary", disabled=not (ADMIN and ticked)):
-                q = 0
-                for g in ticked:
-                    if _queue(PendingOp(
-                        action="revoke", scheme_id=g.scheme_id,
-                        scheme_name=g.scheme_name, permission_key=g.permission_key,
-                        holder_type=g.holder_type, holder_param=g.holder_param,
-                        holder_display=g.holder_display, permission_id=g.permission_id,
-                    )):
-                        q += 1
-                st.success(f"Queued {q} revoke op(s).")
-
-
-# ===========================================================================
-# Tab: Copy / Move
-# ===========================================================================
-with tab_copy:
-    st.markdown("##### Copy or move a holder's grants")
-    if not ADMIN:
-        st.info("Read-only — admin role required to queue writes.")
-    cA, cB = st.columns(2)
-    with cA:
-        st.markdown("**Source (A)**")
-        h_src = holder_picker("copy_src", label="Copy FROM")
-    with cB:
-        st.markdown("**Destination (B)**")
-        h_dst = holder_picker("copy_dst", label="Copy TO")
-
-    move = st.checkbox("Also revoke from source (move)", value=False, key="copy_move", disabled=not ADMIN)
-    skip_existing = st.checkbox("Skip dest grants that already exist", value=True, key="copy_skip")
-
-    if h_src and h_dst:
-        if (h_src["type"], h_src["param"]) == (h_dst["type"], h_dst["param"]):
-            st.warning("Source and destination are identical.")
-        else:
-            with st.spinner("Scanning source's grants…"):
-                src_grants: list[Grant] = []
-                for s in schemes:
-                    det = fetch_scheme_detail(int(s["id"]))
-                    for g in _parse_grants(det):
-                        if g.matches_holder(h_src["type"], h_src["param"]):
-                            src_grants.append(g)
-            if not src_grants:
+                with st.expander("Role provenance", expanded=False):
+                    for s in role_sources:
+                        st.caption(f"• {s}")
+            else:
                 st.markdown(
-                    f"<div class='jp-empty'>Source <b>{h_src['display']}</b> has no grants.</div>",
+                    "<span class='jp-pill jp-warn'>no roles resolved</span>",
+                    unsafe_allow_html=True,
+                )
+        with idc3:
+            st.markdown("**LDAP groups**")
+            if info:
+                gnames = sorted({_extract_cn(dn) for dn in (info.get("groups") or [])})
+                if gnames:
+                    st.markdown(
+                        " ".join(f"<span class='jp-pill jp-group'>{g}</span>" for g in gnames[:20]),
+                        unsafe_allow_html=True,
+                    )
+                    if len(gnames) > 20:
+                        st.caption(f"…and {len(gnames) - 20} more")
+                else:
+                    st.caption("_(no group memberships)_")
+            else:
+                st.caption("—")
+
+        # Access map: every grant the user effectively has, with WHY
+        st.markdown("---")
+        st.markdown("**Effective Jira access**")
+        user_groups_set = user_membership_groups(hparam)
+        rows = []
+        # Direct user grants
+        for g in index["grants_by_user"].get(hparam, []):
+            rows.append({
+                "g": g, "via_type": "direct",
+                "via": "direct user grant",
+                "stray": True,
+            })
+        # Group grants the user effectively gets (LDAP says they're in the group)
+        for gname in user_groups_set:
+            for g in index["grants_by_group"].get(gname, []):
+                rows.append({
+                    "g": g, "via_type": "group",
+                    "via": f"member of group <span class='jp-pill jp-group'>{gname}</span>",
+                    "stray": False,
+                })
+        # Also include grants to groups whose LDAP CN we couldn't verify
+        # but that share the user's LDAP groups — already covered above.
+
+        # Filter rows by the current scheme/project filter set
+        rows = [r for r in rows if r["g"].scheme_id in filt["schemes_in_view"]]
+
+        # Shadow detection: same scheme+perm appears both direct and group
+        seen_key: dict[tuple[int, str], list[dict]] = {}
+        for r in rows:
+            k = (r["g"].scheme_id, r["g"].permission_key)
+            seen_key.setdefault(k, []).append(r)
+        for k, rlist in seen_key.items():
+            if len(rlist) > 1:
+                # Multiple sources for the same access — flag the "direct" rows as shadow
+                for r in rlist:
+                    if r["via_type"] == "direct":
+                        r["shadow"] = True
+                        r["covered_by"] = [x["g"].holder_param for x in rlist if x["via_type"] == "group"]
+
+        if not rows:
+            st.markdown(
+                "<div class='jp-empty'>This user has no Jira access in the current filter set.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div class='jp-access-row' style='font-weight:600;color:var(--jp-text-mute);"
+                "background:var(--jp-surface2);border-bottom:1px solid var(--jp-border);'>"
+                "<div>Permission</div><div>Scheme</div><div>Why</div><div></div></div>",
+                unsafe_allow_html=True,
+            )
+            # Sort: stray first, then by scheme + permission
+            rows.sort(key=lambda r: (not r.get("stray"), r["g"].scheme_name, r["g"].permission_key))
+            for r in rows:
+                g = r["g"]
+                row_class = ""
+                if r["via_type"] == "direct" and r.get("shadow"):
+                    row_class = "jp-shadow-row"
+                elif r["via_type"] == "direct":
+                    row_class = "jp-stray-row"
+                why_html = r["via"]
+                if r.get("shadow"):
+                    why_html += (
+                        f"<br><span class='jp-pill jp-warn'>shadow · also via "
+                        f"{', '.join(r['covered_by'][:2])}</span>"
+                    )
+                elif r["via_type"] == "direct":
+                    why_html += (
+                        "<br><span class='jp-pill jp-stray'>exclusive direct grant — "
+                        "revoking removes the access</span>"
+                    )
+                rc1, rc2, rc3, rc4 = st.columns([1.2, 1.5, 1.7, .6])
+                rc1.markdown(
+                    f"<div class='jp-access-row {row_class}'>"
+                    f"<span class='jp-perm-cell'>{g.permission_key}</span>"
+                    f"<span></span><span></span><span></span></div>",
+                    unsafe_allow_html=True,
+                )
+                rc2.markdown(
+                    f"<div class='jp-access-row {row_class}'>"
+                    f"<span></span>"
+                    f"<span class='jp-scheme-cell'>{g.scheme_name}</span>"
+                    f"<span></span><span></span></div>",
+                    unsafe_allow_html=True,
+                )
+                rc3.markdown(
+                    f"<div class='jp-access-row {row_class}'>"
+                    f"<span></span><span></span>"
+                    f"<span class='jp-why-cell'>{why_html}</span>"
+                    f"<span></span></div>",
+                    unsafe_allow_html=True,
+                )
+                # Action column: revoke only for direct grants the user actually owns
+                if r["via_type"] == "direct" and ADMIN:
+                    with rc4.popover("⊖", use_container_width=True):
+                        st.markdown(
+                            f"**Confirm revoke** — drop `{g.permission_key}` "
+                            f"from `{hparam}` on **{g.scheme_name}**."
+                        )
+                        if r.get("shadow"):
+                            st.caption(f"User keeps access via {', '.join(r['covered_by'])}.")
+                        else:
+                            st.caption("⚠️ User has no other source for this permission. Access will be lost.")
+                        if st.button("Apply", key=f"lensrv_{g.scheme_id}_{g.permission_id}", type="primary"):
+                            ok, err = do_revoke(
+                                scheme_id=g.scheme_id, scheme_name=g.scheme_name,
+                                permission_id=g.permission_id, permission_key=g.permission_key,
+                                holder_type=g.holder_type, holder_param=g.holder_param,
+                                holder_display=g.holder_display,
+                            )
+                            if ok:
+                                st.success("Revoked.")
+                                st.rerun()
+                            else:
+                                st.error(err or "Revoke failed.")
+
+        # Inline grant for this user
+        st.markdown("---")
+        with st.popover("➕ Grant another permission to this user", disabled=not ADMIN):
+            st.caption(
+                "Heads up: organizational policy is to grant access via "
+                "LDAP groups. Use this only when the user genuinely needs an "
+                "exception."
+            )
+            sid_pick = st.selectbox(
+                "Scheme", list(schemes_by_id.keys()),
+                format_func=lambda sid: schemes_by_id[sid]["name"],
+                key=f"lensgrant_scheme_{hparam}",
+            )
+            perm_pick = st.selectbox(
+                "Permission", perm_keys_sorted,
+                format_func=lambda k: f"{perm_name_by_key.get(k,k)} ⟨{k}⟩",
+                key=f"lensgrant_perm_{hparam}",
+            )
+            st.markdown(
+                f"<div class='jp-banner jp-banner-info'>"
+                f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{perm_pick}</span> "
+                f"to user <b>{hdisplay}</b> ⟨{hparam}⟩ "
+                f"on <b>{schemes_by_id[sid_pick]['name']}</b>."
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Apply grant", key=f"lensgrant_apply_{hparam}", type="primary"):
+                ok, err = do_grant(
+                    scheme_id=sid_pick,
+                    scheme_name=schemes_by_id[sid_pick]["name"],
+                    permission_key=perm_pick,
+                    holder_type="user", holder_param=hparam,
+                    holder_display=hdisplay,
+                )
+                if ok:
+                    st.success("Granted.")
+                    st.rerun()
+                else:
+                    st.error(err or "Grant failed.")
+
+    else:
+        # ── group lens ──
+        members = membership_of_group(hparam)
+        rbac_roles = VALID_GROUPS.get(hparam, [])
+        idc1, idc2, idc3 = st.columns([2, 2, 2])
+        with idc1:
+            st.markdown(f"**LDAP members** · {len(members)}")
+            if members:
+                shown = sorted(members)[:30]
+                for m in shown:
+                    if st.button(f"👤 {m}", key=f"glens_m_{hparam}_{m}"):
+                        st.session_state["focus_holder"] = {
+                            "type": "user", "param": m, "display": m,
+                        }
+                        st.rerun()
+                if len(members) > 30:
+                    st.caption(f"…and {len(members) - 30} more")
+            elif _LDAP_AVAILABLE:
+                st.markdown(
+                    "<span class='jp-pill jp-stray'>0 members or LDAP miss</span>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    "Group has Jira grants but no LDAP members. Likely a "
+                    "stale group — its grants don't actually apply to anyone."
+                )
+            else:
+                st.caption("_(LDAP unavailable)_")
+        with idc2:
+            st.markdown("**RBAC roles** (from VALID_GROUPS)")
+            if rbac_roles:
+                st.markdown(
+                    " ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in rbac_roles),
                     unsafe_allow_html=True,
                 )
             else:
-                dest_keysets: dict[int, set[tuple[str, str, str]]] = {}
-                if skip_existing:
-                    for s in {g.scheme_id for g in src_grants}:
-                        det = fetch_scheme_detail(s)
-                        dest_keysets[s] = {
-                            (g.permission_key, g.holder_type, g.holder_param)
-                            for g in _parse_grants(det)
-                        }
-                planned = sum(
-                    1 for g in src_grants
-                    if not (skip_existing and (g.permission_key, h_dst["type"], h_dst["param"]) in dest_keysets.get(g.scheme_id, set()))
-                )
                 st.markdown(
-                    f"<div class='jp-card'><b>Plan:</b> grant "
-                    f"<span class='jp-pill jp-grant'>{planned}</span> to <b>{h_dst['display']}</b>"
-                    + (f" · revoke <span class='jp-pill jp-revoke'>{len(src_grants)}</span> from <b>{h_src['display']}</b>" if move else "")
-                    + f" · spans <span class='jp-pill jp-info'>{len({g.scheme_id for g in src_grants})}</span> scheme(s)"
+                    "<span class='jp-pill jp-warn'>group is granted Jira access but has no role mapping in VALID_GROUPS</span>",
+                    unsafe_allow_html=True,
+                )
+        with idc3:
+            st.markdown("**Grants**")
+            g_grants = [
+                g for g in index["grants_by_group"].get(hparam, [])
+                if g.scheme_id in filt["schemes_in_view"]
+            ]
+            st.metric("Grant rows", len(g_grants))
+            st.metric("Schemes touched", len({g.scheme_id for g in g_grants}))
+
+        st.markdown("---")
+        st.markdown("**Grants made to this group**")
+        g_grants_view = [
+            g for g in index["grants_by_group"].get(hparam, [])
+            if g.scheme_id in filt["schemes_in_view"]
+        ]
+        if not g_grants_view:
+            st.markdown(
+                "<div class='jp-empty'>No grants for this group in the current filter set.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            by_scheme: dict[int, list[Grant]] = {}
+            for g in g_grants_view:
+                by_scheme.setdefault(g.scheme_id, []).append(g)
+            for sid in sorted(by_scheme.keys()):
+                gs = by_scheme[sid]
+                st.markdown(f"**{gs[0].scheme_name}**  <span class='jp-pill jp-mono'>id {sid}</span>", unsafe_allow_html=True)
+                for g in gs:
+                    rc1, rc2 = st.columns([5, 1])
+                    rc1.markdown(
+                        f"<div class='jp-access-row'>"
+                        f"<span class='jp-perm-cell'>{g.permission_key}</span>"
+                        f"<span class='jp-scheme-cell'>{perm_name_by_key.get(g.permission_key, '')}</span>"
+                        f"<span class='jp-why-cell'>granted to group · applies to {len(members)} LDAP member(s)</span>"
+                        f"<span></span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    if ADMIN:
+                        with rc2.popover("⊖", use_container_width=True):
+                            st.markdown(
+                                f"**Confirm revoke:** drop `{g.permission_key}` "
+                                f"from group `{hparam}` on **{g.scheme_name}**."
+                            )
+                            st.caption(f"Will affect {len(members)} LDAP member(s).")
+                            if st.button("Apply", key=f"grpx_{sid}_{g.permission_id}", type="primary"):
+                                ok, err = do_revoke(
+                                    scheme_id=g.scheme_id, scheme_name=g.scheme_name,
+                                    permission_id=g.permission_id, permission_key=g.permission_key,
+                                    holder_type=g.holder_type, holder_param=g.holder_param,
+                                    holder_display=g.holder_display,
+                                )
+                                if ok:
+                                    st.success("Revoked.")
+                                    st.rerun()
+                                else:
+                                    st.error(err or "Revoke failed.")
+
+        st.markdown("---")
+        with st.popover("➕ Grant another permission to this group", disabled=not ADMIN):
+            sid_pick = st.selectbox(
+                "Scheme", list(schemes_by_id.keys()),
+                format_func=lambda sid: schemes_by_id[sid]["name"],
+                key=f"glensgrant_scheme_{hparam}",
+            )
+            perm_pick = st.selectbox(
+                "Permission", perm_keys_sorted,
+                format_func=lambda k: f"{perm_name_by_key.get(k,k)} ⟨{k}⟩",
+                key=f"glensgrant_perm_{hparam}",
+            )
+            st.markdown(
+                f"<div class='jp-banner jp-banner-info'>"
+                f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{perm_pick}</span> "
+                f"to group <b>{hparam}</b> "
+                f"on <b>{schemes_by_id[sid_pick]['name']}</b>. "
+                f"Will apply to {len(members)} LDAP member(s)."
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Apply grant", key=f"glensgrant_apply_{hparam}", type="primary"):
+                ok, err = do_grant(
+                    scheme_id=sid_pick,
+                    scheme_name=schemes_by_id[sid_pick]["name"],
+                    permission_key=perm_pick,
+                    holder_type="group", holder_param=hparam,
+                    holder_display=hparam,
+                )
+                if ok:
+                    st.success("Granted.")
+                    st.rerun()
+                else:
+                    st.error(err or "Grant failed.")
+
+    if st.button("Close lens", key="close_lens"):
+        st.session_state["focus_holder"] = None
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+else:
+    st.markdown(
+        "<div class='jp-empty'>Pick a user or group above to open its access lens.</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section: Scheme / project explorer
+# ---------------------------------------------------------------------------
+st.markdown(
+    "<div class='jp-section-head'><h3>📋 Schemes &amp; projects</h3>"
+    "<span class='jp-section-sub'>Pick a scheme to see every holder; click a "
+    "holder to open it in the lens above</span></div>",
+    unsafe_allow_html=True,
+)
+
+ec1, ec2 = st.columns([1, 1])
+with ec1:
+    sx_scheme = st.selectbox(
+        "Scheme",
+        [None] + list(schemes_by_id.keys()),
+        format_func=lambda sid: "— select —" if sid is None else f"{schemes_by_id[sid]['name']} (id {sid})",
+        key="explore_scheme",
+    )
+with ec2:
+    sx_project = st.selectbox(
+        "Project",
+        [None] + all_project_keys,
+        format_func=lambda k: "— select —" if k is None else k,
+        key="explore_project",
+    )
+
+resolved_sid: int | None = None
+if sx_project and not sx_scheme:
+    resolved_sid = project_to_scheme_id.get(sx_project)
+elif sx_scheme is not None:
+    resolved_sid = sx_scheme
+
+if resolved_sid is not None:
+    sname = schemes_by_id.get(resolved_sid, {}).get("name", str(resolved_sid))
+    sgrants = index["grants_by_scheme"].get(resolved_sid, [])
+    projects_for_this = scheme_to_projects.get(resolved_sid, [])
+    sec1, sec2, sec3 = st.columns(3)
+    sec1.markdown(f"**Scheme · {sname}**  <span class='jp-pill jp-mono'>id {resolved_sid}</span>", unsafe_allow_html=True)
+    sec2.metric("Grants", len(sgrants))
+    sec3.metric("Projects bound", len(projects_for_this))
+    if projects_for_this:
+        st.markdown(
+            " ".join(f"<span class='jp-pill jp-info'>{p['key']} · {p['name']}</span>" for p in projects_for_this),
+            unsafe_allow_html=True,
+        )
+
+    # Aggregate by holder so the table reads vertically
+    holder_rows: dict[tuple[str, str], list[Grant]] = {}
+    for g in sgrants:
+        holder_rows.setdefault((g.holder_type, g.holder_param), []).append(g)
+
+    st.markdown("---")
+    st.markdown(
+        "<div class='jp-access-row' style='font-weight:600;color:var(--jp-text-mute);background:var(--jp-surface2);'>"
+        "<div>Holder</div><div>Permissions</div><div>Notes</div><div></div></div>",
+        unsafe_allow_html=True,
+    )
+    for (htype, hparam), glist in sorted(holder_rows.items(), key=lambda kv: (kv[0][0], kv[0][1].lower())):
+        # Annotate stray + LDAP miss
+        flags = []
+        if htype == "user":
+            flags.append("<span class='jp-pill jp-stray'>direct grant (policy: by group)</span>")
+            if _LDAP_AVAILABLE and not ldap_user_info_safe(hparam):
+                flags.append("<span class='jp-pill jp-stray'>LDAP miss</span>")
+        elif htype == "group":
+            if _LDAP_AVAILABLE and not membership_of_group(hparam):
+                flags.append("<span class='jp-pill jp-stray'>empty LDAP group</span>")
+            if VALID_GROUPS.get(hparam):
+                flags.append(
+                    f"<span class='jp-pill jp-role'>roles: "
+                    f"{', '.join(VALID_GROUPS[hparam])}</span>"
+                )
+        else:
+            flags.append(f"<span class='jp-pill'>{htype}</span>")
+
+        glist_display = " ".join(
+            f"<span class='jp-pill jp-mono'>{g.permission_key}</span>" for g in glist
+        )
+        c_h, c_p, c_n, c_a = st.columns([1.2, 2.5, 1.5, .6])
+        c_h.markdown(
+            f"{'👤' if htype=='user' else ('👥' if htype=='group' else '•')}  "
+            f"**{glist[0].holder_display}**  <br><span class='jp-pill jp-mono'>{hparam}</span>",
+            unsafe_allow_html=True,
+        )
+        c_p.markdown(glist_display, unsafe_allow_html=True)
+        c_n.markdown(" ".join(flags), unsafe_allow_html=True)
+        if htype in ("user", "group"):
+            if c_a.button("Lens", key=f"slens_{resolved_sid}_{htype}_{hparam}", use_container_width=True):
+                st.session_state["focus_holder"] = {
+                    "type": htype, "param": hparam, "display": glist[0].holder_display,
+                }
+                st.rerun()
+        st.divider()
+
+
+# ---------------------------------------------------------------------------
+# Section: Audit log (last 200 events)
+# ---------------------------------------------------------------------------
+with st.expander("📋 Audit log — recent access changes", expanded=False):
+    if not _schema_ok:
+        st.caption("Postgres unavailable.")
+    else:
+        audit_rows, aerr = db_audit_query(limit=200)
+        if aerr:
+            st.error(aerr)
+        elif not audit_rows:
+            st.markdown(
+                "<div class='jp-empty'>No access changes recorded yet.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div class='jp-audit-row' style='font-weight:600;color:var(--jp-text-mute);'>"
+                "<div>Timestamp</div><div>Action</div><div>Status</div>"
+                "<div>Detail</div><div>Scheme</div></div>",
+                unsafe_allow_html=True,
+            )
+            for r in audit_rows:
+                ts = r["ts"].strftime("%Y-%m-%d %H:%M:%S") if hasattr(r["ts"], "strftime") else str(r["ts"])
+                action = r["action"]
+                pill = f"<span class='jp-pill {'jp-ok' if action=='grant' else 'jp-stray'}'>{action}</span>"
+                status_html = (
+                    "<span class='jp-status-ok'>✓</span>"
+                    if r["ok"]
+                    else f"<span class='jp-status-err'>✗ {r.get('status_code') or 'err'}</span>"
+                )
+                detail = (
+                    f"<code>{r['permission_key']}</code> · "
+                    f"{r['holder_type']} <b>{r.get('holder_display') or r['holder_param']}</b> "
+                    f"<span style='color:var(--jp-text-mute);'>(by {r['actor']})</span>"
+                )
+                if not r["ok"] and r.get("error"):
+                    detail += f"<br><span style='color:var(--jp-red);font-size:.7rem;'>{str(r['error'])[:200]}</span>"
+                st.markdown(
+                    f"<div class='jp-audit-row'>"
+                    f"<div class='jp-ts'>{ts}</div>"
+                    f"<div>{pill}</div>"
+                    f"<div>{status_html}</div>"
+                    f"<div>{detail}</div>"
+                    f"<div>{r.get('scheme_name') or r['scheme_id']}</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                if st.button("⇄ Queue copy/move for preview", type="primary", disabled=not ADMIN):
-                    queued = 0
-                    for g in src_grants:
-                        if not (skip_existing and (g.permission_key, h_dst["type"], h_dst["param"]) in dest_keysets.get(g.scheme_id, set())):
-                            if _queue(PendingOp(
-                                action="grant", scheme_id=g.scheme_id, scheme_name=g.scheme_name,
-                                permission_key=g.permission_key, holder_type=h_dst["type"],
-                                holder_param=h_dst["param"], holder_display=h_dst["display"],
-                            )):
-                                queued += 1
-                        if move:
-                            if _queue(PendingOp(
-                                action="revoke", scheme_id=g.scheme_id, scheme_name=g.scheme_name,
-                                permission_key=g.permission_key, holder_type=g.holder_type,
-                                holder_param=g.holder_param, holder_display=g.holder_display,
-                                permission_id=g.permission_id,
-                            )):
-                                queued += 1
-                    st.success(f"Queued {queued} op(s).")
-
-
-# ===========================================================================
-# Tab: Locate
-# ===========================================================================
-with tab_search:
-    st.markdown("##### Locate a holder across every scheme")
-    h = holder_picker("search_holder", label="Holder to locate")
-    if h:
-        with st.spinner("Scanning all schemes…"):
-            hits: list[Grant] = []
-            for s in schemes:
-                det = fetch_scheme_detail(int(s["id"]))
-                for g in _parse_grants(det):
-                    if g.matches_holder(h["type"], h["param"]):
-                        hits.append(g)
-        if not hits:
-            st.markdown(
-                f"<div class='jp-empty'><b>{h['display']}</b> appears in no scheme.</div>",
-                unsafe_allow_html=True,
+            # Export
+            ec1x, ec2x = st.columns(2)
+            ec1x.download_button(
+                "⬇ JSON",
+                data=json.dumps(audit_rows, default=str, indent=2),
+                file_name=f"jira-access-audit-{int(time.time())}.json",
+                mime="application/json",
+                use_container_width=True,
             )
-        else:
-            by_scheme: dict[int, list[Grant]] = {}
-            for g in hits:
-                by_scheme.setdefault(g.scheme_id, []).append(g)
-            c1, c2 = st.columns(2)
-            c1.metric("Schemes touched", len(by_scheme))
-            c2.metric("Total grants", len(hits))
-            for sid in sorted(by_scheme.keys()):
-                gs = by_scheme[sid]
-                with st.expander(f"{gs[0].scheme_name}  —  {len(gs)} grant(s)", expanded=False):
-                    for g in sorted(gs, key=lambda x: x.permission_key):
-                        st.markdown(f"- `{g.permission_key}` — {perm_name_by_key.get(g.permission_key, g.permission_key)}")
-
-
-# ===========================================================================
-# Tab: Approvals — pending + history. The execution path for every Jira
-# write originates here.
-# ===========================================================================
-with tab_approvals:
-    st.markdown("##### Approval queue")
-    if not _schema_ok:
-        st.markdown(
-            "<div class='jp-empty'>Postgres unavailable — approvals can't be persisted.</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            view_mode = st.radio(
-                "View",
-                options=["pending", "all", "history"],
-                format_func=lambda x: {"pending": "Pending", "all": "All", "history": "History only"}[x],
-                horizontal=True,
-                key="approvals_view_mode",
+            buf = io.StringIO()
+            fieldnames = list(audit_rows[0].keys())
+            w = csv.DictWriter(buf, fieldnames=fieldnames)
+            w.writeheader()
+            for r in audit_rows:
+                w.writerow({k: ("" if v is None else (json.dumps(v, default=str) if isinstance(v, (dict, list)) else str(v))) for k, v in r.items()})
+            ec2x.download_button(
+                "⬇ CSV", data=buf.getvalue(),
+                file_name=f"jira-access-audit-{int(time.time())}.csv",
+                mime="text/csv", use_container_width=True,
             )
-        statuses = None
-        if view_mode == "pending":
-            statuses = ["pending"]
-        elif view_mode == "history":
-            statuses = ["approved", "rejected", "executed", "partial", "failed", "cancelled"]
-
-        approvals, aerr = db_list_approvals(statuses=statuses, limit=200)
-        if aerr:
-            st.error(aerr)
-        elif not approvals:
-            st.markdown(
-                "<div class='jp-empty'>Nothing here yet — submit a draft from the preview pane.</div>",
-                unsafe_allow_html=True,
-            )
-
-        for a in approvals:
-            klass = {
-                "pending":   "",
-                "approved":  "jp-st-approved",
-                "rejected":  "jp-st-rejected",
-                "executed":  "jp-st-executed",
-                "partial":   "jp-st-partial",
-                "failed":    "jp-st-failed",
-                "cancelled": "jp-st-rejected",
-            }.get(a["status"], "")
-            ts_req = a["ts_requested"].strftime("%Y-%m-%d %H:%M") if hasattr(a["ts_requested"], "strftime") else str(a["ts_requested"])
-            head = (
-                f"<div class='jp-approval {klass}'>"
-                f"<div style='display:flex;justify-content:space-between;gap:1rem;'>"
-                f"<div>"
-                f"<b>#{a['id']}</b>  "
-                f"<span class='jp-pill {'jp-grant' if a['status']=='executed' else ('jp-warn' if a['status']=='pending' else ('jp-revoke' if a['status'] in ('rejected','failed') else 'jp-info'))}'>{a['status']}</span>  "
-                f"<span class='jp-pill'>{a['mode']}</span>  "
-                f"<span style='color:var(--jp-text-dim);'>by <b>{a['requester']}</b> · {ts_req}</span>"
-                f"</div>"
-                f"<div style='color:var(--jp-text-mute);font-size:.78rem;'>"
-                f"+{a['grant_count']} grants / −{a['revoke_count']} revokes · {a['schemes_touched']} scheme(s)"
-                f"</div></div>"
-            )
-            if a.get("reason"):
-                head += f"<div style='margin-top:.4rem;font-size:.85rem;color:var(--jp-text-dim);'>📝 {a['reason']}</div>"
-            if a.get("approver"):
-                ts_dec = a["ts_decided"].strftime("%Y-%m-%d %H:%M") if hasattr(a["ts_decided"], "strftime") else str(a.get("ts_decided") or "")
-                head += f"<div style='margin-top:.3rem;font-size:.78rem;color:var(--jp-text-mute);'>Decided by <b>{a['approver']}</b> at {ts_dec}</div>"
-            if a.get("decision_note"):
-                head += f"<div style='font-size:.78rem;color:var(--jp-text-mute);'>💬 {a['decision_note']}</div>"
-            head += "</div>"
-            st.markdown(head, unsafe_allow_html=True)
-
-            if a["status"] == "pending" and ADMIN:
-                with st.expander(f"Inspect & decide on request #{a['id']}", expanded=False):
-                    full, lerr = db_load_approval(int(a["id"]))
-                    if lerr:
-                        st.error(lerr)
-                    elif not full:
-                        st.error("Lookup failed.")
-                    else:
-                        ops = full.get("ops") or []
-                        grants_in = [o for o in ops if o.get("action") == "grant"]
-                        revokes_in = [o for o in ops if o.get("action") == "revoke"]
-                        cc1, cc2 = st.columns(2)
-                        cc1.markdown(f"**Grants ({len(grants_in)})**")
-                        for o in grants_in[:200]:
-                            cc1.markdown(
-                                f"<div class='jp-grant-row jp-add'>"
-                                f"<span class='jp-perm'>+ {o['permission_key']}</span>"
-                                f"<span class='jp-holder'>{o['holder_type']} <b>{o['holder_display']}</b> ⟨{o['holder_param']}⟩ · <i>{o['scheme_name']}</i></span>"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-                        if len(grants_in) > 200:
-                            cc1.caption(f"…and {len(grants_in) - 200} more (truncated)")
-                        cc2.markdown(f"**Revokes ({len(revokes_in)})**")
-                        for o in revokes_in[:200]:
-                            cc2.markdown(
-                                f"<div class='jp-grant-row jp-del'>"
-                                f"<span class='jp-perm'>− {o['permission_key']}</span>"
-                                f"<span class='jp-holder'>{o['holder_type']} <b>{o['holder_display']}</b> ⟨{o['holder_param']}⟩ · <i>{o['scheme_name']}</i></span>"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-                        if len(revokes_in) > 200:
-                            cc2.caption(f"…and {len(revokes_in) - 200} more (truncated)")
-
-                        # Decision controls
-                        is_self_request = (a["requester"] == ACTOR)
-                        two_person = (a["mode"] == "two-person")
-                        block_self_approve = two_person and is_self_request
-                        if block_self_approve:
-                            st.warning(
-                                "Two-person mode: you can't approve your own request. "
-                                "Another admin must decide."
-                            )
-                        note = st.text_input("Decision note (optional)", key=f"appr_note_{a['id']}")
-                        d1, d2, d3 = st.columns(3)
-                        approve_clicked = d1.button(
-                            "✅ Approve & execute", type="primary",
-                            key=f"appr_yes_{a['id']}",
-                            disabled=not ADMIN or block_self_approve,
-                        )
-                        reject_clicked = d2.button(
-                            "❌ Reject", key=f"appr_no_{a['id']}",
-                            disabled=not ADMIN or block_self_approve,
-                        )
-                        cancel_clicked = False
-                        if is_self_request:
-                            cancel_clicked = d3.button(
-                                "🗑 Withdraw (requester)", key=f"appr_cancel_{a['id']}",
-                                disabled=not ADMIN,
-                            )
-
-                        if approve_clicked:
-                            ok, err = db_decide_approval(
-                                int(a["id"]), approver=ACTOR, decision="approved", note=note,
-                            )
-                            if not ok:
-                                st.error(err or "Approval failed.")
-                            else:
-                                # Re-load post-decision (so exec_summary etc. references the live row)
-                                full2, _ = db_load_approval(int(a["id"]))
-                                with st.spinner(f"Applying {full2.get('op_count', 0)} op(s) to Jira…"):
-                                    okc, fc = _execute_approved_request(full2)
-                                if fc == 0:
-                                    st.success(f"All {okc} op(s) applied.")
-                                else:
-                                    st.warning(f"{okc} ok, {fc} failed. See Audit tab.")
-                                st.rerun()
-                        if reject_clicked:
-                            ok, err = db_decide_approval(
-                                int(a["id"]), approver=ACTOR, decision="rejected", note=note,
-                            )
-                            if ok:
-                                st.success("Rejected.")
-                                st.rerun()
-                            else:
-                                st.error(err)
-                        if cancel_clicked:
-                            ok, err = db_decide_approval(
-                                int(a["id"]), approver=ACTOR, decision="cancelled", note=note or "withdrawn by requester",
-                            )
-                            if ok:
-                                st.success("Withdrawn.")
-                                st.rerun()
-                            else:
-                                st.error(err)
-            elif a["status"] in ("executed", "partial", "failed") and a.get("exec_summary"):
-                summary = a["exec_summary"]
-                if isinstance(summary, (str, bytes, bytearray)):
-                    try:
-                        summary = json.loads(summary)
-                    except Exception:
-                        summary = {}
-                if isinstance(summary, dict):
-                    st.caption(
-                        f"Exec result: ✓ {summary.get('ok', 0)} ok · ✗ {summary.get('fail', 0)} fail · "
-                        f"{summary.get('audit_rows', 0)} audit row(s) recorded"
-                    )
-
-
-# ===========================================================================
-# Tab: Audit — query Postgres, filter, export
-# ===========================================================================
-with tab_audit:
-    st.markdown("##### Audit log")
-    if not _schema_ok:
-        st.markdown(
-            "<div class='jp-empty'>Postgres unavailable — audit log can't be read.</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.caption(
-            "Every Jira write that ran through this page. Sourced from "
-            "`jira_perm_audit` in Postgres. Filter by actor, holder, scheme, "
-            "date, or free text. CSV / JSON export for permanent record."
-        )
-        f1, f2, f3, f4 = st.columns(4)
-        with f1:
-            f_since = st.date_input(
-                "Since", value=(datetime.now(timezone.utc) - timedelta(days=14)).date(),
-                key="audit_since",
-            )
-        with f2:
-            f_until = st.date_input(
-                "Until", value=datetime.now(timezone.utc).date(),
-                key="audit_until",
-            )
-        with f3:
-            f_actor = st.text_input("Actor", key="audit_actor")
-        with f4:
-            f_action = st.selectbox("Action", ["", "grant", "revoke"], key="audit_action")
-        f5, f6, f7 = st.columns(3)
-        with f5:
-            f_holder = st.text_input("Holder (substring)", key="audit_holder")
-        with f6:
-            scheme_map_audit = {0: "— Any scheme —", **{int(s["id"]): s["name"] for s in schemes}}
-            f_scheme = st.selectbox(
-                "Scheme", list(scheme_map_audit.keys()),
-                format_func=lambda k: scheme_map_audit[k], key="audit_scheme",
-            )
-        with f7:
-            f_ok = st.selectbox(
-                "Status", ["any", "ok", "err"],
-                format_func=lambda x: {"any":"All","ok":"Successful only","err":"Errors only"}[x],
-                key="audit_okfilter",
-            )
-        f_text = st.text_input("Free-text (matches error, permission, scheme name)", key="audit_text")
-        limit = st.slider("Result limit", 50, 5000, 500, step=50, key="audit_limit")
-
-        since_dt = datetime.combine(f_since, datetime.min.time(), tzinfo=timezone.utc) if f_since else None
-        until_dt = datetime.combine(f_until, datetime.max.time().replace(microsecond=0), tzinfo=timezone.utc) if f_until else None
-        rows, qerr = db_audit_query(
-            since=since_dt, until=until_dt,
-            actor=f_actor, action=f_action,
-            scheme_id=f_scheme if f_scheme else None,
-            holder=f_holder, ok=f_ok, text=f_text, limit=limit,
-        )
-        if qerr:
-            st.error(qerr)
-        else:
-            st.markdown(f"Showing **{len(rows)}** entries.")
-            if not rows:
-                st.markdown(
-                    "<div class='jp-empty'>No audit rows match the filter.</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    "<div class='jp-audit-row' style='font-weight:600;color:var(--jp-text-mute);'>"
-                    "<div>Timestamp (UTC)</div><div>Action</div><div>Status</div>"
-                    "<div>Detail</div><div>Scheme</div></div>",
-                    unsafe_allow_html=True,
-                )
-                for r in rows:
-                    ts = r["ts"].strftime("%Y-%m-%d %H:%M:%S") if hasattr(r["ts"], "strftime") else str(r["ts"])
-                    action = r["action"]
-                    pill = f"<span class='jp-pill jp-{'grant' if action=='grant' else 'revoke'}'>{action}</span>"
-                    if r["ok"]:
-                        status_html = "<span class='jp-status-ok'>✓ ok</span>"
-                    else:
-                        status_html = f"<span class='jp-status-err'>✗ {r.get('status_code') or 'err'}</span>"
-                    detail = (
-                        f"<code>{r['permission_key']}</code> · "
-                        f"{r['holder_type']} <b>{r.get('holder_display') or r['holder_param']}</b> ⟨{r['holder_param']}⟩ "
-                        f"<span style='color:var(--jp-text-mute);'>(by {r['actor']}"
-                        + (f", req #{r['approval_id']}" if r.get('approval_id') else "")
-                        + ")</span>"
-                    )
-                    if not r["ok"] and r.get("error"):
-                        detail += f"<br><span style='color:var(--jp-red);font-size:.75rem;'>{str(r['error'])[:200]}</span>"
-                    st.markdown(
-                        f"<div class='jp-audit-row'>"
-                        f"<div class='jp-ts'>{ts}</div>"
-                        f"<div>{pill}</div>"
-                        f"<div>{status_html}</div>"
-                        f"<div>{detail}</div>"
-                        f"<div>{r.get('scheme_name') or r['scheme_id']}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                st.markdown("---")
-                # Export
-                cE1, cE2 = st.columns(2)
-                cE1.download_button(
-                    "⬇ Export JSON",
-                    data=json.dumps(rows, default=str, indent=2),
-                    file_name=f"jira-perm-audit-{int(time.time())}.json",
-                    mime="application/json",
-                    use_container_width=True,
-                )
-                buf = io.StringIO()
-                fieldnames = list(rows[0].keys())
-                w = csv.DictWriter(buf, fieldnames=fieldnames)
-                w.writeheader()
-                for r in rows:
-                    w.writerow({k: ("" if v is None else (json.dumps(v, default=str) if isinstance(v, (dict, list)) else str(v))) for k, v in r.items()})
-                cE2.download_button(
-                    "⬇ Export CSV",
-                    data=buf.getvalue(),
-                    file_name=f"jira-perm-audit-{int(time.time())}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-
-
-# ===========================================================================
-# Pending preview pane — sticky at the bottom whenever there's a draft.
-# Submits to the approval queue (DB) — no direct Jira call from here.
-# ===========================================================================
-pending = st.session_state["jp_pending"]
-if pending:
-    st.markdown("---")
-    st.markdown("## 🔍 Preview & submit pending draft")
-
-    grants_p = [p for p in pending if p["action"] == "grant"]
-    revokes_p = [p for p in pending if p["action"] == "revoke"]
-
-    c1, c2, c3 = st.columns([1, 1, 2])
-    c1.markdown(
-        f"<div class='jp-card'><div class='jp-diff-num jp-add'>+{len(grants_p)}</div>"
-        f"<div style='color:var(--jp-text-mute);font-size:.8rem;'>grants to add</div></div>",
-        unsafe_allow_html=True,
-    )
-    c2.markdown(
-        f"<div class='jp-card'><div class='jp-diff-num jp-del'>-{len(revokes_p)}</div>"
-        f"<div style='color:var(--jp-text-mute);font-size:.8rem;'>grants to remove</div></div>",
-        unsafe_allow_html=True,
-    )
-    schemes_touched = sorted({p["scheme_id"] for p in pending})
-    c3.markdown(
-        f"<div class='jp-card'><div style='font-size:1.6rem;font-weight:600;'>{len(schemes_touched)}</div>"
-        f"<div style='color:var(--jp-text-mute);font-size:.8rem;'>scheme(s) affected: "
-        + ", ".join(schemes_by_id.get(sid, {}).get("name", str(sid)) for sid in schemes_touched[:8])
-        + ("…" if len(schemes_touched) > 8 else "")
-        + "</div></div>",
-        unsafe_allow_html=True,
-    )
-
-    pending_by_scheme: dict[int, list[dict]] = {}
-    for p in pending:
-        pending_by_scheme.setdefault(p["scheme_id"], []).append(p)
-    for sid in sorted(pending_by_scheme.keys()):
-        ops = pending_by_scheme[sid]
-        sname = ops[0]["scheme_name"]
-        with st.expander(f"{sname}  —  {len(ops)} op(s)", expanded=True):
-            rows = []
-            for p in ops:
-                cls = "jp-add" if p["action"] == "grant" else "jp-del"
-                sym = "+" if p["action"] == "grant" else "−"
-                rows.append(
-                    f"<div class='jp-grant-row {cls}'>"
-                    f"<span class='jp-perm'>{sym}  {p['permission_key']}</span>"
-                    f"<span class='jp-holder'>{p['holder_type']} <b>{p['holder_display']}</b> "
-                    f"<span style='color:var(--jp-text-mute);'>⟨{p['holder_param']}⟩</span></span>"
-                    f"</div>"
-                )
-            st.markdown("".join(rows), unsafe_allow_html=True)
-
-    st.markdown("---")
-    mode = st.session_state["jp_approval_mode"]
-    reason = st.text_input(
-        "Justification (recorded with the request) — required",
-        key="submit_reason",
-        placeholder="e.g. onboarding 5 devs to the Payments project",
-    )
-
-    if mode == "self":
-        st.markdown(
-            f"<span class='jp-pill jp-warn'>Self-approve mode</span> "
-            f"&nbsp;Submitting will record a request, auto-approve as <b>{ACTOR}</b>, "
-            f"then execute immediately.",
-            unsafe_allow_html=True,
-        )
-        confirm_text = f"APPLY {len(pending)}"
-        typed = st.text_input(
-            f"Type **{confirm_text}** to enable submit:",
-            key="apply_confirm_self",
-            disabled=not ADMIN,
-        )
-        ready = ADMIN and reason.strip() and typed.strip() == confirm_text
-        cA, cB = st.columns(2)
-        submit = cA.button(
-            f"🚀 Submit & execute {len(pending)} op(s)", type="primary",
-            disabled=(not ready) or (not _schema_ok),
-        )
-        if cB.button("Discard draft", key="discard_self"):
-            _clear_pending()
-            st.rerun()
-        if submit:
-            aid, err = db_create_approval_request(
-                requester=ACTOR, mode="self", ops=pending, reason=reason.strip(),
-            )
-            if err or not aid:
-                st.error(err or "Could not create approval request.")
-            else:
-                ok, err2 = db_decide_approval(
-                    int(aid), approver=ACTOR, decision="approved",
-                    note="self-approved at submit",
-                )
-                if not ok:
-                    st.error(err2 or "Self-approve failed.")
-                else:
-                    full, _ = db_load_approval(int(aid))
-                    with st.spinner(f"Executing {full.get('op_count', 0)} op(s)…"):
-                        okc, fc = _execute_approved_request(full)
-                    if fc == 0:
-                        st.success(f"Request #{aid}: all {okc} op(s) applied.")
-                    else:
-                        st.warning(f"Request #{aid}: {okc} ok, {fc} failed — see Audit tab.")
-                    _clear_pending()
-                    st.session_state["jp_last_submit_id"] = aid
-
-    else:  # two-person
-        st.markdown(
-            f"<span class='jp-pill jp-info'>Two-person mode</span> "
-            f"&nbsp;Submitting will queue a request for a *different* admin to approve. "
-            f"Nothing reaches Jira until they decide.",
-            unsafe_allow_html=True,
-        )
-        ready = ADMIN and reason.strip() and _schema_ok
-        cA, cB = st.columns(2)
-        submit = cA.button(
-            f"📨 Submit {len(pending)} op(s) for approval", type="primary",
-            disabled=not ready,
-        )
-        if cB.button("Discard draft", key="discard_two"):
-            _clear_pending()
-            st.rerun()
-        if submit:
-            aid, err = db_create_approval_request(
-                requester=ACTOR, mode="two-person", ops=pending, reason=reason.strip(),
-            )
-            if err or not aid:
-                st.error(err or "Submission failed.")
-            else:
-                st.success(f"Request #{aid} queued. Awaiting approval in the **🔐 Approvals** tab.")
-                _clear_pending()
-                st.session_state["jp_last_submit_id"] = aid
-else:
-    st.markdown(
-        "<div style='margin-top:1.5rem;text-align:center;color:var(--jp-text-mute);font-size:.85rem;'>"
-        "No pending draft — queue grants or revokes from the tabs above to preview them here."
-        "</div>",
-        unsafe_allow_html=True,
-    )
