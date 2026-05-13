@@ -73,6 +73,16 @@ try:
 except ImportError:  # pragma: no cover
     _VaultClient = None  # type: ignore
     _VAULT_AVAILABLE = False
+try:
+    # LDAP helpers — used for per-user enrichment (title / department /
+    # manager / direct-reports) and to fetch team rosters via `cn=`. We
+    # use the module wholesale rather than re-implementing its caching
+    # (it already does `@st.cache_data` on get_user_info).
+    from utils import ldap as _ldap_mod  # type: ignore
+    _LDAP_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _ldap_mod = None  # type: ignore
+    _LDAP_AVAILABLE = False
 # Postgres driver — psycopg v3 is preferred; fall back to v2 since both
 # are common in this org. Either is fine for our read-only access.
 try:
@@ -157,9 +167,20 @@ ES_TIMEOUT = 60  # seconds for individual search calls
 # while the commits carry the real author.
 GIT_VAULT_PATH = os.environ.get("GIT_VAULT_PATH", "new_git").strip()
 # Ansible Vault password (for decrypting any vaulted YAML in the inventories
-# repo) is a separate concern — kept env-driven for now since it isn't part
-# of the GitHandler's vault entry.
-ANSIBLE_VAULT_PASSWORD = os.environ.get("ANSIBLE_VAULT_PASSWORD", "")
+# repo) is sourced PER-SESSION from an admin-only UI input. We deliberately
+# never read it from the environment so a misconfigured deployment can't
+# leak the password through `os.environ` logging or container introspection.
+_ANSIBLE_VAULT_SS_KEY = "_ansible_vault_pw_v1"
+
+
+def _ansible_vault_password() -> str:
+    """Resolve the Ansible Vault password from the current session.
+
+    Returns ``""`` when no admin has set it — :func:`_decrypt_vault`
+    raises in that case, and :func:`_read_yaml_file` falls through to a
+    warning that surfaces in the integrations strip + git diagnostic.
+    """
+    return str(st.session_state.get(_ANSIBLE_VAULT_SS_KEY) or "")
 
 INVENTORY_REPO_PATH = "/tmp/inventories"
 INVENTORY_BRANCH = "main"
@@ -2758,6 +2779,26 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     letter-spacing: 0.10em;
     color: var(--cc-text-mute);
     padding-top: 6px;
+}
+.iv-src-pref-state {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-family: var(--cc-mono);
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+.iv-src-pref-state.is-set {
+    background: rgba(5,150,105,.12);
+    color: var(--cc-green);
+    border: 1px solid rgba(5,150,105,.32);
+}
+.iv-src-pref-state.is-unset {
+    background: rgba(217,119,6,.10);
+    color: var(--cc-amber);
+    border: 1px solid rgba(217,119,6,.32);
 }
 .st-key-cc_inv_src_pref [role="radiogroup"] {
     gap: 14px !important;
@@ -13226,6 +13267,30 @@ def _render_event_log() -> None:
             + _stat_pill("requests",    _u.get("requests_made", 0), "⇪")
             + _stat_pill("approvals",   _u.get("approvals", 0),     "✓")
             + _stat_pill("rejections",  _u.get("rejections", 0),    "✕")
+            + _stat_pill("builds req",  _u.get("builds_requested", 0), "▶")
+            + _stat_pill("builds appr", _u.get("builds_approved", 0),  "★")
+            + _stat_pill("deploys req", _u.get("deploys_requested", 0), "⇪")
+            + _stat_pill("deploys appr", _u.get("deploys_approved", 0), "✓")
+        )
+
+        # LDAP enrichment block — only renders when ANY ldap_* field has
+        # a value. Surfaces title / department / manager / company so
+        # the popover doubles as a mini directory card.
+        _ldap_fields = [
+            ("Title",      _u.get("ldap_title") or ""),
+            ("Department", _u.get("ldap_department") or ""),
+            ("Company",    _u.get("ldap_company") or ""),
+            ("Manager",    _u.get("ldap_manager") or ""),
+            ("Username",   _u.get("ldap_username") or ""),
+        ]
+        _ldap_rows = "".join(
+            f'<span class="ap-k">{lbl}</span>'
+            f'<span class="ap-v">{html.escape(val)}</span>'
+            for lbl, val in _ldap_fields if val
+        )
+        _ldap_block = (
+            '<div class="ap-section">Directory (LDAP)</div>' + _ldap_rows
+            if _ldap_rows else ""
         )
         _popovers_html.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop el-user-pop">'
@@ -13243,12 +13308,14 @@ def _render_event_log() -> None:
             f'    <span class="ap-k">Aliases</span>{_alias_html}'
             f'    <span class="ap-k">Team(s)</span><span class="ap-v" '
             f'style="display:flex;flex-wrap:wrap;gap:4px">{_team_chips}</span>'
+            f'    {_ldap_block}'
             f'    <div class="ap-section">Activity</div>'
             f'    <div class="el-user-stats">{_stats_html}</div>'
             f'  </div>'
             f'  <div class="ap-foot">'
             f'    counts span the current scope + time window · sources: '
-            f'    commits / jira / requests / approvals'
+            f'    commits / jira / requests / approvals / builds / deploys · '
+            f'    directory: LDAP'
             f'  </div>'
             f'</div>'
         )
@@ -14145,9 +14212,13 @@ def _decrypt_vault(blob: bytes) -> bytes:
     suppress so a wrong vault password is visible rather than silent."""
     if not _ANSIBLE_VAULT_AVAILABLE:
         raise RuntimeError("ansible.parsing.vault not installed")
-    if not ANSIBLE_VAULT_PASSWORD:
-        raise RuntimeError("ANSIBLE_VAULT_PASSWORD not set")
-    vault = _VaultLib([("default", _VaultSecret(ANSIBLE_VAULT_PASSWORD.encode()))])
+    _pw = _ansible_vault_password()
+    if not _pw:
+        raise RuntimeError(
+            "Ansible Vault password not set — an admin must enter it via "
+            "the in-page input each session."
+        )
+    vault = _VaultLib([("default", _VaultSecret(_pw.encode()))])
     return vault.decrypt(blob)
 
 
@@ -15689,6 +15760,10 @@ def _fetch_users_aggregate(
             "key": key, "email": "", "names": set(), "teams": set(),
             "commits": 0, "jira_authored": 0, "jira_assigned": 0,
             "requests_made": 0, "approvals": 0, "rejections": 0,
+            # CI events — builds + deployments carry plain-string
+            # ``requester`` and ``approver`` per the platform schema.
+            "builds_requested": 0, "builds_approved": 0,
+            "deploys_requested": 0, "deploys_approved": 0,
         })
         if email and not u["email"]:
             u["email"] = _norm(email)
@@ -15790,6 +15865,21 @@ def _fetch_users_aggregate(
     _bucket_into("approval", "RequestedBy.keyword", "", "requests_made",
                  scope_filters_list, "RequestDate")
 
+    # ── 5. BUILDS — lowercase `requester` + `approver` per the platform
+    # schema. Both fields are plain name strings; merge into name-keyed
+    # buckets that fold back to the email canonical via the reconciliation
+    # pass below.
+    _bucket_into("builds", "requester.keyword", "", "builds_requested",
+                 commit_scope_list, "startdate")
+    _bucket_into("builds", "approver.keyword", "", "builds_approved",
+                 commit_scope_list, "startdate")
+
+    # ── 6. DEPLOYMENTS — same field shape as builds.
+    _bucket_into("deployments", "requester.keyword", "", "deploys_requested",
+                 commit_scope_list, "startdate")
+    _bucket_into("deployments", "approver.keyword", "", "deploys_approved",
+                 commit_scope_list, "startdate")
+
     # ── Final reconciliation pass — merge name-only buckets into
     # email-keyed buckets where the name has a known email from commits.
     if name_to_email:
@@ -15811,13 +15901,17 @@ def _fetch_users_aggregate(
                 "key": em, "email": em, "names": set(), "teams": set(),
                 "commits": 0, "jira_authored": 0, "jira_assigned": 0,
                 "requests_made": 0, "approvals": 0, "rejections": 0,
+                "builds_requested": 0, "builds_approved": 0,
+                "deploys_requested": 0, "deploys_approved": 0,
             })
             dst["email"] = em
             dst["names"].update(src["names"])
             dst["teams"].update(src["teams"])
             for fld in ("commits", "jira_authored", "jira_assigned",
-                        "requests_made", "approvals", "rejections"):
-                dst[fld] += src[fld]
+                        "requests_made", "approvals", "rejections",
+                        "builds_requested", "builds_approved",
+                        "deploys_requested", "deploys_approved"):
+                dst[fld] += src.get(fld, 0)
             dst["key"] = em
 
     # Finalise — convert sets → sorted lists, compute totals, pick label.
@@ -15826,24 +15920,38 @@ def _fetch_users_aggregate(
         names_sorted = sorted(u["names"])
         teams_sorted = sorted(u["teams"])
         total = (
-            u["commits"] + u["jira_authored"] + u["jira_assigned"]
-            + u["requests_made"] + u["approvals"] + u["rejections"]
+            u["commits"]
+            + u["jira_authored"] + u["jira_assigned"]
+            + u["requests_made"]
+            + u["approvals"] + u["rejections"]
+            + u["builds_requested"] + u["builds_approved"]
+            + u["deploys_requested"] + u["deploys_approved"]
         )
         if total == 0:
             continue
         out_users.append({
-            "key":           u["key"],
-            "email":         u["email"],
-            "names":         names_sorted,
-            "label":         names_sorted[0] if names_sorted else (u["email"] or u["key"]),
-            "teams":         teams_sorted,
-            "commits":       u["commits"],
-            "jira_authored": u["jira_authored"],
-            "jira_assigned": u["jira_assigned"],
-            "requests_made": u["requests_made"],
-            "approvals":     u["approvals"],
-            "rejections":    u["rejections"],
-            "total":         total,
+            "key":              u["key"],
+            "email":            u["email"],
+            "names":            names_sorted,
+            "label":            names_sorted[0] if names_sorted else (u["email"] or u["key"]),
+            "teams":            teams_sorted,
+            "commits":          u["commits"],
+            "jira_authored":    u["jira_authored"],
+            "jira_assigned":    u["jira_assigned"],
+            "requests_made":    u["requests_made"],
+            "approvals":        u["approvals"],
+            "rejections":       u["rejections"],
+            "builds_requested": u["builds_requested"],
+            "builds_approved":  u["builds_approved"],
+            "deploys_requested": u["deploys_requested"],
+            "deploys_approved": u["deploys_approved"],
+            "total":            total,
+            # LDAP enrichment slots — populated by the un-cached wrapper.
+            "ldap_title":      "",
+            "ldap_department": "",
+            "ldap_company":    "",
+            "ldap_manager":    "",
+            "ldap_username":   "",
         })
     out_users.sort(key=lambda u: (-u["total"], u["label"].lower()))
     return {
@@ -15851,6 +15959,49 @@ def _fetch_users_aggregate(
         "errors":      errors,
         "checked_at":  datetime.now(timezone.utc).isoformat(),
     }
+
+
+# LDAP enrichment — sits OUTSIDE the cached aggregator so the per-user
+# directory lookups can happen on the freshly-loaded user list. LDAP
+# queries themselves are individually cached by utils.ldap, so repeated
+# calls within the same session don't keep hitting the server.
+
+def _ldap_enrich_users(users_blob: dict) -> dict:
+    """Decorate the aggregator's user list with LDAP fields (title /
+    department / company / manager / username). Best-effort — when LDAP
+    is unreachable or a lookup misses the user is left as-is. Returns the
+    same dict instance, with each user's ``ldap_*`` slots populated."""
+    if not _LDAP_AVAILABLE:
+        return users_blob
+    users = users_blob.get("users") or []
+    for u in users:
+        if not u.get("email"):
+            continue
+        try:
+            info = _ldap_mod.get_user_info_by_email(u["email"])
+        except Exception:
+            info = None
+        if not isinstance(info, dict):
+            continue
+        u["ldap_username"]   = (info.get("username") or "").strip()
+        u["ldap_title"]      = (info.get("title") or "").strip()
+        u["ldap_department"] = (info.get("department") or "").strip()
+        u["ldap_company"]    = (info.get("ldapcompany") or info.get("company") or "").strip()
+        u["ldap_manager"]    = (info.get("manager") or "").strip()
+    return users_blob
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _ldap_team_members(team_cn: str) -> list[str]:
+    """Cached wrapper around ``utils.ldap.get_team_members`` — keyed on
+    the team CN so repeated calls reuse the result. Returns ``[]`` when
+    LDAP is unavailable / unreachable / the team isn't found."""
+    if not _LDAP_AVAILABLE or not team_cn:
+        return []
+    try:
+        return list(_ldap_mod.get_team_members(team_cn) or [])
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -16493,6 +16644,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _users_blob = _fetch_users_aggregate(
         _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
     )
+    # LDAP enrichment — populates ldap_* slots per user. Caching is
+    # handled inside utils.ldap (`get_user_info` is @st.cache_data
+    # ttl=18000), so the enrichment overhead is bounded across reruns.
+    _users_blob = _ldap_enrich_users(_users_blob)
     _users_list: list[dict] = _users_blob.get("users") or []
     # Build identity → user indices for fast lookup from event-log strings.
     _users_by_email: dict[str, dict] = {
@@ -17186,16 +17341,47 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             f'</div>', unsafe_allow_html=True)
 
                     # ── Users (right after Teams, before Projects) ───────
+                    # Always render the section header so admins know the
+                    # facet exists even when zero users appear in scope.
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph" '
+                        'style="color:var(--cc-amber)">👤</span>'
+                        '<span class="iv-fc-section-label">Users</span>'
+                        '</div>', unsafe_allow_html=True)
                     if _iv_users_opts:
-                        st.markdown(
-                            '<div class="iv-fc-section">'
-                            '<span class="iv-fc-section-glyph" '
-                            'style="color:var(--cc-amber)">👤</span>'
-                            '<span class="iv-fc-section-label">Users</span>'
-                            '</div>', unsafe_allow_html=True)
                         _render_tile_ms_labeled("user", _iv_users_opts,
                                                 _iv_users_label,
                                                 "Select team members")
+                    else:
+                        _users_blob_v1 = (
+                            st.session_state.get("_users_blob_v1") or {}
+                        )
+                        _u_errors = _users_blob_v1.get("errors") or {}
+                        _err_summary = (
+                            " · ".join(
+                                f"{k}: {v}" for k, v in _u_errors.items() if v
+                            )
+                            if _u_errors else ""
+                        )
+                        if _err_summary:
+                            st.markdown(
+                                f'<div class="iv-fc-hint" style="color:var(--cc-red)">'
+                                f'No users detected in scope — aggregator '
+                                f'returned errors: {html.escape(_err_summary)[:280]}'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                '<div class="iv-fc-hint">'
+                                'No users detected in the current scope + '
+                                'time window. Widen the time window or '
+                                'change project / company filters to surface '
+                                'commits / jira / build / deploy activity.'
+                                '</div>',
+                                unsafe_allow_html=True,
+                            )
 
                     st.markdown(
                         '<div class="iv-fc-section">'
@@ -19388,6 +19574,53 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         "is visible. Elasticsearch-only bypasses git entirely."
                     ),
                 )
+
+        # ── Admin-only Ansible Vault password input ─────────────────────
+        # The password sits in session_state, NEVER on disk and NEVER in
+        # an env var. Re-entered each session. Required before vaulted
+        # YAML files in the inventories repo can be decrypted. The
+        # in-page indicator shows whether it's currently set so admins
+        # don't repeatedly re-enter it within a session.
+        with st.container(key="cc_ansible_vault_pw"):
+            _pw_set = bool(_ansible_vault_password())
+            _p1, _p2, _p3 = st.columns([2, 4, 1])
+            with _p1:
+                st.markdown(
+                    f'<div class="iv-src-pref-lbl">'
+                    f'Ansible Vault password '
+                    f'<span class="iv-src-pref-state '
+                    f'{"is-set" if _pw_set else "is-unset"}">'
+                    f'{"✓ set" if _pw_set else "○ not set"}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _p2:
+                _pw_typed = st.text_input(
+                    "Ansible Vault password",
+                    type="password",
+                    placeholder="paste password to decrypt vaulted YAMLs",
+                    key="_ansible_vault_pw_input",
+                    label_visibility="collapsed",
+                    help=(
+                        "Admin-only · NEVER persisted to disk or vault · "
+                        "session-scoped only. Required to decrypt any "
+                        "ansible-vault YAML files in the inventories repo. "
+                        "Re-enter each session."
+                    ),
+                )
+                # Only mutate the canonical key when the input was filled —
+                # otherwise we'd clobber an already-set value on every
+                # rerun where the input renders empty.
+                if _pw_typed:
+                    st.session_state[_ANSIBLE_VAULT_SS_KEY] = _pw_typed
+            with _p3:
+                if _pw_set and st.button("✕ Clear",
+                                         key="_ansible_vault_pw_clear_btn",
+                                         use_container_width=True,
+                                         help="Wipe the password from session state"):
+                    st.session_state.pop(_ANSIBLE_VAULT_SS_KEY, None)
+                    st.session_state.pop("_ansible_vault_pw_input", None)
+                    st.rerun()
 
         if _src == "git-forced-failed":
             # Admin explicitly forced git but git failed. Don't fall back
