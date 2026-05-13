@@ -2594,6 +2594,93 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-style: italic;
 }
 
+/* ── EVENT-LOG USER TRIGGERS + POPOVERS ───────────────────────────────────
+ * Each Requester / Approver cell carrying a recognised user becomes a
+ * compact button that opens a per-user popover with the cross-index
+ * activity counts. The button itself stays subtle (typographic) so the
+ * event log retains its current density. */
+.el-user-trigger {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    color: var(--cc-text);
+    font-family: var(--cc-sans);
+    font-size: 0.76rem;
+    text-align: left;
+    cursor: pointer;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+    border-bottom: 1px dashed rgba(79,70,229,.30);
+    transition: color .12s, border-color .12s;
+}
+.el-user-trigger:hover {
+    color: var(--cc-accent);
+    border-bottom-color: var(--cc-accent);
+}
+.el-user-pop {
+    /* Slightly narrower than the app popover so the stat grid sits tight. */
+    width: min(540px, 90vw);
+}
+.el-user-pop-email {
+    font-family: var(--cc-mono);
+    font-size: 0.78rem;
+    color: var(--cc-accent);
+    text-decoration: none;
+    word-break: break-all;
+}
+.el-user-pop-email:hover { text-decoration: underline; }
+.el-user-stats {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 6px;
+    margin: 4px 0 2px 0;
+}
+.el-user-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 7px 6px 6px 6px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+}
+.el-user-stat.is-nonzero {
+    background: rgba(79,70,229,.05);
+    border-color: rgba(79,70,229,.32);
+}
+.el-user-stat-glyph {
+    font-size: 1rem;
+    color: var(--cc-text-mute);
+    line-height: 1;
+}
+.el-user-stat.is-nonzero .el-user-stat-glyph { color: var(--cc-accent); }
+.el-user-stat-val {
+    font-family: var(--cc-mono);
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+}
+.el-user-stat.is-zero .el-user-stat-val {
+    color: var(--cc-text-mute);
+}
+.el-user-stat.is-nonzero .el-user-stat-val { color: var(--cc-accent); }
+.el-user-stat-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--cc-text-mute);
+    margin-top: 2px;
+    font-weight: 700;
+}
+
 /* Source-selector radio strip — admin-only inline control above the
  * source pill / banner. Tight + horizontal so it reads as a toggle, not a
  * full form. */
@@ -10308,17 +10395,12 @@ _PEOPLE_LOADED_KEY = "_people_insights_loaded_v1"
 
 
 def _render_people_insights_panel(start_dt, end_dt) -> None:
-    """Smart-loaded per-user activity panel. ``start_dt`` / ``end_dt`` are
-    the page-level time-window datetimes (from the rail). The fetcher
-    requires both scope-filter shapes (commits get the commit-specific
-    extras like service-account exclusion); we serialise them here so the
-    cached fetcher's args are picklable JSON strings."""
-    sf_list = list(scope_filters())
-    cs_list = list(commit_scope_filters())
-    sf_json = json.dumps(sf_list, sort_keys=True, default=str)
-    cs_json = json.dumps(cs_list, sort_keys=True, default=str)
-    start_iso = start_dt.astimezone(timezone.utc).isoformat()
-    end_iso = end_dt.astimezone(timezone.utc).isoformat()
+    """Per-user activity panel — reads the already-cached users aggregate
+    that ``_render_inventory_view`` fetches on every render (so this panel
+    no longer needs its own smart-load gate; the data is always there)."""
+    diff = st.session_state.get("_users_blob_v1") or {}
+    users = diff.get("users") or []
+    errors = diff.get("errors") or {}
 
     st.markdown(
         '<div class="ppl-section-divider">'
@@ -10329,65 +10411,12 @@ def _render_people_insights_panel(start_dt, end_dt) -> None:
         unsafe_allow_html=True,
     )
 
-    if not st.session_state.get(_PEOPLE_LOADED_KEY):
-        st.markdown(
-            '<div class="ppl-gate">'
-            '  <div class="ppl-gate-glyph">👤</div>'
-            '  <div class="ppl-gate-title">Run people insights</div>'
-            '  <div class="ppl-gate-body">'
-            '    Aggregates per-user activity across the event indices for '
-            '    the <b>current scope</b> + the <b>active time window</b>, '
-            '    reconciled on canonical email address (commits supply '
-            '    most of the email ↔ name pairs; jira / requests / '
-            '    approvals merge in via name matching).<br/><br/>'
-            '    Counts surfaced per user: commits, jira authored, jira '
-            '    assigned, requests made, approvals, rejections.<br/>'
-            '    Team affiliation is inferred from jira <code>reporterteam</code> '
-            '    when present.'
-            '  </div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        _g1, _g2, _g3 = st.columns([1, 2, 1])
-        with _g2:
-            if st.button("▶  Load people insights",
-                         key="_people_load_btn",
-                         type="primary",
-                         use_container_width=True):
-                with st.spinner("Aggregating per-user activity..."):
-                    st.session_state[_PEOPLE_LOADED_KEY] = (
-                        _fetch_users_aggregate(sf_json, cs_json,
-                                               start_iso, end_iso)
-                    )
-                st.rerun()
-        return
-
-    diff = st.session_state.get(_PEOPLE_LOADED_KEY) or {}
-    users = diff.get("users") or []
-    errors = diff.get("errors") or {}
-
-    # ── Control row ────────────────────────────────────────────────────────
-    _cc1, _cc2, _cc3 = st.columns([1, 1, 6])
-    with _cc1:
-        if st.button("↻ Re-run", key="_people_rerun_btn",
-                     use_container_width=True):
-            with st.spinner("Re-aggregating..."):
-                st.session_state[_PEOPLE_LOADED_KEY] = (
-                    _fetch_users_aggregate(sf_json, cs_json,
-                                           start_iso, end_iso)
-                )
-            st.rerun()
-    with _cc2:
-        if st.button("✕ Clear", key="_people_clear_btn",
-                     use_container_width=True):
-            st.session_state.pop(_PEOPLE_LOADED_KEY, None)
-            st.rerun()
-    with _cc3:
-        _ts = (diff.get("checked_at") or "").replace("T", " ")[:19]
-        st.caption(
-            f"comparison run at {_ts} UTC · canonical key: email · "
-            f"team affiliation from jira reporterteam"
-        )
+    _ts = (diff.get("checked_at") or "").replace("T", " ")[:19]
+    st.caption(
+        f"snapshot at {_ts} UTC · canonical key: email · "
+        f"team affiliation from jira reporterteam · "
+        f"counts mirror the current scope + time window"
+    )
 
     if errors:
         _err_lines = "".join(
@@ -12216,6 +12245,48 @@ def _render_event_log() -> None:
             if all(_t in _el_haystack(ev) for _t in _el_terms)
         ]
 
+    # ── User-filter pass — apply selected Users from the Filter Console ────
+    # Inventory rows can't be filtered by user directly (rows have no user
+    # field; the link is user→team→row). Event rows DO have user fields,
+    # so the user filter actually narrows the event log meaningfully:
+    # only events authored by / requested by / approved by / rejected by
+    # one of the selected users survive.
+    _sel_user_keys = list(st.session_state.get("_sel_user_keys_v1") or [])
+    _users_by_email_v1 = st.session_state.get("_users_by_email_v1") or {}
+    _users_by_name_v1 = st.session_state.get("_users_by_name_v1") or {}
+    _users_by_key_v1 = st.session_state.get("_users_by_key_v1") or {}
+    if _sel_user_keys and events:
+        # Build the set of identity strings we'll accept on each event row.
+        _accept_emails: set[str] = set()
+        _accept_names: set[str] = set()
+        for _k in _sel_user_keys:
+            _u = _users_by_key_v1.get(_k) or {}
+            if _u.get("email"):
+                _accept_emails.add(_u["email"])
+            for _nm in _u.get("names") or []:
+                _accept_names.add(_nm.strip().lower())
+
+        def _event_user_match(_ev: dict) -> bool:
+            """True when any user field on the event matches a selected user.
+            commits store ``Name / email`` in Requester/Approver; jira /
+            requests use a plain name; approvals use names too. Split on
+            ``/`` and match either side."""
+            for _fld in ("Requester", "Approver"):
+                _s = (_ev.get(_fld) or "").strip()
+                if not _s:
+                    continue
+                for _part in (p.strip() for p in _s.split("/")):
+                    if not _part:
+                        continue
+                    _p_lower = _part.lower()
+                    if _p_lower in _accept_emails:
+                        return True
+                    if _p_lower in _accept_names:
+                        return True
+            return False
+
+        events = [ev for ev in events if _event_user_match(ev)]
+
     if not events:
         if _total_events_unfiltered:
             inline_note(
@@ -12323,6 +12394,10 @@ def _render_event_log() -> None:
         """Deterministic DOM id for an app+version liveness/security popover."""
         return _slug(f"{app}--{version}", "el-ver-pop-")
 
+    def _user_pop_id(key: str) -> str:
+        """Deterministic DOM id for a per-user popover."""
+        return _slug(key, "el-user-pop-")
+
     def _app_cell(ev: dict) -> str:
         """Render the Application column — clickable popover trigger when we
         have inventory data for it; otherwise plain text."""
@@ -12398,14 +12473,45 @@ def _render_event_log() -> None:
             f'font-family:var(--cc-mono)">{_lbl}</span>'
         )
 
+    def _user_lookup(s: str) -> dict | None:
+        """Resolve a free-form person string from an event row (which may
+        be ``"Name / email"`` for commits, a bare name for jira/requests,
+        or an email) into the matching user record from the aggregate.
+        Returns ``None`` when no match exists — caller renders a plain
+        span in that case."""
+        if not s:
+            return None
+        _by_email = st.session_state.get("_users_by_email_v1") or {}
+        _by_name = st.session_state.get("_users_by_name_v1") or {}
+        for _part in (p.strip() for p in s.split("/")):
+            if not _part:
+                continue
+            _p_lower = _part.lower()
+            u = _by_email.get(_p_lower)
+            if u:
+                return u
+            u = _by_name.get(_p_lower)
+            if u:
+                return u
+        return None
+
     def _person_cell(val: str) -> str:
         if not val:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
+        _u = _user_lookup(val)
+        if _u:
+            _pid = _user_pop_id(_u["key"])
+            return (
+                f'<button type="button" class="el-user-trigger" '
+                f'popovertarget="{_pid}" '
+                f'title="{html.escape(val, quote=True)} — click for stats">'
+                f'{html.escape(val)}</button>'
+            )
         return (
             f'<span style="color:var(--cc-text-dim);font-size:0.76rem;'
             f'max-width:180px;display:inline-block;overflow:hidden;'
             f'text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" '
-            f'title="{val}">{val}</span>'
+            f'title="{html.escape(val, quote=True)}">{html.escape(val)}</span>'
         )
 
     def _freshness_tier(_ts) -> str:
@@ -13003,6 +13109,86 @@ def _render_event_log() -> None:
     else:
         _rows = "".join(_row_html(ev, include_project=True) for ev in events)
         _main_html = _table_shell(_rows, include_project=True, max_h="60vh")
+
+    # ── Per-user popovers — one per unique user appearing in the visible
+    # event rows. Built off the cached users aggregate so we get the full
+    # cross-index counts + inferred teams. Non-aggregate user mentions
+    # (e.g. a system bot the aggregator didn't track) just render as plain
+    # text via the fallback path in _person_cell.
+    _users_in_view: dict[str, dict] = {}
+    for _ev in events:
+        for _fld in ("Requester", "Approver"):
+            _v_str = (_ev.get(_fld) or "").strip()
+            if not _v_str:
+                continue
+            _u = _user_lookup(_v_str)
+            if _u and _u["key"] not in _users_in_view:
+                _users_in_view[_u["key"]] = _u
+    for _u in _users_in_view.values():
+        _pid = _user_pop_id(_u["key"])
+        _name = html.escape(_u.get("label") or _u.get("email") or _u["key"])
+        _email = _u.get("email") or ""
+        _email_html = (
+            f'<a class="el-user-pop-email" href="mailto:{html.escape(_email, quote=True)}">'
+            f'{html.escape(_email)}</a>'
+            if _email else '<span class="ap-v empty">— no email known —</span>'
+        )
+        _team_chips = (
+            " ".join(
+                f'<span class="ap-chip">{html.escape(t)}</span>'
+                for t in (_u.get("teams") or [])
+            ) or '<span class="ap-v empty">—</span>'
+        )
+        _aliases = sorted({n for n in (_u.get("names") or []) if n})
+        _alias_html = (
+            '<span class="ap-v">' + ", ".join(
+                html.escape(n) for n in _aliases
+            ) + '</span>'
+            if len(_aliases) > 1 else '<span class="ap-v empty">—</span>'
+        )
+        # Activity stat grid — six counts; nonzero ones highlight.
+        def _stat_pill(lbl: str, val: int, glyph: str) -> str:
+            _cls = "is-zero" if val == 0 else "is-nonzero"
+            return (
+                f'<div class="el-user-stat {_cls}">'
+                f'<span class="el-user-stat-glyph">{glyph}</span>'
+                f'<span class="el-user-stat-val">{val:,}</span>'
+                f'<span class="el-user-stat-lbl">{lbl}</span>'
+                f'</div>'
+            )
+        _stats_html = (
+            _stat_pill("commits",       _u.get("commits", 0),       "⎇")
+            + _stat_pill("jira authored", _u.get("jira_authored", 0), "✎")
+            + _stat_pill("jira assigned", _u.get("jira_assigned", 0), "◎")
+            + _stat_pill("requests",    _u.get("requests_made", 0), "⇪")
+            + _stat_pill("approvals",   _u.get("approvals", 0),     "✓")
+            + _stat_pill("rejections",  _u.get("rejections", 0),    "✕")
+        )
+        _popovers_html.append(
+            f'<div id="{_pid}" popover="auto" class="el-app-pop el-user-pop">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">👤</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Team member · current window</div>'
+            f'      <div class="ap-title">{_name}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_pid}" popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    <div class="ap-section">Identity</div>'
+            f'    <span class="ap-k">Email</span><span class="ap-v">{_email_html}</span>'
+            f'    <span class="ap-k">Aliases</span>{_alias_html}'
+            f'    <span class="ap-k">Team(s)</span><span class="ap-v" '
+            f'style="display:flex;flex-wrap:wrap;gap:4px">{_team_chips}</span>'
+            f'    <div class="ap-section">Activity</div>'
+            f'    <div class="el-user-stats">{_stats_html}</div>'
+            f'  </div>'
+            f'  <div class="ap-foot">'
+            f'    counts span the current scope + time window · sources: '
+            f'    commits / jira / requests / approvals'
+            f'  </div>'
+            f'</div>'
+        )
 
     # Thin caption under the pill bar — reminds users about the interactive
     # popovers now that the type-count summary lives in the stats card.
@@ -15991,6 +16177,33 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     st.session_state["_iv_source_v1"] = _iv_source
     st.session_state["_iv_source_status_v1"] = _iv_source_status
     st.session_state["_iv_source_warnings_v1"] = list(_iv_source_warnings)
+
+    # ── Users aggregate — fetched once per scope+window via the cached
+    # aggregator, then stashed for the Filter Console, the inventory user
+    # filter, the People Insights panel, AND the event log's per-user
+    # popovers. Cache hit on repeat renders.
+    _users_sf_json = json.dumps(list(scope_filters()), sort_keys=True, default=str)
+    _users_cs_json = json.dumps(list(commit_scope_filters()), sort_keys=True, default=str)
+    _users_start_iso = start_dt.astimezone(timezone.utc).isoformat()
+    _users_end_iso = end_dt.astimezone(timezone.utc).isoformat()
+    _users_blob = _fetch_users_aggregate(
+        _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
+    )
+    _users_list: list[dict] = _users_blob.get("users") or []
+    # Build identity → user indices for fast lookup from event-log strings.
+    _users_by_email: dict[str, dict] = {
+        u["email"]: u for u in _users_list if u.get("email")
+    }
+    _users_by_name: dict[str, dict] = {}
+    for u in _users_list:
+        for nm in u.get("names") or []:
+            _users_by_name.setdefault(nm.strip().lower(), u)
+    _users_by_key: dict[str, dict] = {u["key"]: u for u in _users_list}
+    st.session_state["_users_blob_v1"] = _users_blob
+    st.session_state["_users_by_email_v1"] = _users_by_email
+    st.session_state["_users_by_name_v1"] = _users_by_name
+    st.session_state["_users_by_key_v1"] = _users_by_key
+
     # Mutable view that search/pills/sort narrow. Popovers are always built
     # from _inv_rows_all, so cached HTML remains correct when filters change.
     _inv_rows = list(_inv_rows_all)
@@ -16192,6 +16405,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_filter_keys = {
         "company": "iv_f_company_v1",
         "team":    "iv_f_team_v1",
+        "user":    "iv_f_user_v1",
         "project": "iv_f_project_v1",
         "app":     "iv_f_app_v1",
         "build":   "iv_tech_pills_v1",
@@ -16220,12 +16434,24 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # ── Read current selections (before applying any filter) ──────────────
     _sel_company  = list(st.session_state.get(_iv_filter_keys["company"]) or [])
     _sel_team     = list(st.session_state.get(_iv_filter_keys["team"])    or [])
+    _sel_user     = list(st.session_state.get(_iv_filter_keys["user"])    or [])
     _sel_project  = list(st.session_state.get(_iv_filter_keys["project"]) or [])
     _sel_app      = list(st.session_state.get(_iv_filter_keys["app"])     or [])
     _sel_build    = list(st.session_state.get(_iv_filter_keys["build"])   or [])
     _sel_deploy   = list(st.session_state.get(_iv_filter_keys["deploy"])  or [])
     _sel_platform = list(st.session_state.get(_iv_filter_keys["platform"]) or [])
     _sel_combo    = list(st.session_state.get(_iv_filter_keys["combo"])   or [])
+
+    # Pre-compute the team set the selected users belong to, so the user
+    # filter can narrow inventory rows via their teams (inventory rows
+    # don't carry user identities directly — the link is user→team→row).
+    _sel_user_teams: set[str] = set()
+    for _uk in _sel_user:
+        _u = _users_by_key.get(_uk)
+        if _u:
+            _sel_user_teams.update(_u.get("teams") or [])
+    # Publish the selected-user keys for the event log fragment to apply.
+    st.session_state["_sel_user_keys_v1"] = list(_sel_user)
 
     # Pill selections are "glyph value · count" strings — extract the raw value.
     def _pill_to_val(opt: str) -> str:
@@ -16270,6 +16496,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if exclude != "team" and _sel_team:
             _s = set(_sel_team)
             out = [r for r in out if _iv_row_teams(r) & _s]
+        # Users → inventory link is indirect (via their teams). When users
+        # are selected, narrow rows to projects owned by ANY of those
+        # users' teams. Users without an inferred team don't narrow the
+        # inventory at all (they only affect the event log filter).
+        if exclude != "user" and _sel_user and _sel_user_teams:
+            out = [r for r in out if _iv_row_teams(r) & _sel_user_teams]
         if exclude != "project" and _sel_project:
             _s = set(_sel_project)
             out = [r for r in out if (r.get("project") or "") in _s]
@@ -16318,6 +16550,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     if not _is_admin and _iv_session_teams:
         _legal = set(_iv_session_teams)
         _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if t in _legal}
+    # ── Users option dict — leave-one-out by user-filter exclusion ────────
+    # Each user has a key (canonical email/name) + display label. We surface
+    # the activity total in the count so users sort by impact in the
+    # multiselect. Non-admins only see users whose teams intersect their
+    # session teams (or themselves) — keeps the picker scoped to people
+    # they have visibility into.
+    _iv_users_rows = _apply_iv_filters(_inv_rows, exclude="user")
+    _iv_users_scope_teams: set[str] = set()
+    for _r in _iv_users_rows:
+        _iv_users_scope_teams.update(_iv_row_teams(_r))
+    _iv_users_opts: dict[str, int] = {}
+    _iv_users_label: dict[str, str] = {}
+    for _u in _users_list:
+        # Admin sees everyone. Non-admin only sees users on a team they own,
+        # plus themselves (so each user can always find their own activity).
+        if not _is_admin:
+            _u_teams = set(_u.get("teams") or [])
+            if _u_teams and _iv_session_teams and not (_u_teams & set(_iv_session_teams)):
+                # User has known teams, none match the viewer's — hide.
+                continue
+        # When user filter narrows the inventory by their team, also align
+        # this user list with the active scope teams (admin) — but only if
+        # there ARE inferred teams; otherwise show the user anyway since
+        # we have no team metadata to gate on.
+        _label = _u.get("label") or _u.get("email") or _u.get("key")
+        _iv_users_opts[_u["key"]] = int(_u.get("total") or 0)
+        _iv_users_label[_u["key"]] = _label
+
     _iv_projects_opts  = _count_single(_apply_iv_filters(_inv_rows, exclude="project"), "project")
     _iv_apps_opts      = _count_single(_apply_iv_filters(_inv_rows, exclude="app"), "application")
     _iv_build_opts     = _count_single(_apply_iv_filters(_inv_rows, exclude="build"), "build_technology")
@@ -16416,6 +16676,41 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         def _fmt(v: str) -> str:
             _c = opts.get(v, 0)
             return f"{v}  ·  {_c}" if _c else f"{v}  ·  (filtered out)"
+        st.markdown(
+            f'<div class="iv-fc-hint">{len(opts)} available · '
+            f'{len(_cur)} selected</div>',
+            unsafe_allow_html=True,
+        )
+        st.multiselect(
+            placeholder, options=_sorted_vals, key=ss_key,
+            label_visibility="collapsed", placeholder=placeholder,
+            format_func=_fmt,
+        )
+
+    def _render_tile_ms_labeled(dim_key: str, opts: dict[str, int],
+                                labels: dict[str, str],
+                                placeholder: str) -> None:
+        """Same as :func:`_render_tile_ms` but the option *value* (stored in
+        session_state) is a key while the displayed label is looked up in
+        ``labels``. Used for Users where the canonical key is an email but
+        the operator wants to see "Display Name · email · count"."""
+        ss_key = _iv_filter_keys[dim_key]
+        _cur = list(st.session_state.get(ss_key) or [])
+        _union = set(opts.keys()) | set(_cur)
+        _sorted_vals = sorted(
+            _union,
+            key=lambda v: (-opts.get(v, 0), (labels.get(v) or v).lower()),
+        )
+
+        def _fmt(v: str) -> str:
+            _c = opts.get(v, 0)
+            _lbl = labels.get(v, v)
+            # Append the email to disambiguate similarly-named users.
+            _suffix = f" · {v}" if v != _lbl.lower() and "@" in v else ""
+            return (
+                f"{_lbl}{_suffix}  ·  {_c}" if _c
+                else f"{_lbl}{_suffix}  ·  (filtered out)"
+            )
         st.markdown(
             f'<div class="iv-fc-hint">{len(opts)} available · '
             f'{len(_cur)} selected</div>',
@@ -16585,6 +16880,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             f'<span class="iv-fc-locked-val">{html.escape(_iv_session_teams[0])}</span>'
                             f'<span class="iv-fc-locked-tag">scoped</span>'
                             f'</div>', unsafe_allow_html=True)
+
+                    # ── Users (right after Teams, before Projects) ───────
+                    if _iv_users_opts:
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph" '
+                            'style="color:var(--cc-amber)">👤</span>'
+                            '<span class="iv-fc-section-label">Users</span>'
+                            '</div>', unsafe_allow_html=True)
+                        _render_tile_ms_labeled("user", _iv_users_opts,
+                                                _iv_users_label,
+                                                "Select team members")
 
                     st.markdown(
                         '<div class="iv-fc-section">'
