@@ -530,6 +530,7 @@ def db_audit_insert(rows: list[dict]) -> tuple[int, str]:
             pass
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def db_audit_query(*, limit: int = 200) -> tuple[list[dict], str]:
     conn, err = _pg_connect()
     if err:
@@ -727,9 +728,18 @@ def fetch_devops_projects() -> list[dict]:
 
 
 def _invalidate_jira_cache():
+    """Run after any Jira write. Clears the read-path caches that depend
+    on grant state, plus the audit query cache so the audit log reflects
+    the just-written row on the next render. ``cache_resource`` indices
+    (_build_index, _build_group_grants_index, _compute_standardization_cached)
+    self-invalidate via their signature args once ``all_grants`` changes."""
     fetch_all_schemes.clear()
     fetch_scheme_detail.clear()
     fetch_scheme_to_projects.clear()
+    try:
+        db_audit_query.clear()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1101,50 +1111,65 @@ coverage_by_scheme = _scheme_coverage_map(all_grants(), total_permission_count)
 
 # ---------------------------------------------------------------------------
 # Stray-access analysis — per holder + per grant
+#
+# All the lookup structures are cached via ``st.cache_resource`` so they
+# survive widget interactions and only re-build when the underlying grant
+# list changes. ``cache_resource`` (rather than ``cache_data``) is used on
+# purpose: it doesn't pickle the return value, which means Grant dataclass
+# instances pass through fine.
 # ---------------------------------------------------------------------------
-def _build_index(_grants_dicts: list[dict]) -> dict:
-    """Compute several lookup structures over the grant set. NOT cached
-    via ``st.cache_data`` because the buckets contain ``Grant`` dataclass
-    instances which Streamlit's cache serializer rejects when nested
-    inside dict/list containers. The underlying ``all_grants()`` call is
-    already cached, so re-bucketing per render is cheap."""
+@st.cache_resource(show_spinner=False)
+def _build_index(_grants_dicts_signature: str, _grants_dicts: list[dict]) -> dict:
+    """Per-holder / per-scheme grant buckets. Signature arg drives the cache
+    key — pass a fingerprint of the grant list (length is good enough; any
+    write to Jira invalidates ``all_grants`` which changes the count)."""
     g_objs = _grants_as_objs(_grants_dicts)
-
     grants_by_user: dict[str, list[Grant]] = {}
     grants_by_group: dict[str, list[Grant]] = {}
     grants_by_scheme: dict[int, list[Grant]] = {}
-
     for g in g_objs:
         grants_by_scheme.setdefault(g.scheme_id, []).append(g)
         if g.holder_type == "user":
             grants_by_user.setdefault(g.holder_param, []).append(g)
         elif g.holder_type == "group":
             grants_by_group.setdefault(g.holder_param, []).append(g)
-
-    # Distinct usernames + groups that appear anywhere as a Jira holder
-    user_holders = sorted(grants_by_user.keys())
-    group_holders = sorted(grants_by_group.keys())
-
     return {
         "grants_by_user": grants_by_user,
         "grants_by_group": grants_by_group,
         "grants_by_scheme": grants_by_scheme,
-        "user_holders": user_holders,
-        "group_holders": group_holders,
+        "user_holders": sorted(grants_by_user.keys()),
+        "group_holders": sorted(grants_by_group.keys()),
     }
 
 
-index = _build_index(all_grants())
+@st.cache_resource(show_spinner=False)
+def _build_group_grants_index(_grants_dicts_signature: str, _grants_dicts: list[dict]) -> dict:
+    """(scheme_id, permission_key) → list of group Grants. Used by the
+    stray detector so per-user work is O(direct_grants) instead of
+    O(all_grants × direct_grants)."""
+    idx: dict[tuple[int, str], list[Grant]] = {}
+    for d in _grants_dicts:
+        if d["holder_type"] == "group":
+            idx.setdefault((int(d["scheme_id"]), d["permission_key"]), []).append(Grant(**d))
+    return idx
+
+
+def _grants_signature(grants_dicts: list[dict]) -> str:
+    """Cheap fingerprint of the grant list — len is enough since any write
+    bumps it and Streamlit's underlying caches refresh together."""
+    return f"n={len(grants_dicts)}"
+
+
+_g_sig = _grants_signature(all_grants())
+index = _build_index(_g_sig, all_grants())
+_GROUP_GRANTS_INDEX = _build_group_grants_index(_g_sig, all_grants())
 
 
 def membership_of_group(group_name: str) -> set[str]:
-    """sAMAccountNames in an LDAP group. Maps Jira group CN → LDAP team
-    members. Empty set if the group is unknown / unreachable."""
     return set(ldap_team_members_safe(group_name))
 
 
 def user_membership_groups(username: str) -> set[str]:
-    """LDAP group CNs the user belongs to."""
     info = ldap_user_info_safe(username)
     if not info:
         return set()
@@ -1152,28 +1177,14 @@ def user_membership_groups(username: str) -> set[str]:
 
 
 def detect_stray_for_user(username: str, grants: list[Grant]) -> list[dict]:
-    """For each direct user grant the user has, work out whether they also
-    receive the same permission on the same scheme via group membership.
-
-    Returns a list of dicts, each describing one direct grant with:
-      - grant (Grant)
-      - covered_by_groups: list[str] — group names that ALSO grant the same
-        scheme+permission and contain this user (so revoking the direct
-        grant doesn't actually remove access).
-      - severity: 'shadow' (covered) | 'exclusive' (would remove access)
-    """
+    """Per direct user grant: is it covered by a group the user is a
+    member of? Uses the precomputed group-grants index — no inner loop
+    over all_grants."""
     user_groups = user_membership_groups(username)
     direct_grants = [g for g in grants if g.holder_type == "user"]
-
     flags: list[dict] = []
-    # Build a lookup: scheme+permission → list of group grants
-    group_grants_index: dict[tuple[int, str], list[Grant]] = {}
-    for g in grants_all:
-        if g.holder_type == "group":
-            group_grants_index.setdefault((g.scheme_id, g.permission_key), []).append(g)
-
     for dg in direct_grants:
-        candidates = group_grants_index.get((dg.scheme_id, dg.permission_key), [])
+        candidates = _GROUP_GRANTS_INDEX.get((dg.scheme_id, dg.permission_key), [])
         covered = [c.holder_param for c in candidates if c.holder_param in user_groups]
         flags.append({
             "grant": dg,
@@ -1184,7 +1195,6 @@ def detect_stray_for_user(username: str, grants: list[Grant]) -> list[dict]:
 
 
 def explain_group_grant(group_name: str, username: str) -> str:
-    """Tell the UI how a group grant connects to a specific user."""
     members = membership_of_group(group_name)
     if not members:
         return "group has no LDAP members or LDAP lookup failed"
@@ -1552,7 +1562,10 @@ _kpi(kc7, "Stray",       f"{len(stray_grants):,}",
 # ---------------------------------------------------------------------------
 # Stray summary banner — opens an expander listing all of them with batch fix
 # ---------------------------------------------------------------------------
-if stray_grants:
+@st.fragment
+def _section_stray():
+    if not stray_grants:
+        return
     with st.expander(
         f"⚠️  {len(stray_grants)} stray access pattern(s) — direct user grants in view",
         expanded=False,
@@ -1650,155 +1663,153 @@ if stray_grants:
             st.divider()
 
 
+_section_stray()
+
+
 # ---------------------------------------------------------------------------
 # Section: Compliance by role — one card per RBAC role
+# Wrapped as a fragment so expander clicks and per-role buttons don't
+# trigger a full-page rerun (they only re-render this section).
 # ---------------------------------------------------------------------------
-st.markdown(
-    "<div class='jp-section-head'><h3>🎭 Compliance by role</h3>"
-    "<span class='jp-section-sub'>From utils.rbac · click a card to inspect "
-    "members and their Jira access</span></div>",
-    unsafe_allow_html=True,
-)
-
-roles_in_view = st.session_state["flt_roles"] or all_roles()
-if not roles_in_view:
+@st.fragment
+def _section_compliance():
     st.markdown(
-        "<div class='jp-empty'>No roles defined in utils.rbac — the page "
-        "still works for raw Jira access management, but role-based "
-        "compliance views are empty until VALID_GROUPS / VALID_USERS are populated.</div>",
+        "<div class='jp-section-head'><h3>🎭 Compliance by role</h3>"
+        "<span class='jp-section-sub'>From utils.rbac · click a card to inspect "
+        "members and their Jira access</span></div>",
         unsafe_allow_html=True,
     )
-else:
-    role_cols = st.columns(2)
-    for i, role in enumerate(roles_in_view):
-        col = role_cols[i % 2]
-        with col:
-            users = users_for_role(role)
-            groups = groups_for_role(role)
-            # Aggregate grants for the role: direct-user grants + group grants
-            role_user_grants = [g for g in view_grants if g.holder_type == "user" and g.holder_param in users]
-            role_group_grants = [g for g in view_grants if g.holder_type == "group" and g.holder_param in groups]
-            stray_for_role = role_user_grants  # by policy
-            has_stray = bool(stray_for_role)
 
-            klass = "jp-has-stray" if has_stray else ""
-            stray_chip = (
-                f"<span class='jp-pill jp-stray'>{len(stray_for_role)} stray</span>"
-                if has_stray else "<span class='jp-pill jp-ok'>clean</span>"
-            )
-            col.markdown(
-                f"<div class='jp-role-card {klass}'>"
-                f"<div class='jp-role-head'>"
-                f"<div><span class='jp-role-name'>{role}</span></div>"
-                f"<div class='jp-role-stats'>"
-                f"<span class='jp-pill jp-user'>{len(users)} users</span>"
-                f"<span class='jp-pill jp-group'>{len(groups)} groups</span>"
-                f"{stray_chip}"
-                f"</div></div>",
-                unsafe_allow_html=True,
-            )
-            with col.expander(f"Inspect role: {role}", expanded=False):
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    st.markdown("**Users in this role** (via VALID_USERS)")
-                    if not users:
-                        st.caption("_none_")
-                    for u in users:
-                        info = ldap_user_info_safe(u) or {}
-                        disp = info.get("username") or u
-                        b = st.button(
-                            f"👤 {disp}  ⟨{u}⟩",
-                            key=f"rolelens_u_{role}_{u}",
-                            use_container_width=True,
-                        )
-                        if b:
-                            st.session_state["focus_holder"] = {
-                                "type": "user", "param": u, "display": disp,
-                            }
-                            st.rerun()
-                with ec2:
-                    st.markdown("**LDAP groups → this role** (via VALID_GROUPS)")
-                    if not groups:
-                        st.caption("_none_")
-                    for g in groups:
-                        members = membership_of_group(g)
-                        b = st.button(
-                            f"👥 {g}  ({len(members)} member{'s' if len(members)!=1 else ''})",
-                            key=f"rolelens_g_{role}_{g}",
-                            use_container_width=True,
-                        )
-                        if b:
-                            st.session_state["focus_holder"] = {
-                                "type": "group", "param": g, "display": g,
-                            }
-                            st.rerun()
-                if stray_for_role:
-                    st.markdown(
-                        f"**⚠️ Stray direct grants for this role:** {len(stray_for_role)}"
-                    )
-                    for g in stray_for_role[:12]:
+    roles_in_view = st.session_state["flt_roles"] or all_roles()
+    if not roles_in_view:
+        st.markdown(
+            "<div class='jp-empty'>No roles defined in utils.rbac — the page "
+            "still works for raw Jira access management, but role-based "
+            "compliance views are empty until VALID_GROUPS / VALID_USERS are populated.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        role_cols = st.columns(2)
+        for i, role in enumerate(roles_in_view):
+            col = role_cols[i % 2]
+            with col:
+                users = users_for_role(role)
+                groups = groups_for_role(role)
+                # Aggregate grants for the role: direct-user grants + group grants
+                role_user_grants = [g for g in view_grants if g.holder_type == "user" and g.holder_param in users]
+                role_group_grants = [g for g in view_grants if g.holder_type == "group" and g.holder_param in groups]
+                stray_for_role = role_user_grants  # by policy
+                has_stray = bool(stray_for_role)
+    
+                klass = "jp-has-stray" if has_stray else ""
+                stray_chip = (
+                    f"<span class='jp-pill jp-stray'>{len(stray_for_role)} stray</span>"
+                    if has_stray else "<span class='jp-pill jp-ok'>clean</span>"
+                )
+                col.markdown(
+                    f"<div class='jp-role-card {klass}'>"
+                    f"<div class='jp-role-head'>"
+                    f"<div><span class='jp-role-name'>{role}</span></div>"
+                    f"<div class='jp-role-stats'>"
+                    f"<span class='jp-pill jp-user'>{len(users)} users</span>"
+                    f"<span class='jp-pill jp-group'>{len(groups)} groups</span>"
+                    f"{stray_chip}"
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+                with col.expander(f"Inspect role: {role}", expanded=False):
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        st.markdown("**Users in this role** (via VALID_USERS)")
+                        if not users:
+                            st.caption("_none_")
+                        # No LDAP enrichment here — would do N round-trips per
+                        # role and gum up the page. The holder lens fetches it
+                        # on demand when the user clicks through.
+                        for u in users:
+                            if st.button(
+                                f"👤 {u}",
+                                key=f"rolelens_u_{role}_{u}",
+                                use_container_width=True,
+                            ):
+                                st.session_state["focus_holder"] = {
+                                    "type": "user", "param": u, "display": u,
+                                }
+                                st.rerun()
+                    with ec2:
+                        st.markdown("**LDAP groups → this role** (via VALID_GROUPS)")
+                        if not groups:
+                            st.caption("_none_")
+                        # Same idea — don't fetch members eagerly. The lens
+                        # surfaces the membership when you click in.
+                        for g in groups:
+                            if st.button(
+                                f"👥 {g}",
+                                key=f"rolelens_g_{role}_{g}",
+                                use_container_width=True,
+                            ):
+                                st.session_state["focus_holder"] = {
+                                    "type": "group", "param": g, "display": g,
+                                }
+                                st.rerun()
+                    if stray_for_role:
                         st.markdown(
-                            f"- `{g.permission_key}` on **{g.scheme_name}** "
-                            f"to `{g.holder_param}`"
+                            f"**⚠️ Stray direct grants for this role:** {len(stray_for_role)}"
                         )
-                    if len(stray_for_role) > 12:
-                        st.caption(f"…and {len(stray_for_role) - 12} more (use the stray banner above for full list).")
+                        for g in stray_for_role[:12]:
+                            st.markdown(
+                                f"- `{g.permission_key}` on **{g.scheme_name}** "
+                                f"to `{g.holder_param}`"
+                            )
+                        if len(stray_for_role) > 12:
+                            st.caption(f"…and {len(stray_for_role) - 12} more (use the stray banner above for full list).")
+
+
+_section_compliance()
 
 
 # ---------------------------------------------------------------------------
 # Section: Role × permission standardization
-# Answers questions like "do all QC teams have EDIT_OWN_COMMENTS?" by
-# computing per-(role, permission) what fraction of *role-relevant* schemes
-# grant that permission to the role. A scheme is role-relevant if the role
-# has any grant in it.
+# Helpers stay at module level so their @st.cache_resource decoration is
+# stable across reruns. The rendering itself is wrapped as a fragment
+# further down — _section_standardization() — so matrix-local widgets
+# don't trigger a full-page rerun.
 # ---------------------------------------------------------------------------
-st.markdown(
-    "<div class='jp-section-head'><h3>🧭 Role × permission standardization</h3>"
-    "<span class='jp-section-sub'>For each role, which permissions are granted "
-    "consistently across the schemes that role touches — and which deviate.</span>"
-    "</div>",
-    unsafe_allow_html=True,
-)
 
 
-def _compute_standardization(
-    roles_list: list[str],
-    perms_list: list[str],
-    view_grants_list: list[Grant],
+@st.cache_resource(show_spinner=False)
+def _compute_standardization_cached(
+    _sig: str,
+    roles_tuple: tuple[str, ...],
+    perms_tuple: tuple[str, ...],
+    view_grants_tuple: tuple,        # tuple of (holder_type, holder_param, scheme_id, permission_key)
 ) -> tuple[list[dict], dict[str, set[int]], dict[tuple[str, str], set[int]]]:
-    """For each role + permission combination, compute:
-      - relevant_schemes: schemes the role appears in (via users OR groups
-        in the role per rbac.py)
-      - granted_schemes:  subset where the role has THIS permission
-    Returns flat row list + the lookup maps so the UI can drill into
-    deviating schemes."""
+    """Pure compute: role × permission coverage across role-relevant
+    schemes. Cached via cache_resource (return contains sets, so it isn't
+    pickle-friendly via cache_data). The signature arg is a coarse
+    fingerprint of the filter + grant set that keys the cache."""
     role_holders: dict[str, set[tuple[str, str]]] = {}
-    for role in roles_list:
+    for role in roles_tuple:
         ru = set(users_for_role(role))
         rg = set(groups_for_role(role))
-        role_holders[role] = (
-            {("user", u) for u in ru} | {("group", g) for g in rg}
-        )
+        role_holders[role] = {("user", u) for u in ru} | {("group", g) for g in rg}
 
-    role_relevant: dict[str, set[int]] = {r: set() for r in roles_list}
+    role_relevant: dict[str, set[int]] = {r: set() for r in roles_tuple}
     rp_granted: dict[tuple[str, str], set[int]] = {}
 
-    for g in view_grants_list:
-        key = (g.holder_type, g.holder_param)
+    for htype, hparam, sid, pkey in view_grants_tuple:
+        key = (htype, hparam)
         for role, holders in role_holders.items():
             if key in holders:
-                role_relevant[role].add(g.scheme_id)
-                rp_granted.setdefault((role, g.permission_key), set()).add(g.scheme_id)
+                role_relevant[role].add(sid)
+                rp_granted.setdefault((role, pkey), set()).add(sid)
 
     rows: list[dict] = []
-    for role in roles_list:
+    for role in roles_tuple:
         rel = role_relevant.get(role, set())
         if not rel:
             continue
-        # Only show permissions actually exercised by *any* role across the
-        # whole instance — otherwise the matrix becomes mostly zeros and the
-        # signal drowns. Use perms_list (passed in) as the column universe.
-        for perm in perms_list:
+        for perm in perms_tuple:
             granted = rp_granted.get((role, perm), set())
             n = len(granted)
             total = len(rel)
@@ -1821,588 +1832,485 @@ def _compute_standardization(
     return rows, role_relevant, rp_granted
 
 
-# Permission universe: only permissions that are actually granted to
-# anyone anywhere in the filter set — keeps the matrix dense.
-_perm_universe_in_view = sorted({g.permission_key for g in view_grants})
+def _compute_standardization(
+    roles_list: list[str],
+    perms_list: list[str],
+    view_grants_list: list[Grant],
+) -> tuple[list[dict], dict[str, set[int]], dict[tuple[str, str], set[int]]]:
+    """Thin wrapper that hashes inputs into a stable cache key and calls
+    the cached version with primitive tuples."""
+    view_tuple = tuple(
+        (g.holder_type, g.holder_param, g.scheme_id, g.permission_key)
+        for g in view_grants_list
+    )
+    sig = f"r{len(roles_list)}_p{len(perms_list)}_v{len(view_tuple)}"
+    return _compute_standardization_cached(
+        sig, tuple(roles_list), tuple(perms_list), view_tuple,
+    )
 
-# Role universe: filter selection if set, else every role with at least
-# one relevant scheme.
-_roles_for_matrix = st.session_state["flt_roles"] or all_roles()
 
-if not _roles_for_matrix or not _perm_universe_in_view:
+@st.fragment
+def _section_standardization():
     st.markdown(
-        "<div class='jp-empty'>Need at least one role (from utils.rbac) and "
-        "one permission with grants in the current filter set to compute "
-        "the matrix.</div>",
+        "<div class='jp-section-head'><h3>🧭 Role × permission standardization</h3>"
+        "<span class='jp-section-sub'>For each role, which permissions are granted "
+        "consistently across the schemes that role touches — and which deviate.</span>"
+        "</div>",
         unsafe_allow_html=True,
     )
-else:
-    matrix_rows, role_relevant_map, rp_granted_map = _compute_standardization(
-        _roles_for_matrix, _perm_universe_in_view, view_grants,
-    )
 
-    if not matrix_rows:
+    # Permission universe: only permissions that are actually granted to
+    # anyone anywhere in the filter set — keeps the matrix dense.
+    _perm_universe_in_view = sorted({g.permission_key for g in view_grants})
+
+    # Role universe: filter selection if set, else every role with at least
+    # one relevant scheme.
+    _roles_for_matrix = st.session_state["flt_roles"] or all_roles()
+
+    if not _roles_for_matrix or not _perm_universe_in_view:
         st.markdown(
-            "<div class='jp-empty'>No matching grants for the chosen "
-            "roles in the current filter set.</div>",
+            "<div class='jp-empty'>Need at least one role (from utils.rbac) and "
+            "one permission with grants in the current filter set to compute "
+            "the matrix.</div>",
             unsafe_allow_html=True,
         )
     else:
-        mc1, mc2, mc3 = st.columns([1, 1, 1])
-        with mc1:
-            show_only_dev = st.checkbox(
-                "Show only deviations (partial coverage)",
-                value=True,
-                key="matrix_only_dev",
-                help="Hide rows where coverage is either 0% (irrelevant) or 100% (perfectly standardized).",
-            )
-        with mc2:
-            role_pick = st.selectbox(
-                "Focus role",
-                ["(all)"] + sorted({r["Role"] for r in matrix_rows}),
-                key="matrix_role_pick",
-            )
-        with mc3:
-            perm_pick = st.selectbox(
-                "Focus permission",
-                ["(all)"] + sorted({r["Permission key"] for r in matrix_rows}),
-                key="matrix_perm_pick",
-            )
-
-        visible = matrix_rows
-        if show_only_dev:
-            visible = [r for r in visible if r["Status"] == "⚠️ partial"]
-        if role_pick != "(all)":
-            visible = [r for r in visible if r["Role"] == role_pick]
-        if perm_pick != "(all)":
-            visible = [r for r in visible if r["Permission key"] == perm_pick]
-
-        # Top-level counters: how many role/permission pairs are
-        # standardized vs deviating.
-        tot_full     = sum(1 for r in matrix_rows if r["Status"] == "✅ all")
-        tot_partial  = sum(1 for r in matrix_rows if r["Status"] == "⚠️ partial")
-        tot_never    = sum(1 for r in matrix_rows if r["Status"] == "⛔ never")
-        sumc = st.columns(3)
-        sumc[0].markdown(
-            f"<div class='jp-kpi jp-kpi-green'>"
-            f"<div class='jp-kpi-label'>Fully standardized</div>"
-            f"<div class='jp-kpi-num'>{tot_full}</div>"
-            f"<div class='jp-kpi-sub'>role × permission pairs at 100%</div>"
-            f"</div>",
-            unsafe_allow_html=True,
+        matrix_rows, role_relevant_map, rp_granted_map = _compute_standardization(
+            _roles_for_matrix, _perm_universe_in_view, view_grants,
         )
-        sumc[1].markdown(
-            f"<div class='jp-kpi jp-kpi-amber'>"
-            f"<div class='jp-kpi-label'>Deviating</div>"
-            f"<div class='jp-kpi-num'>{tot_partial}</div>"
-            f"<div class='jp-kpi-sub'>partial coverage — inconsistent</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        sumc[2].markdown(
-            f"<div class='jp-kpi'>"
-            f"<div class='jp-kpi-label'>Never granted</div>"
-            f"<div class='jp-kpi-num'>{tot_never}</div>"
-            f"<div class='jp-kpi-sub'>role has 0% of permission in role-relevant schemes</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("")
-        if _PANDAS:
-            df = pd.DataFrame(visible)
-            # Heat-tint the Coverage % column
-            def _coverage_style(v):
-                try:
-                    pct = float(v)
-                except Exception:
-                    return ""
-                if pct >= 99.5:
-                    return "background-color: #d1fae5; color: #059669; font-weight:600;"
-                if pct <= .5:
-                    return "background-color: #fee2e2; color: #dc2626; font-weight:600;"
-                # Linear blend amber for partial
-                return "background-color: #fef3c7; color: #d97706; font-weight:600;"
-            try:
-                styled = df.style.map(_coverage_style, subset=["Coverage %"])
-            except AttributeError:
-                # pandas < 2.1 uses .applymap
-                styled = df.style.applymap(_coverage_style, subset=["Coverage %"])
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=420)
+    
+        if not matrix_rows:
+            st.markdown(
+                "<div class='jp-empty'>No matching grants for the chosen "
+                "roles in the current filter set.</div>",
+                unsafe_allow_html=True,
+            )
         else:
-            for r in visible[:200]:
-                st.markdown(
-                    f"- **{r['Role']}** · `{r['Permission key']}` "
-                    f"({r['Permission name']}) — {r['Granted in']}/{r['Out of']} "
-                    f"= **{r['Coverage %']}%** {r['Status']}"
-                )
-
-        st.markdown("---")
-        st.markdown("**Drill in — which schemes deviate?**")
-        st.caption(
-            "Pick a (role, permission) pair to see exactly which schemes "
-            "are missing the grant. Click a scheme to open its full "
-            "holder table in the Schemes section below."
-        )
-        dr_c1, dr_c2 = st.columns(2)
-        d_role = dr_c1.selectbox(
-            "Role",
-            sorted({r["Role"] for r in matrix_rows if r["Status"] == "⚠️ partial"}) or ["(no deviations)"],
-            key="drill_role",
-        )
-        d_perms_for_role = sorted({
-            r["Permission key"] for r in matrix_rows
-            if r["Status"] == "⚠️ partial" and r["Role"] == d_role
-        }) or ["(no deviations)"]
-        d_perm = dr_c2.selectbox(
-            "Permission", d_perms_for_role,
-            format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩" if k != "(no deviations)" else k,
-            key="drill_perm",
-        )
-        if d_role != "(no deviations)" and d_perm != "(no deviations)":
-            relevant_set = role_relevant_map.get(d_role, set())
-            granted_set = rp_granted_map.get((d_role, d_perm), set())
-            missing_set = relevant_set - granted_set
-
-            mc1, mc2 = st.columns(2)
+            mc1, mc2, mc3 = st.columns([1, 1, 1])
             with mc1:
-                st.markdown(
-                    f"<div class='jp-banner jp-banner-ok'>"
-                    f"<b>{len(granted_set)} scheme(s)</b> grant `{d_perm}` "
-                    f"to <span class='jp-pill jp-role'>{d_role}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
+                show_only_dev = st.checkbox(
+                    "Show only deviations (partial coverage)",
+                    value=True,
+                    key="matrix_only_dev",
+                    help="Hide rows where coverage is either 0% (irrelevant) or 100% (perfectly standardized).",
                 )
-                for sid in sorted(granted_set):
-                    name = schemes_by_id.get(sid, {}).get("name", str(sid))
-                    cov = coverage_by_scheme.get(sid, {})
-                    projs = scheme_to_projects.get(sid, [])
-                    companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
-                    st.markdown(
-                        f"- **{name}**  "
-                        f"<span class='jp-pill jp-mono'>id {sid}</span>  "
-                        f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
-                        + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
-                        unsafe_allow_html=True,
-                    )
             with mc2:
-                st.markdown(
-                    f"<div class='jp-banner jp-banner-red'>"
-                    f"<b>{len(missing_set)} scheme(s)</b> are missing "
-                    f"<code>{d_perm}</code> for <span class='jp-pill jp-role'>{d_role}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
+                role_pick = st.selectbox(
+                    "Focus role",
+                    ["(all)"] + sorted({r["Role"] for r in matrix_rows}),
+                    key="matrix_role_pick",
                 )
-                for sid in sorted(missing_set):
-                    name = schemes_by_id.get(sid, {}).get("name", str(sid))
-                    cov = coverage_by_scheme.get(sid, {})
-                    projs = scheme_to_projects.get(sid, [])
-                    companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
-                    cols = st.columns([5, 1])
-                    cols[0].markdown(
-                        f"- **{name}**  "
-                        f"<span class='jp-pill jp-mono'>id {sid}</span>  "
-                        f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
-                        + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
+            with mc3:
+                perm_pick = st.selectbox(
+                    "Focus permission",
+                    ["(all)"] + sorted({r["Permission key"] for r in matrix_rows}),
+                    key="matrix_perm_pick",
+                )
+    
+            visible = matrix_rows
+            if show_only_dev:
+                visible = [r for r in visible if r["Status"] == "⚠️ partial"]
+            if role_pick != "(all)":
+                visible = [r for r in visible if r["Role"] == role_pick]
+            if perm_pick != "(all)":
+                visible = [r for r in visible if r["Permission key"] == perm_pick]
+    
+            # Top-level counters: how many role/permission pairs are
+            # standardized vs deviating.
+            tot_full     = sum(1 for r in matrix_rows if r["Status"] == "✅ all")
+            tot_partial  = sum(1 for r in matrix_rows if r["Status"] == "⚠️ partial")
+            tot_never    = sum(1 for r in matrix_rows if r["Status"] == "⛔ never")
+            sumc = st.columns(3)
+            sumc[0].markdown(
+                f"<div class='jp-kpi jp-kpi-green'>"
+                f"<div class='jp-kpi-label'>Fully standardized</div>"
+                f"<div class='jp-kpi-num'>{tot_full}</div>"
+                f"<div class='jp-kpi-sub'>role × permission pairs at 100%</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            sumc[1].markdown(
+                f"<div class='jp-kpi jp-kpi-amber'>"
+                f"<div class='jp-kpi-label'>Deviating</div>"
+                f"<div class='jp-kpi-num'>{tot_partial}</div>"
+                f"<div class='jp-kpi-sub'>partial coverage — inconsistent</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            sumc[2].markdown(
+                f"<div class='jp-kpi'>"
+                f"<div class='jp-kpi-label'>Never granted</div>"
+                f"<div class='jp-kpi-num'>{tot_never}</div>"
+                f"<div class='jp-kpi-sub'>role has 0% of permission in role-relevant schemes</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    
+            st.markdown("")
+            if _PANDAS:
+                df = pd.DataFrame(visible)
+                # Heat-tint the Coverage % column
+                def _coverage_style(v):
+                    try:
+                        pct = float(v)
+                    except Exception:
+                        return ""
+                    if pct >= 99.5:
+                        return "background-color: #d1fae5; color: #059669; font-weight:600;"
+                    if pct <= .5:
+                        return "background-color: #fee2e2; color: #dc2626; font-weight:600;"
+                    # Linear blend amber for partial
+                    return "background-color: #fef3c7; color: #d97706; font-weight:600;"
+                try:
+                    styled = df.style.map(_coverage_style, subset=["Coverage %"])
+                except AttributeError:
+                    # pandas < 2.1 uses .applymap
+                    styled = df.style.applymap(_coverage_style, subset=["Coverage %"])
+                st.dataframe(styled, use_container_width=True, hide_index=True, height=420)
+            else:
+                for r in visible[:200]:
+                    st.markdown(
+                        f"- **{r['Role']}** · `{r['Permission key']}` "
+                        f"({r['Permission name']}) — {r['Granted in']}/{r['Out of']} "
+                        f"= **{r['Coverage %']}%** {r['Status']}"
+                    )
+    
+            st.markdown("---")
+            st.markdown("**Drill in — which schemes deviate?**")
+            st.caption(
+                "Pick a (role, permission) pair to see exactly which schemes "
+                "are missing the grant. Click a scheme to open its full "
+                "holder table in the Schemes section below."
+            )
+            dr_c1, dr_c2 = st.columns(2)
+            d_role = dr_c1.selectbox(
+                "Role",
+                sorted({r["Role"] for r in matrix_rows if r["Status"] == "⚠️ partial"}) or ["(no deviations)"],
+                key="drill_role",
+            )
+            d_perms_for_role = sorted({
+                r["Permission key"] for r in matrix_rows
+                if r["Status"] == "⚠️ partial" and r["Role"] == d_role
+            }) or ["(no deviations)"]
+            d_perm = dr_c2.selectbox(
+                "Permission", d_perms_for_role,
+                format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩" if k != "(no deviations)" else k,
+                key="drill_perm",
+            )
+            if d_role != "(no deviations)" and d_perm != "(no deviations)":
+                relevant_set = role_relevant_map.get(d_role, set())
+                granted_set = rp_granted_map.get((d_role, d_perm), set())
+                missing_set = relevant_set - granted_set
+    
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    st.markdown(
+                        f"<div class='jp-banner jp-banner-ok'>"
+                        f"<b>{len(granted_set)} scheme(s)</b> grant `{d_perm}` "
+                        f"to <span class='jp-pill jp-role'>{d_role}</span>"
+                        f"</div>",
                         unsafe_allow_html=True,
                     )
-                    # Quick-fix: pop a confirm popover to add the missing grant
-                    # to the role's preferred group (first group in
-                    # groups_for_role). Falls back to user grant prompt
-                    # if the role has no LDAP-group mapping.
-                    if ADMIN:
-                        with cols[1].popover("Fix", use_container_width=True):
-                            role_groups = groups_for_role(d_role)
-                            if role_groups:
-                                target_group = st.selectbox(
-                                    "Grant to which role group?",
-                                    role_groups,
-                                    key=f"fix_{sid}_{d_role}_{d_perm}",
-                                )
-                                st.markdown(
-                                    f"<div class='jp-banner jp-banner-info'>"
-                                    f"<b>Confirm:</b> grant "
-                                    f"<span class='jp-pill jp-mono'>{d_perm}</span> "
-                                    f"to group <b>{target_group}</b> on "
-                                    f"<b>{name}</b>.</div>",
-                                    unsafe_allow_html=True,
-                                )
-                                if st.button("Apply", key=f"fix_btn_{sid}_{d_role}_{d_perm}", type="primary"):
-                                    ok, err = do_grant(
-                                        scheme_id=sid, scheme_name=name,
-                                        permission_key=d_perm,
-                                        holder_type="group", holder_param=target_group,
-                                        holder_display=target_group,
+                    for sid in sorted(granted_set):
+                        name = schemes_by_id.get(sid, {}).get("name", str(sid))
+                        cov = coverage_by_scheme.get(sid, {})
+                        projs = scheme_to_projects.get(sid, [])
+                        companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
+                        st.markdown(
+                            f"- **{name}**  "
+                            f"<span class='jp-pill jp-mono'>id {sid}</span>  "
+                            f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
+                            + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
+                            unsafe_allow_html=True,
+                        )
+                with mc2:
+                    st.markdown(
+                        f"<div class='jp-banner jp-banner-red'>"
+                        f"<b>{len(missing_set)} scheme(s)</b> are missing "
+                        f"<code>{d_perm}</code> for <span class='jp-pill jp-role'>{d_role}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for sid in sorted(missing_set):
+                        name = schemes_by_id.get(sid, {}).get("name", str(sid))
+                        cov = coverage_by_scheme.get(sid, {})
+                        projs = scheme_to_projects.get(sid, [])
+                        companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
+                        cols = st.columns([5, 1])
+                        cols[0].markdown(
+                            f"- **{name}**  "
+                            f"<span class='jp-pill jp-mono'>id {sid}</span>  "
+                            f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
+                            + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
+                            unsafe_allow_html=True,
+                        )
+                        # Quick-fix: pop a confirm popover to add the missing grant
+                        # to the role's preferred group (first group in
+                        # groups_for_role). Falls back to user grant prompt
+                        # if the role has no LDAP-group mapping.
+                        if ADMIN:
+                            with cols[1].popover("Fix", use_container_width=True):
+                                role_groups = groups_for_role(d_role)
+                                if role_groups:
+                                    target_group = st.selectbox(
+                                        "Grant to which role group?",
+                                        role_groups,
+                                        key=f"fix_{sid}_{d_role}_{d_perm}",
                                     )
-                                    if ok:
-                                        st.success("Granted.")
-                                        st.rerun()
-                                    else:
-                                        st.error(err or "Grant failed.")
-                            else:
-                                st.caption(
-                                    f"Role `{d_role}` has no LDAP-group "
-                                    "mapping in VALID_GROUPS. Use Quick "
-                                    "grant in the filter bar to pick a "
-                                    "specific holder."
-                                )
+                                    st.markdown(
+                                        f"<div class='jp-banner jp-banner-info'>"
+                                        f"<b>Confirm:</b> grant "
+                                        f"<span class='jp-pill jp-mono'>{d_perm}</span> "
+                                        f"to group <b>{target_group}</b> on "
+                                        f"<b>{name}</b>.</div>",
+                                        unsafe_allow_html=True,
+                                    )
+                                    if st.button("Apply", key=f"fix_btn_{sid}_{d_role}_{d_perm}", type="primary"):
+                                        ok, err = do_grant(
+                                            scheme_id=sid, scheme_name=name,
+                                            permission_key=d_perm,
+                                            holder_type="group", holder_param=target_group,
+                                            holder_display=target_group,
+                                        )
+                                        if ok:
+                                            st.success("Granted.")
+                                            st.rerun()
+                                        else:
+                                            st.error(err or "Grant failed.")
+                                else:
+                                    st.caption(
+                                        f"Role `{d_role}` has no LDAP-group "
+                                        "mapping in VALID_GROUPS. Use Quick "
+                                        "grant in the filter bar to pick a "
+                                        "specific holder."
+                                    )
+
+
+_section_standardization()
 
 
 # ---------------------------------------------------------------------------
 # Section: Per-holder access lens
+# Wrapped as a fragment so the lens-internal revoke/grant popovers and the
+# search box don't trigger a full-page rerun.
 # ---------------------------------------------------------------------------
-st.markdown(
-    "<div class='jp-section-head'><h3>🔬 Holder access lens</h3>"
-    "<span class='jp-section-sub'>Search any user or group — see exactly what "
-    "they can do, why, and whether it's right for their role</span></div>",
-    unsafe_allow_html=True,
-)
-
-ls1, ls2 = st.columns([1, 3])
-with ls1:
-    lens_type = st.radio(
-        "Lens for", ["user", "group"], horizontal=True, key="lens_type",
-    )
-with ls2:
-    lens_q = st.text_input("Search…", key="lens_q", placeholder="2+ chars")
-    if lens_q and len(lens_q.strip()) >= 2:
-        if lens_type == "user":
-            res = search_users(lens_q)
-            opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in res}
-        else:
-            res = search_groups(lens_q)
-            opts = {r["name"]: r for r in res}
-        if opts:
-            pick = st.selectbox("Open", list(opts.keys()), key="lens_pick")
-            if st.button("Open lens", key="lens_open"):
-                if lens_type == "user":
-                    chosen = opts[pick]
-                    st.session_state["focus_holder"] = {
-                        "type": "user", "param": chosen["name"],
-                        "display": chosen["display"] or chosen["name"],
-                    }
-                else:
-                    chosen = opts[pick]
-                    st.session_state["focus_holder"] = {
-                        "type": "group", "param": chosen["name"],
-                        "display": chosen["name"],
-                    }
-                st.rerun()
-
-
-# --- Render the focus holder (if any) --------------------------------------
-focus = st.session_state.get("focus_holder")
-if focus:
-    htype = focus["type"]
-    hparam = focus["param"]
-    hdisplay = focus["display"]
-    st.markdown(f"<div class='jp-holder-card'>", unsafe_allow_html=True)
+@st.fragment
+def _section_lens():
     st.markdown(
-        f"<div class='jp-holder-head'>"
-        f"<div>"
-        f"<div class='jp-holder-name'>{'👤' if htype=='user' else '👥'} {hdisplay}</div>"
-        f"<div class='jp-holder-id'>{htype}: <span class='jp-pill jp-mono jp-{htype}'>{hparam}</span></div>"
-        f"</div>"
-        f"</div>",
+        "<div class='jp-section-head'><h3>🔬 Holder access lens</h3>"
+        "<span class='jp-section-sub'>Search any user or group — see exactly what "
+        "they can do, why, and whether it's right for their role</span></div>",
         unsafe_allow_html=True,
     )
 
-    if htype == "user":
-        # Identity card from LDAP + roles from RBAC
-        info = ldap_user_info_safe(hparam)
-        roles, role_sources = roles_for_user(hparam)
-        idc1, idc2, idc3 = st.columns([2, 2, 2])
-        with idc1:
-            if info:
-                st.markdown(f"**Email** · {info.get('email') or '—'}")
-                st.markdown(f"**Title** · {info.get('title') or '—'}")
-                st.markdown(f"**Dept**  · {info.get('department') or '—'}")
-                if info.get("manager"):
-                    st.markdown(f"**Manager** · {info['manager']}")
+    ls1, ls2 = st.columns([1, 3])
+    with ls1:
+        lens_type = st.radio(
+            "Lens for", ["user", "group"], horizontal=True, key="lens_type",
+        )
+    with ls2:
+        lens_q = st.text_input("Search…", key="lens_q", placeholder="2+ chars")
+        if lens_q and len(lens_q.strip()) >= 2:
+            if lens_type == "user":
+                res = search_users(lens_q)
+                opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in res}
             else:
-                if _LDAP_AVAILABLE:
-                    st.markdown(
-                        "<span class='jp-pill jp-stray'>not found in LDAP</span>",
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(
-                        "User has Jira grants but doesn't resolve in LDAP — "
-                        "likely a decommissioned account. Audit + clean up."
-                    )
-                else:
-                    st.caption("_(LDAP unavailable in this environment)_")
-        with idc2:
-            st.markdown("**RBAC roles**")
-            if roles:
-                st.markdown(
-                    " ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in roles),
-                    unsafe_allow_html=True,
-                )
-                with st.expander("Role provenance", expanded=False):
-                    for s in role_sources:
-                        st.caption(f"• {s}")
-            else:
-                st.markdown(
-                    "<span class='jp-pill jp-warn'>no roles resolved</span>",
-                    unsafe_allow_html=True,
-                )
-        with idc3:
-            st.markdown("**LDAP groups**")
-            if info:
-                gnames = sorted({_extract_cn(dn) for dn in (info.get("groups") or [])})
-                if gnames:
-                    st.markdown(
-                        " ".join(f"<span class='jp-pill jp-group'>{g}</span>" for g in gnames[:20]),
-                        unsafe_allow_html=True,
-                    )
-                    if len(gnames) > 20:
-                        st.caption(f"…and {len(gnames) - 20} more")
-                else:
-                    st.caption("_(no group memberships)_")
-            else:
-                st.caption("—")
-
-        # Access map: every grant the user effectively has, with WHY
-        st.markdown("---")
-        st.markdown("**Effective Jira access**")
-        user_groups_set = user_membership_groups(hparam)
-        rows = []
-        # Direct user grants
-        for g in index["grants_by_user"].get(hparam, []):
-            rows.append({
-                "g": g, "via_type": "direct",
-                "via": "direct user grant",
-                "stray": True,
-            })
-        # Group grants the user effectively gets (LDAP says they're in the group)
-        for gname in user_groups_set:
-            for g in index["grants_by_group"].get(gname, []):
-                rows.append({
-                    "g": g, "via_type": "group",
-                    "via": f"member of group <span class='jp-pill jp-group'>{gname}</span>",
-                    "stray": False,
-                })
-        # Also include grants to groups whose LDAP CN we couldn't verify
-        # but that share the user's LDAP groups — already covered above.
-
-        # Filter rows by the current scheme/project filter set
-        rows = [r for r in rows if r["g"].scheme_id in filt["schemes_in_view"]]
-
-        # Shadow detection: same scheme+perm appears both direct and group
-        seen_key: dict[tuple[int, str], list[dict]] = {}
-        for r in rows:
-            k = (r["g"].scheme_id, r["g"].permission_key)
-            seen_key.setdefault(k, []).append(r)
-        for k, rlist in seen_key.items():
-            if len(rlist) > 1:
-                # Multiple sources for the same access — flag the "direct" rows as shadow
-                for r in rlist:
-                    if r["via_type"] == "direct":
-                        r["shadow"] = True
-                        r["covered_by"] = [x["g"].holder_param for x in rlist if x["via_type"] == "group"]
-
-        if not rows:
-            st.markdown(
-                "<div class='jp-empty'>This user has no Jira access in the current filter set.</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                "<div class='jp-access-row' style='font-weight:600;color:var(--jp-text-mute);"
-                "background:var(--jp-surface2);border-bottom:1px solid var(--jp-border);'>"
-                "<div>Permission</div><div>Scheme</div><div>Why</div><div></div></div>",
-                unsafe_allow_html=True,
-            )
-            # Sort: stray first, then by scheme + permission
-            rows.sort(key=lambda r: (not r.get("stray"), r["g"].scheme_name, r["g"].permission_key))
-            for r in rows:
-                g = r["g"]
-                row_class = ""
-                if r["via_type"] == "direct" and r.get("shadow"):
-                    row_class = "jp-shadow-row"
-                elif r["via_type"] == "direct":
-                    row_class = "jp-stray-row"
-                why_html = r["via"]
-                if r.get("shadow"):
-                    why_html += (
-                        f"<br><span class='jp-pill jp-warn'>shadow · also via "
-                        f"{', '.join(r['covered_by'][:2])}</span>"
-                    )
-                elif r["via_type"] == "direct":
-                    why_html += (
-                        "<br><span class='jp-pill jp-stray'>exclusive direct grant — "
-                        "revoking removes the access</span>"
-                    )
-                rc1, rc2, rc3, rc4 = st.columns([1.2, 1.5, 1.7, .6])
-                rc1.markdown(
-                    f"<div class='jp-access-row {row_class}'>"
-                    f"<span class='jp-perm-cell'>{g.permission_key}</span>"
-                    f"<span></span><span></span><span></span></div>",
-                    unsafe_allow_html=True,
-                )
-                rc2.markdown(
-                    f"<div class='jp-access-row {row_class}'>"
-                    f"<span></span>"
-                    f"<span class='jp-scheme-cell'>{g.scheme_name}</span>"
-                    f"<span></span><span></span></div>",
-                    unsafe_allow_html=True,
-                )
-                rc3.markdown(
-                    f"<div class='jp-access-row {row_class}'>"
-                    f"<span></span><span></span>"
-                    f"<span class='jp-why-cell'>{why_html}</span>"
-                    f"<span></span></div>",
-                    unsafe_allow_html=True,
-                )
-                # Action column: revoke only for direct grants the user actually owns
-                if r["via_type"] == "direct" and ADMIN:
-                    with rc4.popover("⊖", use_container_width=True):
-                        st.markdown(
-                            f"**Confirm revoke** — drop `{g.permission_key}` "
-                            f"from `{hparam}` on **{g.scheme_name}**."
-                        )
-                        if r.get("shadow"):
-                            st.caption(f"User keeps access via {', '.join(r['covered_by'])}.")
-                        else:
-                            st.caption("⚠️ User has no other source for this permission. Access will be lost.")
-                        if st.button("Apply", key=f"lensrv_{g.scheme_id}_{g.permission_id}", type="primary"):
-                            ok, err = do_revoke(
-                                scheme_id=g.scheme_id, scheme_name=g.scheme_name,
-                                permission_id=g.permission_id, permission_key=g.permission_key,
-                                holder_type=g.holder_type, holder_param=g.holder_param,
-                                holder_display=g.holder_display,
-                            )
-                            if ok:
-                                st.success("Revoked.")
-                                st.rerun()
-                            else:
-                                st.error(err or "Revoke failed.")
-
-        # Inline grant for this user
-        st.markdown("---")
-        with st.popover("➕ Grant another permission to this user", disabled=not ADMIN):
-            st.caption(
-                "Heads up: organizational policy is to grant access via "
-                "LDAP groups. Use this only when the user genuinely needs an "
-                "exception."
-            )
-            sid_pick = st.selectbox(
-                "Scheme", list(schemes_by_id.keys()),
-                format_func=lambda sid: schemes_by_id[sid]["name"],
-                key=f"lensgrant_scheme_{hparam}",
-            )
-            perm_pick = st.selectbox(
-                "Permission", perm_keys_sorted,
-                format_func=lambda k: f"{perm_name_by_key.get(k,k)} ⟨{k}⟩",
-                key=f"lensgrant_perm_{hparam}",
-            )
-            st.markdown(
-                f"<div class='jp-banner jp-banner-info'>"
-                f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{perm_pick}</span> "
-                f"to user <b>{hdisplay}</b> ⟨{hparam}⟩ "
-                f"on <b>{schemes_by_id[sid_pick]['name']}</b>."
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("Apply grant", key=f"lensgrant_apply_{hparam}", type="primary"):
-                ok, err = do_grant(
-                    scheme_id=sid_pick,
-                    scheme_name=schemes_by_id[sid_pick]["name"],
-                    permission_key=perm_pick,
-                    holder_type="user", holder_param=hparam,
-                    holder_display=hdisplay,
-                )
-                if ok:
-                    st.success("Granted.")
-                    st.rerun()
-                else:
-                    st.error(err or "Grant failed.")
-
-    else:
-        # ── group lens ──
-        members = membership_of_group(hparam)
-        rbac_roles = VALID_GROUPS.get(hparam, [])
-        idc1, idc2, idc3 = st.columns([2, 2, 2])
-        with idc1:
-            st.markdown(f"**LDAP members** · {len(members)}")
-            if members:
-                shown = sorted(members)[:30]
-                for m in shown:
-                    if st.button(f"👤 {m}", key=f"glens_m_{hparam}_{m}"):
+                res = search_groups(lens_q)
+                opts = {r["name"]: r for r in res}
+            if opts:
+                pick = st.selectbox("Open", list(opts.keys()), key="lens_pick")
+                if st.button("Open lens", key="lens_open"):
+                    if lens_type == "user":
+                        chosen = opts[pick]
                         st.session_state["focus_holder"] = {
-                            "type": "user", "param": m, "display": m,
+                            "type": "user", "param": chosen["name"],
+                            "display": chosen["display"] or chosen["name"],
                         }
-                        st.rerun()
-                if len(members) > 30:
-                    st.caption(f"…and {len(members) - 30} more")
-            elif _LDAP_AVAILABLE:
+                    else:
+                        chosen = opts[pick]
+                        st.session_state["focus_holder"] = {
+                            "type": "group", "param": chosen["name"],
+                            "display": chosen["name"],
+                        }
+                    st.rerun()
+    
+    
+    # --- Render the focus holder (if any) --------------------------------------
+    focus = st.session_state.get("focus_holder")
+    if focus:
+        htype = focus["type"]
+        hparam = focus["param"]
+        hdisplay = focus["display"]
+        st.markdown(f"<div class='jp-holder-card'>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='jp-holder-head'>"
+            f"<div>"
+            f"<div class='jp-holder-name'>{'👤' if htype=='user' else '👥'} {hdisplay}</div>"
+            f"<div class='jp-holder-id'>{htype}: <span class='jp-pill jp-mono jp-{htype}'>{hparam}</span></div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    
+        if htype == "user":
+            # Identity card from LDAP + roles from RBAC
+            info = ldap_user_info_safe(hparam)
+            roles, role_sources = roles_for_user(hparam)
+            idc1, idc2, idc3 = st.columns([2, 2, 2])
+            with idc1:
+                if info:
+                    st.markdown(f"**Email** · {info.get('email') or '—'}")
+                    st.markdown(f"**Title** · {info.get('title') or '—'}")
+                    st.markdown(f"**Dept**  · {info.get('department') or '—'}")
+                    if info.get("manager"):
+                        st.markdown(f"**Manager** · {info['manager']}")
+                else:
+                    if _LDAP_AVAILABLE:
+                        st.markdown(
+                            "<span class='jp-pill jp-stray'>not found in LDAP</span>",
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(
+                            "User has Jira grants but doesn't resolve in LDAP — "
+                            "likely a decommissioned account. Audit + clean up."
+                        )
+                    else:
+                        st.caption("_(LDAP unavailable in this environment)_")
+            with idc2:
+                st.markdown("**RBAC roles**")
+                if roles:
+                    st.markdown(
+                        " ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in roles),
+                        unsafe_allow_html=True,
+                    )
+                    with st.expander("Role provenance", expanded=False):
+                        for s in role_sources:
+                            st.caption(f"• {s}")
+                else:
+                    st.markdown(
+                        "<span class='jp-pill jp-warn'>no roles resolved</span>",
+                        unsafe_allow_html=True,
+                    )
+            with idc3:
+                st.markdown("**LDAP groups**")
+                if info:
+                    gnames = sorted({_extract_cn(dn) for dn in (info.get("groups") or [])})
+                    if gnames:
+                        st.markdown(
+                            " ".join(f"<span class='jp-pill jp-group'>{g}</span>" for g in gnames[:20]),
+                            unsafe_allow_html=True,
+                        )
+                        if len(gnames) > 20:
+                            st.caption(f"…and {len(gnames) - 20} more")
+                    else:
+                        st.caption("_(no group memberships)_")
+                else:
+                    st.caption("—")
+    
+            # Access map: every grant the user effectively has, with WHY
+            st.markdown("---")
+            st.markdown("**Effective Jira access**")
+            user_groups_set = user_membership_groups(hparam)
+            rows = []
+            # Direct user grants
+            for g in index["grants_by_user"].get(hparam, []):
+                rows.append({
+                    "g": g, "via_type": "direct",
+                    "via": "direct user grant",
+                    "stray": True,
+                })
+            # Group grants the user effectively gets (LDAP says they're in the group)
+            for gname in user_groups_set:
+                for g in index["grants_by_group"].get(gname, []):
+                    rows.append({
+                        "g": g, "via_type": "group",
+                        "via": f"member of group <span class='jp-pill jp-group'>{gname}</span>",
+                        "stray": False,
+                    })
+            # Also include grants to groups whose LDAP CN we couldn't verify
+            # but that share the user's LDAP groups — already covered above.
+    
+            # Filter rows by the current scheme/project filter set
+            rows = [r for r in rows if r["g"].scheme_id in filt["schemes_in_view"]]
+    
+            # Shadow detection: same scheme+perm appears both direct and group
+            seen_key: dict[tuple[int, str], list[dict]] = {}
+            for r in rows:
+                k = (r["g"].scheme_id, r["g"].permission_key)
+                seen_key.setdefault(k, []).append(r)
+            for k, rlist in seen_key.items():
+                if len(rlist) > 1:
+                    # Multiple sources for the same access — flag the "direct" rows as shadow
+                    for r in rlist:
+                        if r["via_type"] == "direct":
+                            r["shadow"] = True
+                            r["covered_by"] = [x["g"].holder_param for x in rlist if x["via_type"] == "group"]
+    
+            if not rows:
                 st.markdown(
-                    "<span class='jp-pill jp-stray'>0 members or LDAP miss</span>",
+                    "<div class='jp-empty'>This user has no Jira access in the current filter set.</div>",
                     unsafe_allow_html=True,
-                )
-                st.caption(
-                    "Group has Jira grants but no LDAP members. Likely a "
-                    "stale group — its grants don't actually apply to anyone."
                 )
             else:
-                st.caption("_(LDAP unavailable)_")
-        with idc2:
-            st.markdown("**RBAC roles** (from VALID_GROUPS)")
-            if rbac_roles:
                 st.markdown(
-                    " ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in rbac_roles),
+                    "<div class='jp-access-row' style='font-weight:600;color:var(--jp-text-mute);"
+                    "background:var(--jp-surface2);border-bottom:1px solid var(--jp-border);'>"
+                    "<div>Permission</div><div>Scheme</div><div>Why</div><div></div></div>",
                     unsafe_allow_html=True,
                 )
-            else:
-                st.markdown(
-                    "<span class='jp-pill jp-warn'>group is granted Jira access but has no role mapping in VALID_GROUPS</span>",
-                    unsafe_allow_html=True,
-                )
-        with idc3:
-            st.markdown("**Grants**")
-            g_grants = [
-                g for g in index["grants_by_group"].get(hparam, [])
-                if g.scheme_id in filt["schemes_in_view"]
-            ]
-            st.metric("Grant rows", len(g_grants))
-            st.metric("Schemes touched", len({g.scheme_id for g in g_grants}))
-
-        st.markdown("---")
-        st.markdown("**Grants made to this group**")
-        g_grants_view = [
-            g for g in index["grants_by_group"].get(hparam, [])
-            if g.scheme_id in filt["schemes_in_view"]
-        ]
-        if not g_grants_view:
-            st.markdown(
-                "<div class='jp-empty'>No grants for this group in the current filter set.</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            by_scheme: dict[int, list[Grant]] = {}
-            for g in g_grants_view:
-                by_scheme.setdefault(g.scheme_id, []).append(g)
-            for sid in sorted(by_scheme.keys()):
-                gs = by_scheme[sid]
-                st.markdown(f"**{gs[0].scheme_name}**  <span class='jp-pill jp-mono'>id {sid}</span>", unsafe_allow_html=True)
-                for g in gs:
-                    rc1, rc2 = st.columns([5, 1])
+                # Sort: stray first, then by scheme + permission
+                rows.sort(key=lambda r: (not r.get("stray"), r["g"].scheme_name, r["g"].permission_key))
+                for r in rows:
+                    g = r["g"]
+                    row_class = ""
+                    if r["via_type"] == "direct" and r.get("shadow"):
+                        row_class = "jp-shadow-row"
+                    elif r["via_type"] == "direct":
+                        row_class = "jp-stray-row"
+                    why_html = r["via"]
+                    if r.get("shadow"):
+                        why_html += (
+                            f"<br><span class='jp-pill jp-warn'>shadow · also via "
+                            f"{', '.join(r['covered_by'][:2])}</span>"
+                        )
+                    elif r["via_type"] == "direct":
+                        why_html += (
+                            "<br><span class='jp-pill jp-stray'>exclusive direct grant — "
+                            "revoking removes the access</span>"
+                        )
+                    rc1, rc2, rc3, rc4 = st.columns([1.2, 1.5, 1.7, .6])
                     rc1.markdown(
-                        f"<div class='jp-access-row'>"
+                        f"<div class='jp-access-row {row_class}'>"
                         f"<span class='jp-perm-cell'>{g.permission_key}</span>"
-                        f"<span class='jp-scheme-cell'>{perm_name_by_key.get(g.permission_key, '')}</span>"
-                        f"<span class='jp-why-cell'>granted to group · applies to {len(members)} LDAP member(s)</span>"
+                        f"<span></span><span></span><span></span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    rc2.markdown(
+                        f"<div class='jp-access-row {row_class}'>"
+                        f"<span></span>"
+                        f"<span class='jp-scheme-cell'>{g.scheme_name}</span>"
+                        f"<span></span><span></span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    rc3.markdown(
+                        f"<div class='jp-access-row {row_class}'>"
+                        f"<span></span><span></span>"
+                        f"<span class='jp-why-cell'>{why_html}</span>"
                         f"<span></span></div>",
                         unsafe_allow_html=True,
                     )
-                    if ADMIN:
-                        with rc2.popover("⊖", use_container_width=True):
+                    # Action column: revoke only for direct grants the user actually owns
+                    if r["via_type"] == "direct" and ADMIN:
+                        with rc4.popover("⊖", use_container_width=True):
                             st.markdown(
-                                f"**Confirm revoke:** drop `{g.permission_key}` "
-                                f"from group `{hparam}` on **{g.scheme_name}**."
+                                f"**Confirm revoke** — drop `{g.permission_key}` "
+                                f"from `{hparam}` on **{g.scheme_name}**."
                             )
-                            st.caption(f"Will affect {len(members)} LDAP member(s).")
-                            if st.button("Apply", key=f"grpx_{sid}_{g.permission_id}", type="primary"):
+                            if r.get("shadow"):
+                                st.caption(f"User keeps access via {', '.join(r['covered_by'])}.")
+                            else:
+                                st.caption("⚠️ User has no other source for this permission. Access will be lost.")
+                            if st.button("Apply", key=f"lensrv_{g.scheme_id}_{g.permission_id}", type="primary"):
                                 ok, err = do_revoke(
                                     scheme_id=g.scheme_id, scheme_name=g.scheme_name,
                                     permission_id=g.permission_id, permission_key=g.permission_key,
@@ -2414,264 +2322,417 @@ if focus:
                                     st.rerun()
                                 else:
                                     st.error(err or "Revoke failed.")
-
-        st.markdown("---")
-        with st.popover("➕ Grant another permission to this group", disabled=not ADMIN):
-            sid_pick = st.selectbox(
-                "Scheme", list(schemes_by_id.keys()),
-                format_func=lambda sid: schemes_by_id[sid]["name"],
-                key=f"glensgrant_scheme_{hparam}",
-            )
-            perm_pick = st.selectbox(
-                "Permission", perm_keys_sorted,
-                format_func=lambda k: f"{perm_name_by_key.get(k,k)} ⟨{k}⟩",
-                key=f"glensgrant_perm_{hparam}",
-            )
-            st.markdown(
-                f"<div class='jp-banner jp-banner-info'>"
-                f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{perm_pick}</span> "
-                f"to group <b>{hparam}</b> "
-                f"on <b>{schemes_by_id[sid_pick]['name']}</b>. "
-                f"Will apply to {len(members)} LDAP member(s)."
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("Apply grant", key=f"glensgrant_apply_{hparam}", type="primary"):
-                ok, err = do_grant(
-                    scheme_id=sid_pick,
-                    scheme_name=schemes_by_id[sid_pick]["name"],
-                    permission_key=perm_pick,
-                    holder_type="group", holder_param=hparam,
-                    holder_display=hparam,
+    
+            # Inline grant for this user
+            st.markdown("---")
+            with st.popover("➕ Grant another permission to this user", disabled=not ADMIN):
+                st.caption(
+                    "Heads up: organizational policy is to grant access via "
+                    "LDAP groups. Use this only when the user genuinely needs an "
+                    "exception."
                 )
-                if ok:
-                    st.success("Granted.")
-                    st.rerun()
+                sid_pick = st.selectbox(
+                    "Scheme", list(schemes_by_id.keys()),
+                    format_func=lambda sid: schemes_by_id[sid]["name"],
+                    key=f"lensgrant_scheme_{hparam}",
+                )
+                perm_pick = st.selectbox(
+                    "Permission", perm_keys_sorted,
+                    format_func=lambda k: f"{perm_name_by_key.get(k,k)} ⟨{k}⟩",
+                    key=f"lensgrant_perm_{hparam}",
+                )
+                st.markdown(
+                    f"<div class='jp-banner jp-banner-info'>"
+                    f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{perm_pick}</span> "
+                    f"to user <b>{hdisplay}</b> ⟨{hparam}⟩ "
+                    f"on <b>{schemes_by_id[sid_pick]['name']}</b>."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("Apply grant", key=f"lensgrant_apply_{hparam}", type="primary"):
+                    ok, err = do_grant(
+                        scheme_id=sid_pick,
+                        scheme_name=schemes_by_id[sid_pick]["name"],
+                        permission_key=perm_pick,
+                        holder_type="user", holder_param=hparam,
+                        holder_display=hdisplay,
+                    )
+                    if ok:
+                        st.success("Granted.")
+                        st.rerun()
+                    else:
+                        st.error(err or "Grant failed.")
+    
+        else:
+            # ── group lens ──
+            members = membership_of_group(hparam)
+            rbac_roles = VALID_GROUPS.get(hparam, [])
+            idc1, idc2, idc3 = st.columns([2, 2, 2])
+            with idc1:
+                st.markdown(f"**LDAP members** · {len(members)}")
+                if members:
+                    shown = sorted(members)[:30]
+                    for m in shown:
+                        if st.button(f"👤 {m}", key=f"glens_m_{hparam}_{m}"):
+                            st.session_state["focus_holder"] = {
+                                "type": "user", "param": m, "display": m,
+                            }
+                            st.rerun()
+                    if len(members) > 30:
+                        st.caption(f"…and {len(members) - 30} more")
+                elif _LDAP_AVAILABLE:
+                    st.markdown(
+                        "<span class='jp-pill jp-stray'>0 members or LDAP miss</span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        "Group has Jira grants but no LDAP members. Likely a "
+                        "stale group — its grants don't actually apply to anyone."
+                    )
                 else:
-                    st.error(err or "Grant failed.")
+                    st.caption("_(LDAP unavailable)_")
+            with idc2:
+                st.markdown("**RBAC roles** (from VALID_GROUPS)")
+                if rbac_roles:
+                    st.markdown(
+                        " ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in rbac_roles),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        "<span class='jp-pill jp-warn'>group is granted Jira access but has no role mapping in VALID_GROUPS</span>",
+                        unsafe_allow_html=True,
+                    )
+            with idc3:
+                st.markdown("**Grants**")
+                g_grants = [
+                    g for g in index["grants_by_group"].get(hparam, [])
+                    if g.scheme_id in filt["schemes_in_view"]
+                ]
+                st.metric("Grant rows", len(g_grants))
+                st.metric("Schemes touched", len({g.scheme_id for g in g_grants}))
+    
+            st.markdown("---")
+            st.markdown("**Grants made to this group**")
+            g_grants_view = [
+                g for g in index["grants_by_group"].get(hparam, [])
+                if g.scheme_id in filt["schemes_in_view"]
+            ]
+            if not g_grants_view:
+                st.markdown(
+                    "<div class='jp-empty'>No grants for this group in the current filter set.</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                by_scheme: dict[int, list[Grant]] = {}
+                for g in g_grants_view:
+                    by_scheme.setdefault(g.scheme_id, []).append(g)
+                for sid in sorted(by_scheme.keys()):
+                    gs = by_scheme[sid]
+                    st.markdown(f"**{gs[0].scheme_name}**  <span class='jp-pill jp-mono'>id {sid}</span>", unsafe_allow_html=True)
+                    for g in gs:
+                        rc1, rc2 = st.columns([5, 1])
+                        rc1.markdown(
+                            f"<div class='jp-access-row'>"
+                            f"<span class='jp-perm-cell'>{g.permission_key}</span>"
+                            f"<span class='jp-scheme-cell'>{perm_name_by_key.get(g.permission_key, '')}</span>"
+                            f"<span class='jp-why-cell'>granted to group · applies to {len(members)} LDAP member(s)</span>"
+                            f"<span></span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        if ADMIN:
+                            with rc2.popover("⊖", use_container_width=True):
+                                st.markdown(
+                                    f"**Confirm revoke:** drop `{g.permission_key}` "
+                                    f"from group `{hparam}` on **{g.scheme_name}**."
+                                )
+                                st.caption(f"Will affect {len(members)} LDAP member(s).")
+                                if st.button("Apply", key=f"grpx_{sid}_{g.permission_id}", type="primary"):
+                                    ok, err = do_revoke(
+                                        scheme_id=g.scheme_id, scheme_name=g.scheme_name,
+                                        permission_id=g.permission_id, permission_key=g.permission_key,
+                                        holder_type=g.holder_type, holder_param=g.holder_param,
+                                        holder_display=g.holder_display,
+                                    )
+                                    if ok:
+                                        st.success("Revoked.")
+                                        st.rerun()
+                                    else:
+                                        st.error(err or "Revoke failed.")
+    
+            st.markdown("---")
+            with st.popover("➕ Grant another permission to this group", disabled=not ADMIN):
+                sid_pick = st.selectbox(
+                    "Scheme", list(schemes_by_id.keys()),
+                    format_func=lambda sid: schemes_by_id[sid]["name"],
+                    key=f"glensgrant_scheme_{hparam}",
+                )
+                perm_pick = st.selectbox(
+                    "Permission", perm_keys_sorted,
+                    format_func=lambda k: f"{perm_name_by_key.get(k,k)} ⟨{k}⟩",
+                    key=f"glensgrant_perm_{hparam}",
+                )
+                st.markdown(
+                    f"<div class='jp-banner jp-banner-info'>"
+                    f"<b>Confirm:</b> grant <span class='jp-pill jp-mono'>{perm_pick}</span> "
+                    f"to group <b>{hparam}</b> "
+                    f"on <b>{schemes_by_id[sid_pick]['name']}</b>. "
+                    f"Will apply to {len(members)} LDAP member(s)."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("Apply grant", key=f"glensgrant_apply_{hparam}", type="primary"):
+                    ok, err = do_grant(
+                        scheme_id=sid_pick,
+                        scheme_name=schemes_by_id[sid_pick]["name"],
+                        permission_key=perm_pick,
+                        holder_type="group", holder_param=hparam,
+                        holder_display=hparam,
+                    )
+                    if ok:
+                        st.success("Granted.")
+                        st.rerun()
+                    else:
+                        st.error(err or "Grant failed.")
+    
+        if st.button("Close lens", key="close_lens"):
+            st.session_state["focus_holder"] = None
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            "<div class='jp-empty'>Pick a user or group above to open its access lens.</div>",
+            unsafe_allow_html=True,
+        )
 
-    if st.button("Close lens", key="close_lens"):
-        st.session_state["focus_holder"] = None
-        st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
-else:
-    st.markdown(
-        "<div class='jp-empty'>Pick a user or group above to open its access lens.</div>",
-        unsafe_allow_html=True,
-    )
+
+_section_lens()
 
 
 # ---------------------------------------------------------------------------
 # Section: Scheme / project explorer
+# Wrapped as a fragment so the scheme/project pickers and per-row Lens
+# buttons don't trigger a full-page rerun.
 # ---------------------------------------------------------------------------
-st.markdown(
-    "<div class='jp-section-head'><h3>📋 Schemes &amp; projects</h3>"
-    "<span class='jp-section-sub'>Pick a scheme to see every holder; click a "
-    "holder to open it in the lens above</span></div>",
-    unsafe_allow_html=True,
-)
-
-ec1, ec2 = st.columns([1, 1])
-with ec1:
-    # Searchable dropdown — Streamlit's selectbox filters as you type
-    sx_scheme = st.selectbox(
-        "Scheme",
-        [None] + list(schemes_by_id.keys()),
-        format_func=lambda sid: (
-            "— select —" if sid is None else
-            f"{schemes_by_id[sid]['name']}  · "
-            f"{coverage_by_scheme.get(sid, {}).get('covered', 0)}/"
-            f"{total_permission_count} perms  · id {sid}"
-        ),
-        key="explore_scheme",
-    )
-with ec2:
-    sx_project = st.selectbox(
-        "Project",
-        [None] + all_project_keys,
-        format_func=lambda k: (
-            "— select —" if k is None
-            else f"{k}  · {project_to_company.get(k, '(unmapped)')}"
-        ),
-        key="explore_project",
-    )
-
-resolved_sid: int | None = None
-if sx_project and not sx_scheme:
-    resolved_sid = project_to_scheme_id.get(sx_project)
-elif sx_scheme is not None:
-    resolved_sid = sx_scheme
-
-if resolved_sid is not None:
-    sname = schemes_by_id.get(resolved_sid, {}).get("name", str(resolved_sid))
-    sgrants = index["grants_by_scheme"].get(resolved_sid, [])
-    projects_for_this = scheme_to_projects.get(resolved_sid, [])
-    cov = coverage_by_scheme.get(resolved_sid, {})
-    companies_for_this = sorted({
-        project_to_company.get(p["key"], "(unmapped)") for p in projects_for_this
-    })
-    sec1, sec2, sec3, sec4 = st.columns(4)
-    sec1.markdown(
-        f"**Scheme · {sname}**  <span class='jp-pill jp-mono'>id {resolved_sid}</span>",
+@st.fragment
+def _section_explorer():
+    st.markdown(
+        "<div class='jp-section-head'><h3>📋 Schemes &amp; projects</h3>"
+        "<span class='jp-section-sub'>Pick a scheme to see every holder; click a "
+        "holder to open it in the lens above</span></div>",
         unsafe_allow_html=True,
     )
-    sec2.metric("Grants", len(sgrants))
-    sec3.metric(
-        "Permissions covered",
-        f"{cov.get('covered', 0)} / {total_permission_count}",
-        f"{(cov.get('pct', 0) * 100):.0f}% of catalog",
-    )
-    sec4.metric("Projects bound", len(projects_for_this))
-    if companies_for_this:
-        st.markdown(
-            "🏢 " + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies_for_this),
-            unsafe_allow_html=True,
-        )
-    if projects_for_this:
-        st.markdown(
-            " ".join(
-                f"<span class='jp-pill jp-info'>{p['key']} · {p['name']}"
-                f"  · {project_to_company.get(p['key'], '(unmapped)')}</span>"
-                for p in projects_for_this
+
+    ec1, ec2 = st.columns([1, 1])
+    with ec1:
+        # Searchable dropdown — Streamlit's selectbox filters as you type
+        sx_scheme = st.selectbox(
+            "Scheme",
+            [None] + list(schemes_by_id.keys()),
+            format_func=lambda sid: (
+                "— select —" if sid is None else
+                f"{schemes_by_id[sid]['name']}  · "
+                f"{coverage_by_scheme.get(sid, {}).get('covered', 0)}/"
+                f"{total_permission_count} perms  · id {sid}"
             ),
+            key="explore_scheme",
+        )
+    with ec2:
+        sx_project = st.selectbox(
+            "Project",
+            [None] + all_project_keys,
+            format_func=lambda k: (
+                "— select —" if k is None
+                else f"{k}  · {project_to_company.get(k, '(unmapped)')}"
+            ),
+            key="explore_project",
+        )
+    
+    resolved_sid: int | None = None
+    if sx_project and not sx_scheme:
+        resolved_sid = project_to_scheme_id.get(sx_project)
+    elif sx_scheme is not None:
+        resolved_sid = sx_scheme
+    
+    if resolved_sid is not None:
+        sname = schemes_by_id.get(resolved_sid, {}).get("name", str(resolved_sid))
+        sgrants = index["grants_by_scheme"].get(resolved_sid, [])
+        projects_for_this = scheme_to_projects.get(resolved_sid, [])
+        cov = coverage_by_scheme.get(resolved_sid, {})
+        companies_for_this = sorted({
+            project_to_company.get(p["key"], "(unmapped)") for p in projects_for_this
+        })
+        sec1, sec2, sec3, sec4 = st.columns(4)
+        sec1.markdown(
+            f"**Scheme · {sname}**  <span class='jp-pill jp-mono'>id {resolved_sid}</span>",
             unsafe_allow_html=True,
         )
-    # Missing permissions in this scheme — actionable hint
-    missing = sorted(set(perm_keys_sorted) - set(cov.get("perm_keys", [])))
-    if missing:
-        with st.expander(
-            f"⚠️  {len(missing)} permission(s) in the Jira catalog have NO holder in this scheme",
-            expanded=False,
-        ):
-            st.caption(
-                "These permission keys exist on the instance but no user, "
-                "group, or role can exercise them on projects bound to this "
-                "scheme. Often fine (e.g. Service Desk perms on a software "
-                "project) — but worth a glance."
+        sec2.metric("Grants", len(sgrants))
+        sec3.metric(
+            "Permissions covered",
+            f"{cov.get('covered', 0)} / {total_permission_count}",
+            f"{(cov.get('pct', 0) * 100):.0f}% of catalog",
+        )
+        sec4.metric("Projects bound", len(projects_for_this))
+        if companies_for_this:
+            st.markdown(
+                "🏢 " + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies_for_this),
+                unsafe_allow_html=True,
             )
+        if projects_for_this:
             st.markdown(
                 " ".join(
-                    f"<span class='jp-pill jp-mono'>{k}</span>"
-                    f" <span style='color:var(--jp-text-mute);font-size:.72rem;'>{perm_name_by_key.get(k, '')}</span><br>"
-                    for k in missing
+                    f"<span class='jp-pill jp-info'>{p['key']} · {p['name']}"
+                    f"  · {project_to_company.get(p['key'], '(unmapped)')}</span>"
+                    for p in projects_for_this
                 ),
                 unsafe_allow_html=True,
             )
-
-    # Aggregate by holder so the table reads vertically
-    holder_rows: dict[tuple[str, str], list[Grant]] = {}
-    for g in sgrants:
-        holder_rows.setdefault((g.holder_type, g.holder_param), []).append(g)
-
-    st.markdown("---")
-    st.markdown(
-        "<div class='jp-access-row' style='font-weight:600;color:var(--jp-text-mute);background:var(--jp-surface2);'>"
-        "<div>Holder</div><div>Permissions</div><div>Notes</div><div></div></div>",
-        unsafe_allow_html=True,
-    )
-    for (htype, hparam), glist in sorted(holder_rows.items(), key=lambda kv: (kv[0][0], kv[0][1].lower())):
-        # Annotate stray + LDAP miss
-        flags = []
-        if htype == "user":
-            flags.append("<span class='jp-pill jp-stray'>direct grant (policy: by group)</span>")
-            if _LDAP_AVAILABLE and not ldap_user_info_safe(hparam):
-                flags.append("<span class='jp-pill jp-stray'>LDAP miss</span>")
-        elif htype == "group":
-            if _LDAP_AVAILABLE and not membership_of_group(hparam):
-                flags.append("<span class='jp-pill jp-stray'>empty LDAP group</span>")
-            if VALID_GROUPS.get(hparam):
-                flags.append(
-                    f"<span class='jp-pill jp-role'>roles: "
-                    f"{', '.join(VALID_GROUPS[hparam])}</span>"
+        # Missing permissions in this scheme — actionable hint
+        missing = sorted(set(perm_keys_sorted) - set(cov.get("perm_keys", [])))
+        if missing:
+            with st.expander(
+                f"⚠️  {len(missing)} permission(s) in the Jira catalog have NO holder in this scheme",
+                expanded=False,
+            ):
+                st.caption(
+                    "These permission keys exist on the instance but no user, "
+                    "group, or role can exercise them on projects bound to this "
+                    "scheme. Often fine (e.g. Service Desk perms on a software "
+                    "project) — but worth a glance."
                 )
-        else:
-            flags.append(f"<span class='jp-pill'>{htype}</span>")
-
-        glist_display = " ".join(
-            f"<span class='jp-pill jp-mono'>{g.permission_key}</span>" for g in glist
-        )
-        c_h, c_p, c_n, c_a = st.columns([1.2, 2.5, 1.5, .6])
-        c_h.markdown(
-            f"{'👤' if htype=='user' else ('👥' if htype=='group' else '•')}  "
-            f"**{glist[0].holder_display}**  <br><span class='jp-pill jp-mono'>{hparam}</span>",
+                st.markdown(
+                    " ".join(
+                        f"<span class='jp-pill jp-mono'>{k}</span>"
+                        f" <span style='color:var(--jp-text-mute);font-size:.72rem;'>{perm_name_by_key.get(k, '')}</span><br>"
+                        for k in missing
+                    ),
+                    unsafe_allow_html=True,
+                )
+    
+        # Aggregate by holder so the table reads vertically
+        holder_rows: dict[tuple[str, str], list[Grant]] = {}
+        for g in sgrants:
+            holder_rows.setdefault((g.holder_type, g.holder_param), []).append(g)
+    
+        st.markdown("---")
+        st.markdown(
+            "<div class='jp-access-row' style='font-weight:600;color:var(--jp-text-mute);background:var(--jp-surface2);'>"
+            "<div>Holder</div><div>Permissions</div><div>Notes</div><div></div></div>",
             unsafe_allow_html=True,
         )
-        c_p.markdown(glist_display, unsafe_allow_html=True)
-        c_n.markdown(" ".join(flags), unsafe_allow_html=True)
-        if htype in ("user", "group"):
-            if c_a.button("Lens", key=f"slens_{resolved_sid}_{htype}_{hparam}", use_container_width=True):
-                st.session_state["focus_holder"] = {
-                    "type": htype, "param": hparam, "display": glist[0].holder_display,
-                }
-                st.rerun()
-        st.divider()
+        for (htype, hparam), glist in sorted(holder_rows.items(), key=lambda kv: (kv[0][0], kv[0][1].lower())):
+            # Per-row notes. We DO NOT call LDAP per row here — that would do
+            # N round-trips for every scheme view and stall the page. The
+            # holder lens verifies LDAP existence on demand when you click
+            # into a specific holder.
+            flags = []
+            if htype == "user":
+                flags.append("<span class='jp-pill jp-stray'>direct grant (policy: by group)</span>")
+            elif htype == "group":
+                if VALID_GROUPS.get(hparam):
+                    flags.append(
+                        f"<span class='jp-pill jp-role'>roles: "
+                        f"{', '.join(VALID_GROUPS[hparam])}</span>"
+                    )
+            else:
+                flags.append(f"<span class='jp-pill'>{htype}</span>")
+    
+            glist_display = " ".join(
+                f"<span class='jp-pill jp-mono'>{g.permission_key}</span>" for g in glist
+            )
+            c_h, c_p, c_n, c_a = st.columns([1.2, 2.5, 1.5, .6])
+            c_h.markdown(
+                f"{'👤' if htype=='user' else ('👥' if htype=='group' else '•')}  "
+                f"**{glist[0].holder_display}**  <br><span class='jp-pill jp-mono'>{hparam}</span>",
+                unsafe_allow_html=True,
+            )
+            c_p.markdown(glist_display, unsafe_allow_html=True)
+            c_n.markdown(" ".join(flags), unsafe_allow_html=True)
+            if htype in ("user", "group"):
+                if c_a.button("Lens", key=f"slens_{resolved_sid}_{htype}_{hparam}", use_container_width=True):
+                    st.session_state["focus_holder"] = {
+                        "type": htype, "param": hparam, "display": glist[0].holder_display,
+                    }
+                    st.rerun()
+            st.divider()
+
+
+_section_explorer()
 
 
 # ---------------------------------------------------------------------------
 # Section: Audit log (last 200 events)
+# Wrapped as a fragment + the query is cached for 30 s so the log opens
+# instantly on subsequent renders.
 # ---------------------------------------------------------------------------
-with st.expander("📋 Audit log — recent access changes", expanded=False):
-    if not _schema_ok:
-        st.caption("Postgres unavailable.")
-    else:
-        audit_rows, aerr = db_audit_query(limit=200)
-        if aerr:
-            st.error(aerr)
-        elif not audit_rows:
-            st.markdown(
-                "<div class='jp-empty'>No access changes recorded yet.</div>",
-                unsafe_allow_html=True,
-            )
+@st.fragment
+def _section_audit():
+    with st.expander("📋 Audit log — recent access changes", expanded=False):
+        if not _schema_ok:
+            st.caption("Postgres unavailable.")
         else:
-            st.markdown(
-                "<div class='jp-audit-row' style='font-weight:600;color:var(--jp-text-mute);'>"
-                "<div>Timestamp</div><div>Action</div><div>Status</div>"
-                "<div>Detail</div><div>Scheme</div></div>",
-                unsafe_allow_html=True,
-            )
-            for r in audit_rows:
-                ts = r["ts"].strftime("%Y-%m-%d %H:%M:%S") if hasattr(r["ts"], "strftime") else str(r["ts"])
-                action = r["action"]
-                pill = f"<span class='jp-pill {'jp-ok' if action=='grant' else 'jp-stray'}'>{action}</span>"
-                status_html = (
-                    "<span class='jp-status-ok'>✓</span>"
-                    if r["ok"]
-                    else f"<span class='jp-status-err'>✗ {r.get('status_code') or 'err'}</span>"
-                )
-                detail = (
-                    f"<code>{r['permission_key']}</code> · "
-                    f"{r['holder_type']} <b>{r.get('holder_display') or r['holder_param']}</b> "
-                    f"<span style='color:var(--jp-text-mute);'>(by {r['actor']})</span>"
-                )
-                if not r["ok"] and r.get("error"):
-                    detail += f"<br><span style='color:var(--jp-red);font-size:.7rem;'>{str(r['error'])[:200]}</span>"
+            audit_rows, aerr = db_audit_query(limit=200)
+            if aerr:
+                st.error(aerr)
+            elif not audit_rows:
                 st.markdown(
-                    f"<div class='jp-audit-row'>"
-                    f"<div class='jp-ts'>{ts}</div>"
-                    f"<div>{pill}</div>"
-                    f"<div>{status_html}</div>"
-                    f"<div>{detail}</div>"
-                    f"<div>{r.get('scheme_name') or r['scheme_id']}</div>"
-                    f"</div>",
+                    "<div class='jp-empty'>No access changes recorded yet.</div>",
                     unsafe_allow_html=True,
                 )
-            # Export
-            ec1x, ec2x = st.columns(2)
-            ec1x.download_button(
-                "⬇ JSON",
-                data=json.dumps(audit_rows, default=str, indent=2),
-                file_name=f"jira-access-audit-{int(time.time())}.json",
-                mime="application/json",
-                use_container_width=True,
-            )
-            buf = io.StringIO()
-            fieldnames = list(audit_rows[0].keys())
-            w = csv.DictWriter(buf, fieldnames=fieldnames)
-            w.writeheader()
-            for r in audit_rows:
-                w.writerow({k: ("" if v is None else (json.dumps(v, default=str) if isinstance(v, (dict, list)) else str(v))) for k, v in r.items()})
-            ec2x.download_button(
-                "⬇ CSV", data=buf.getvalue(),
-                file_name=f"jira-access-audit-{int(time.time())}.csv",
-                mime="text/csv", use_container_width=True,
-            )
+            else:
+                st.markdown(
+                    "<div class='jp-audit-row' style='font-weight:600;color:var(--jp-text-mute);'>"
+                    "<div>Timestamp</div><div>Action</div><div>Status</div>"
+                    "<div>Detail</div><div>Scheme</div></div>",
+                    unsafe_allow_html=True,
+                )
+                for r in audit_rows:
+                    ts = r["ts"].strftime("%Y-%m-%d %H:%M:%S") if hasattr(r["ts"], "strftime") else str(r["ts"])
+                    action = r["action"]
+                    pill = f"<span class='jp-pill {'jp-ok' if action=='grant' else 'jp-stray'}'>{action}</span>"
+                    status_html = (
+                        "<span class='jp-status-ok'>✓</span>"
+                        if r["ok"]
+                        else f"<span class='jp-status-err'>✗ {r.get('status_code') or 'err'}</span>"
+                    )
+                    detail = (
+                        f"<code>{r['permission_key']}</code> · "
+                        f"{r['holder_type']} <b>{r.get('holder_display') or r['holder_param']}</b> "
+                        f"<span style='color:var(--jp-text-mute);'>(by {r['actor']})</span>"
+                    )
+                    if not r["ok"] and r.get("error"):
+                        detail += f"<br><span style='color:var(--jp-red);font-size:.7rem;'>{str(r['error'])[:200]}</span>"
+                    st.markdown(
+                        f"<div class='jp-audit-row'>"
+                        f"<div class='jp-ts'>{ts}</div>"
+                        f"<div>{pill}</div>"
+                        f"<div>{status_html}</div>"
+                        f"<div>{detail}</div>"
+                        f"<div>{r.get('scheme_name') or r['scheme_id']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                # Export
+                ec1x, ec2x = st.columns(2)
+                ec1x.download_button(
+                    "⬇ JSON",
+                    data=json.dumps(audit_rows, default=str, indent=2),
+                    file_name=f"jira-access-audit-{int(time.time())}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+                buf = io.StringIO()
+                fieldnames = list(audit_rows[0].keys())
+                w = csv.DictWriter(buf, fieldnames=fieldnames)
+                w.writeheader()
+                for r in audit_rows:
+                    w.writerow({k: ("" if v is None else (json.dumps(v, default=str) if isinstance(v, (dict, list)) else str(v))) for k, v in r.items()})
+                ec2x.download_button(
+                    "⬇ CSV", data=buf.getvalue(),
+                    file_name=f"jira-access-audit-{int(time.time())}.csv",
+                    mime="text/csv", use_container_width=True,
+                )
+
+
+_section_audit()
