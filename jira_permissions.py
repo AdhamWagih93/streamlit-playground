@@ -39,6 +39,15 @@ import requests
 from requests.auth import HTTPBasicAuth
 import streamlit as st
 
+# Pandas is used for the role × permission standardization matrix display.
+# Falls back to a plain HTML table if it isn't available.
+try:
+    import pandas as pd
+    _PANDAS = True
+except ImportError:
+    pd = None  # type: ignore
+    _PANDAS = False
+
 # --- Project-internal modules (present in prod, optional locally) ----------
 try:
     from utils.vault import VaultClient  # type: ignore
@@ -687,6 +696,36 @@ def search_groups(query: str, max_results: int = 30) -> list[dict]:
     return [{"name": g.get("name", "")} for g in (res or {}).get("groups") or []]
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_devops_projects() -> list[dict]:
+    """Read the (company, project) mapping from the devops_projects
+    Postgres table — same source cicd_dashboard.py uses. Returns plain
+    dicts so Streamlit can cache them. Empty list on any error (the page
+    still works; the Company filter just goes blank)."""
+    conn, err = _pg_connect()
+    if err:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT company, project FROM devops_projects")
+            rows = cur.fetchall()
+            out: list[dict] = []
+            for r in rows:
+                company = (str(r[0]) if r[0] is not None else "").strip()
+                project = (str(r[1]) if r[1] is not None else "").strip()
+                if project:
+                    out.append({"company": company, "project": project})
+            return out
+    except Exception as e:
+        logger.warning(f"devops_projects read failed: {e}")
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _invalidate_jira_cache():
     fetch_all_schemes.clear()
     fetch_scheme_detail.clear()
@@ -906,6 +945,7 @@ def do_batch_revoke(grants_to_revoke: list[Grant]) -> tuple[int, int]:
 # Session state init
 # ---------------------------------------------------------------------------
 def _ss_init():
+    st.session_state.setdefault("flt_companies", [])
     st.session_state.setdefault("flt_projects", [])
     st.session_state.setdefault("flt_schemes", [])
     st.session_state.setdefault("flt_roles", [])
@@ -1012,6 +1052,52 @@ for sid, projs in scheme_to_projects.items():
 all_project_keys = sorted(project_to_scheme_id.keys())
 all_scheme_names = [(int(s["id"]), s["name"]) for s in schemes]
 
+# Company dimension — sourced from the devops_projects Postgres table
+# (same table cicd_dashboard.py reads). Project keys not present in the
+# table fall under "(unmapped)" so they remain selectable.
+_devops_rows = fetch_devops_projects()
+project_to_company: dict[str, str] = {}
+for r in _devops_rows:
+    pkey = (r.get("project") or "").strip()
+    comp = (r.get("company") or "").strip()
+    if pkey:
+        project_to_company[pkey] = comp or "(unmapped)"
+# Make sure every Jira-known project is keyed (even if missing from DB)
+for pk in all_project_keys:
+    project_to_company.setdefault(pk, "(unmapped)")
+company_to_projects: dict[str, set[str]] = {}
+for pk, comp in project_to_company.items():
+    company_to_projects.setdefault(comp, set()).add(pk)
+all_companies = sorted(c for c in company_to_projects.keys() if c)
+
+# Total size of the Jira permission catalog — denominator for the
+# "X of Y permissions covered" stat that appears throughout the page.
+total_permission_count = len(perm_catalog) or 1
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _scheme_coverage_map(_grants_dicts: list[dict], total: int) -> dict[int, dict]:
+    """Per-scheme permission coverage. Returns scheme_id → {covered, total,
+    pct, perm_keys}. ``perm_keys`` is the sorted list of distinct
+    permission keys with at least one holder in the scheme."""
+    bucket: dict[int, set[str]] = {}
+    for d in _grants_dicts:
+        bucket.setdefault(int(d["scheme_id"]), set()).add(d["permission_key"])
+    out: dict[int, dict] = {}
+    for sid, keys in bucket.items():
+        out[sid] = {
+            "covered": len(keys),
+            "total":   total,
+            "pct":     (len(keys) / total) if total else 0.0,
+            "perm_keys": sorted(keys),
+        }
+    # Schemes with zero grants don't appear in `bucket` — give them a row
+    for sid in schemes_by_id:
+        out.setdefault(sid, {"covered": 0, "total": total, "pct": 0.0, "perm_keys": []})
+    return out
+
+coverage_by_scheme = _scheme_coverage_map(all_grants(), total_permission_count)
+
 
 # ---------------------------------------------------------------------------
 # Stray-access analysis — per holder + per grant
@@ -1112,28 +1198,45 @@ def explain_group_grant(group_name: str, username: str) -> str:
 # ---------------------------------------------------------------------------
 def resolve_filter() -> dict:
     """Translate the active filter selections into a single canonical
-    result — schemes_in_view, users_in_view, groups_in_view, and a label
-    set for the chip strip."""
+    result — projects_in_view, schemes_in_view, users_in_view,
+    groups_in_view, and a label set for the chip strip."""
+    flt_companies: list[str] = list(st.session_state["flt_companies"] or [])
     flt_projects: list[str] = list(st.session_state["flt_projects"] or [])
     flt_schemes: list[int] = list(st.session_state["flt_schemes"] or [])
     flt_roles: list[str] = list(st.session_state["flt_roles"] or [])
     flt_holder: dict | None = st.session_state["flt_holder"]
 
-    # Schemes-in-view
-    schemes_set: set[int] = set(schemes_by_id.keys())
+    # Projects-in-view: start from all known projects, narrow by company,
+    # then by explicit project picks.
+    projects_set: set[str] = set(all_project_keys)
+    if flt_companies:
+        projects_set = set()
+        for c in flt_companies:
+            projects_set |= company_to_projects.get(c, set())
+        projects_set &= set(all_project_keys)
     if flt_projects:
-        schemes_set &= {project_to_scheme_id[p] for p in flt_projects if p in project_to_scheme_id}
+        projects_set &= set(flt_projects)
+
+    # Schemes-in-view: start from the schemes bound to those projects, then
+    # narrow further by the explicit scheme picks. If no project or company
+    # filter is active, all schemes are eligible (incl. those bound to no
+    # project — they wouldn't be reachable via the project path).
+    if flt_companies or flt_projects:
+        schemes_set: set[int] = {
+            project_to_scheme_id[p] for p in projects_set
+            if p in project_to_scheme_id
+        }
+    else:
+        schemes_set = set(schemes_by_id.keys())
     if flt_schemes:
         schemes_set &= set(flt_schemes)
 
-    # Users/groups implied by chosen roles
     users_by_role: set[str] = set()
     groups_by_role: set[str] = set()
     for role in flt_roles:
         users_by_role.update(users_for_role(role))
         groups_by_role.update(groups_for_role(role))
 
-    # If a single holder is picked, intersect with that
     pinned_user = None
     pinned_group = None
     if flt_holder:
@@ -1143,17 +1246,21 @@ def resolve_filter() -> dict:
             pinned_group = flt_holder["param"]
 
     chips: list[str] = []
+    if flt_companies:
+        chips.append(f"<span class='jp-pill jp-info'>🏢 {', '.join(flt_companies)}</span>")
     if flt_projects:
-        chips.append(f"<span class='jp-pill jp-info'>projects: {', '.join(flt_projects[:5])}{'…' if len(flt_projects)>5 else ''}</span>")
+        chips.append(f"<span class='jp-pill jp-info'>📁 {', '.join(flt_projects[:5])}{'…' if len(flt_projects)>5 else ''}</span>")
     if flt_schemes:
-        chips.append(f"<span class='jp-pill jp-info'>schemes: {len(flt_schemes)}</span>")
+        chips.append(f"<span class='jp-pill jp-info'>📋 {len(flt_schemes)} scheme(s)</span>")
     if flt_roles:
-        chips.append(f"<span class='jp-pill jp-role'>roles: {', '.join(flt_roles)}</span>")
+        chips.append(f"<span class='jp-pill jp-role'>🎭 {', '.join(flt_roles)}</span>")
     if flt_holder:
         icon = "👤" if flt_holder["type"] == "user" else "👥"
         chips.append(f"<span class='jp-pill jp-{flt_holder['type']}'>{icon} {flt_holder['display']}</span>")
 
     return {
+        "companies_in_view": set(flt_companies) if flt_companies else set(all_companies),
+        "projects_in_view": projects_set,
         "schemes_in_view": schemes_set,
         "users_by_role": users_by_role,
         "groups_by_role": groups_by_role,
@@ -1193,68 +1300,101 @@ def grants_in_view(filt: dict) -> list[Grant]:
 
 
 # ---------------------------------------------------------------------------
-# Filter bar — popovers wired into the stat strip
+# Filter bar — inline searchable multiselects (companies / projects / schemes
+# / roles) for type-as-you-go filtering, plus popovers for holder pin and
+# the quick-grant action.
 # ---------------------------------------------------------------------------
 st.markdown("<div class='jp-filterbar'>", unsafe_allow_html=True)
 
-ftcols = st.columns([1, 1, 1, 1, 1, 3])
+# Row 1 — searchable dropdowns. Streamlit's multiselect filters its
+# options as you type, so even a 200-entry list stays usable.
+flt_r1 = st.columns([1.1, 1.4, 1.4, 1.2])
 
-with ftcols[0]:
-    with st.popover("📁 Projects", use_container_width=True):
-        sel = st.multiselect(
-            "Filter to projects (intersect with their bound schemes)",
-            all_project_keys,
-            default=st.session_state["flt_projects"],
-            key="flt_projects_pop",
-        )
-        if sel != st.session_state["flt_projects"]:
-            st.session_state["flt_projects"] = sel
-            st.rerun()
+with flt_r1[0]:
+    new_cs = st.multiselect(
+        "🏢 Companies",
+        options=all_companies,
+        default=st.session_state["flt_companies"],
+        placeholder="any company" if all_companies else "(devops_projects empty / unreachable)",
+        key="flt_companies_ms",
+        help="Sourced from the devops_projects Postgres table. "
+             "Filters projects (and therefore schemes) to those owned by the company.",
+    )
+    if new_cs != st.session_state["flt_companies"]:
+        st.session_state["flt_companies"] = new_cs
+        st.rerun()
 
-with ftcols[1]:
-    with st.popover("📋 Schemes", use_container_width=True):
-        scheme_options = {sid: name for sid, name in all_scheme_names}
-        sel = st.multiselect(
-            "Filter to schemes",
-            list(scheme_options.keys()),
-            default=st.session_state["flt_schemes"],
-            format_func=lambda sid: f"{scheme_options[sid]} (id {sid})",
-            key="flt_schemes_pop",
-        )
-        if sel != st.session_state["flt_schemes"]:
-            st.session_state["flt_schemes"] = sel
-            st.rerun()
+with flt_r1[1]:
+    # If a company filter is active, narrow the project pick-list to that
+    # company's projects so the dropdown shrinks. Empty company filter →
+    # everything is selectable.
+    if st.session_state["flt_companies"]:
+        proj_opts = sorted({
+            p for c in st.session_state["flt_companies"]
+            for p in company_to_projects.get(c, set())
+            if p in project_to_scheme_id  # only show projects we know schemes for
+        })
+    else:
+        proj_opts = all_project_keys
+    new_ps = st.multiselect(
+        "📁 Projects",
+        options=proj_opts,
+        default=[p for p in st.session_state["flt_projects"] if p in proj_opts],
+        placeholder="any project",
+        format_func=lambda k: f"{k}  · {project_to_company.get(k, '(unmapped)')}",
+        key="flt_projects_ms",
+    )
+    if new_ps != st.session_state["flt_projects"]:
+        st.session_state["flt_projects"] = new_ps
+        st.rerun()
 
-with ftcols[2]:
-    with st.popover("🎭 Roles", use_container_width=True):
-        roles_known = all_roles()
-        if not roles_known:
-            st.caption("_(no roles defined in utils.rbac — running with empty stub)_")
-        sel = st.multiselect(
-            "Filter to RBAC roles (from utils.rbac)",
-            roles_known,
-            default=st.session_state["flt_roles"],
-            key="flt_roles_pop",
-        )
-        if sel != st.session_state["flt_roles"]:
-            st.session_state["flt_roles"] = sel
-            st.rerun()
+with flt_r1[2]:
+    scheme_options = {sid: name for sid, name in all_scheme_names}
+    new_sc = st.multiselect(
+        "📋 Schemes",
+        options=list(scheme_options.keys()),
+        default=st.session_state["flt_schemes"],
+        format_func=lambda sid: (
+            f"{scheme_options[sid]}  · "
+            f"{coverage_by_scheme.get(sid, {}).get('covered', 0)}/"
+            f"{total_permission_count} perms"
+        ),
+        placeholder="any scheme",
+        key="flt_schemes_ms",
+    )
+    if new_sc != st.session_state["flt_schemes"]:
+        st.session_state["flt_schemes"] = new_sc
+        st.rerun()
 
-with ftcols[3]:
-    with st.popover("👤 Holder", use_container_width=True):
-        st.caption("Pin a single user or group to scope the view.")
-        ht = st.radio(
-            "Type", options=["user", "group"], horizontal=True,
-            key="flt_holder_type_pop",
-        )
-        q = st.text_input("Search…", key="flt_holder_q_pop")
+with flt_r1[3]:
+    roles_known = all_roles()
+    new_rs = st.multiselect(
+        "🎭 Roles",
+        options=roles_known,
+        default=st.session_state["flt_roles"],
+        placeholder="any role" if roles_known else "(no roles in utils.rbac)",
+        key="flt_roles_ms",
+        help="RBAC roles from utils.rbac.VALID_USERS / VALID_GROUPS.",
+    )
+    if new_rs != st.session_state["flt_roles"]:
+        st.session_state["flt_roles"] = new_rs
+        st.rerun()
+
+# Row 2 — action popovers and reset
+flt_r2 = st.columns([1.4, 1.4, .8, 1.2])
+
+with flt_r2[0]:
+    with st.popover("👤 Pin holder", use_container_width=True):
+        st.caption("Scope the whole page to a single user or group.")
+        ht = st.radio("Type", ["user", "group"], horizontal=True, key="flt_holder_type_pop")
+        q = st.text_input("Search…", key="flt_holder_q_pop", placeholder="≥ 2 chars")
         if q and len(q.strip()) >= 2:
-            if ht == "user":
-                results = search_users(q)
-                opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in results}
-            else:
-                results = search_groups(q)
-                opts = {r["name"]: r for r in results}
+            results = search_users(q) if ht == "user" else search_groups(q)
+            opts = (
+                {f"{r['display']}  ⟨{r['name']}⟩": r for r in results}
+                if ht == "user"
+                else {r["name"]: r for r in results}
+            )
             if opts:
                 pick = st.selectbox("Select", list(opts.keys()), key="flt_holder_pick_pop")
                 chosen = opts[pick]
@@ -1273,39 +1413,34 @@ with ftcols[3]:
             else:
                 st.caption(f"No matching {ht}s.")
         if st.session_state["flt_holder"]:
+            st.caption(f"Currently pinned: **{st.session_state['flt_holder']['display']}**")
             if st.button("Unpin", key="flt_holder_unpin_btn"):
                 st.session_state["flt_holder"] = None
                 st.rerun()
 
-with ftcols[4]:
-    if st.button("❎ Reset", use_container_width=True):
-        st.session_state["flt_projects"] = []
-        st.session_state["flt_schemes"] = []
-        st.session_state["flt_roles"] = []
-        st.session_state["flt_holder"] = None
-        st.rerun()
-
-with ftcols[5]:
-    # Quick grant popover here — keeps the primary "create access" action
-    # on the same surface as the filters.
+with flt_r2[1]:
     with st.popover("➕ Quick grant", use_container_width=True, disabled=not ADMIN):
         st.markdown("**Grant a permission to a holder**")
         qg_type = st.radio("Holder type", ["user", "group"], horizontal=True, key="qg_type")
         qg_q = st.text_input("Search holder", key="qg_q")
         qg_holder = None
         if qg_q and len(qg_q.strip()) >= 2:
-            if qg_type == "user":
-                results = search_users(qg_q)
-                opts = {f"{r['display']}  ⟨{r['name']}⟩": r for r in results}
-            else:
-                results = search_groups(qg_q)
-                opts = {r["name"]: r for r in results}
+            results = search_users(qg_q) if qg_type == "user" else search_groups(qg_q)
+            opts = (
+                {f"{r['display']}  ⟨{r['name']}⟩": r for r in results}
+                if qg_type == "user"
+                else {r["name"]: r for r in results}
+            )
             if opts:
                 pick = st.selectbox("Holder", list(opts.keys()), key="qg_pick")
                 qg_holder = opts[pick]
         qg_scheme = st.selectbox(
             "Scheme", list(schemes_by_id.keys()),
-            format_func=lambda sid: f"{schemes_by_id[sid]['name']} (id {sid})",
+            format_func=lambda sid: (
+                f"{schemes_by_id[sid]['name']}  · "
+                f"{coverage_by_scheme.get(sid, {}).get('covered', 0)}/"
+                f"{total_permission_count} perms"
+            ),
             key="qg_scheme",
         )
         qg_perm = st.selectbox(
@@ -1338,6 +1473,21 @@ with ftcols[5]:
                 else:
                     st.error(err or "Grant failed.")
 
+with flt_r2[2]:
+    if st.button("❎ Reset", use_container_width=True):
+        st.session_state["flt_companies"] = []
+        st.session_state["flt_projects"] = []
+        st.session_state["flt_schemes"] = []
+        st.session_state["flt_roles"] = []
+        st.session_state["flt_holder"] = None
+        st.rerun()
+
+with flt_r2[3]:
+    st.caption(
+        f"{len(all_companies)} compan{'y' if len(all_companies)==1 else 'ies'} · "
+        f"{len(all_project_keys)} projects · {len(schemes_by_id)} schemes"
+    )
+
 st.markdown("</div>", unsafe_allow_html=True)
 
 # Active filter chip line
@@ -1357,31 +1507,45 @@ v_users = sorted({g.holder_param for g in view_grants if g.holder_type == "user"
 v_groups = sorted({g.holder_param for g in view_grants if g.holder_type == "group"})
 v_schemes = sorted({g.scheme_id for g in view_grants})
 v_projects: set[str] = set()
+v_companies: set[str] = set()
 for sid in v_schemes:
     for p in scheme_to_projects.get(sid, []):
         v_projects.add(p["key"])
+        v_companies.add(project_to_company.get(p["key"], "(unmapped)"))
+
+# Permission coverage in current view — distinct permission keys with any
+# grant in the filter set, denominator = full Jira catalog size.
+v_perm_keys = sorted({g.permission_key for g in view_grants})
+v_perm_pct = (len(v_perm_keys) / total_permission_count * 100) if total_permission_count else 0
 
 # Stray = direct user grants in the view
 stray_grants = [g for g in view_grants if g.holder_type == "user"]
 
-kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
+kc1, kc2, kc3, kc4, kc5, kc6, kc7 = st.columns(7)
 def _kpi(col, label, num, sub, klass):
     col.markdown(
         f"<div class='jp-kpi {klass}'>"
         f"<div class='jp-kpi-label'>{label}</div>"
-        f"<div class='jp-kpi-num'>{num:,}</div>"
+        f"<div class='jp-kpi-num'>{num}</div>"
         f"<div class='jp-kpi-sub'>{sub}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
-_kpi(kc1, "Users",      len(v_users),    "distinct direct holders",          "jp-kpi-purple")
-_kpi(kc2, "Groups",     len(v_groups),   "distinct group holders",           "jp-kpi-teal")
-_kpi(kc3, "Schemes",    len(v_schemes),  "in current filter set",            "jp-kpi-accent")
-_kpi(kc4, "Projects",   len(v_projects), "bound to those schemes",           "jp-kpi-amber")
-_kpi(kc5, "Grants",     len(view_grants), "total in view",                    "jp-kpi-green")
-_kpi(kc6, "Stray",      len(stray_grants),
-     "direct-user grants (policy is by-group)",
+_kpi(kc1, "Companies",   f"{len(v_companies):,}",
+     f"of {len(all_companies)} total",                              "jp-kpi-teal")
+_kpi(kc2, "Projects",    f"{len(v_projects):,}",
+     f"of {len(all_project_keys)} bound to schemes",                "jp-kpi-amber")
+_kpi(kc3, "Schemes",     f"{len(v_schemes):,}",
+     f"of {len(schemes_by_id)} on instance",                        "jp-kpi-accent")
+_kpi(kc4, "Permissions", f"{len(v_perm_keys)}/{total_permission_count}",
+     f"{v_perm_pct:.0f}% of catalog covered",                       "jp-kpi-purple")
+_kpi(kc5, "Users",       f"{len(v_users):,}",
+     "distinct direct user holders",                                "jp-kpi-purple")
+_kpi(kc6, "Groups",      f"{len(v_groups):,}",
+     "distinct group holders",                                      "jp-kpi-teal")
+_kpi(kc7, "Stray",       f"{len(stray_grants):,}",
+     "direct grants (policy: by-group)",
      "jp-kpi-red" if stray_grants else "jp-kpi-green")
 
 
@@ -1579,6 +1743,309 @@ else:
                         )
                     if len(stray_for_role) > 12:
                         st.caption(f"…and {len(stray_for_role) - 12} more (use the stray banner above for full list).")
+
+
+# ---------------------------------------------------------------------------
+# Section: Role × permission standardization
+# Answers questions like "do all QC teams have EDIT_OWN_COMMENTS?" by
+# computing per-(role, permission) what fraction of *role-relevant* schemes
+# grant that permission to the role. A scheme is role-relevant if the role
+# has any grant in it.
+# ---------------------------------------------------------------------------
+st.markdown(
+    "<div class='jp-section-head'><h3>🧭 Role × permission standardization</h3>"
+    "<span class='jp-section-sub'>For each role, which permissions are granted "
+    "consistently across the schemes that role touches — and which deviate.</span>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+
+def _compute_standardization(
+    roles_list: list[str],
+    perms_list: list[str],
+    view_grants_list: list[Grant],
+) -> tuple[list[dict], dict[str, set[int]], dict[tuple[str, str], set[int]]]:
+    """For each role + permission combination, compute:
+      - relevant_schemes: schemes the role appears in (via users OR groups
+        in the role per rbac.py)
+      - granted_schemes:  subset where the role has THIS permission
+    Returns flat row list + the lookup maps so the UI can drill into
+    deviating schemes."""
+    role_holders: dict[str, set[tuple[str, str]]] = {}
+    for role in roles_list:
+        ru = set(users_for_role(role))
+        rg = set(groups_for_role(role))
+        role_holders[role] = (
+            {("user", u) for u in ru} | {("group", g) for g in rg}
+        )
+
+    role_relevant: dict[str, set[int]] = {r: set() for r in roles_list}
+    rp_granted: dict[tuple[str, str], set[int]] = {}
+
+    for g in view_grants_list:
+        key = (g.holder_type, g.holder_param)
+        for role, holders in role_holders.items():
+            if key in holders:
+                role_relevant[role].add(g.scheme_id)
+                rp_granted.setdefault((role, g.permission_key), set()).add(g.scheme_id)
+
+    rows: list[dict] = []
+    for role in roles_list:
+        rel = role_relevant.get(role, set())
+        if not rel:
+            continue
+        # Only show permissions actually exercised by *any* role across the
+        # whole instance — otherwise the matrix becomes mostly zeros and the
+        # signal drowns. Use perms_list (passed in) as the column universe.
+        for perm in perms_list:
+            granted = rp_granted.get((role, perm), set())
+            n = len(granted)
+            total = len(rel)
+            pct = (n / total * 100) if total else 0
+            if n == 0 and total > 0:
+                status = "⛔ never"
+            elif n == total:
+                status = "✅ all"
+            else:
+                status = "⚠️ partial"
+            rows.append({
+                "Role": role,
+                "Permission key": perm,
+                "Permission name": perm_name_by_key.get(perm, perm),
+                "Granted in": n,
+                "Out of": total,
+                "Coverage %": round(pct, 1),
+                "Status": status,
+            })
+    return rows, role_relevant, rp_granted
+
+
+# Permission universe: only permissions that are actually granted to
+# anyone anywhere in the filter set — keeps the matrix dense.
+_perm_universe_in_view = sorted({g.permission_key for g in view_grants})
+
+# Role universe: filter selection if set, else every role with at least
+# one relevant scheme.
+_roles_for_matrix = st.session_state["flt_roles"] or all_roles()
+
+if not _roles_for_matrix or not _perm_universe_in_view:
+    st.markdown(
+        "<div class='jp-empty'>Need at least one role (from utils.rbac) and "
+        "one permission with grants in the current filter set to compute "
+        "the matrix.</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    matrix_rows, role_relevant_map, rp_granted_map = _compute_standardization(
+        _roles_for_matrix, _perm_universe_in_view, view_grants,
+    )
+
+    if not matrix_rows:
+        st.markdown(
+            "<div class='jp-empty'>No matching grants for the chosen "
+            "roles in the current filter set.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        mc1, mc2, mc3 = st.columns([1, 1, 1])
+        with mc1:
+            show_only_dev = st.checkbox(
+                "Show only deviations (partial coverage)",
+                value=True,
+                key="matrix_only_dev",
+                help="Hide rows where coverage is either 0% (irrelevant) or 100% (perfectly standardized).",
+            )
+        with mc2:
+            role_pick = st.selectbox(
+                "Focus role",
+                ["(all)"] + sorted({r["Role"] for r in matrix_rows}),
+                key="matrix_role_pick",
+            )
+        with mc3:
+            perm_pick = st.selectbox(
+                "Focus permission",
+                ["(all)"] + sorted({r["Permission key"] for r in matrix_rows}),
+                key="matrix_perm_pick",
+            )
+
+        visible = matrix_rows
+        if show_only_dev:
+            visible = [r for r in visible if r["Status"] == "⚠️ partial"]
+        if role_pick != "(all)":
+            visible = [r for r in visible if r["Role"] == role_pick]
+        if perm_pick != "(all)":
+            visible = [r for r in visible if r["Permission key"] == perm_pick]
+
+        # Top-level counters: how many role/permission pairs are
+        # standardized vs deviating.
+        tot_full     = sum(1 for r in matrix_rows if r["Status"] == "✅ all")
+        tot_partial  = sum(1 for r in matrix_rows if r["Status"] == "⚠️ partial")
+        tot_never    = sum(1 for r in matrix_rows if r["Status"] == "⛔ never")
+        sumc = st.columns(3)
+        sumc[0].markdown(
+            f"<div class='jp-kpi jp-kpi-green'>"
+            f"<div class='jp-kpi-label'>Fully standardized</div>"
+            f"<div class='jp-kpi-num'>{tot_full}</div>"
+            f"<div class='jp-kpi-sub'>role × permission pairs at 100%</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        sumc[1].markdown(
+            f"<div class='jp-kpi jp-kpi-amber'>"
+            f"<div class='jp-kpi-label'>Deviating</div>"
+            f"<div class='jp-kpi-num'>{tot_partial}</div>"
+            f"<div class='jp-kpi-sub'>partial coverage — inconsistent</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        sumc[2].markdown(
+            f"<div class='jp-kpi'>"
+            f"<div class='jp-kpi-label'>Never granted</div>"
+            f"<div class='jp-kpi-num'>{tot_never}</div>"
+            f"<div class='jp-kpi-sub'>role has 0% of permission in role-relevant schemes</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("")
+        if _PANDAS:
+            df = pd.DataFrame(visible)
+            # Heat-tint the Coverage % column
+            def _coverage_style(v):
+                try:
+                    pct = float(v)
+                except Exception:
+                    return ""
+                if pct >= 99.5:
+                    return "background-color: #d1fae5; color: #059669; font-weight:600;"
+                if pct <= .5:
+                    return "background-color: #fee2e2; color: #dc2626; font-weight:600;"
+                # Linear blend amber for partial
+                return "background-color: #fef3c7; color: #d97706; font-weight:600;"
+            try:
+                styled = df.style.map(_coverage_style, subset=["Coverage %"])
+            except AttributeError:
+                # pandas < 2.1 uses .applymap
+                styled = df.style.applymap(_coverage_style, subset=["Coverage %"])
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=420)
+        else:
+            for r in visible[:200]:
+                st.markdown(
+                    f"- **{r['Role']}** · `{r['Permission key']}` "
+                    f"({r['Permission name']}) — {r['Granted in']}/{r['Out of']} "
+                    f"= **{r['Coverage %']}%** {r['Status']}"
+                )
+
+        st.markdown("---")
+        st.markdown("**Drill in — which schemes deviate?**")
+        st.caption(
+            "Pick a (role, permission) pair to see exactly which schemes "
+            "are missing the grant. Click a scheme to open its full "
+            "holder table in the Schemes section below."
+        )
+        dr_c1, dr_c2 = st.columns(2)
+        d_role = dr_c1.selectbox(
+            "Role",
+            sorted({r["Role"] for r in matrix_rows if r["Status"] == "⚠️ partial"}) or ["(no deviations)"],
+            key="drill_role",
+        )
+        d_perms_for_role = sorted({
+            r["Permission key"] for r in matrix_rows
+            if r["Status"] == "⚠️ partial" and r["Role"] == d_role
+        }) or ["(no deviations)"]
+        d_perm = dr_c2.selectbox(
+            "Permission", d_perms_for_role,
+            format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩" if k != "(no deviations)" else k,
+            key="drill_perm",
+        )
+        if d_role != "(no deviations)" and d_perm != "(no deviations)":
+            relevant_set = role_relevant_map.get(d_role, set())
+            granted_set = rp_granted_map.get((d_role, d_perm), set())
+            missing_set = relevant_set - granted_set
+
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                st.markdown(
+                    f"<div class='jp-banner jp-banner-ok'>"
+                    f"<b>{len(granted_set)} scheme(s)</b> grant `{d_perm}` "
+                    f"to <span class='jp-pill jp-role'>{d_role}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                for sid in sorted(granted_set):
+                    name = schemes_by_id.get(sid, {}).get("name", str(sid))
+                    cov = coverage_by_scheme.get(sid, {})
+                    projs = scheme_to_projects.get(sid, [])
+                    companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
+                    st.markdown(
+                        f"- **{name}**  "
+                        f"<span class='jp-pill jp-mono'>id {sid}</span>  "
+                        f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
+                        + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
+                        unsafe_allow_html=True,
+                    )
+            with mc2:
+                st.markdown(
+                    f"<div class='jp-banner jp-banner-red'>"
+                    f"<b>{len(missing_set)} scheme(s)</b> are missing "
+                    f"<code>{d_perm}</code> for <span class='jp-pill jp-role'>{d_role}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                for sid in sorted(missing_set):
+                    name = schemes_by_id.get(sid, {}).get("name", str(sid))
+                    cov = coverage_by_scheme.get(sid, {})
+                    projs = scheme_to_projects.get(sid, [])
+                    companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
+                    cols = st.columns([5, 1])
+                    cols[0].markdown(
+                        f"- **{name}**  "
+                        f"<span class='jp-pill jp-mono'>id {sid}</span>  "
+                        f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
+                        + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
+                        unsafe_allow_html=True,
+                    )
+                    # Quick-fix: pop a confirm popover to add the missing grant
+                    # to the role's preferred group (first group in
+                    # groups_for_role). Falls back to user grant prompt
+                    # if the role has no LDAP-group mapping.
+                    if ADMIN:
+                        with cols[1].popover("Fix", use_container_width=True):
+                            role_groups = groups_for_role(d_role)
+                            if role_groups:
+                                target_group = st.selectbox(
+                                    "Grant to which role group?",
+                                    role_groups,
+                                    key=f"fix_{sid}_{d_role}_{d_perm}",
+                                )
+                                st.markdown(
+                                    f"<div class='jp-banner jp-banner-info'>"
+                                    f"<b>Confirm:</b> grant "
+                                    f"<span class='jp-pill jp-mono'>{d_perm}</span> "
+                                    f"to group <b>{target_group}</b> on "
+                                    f"<b>{name}</b>.</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                if st.button("Apply", key=f"fix_btn_{sid}_{d_role}_{d_perm}", type="primary"):
+                                    ok, err = do_grant(
+                                        scheme_id=sid, scheme_name=name,
+                                        permission_key=d_perm,
+                                        holder_type="group", holder_param=target_group,
+                                        holder_display=target_group,
+                                    )
+                                    if ok:
+                                        st.success("Granted.")
+                                        st.rerun()
+                                    else:
+                                        st.error(err or "Grant failed.")
+                            else:
+                                st.caption(
+                                    f"Role `{d_role}` has no LDAP-group "
+                                    "mapping in VALID_GROUPS. Use Quick "
+                                    "grant in the filter bar to pick a "
+                                    "specific holder."
+                                )
 
 
 # ---------------------------------------------------------------------------
@@ -2006,17 +2473,26 @@ st.markdown(
 
 ec1, ec2 = st.columns([1, 1])
 with ec1:
+    # Searchable dropdown — Streamlit's selectbox filters as you type
     sx_scheme = st.selectbox(
         "Scheme",
         [None] + list(schemes_by_id.keys()),
-        format_func=lambda sid: "— select —" if sid is None else f"{schemes_by_id[sid]['name']} (id {sid})",
+        format_func=lambda sid: (
+            "— select —" if sid is None else
+            f"{schemes_by_id[sid]['name']}  · "
+            f"{coverage_by_scheme.get(sid, {}).get('covered', 0)}/"
+            f"{total_permission_count} perms  · id {sid}"
+        ),
         key="explore_scheme",
     )
 with ec2:
     sx_project = st.selectbox(
         "Project",
         [None] + all_project_keys,
-        format_func=lambda k: "— select —" if k is None else k,
+        format_func=lambda k: (
+            "— select —" if k is None
+            else f"{k}  · {project_to_company.get(k, '(unmapped)')}"
+        ),
         key="explore_project",
     )
 
@@ -2030,15 +2506,57 @@ if resolved_sid is not None:
     sname = schemes_by_id.get(resolved_sid, {}).get("name", str(resolved_sid))
     sgrants = index["grants_by_scheme"].get(resolved_sid, [])
     projects_for_this = scheme_to_projects.get(resolved_sid, [])
-    sec1, sec2, sec3 = st.columns(3)
-    sec1.markdown(f"**Scheme · {sname}**  <span class='jp-pill jp-mono'>id {resolved_sid}</span>", unsafe_allow_html=True)
+    cov = coverage_by_scheme.get(resolved_sid, {})
+    companies_for_this = sorted({
+        project_to_company.get(p["key"], "(unmapped)") for p in projects_for_this
+    })
+    sec1, sec2, sec3, sec4 = st.columns(4)
+    sec1.markdown(
+        f"**Scheme · {sname}**  <span class='jp-pill jp-mono'>id {resolved_sid}</span>",
+        unsafe_allow_html=True,
+    )
     sec2.metric("Grants", len(sgrants))
-    sec3.metric("Projects bound", len(projects_for_this))
-    if projects_for_this:
+    sec3.metric(
+        "Permissions covered",
+        f"{cov.get('covered', 0)} / {total_permission_count}",
+        f"{(cov.get('pct', 0) * 100):.0f}% of catalog",
+    )
+    sec4.metric("Projects bound", len(projects_for_this))
+    if companies_for_this:
         st.markdown(
-            " ".join(f"<span class='jp-pill jp-info'>{p['key']} · {p['name']}</span>" for p in projects_for_this),
+            "🏢 " + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies_for_this),
             unsafe_allow_html=True,
         )
+    if projects_for_this:
+        st.markdown(
+            " ".join(
+                f"<span class='jp-pill jp-info'>{p['key']} · {p['name']}"
+                f"  · {project_to_company.get(p['key'], '(unmapped)')}</span>"
+                for p in projects_for_this
+            ),
+            unsafe_allow_html=True,
+        )
+    # Missing permissions in this scheme — actionable hint
+    missing = sorted(set(perm_keys_sorted) - set(cov.get("perm_keys", [])))
+    if missing:
+        with st.expander(
+            f"⚠️  {len(missing)} permission(s) in the Jira catalog have NO holder in this scheme",
+            expanded=False,
+        ):
+            st.caption(
+                "These permission keys exist on the instance but no user, "
+                "group, or role can exercise them on projects bound to this "
+                "scheme. Often fine (e.g. Service Desk perms on a software "
+                "project) — but worth a glance."
+            )
+            st.markdown(
+                " ".join(
+                    f"<span class='jp-pill jp-mono'>{k}</span>"
+                    f" <span style='color:var(--jp-text-mute);font-size:.72rem;'>{perm_name_by_key.get(k, '')}</span><br>"
+                    for k in missing
+                ),
+                unsafe_allow_html=True,
+            )
 
     # Aggregate by holder so the table reads vertically
     holder_rows: dict[tuple[str, str], list[Grant]] = {}
