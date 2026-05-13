@@ -14046,7 +14046,7 @@ def _render_git_diag_panel(result: dict) -> None:
                 f'  <td class="gd-layout-files">{html.escape(_yml)}</td>'
                 f'  <td class="gd-layout-num">{p.get("subdir_n", 0)}</td>'
                 f'  <td class="gd-layout-files">{html.escape(_subs)}</td>'
-                f'  <td class="gd-layout-num">{p.get("gvars_apps_n", 0)}</td>'
+                f'  <td class="gd-layout-num">{p.get("gvars_n", 0)}</td>'
                 f'  <td class="gd-layout-files">{html.escape(_gv_subs)}</td>'
                 f'</tr>'
             )
@@ -14058,7 +14058,7 @@ def _render_git_diag_panel(result: dict) -> None:
             f'    <th>example files</th>'
             f'    <th>subdirs</th>'
             f'    <th>example subdirs</th>'
-            f'    <th>apps via group_vars</th>'
+            f'    <th>group_vars subdir count</th>'
             f'    <th>group_vars subdirs</th>'
             f'  </tr></thead>'
             f'  <tbody>{"".join(_proj_rows)}</tbody>'
@@ -14347,33 +14347,6 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
             if p.is_file() and p.suffix.lower() in (".yml", ".yaml")
         )
 
-    def _apps_from_group_vars(gv_dir: pathlib.Path) -> set[str]:
-        """Derive app names from a project's ``group_vars/`` tree.
-
-        Each subdir under ``group_vars/`` is either:
-          • ``all``                          — baseline, skip.
-          • ``{app}``                        — app-level vars.
-          • ``{env}_{app}``                  — env-specific overrides for
-            that app, where ``{env}`` is one of the known stages.
-
-        Returns the distinct app names. When the same app appears as both
-        ``{app}`` and ``{env}_{app}`` subdirs, it counts once."""
-        if not gv_dir.is_dir():
-            return set()
-        out: set[str] = set()
-        for sub in gv_dir.iterdir():
-            if not sub.is_dir() or sub.name == "all":
-                continue
-            n = sub.name
-            stripped = None
-            for env in _INV_ENVIRONMENTS:
-                pfx = f"{env}_"
-                if n.startswith(pfx) and len(n) > len(pfx):
-                    stripped = n[len(pfx):]
-                    break
-            out.add(stripped if stripped else n)
-        return out
-
     skip_dirs = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
     project_dirs = sorted(
         p for p in base.iterdir()
@@ -14404,19 +14377,18 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
             gvars_origin = "absent"
 
         # ── Discover apps in this project ───────────────────────────────
-        # Two sources, unioned: root-level *.yml files (each filename stem
-        # is an app) AND subdir names under group_vars/ (each non-env
-        # subdir is an app). The user's confirmed layout uses the second
-        # form exclusively.
+        # Apps are defined EXCLUSIVELY by an ``{app}.yml`` (or .yaml)
+        # inventory file at the project's root. ``group_vars/{app}/`` is
+        # the variable store for an app that already exists — it does
+        # NOT define new apps. A project with an empty root yields zero
+        # apps; that's correct (per user direction).
         apps_set: set[str] = {p.stem for p in _yaml_files(project_dir)}
-        if gvars_dir is not None:
-            apps_set.update(_apps_from_group_vars(gvars_dir))
 
         if not apps_set:
             warnings.append(
-                f"project '{project}' produced 0 apps "
-                f"(group_vars: {gvars_origin}) — neither root .yml/.yaml "
-                f"files nor group_vars subdirs surfaced any app names"
+                f"project '{project}' produced 0 apps — no "
+                f"<code>{{app}}.yml</code> / <code>{{app}}.yaml</code> "
+                f"files at its root (group_vars: {gvars_origin})"
             )
             continue
 
