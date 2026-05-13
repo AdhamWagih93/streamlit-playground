@@ -39,14 +39,24 @@ import requests
 from requests.auth import HTTPBasicAuth
 import streamlit as st
 
-# Pandas is used for the role × permission standardization matrix display.
-# Falls back to a plain HTML table if it isn't available.
+# Pandas + Plotly drive the standardization visualisations. Both are
+# optional — the page degrades to plain HTML tables / lists if either
+# is missing.
 try:
     import pandas as pd
     _PANDAS = True
 except ImportError:
     pd = None  # type: ignore
     _PANDAS = False
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    _PLOTLY = True
+except ImportError:
+    px = None  # type: ignore
+    go = None  # type: ignore
+    _PLOTLY = False
 
 # --- Project-internal modules (present in prod, optional locally) ----------
 try:
@@ -327,6 +337,7 @@ h1,h2,h3,h4 { color: var(--jp-text); letter-spacing: -.01em; }
 .jp-banner.jp-banner-red   { border-left-color: var(--jp-red);   background: #fff2f2; }
 .jp-banner.jp-banner-ok    { border-left-color: var(--jp-green); background: #f0fdf4; }
 .jp-banner.jp-banner-info  { border-left-color: var(--jp-accent); background: #f0f6ff; }
+.jp-banner.jp-banner-amber { border-left-color: var(--jp-amber); background: #fffaf0; }
 .jp-banner b { color: var(--jp-text); }
 
 /* Empty state */
@@ -1849,241 +1860,887 @@ def _compute_standardization(
     )
 
 
+def _coverage_color(pct: float) -> str:
+    """Hex colour for a coverage percentage — green at 100, red at 0,
+    amber in between. Used by the heatmap legend + the inline chips."""
+    if pct >= 99.5:
+        return "#059669"
+    if pct <= .5:
+        return "#dc2626"
+    return "#d97706"
+
+
+def _coverage_bg(pct: float) -> str:
+    if pct >= 99.5:
+        return "#d1fae5"
+    if pct <= .5:
+        return "#fee2e2"
+    return "#fef3c7"
+
+
+def _grant_fix_popover(
+    *, scheme_id: int, scheme_name: str, permission_key: str,
+    role: str, key_suffix: str, extra_caption: str = "",
+):
+    """Inline confirm popover that grants a missing permission to one of
+    the role's mapped LDAP groups. Falls back to a hint when the role has
+    no group mapping in VALID_GROUPS."""
+    with st.popover("⊕ Fix", use_container_width=True, disabled=not ADMIN):
+        role_groups = groups_for_role(role)
+        if not role_groups:
+            st.caption(
+                f"Role `{role}` has no LDAP-group mapping in VALID_GROUPS. "
+                "Use Quick grant in the filter bar to grant a specific holder."
+            )
+            return
+        target_group = st.selectbox(
+            "Grant to which group carrying this role?",
+            role_groups,
+            key=f"fix_pick_{key_suffix}",
+        )
+        st.markdown(
+            f"<div class='jp-banner jp-banner-info'>"
+            f"<b>Confirm:</b> grant "
+            f"<span class='jp-pill jp-mono'>{permission_key}</span> "
+            f"to group <b>{target_group}</b> on <b>{scheme_name}</b>."
+            f"{('<br>' + extra_caption) if extra_caption else ''}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Apply grant", key=f"fix_apply_{key_suffix}", type="primary"):
+            ok, err = do_grant(
+                scheme_id=scheme_id, scheme_name=scheme_name,
+                permission_key=permission_key,
+                holder_type="group", holder_param=target_group,
+                holder_display=target_group,
+            )
+            if ok:
+                st.success("Granted.")
+                st.rerun()
+            else:
+                st.error(err or "Grant failed.")
+
+
+def _revoke_confirm_popover(grant: Grant, key_suffix: str):
+    """Inline confirm popover that revokes a single grant."""
+    with st.popover("⊖ Revoke", use_container_width=True, disabled=not ADMIN):
+        st.markdown(
+            f"<div class='jp-banner jp-banner-red'>"
+            f"<b>Confirm revoke:</b> drop "
+            f"<span class='jp-pill jp-mono'>{grant.permission_key}</span> "
+            f"from {grant.holder_type} <b>{grant.holder_display}</b> "
+            f"on <b>{grant.scheme_name}</b>."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Apply revoke", key=f"std_rv_apply_{key_suffix}", type="primary"):
+            ok, err = do_revoke(
+                scheme_id=grant.scheme_id, scheme_name=grant.scheme_name,
+                permission_id=grant.permission_id,
+                permission_key=grant.permission_key,
+                holder_type=grant.holder_type, holder_param=grant.holder_param,
+                holder_display=grant.holder_display,
+            )
+            if ok:
+                st.success("Revoked.")
+                st.rerun()
+            else:
+                st.error(err or "Revoke failed.")
+
+
+def _bulk_fix_popover(
+    *, label: str, plan: list[tuple[int, str, str]], key_suffix: str,
+    title: str, description: str,
+):
+    """Plan is a list of (scheme_id, permission_key, role) tuples. The
+    popover surfaces each, lets the operator pick the target group per
+    role (defaulted to the first one), then applies in one batch."""
+    with st.popover(label, use_container_width=True, disabled=not ADMIN):
+        if not plan:
+            st.caption("Nothing to fix in this slice.")
+            return
+        st.markdown(f"**{title}**")
+        st.caption(description)
+        st.markdown(
+            f"<div class='jp-banner jp-banner-amber'>"
+            f"Will issue <b>{len(plan)}</b> grant(s) across "
+            f"<b>{len({s for s, _, _ in plan})}</b> scheme(s)."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        # Per-role target group picker
+        roles_in_plan = sorted({role for _, _, role in plan})
+        target_groups: dict[str, str] = {}
+        for role in roles_in_plan:
+            rg = groups_for_role(role)
+            if not rg:
+                st.caption(f"⚠️ Role `{role}` has no group mapping — its grants will be skipped.")
+                continue
+            target_groups[role] = st.selectbox(
+                f"Target group for role `{role}`",
+                rg,
+                key=f"bulk_grp_{key_suffix}_{role}",
+            )
+        # Per-scheme preview list
+        with st.expander("Preview the full plan", expanded=False):
+            for sid, pkey, role in plan:
+                sname = schemes_by_id.get(sid, {}).get("name", str(sid))
+                tgt = target_groups.get(role, "—")
+                st.markdown(
+                    f"- grant <span class='jp-pill jp-mono'>{pkey}</span> "
+                    f"to <span class='jp-pill jp-group'>{tgt}</span> on **{sname}**",
+                    unsafe_allow_html=True,
+                )
+        if st.button(f"Apply {len(plan)} grant(s)", type="primary", key=f"bulk_apply_{key_suffix}"):
+            audit_rows: list[dict] = []
+            ok_n, fail_n = 0, 0
+            for sid, pkey, role in plan:
+                sname = schemes_by_id.get(sid, {}).get("name", str(sid))
+                tgt = target_groups.get(role)
+                if not tgt:
+                    fail_n += 1
+                    continue
+                ok, err = do_grant(
+                    scheme_id=sid, scheme_name=sname,
+                    permission_key=pkey,
+                    holder_type="group", holder_param=tgt,
+                    holder_display=tgt,
+                )
+                if ok:
+                    ok_n += 1
+                else:
+                    fail_n += 1
+            if fail_n == 0:
+                st.success(f"Applied {ok_n} grant(s).")
+            else:
+                st.warning(f"{ok_n} ok, {fail_n} failed (see Audit log).")
+            st.rerun()
+
+
 @st.fragment
 def _section_standardization():
     st.markdown(
         "<div class='jp-section-head'><h3>🧭 Role × permission standardization</h3>"
-        "<span class='jp-section-sub'>For each role, which permissions are granted "
-        "consistently across the schemes that role touches — and which deviate.</span>"
+        "<span class='jp-section-sub'>How consistently each role is granted "
+        "each permission across the schemes that role touches — sliced by "
+        "role, permission, group, or scheme, with one-click fixes.</span>"
         "</div>",
         unsafe_allow_html=True,
     )
 
-    # Permission universe: only permissions that are actually granted to
-    # anyone anywhere in the filter set — keeps the matrix dense.
     _perm_universe_in_view = sorted({g.permission_key for g in view_grants})
-
-    # Role universe: filter selection if set, else every role with at least
-    # one relevant scheme.
     _roles_for_matrix = st.session_state["flt_roles"] or all_roles()
 
     if not _roles_for_matrix or not _perm_universe_in_view:
         st.markdown(
             "<div class='jp-empty'>Need at least one role (from utils.rbac) and "
             "one permission with grants in the current filter set to compute "
-            "the matrix.</div>",
+            "the matrix. Try clearing the filters above.</div>",
             unsafe_allow_html=True,
         )
-    else:
-        matrix_rows, role_relevant_map, rp_granted_map = _compute_standardization(
-            _roles_for_matrix, _perm_universe_in_view, view_grants,
+        return
+
+    matrix_rows, role_relevant_map, rp_granted_map = _compute_standardization(
+        _roles_for_matrix, _perm_universe_in_view, view_grants,
+    )
+    if not matrix_rows:
+        st.markdown(
+            "<div class='jp-empty'>No matching grants for the chosen roles "
+            "in the current filter set.</div>",
+            unsafe_allow_html=True,
         )
-    
-        if not matrix_rows:
+        return
+
+    # ── Headline KPIs ──────────────────────────────────────────────────
+    tot_pairs   = len(matrix_rows)
+    tot_full    = sum(1 for r in matrix_rows if r["Status"] == "✅ all")
+    tot_partial = sum(1 for r in matrix_rows if r["Status"] == "⚠️ partial")
+    tot_never   = sum(1 for r in matrix_rows if r["Status"] == "⛔ never")
+    # Score: of the pairs where the role actually has any access (≠ never),
+    # what fraction is fully standardized. Excludes "never granted" pairs
+    # because they're usually irrelevant rather than misconfigured.
+    score_den = max(tot_full + tot_partial, 1)
+    score_pct = (tot_full / score_den) * 100
+
+    kp = st.columns([1, 1, 1, 1, 1.3])
+    kp[0].markdown(
+        f"<div class='jp-kpi jp-kpi-accent'>"
+        f"<div class='jp-kpi-label'>Role × Perm pairs</div>"
+        f"<div class='jp-kpi-num'>{tot_pairs}</div>"
+        f"<div class='jp-kpi-sub'>in current filter set</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    kp[1].markdown(
+        f"<div class='jp-kpi jp-kpi-green'>"
+        f"<div class='jp-kpi-label'>Standardized</div>"
+        f"<div class='jp-kpi-num'>{tot_full}</div>"
+        f"<div class='jp-kpi-sub'>✅ 100% across role-relevant schemes</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    kp[2].markdown(
+        f"<div class='jp-kpi jp-kpi-amber'>"
+        f"<div class='jp-kpi-label'>Deviating</div>"
+        f"<div class='jp-kpi-num'>{tot_partial}</div>"
+        f"<div class='jp-kpi-sub'>⚠️ partial coverage — inconsistent</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    kp[3].markdown(
+        f"<div class='jp-kpi jp-kpi-red'>"
+        f"<div class='jp-kpi-label'>Never granted</div>"
+        f"<div class='jp-kpi-num'>{tot_never}</div>"
+        f"<div class='jp-kpi-sub'>⛔ 0% — possibly out of scope</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    kp[4].markdown(
+        f"<div class='jp-kpi jp-kpi-purple'>"
+        f"<div class='jp-kpi-label'>Standardization score</div>"
+        f"<div class='jp-kpi-num' style='color:{_coverage_color(score_pct)};'>{score_pct:.0f}%</div>"
+        f"<div class='jp-kpi-sub'>{tot_full} of {score_den} role×perm pairs the role actually uses</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")
+
+    # ── Heatmap (the headline visual) ──────────────────────────────────
+    st.markdown("##### 🔥 Coverage heatmap")
+    st.caption(
+        "Rows = roles, columns = permissions. Cell colour shows what fraction "
+        "of *role-relevant* schemes grant the permission to the role. Grey "
+        "cells mean the role has no grants in any scheme — nothing to standardize."
+    )
+
+    if _PLOTLY:
+        # Build the z matrix in the same row/col order as we'll display.
+        cov_grid: dict[tuple[str, str], dict] = {
+            (r["Role"], r["Permission key"]): r for r in matrix_rows
+        }
+        roles_in_grid = sorted({r["Role"] for r in matrix_rows})
+        perms_in_grid = sorted({r["Permission key"] for r in matrix_rows})
+        # Sort columns by total coverage so the eye lands on the most-used perms first
+        perm_score: dict[str, float] = {
+            p: sum(r["Coverage %"] for r in matrix_rows if r["Permission key"] == p)
+            for p in perms_in_grid
+        }
+        perms_in_grid = sorted(perms_in_grid, key=lambda p: -perm_score[p])
+        z = []
+        hover = []
+        for role in roles_in_grid:
+            row, hov = [], []
+            for perm in perms_in_grid:
+                cell = cov_grid.get((role, perm))
+                if cell is None:
+                    row.append(None)
+                    hov.append(f"{role} · {perm}<br>not relevant")
+                else:
+                    row.append(cell["Coverage %"])
+                    hov.append(
+                        f"<b>{role}</b> · {perm_name_by_key.get(perm, perm)}<br>"
+                        f"granted in {cell['Granted in']} of {cell['Out of']} "
+                        f"role-relevant scheme(s) — {cell['Coverage %']:.0f}%"
+                    )
+            z.append(row)
+            hover.append(hov)
+
+        # Cell label: percent number for visible cells
+        text = [
+            [
+                f"{cov_grid[(role, perm)]['Coverage %']:.0f}" if (role, perm) in cov_grid else ""
+                for perm in perms_in_grid
+            ]
+            for role in roles_in_grid
+        ]
+
+        fig = go.Figure(data=go.Heatmap(
+            z=z, x=perms_in_grid, y=roles_in_grid,
+            colorscale=[
+                [0.0, "#dc2626"], [0.25, "#ef4444"], [0.5, "#f59e0b"],
+                [0.75, "#84cc16"], [1.0, "#059669"],
+            ],
+            zmin=0, zmax=100, zauto=False,
+            customdata=hover,
+            hovertemplate="%{customdata}<extra></extra>",
+            text=text, texttemplate="%{text}",
+            textfont={"size": 11, "color": "white"},
+            colorbar=dict(title="Coverage<br>%", thickness=12),
+        ))
+        fig.update_layout(
+            height=max(260, 32 * len(roles_in_grid) + 80),
+            margin=dict(l=10, r=10, t=10, b=80),
+            xaxis=dict(tickangle=-40, side="bottom", tickfont={"family": "monospace", "size": 10}),
+            yaxis=dict(tickfont={"size": 12}, autorange="reversed"),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.caption("_(plotly not installed — heatmap omitted; use the lenses below)_")
+
+    # ── Lens picker ────────────────────────────────────────────────────
+    st.markdown("---")
+    lens_options = [
+        "⚠️ Deviations",
+        "🎭 By role",
+        "🔑 By permission",
+        "👥 By group",
+        "📋 By scheme",
+    ]
+    try:
+        lens = st.segmented_control(
+            "Slice the matrix by",
+            options=lens_options,
+            default="⚠️ Deviations",
+            key="std_lens",
+        )
+    except AttributeError:
+        # Streamlit < 1.36 — fall back to radio
+        lens = st.radio(
+            "Slice the matrix by", lens_options,
+            horizontal=True, key="std_lens_radio",
+        )
+    if not lens:
+        lens = "⚠️ Deviations"
+
+    # ── Lens: Deviations ──────────────────────────────────────────────
+    if lens == "⚠️ Deviations":
+        deviations = [r for r in matrix_rows if r["Status"] == "⚠️ partial"]
+        if not deviations:
             st.markdown(
-                "<div class='jp-empty'>No matching grants for the chosen "
-                "roles in the current filter set.</div>",
+                "<div class='jp-banner jp-banner-ok'><b>✅ No deviations.</b> "
+                "Every role × permission pair is either fully standardized or "
+                "out of scope.</div>",
                 unsafe_allow_html=True,
             )
-        else:
-            mc1, mc2, mc3 = st.columns([1, 1, 1])
-            with mc1:
-                show_only_dev = st.checkbox(
-                    "Show only deviations (partial coverage)",
-                    value=True,
-                    key="matrix_only_dev",
-                    help="Hide rows where coverage is either 0% (irrelevant) or 100% (perfectly standardized).",
+            return
+
+        deviations.sort(key=lambda r: (r["Coverage %"], -r["Out of"], r["Role"]))
+
+        # Build a bulk plan covering every deviation
+        full_plan: list[tuple[int, str, str]] = []
+        for r in deviations:
+            rel = role_relevant_map.get(r["Role"], set())
+            granted = rp_granted_map.get((r["Role"], r["Permission key"]), set())
+            for sid in rel - granted:
+                full_plan.append((sid, r["Permission key"], r["Role"]))
+
+        bc1, bc2 = st.columns([3, 1])
+        bc1.markdown(
+            f"**{len(deviations)} deviating pair(s)** — would need "
+            f"<b>{len(full_plan)}</b> grant(s) to bring all of them to 100% "
+            f"on their role-relevant schemes."
+        )
+        with bc2:
+            _bulk_fix_popover(
+                label=f"⊕ Fix all {len(full_plan)}",
+                plan=full_plan,
+                key_suffix="all_dev",
+                title="Bring every deviation to 100% standardization",
+                description=(
+                    "For every (role, permission) pair below 100%, grants "
+                    "the permission to the role's mapped LDAP group on each "
+                    "scheme that's currently missing it."
+                ),
+            )
+
+        # One row per (role, permission) pair, with sparkline + per-row fix
+        st.markdown("")
+        st.markdown(
+            "<div style='display:grid;grid-template-columns:1.5fr 2fr 1fr 1fr;"
+            "gap:.5rem;font-weight:600;color:var(--jp-text-mute);font-size:.78rem;"
+            "border-bottom:1px solid var(--jp-border);padding-bottom:.3rem;margin-bottom:.4rem;'>"
+            "<div>Role</div><div>Permission</div><div>Coverage</div><div>Action</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        for r in deviations[:200]:
+            rel_size = r["Out of"]
+            granted_size = r["Granted in"]
+            pct = r["Coverage %"]
+            bar_html = (
+                f"<div style='background:var(--jp-border);height:7px;border-radius:4px;overflow:hidden;'>"
+                f"<div style='background:{_coverage_color(pct)};width:{pct:.1f}%;height:100%;'></div></div>"
+                f"<div style='font-size:.72rem;color:var(--jp-text-mute);margin-top:.15rem;'>"
+                f"{granted_size}/{rel_size} schemes · {pct:.0f}%</div>"
+            )
+            cols = st.columns([1.5, 2, 1, 1])
+            cols[0].markdown(f"<span class='jp-pill jp-role'>{r['Role']}</span>", unsafe_allow_html=True)
+            cols[1].markdown(
+                f"<span class='jp-pill jp-mono'>{r['Permission key']}</span><br>"
+                f"<span style='font-size:.78rem;color:var(--jp-text-dim);'>"
+                f"{perm_name_by_key.get(r['Permission key'], '')}</span>",
+                unsafe_allow_html=True,
+            )
+            cols[2].markdown(bar_html, unsafe_allow_html=True)
+            # Per-row bulk fix
+            missing = role_relevant_map[r["Role"]] - rp_granted_map.get(
+                (r["Role"], r["Permission key"]), set()
+            )
+            plan = [(sid, r["Permission key"], r["Role"]) for sid in missing]
+            with cols[3]:
+                _bulk_fix_popover(
+                    label=f"⊕ Fix {len(plan)}",
+                    plan=plan,
+                    key_suffix=f"dev_{r['Role']}_{r['Permission key']}",
+                    title=f"Standardize `{r['Role']}` → `{r['Permission key']}`",
+                    description=(
+                        f"Grant `{r['Permission key']}` on the {len(plan)} "
+                        f"scheme(s) currently missing it for role `{r['Role']}`."
+                    ),
                 )
-            with mc2:
-                role_pick = st.selectbox(
-                    "Focus role",
-                    ["(all)"] + sorted({r["Role"] for r in matrix_rows}),
-                    key="matrix_role_pick",
-                )
-            with mc3:
-                perm_pick = st.selectbox(
-                    "Focus permission",
-                    ["(all)"] + sorted({r["Permission key"] for r in matrix_rows}),
-                    key="matrix_perm_pick",
-                )
-    
-            visible = matrix_rows
-            if show_only_dev:
-                visible = [r for r in visible if r["Status"] == "⚠️ partial"]
-            if role_pick != "(all)":
-                visible = [r for r in visible if r["Role"] == role_pick]
-            if perm_pick != "(all)":
-                visible = [r for r in visible if r["Permission key"] == perm_pick]
-    
-            # Top-level counters: how many role/permission pairs are
-            # standardized vs deviating.
-            tot_full     = sum(1 for r in matrix_rows if r["Status"] == "✅ all")
-            tot_partial  = sum(1 for r in matrix_rows if r["Status"] == "⚠️ partial")
-            tot_never    = sum(1 for r in matrix_rows if r["Status"] == "⛔ never")
-            sumc = st.columns(3)
-            sumc[0].markdown(
-                f"<div class='jp-kpi jp-kpi-green'>"
-                f"<div class='jp-kpi-label'>Fully standardized</div>"
-                f"<div class='jp-kpi-num'>{tot_full}</div>"
-                f"<div class='jp-kpi-sub'>role × permission pairs at 100%</div>"
-                f"</div>",
+        if len(deviations) > 200:
+            st.caption(f"…and {len(deviations) - 200} more (refine the role filter to narrow).")
+
+    # ── Lens: By role ─────────────────────────────────────────────────
+    elif lens == "🎭 By role":
+        role_pick = st.selectbox(
+            "Pick a role",
+            sorted({r["Role"] for r in matrix_rows}),
+            key="std_lens_role",
+        )
+        rows_for_role = [r for r in matrix_rows if r["Role"] == role_pick]
+        rel = role_relevant_map.get(role_pick, set())
+        full_n     = sum(1 for r in rows_for_role if r["Status"] == "✅ all")
+        partial_n  = sum(1 for r in rows_for_role if r["Status"] == "⚠️ partial")
+        never_n    = sum(1 for r in rows_for_role if r["Status"] == "⛔ never")
+
+        cs1, cs2, cs3, cs4 = st.columns(4)
+        cs1.metric("Role-relevant schemes", len(rel))
+        cs2.metric("Permissions at 100%", full_n)
+        cs3.metric("Permissions deviating", partial_n)
+        cs4.metric("Permissions never granted", never_n)
+
+        # Identify the LDAP groups carrying this role and the users
+        # explicitly listed against it. Useful provenance.
+        rgroups = groups_for_role(role_pick)
+        rusers  = users_for_role(role_pick)
+        prov_cols = st.columns(2)
+        prov_cols[0].markdown(
+            "**Carriers (LDAP groups)** "
+            + (" ".join(f"<span class='jp-pill jp-group'>{g}</span>" for g in rgroups) or "<i>none</i>"),
+            unsafe_allow_html=True,
+        )
+        prov_cols[1].markdown(
+            "**Direct users (VALID_USERS)** "
+            + (" ".join(f"<span class='jp-pill jp-user'>{u}</span>" for u in rusers) or "<i>none</i>"),
+            unsafe_allow_html=True,
+        )
+
+        # Bar chart of permissions sorted by coverage
+        if _PLOTLY and rows_for_role:
+            df_role = pd.DataFrame(rows_for_role)
+            df_role = df_role.sort_values("Coverage %", ascending=True)
+            fig = px.bar(
+                df_role, x="Coverage %", y="Permission key", orientation="h",
+                color="Coverage %",
+                color_continuous_scale=[(0, "#dc2626"), (0.5, "#f59e0b"), (1, "#059669")],
+                range_color=[0, 100],
+                hover_data=["Granted in", "Out of", "Permission name", "Status"],
+            )
+            fig.update_layout(
+                height=max(260, 22 * len(rows_for_role) + 80),
+                margin=dict(l=10, r=10, t=10, b=10),
+                yaxis=dict(tickfont={"family": "monospace", "size": 10}),
+                plot_bgcolor="white", paper_bgcolor="white",
+                coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Per-permission row list with inline fix
+        st.markdown("**Permission breakdown**")
+        rows_for_role.sort(key=lambda r: (r["Coverage %"], r["Permission key"]))
+        for r in rows_for_role:
+            pct = r["Coverage %"]
+            missing = role_relevant_map[role_pick] - rp_granted_map.get(
+                (role_pick, r["Permission key"]), set()
+            )
+            cols = st.columns([2, 3, 1])
+            cols[0].markdown(
+                f"<span class='jp-pill jp-mono'>{r['Permission key']}</span><br>"
+                f"<span style='font-size:.78rem;color:var(--jp-text-mute);'>"
+                f"{perm_name_by_key.get(r['Permission key'], '')}</span>",
                 unsafe_allow_html=True,
             )
-            sumc[1].markdown(
-                f"<div class='jp-kpi jp-kpi-amber'>"
-                f"<div class='jp-kpi-label'>Deviating</div>"
-                f"<div class='jp-kpi-num'>{tot_partial}</div>"
-                f"<div class='jp-kpi-sub'>partial coverage — inconsistent</div>"
-                f"</div>",
+            cols[1].markdown(
+                f"<div style='background:var(--jp-border);height:8px;border-radius:4px;overflow:hidden;'>"
+                f"<div style='background:{_coverage_color(pct)};width:{pct:.1f}%;height:100%;'></div></div>"
+                f"<div style='font-size:.74rem;color:var(--jp-text-mute);margin-top:.15rem;'>"
+                f"{r['Granted in']}/{r['Out of']} schemes · {pct:.0f}% · {r['Status']}</div>",
                 unsafe_allow_html=True,
             )
-            sumc[2].markdown(
-                f"<div class='jp-kpi'>"
-                f"<div class='jp-kpi-label'>Never granted</div>"
-                f"<div class='jp-kpi-num'>{tot_never}</div>"
-                f"<div class='jp-kpi-sub'>role has 0% of permission in role-relevant schemes</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-    
-            st.markdown("")
-            if _PANDAS:
-                df = pd.DataFrame(visible)
-                # Heat-tint the Coverage % column
-                def _coverage_style(v):
-                    try:
-                        pct = float(v)
-                    except Exception:
-                        return ""
-                    if pct >= 99.5:
-                        return "background-color: #d1fae5; color: #059669; font-weight:600;"
-                    if pct <= .5:
-                        return "background-color: #fee2e2; color: #dc2626; font-weight:600;"
-                    # Linear blend amber for partial
-                    return "background-color: #fef3c7; color: #d97706; font-weight:600;"
-                try:
-                    styled = df.style.map(_coverage_style, subset=["Coverage %"])
-                except AttributeError:
-                    # pandas < 2.1 uses .applymap
-                    styled = df.style.applymap(_coverage_style, subset=["Coverage %"])
-                st.dataframe(styled, use_container_width=True, hide_index=True, height=420)
-            else:
-                for r in visible[:200]:
-                    st.markdown(
-                        f"- **{r['Role']}** · `{r['Permission key']}` "
-                        f"({r['Permission name']}) — {r['Granted in']}/{r['Out of']} "
-                        f"= **{r['Coverage %']}%** {r['Status']}"
+            with cols[2]:
+                if missing:
+                    plan = [(sid, r["Permission key"], role_pick) for sid in missing]
+                    _bulk_fix_popover(
+                        label=f"⊕ Fix {len(missing)}",
+                        plan=plan,
+                        key_suffix=f"role_{role_pick}_{r['Permission key']}",
+                        title=f"Grant `{r['Permission key']}` to `{role_pick}` on missing schemes",
+                        description=(
+                            f"Grants the permission to the role's mapped "
+                            f"group on the {len(missing)} scheme(s) missing it."
+                        ),
                     )
-    
+                else:
+                    st.caption("✓ standardized")
+
+        # Bulk action: standardize the whole role
+        whole_plan: list[tuple[int, str, str]] = []
+        for r in rows_for_role:
+            if r["Status"] == "⚠️ partial":
+                missing = role_relevant_map[role_pick] - rp_granted_map.get(
+                    (role_pick, r["Permission key"]), set()
+                )
+                for sid in missing:
+                    whole_plan.append((sid, r["Permission key"], role_pick))
+        if whole_plan:
             st.markdown("---")
-            st.markdown("**Drill in — which schemes deviate?**")
-            st.caption(
-                "Pick a (role, permission) pair to see exactly which schemes "
-                "are missing the grant. Click a scheme to open its full "
-                "holder table in the Schemes section below."
+            _bulk_fix_popover(
+                label=f"⚡ Standardize ALL deviations for `{role_pick}` ({len(whole_plan)} grants)",
+                plan=whole_plan,
+                key_suffix=f"role_all_{role_pick}",
+                title=f"Bring every deviating permission for `{role_pick}` to 100%",
+                description=(
+                    "Single batch op — issues a grant for every "
+                    "(permission, scheme) where this role is below 100%."
+                ),
             )
-            dr_c1, dr_c2 = st.columns(2)
-            d_role = dr_c1.selectbox(
-                "Role",
-                sorted({r["Role"] for r in matrix_rows if r["Status"] == "⚠️ partial"}) or ["(no deviations)"],
-                key="drill_role",
+
+    # ── Lens: By permission ───────────────────────────────────────────
+    elif lens == "🔑 By permission":
+        perm_pick = st.selectbox(
+            "Pick a permission",
+            sorted({r["Permission key"] for r in matrix_rows}),
+            format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩",
+            key="std_lens_perm",
+        )
+        rows_for_perm = [r for r in matrix_rows if r["Permission key"] == perm_pick]
+        st.caption(perm_desc_by_key.get(perm_pick, ""))
+
+        cs1, cs2, cs3 = st.columns(3)
+        cs1.metric("Roles with full coverage", sum(1 for r in rows_for_perm if r["Status"] == "✅ all"))
+        cs2.metric("Roles deviating",         sum(1 for r in rows_for_perm if r["Status"] == "⚠️ partial"))
+        cs3.metric("Roles never granted",     sum(1 for r in rows_for_perm if r["Status"] == "⛔ never"))
+
+        # Bar chart of roles vs coverage
+        if _PLOTLY and rows_for_perm:
+            df_perm = pd.DataFrame(rows_for_perm).sort_values("Coverage %", ascending=True)
+            fig = px.bar(
+                df_perm, x="Coverage %", y="Role", orientation="h",
+                color="Coverage %",
+                color_continuous_scale=[(0, "#dc2626"), (0.5, "#f59e0b"), (1, "#059669")],
+                range_color=[0, 100],
+                hover_data=["Granted in", "Out of", "Status"],
             )
-            d_perms_for_role = sorted({
-                r["Permission key"] for r in matrix_rows
-                if r["Status"] == "⚠️ partial" and r["Role"] == d_role
-            }) or ["(no deviations)"]
-            d_perm = dr_c2.selectbox(
-                "Permission", d_perms_for_role,
-                format_func=lambda k: f"{perm_name_by_key.get(k, k)}  ⟨{k}⟩" if k != "(no deviations)" else k,
-                key="drill_perm",
+            fig.update_layout(
+                height=max(260, 28 * len(rows_for_perm) + 80),
+                margin=dict(l=10, r=10, t=10, b=10),
+                plot_bgcolor="white", paper_bgcolor="white",
+                coloraxis_showscale=False,
             )
-            if d_role != "(no deviations)" and d_perm != "(no deviations)":
-                relevant_set = role_relevant_map.get(d_role, set())
-                granted_set = rp_granted_map.get((d_role, d_perm), set())
-                missing_set = relevant_set - granted_set
-    
-                mc1, mc2 = st.columns(2)
-                with mc1:
-                    st.markdown(
-                        f"<div class='jp-banner jp-banner-ok'>"
-                        f"<b>{len(granted_set)} scheme(s)</b> grant `{d_perm}` "
-                        f"to <span class='jp-pill jp-role'>{d_role}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Per-role row list with deviation drill-in
+        st.markdown(f"**`{perm_pick}` by role**")
+        rows_for_perm.sort(key=lambda r: (r["Coverage %"], r["Role"]))
+        for r in rows_for_perm:
+            pct = r["Coverage %"]
+            missing = role_relevant_map[r["Role"]] - rp_granted_map.get(
+                (r["Role"], perm_pick), set()
+            )
+            cols = st.columns([1.5, 3, 1])
+            cols[0].markdown(f"<span class='jp-pill jp-role'>{r['Role']}</span>", unsafe_allow_html=True)
+            cols[1].markdown(
+                f"<div style='background:var(--jp-border);height:8px;border-radius:4px;overflow:hidden;'>"
+                f"<div style='background:{_coverage_color(pct)};width:{pct:.1f}%;height:100%;'></div></div>"
+                f"<div style='font-size:.74rem;color:var(--jp-text-mute);margin-top:.15rem;'>"
+                f"{r['Granted in']}/{r['Out of']} schemes · {pct:.0f}% · {r['Status']}</div>",
+                unsafe_allow_html=True,
+            )
+            with cols[2]:
+                if missing:
+                    plan = [(sid, perm_pick, r["Role"]) for sid in missing]
+                    _bulk_fix_popover(
+                        label=f"⊕ Fix {len(missing)}",
+                        plan=plan,
+                        key_suffix=f"perm_{perm_pick}_{r['Role']}",
+                        title=f"Grant `{perm_pick}` to `{r['Role']}` on missing schemes",
+                        description=(
+                            f"Grants the permission to the role's mapped "
+                            f"group on the {len(missing)} scheme(s) missing it."
+                        ),
                     )
-                    for sid in sorted(granted_set):
-                        name = schemes_by_id.get(sid, {}).get("name", str(sid))
-                        cov = coverage_by_scheme.get(sid, {})
-                        projs = scheme_to_projects.get(sid, [])
-                        companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
-                        st.markdown(
-                            f"- **{name}**  "
-                            f"<span class='jp-pill jp-mono'>id {sid}</span>  "
-                            f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
-                            + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
-                            unsafe_allow_html=True,
-                        )
-                with mc2:
-                    st.markdown(
-                        f"<div class='jp-banner jp-banner-red'>"
-                        f"<b>{len(missing_set)} scheme(s)</b> are missing "
-                        f"<code>{d_perm}</code> for <span class='jp-pill jp-role'>{d_role}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                    for sid in sorted(missing_set):
-                        name = schemes_by_id.get(sid, {}).get("name", str(sid))
-                        cov = coverage_by_scheme.get(sid, {})
-                        projs = scheme_to_projects.get(sid, [])
-                        companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
-                        cols = st.columns([5, 1])
-                        cols[0].markdown(
-                            f"- **{name}**  "
-                            f"<span class='jp-pill jp-mono'>id {sid}</span>  "
-                            f"<span class='jp-pill'>{cov.get('covered', 0)}/{total_permission_count} perms</span>  "
-                            + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies),
-                            unsafe_allow_html=True,
-                        )
-                        # Quick-fix: pop a confirm popover to add the missing grant
-                        # to the role's preferred group (first group in
-                        # groups_for_role). Falls back to user grant prompt
-                        # if the role has no LDAP-group mapping.
-                        if ADMIN:
-                            with cols[1].popover("Fix", use_container_width=True):
-                                role_groups = groups_for_role(d_role)
-                                if role_groups:
-                                    target_group = st.selectbox(
-                                        "Grant to which role group?",
-                                        role_groups,
-                                        key=f"fix_{sid}_{d_role}_{d_perm}",
+                else:
+                    st.caption("✓")
+
+    # ── Lens: By group ────────────────────────────────────────────────
+    elif lens == "👥 By group":
+        # Eligible groups: ANY group with at least one grant in view, plus
+        # any LDAP group in VALID_GROUPS (so the dropdown surfaces roles
+        # even if the group has no Jira grants yet).
+        groups_in_view = sorted({
+            g.holder_param for g in view_grants if g.holder_type == "group"
+        } | set(VALID_GROUPS.keys()))
+        if not groups_in_view:
+            st.markdown("<div class='jp-empty'>No groups in scope.</div>", unsafe_allow_html=True)
+            return
+        gpick = st.selectbox(
+            "Pick a group",
+            groups_in_view,
+            format_func=lambda g: (
+                f"{g}  · roles: {', '.join(VALID_GROUPS.get(g, []) or ['—'])}"
+            ),
+            key="std_lens_group",
+        )
+        roles_carried = VALID_GROUPS.get(gpick, [])
+        st.markdown(
+            "**Roles this group carries:** "
+            + (" ".join(f"<span class='jp-pill jp-role'>{r}</span>" for r in roles_carried) or "_none in VALID_GROUPS_"),
+            unsafe_allow_html=True,
+        )
+
+        # All grants where this group is the holder
+        group_grants = [
+            g for g in view_grants
+            if g.holder_type == "group" and g.holder_param == gpick
+        ]
+        schemes_touched = sorted({g.scheme_id for g in group_grants})
+        perms_held = sorted({g.permission_key for g in group_grants})
+
+        cs1, cs2, cs3 = st.columns(3)
+        cs1.metric("Grants in view", len(group_grants))
+        cs2.metric("Schemes touched", len(schemes_touched))
+        cs3.metric("Distinct permissions", len(perms_held))
+
+        # Bar chart: per permission, in how many schemes (where group has any grant)
+        if _PLOTLY and group_grants:
+            from collections import Counter
+            cnt = Counter(g.permission_key for g in group_grants)
+            df_g = pd.DataFrame(
+                [{"Permission key": k, "Schemes granted": v,
+                  "Permission name": perm_name_by_key.get(k, k)}
+                 for k, v in cnt.items()]
+            ).sort_values("Schemes granted", ascending=True)
+            fig = px.bar(
+                df_g, x="Schemes granted", y="Permission key", orientation="h",
+                hover_data=["Permission name"],
+            )
+            fig.update_traces(marker_color="#0052cc")
+            fig.update_layout(
+                height=max(260, 22 * len(df_g) + 80),
+                margin=dict(l=10, r=10, t=10, b=10),
+                yaxis=dict(tickfont={"family": "monospace", "size": 10}),
+                plot_bgcolor="white", paper_bgcolor="white",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Group-level standardization: across the schemes this group
+        # appears in, which permissions are sometimes granted but not always.
+        st.markdown("**Internal standardization across the schemes this group touches**")
+        if schemes_touched:
+            internal_rows = []
+            for pkey in perms_held:
+                schemes_with_perm = {g.scheme_id for g in group_grants if g.permission_key == pkey}
+                n = len(schemes_with_perm)
+                tot = len(schemes_touched)
+                pct = (n / tot * 100) if tot else 0
+                internal_rows.append({
+                    "perm": pkey, "n": n, "tot": tot, "pct": pct,
+                    "missing": set(schemes_touched) - schemes_with_perm,
+                })
+            internal_rows.sort(key=lambda r: r["pct"])
+
+            for ir in internal_rows:
+                cols = st.columns([2, 3, 1])
+                cols[0].markdown(
+                    f"<span class='jp-pill jp-mono'>{ir['perm']}</span><br>"
+                    f"<span style='font-size:.78rem;color:var(--jp-text-mute);'>"
+                    f"{perm_name_by_key.get(ir['perm'], '')}</span>",
+                    unsafe_allow_html=True,
+                )
+                cols[1].markdown(
+                    f"<div style='background:var(--jp-border);height:8px;border-radius:4px;overflow:hidden;'>"
+                    f"<div style='background:{_coverage_color(ir['pct'])};width:{ir['pct']:.1f}%;height:100%;'></div></div>"
+                    f"<div style='font-size:.74rem;color:var(--jp-text-mute);margin-top:.15rem;'>"
+                    f"granted in {ir['n']}/{ir['tot']} of this group's schemes · {ir['pct']:.0f}%</div>",
+                    unsafe_allow_html=True,
+                )
+                with cols[2]:
+                    if ir["missing"]:
+                        # Bulk-grant this permission to THIS specific group on the missing schemes.
+                        plan_rows: list[dict] = []
+                        for sid in ir["missing"]:
+                            plan_rows.append({
+                                "sid": sid,
+                                "name": schemes_by_id.get(sid, {}).get("name", str(sid)),
+                            })
+                        with st.popover(f"⊕ Fix {len(ir['missing'])}", use_container_width=True, disabled=not ADMIN):
+                            st.markdown(
+                                f"**Confirm:** grant <code>{ir['perm']}</code> to "
+                                f"group <b>{gpick}</b> on these {len(plan_rows)} scheme(s):"
+                            )
+                            for p in plan_rows[:30]:
+                                st.markdown(f"- {p['name']}  <span class='jp-pill jp-mono'>id {p['sid']}</span>", unsafe_allow_html=True)
+                            if len(plan_rows) > 30:
+                                st.caption(f"…and {len(plan_rows) - 30} more")
+                            if st.button("Apply", key=f"grp_fix_{gpick}_{ir['perm']}", type="primary"):
+                                ok_n, fail_n = 0, 0
+                                for p in plan_rows:
+                                    ok, _ = do_grant(
+                                        scheme_id=p["sid"], scheme_name=p["name"],
+                                        permission_key=ir["perm"],
+                                        holder_type="group", holder_param=gpick,
+                                        holder_display=gpick,
                                     )
-                                    st.markdown(
-                                        f"<div class='jp-banner jp-banner-info'>"
-                                        f"<b>Confirm:</b> grant "
-                                        f"<span class='jp-pill jp-mono'>{d_perm}</span> "
-                                        f"to group <b>{target_group}</b> on "
-                                        f"<b>{name}</b>.</div>",
-                                        unsafe_allow_html=True,
-                                    )
-                                    if st.button("Apply", key=f"fix_btn_{sid}_{d_role}_{d_perm}", type="primary"):
-                                        ok, err = do_grant(
-                                            scheme_id=sid, scheme_name=name,
-                                            permission_key=d_perm,
-                                            holder_type="group", holder_param=target_group,
-                                            holder_display=target_group,
-                                        )
-                                        if ok:
-                                            st.success("Granted.")
-                                            st.rerun()
-                                        else:
-                                            st.error(err or "Grant failed.")
+                                    if ok:
+                                        ok_n += 1
+                                    else:
+                                        fail_n += 1
+                                if fail_n == 0:
+                                    st.success(f"Granted {ok_n}.")
                                 else:
-                                    st.caption(
-                                        f"Role `{d_role}` has no LDAP-group "
-                                        "mapping in VALID_GROUPS. Use Quick "
-                                        "grant in the filter bar to pick a "
-                                        "specific holder."
-                                    )
+                                    st.warning(f"{ok_n} ok, {fail_n} failed.")
+                                st.rerun()
+                    else:
+                        st.caption("✓ everywhere")
+        else:
+            st.caption("This group has no Jira grants in view.")
+
+    # ── Lens: By scheme ───────────────────────────────────────────────
+    elif lens == "📋 By scheme":
+        scheme_options = sorted(
+            {sid for sid in schemes_by_id.keys() if sid in filt["schemes_in_view"]},
+            key=lambda s: schemes_by_id[s]["name"],
+        )
+        if not scheme_options:
+            st.markdown("<div class='jp-empty'>No schemes in the current filter set.</div>", unsafe_allow_html=True)
+            return
+        spick = st.selectbox(
+            "Pick a scheme",
+            scheme_options,
+            format_func=lambda s: (
+                f"{schemes_by_id[s]['name']}  · "
+                f"{coverage_by_scheme.get(s, {}).get('covered', 0)}/{total_permission_count} perms"
+            ),
+            key="std_lens_scheme",
+        )
+        sname = schemes_by_id[spick]["name"]
+        projs = scheme_to_projects.get(spick, [])
+        companies = sorted({project_to_company.get(p["key"], "(unmapped)") for p in projs})
+
+        # Identity row
+        st.markdown(
+            f"<div class='jp-card'><div class='jp-card-head'>"
+            f"<div><span class='jp-title'>{sname}</span>  "
+            f"<span class='jp-pill jp-mono'>id {spick}</span>  "
+            + " ".join(f"<span class='jp-pill jp-teal'>{c}</span>" for c in companies)
+            + "</div><div class='jp-sub'>"
+            + f"{len(projs)} project(s) bound</div></div></div>",
+            unsafe_allow_html=True,
+        )
+
+        # Compute role × permission boolean grid FOR THIS SCHEME specifically.
+        # A pair is "granted" if the role has ANY user/group holder granted
+        # the permission in this scheme.
+        scheme_grants = [g for g in view_grants if g.scheme_id == spick]
+
+        role_holders_map: dict[str, set[tuple[str, str]]] = {}
+        for role in _roles_for_matrix:
+            ru = set(users_for_role(role))
+            rg = set(groups_for_role(role))
+            role_holders_map[role] = {("user", u) for u in ru} | {("group", g) for g in rg}
+
+        # Per-(role, permission): granted?
+        granted_pairs: set[tuple[str, str]] = set()
+        for g in scheme_grants:
+            for role, holders in role_holders_map.items():
+                if (g.holder_type, g.holder_param) in holders:
+                    granted_pairs.add((role, g.permission_key))
+
+        # Render mini heatmap (role × permission for this scheme)
+        if _PLOTLY:
+            roles_in_scheme = sorted({role for role, _ in granted_pairs} | {
+                role for role in _roles_for_matrix
+                if role_relevant_map.get(role) and spick in role_relevant_map[role]
+            })
+            perms_in_scheme = sorted({g.permission_key for g in scheme_grants})
+            if roles_in_scheme and perms_in_scheme:
+                z = []
+                hov = []
+                for role in roles_in_scheme:
+                    row, hrow = [], []
+                    for perm in perms_in_scheme:
+                        row.append(1 if (role, perm) in granted_pairs else 0)
+                        status = "GRANTED" if (role, perm) in granted_pairs else "missing"
+                        hrow.append(f"<b>{role}</b> · {perm}<br>{status} on {sname}")
+                    z.append(row)
+                    hov.append(hrow)
+                fig = go.Figure(data=go.Heatmap(
+                    z=z, x=perms_in_scheme, y=roles_in_scheme,
+                    colorscale=[[0, "#fee2e2"], [1, "#059669"]],
+                    zmin=0, zmax=1, zauto=False,
+                    customdata=hov,
+                    hovertemplate="%{customdata}<extra></extra>",
+                    showscale=False,
+                ))
+                fig.update_layout(
+                    height=max(220, 28 * len(roles_in_scheme) + 80),
+                    margin=dict(l=10, r=10, t=10, b=80),
+                    xaxis=dict(tickangle=-40, tickfont={"family": "monospace", "size": 10}),
+                    yaxis=dict(autorange="reversed"),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Per-role drill-in with inline fix per missing permission
+        st.markdown("**Role grants on this scheme — fill the gaps**")
+        for role in sorted(_roles_for_matrix):
+            if spick not in role_relevant_map.get(role, set()):
+                continue
+            perms_for_role_here = sorted({p for r, p in granted_pairs if r == role})
+            # All permissions exercised by ANY role anywhere in matrix view
+            # are candidates for this role on this scheme.
+            candidate_perms = sorted({r["Permission key"] for r in matrix_rows if r["Role"] == role})
+            with st.expander(
+                f"🎭 {role}  —  {len(perms_for_role_here)} / {len(candidate_perms)} role permissions held",
+                expanded=False,
+            ):
+                for perm in candidate_perms:
+                    held = perm in perms_for_role_here
+                    cols = st.columns([3, 1, 1])
+                    label_html = (
+                        f"<span class='jp-pill jp-mono'>{perm}</span> "
+                        f"<span style='font-size:.74rem;color:var(--jp-text-mute);'>"
+                        f"{perm_name_by_key.get(perm, '')}</span>"
+                    )
+                    cols[0].markdown(label_html, unsafe_allow_html=True)
+                    cols[1].markdown(
+                        "<span class='jp-pill jp-ok'>✓ granted</span>"
+                        if held else "<span class='jp-pill jp-stray'>✗ missing</span>",
+                        unsafe_allow_html=True,
+                    )
+                    with cols[2]:
+                        if held:
+                            # Find the actual Grant rows to revoke (could be multiple holders for same perm)
+                            matching = [
+                                g for g in scheme_grants
+                                if g.permission_key == perm and
+                                (g.holder_type, g.holder_param) in role_holders_map[role]
+                            ]
+                            if matching:
+                                # Revoke the first matching grant (others are duplicate paths)
+                                _revoke_confirm_popover(
+                                    matching[0],
+                                    key_suffix=f"sch_{spick}_{role}_{perm}",
+                                )
+                        else:
+                            _grant_fix_popover(
+                                scheme_id=spick, scheme_name=sname,
+                                permission_key=perm, role=role,
+                                key_suffix=f"sch_{spick}_{role}_{perm}",
+                            )
 
 
 _section_standardization()
