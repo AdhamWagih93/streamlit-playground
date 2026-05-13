@@ -166,21 +166,25 @@ ES_TIMEOUT = 60  # seconds for individual search calls
 # clone or fetch, so the service-account credentials only handle transport
 # while the commits carry the real author.
 GIT_VAULT_PATH = os.environ.get("GIT_VAULT_PATH", "new_git").strip()
-# Ansible Vault password (for decrypting any vaulted YAML in the inventories
-# repo) is sourced PER-SESSION from an admin-only UI input. We deliberately
-# never read it from the environment so a misconfigured deployment can't
-# leak the password through `os.environ` logging or container introspection.
-_ANSIBLE_VAULT_SS_KEY = "_ansible_vault_pw_v1"
+# Ansible Vault password is now stored in the same HashiCorp vault that
+# backs the rest of the platform's secrets, at path ``ansible`` with
+# variable ``vault_password``. No UI input, no env var — just an
+# auto-resolved read with the same caching / error-stash behaviour as
+# the other vault entries (Jenkins / S3 / Postgres / Git).
+ANSIBLE_VAULT_PATH = os.environ.get("ANSIBLE_VAULT_PATH", "ansible").strip()
+ANSIBLE_VAULT_PW_KEY = os.environ.get("ANSIBLE_VAULT_PW_KEY", "vault_password").strip()
 
 
 def _ansible_vault_password() -> str:
-    """Resolve the Ansible Vault password from the current session.
+    """Read the Ansible Vault password from HashiCorp vault.
 
-    Returns ``""`` when no admin has set it — :func:`_decrypt_vault`
-    raises in that case, and :func:`_read_yaml_file` falls through to a
-    warning that surfaces in the integrations strip + git diagnostic.
+    Returns ``""`` when the vault entry is missing / inaccessible —
+    :func:`_decrypt_vault` raises in that case and the failure surfaces
+    in the integrations strip + git-diagnostic panel via the standard
+    ``_vault_last_error(ANSIBLE_VAULT_PATH)`` path.
     """
-    return str(st.session_state.get(_ANSIBLE_VAULT_SS_KEY) or "")
+    cfg = _vault_secrets(ANSIBLE_VAULT_PATH)
+    return str(cfg.get(ANSIBLE_VAULT_PW_KEY) or "")
 
 INVENTORY_REPO_PATH = "/tmp/inventories"
 INVENTORY_BRANCH = "main"
@@ -230,10 +234,12 @@ JENKINS_TTL = 30      # seconds — how long status results are cached
 # secrets, and they're typically per-environment configuration the operator
 # wants to retarget without touching vault entries.
 PRISMA_S3_VAULT_PATH = os.environ.get("PRISMA_S3_VAULT_PATH", "s3/prisma").strip()
-PRISMA_S3_BUCKET = os.environ.get("PRISMA_S3_BUCKET", "").strip()
+# Defaults baked in per the platform's confirmed layout — env vars only
+# need to be set when retargeting (e.g. against a non-prod bucket).
+PRISMA_S3_BUCKET = os.environ.get("PRISMA_S3_BUCKET", "PrismaCloud-Logs").strip()
 PRISMA_S3_KEY_PATTERN = os.environ.get(
     "PRISMA_S3_KEY_PATTERN",
-    "prisma-scans/{project}/{application}/{version}.html",
+    "{project}/{application}_{version}-PrismaCloudLog.txt",
 ).strip()
 # S3-compatible services (MinIO etc.) don't really care about the region but
 # boto3 won't sign requests without one. Default to us-east-1 unless an env
@@ -11756,12 +11762,32 @@ def _render_prisma_scan_viewer() -> None:
         unsafe_allow_html=True,
     )
 
-    # Sandboxed iframe with the report HTML. Streamlit's components.v1.html
-    # generates a sandboxed iframe with srcdoc — perfect for embedded HTML
-    # that may include its own <script> tags.
+    # Render branch depends on the source object's extension. The
+    # platform's PrismaCloudLog files are plain text — we wrap them in a
+    # <pre> block inside a sandboxed iframe so the parent page styles
+    # don't leak in, and the text gets the same monospace + scrolling
+    # treatment regardless of length. HTML reports (legacy) still render
+    # as-is via components.v1.html.
+    _content = loaded.get("html") or ""
+    _ext_lower = (loaded.get("key") or "").lower()
     try:
         import streamlit.components.v1 as _components
-        _components.html(loaded["html"], height=900, scrolling=True)
+        if _ext_lower.endswith(".txt") or _ext_lower.endswith(".log"):
+            _wrapped = (
+                '<html><head><style>'
+                'html,body{margin:0;padding:0;background:#0d1117;'
+                'color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,'
+                'Menlo,Monaco,Consolas,monospace;font-size:12.5px;'
+                'line-height:1.55}'
+                'pre{margin:0;padding:18px 22px;white-space:pre-wrap;'
+                'word-break:break-word;tab-size:4}'
+                '</style></head><body><pre>'
+                f'{html.escape(_content)}'
+                '</pre></body></html>'
+            )
+            _components.html(_wrapped, height=900, scrolling=True)
+        else:
+            _components.html(_content, height=900, scrolling=True)
     except Exception as e:
         inline_note(
             f"Failed to render the scan iframe: {type(e).__name__}: {e}",
@@ -19678,52 +19704,36 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     ),
                 )
 
-        # ── Admin-only Ansible Vault password input ─────────────────────
-        # The password sits in session_state, NEVER on disk and NEVER in
-        # an env var. Re-entered each session. Required before vaulted
-        # YAML files in the inventories repo can be decrypted. The
-        # in-page indicator shows whether it's currently set so admins
-        # don't repeatedly re-enter it within a session.
+        # ── Admin-only Ansible Vault password status indicator ──────────
+        # The password is now read from HashiCorp vault at ANSIBLE_VAULT_PATH
+        # / ANSIBLE_VAULT_PW_KEY automatically — no UI input. We still surface
+        # the status so admins can see at a glance whether the secret
+        # resolved (and if not, the underlying vault error).
         with st.container(key="cc_ansible_vault_pw"):
             _pw_set = bool(_ansible_vault_password())
-            _p1, _p2, _p3 = st.columns([2, 4, 1])
-            with _p1:
-                st.markdown(
-                    f'<div class="iv-src-pref-lbl">'
-                    f'Ansible Vault password '
-                    f'<span class="iv-src-pref-state '
-                    f'{"is-set" if _pw_set else "is-unset"}">'
-                    f'{"✓ set" if _pw_set else "○ not set"}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with _p2:
-                _pw_typed = st.text_input(
-                    "Ansible Vault password",
-                    type="password",
-                    placeholder="paste password to decrypt vaulted YAMLs",
-                    key="_ansible_vault_pw_input",
-                    label_visibility="collapsed",
-                    help=(
-                        "Admin-only · NEVER persisted to disk or vault · "
-                        "session-scoped only. Required to decrypt any "
-                        "ansible-vault YAML files in the inventories repo. "
-                        "Re-enter each session."
-                    ),
-                )
-                # Only mutate the canonical key when the input was filled —
-                # otherwise we'd clobber an already-set value on every
-                # rerun where the input renders empty.
-                if _pw_typed:
-                    st.session_state[_ANSIBLE_VAULT_SS_KEY] = _pw_typed
-            with _p3:
-                if _pw_set and st.button("✕ Clear",
-                                         key="_ansible_vault_pw_clear_btn",
-                                         use_container_width=True,
-                                         help="Wipe the password from session state"):
-                    st.session_state.pop(_ANSIBLE_VAULT_SS_KEY, None)
-                    st.session_state.pop("_ansible_vault_pw_input", None)
-                    st.rerun()
+            _pw_err = (
+                _vault_last_error(ANSIBLE_VAULT_PATH)
+                if not _pw_set else ""
+            )
+            _state_cls = "is-set" if _pw_set else "is-unset"
+            _state_txt = "✓ resolved from vault" if _pw_set else "○ not in vault"
+            _detail = (
+                f' · <code style="font-size:0.66rem">{html.escape(ANSIBLE_VAULT_PATH)}'
+                f'/{html.escape(ANSIBLE_VAULT_PW_KEY)}</code>'
+            )
+            _err_html = (
+                f' · <span style="color:var(--cc-red)">vault error: '
+                f'{html.escape(_pw_err)[:80]}</span>'
+                if _pw_err else ""
+            )
+            st.markdown(
+                f'<div class="iv-src-pref-lbl" style="padding-top:2px">'
+                f'Ansible Vault password '
+                f'<span class="iv-src-pref-state {_state_cls}">{_state_txt}</span>'
+                f'{_detail}{_err_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         if _src == "git-forced-failed":
             # Admin explicitly forced git but git failed. Don't fall back
@@ -20256,14 +20266,32 @@ are cached for 5 hours inside `utils.ldap`.
 ### Vault-encrypted YAML files (inventories repo)
 
 When a `group_vars/{app}/*.yml` or similar inventory file begins with
-`$ANSIBLE_VAULT;` it's decrypted in-memory using the password an admin
-enters via the **Ansible Vault password** input near the source selector.
-The password never touches disk and never goes into an env var or vault
-entry; it's session-scoped only.
+`$ANSIBLE_VAULT;` it's decrypted in-memory using the password sourced
+from HashiCorp vault at path **`ansible`** (configurable via
+`ANSIBLE_VAULT_PATH`) under variable **`vault_password`** (configurable
+via `ANSIBLE_VAULT_PW_KEY`). Reads share the same vault-error stash as
+Jenkins / S3 / Postgres / Git, so a missing or unauthorised entry
+surfaces in the integrations strip + git-diagnostic panel.
 
 The inventory-loader cache key includes a short fingerprint of the
-password so setting / clearing / rotating it invalidates the loader on
-the next render — no need to wait for a TTL.
+resolved password so a vault rotation invalidates the loader on the
+next render — no TTL wait.
+
+### Prismacloud scan reports (S3)
+
+Each scanned `(project, application, version)` triple has a
+PrismaCloud log stored at:
+
+```
+s3://PrismaCloud-Logs/{project}/{application}_{version}-PrismaCloudLog.txt
+```
+
+The bucket name and key template are env-overridable
+(`PRISMA_S3_BUCKET`, `PRISMA_S3_KEY_PATTERN`) but the defaults match
+this layout so the Scan Viewer tab works out-of-the-box. The viewer
+auto-detects `.txt` / `.log` files and renders them in a sandboxed
+iframe with a `<pre>` wrapper + dark monospace styling; `.html` reports
+(legacy) still render inline as a sandboxed page.
 
             """
         )
