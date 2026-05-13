@@ -2375,6 +2375,69 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border: 1px solid rgba(5,150,105,.18);
     color: #065f46;
 }
+.gd-layout-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    background: var(--cc-surface2);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.gd-layout-table th {
+    text-align: left;
+    padding: 6px 10px;
+    background: var(--cc-surface);
+    color: var(--cc-text-mute);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--cc-border);
+}
+.gd-layout-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--cc-border);
+    vertical-align: top;
+}
+.gd-layout-table tr:last-child td { border-bottom: none; }
+.gd-layout-name { font-weight: 700; color: var(--cc-text); }
+.gd-layout-num {
+    color: var(--cc-accent);
+    text-align: right;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.gd-layout-files {
+    color: var(--cc-text-dim);
+    word-break: break-all;
+    max-width: 360px;
+}
+.gd-layout-empty {
+    padding: 8px 10px;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+    color: var(--cc-text-mute);
+    font-size: 0.78rem;
+}
+.gd-layout-empty code {
+    font-family: var(--cc-mono);
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+}
+.gd-layout-skipped {
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 6px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+}
 
 /* ── PEOPLE INSIGHTS PANEL ────────────────────────────────────────────────
  * Inline section at the bottom of the inventory tab. Idle gate, then
@@ -13700,6 +13763,50 @@ def _git_diag_probe() -> dict:
         out["final"]["status_msg"] = f"{type(e).__name__}: {e}"
     out["trace"] = trace
 
+    # 6. Layout manifest — captured ONLY when the clone succeeded.
+    # Surfaces top-level dir names + per-project yml counts so the admin
+    # can see what the loader actually saw. This is the most common
+    # source of "0 apps parsed" — repo layout drifted from the loader's
+    # assumed shape (e.g. .yaml extension, deeper nesting, env-first
+    # top-level dirs).
+    layout: dict[str, Any] = {
+        "top_level":    [],
+        "skipped":      [],
+        "projects":     [],
+        "yaml_dropped": 0,
+    }
+    try:
+        if out["fs"]["git_dir_exists"]:
+            _base = pathlib.Path(INVENTORY_REPO_PATH)
+            _skip = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
+            for p in sorted(_base.iterdir()):
+                if p.name.startswith("."):
+                    continue
+                if p.is_dir() and p.name in _skip:
+                    layout["skipped"].append(p.name)
+                    continue
+                if p.is_dir():
+                    _files = sorted(p.iterdir())
+                    _yml = [f.name for f in _files
+                            if f.is_file() and f.suffix.lower() in (".yml", ".yaml")]
+                    _other = [f.name for f in _files
+                              if f.is_file() and f.suffix.lower() not in (".yml", ".yaml")]
+                    _subdirs = [f.name for f in _files if f.is_dir()]
+                    layout["projects"].append({
+                        "name":     p.name,
+                        "yml":      _yml[:12],
+                        "yml_n":    len(_yml),
+                        "other_n":  len(_other),
+                        "subdirs":  _subdirs[:8],
+                        "subdir_n": len(_subdirs),
+                    })
+                else:
+                    # A file at the repo root — unusual but surface it.
+                    layout["top_level"].append(p.name)
+    except Exception as e:
+        layout["error"] = f"{type(e).__name__}: {e}"
+    out["layout"] = layout
+
     return out
 
 
@@ -13827,6 +13934,67 @@ def _render_git_diag_panel(result: dict) -> None:
 
     _ts = (result.get("timestamp") or "").replace("T", " ")[:19]
 
+    # ── Layout manifest — built when the clone succeeded so the admin can
+    # see what the loader actually walked vs. what they expected.
+    layout = result.get("layout") or {}
+    layout_html = ""
+    if layout:
+        _skipped = layout.get("skipped") or []
+        _projects = layout.get("projects") or []
+        _toplvl = layout.get("top_level") or []
+        _proj_rows: list[str] = []
+        for p in _projects:
+            _yml = ", ".join(p.get("yml") or []) or "(none)"
+            _subs = ", ".join(p.get("subdirs") or []) or "(none)"
+            _proj_rows.append(
+                f'<tr>'
+                f'  <td class="gd-layout-name">{html.escape(p.get("name", "?"))}</td>'
+                f'  <td class="gd-layout-num">{p.get("yml_n", 0)}</td>'
+                f'  <td class="gd-layout-files">{html.escape(_yml)}</td>'
+                f'  <td class="gd-layout-num">{p.get("subdir_n", 0)}</td>'
+                f'  <td class="gd-layout-files">{html.escape(_subs)}</td>'
+                f'</tr>'
+            )
+        _proj_table = (
+            f'<table class="gd-layout-table">'
+            f'  <thead><tr>'
+            f'    <th>Top-level dir</th>'
+            f'    <th>yml/yaml at root</th>'
+            f'    <th>example files</th>'
+            f'    <th>subdirs</th>'
+            f'    <th>example subdirs</th>'
+            f'  </tr></thead>'
+            f'  <tbody>{"".join(_proj_rows)}</tbody>'
+            f'</table>'
+            if _proj_rows else
+            '<div class="gd-layout-empty">no project-style top-level '
+            'directories — loader expects each project under the repo root '
+            '(e.g. <code>PLAT/</code>, <code>FIN/</code>) with one '
+            '<code>{app}.yml</code> per app inside.</div>'
+        )
+        _skipped_html = (
+            f'<div class="gd-layout-skipped">'
+            f'skipped (handled separately): {html.escape(", ".join(_skipped))}'
+            f'</div>'
+            if _skipped else ""
+        )
+        _stray_html = (
+            f'<div class="gd-layout-skipped">'
+            f'loose files at repo root (ignored): '
+            f'{html.escape(", ".join(_toplvl[:20]))}'
+            f'</div>'
+            if _toplvl else ""
+        )
+        layout_html = (
+            f'<div class="gd-section">'
+            f'  <div class="gd-section-title">repo layout — what the '
+            f'loader saw</div>'
+            f'  {_proj_table}'
+            f'  {_skipped_html}'
+            f'  {_stray_html}'
+            f'</div>'
+        )
+
     st.markdown(
         f'<div class="gd-panel">'
         f'  <div class="gd-panel-head">'
@@ -13867,6 +14035,7 @@ def _render_git_diag_panel(result: dict) -> None:
         f'    <div class="gd-section-title">git steps · last attempt</div>'
         f'    <div class="gd-trace">{trace_html}</div>'
         f'  </div>'
+        f'  {layout_html}'
         f'  <div class="gd-section">'
         f'    <div class="gd-section-title">final outcome</div>'
         f'    <div class="gd-step {_final_cls}">'
@@ -14030,7 +14199,10 @@ def _load_inventory_from_git(head_sha: str) -> tuple[list[dict], list[str]]:
     revision pay zero parse cost.
 
     Returns ``(rows, warnings)``. Warnings surface missing dependencies,
-    decrypt failures, and parse errors for the admin banner.
+    decrypt failures, and parse errors for the admin banner — when no
+    rows are produced the warnings ALSO include a manifest of the top
+    levels of the repo so an admin can see at a glance what the loader
+    saw vs what the layout actually is.
     """
     warnings: list[str] = []
     rows: list[dict] = []
@@ -14045,13 +14217,44 @@ def _load_inventory_from_git(head_sha: str) -> tuple[list[dict], list[str]]:
     group_vars_root = base / "group_vars"
     all_vars = _load_yaml_dir(group_vars_root / "all", warnings)
 
+    # Helper — sorted list of inventory YAML files in a directory.
+    # Accepts BOTH ``.yml`` and ``.yaml`` extensions; real-world Ansible
+    # repos use either, and the previous walker only saw ``.yml``.
+    def _yaml_files(d: pathlib.Path) -> list[pathlib.Path]:
+        if not d.is_dir():
+            return []
+        return sorted(
+            p for p in d.iterdir()
+            if p.is_file() and p.suffix.lower() in (".yml", ".yaml")
+        )
+
     # Iterate projects (top-level directories that are not group_vars / host_vars / .git)
     skip_dirs = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
-    for project_dir in sorted(p for p in base.iterdir()
-                              if p.is_dir() and p.name not in skip_dirs and not p.name.startswith(".")):
+    project_dirs = sorted(
+        p for p in base.iterdir()
+        if p.is_dir() and p.name not in skip_dirs and not p.name.startswith(".")
+    )
+    if not project_dirs:
+        # No project directories at all — record what IS there so the
+        # admin banner can show "expected dirs, got <names>".
+        present = sorted(p.name for p in base.iterdir())[:30]
+        warnings.append(
+            f"no project directories at repo root — found instead: "
+            f"{', '.join(present) or '(empty)'}"
+        )
+    for project_dir in project_dirs:
         project = project_dir.name
         # Each {application}.yml at the project root defines an app's inventory.
-        for inv_file in sorted(project_dir.glob("*.yml")):
+        _app_files = _yaml_files(project_dir)
+        if not _app_files:
+            warnings.append(
+                f"project '{project}' has no .yml / .yaml files at its root "
+                f"({len([p for p in project_dir.iterdir() if p.is_file()])} "
+                f"other files, "
+                f"{len([p for p in project_dir.iterdir() if p.is_dir()])} "
+                f"subdirs)"
+            )
+        for inv_file in _app_files:
             app = inv_file.stem
             # Per-app group_vars live at the REPO root, not under the project
             # directory (Ansible convention). Same for env-scoped vars.
@@ -14225,7 +14428,12 @@ def _load_inventory_from_git_scoped(scope_json: str) -> tuple[list[dict], str, s
     rows, parse_warnings = _load_inventory_from_git(head)
     warnings.extend(parse_warnings)
     if not rows:
-        warnings.append("git checkout parsed 0 apps — check field aliases")
+        warnings.append(
+            "git checkout parsed 0 apps — check the inventory loader's "
+            "structural assumptions (project dirs at the repo root, "
+            "{app}.yml or {app}.yaml inside each). Click 🔍 Diagnose git "
+            "to view the full per-step warning list."
+        )
         return [], "0 apps parsed", head, warnings
     # Apply the same scope filters locally so role/company/project scoping
     # behaves identically across both paths.
