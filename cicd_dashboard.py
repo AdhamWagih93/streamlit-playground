@@ -13792,16 +13792,41 @@ def _git_diag_probe() -> dict:
                     _other = [f.name for f in _files
                               if f.is_file() and f.suffix.lower() not in (".yml", ".yaml")]
                     _subdirs = [f.name for f in _files if f.is_dir()]
+                    # Peek into the project's group_vars/ if it has one —
+                    # the confirmed layout puts apps as group_vars/{app}/
+                    # subdirs (with optional {env}_{app} env-specific dirs).
+                    _gv = p / "group_vars"
+                    _gv_subs: list[str] = []
+                    _gv_app_count = 0
+                    if _gv.is_dir():
+                        _gv_subs = sorted(
+                            s.name for s in _gv.iterdir() if s.is_dir()
+                        )
+                        # Distinct app names = non-env-prefixed subdirs +
+                        # stripped env-prefixed ones, minus "all".
+                        _apps = set()
+                        for sn in _gv_subs:
+                            if sn == "all":
+                                continue
+                            stripped = sn
+                            for env in _INV_ENVIRONMENTS:
+                                if sn.startswith(f"{env}_") and len(sn) > len(env) + 1:
+                                    stripped = sn[len(env) + 1:]
+                                    break
+                            _apps.add(stripped)
+                        _gv_app_count = len(_apps)
                     layout["projects"].append({
-                        "name":     p.name,
-                        "yml":      _yml[:12],
-                        "yml_n":    len(_yml),
-                        "other_n":  len(_other),
-                        "subdirs":  _subdirs[:8],
-                        "subdir_n": len(_subdirs),
+                        "name":         p.name,
+                        "yml":          _yml[:12],
+                        "yml_n":        len(_yml),
+                        "other_n":      len(_other),
+                        "subdirs":      _subdirs[:8],
+                        "subdir_n":     len(_subdirs),
+                        "gvars_subs":   _gv_subs[:12],
+                        "gvars_n":      len(_gv_subs),
+                        "gvars_apps_n": _gv_app_count,
                     })
                 else:
-                    # A file at the repo root — unusual but surface it.
                     layout["top_level"].append(p.name)
     except Exception as e:
         layout["error"] = f"{type(e).__name__}: {e}"
@@ -13946,6 +13971,7 @@ def _render_git_diag_panel(result: dict) -> None:
         for p in _projects:
             _yml = ", ".join(p.get("yml") or []) or "(none)"
             _subs = ", ".join(p.get("subdirs") or []) or "(none)"
+            _gv_subs = ", ".join(p.get("gvars_subs") or []) or "(none)"
             _proj_rows.append(
                 f'<tr>'
                 f'  <td class="gd-layout-name">{html.escape(p.get("name", "?"))}</td>'
@@ -13953,6 +13979,8 @@ def _render_git_diag_panel(result: dict) -> None:
                 f'  <td class="gd-layout-files">{html.escape(_yml)}</td>'
                 f'  <td class="gd-layout-num">{p.get("subdir_n", 0)}</td>'
                 f'  <td class="gd-layout-files">{html.escape(_subs)}</td>'
+                f'  <td class="gd-layout-num">{p.get("gvars_apps_n", 0)}</td>'
+                f'  <td class="gd-layout-files">{html.escape(_gv_subs)}</td>'
                 f'</tr>'
             )
         _proj_table = (
@@ -13963,6 +13991,8 @@ def _render_git_diag_panel(result: dict) -> None:
             f'    <th>example files</th>'
             f'    <th>subdirs</th>'
             f'    <th>example subdirs</th>'
+            f'    <th>apps via group_vars</th>'
+            f'    <th>group_vars subdirs</th>'
             f'  </tr></thead>'
             f'  <tbody>{"".join(_proj_rows)}</tbody>'
             f'</table>'
@@ -14213,14 +14243,16 @@ def _load_inventory_from_git(head_sha: str) -> tuple[list[dict], list[str]]:
         warnings.append("PyYAML missing — `pip install pyyaml`")
         return rows, warnings
 
-    # group_vars/all is shared baseline across every app/project.
-    group_vars_root = base / "group_vars"
-    all_vars = _load_yaml_dir(group_vars_root / "all", warnings)
+    # Repo-root group_vars/host_vars are tolerated (legacy layout) but the
+    # confirmed real layout is per-project: each project carries its OWN
+    # group_vars/ and host_vars/ trees with no top-level shared dir. We
+    # fall through to a per-project search; the root group_vars/all (if
+    # present) is consulted as a low-priority baseline.
+    root_group_vars = base / "group_vars"
+    root_all_vars = _load_yaml_dir(root_group_vars / "all", warnings)
 
-    # Helper — sorted list of inventory YAML files in a directory.
-    # Accepts BOTH ``.yml`` and ``.yaml`` extensions; real-world Ansible
-    # repos use either, and the previous walker only saw ``.yml``.
     def _yaml_files(d: pathlib.Path) -> list[pathlib.Path]:
+        """Sorted list of YAML files in *d* (accepts .yml / .yaml)."""
         if not d.is_dir():
             return []
         return sorted(
@@ -14228,66 +14260,130 @@ def _load_inventory_from_git(head_sha: str) -> tuple[list[dict], list[str]]:
             if p.is_file() and p.suffix.lower() in (".yml", ".yaml")
         )
 
-    # Iterate projects (top-level directories that are not group_vars / host_vars / .git)
+    def _apps_from_group_vars(gv_dir: pathlib.Path) -> set[str]:
+        """Derive app names from a project's ``group_vars/`` tree.
+
+        Each subdir under ``group_vars/`` is either:
+          • ``all``                          — baseline, skip.
+          • ``{app}``                        — app-level vars.
+          • ``{env}_{app}``                  — env-specific overrides for
+            that app, where ``{env}`` is one of the known stages.
+
+        Returns the distinct app names. When the same app appears as both
+        ``{app}`` and ``{env}_{app}`` subdirs, it counts once."""
+        if not gv_dir.is_dir():
+            return set()
+        out: set[str] = set()
+        for sub in gv_dir.iterdir():
+            if not sub.is_dir() or sub.name == "all":
+                continue
+            n = sub.name
+            stripped = None
+            for env in _INV_ENVIRONMENTS:
+                pfx = f"{env}_"
+                if n.startswith(pfx) and len(n) > len(pfx):
+                    stripped = n[len(pfx):]
+                    break
+            out.add(stripped if stripped else n)
+        return out
+
     skip_dirs = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
     project_dirs = sorted(
         p for p in base.iterdir()
         if p.is_dir() and p.name not in skip_dirs and not p.name.startswith(".")
     )
     if not project_dirs:
-        # No project directories at all — record what IS there so the
-        # admin banner can show "expected dirs, got <names>".
         present = sorted(p.name for p in base.iterdir())[:30]
         warnings.append(
             f"no project directories at repo root — found instead: "
             f"{', '.join(present) or '(empty)'}"
         )
+
     for project_dir in project_dirs:
         project = project_dir.name
-        # Each {application}.yml at the project root defines an app's inventory.
-        _app_files = _yaml_files(project_dir)
-        if not _app_files:
+
+        # ── Resolve where this project's group_vars actually live ────────
+        # Per-project layout (confirmed): ``{project}/group_vars/``
+        # Legacy fallback:                ``{repo_root}/group_vars/`` shared
+        proj_gvars = project_dir / "group_vars"
+        if proj_gvars.is_dir():
+            gvars_dir = proj_gvars
+            gvars_origin = "per-project"
+        elif root_group_vars.is_dir():
+            gvars_dir = root_group_vars
+            gvars_origin = "repo-root (legacy)"
+        else:
+            gvars_dir = None
+            gvars_origin = "absent"
+
+        # ── Discover apps in this project ───────────────────────────────
+        # Two sources, unioned: root-level *.yml files (each filename stem
+        # is an app) AND subdir names under group_vars/ (each non-env
+        # subdir is an app). The user's confirmed layout uses the second
+        # form exclusively.
+        apps_set: set[str] = {p.stem for p in _yaml_files(project_dir)}
+        if gvars_dir is not None:
+            apps_set.update(_apps_from_group_vars(gvars_dir))
+
+        if not apps_set:
             warnings.append(
-                f"project '{project}' has no .yml / .yaml files at its root "
-                f"({len([p for p in project_dir.iterdir() if p.is_file()])} "
-                f"other files, "
-                f"{len([p for p in project_dir.iterdir() if p.is_dir()])} "
-                f"subdirs)"
+                f"project '{project}' produced 0 apps "
+                f"(group_vars: {gvars_origin}) — neither root .yml/.yaml "
+                f"files nor group_vars subdirs surfaced any app names"
             )
-        for inv_file in _app_files:
-            app = inv_file.stem
-            # Per-app group_vars live at the REPO root, not under the project
-            # directory (Ansible convention). Same for env-scoped vars.
-            app_vars = _load_yaml_dir(group_vars_root / app, warnings)
+            continue
+
+        # ── all-baseline for THIS project ──────────────────────────────
+        # When per-project group_vars exists, use ITS `all/`; otherwise
+        # fall back to the repo-root `group_vars/all/` already loaded.
+        if gvars_dir is not None and gvars_dir is not root_group_vars:
+            proj_all_vars = _load_yaml_dir(gvars_dir / "all", warnings)
+        else:
+            proj_all_vars = root_all_vars
+
+        for app in sorted(apps_set):
+            # Per-app and per-env vars from THIS project's group_vars.
+            if gvars_dir is not None:
+                app_vars = _load_yaml_dir(gvars_dir / app, warnings)
+            else:
+                app_vars = {}
             env_vars: dict[str, dict] = {}
-            for env in _INV_ENVIRONMENTS:
-                env_vars[env] = _load_yaml_dir(group_vars_root / f"{env}_{app}", warnings)
+            if gvars_dir is not None:
+                for env in _INV_ENVIRONMENTS:
+                    env_vars[env] = _load_yaml_dir(
+                        gvars_dir / f"{env}_{app}", warnings,
+                    )
+            else:
+                env_vars = {env: {} for env in _INV_ENVIRONMENTS}
 
-            # Merge precedence: all → app → env-specific (env-specific wins).
-            # We expose the app-level merge for the row's primary fields and
-            # the env-specific merges for image/team fields where it matters.
-            app_merged: dict = {**all_vars, **app_vars}
+            # Merge precedence: project's all → app → env-specific.
+            app_merged: dict = {**proj_all_vars, **app_vars}
 
-            # Teams: collect *_team keys from every level. Env-specific values
-            # override app-level for that env's team key, matching how
-            # ef-devops-inventory currently surfaces them.
+            # Teams: collect *_team keys from every level. Env-specific
+            # values override app-level for that env's team key.
             teams: dict[str, list[str]] = {}
-            for src in (all_vars, app_vars):
+            for src in (proj_all_vars, app_vars):
                 for k, v in (src or {}).items():
                     if k.endswith("_team") and v not in (None, "", []):
-                        teams[k] = sorted([str(x) for x in v]) if isinstance(v, list) else [str(v)]
+                        teams[k] = (
+                            sorted([str(x) for x in v]) if isinstance(v, list)
+                            else [str(v)]
+                        )
             for env, ev in env_vars.items():
                 for k, v in (ev or {}).items():
                     if k.endswith("_team") and v not in (None, "", []):
-                        teams[k] = sorted([str(x) for x in v]) if isinstance(v, list) else [str(v)]
-                # Also accept a bare `team` key under env_app and map it onto {env}_team.
+                        teams[k] = (
+                            sorted([str(x) for x in v]) if isinstance(v, list)
+                            else [str(v)]
+                        )
+                # Also accept a bare `team` key → maps onto {env}_team.
                 _bare = (ev or {}).get("team")
                 if _bare and not teams.get(f"{env}_team"):
-                    teams[f"{env}_team"] = [str(_bare)] if not isinstance(_bare, list) else sorted(str(x) for x in _bare)
+                    teams[f"{env}_team"] = (
+                        [str(_bare)] if not isinstance(_bare, list)
+                        else sorted(str(x) for x in _bare)
+                    )
 
-            # Image fields can be env-specific. Pick the best signal: prd
-            # first (production is the canonical version), then dev → qc →
-            # uat. Falls back to the app-level value if no env carries it.
             def _pick_env_field(field: str) -> str:
                 for env in ("prd", "uat", "qc", "dev"):
                     v = _resolve_field(env_vars.get(env, {}) or {}, field)
