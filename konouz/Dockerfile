@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && docker-php-ext-enable redis \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+COPY --from=composer:2.2 /usr/bin/composer /usr/bin/composer
 
 COPY docker/app/php.ini   /usr/local/etc/php/conf.d/zz-magento.ini
 COPY docker/app/www.conf  /usr/local/etc/php-fpm.d/www.conf
