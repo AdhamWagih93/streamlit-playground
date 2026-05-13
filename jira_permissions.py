@@ -1016,10 +1016,12 @@ all_scheme_names = [(int(s["id"]), s["name"]) for s in schemes]
 # ---------------------------------------------------------------------------
 # Stray-access analysis — per holder + per grant
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=300, show_spinner=False)
 def _build_index(_grants_dicts: list[dict]) -> dict:
-    """Compute several lookup structures over the grant set, once per
-    refresh. Cached against the raw dict list so Streamlit can hash it."""
+    """Compute several lookup structures over the grant set. NOT cached
+    via ``st.cache_data`` because the buckets contain ``Grant`` dataclass
+    instances which Streamlit's cache serializer rejects when nested
+    inside dict/list containers. The underlying ``all_grants()`` call is
+    already cached, so re-bucketing per render is cheap."""
     g_objs = _grants_as_objs(_grants_dicts)
 
     grants_by_user: dict[str, list[Grant]] = {}
