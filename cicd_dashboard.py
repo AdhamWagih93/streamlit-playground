@@ -2376,6 +2376,224 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: #065f46;
 }
 
+/* ── PEOPLE INSIGHTS PANEL ────────────────────────────────────────────────
+ * Inline section at the bottom of the inventory tab. Idle gate, then
+ * summary tiles + per-user table + team roll-up. Reuses the sync-check
+ * gate styling for the idle state. */
+.ppl-section-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 22px 0 10px 0;
+    padding: 6px 0;
+    font-family: var(--cc-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    border-bottom: 1px solid var(--cc-border);
+}
+.ppl-section-divider.ppl-section-divider--sub {
+    margin-top: 14px;
+    font-size: 0.7rem;
+}
+.ppl-section-divider-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    font-size: 0.95rem;
+}
+
+.ppl-gate {
+    text-align: center;
+    padding: 22px 22px 14px 22px;
+    margin: 4px 0 12px 0;
+    border-radius: 16px;
+    background: linear-gradient(180deg,
+                rgba(79,70,229,.05) 0%,
+                rgba(79,70,229,.01) 100%);
+    border: 1px dashed var(--cc-border-hi);
+}
+.ppl-gate-glyph {
+    font-size: 2.4rem;
+    line-height: 1;
+    opacity: .82;
+}
+.ppl-gate-title {
+    font-family: var(--cc-mono);
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    margin: 10px 0 6px 0;
+}
+.ppl-gate-body {
+    font-size: 0.82rem;
+    color: var(--cc-text-dim);
+    max-width: 600px;
+    margin: 0 auto;
+    line-height: 1.5;
+    text-align: left;
+}
+.ppl-gate-body b { color: var(--cc-accent); }
+.ppl-gate-body code {
+    font-family: var(--cc-mono);
+    background: var(--cc-surface2);
+    color: var(--cc-text);
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.74rem;
+    border: 1px solid var(--cc-border);
+}
+
+.ppl-empty {
+    padding: 16px 18px;
+    margin: 8px 0;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+    border-radius: 10px;
+    text-align: center;
+    color: var(--cc-text-mute);
+    font-size: 0.84rem;
+}
+
+.ppl-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    margin: 8px 0 12px 0;
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+}
+.ppl-tile {
+    text-align: center;
+    padding: 8px 6px;
+    background: var(--cc-surface2);
+    border-radius: 10px;
+    border: 1px solid var(--cc-border);
+}
+.ppl-tile.is-cnt {
+    background: rgba(79,70,229,.04);
+    border-color: rgba(79,70,229,.22);
+}
+.ppl-tile-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.ppl-tile-val {
+    font-family: var(--cc-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    line-height: 1.2;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+}
+.ppl-tile.is-cnt .ppl-tile-val { color: var(--cc-accent); }
+
+.ppl-table-wrap {
+    margin: 6px 0 4px 0;
+    overflow-x: auto;
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    background: var(--cc-surface);
+}
+.ppl-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+.ppl-table th {
+    text-align: left;
+    padding: 8px 10px;
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 700;
+    border-bottom: 1px solid var(--cc-border);
+    position: sticky;
+    top: 0;
+}
+.ppl-th-num { text-align: right; }
+.ppl-th-total { color: var(--cc-accent); }
+.ppl-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--cc-border);
+    vertical-align: top;
+}
+.ppl-table tbody tr:last-child td { border-bottom: none; }
+.ppl-table tbody tr:hover td { background: var(--cc-surface2); }
+.ppl-user-cell { min-width: 200px; }
+.ppl-user-name {
+    font-weight: 700;
+    color: var(--cc-text);
+    word-break: break-word;
+}
+.ppl-user-meta {
+    margin-top: 2px;
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    color: var(--cc-text-mute);
+}
+.ppl-email.is-missing { font-style: italic; opacity: .7; }
+.ppl-team-cell {
+    min-width: 180px;
+    max-width: 280px;
+}
+.ppl-team {
+    display: inline-block;
+    margin: 1px 3px 1px 0;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: var(--cc-teal-lt);
+    color: var(--cc-teal);
+    border: 1px solid rgba(13,148,136,.24);
+}
+.ppl-team.is-missing {
+    background: transparent;
+    border: 1px dashed var(--cc-border);
+    color: var(--cc-text-mute);
+    font-style: italic;
+}
+.ppl-num {
+    text-align: right;
+    font-family: var(--cc-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--cc-text);
+}
+.ppl-total {
+    font-weight: 700;
+    color: var(--cc-accent);
+}
+.ppl-overflow {
+    margin: 6px 0 0 0;
+    padding: 8px 12px;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+    font-size: 0.76rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+}
+
 /* Source-selector radio strip — admin-only inline control above the
  * source pill / banner. Tight + horizontal so it reads as a toggle, not a
  * full form. */
@@ -10077,6 +10295,268 @@ def _render_sync_value(val: Any, side: str) -> str:
     return f'<span class="sync-cell-val {side}">{html.escape(str(val))}</span>'
 
 
+# =============================================================================
+# PEOPLE INSIGHTS PANEL — per-user × per-team stats, smart-loaded
+# =============================================================================
+# Inline section at the bottom of the inventory tab. Aggregates per-user
+# activity across commits / jira / requests / approval, reconciled on
+# lowercased email (per the user's choice). Smart-loaded behind a button
+# so opening the inventory tab never pays the cost; once loaded, the
+# result is stashed in session_state until cleared or re-run.
+
+_PEOPLE_LOADED_KEY = "_people_insights_loaded_v1"
+
+
+def _render_people_insights_panel(start_dt, end_dt) -> None:
+    """Smart-loaded per-user activity panel. ``start_dt`` / ``end_dt`` are
+    the page-level time-window datetimes (from the rail). The fetcher
+    requires both scope-filter shapes (commits get the commit-specific
+    extras like service-account exclusion); we serialise them here so the
+    cached fetcher's args are picklable JSON strings."""
+    sf_list = list(scope_filters())
+    cs_list = list(commit_scope_filters())
+    sf_json = json.dumps(sf_list, sort_keys=True, default=str)
+    cs_json = json.dumps(cs_list, sort_keys=True, default=str)
+    start_iso = start_dt.astimezone(timezone.utc).isoformat()
+    end_iso = end_dt.astimezone(timezone.utc).isoformat()
+
+    st.markdown(
+        '<div class="ppl-section-divider">'
+        '  <span class="ppl-section-divider-glyph">👤</span>'
+        '  People insights — per-user activity across commits / jira / '
+        '  requests / approvals'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not st.session_state.get(_PEOPLE_LOADED_KEY):
+        st.markdown(
+            '<div class="ppl-gate">'
+            '  <div class="ppl-gate-glyph">👤</div>'
+            '  <div class="ppl-gate-title">Run people insights</div>'
+            '  <div class="ppl-gate-body">'
+            '    Aggregates per-user activity across the event indices for '
+            '    the <b>current scope</b> + the <b>active time window</b>, '
+            '    reconciled on canonical email address (commits supply '
+            '    most of the email ↔ name pairs; jira / requests / '
+            '    approvals merge in via name matching).<br/><br/>'
+            '    Counts surfaced per user: commits, jira authored, jira '
+            '    assigned, requests made, approvals, rejections.<br/>'
+            '    Team affiliation is inferred from jira <code>reporterteam</code> '
+            '    when present.'
+            '  </div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _g1, _g2, _g3 = st.columns([1, 2, 1])
+        with _g2:
+            if st.button("▶  Load people insights",
+                         key="_people_load_btn",
+                         type="primary",
+                         use_container_width=True):
+                with st.spinner("Aggregating per-user activity..."):
+                    st.session_state[_PEOPLE_LOADED_KEY] = (
+                        _fetch_users_aggregate(sf_json, cs_json,
+                                               start_iso, end_iso)
+                    )
+                st.rerun()
+        return
+
+    diff = st.session_state.get(_PEOPLE_LOADED_KEY) or {}
+    users = diff.get("users") or []
+    errors = diff.get("errors") or {}
+
+    # ── Control row ────────────────────────────────────────────────────────
+    _cc1, _cc2, _cc3 = st.columns([1, 1, 6])
+    with _cc1:
+        if st.button("↻ Re-run", key="_people_rerun_btn",
+                     use_container_width=True):
+            with st.spinner("Re-aggregating..."):
+                st.session_state[_PEOPLE_LOADED_KEY] = (
+                    _fetch_users_aggregate(sf_json, cs_json,
+                                           start_iso, end_iso)
+                )
+            st.rerun()
+    with _cc2:
+        if st.button("✕ Clear", key="_people_clear_btn",
+                     use_container_width=True):
+            st.session_state.pop(_PEOPLE_LOADED_KEY, None)
+            st.rerun()
+    with _cc3:
+        _ts = (diff.get("checked_at") or "").replace("T", " ")[:19]
+        st.caption(
+            f"comparison run at {_ts} UTC · canonical key: email · "
+            f"team affiliation from jira reporterteam"
+        )
+
+    if errors:
+        _err_lines = "".join(
+            f'<div class="sync-errs-line"><span class="sync-errs-k">'
+            f'{html.escape(k)}:</span><code>{html.escape(v)}</code></div>'
+            for k, v in errors.items() if v
+        )
+        if _err_lines:
+            st.markdown(
+                f'<div class="sync-errs">{_err_lines}</div>',
+                unsafe_allow_html=True,
+            )
+
+    if not users:
+        st.markdown(
+            '<div class="ppl-empty">No user activity found in the '
+            'current scope and time window. Widen the time window or '
+            'change the project / company filters to see results.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Summary tiles ──────────────────────────────────────────────────────
+    n_users = len(users)
+    n_with_team = sum(1 for u in users if u["teams"])
+    n_with_email = sum(1 for u in users if u["email"])
+    total_commits = sum(u["commits"] for u in users)
+    total_jira = sum(u["jira_authored"] + u["jira_assigned"] for u in users)
+    total_requests = sum(u["requests_made"] for u in users)
+    total_approvals = sum(u["approvals"] + u["rejections"] for u in users)
+    st.markdown(
+        f'<div class="ppl-summary">'
+        f'  <div class="ppl-tile"><div class="ppl-tile-lbl">Users</div>'
+        f'    <div class="ppl-tile-val">{n_users:,}</div></div>'
+        f'  <div class="ppl-tile"><div class="ppl-tile-lbl">With email</div>'
+        f'    <div class="ppl-tile-val">{n_with_email:,}</div></div>'
+        f'  <div class="ppl-tile"><div class="ppl-tile-lbl">With team</div>'
+        f'    <div class="ppl-tile-val">{n_with_team:,}</div></div>'
+        f'  <div class="ppl-tile is-cnt"><div class="ppl-tile-lbl">Commits</div>'
+        f'    <div class="ppl-tile-val">{total_commits:,}</div></div>'
+        f'  <div class="ppl-tile is-cnt"><div class="ppl-tile-lbl">Jira</div>'
+        f'    <div class="ppl-tile-val">{total_jira:,}</div></div>'
+        f'  <div class="ppl-tile is-cnt"><div class="ppl-tile-lbl">Requests</div>'
+        f'    <div class="ppl-tile-val">{total_requests:,}</div></div>'
+        f'  <div class="ppl-tile is-cnt"><div class="ppl-tile-lbl">Approvals</div>'
+        f'    <div class="ppl-tile-val">{total_approvals:,}</div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Per-user table — top 100 by total activity ─────────────────────────
+    _PPL_VIS_CAP = 100
+    visible = users[:_PPL_VIS_CAP]
+    rows_html: list[str] = []
+    for u in visible:
+        _names = " / ".join(u["names"]) if u["names"] else u["email"]
+        _email_chip = (
+            f'<span class="ppl-email">{html.escape(u["email"])}</span>'
+            if u["email"] else
+            '<span class="ppl-email is-missing">— no email —</span>'
+        )
+        _team_chips = " ".join(
+            f'<span class="ppl-team">{html.escape(t)}</span>'
+            for t in u["teams"]
+        ) if u["teams"] else '<span class="ppl-team is-missing">—</span>'
+        rows_html.append(
+            f'<tr>'
+            f'  <td class="ppl-user-cell">'
+            f'    <div class="ppl-user-name">{html.escape(_names)}</div>'
+            f'    <div class="ppl-user-meta">{_email_chip}</div>'
+            f'  </td>'
+            f'  <td class="ppl-team-cell">{_team_chips}</td>'
+            f'  <td class="ppl-num">{u["commits"]:,}</td>'
+            f'  <td class="ppl-num">{u["jira_authored"]:,}</td>'
+            f'  <td class="ppl-num">{u["jira_assigned"]:,}</td>'
+            f'  <td class="ppl-num">{u["requests_made"]:,}</td>'
+            f'  <td class="ppl-num">{u["approvals"]:,}</td>'
+            f'  <td class="ppl-num">{u["rejections"]:,}</td>'
+            f'  <td class="ppl-num ppl-total">{u["total"]:,}</td>'
+            f'</tr>'
+        )
+    overflow_note = ""
+    if len(users) > _PPL_VIS_CAP:
+        overflow_note = (
+            f'<div class="ppl-overflow">+{len(users) - _PPL_VIS_CAP} '
+            f'additional users not shown — narrow filters or shorten the '
+            f'time window to inspect them.</div>'
+        )
+    st.markdown(
+        f'<div class="ppl-table-wrap">'
+        f'  <table class="ppl-table">'
+        f'    <thead><tr>'
+        f'      <th class="ppl-th-user">User</th>'
+        f'      <th class="ppl-th-team">Team(s)</th>'
+        f'      <th class="ppl-th-num">Commits</th>'
+        f'      <th class="ppl-th-num">Jira auth.</th>'
+        f'      <th class="ppl-th-num">Jira assig.</th>'
+        f'      <th class="ppl-th-num">Requests</th>'
+        f'      <th class="ppl-th-num">Approvals</th>'
+        f'      <th class="ppl-th-num">Rejections</th>'
+        f'      <th class="ppl-th-num ppl-th-total">Total</th>'
+        f'    </tr></thead>'
+        f'    <tbody>{"".join(rows_html)}</tbody>'
+        f'  </table>'
+        f'</div>'
+        f'{overflow_note}',
+        unsafe_allow_html=True,
+    )
+
+    # ── Team aggregate roll-up — "user vs team" stat block ────────────────
+    by_team: dict[str, dict] = {}
+    for u in users:
+        # A user can be in 0..N teams; attribute their counts to every team
+        # they appear in (or to "(no team)" otherwise). Members count is
+        # distinct-by-key.
+        attrs = u["teams"] or ["(no team)"]
+        for t in attrs:
+            b = by_team.setdefault(t, {
+                "members": set(),
+                "commits": 0, "jira": 0, "requests": 0, "approvals": 0,
+            })
+            b["members"].add(u["key"])
+            b["commits"] += u["commits"]
+            b["jira"] += u["jira_authored"] + u["jira_assigned"]
+            b["requests"] += u["requests_made"]
+            b["approvals"] += u["approvals"] + u["rejections"]
+    team_rows = sorted(
+        by_team.items(),
+        key=lambda kv: (
+            -(kv[1]["commits"] + kv[1]["jira"] + kv[1]["requests"] + kv[1]["approvals"]),
+            kv[0].lower(),
+        ),
+    )
+    if team_rows:
+        _team_html: list[str] = []
+        for t, b in team_rows:
+            _team_html.append(
+                f'<tr>'
+                f'  <td class="ppl-user-cell"><div class="ppl-user-name">'
+                f'    {html.escape(t)}</div></td>'
+                f'  <td class="ppl-num">{len(b["members"]):,}</td>'
+                f'  <td class="ppl-num">{b["commits"]:,}</td>'
+                f'  <td class="ppl-num">{b["jira"]:,}</td>'
+                f'  <td class="ppl-num">{b["requests"]:,}</td>'
+                f'  <td class="ppl-num">{b["approvals"]:,}</td>'
+                f'</tr>'
+            )
+        st.markdown(
+            '<div class="ppl-section-divider ppl-section-divider--sub">'
+            '  <span class="ppl-section-divider-glyph">👥</span>'
+            '  Team roll-up — per-team aggregate across the same users'
+            '</div>'
+            f'<div class="ppl-table-wrap">'
+            f'  <table class="ppl-table">'
+            f'    <thead><tr>'
+            f'      <th class="ppl-th-user">Team</th>'
+            f'      <th class="ppl-th-num">Members</th>'
+            f'      <th class="ppl-th-num">Commits</th>'
+            f'      <th class="ppl-th-num">Jira</th>'
+            f'      <th class="ppl-th-num">Requests</th>'
+            f'      <th class="ppl-th-num">Approvals</th>'
+            f'    </tr></thead>'
+            f'    <tbody>{"".join(_team_html)}</tbody>'
+            f'  </table>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def _render_sync_check_panel(scope_json: str) -> None:
     """Admin-only sync-check panel. See section header for the UX contract."""
     # ── Idle gate ──────────────────────────────────────────────────────────
@@ -14627,6 +15107,262 @@ def _fetch_full_inventory(scope_json: str) -> list[dict]:
     return rows
 
 
+# =============================================================================
+# PER-USER AGGREGATION — reconciled across commits / jira / requests / approval
+# =============================================================================
+# Each index uses a different identity field — commits write
+# ``authormail`` + ``authorname``, jira writes ``assignee`` / ``creator`` /
+# ``reporter`` (often just a display name), requests/approvals write
+# ``Requester`` / ``RequestedBy`` / ``ApprovedBy`` / ``RejectedBy``. We
+# reconcile them on a canonical key per the user's choice:
+#
+#     canonical key = email.strip().lower()   when an email is present
+#                                              (commits is the primary
+#                                              source of email→name pairs)
+#                   = name.strip().lower()    otherwise
+#
+# A name→email index built from commits then merges name-only buckets
+# (jira / requests / approvals) into the email-keyed bucket on best-effort.
+# Team affiliation is harvested from jira's ``reporterteam`` /
+# ``projectleadteam`` fields when present.
+#
+# Cached by scope + time window. The aggregations use ``composite`` so we
+# can pair (identity, related-attribute) without two round-trips per index.
+
+_USERS_AGG_BUCKET_CAP = 5000  # per index — bounds memory even on noisy fleets
+
+
+def _users_term_size(es_index: str, field: str) -> int:
+    """Single knob for per-index ``terms`` agg size. We currently use a flat
+    cap, but kept centralised in case different indices need different
+    ceilings later."""
+    return _USERS_AGG_BUCKET_CAP
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_users_aggregate(
+    scope_filters_json: str,
+    commit_scope_json: str,
+    start_iso: str,
+    end_iso: str,
+) -> dict:
+    """Aggregate per-user activity across event indices.
+
+    Returns ``{"users": [...], "errors": {...}, "checked_at": iso}`` where
+    each user dict carries:
+
+        {
+          "key":           canonical key (email_lower or name_lower)
+          "email":         resolved email (may be "")
+          "names":         sorted distinct display names seen
+          "label":         preferred display label (first non-empty name)
+          "teams":         sorted distinct teams (inferred from jira)
+          "commits":       int,
+          "jira_authored": int (creator/reporter)
+          "jira_assigned": int
+          "requests_made": int
+          "approvals":     int
+          "rejections":    int
+          "total":         sum of the above (for ranking)
+        }
+    """
+    start = parse_dt(start_iso)
+    end = parse_dt(end_iso)
+    if start is None or end is None:
+        return {"users": [], "errors": {"window": "invalid time window"},
+                "checked_at": datetime.now(timezone.utc).isoformat()}
+
+    try:
+        scope_filters_list = json.loads(scope_filters_json or "[]")
+    except Exception:
+        scope_filters_list = []
+    try:
+        commit_scope_list = json.loads(commit_scope_json or "[]")
+    except Exception:
+        commit_scope_list = scope_filters_list
+
+    errors: dict[str, str] = {}
+    users: dict[str, dict] = {}
+    name_to_email: dict[str, str] = {}
+
+    def _norm(s: Any) -> str:
+        return (str(s).strip().lower()) if s else ""
+
+    def _canonical_key(email: str, name: str) -> str:
+        return _norm(email) or _norm(name)
+
+    def _ensure(email: str, name: str) -> dict:
+        key = _canonical_key(email, name)
+        if not key:
+            return {}
+        u = users.setdefault(key, {
+            "key": key, "email": "", "names": set(), "teams": set(),
+            "commits": 0, "jira_authored": 0, "jira_assigned": 0,
+            "requests_made": 0, "approvals": 0, "rejections": 0,
+        })
+        if email and not u["email"]:
+            u["email"] = _norm(email)
+        if name:
+            u["names"].add(str(name).strip())
+        return u
+
+    # ── 1. COMMITS — primary source of (email, name) pairs ────────────────
+    try:
+        r = es_search(
+            IDX["commits"],
+            {
+                "query": {"bool": {"filter": list(commit_scope_list)
+                                   + [range_filter("commitdate", start, end)]}},
+                "size": 0,
+                "aggs": {
+                    "by_user": {
+                        "composite": {
+                            "size": _users_term_size(IDX["commits"], "authormail.keyword"),
+                            "sources": [
+                                {"email": {"terms": {"field": "authormail.keyword",
+                                                     "missing_bucket": True}}},
+                                {"name":  {"terms": {"field": "authorname.keyword",
+                                                     "missing_bucket": True}}},
+                            ],
+                        }
+                    }
+                },
+            },
+        )
+        for b in r.get("aggregations", {}).get("by_user", {}).get("buckets", []):
+            k = b.get("key") or {}
+            email = (k.get("email") or "").strip()
+            name = (k.get("name") or "").strip()
+            if not email and not name:
+                continue
+            u = _ensure(email, name)
+            u["commits"] += int(b.get("doc_count", 0))
+            if email and name:
+                name_to_email[name.strip().lower()] = email.strip().lower()
+    except Exception as e:
+        errors["commits"] = f"{type(e).__name__}: {e}"
+
+    # ── 2. JIRA — assignee + reporter + creator (no email field; uses
+    # display-name keys keyword fields per platform schema). Capture
+    # `reporterteam` to build user → team mapping.
+    def _bucket_into(index_key, identity_field, team_field, ctr_attr,
+                     filters, time_field):
+        try:
+            sources = [
+                {"id": {"terms": {"field": identity_field,
+                                  "missing_bucket": True}}},
+            ]
+            if team_field:
+                sources.append({"team": {"terms": {"field": team_field,
+                                                   "missing_bucket": True}}})
+            r = es_search(
+                IDX[index_key],
+                {
+                    "query": {"bool": {"filter": list(filters)
+                                       + [range_filter(time_field, start, end)]}},
+                    "size": 0,
+                    "aggs": {"by_user": {"composite": {
+                        "size": _users_term_size(IDX[index_key], identity_field),
+                        "sources": sources,
+                    }}},
+                },
+            )
+            for b in r.get("aggregations", {}).get("by_user", {}).get("buckets", []):
+                k = b.get("key") or {}
+                ident = (k.get("id") or "").strip()
+                tm = (k.get("team") or "").strip() if team_field else ""
+                if not ident:
+                    continue
+                # Reconcile name → email when commits saw the same person
+                email = name_to_email.get(ident.lower(), "")
+                u = _ensure(email, ident)
+                u[ctr_attr] += int(b.get("doc_count", 0))
+                if tm:
+                    u["teams"].add(tm)
+        except Exception as e:
+            errors[f"{index_key}_{ctr_attr}"] = f"{type(e).__name__}: {e}"
+
+    _bucket_into("jira", "assignee", "reporterteam", "jira_assigned",
+                 scope_filters_list, "created")
+    _bucket_into("jira", "reporter", "reporterteam", "jira_authored",
+                 scope_filters_list, "created")
+
+    # ── 3. REQUESTS — Requester field is typically a name string
+    _bucket_into("requests", "Requester.keyword", "", "requests_made",
+                 scope_filters_list, "RequestDate")
+
+    # ── 4. APPROVAL — split approvals vs rejections by separate aggs on
+    # ApprovedBy / RejectedBy. Each carries the user identity directly.
+    _bucket_into("approval", "ApprovedBy.keyword", "", "approvals",
+                 scope_filters_list, "RequestDate")
+    _bucket_into("approval", "RejectedBy.keyword", "", "rejections",
+                 scope_filters_list, "RequestDate")
+    _bucket_into("approval", "RequestedBy.keyword", "", "requests_made",
+                 scope_filters_list, "RequestDate")
+
+    # ── Final reconciliation pass — merge name-only buckets into
+    # email-keyed buckets where the name has a known email from commits.
+    if name_to_email:
+        rekey: list[tuple[str, str]] = []
+        for k, u in list(users.items()):
+            if u["email"]:
+                continue
+            # Look for a known email matching any of the user's names
+            for nm in u["names"]:
+                em = name_to_email.get(nm.strip().lower())
+                if em:
+                    rekey.append((k, em))
+                    break
+        for old_key, em in rekey:
+            if old_key not in users:
+                continue
+            src = users.pop(old_key)
+            dst = users.setdefault(em, {
+                "key": em, "email": em, "names": set(), "teams": set(),
+                "commits": 0, "jira_authored": 0, "jira_assigned": 0,
+                "requests_made": 0, "approvals": 0, "rejections": 0,
+            })
+            dst["email"] = em
+            dst["names"].update(src["names"])
+            dst["teams"].update(src["teams"])
+            for fld in ("commits", "jira_authored", "jira_assigned",
+                        "requests_made", "approvals", "rejections"):
+                dst[fld] += src[fld]
+            dst["key"] = em
+
+    # Finalise — convert sets → sorted lists, compute totals, pick label.
+    out_users: list[dict] = []
+    for u in users.values():
+        names_sorted = sorted(u["names"])
+        teams_sorted = sorted(u["teams"])
+        total = (
+            u["commits"] + u["jira_authored"] + u["jira_assigned"]
+            + u["requests_made"] + u["approvals"] + u["rejections"]
+        )
+        if total == 0:
+            continue
+        out_users.append({
+            "key":           u["key"],
+            "email":         u["email"],
+            "names":         names_sorted,
+            "label":         names_sorted[0] if names_sorted else (u["email"] or u["key"]),
+            "teams":         teams_sorted,
+            "commits":       u["commits"],
+            "jira_authored": u["jira_authored"],
+            "jira_assigned": u["jira_assigned"],
+            "requests_made": u["requests_made"],
+            "approvals":     u["approvals"],
+            "rejections":    u["rejections"],
+            "total":         total,
+        })
+    out_users.sort(key=lambda u: (-u["total"], u["label"].lower()))
+    return {
+        "users":       out_users,
+        "errors":      errors,
+        "checked_at":  datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_inv_pulse(apps_json: str, days: int = 14,
                      exclude_test: bool = True) -> dict:
@@ -18258,6 +18994,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         + _iv_popovers_html,
         unsafe_allow_html=True,
     )
+
+    # ── People insights — per-user × per-team stats, smart-loaded ───────────
+    # Renders below the table so it never pushes inventory data off-screen.
+    # Fires zero ES queries until the operator clicks "▶ Load people insights".
+    _render_people_insights_panel(start_dt, end_dt)
+
     # End of body_slot; the tab panel closes here.
     _body_container.__exit__(None, None, None)
 
