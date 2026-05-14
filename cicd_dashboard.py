@@ -83,6 +83,15 @@ try:
 except ImportError:  # pragma: no cover
     _ldap_mod = None  # type: ignore
     _LDAP_AVAILABLE = False
+try:
+    # Reuse the platform's S3 wrapper wholesale — it already handles
+    # MinIO/Ceph addressing styles, custom CA bundles, multipart
+    # transfer config, signature_version, addressing_style, etc.
+    from utils.s3 import S3Client as _S3Client  # type: ignore
+    _S3CLIENT_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _S3Client = None  # type: ignore
+    _S3CLIENT_AVAILABLE = False
 # Postgres driver — psycopg v3 is preferred; fall back to v2 since both
 # are common in this org. Either is fine for our read-only access.
 try:
@@ -233,7 +242,9 @@ JENKINS_TTL = 30      # seconds — how long status results are cached
 # Bucket name and the object-key template stay env-driven — they aren't
 # secrets, and they're typically per-environment configuration the operator
 # wants to retarget without touching vault entries.
-PRISMA_S3_VAULT_PATH = os.environ.get("PRISMA_S3_VAULT_PATH", "s3/prisma").strip()
+# S3 vault entry lives at path "s3" (matches the platform's utils.s3
+# convention). NOT "s3/prisma" — there's no per-service subpath.
+PRISMA_S3_VAULT_PATH = os.environ.get("PRISMA_S3_VAULT_PATH", "s3").strip()
 # Defaults baked in per the platform's confirmed layout — env vars only
 # need to be set when retargeting (e.g. against a non-prod bucket).
 PRISMA_S3_BUCKET = os.environ.get("PRISMA_S3_BUCKET", "PrismaCloud-Logs").strip()
@@ -10257,25 +10268,27 @@ def _integrations_health() -> list[dict]:
             "tip": "Set PRISMA_S3_BUCKET to enable.",
         })
     else:
-        s3_creds = _prisma_s3_creds()
-        if not s3_creds:
-            err = _vault_last_error(PRISMA_S3_VAULT_PATH)
+        s3_status = _prisma_s3_status()
+        if not s3_status["ok"]:
+            v_err = _vault_last_error(PRISMA_S3_VAULT_PATH)
             out.append({
                 "key": "s3", "label": "S3 (prisma)", "glyph": "⛟",
                 "state": "down",
-                "detail": "creds unresolved",
+                "detail": "S3 client not initialised",
                 "tip": (
-                    err
-                    or f"No vault entry at {PRISMA_S3_VAULT_PATH!r}."
+                    s3_status["error"] or v_err
+                    or f"S3Client(vault_path={PRISMA_S3_VAULT_PATH!r}) failed."
                 ),
             })
         else:
-            ep = _prisma_s3_endpoint(s3_creds["host"], s3_creds["port"])
             out.append({
                 "key": "s3", "label": "S3 (prisma)", "glyph": "⛟",
                 "state": "ok",
                 "detail": "ready",
-                "tip": f"endpoint: {ep} · bucket: {PRISMA_S3_BUCKET}",
+                "tip": (
+                    f"endpoint: {s3_status['endpoint']} · "
+                    f"bucket: {PRISMA_S3_BUCKET}"
+                ),
             })
 
     # 6. Postgres devops_projects — only meaningful when configured.
@@ -11569,41 +11582,42 @@ def _render_prisma_scan_viewer() -> None:
             '  <div class="psv-empty-glyph">🔬</div>'
             '  <div class="psv-empty-title">Prisma scan viewer not configured</div>'
             '  <div class="psv-empty-body">Set <code>PRISMA_S3_BUCKET</code> '
-            '  (and optionally <code>PRISMA_S3_KEY_PATTERN</code> / '
-            '  <code>PRISMA_S3_REGION</code>) in the environment, plus a '
-            '  vault entry at <code>' + html.escape(PRISMA_S3_VAULT_PATH) +
-            '  </code> with <code>host</code>, <code>port</code>, '
-            '  <code>access_key</code>, <code>secret_key</code>. While '
-            '  unconfigured the panel costs nothing.</div>'
+            '  (and optionally <code>PRISMA_S3_KEY_PATTERN</code>) in the '
+            '  environment. The S3 connection itself is read by '
+            '  <code>utils.s3.S3Client</code> from vault at '
+            '  <code>' + html.escape(PRISMA_S3_VAULT_PATH) + '</code>.</div>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
-    s3_creds = _prisma_s3_creds()
-    if not s3_creds:
-        _v_err = _vault_last_error(PRISMA_S3_VAULT_PATH)
+    _s3_status = _prisma_s3_status()
+    if not _s3_status["ok"]:
+        _err = _s3_status["error"] or _vault_last_error(PRISMA_S3_VAULT_PATH)
         _err_block = (
             '<div class="psv-empty-err">'
-            '  <span class="psv-empty-err-k">Vault error:</span>'
-            f'  <code>{html.escape(_v_err)}</code>'
+            '  <span class="psv-empty-err-k">S3 client error:</span>'
+            f'  <code>{html.escape(_err)}</code>'
             '</div>'
-            if _v_err else ""
+            if _err else ""
         )
         st.markdown(
             '<div class="psv-empty">'
             '  <div class="psv-empty-glyph">🔐</div>'
-            '  <div class="psv-empty-title">S3 credentials not resolved</div>'
-            '  <div class="psv-empty-body">No vault entry found at '
-            '  <code>' + html.escape(PRISMA_S3_VAULT_PATH) + '</code>. '
+            '  <div class="psv-empty-title">S3 client could not be initialised</div>'
+            '  <div class="psv-empty-body">'
+            '  The platform <code>utils.s3.S3Client</code> reads its config '
+            '  from vault at <code>' + html.escape(PRISMA_S3_VAULT_PATH) + '</code>. '
             '  Expected keys: <code>host</code>, <code>port</code>, '
             '  <code>access_key</code>, <code>secret_key</code> '
-            '  (or <code>secret_id</code>).</div>'
+            '  (or <code>secret_id</code>); optional <code>scheme</code>, '
+            '  <code>region</code>, <code>verify</code>, '
+            '  <code>ca_bundle</code>, <code>addressing_style</code>.</div>'
             + _err_block +
             '</div>',
             unsafe_allow_html=True,
         )
         return
-    s3_endpoint = _prisma_s3_endpoint(s3_creds["host"], s3_creds["port"])
+    s3_endpoint = _s3_status["endpoint"]
 
     apps, app_to_project, app_to_versions = _psv_inventory_options()
     if not apps:
@@ -11681,8 +11695,7 @@ def _render_prisma_scan_viewer() -> None:
     # ── Fetch on demand ────────────────────────────────────────────────────
     if load and app and version:
         html_doc, size, err = _fetch_prisma_scan_html(
-            PRISMA_S3_BUCKET, s3_key, s3_endpoint, PRISMA_S3_REGION,
-            s3_creds["access_key"], s3_creds["secret_key"],
+            PRISMA_S3_BUCKET, s3_key,
         )
         if err:
             inline_note(
@@ -15229,40 +15242,42 @@ def _fetch_devops_projects_from_postgres() -> tuple[list[dict], str]:
                 pass
 
 
-def _prisma_s3_creds() -> dict:
-    """Resolved S3 connection details for the scan-viewer bucket. Empty
-    dict means "not configured" — viewer renders an actionable empty-state
-    instead of trying to fetch."""
-    cfg = _vault_secrets(PRISMA_S3_VAULT_PATH)
-    if not cfg:
-        return {}
-    host = (cfg.get("host") or "").strip()
-    if not host:
-        return {}
+@st.cache_resource(show_spinner=False)
+def _prisma_s3_client():
+    """One-per-process S3Client backed by the platform's utils.s3 wrapper.
+
+    The wrapper handles vault reads, MinIO/Ceph addressing styles, CA-bundle
+    plumbing, multipart transfer config, retries, etc. We just instantiate
+    it on demand and cache the instance. Returns ``(client, "")`` on
+    success or ``(None, error_str)`` on any failure (vault unreachable,
+    bad creds, ImportError when boto3 wasn't installed yet)."""
+    if not _S3CLIENT_AVAILABLE:
+        return None, "utils.s3 not importable"
+    try:
+        return _S3Client(vault_path=PRISMA_S3_VAULT_PATH), ""
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _prisma_s3_status() -> dict:
+    """Lightweight snapshot of S3 connectivity for the integrations strip /
+    Scan Viewer empty-state — surfaces whether ``utils.s3.S3Client`` was
+    available, whether the constructor succeeded, and the resolved
+    endpoint URL when it did."""
+    client, err = _prisma_s3_client()
+    if not client:
+        return {
+            "ok":           False,
+            "error":        err,
+            "endpoint":     "",
+            "access_key":   "",
+        }
     return {
-        "host":       host,
-        "port":       str(cfg.get("port") or "443").strip(),
-        "access_key": (cfg.get("access_key") or "").strip(),
-        # The platform mixes naming conventions — `secret_key` is canonical
-        # but some entries write `secret_id`. Accept either.
-        "secret_key": (cfg.get("secret_key") or cfg.get("secret_id") or "").strip(),
+        "ok":           True,
+        "error":        "",
+        "endpoint":     getattr(client, "endpoint_url", "") or "",
+        "access_key":   getattr(client, "access_key_id", "") or "",
     }
-
-
-def _prisma_s3_endpoint(host: str, port: str) -> str:
-    """Build an S3-compatible endpoint URL from host + port. Defaults to
-    HTTPS; only port 80 produces an HTTP URL. The host string may already
-    include a scheme — we trust that and pass it through unchanged."""
-    if not host:
-        return ""
-    if host.startswith(("http://", "https://")):
-        return host.rstrip("/")
-    p = (port or "443").strip()
-    if p == "80":
-        return f"http://{host}"
-    if p in ("", "443"):
-        return f"https://{host}"
-    return f"https://{host}:{p}"
 
 
 # =============================================================================
@@ -15571,60 +15586,51 @@ def _prisma_scan_console_url(endpoint: str, bucket: str, key: str) -> str:
 
 
 @st.cache_data(ttl=PRISMA_SCAN_TTL, show_spinner=False, max_entries=20)
-def _fetch_prisma_scan_html(
-    bucket: str, key: str, endpoint: str, region: str,
-    access_key: str, secret_key: str,
-) -> tuple[str, int, str]:
-    """Fetch the HTML report for one ``(bucket, key)`` pair against the
-    S3-compatible ``endpoint`` (host:port pulled from vault).
-
-    Returns ``(html, content_length, error)``. On success ``error`` is empty;
-    on failure ``html`` is empty and ``error`` carries a short label suitable
-    for the viewer's error banner.
+def _fetch_prisma_scan_html(bucket: str, key: str) -> tuple[str, int, str]:
+    """Fetch the scan file for one ``(bucket, key)`` pair via the
+    platform's :class:`utils.s3.S3Client`. Returns
+    ``(text, content_length, error)``. On success ``error`` is empty;
+    on failure ``text`` is empty and ``error`` carries a short label
+    suitable for the viewer's error banner.
 
     Cache settings:
       - ``ttl``         : reports are immutable per (app, version), so a
                           long TTL is safe; 10 minutes lets us absorb retries.
       - ``max_entries`` : 20 — bounds memory if a user pages through many
-                          scans in a single session. The least-recently-used
-                          entry is evicted automatically by Streamlit.
+                          scans in a single session. LRU eviction handled
+                          by Streamlit.
 
-    All credential fields are part of the cache key so a vault rotation
-    invalidates the cached scans on the next read.
+    Connection details aren't part of the cache key — the S3Client is a
+    process-level cached resource, so a vault rotation requires
+    refreshing that resource (or restarting the process). Within a single
+    session the credentials are stable, which is the relevant invariant
+    for this cache.
     """
-    if not _BOTO3_AVAILABLE:
-        return "", 0, "boto3 not installed (pip install boto3)"
+    if not _S3CLIENT_AVAILABLE:
+        return "", 0, "utils.s3 not importable"
     if not bucket or not key:
         return "", 0, "S3 bucket / key not configured"
-    if not endpoint:
-        return "", 0, "S3 endpoint not resolved (check vault path)"
+    client, err = _prisma_s3_client()
+    if not client or err:
+        return "", 0, err or "S3 client not initialised"
     try:
-        # ``endpoint_url`` lets boto3 talk to S3-compatible services (MinIO,
-        # Ceph, etc.). We don't pass a session_token — the vault here
-        # exposes only access_key + secret_key, which is the access pattern
-        # for static service credentials.
-        s3 = _boto3.client(
-            "s3",
-            region_name=region or "us-east-1",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key or None,
-            aws_secret_access_key=secret_key or None,
-        )
+        # The S3Client exposes a private ``_client`` (boto3) attribute per
+        # the platform's convention. We use ``get_object`` directly so
+        # we don't depend on any higher-level method that may or may not
+        # exist; this is the lowest-friction path.
+        s3 = getattr(client, "_client", None) or client
         obj = s3.get_object(Bucket=bucket, Key=key)
         body_bytes = obj["Body"].read()
         size = int(obj.get("ContentLength") or len(body_bytes))
-        # decode with replace so a single bad byte in the report doesn't
-        # blow up rendering — viewers tolerate substituted glyphs better
-        # than a stack trace.
         return body_bytes.decode("utf-8", errors="replace"), size, ""
-    except _BotoClientError as e:
-        err = e.response.get("Error", {}) if hasattr(e, "response") else {}
-        code = err.get("Code") or "ClientError"
-        return "", 0, f"S3 {code}: {err.get('Message') or '(no detail)'}"
-    except _BotoCoreError as e:
-        return "", 0, f"S3 connection: {type(e).__name__}"
     except Exception as e:
-        return "", 0, f"unexpected: {type(e).__name__}: {e}"
+        # Surface boto3 ClientError specifics when available.
+        _resp = getattr(e, "response", None)
+        if isinstance(_resp, dict):
+            _err = _resp.get("Error") or {}
+            _code = _err.get("Code") or type(e).__name__
+            return "", 0, f"S3 {_code}: {_err.get('Message') or e}"
+        return "", 0, f"{type(e).__name__}: {e}"
 
 
 # =============================================================================
