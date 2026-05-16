@@ -16141,6 +16141,116 @@ def _ldap_team_members(team_cn: str) -> list[str]:
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _ldap_user_info_cached(username: str) -> dict:
+    """Cached wrapper around ``utils.ldap.get_user_info(username)`` —
+    keyed on the sAMAccountName so repeated calls reuse the result.
+    ``utils.ldap`` already memoises via ``@st.cache_data`` but we add
+    our own layer so missing-user lookups also cache (the original
+    raises silently and re-tries every call)."""
+    if not _LDAP_AVAILABLE or not username:
+        return {}
+    try:
+        info = _ldap_mod.get_user_info(username)
+        return dict(info) if isinstance(info, dict) else {}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _resolve_ldap_users_from_teams(team_cns_tuple: tuple[str, ...]) -> dict:
+    """LDAP-first user discovery: for each team CN, fetch the roster via
+    ``get_team_members`` and resolve each member to a fully-enriched
+    user record (email / display name / department / etc).
+
+    Returned shape:
+
+        {
+          "users": {
+            sAMAccountName_lower: {
+              "username":   sAMAccountName,
+              "email":      "...",
+              "label":      display name (or sAMAccountName fallback),
+              "names":      [display name, sAMAccountName],
+              "teams":      [team_cn, ...],
+              "title":      "...",
+              "department": "...",
+              "company":    "...",
+              "manager":    "...",
+            },
+            ...
+          },
+          "team_rosters": {team_cn: [sAMAccountName, ...]},
+          "errors":      {team_cn: "ldap error msg"},
+        }
+
+    Cached on the sorted tuple of team CNs — when team scope changes,
+    re-resolves. The underlying ``utils.ldap`` calls are themselves
+    cached for 5 hours, so on a warm cache this is near-free."""
+    out_users: dict[str, dict] = {}
+    team_rosters: dict[str, list[str]] = {}
+    errors: dict[str, str] = {}
+    if not _LDAP_AVAILABLE or not team_cns_tuple:
+        return {"users": {}, "team_rosters": {}, "errors": errors}
+
+    for team_cn in team_cns_tuple:
+        try:
+            members = _ldap_team_members(team_cn) or []
+        except Exception as e:
+            errors[team_cn] = f"{type(e).__name__}: {e}"
+            members = []
+        team_rosters[team_cn] = list(members)
+        for username in members:
+            if not username:
+                continue
+            key = username.strip().lower()
+            if not key:
+                continue
+            u = out_users.setdefault(key, {
+                "username":   username.strip(),
+                "email":      "",
+                "label":      username.strip(),
+                "names":      set(),
+                "teams":      set(),
+                "title":      "",
+                "department": "",
+                "company":    "",
+                "manager":    "",
+            })
+            u["teams"].add(team_cn)
+            u["names"].add(username.strip())
+            # Lazy enrichment — only fetch info when we haven't filled
+            # the email yet (key absent or empty). Subsequent team
+            # iterations for the same user reuse the cached info.
+            if not u["email"]:
+                info = _ldap_user_info_cached(username)
+                if info:
+                    if info.get("email"):
+                        u["email"] = str(info["email"]).strip().lower()
+                    _disp = info.get("username") or username
+                    u["label"] = str(_disp).strip() or username.strip()
+                    u["title"]      = (info.get("title") or "").strip()
+                    u["department"] = (info.get("department") or "").strip()
+                    u["company"]    = (
+                        info.get("ldapcompany") or info.get("company") or ""
+                    ).strip()
+                    u["manager"]    = (info.get("manager") or "").strip()
+                    # Add the display name as another alias for ES matching.
+                    if _disp and _disp not in u["names"]:
+                        u["names"].add(str(_disp).strip())
+
+    # Convert sets → sorted lists for serialisation.
+    for u in out_users.values():
+        u["names"] = sorted({n for n in u["names"] if n})
+        u["teams"] = sorted(u["teams"])
+
+    return {
+        "users":        out_users,
+        "team_rosters": team_rosters,
+        "errors":       errors,
+    }
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_inv_pulse(apps_json: str, days: int = 14,
                      exclude_test: bool = True) -> dict:
     """Daily build + PRD-deploy activity for the given application scope.
@@ -16780,10 +16890,178 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _users_blob = _fetch_users_aggregate(
         _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
     )
-    # LDAP enrichment — populates ldap_* slots per user. Caching is
-    # handled inside utils.ldap (`get_user_info` is @st.cache_data
-    # ttl=18000), so the enrichment overhead is bounded across reruns.
-    _users_blob = _ldap_enrich_users(_users_blob)
+    # LDAP-FIRST USER DISCOVERY ─────────────────────────────────────────────
+    # The ES aggregator only surfaces people who had activity in the
+    # current window. LDAP team rosters are the authoritative count —
+    # ALL members of every team that appears in inventory, whether or
+    # not they did anything in this window. We resolve those team
+    # rosters first, then merge ES activity counts into each LDAP
+    # record by matching on email (canonical) or any known display name.
+    _ldap_team_set: set[str] = set()
+    for _r in _inv_rows_all:
+        for _t in _iv_row_teams(_r):
+            _ldap_team_set.add(_t)
+    _ldap_blob = _resolve_ldap_users_from_teams(
+        tuple(sorted(_ldap_team_set)),
+    ) if _ldap_team_set else {"users": {}, "team_rosters": {}, "errors": {}}
+
+    _users_list_es: list[dict] = list(_users_blob.get("users") or [])
+    # Indices for matching LDAP users against ES activity rows.
+    _es_by_email = {
+        u["email"]: u for u in _users_list_es if u.get("email")
+    }
+    _es_by_name: dict[str, dict] = {}
+    for u in _users_list_es:
+        for nm in u.get("names") or []:
+            _es_by_name.setdefault(nm.strip().lower(), u)
+    # Default zero-activity record shape — must match every counter the
+    # rest of the dashboard reads, so LDAP-only users still slot into
+    # tables / popovers without missing-key errors.
+    def _zero_record() -> dict:
+        return {
+            "key": "", "email": "", "names": [], "label": "",
+            "teams": [], "commits": 0, "jira_authored": 0,
+            "jira_assigned": 0, "requests_made": 0,
+            "approvals": 0, "rejections": 0,
+            "builds_requested": 0, "builds_approved": 0,
+            "deploys_requested": 0, "deploys_approved": 0,
+            "total": 0,
+            "ldap_title": "", "ldap_department": "",
+            "ldap_company": "", "ldap_manager": "", "ldap_username": "",
+        }
+
+    for _ldap_user in (_ldap_blob.get("users") or {}).values():
+        _l_email = (_ldap_user.get("email") or "").strip().lower()
+        _l_names = _ldap_user.get("names") or []
+        # Try to find a matching ES-side record (by email, then by any
+        # known name). When found, enrich it with LDAP fields. When
+        # missing, append a fresh zero-activity record so the LDAP user
+        # still counts.
+        _match: dict | None = None
+        if _l_email and _l_email in _es_by_email:
+            _match = _es_by_email[_l_email]
+        if _match is None:
+            for _nm in _l_names:
+                _key = _nm.strip().lower()
+                if _key and _key in _es_by_name:
+                    _match = _es_by_name[_key]
+                    break
+        if _match is not None:
+            # Enrich existing record with LDAP fields + team set.
+            _match["ldap_username"]   = _ldap_user.get("username") or ""
+            _match["ldap_title"]      = _ldap_user.get("title") or ""
+            _match["ldap_department"] = _ldap_user.get("department") or ""
+            _match["ldap_company"]    = _ldap_user.get("company") or ""
+            _match["ldap_manager"]    = _ldap_user.get("manager") or ""
+            # Union LDAP team membership with the ES-derived teams.
+            _existing_teams = set(_match.get("teams") or [])
+            _match["teams"] = sorted(
+                _existing_teams | set(_ldap_user.get("teams") or [])
+            )
+            # Union the alias set.
+            _existing_names = set(_match.get("names") or [])
+            _match["names"] = sorted(
+                _existing_names | set(_l_names)
+            )
+            if not _match.get("email") and _l_email:
+                _match["email"] = _l_email
+        else:
+            _new = _zero_record()
+            _new["email"]   = _l_email
+            _new["names"]   = sorted(_l_names)
+            _new["label"]   = _ldap_user.get("label") or (
+                (_l_names[0] if _l_names else _l_email
+                 or _ldap_user.get("username") or "")
+            )
+            _new["teams"]   = sorted(_ldap_user.get("teams") or [])
+            _new["ldap_username"]   = _ldap_user.get("username") or ""
+            _new["ldap_title"]      = _ldap_user.get("title") or ""
+            _new["ldap_department"] = _ldap_user.get("department") or ""
+            _new["ldap_company"]    = _ldap_user.get("company") or ""
+            _new["ldap_manager"]    = _ldap_user.get("manager") or ""
+            _new["key"] = (
+                _l_email or (_new["label"] or "").strip().lower()
+                or _new["ldap_username"].lower()
+            )
+            _users_list_es.append(_new)
+
+    # ES-side users that did NOT match an LDAP user still get the
+    # standard LDAP enrichment pass (best-effort directory lookup by
+    # email — handles people on teams that aren't in the inventory's
+    # scope, or whose team string doesn't resolve via LDAP).
+    for _u in _users_list_es:
+        if _u.get("ldap_username"):
+            continue
+        if not _u.get("email"):
+            continue
+        info = _ldap_user_info_cached(_u.get("ldap_username") or "")
+        if info:
+            _u["ldap_username"]   = info.get("username") or ""
+            _u["ldap_title"]      = info.get("title") or ""
+            _u["ldap_department"] = info.get("department") or ""
+            _u["ldap_company"]    = (
+                info.get("ldapcompany") or info.get("company") or ""
+            )
+            _u["ldap_manager"]    = info.get("manager") or ""
+
+    # Final dedupe + sort: collapse any duplicates that crept in via
+    # both an email-keyed bucket AND a name-keyed bucket. Last-write
+    # wins on the union of fields; counters survive.
+    _users_dedup: dict[str, dict] = {}
+    for _u in _users_list_es:
+        _k = _u.get("email") or _u.get("ldap_username") or _u.get("key") or ""
+        _k = _k.strip().lower()
+        if not _k:
+            continue
+        if _k in _users_dedup:
+            _existing = _users_dedup[_k]
+            for _fld in ("commits", "jira_authored", "jira_assigned",
+                         "requests_made", "approvals", "rejections",
+                         "builds_requested", "builds_approved",
+                         "deploys_requested", "deploys_approved"):
+                _existing[_fld] = (
+                    _existing.get(_fld, 0) + _u.get(_fld, 0)
+                )
+            _existing["teams"] = sorted(
+                set(_existing.get("teams") or []) | set(_u.get("teams") or [])
+            )
+            _existing["names"] = sorted(
+                set(_existing.get("names") or []) | set(_u.get("names") or [])
+            )
+            for _l in ("ldap_username", "ldap_title", "ldap_department",
+                       "ldap_company", "ldap_manager"):
+                if not _existing.get(_l) and _u.get(_l):
+                    _existing[_l] = _u[_l]
+            if not _existing.get("email") and _u.get("email"):
+                _existing["email"] = _u["email"]
+        else:
+            _u["key"] = _k
+            _u["total"] = (
+                _u.get("commits", 0)
+                + _u.get("jira_authored", 0) + _u.get("jira_assigned", 0)
+                + _u.get("requests_made", 0)
+                + _u.get("approvals", 0) + _u.get("rejections", 0)
+                + _u.get("builds_requested", 0) + _u.get("builds_approved", 0)
+                + _u.get("deploys_requested", 0) + _u.get("deploys_approved", 0)
+            )
+            _users_dedup[_k] = _u
+    # Recompute totals after merges.
+    for _u in _users_dedup.values():
+        _u["total"] = (
+            _u.get("commits", 0)
+            + _u.get("jira_authored", 0) + _u.get("jira_assigned", 0)
+            + _u.get("requests_made", 0)
+            + _u.get("approvals", 0) + _u.get("rejections", 0)
+            + _u.get("builds_requested", 0) + _u.get("builds_approved", 0)
+            + _u.get("deploys_requested", 0) + _u.get("deploys_approved", 0)
+        )
+    _users_blob["users"] = sorted(
+        _users_dedup.values(),
+        key=lambda u: (-u["total"], (u.get("label") or u["key"]).lower()),
+    )
+    _users_blob["ldap_team_count"] = len(_ldap_team_set)
+    _users_blob["ldap_user_count"] = len(_ldap_blob.get("users") or {})
+    _users_blob["ldap_team_errors"] = _ldap_blob.get("errors") or {}
     _users_list: list[dict] = _users_blob.get("users") or []
     # Build identity → user indices for fast lookup from event-log strings.
     _users_by_email: dict[str, dict] = {
@@ -17771,11 +18049,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _users_scoped.append(_u)
     _users_total = len(_users_scoped)
     _users_with_email = sum(1 for _u in _users_scoped if _u.get("email"))
+    _users_active = sum(1 for _u in _users_scoped if (_u.get("total") or 0) > 0)
+    _users_ldap_count = int(_users_blob.get("ldap_user_count") or 0)
     _users_sub = (
-        f"<b>{_users_with_email}</b> with email · reconciled across "
-        f"commits / jira / builds / deploys"
+        f"<b>{_users_active}</b> active · "
+        f"{_users_ldap_count} via LDAP team rosters"
         if _users_total else
-        "no activity in scope · widen window"
+        "no users resolved · check LDAP / widen window"
     )
 
     # Tile specs: (dim_key, glyph, label, number, sub_markdown)
