@@ -3210,6 +3210,71 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     text-align: center;
     font-style: italic;
 }
+
+/* Sync-status row inside the Teams & Members tab. Five small boxes
+ * surface DB / inventory / visible / last-sync counts so admins can
+ * spot drift between the cached roster and the current inventory. */
+.tm-sync-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    margin: 6px 0 10px 0;
+}
+.tm-sync-box {
+    padding: 10px 12px;
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    background: var(--cc-surface);
+}
+.tm-sync-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.tm-sync-val {
+    font-family: var(--cc-mono);
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    margin: 4px 0 3px 0;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.tm-sync-val--ts {
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+.tm-sync-sub {
+    font-size: 0.7rem;
+    color: var(--cc-text-dim);
+    line-height: 1.4;
+}
+.tm-sync-sub code {
+    background: var(--cc-surface2);
+    color: var(--cc-text);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 0.66rem;
+}
+.tm-sync-drift {
+    margin: 4px 0 12px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(220,38,38,.06);
+    border: 1px solid rgba(220,38,38,.30);
+    color: var(--cc-red);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+.tm-sync-drift.is-stale {
+    background: rgba(217,119,6,.08);
+    border-color: rgba(217,119,6,.30);
+    color: var(--cc-amber);
+}
+.tm-sync-drift b { color: inherit; }
 .st-key-cc_inv_src_pref [role="radiogroup"] {
     gap: 14px !important;
 }
@@ -11069,6 +11134,88 @@ def _render_teams_and_members_view() -> None:
         f'</div>'
         f'  </div>'
         f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Sync coverage breakdown ────────────────────────────────────────
+    # Shows the relationship between three counts admins care about:
+    #   • DB total      — every user currently in ldap_users.
+    #   • Inventory     — every distinct team in the unscoped inventory,
+    #                     and the count of those teams that have at
+    #                     least one member in ldap_team_members.
+    #   • Visible       — users surviving the Filter Console scope on
+    #                     this render.
+    # Drift between "inventory teams" and "teams synced" tells the admin
+    # they should re-sync to pick up missing teams.
+    _db_users_count = len(_ldap_db_load_users() or {})
+    _db_team_rosters = _ldap_db_load_team_members() or {}
+    _db_synced_teams = set(_db_team_rosters.keys())
+    _inv_team_set = set(_team_roles.keys())
+    _missing_teams_in_db = sorted(_inv_team_set - _db_synced_teams)
+    _stale_teams_in_db = sorted(_db_synced_teams - _inv_team_set)
+    _last_sync = _ldap_db_load_last_sync() or {}
+    _last_sync_ts = (_last_sync.get("completed_at") or "").replace("T", " ")[:19]
+    _last_sync_teams = int(_last_sync.get("teams_count") or 0)
+    _last_sync_users = int(_last_sync.get("users_count") or 0)
+    _visible_count_hint = (
+        "All filters off — visible = DB total."
+        if _db_users_count == _total_members
+        else f"Current Filter Console scope shows {_total_members:,} of {_db_users_count:,}."
+    )
+    _drift_warn_html = ""
+    if _missing_teams_in_db:
+        _drift_warn_html = (
+            f'<div class="tm-sync-drift">⚠ '
+            f'{len(_missing_teams_in_db)} team'
+            f'{"s" if len(_missing_teams_in_db) != 1 else ""} '
+            f'in inventory NOT yet in DB — click <b>↻ Sync LDAP</b> on '
+            f'the Pipelines Inventory tab to pull them in.'
+            f'</div>'
+        )
+    elif _stale_teams_in_db:
+        _drift_warn_html = (
+            f'<div class="tm-sync-drift is-stale">ℹ '
+            f'{len(_stale_teams_in_db)} team'
+            f'{"s" if len(_stale_teams_in_db) != 1 else ""} '
+            f'in DB no longer present in inventory — re-sync to clean up.'
+            f'</div>'
+        )
+    st.markdown(
+        '<div class="tm-section-head">'
+        '  <span class="tm-section-glyph">↻</span>'
+        '  Sync status'
+        '</div>'
+        f'<div class="tm-sync-grid">'
+        f'  <div class="tm-sync-box">'
+        f'    <div class="tm-sync-lbl">DB users</div>'
+        f'    <div class="tm-sync-val">{_db_users_count:,}</div>'
+        f'    <div class="tm-sync-sub">stored in <code>ldap_users</code></div>'
+        f'  </div>'
+        f'  <div class="tm-sync-box">'
+        f'    <div class="tm-sync-lbl">DB teams</div>'
+        f'    <div class="tm-sync-val">{len(_db_synced_teams):,}</div>'
+        f'    <div class="tm-sync-sub">rosters in <code>ldap_team_members</code></div>'
+        f'  </div>'
+        f'  <div class="tm-sync-box">'
+        f'    <div class="tm-sync-lbl">Inventory teams</div>'
+        f'    <div class="tm-sync-val">{len(_inv_team_set):,}</div>'
+        f'    <div class="tm-sync-sub">distinct <code>*_team</code> values</div>'
+        f'  </div>'
+        f'  <div class="tm-sync-box">'
+        f'    <div class="tm-sync-lbl">Visible after filter</div>'
+        f'    <div class="tm-sync-val">{_total_members:,}</div>'
+        f'    <div class="tm-sync-sub">{html.escape(_visible_count_hint)}</div>'
+        f'  </div>'
+        f'  <div class="tm-sync-box">'
+        f'    <div class="tm-sync-lbl">Last sync</div>'
+        f'    <div class="tm-sync-val tm-sync-val--ts">'
+        f'{html.escape(_last_sync_ts) or "never"}</div>'
+        f'    <div class="tm-sync-sub">'
+        f'covered {_last_sync_teams:,} teams · {_last_sync_users:,} users'
+        f'</div>'
+        f'  </div>'
+        f'</div>'
+        f'{_drift_warn_html}',
         unsafe_allow_html=True,
     )
 
@@ -21381,18 +21528,39 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                              key="_ldap_sync_btn",
                              use_container_width=True,
                              help=(
-                                 "Re-query LDAP for every team in the "
-                                 "current inventory, compute deltas vs "
-                                 "the Postgres cache, and write the "
-                                 "fresh state. Slow (~1 minute on the "
-                                 "first run); page reads stay fast "
-                                 "between syncs."
+                                 "Re-query LDAP for every team across "
+                                 "the UNSCOPED inventory (ignores the "
+                                 "current Filter Console selection so "
+                                 "the DB always reflects the full fleet), "
+                                 "compute deltas vs the Postgres cache, "
+                                 "and write the fresh state. Slow (~1 "
+                                 "minute on the first run); page reads "
+                                 "stay fast between syncs."
                              )):
-                    with st.spinner("Syncing LDAP → Postgres..."):
+                    # Re-fetch the inventory with an EMPTY scope filter
+                    # so the sync always covers every team, regardless of
+                    # the admin's current view-all toggle / project
+                    # picker / role scope. Without this, a sync done
+                    # under a narrow filter would persist only those
+                    # teams and the DB would silently miss the rest.
+                    with st.spinner("Syncing LDAP → Postgres (full fleet)..."):
+                        _full_inv_rows, _, _, _ = _inventory_load("[]")
+                        _full_team_set: set[str] = set()
+                        for _r in _full_inv_rows:
+                            _t_blob = _r.get("teams") or {}
+                            for _vals in _t_blob.values():
+                                if isinstance(_vals, (list, tuple, set)):
+                                    for _v in _vals:
+                                        if _v:
+                                            _full_team_set.add(str(_v).strip())
+                                elif _vals:
+                                    _full_team_set.add(str(_vals).strip())
+                        _full_team_set.discard("")
                         _sync_delta = _ldap_sync_to_db(
-                            tuple(sorted(_ldap_team_set))
+                            tuple(sorted(_full_team_set))
                         )
                     st.session_state["_ldap_sync_last_delta_v1"] = _sync_delta
+                    st.session_state["_ldap_sync_team_set_v1"] = sorted(_full_team_set)
                     st.rerun()
 
         # ── Sync delta panel ────────────────────────────────────────────
