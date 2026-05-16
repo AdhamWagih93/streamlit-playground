@@ -2855,6 +2855,84 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-amber);
     border: 1px solid rgba(217,119,6,.32);
 }
+
+/* LDAP sync delta panel — appears under the sync row after the admin
+ * clicks ↻ Sync LDAP. Summary row sits on top, per-bucket chip lists
+ * collapse inside a <details>. */
+.ldap-delta-panel {
+    margin: 8px 0 12px 0;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: linear-gradient(135deg,
+                rgba(79,70,229,.05), rgba(79,70,229,.01));
+    border: 1px solid rgba(79,70,229,.30);
+}
+.ldap-delta-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.84rem;
+    color: var(--cc-text);
+    margin-bottom: 6px;
+}
+.ldap-delta-summary b { color: var(--cc-accent); }
+.ldap-delta-glyph {
+    color: var(--cc-accent);
+    font-size: 1.1rem;
+}
+.ldap-delta-details summary {
+    cursor: pointer;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    list-style: none;
+    padding: 4px 0;
+}
+.ldap-delta-details summary::-webkit-details-marker { display: none; }
+.ldap-delta-details summary::before {
+    content: "▸ ";
+    color: var(--cc-accent);
+    transition: transform .12s;
+    display: inline-block;
+}
+.ldap-delta-details[open] summary::before { transform: rotate(90deg); }
+.ldap-delta-block {
+    margin: 6px 0 4px 0;
+    padding: 6px 8px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+}
+.ldap-delta-block h6 {
+    margin: 0 0 4px 0;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.ldap-delta-chip {
+    display: inline-block;
+    margin: 2px 3px 2px 0;
+    padding: 1px 8px;
+    border-radius: 4px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    border: 1px solid;
+}
+.ldap-delta-chip.is-add {
+    background: rgba(5,150,105,.08);
+    color: #047857;
+    border-color: rgba(5,150,105,.30);
+}
+.ldap-delta-chip.is-rem {
+    background: rgba(220,38,38,.08);
+    color: #b91c1c;
+    border-color: rgba(220,38,38,.32);
+}
 .st-key-cc_inv_src_pref [role="radiogroup"] {
     gap: 14px !important;
 }
@@ -15329,6 +15407,444 @@ def _fetch_devops_projects_from_postgres() -> tuple[list[dict], str]:
                 pass
 
 
+# =============================================================================
+# LDAP CACHE TABLES — Postgres-backed roster + sync log
+# =============================================================================
+# The live LDAP probe is too expensive to run on every page render
+# (cold cache = ~50 teams × N+1 LDAP queries each, takes 30s+). The
+# operator instead syncs LDAP into Postgres on demand; subsequent
+# renders read from the DB (fast). Schema:
+#
+#   ldap_users        — one row per sAMAccountName with directory fields.
+#   ldap_team_members — many-to-many: (team_cn, username).
+#   ldap_sync_log     — append-only row per sync attempt with delta JSON.
+#
+# Tables are created on first sync if missing. No migrations needed —
+# the schema is fixed and additive.
+
+LDAP_DB_USERS_TABLE = os.environ.get("LDAP_DB_USERS_TABLE", "ldap_users").strip()
+LDAP_DB_MEMBERS_TABLE = os.environ.get("LDAP_DB_MEMBERS_TABLE", "ldap_team_members").strip()
+LDAP_DB_SYNC_LOG_TABLE = os.environ.get("LDAP_DB_SYNC_LOG_TABLE", "ldap_sync_log").strip()
+
+
+def _pg_connect_rw():
+    """Open a read-write Postgres connection using the vault-resolved
+    creds. Raises on failure. Callers must close. Used by the LDAP sync
+    writer; read-only callsites still use the existing pattern in
+    :func:`_fetch_devops_projects_from_postgres`."""
+    if not _POSTGRES_AVAILABLE:
+        raise RuntimeError("psycopg not installed")
+    creds = _postgres_creds()
+    if not creds or not creds.get("host"):
+        raise RuntimeError("postgres creds not resolved")
+    try:
+        _port = int(creds["port"])
+    except (ValueError, TypeError):
+        _port = 5432
+    return _psycopg.connect(
+        host=creds["host"], port=_port, dbname=creds["database"],
+        user=creds["username"], password=creds["password"],
+        connect_timeout=POSTGRES_CONNECT_TIMEOUT,
+    )
+
+
+def _ldap_db_safe_ident(s: str) -> bool:
+    """Permissive identifier check — alphanumeric + underscore + dot only.
+    Used to gate the env-overridable table names before interpolating
+    them into DDL / DML."""
+    return bool(s) and all(c.isalnum() or c in "_." for c in s)
+
+
+def _ldap_db_ensure_schema(conn) -> None:
+    """Idempotent CREATE TABLE IF NOT EXISTS for the three LDAP tables.
+    Called once per sync invocation. Cheap on warm runs; safe to
+    re-execute on every cold start."""
+    for _name in (LDAP_DB_USERS_TABLE, LDAP_DB_MEMBERS_TABLE, LDAP_DB_SYNC_LOG_TABLE):
+        if not _ldap_db_safe_ident(_name):
+            raise RuntimeError(f"unsafe table identifier: {_name!r}")
+    cur = conn.cursor()
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {LDAP_DB_USERS_TABLE} (
+            username      TEXT PRIMARY KEY,
+            email         TEXT,
+            display_name  TEXT,
+            title         TEXT,
+            department    TEXT,
+            company       TEXT,
+            manager       TEXT,
+            updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {LDAP_DB_MEMBERS_TABLE} (
+            team_cn    TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (team_cn, username)
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {LDAP_DB_SYNC_LOG_TABLE} (
+            id            BIGSERIAL PRIMARY KEY,
+            started_at    TIMESTAMPTZ NOT NULL,
+            completed_at  TIMESTAMPTZ,
+            status        TEXT NOT NULL,
+            teams_count   INT,
+            users_count   INT,
+            delta_summary TEXT,
+            error_msg     TEXT
+        )
+    """)
+    cur.close()
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ldap_db_load_users() -> dict:
+    """Cached read of the ldap_users table. Returns
+    ``{username_lower: {username, email, label, title, department,
+    company, manager}}``. Empty dict when Postgres / the table is
+    unavailable — no error surfaced here; the integrations strip and
+    sync panel show the underlying failure separately."""
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(LDAP_DB_USERS_TABLE):
+        return {}
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT username, email, display_name, title, department, "
+            f"company, manager FROM {LDAP_DB_USERS_TABLE}"
+        )
+        rows = cur.fetchall()
+        cur.close()
+        out: dict[str, dict] = {}
+        for r in rows:
+            _un = (str(r[0] or "").strip())
+            if not _un:
+                continue
+            out[_un.lower()] = {
+                "username":   _un,
+                "email":      (str(r[1] or "").strip().lower()),
+                "label":      (str(r[2] or "").strip() or _un),
+                "title":      (str(r[3] or "").strip()),
+                "department": (str(r[4] or "").strip()),
+                "company":    (str(r[5] or "").strip()),
+                "manager":    (str(r[6] or "").strip()),
+            }
+        return out
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ldap_db_load_team_members() -> dict:
+    """Cached read of ldap_team_members. Returns
+    ``{team_cn: [username, ...]}``. Empty dict on failure."""
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(LDAP_DB_MEMBERS_TABLE):
+        return {}
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT team_cn, username FROM {LDAP_DB_MEMBERS_TABLE}"
+        )
+        rows = cur.fetchall()
+        cur.close()
+        out: dict[str, list[str]] = {}
+        for r in rows:
+            _t = str(r[0] or "").strip()
+            _u = str(r[1] or "").strip()
+            if _t and _u:
+                out.setdefault(_t, []).append(_u)
+        for _t in out:
+            out[_t].sort(key=str.lower)
+        return out
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _ldap_db_load_last_sync() -> dict:
+    """Last sync log entry. Returns
+    ``{started_at, completed_at, status, teams_count, users_count,
+    delta_summary, error_msg}`` or ``{}`` when none exists / table
+    missing."""
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(LDAP_DB_SYNC_LOG_TABLE):
+        return {}
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT started_at, completed_at, status, teams_count, "
+            f"users_count, delta_summary, error_msg "
+            f"FROM {LDAP_DB_SYNC_LOG_TABLE} ORDER BY id DESC LIMIT 1"
+        )
+        r = cur.fetchone()
+        cur.close()
+        if not r:
+            return {}
+        try:
+            _delta = json.loads(r[5]) if r[5] else {}
+        except Exception:
+            _delta = {}
+        return {
+            "started_at":    r[0].isoformat() if r[0] else "",
+            "completed_at":  r[1].isoformat() if r[1] else "",
+            "status":        r[2] or "",
+            "teams_count":   int(r[3] or 0),
+            "users_count":   int(r[4] or 0),
+            "delta_summary": _delta,
+            "error_msg":     r[6] or "",
+        }
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _ldap_sync_to_db(team_cns_tuple: tuple[str, ...]) -> dict:
+    """Run a live LDAP probe over *team_cns_tuple*, compute deltas vs
+    the current DB state, write the new state, log the sync attempt,
+    and return the delta summary. NEVER cached — this is the explicit
+    admin action.
+
+    Delta shape:
+
+        {
+          "added_users":         [username, ...],   # in LDAP, missing from DB
+          "removed_users":       [username, ...],   # in DB, missing from LDAP
+          "added_memberships":   [(team_cn, username), ...],
+          "removed_memberships": [(team_cn, username), ...],
+          "field_changes":       {username: {field: (old, new)}, ...},
+          "ldap_users_total":    int,
+          "ldap_teams_total":    int,
+          "status":              "success" | "error",
+          "error_msg":           str,
+        }
+    """
+    started_at = datetime.now(timezone.utc)
+    delta: dict[str, Any] = {
+        "added_users":         [],
+        "removed_users":       [],
+        "added_memberships":   [],
+        "removed_memberships": [],
+        "field_changes":       {},
+        "ldap_users_total":    0,
+        "ldap_teams_total":    0,
+        "status":              "running",
+        "error_msg":           "",
+    }
+
+    # ── Phase 1: query LDAP (uses parallel team roster fetcher + lazy
+    # per-user enrichment via _ldap_user_info_cached). We DO enrich
+    # every user here because we're about to persist them — the cost
+    # is paid once per sync, not per render.
+    try:
+        ldap_blob = _resolve_ldap_users_from_teams(team_cns_tuple)
+    except Exception as e:
+        delta["status"] = "error"
+        delta["error_msg"] = f"LDAP probe failed: {type(e).__name__}: {e}"
+        # Still log the failure to the sync table.
+        try:
+            conn = _pg_connect_rw()
+            _ldap_db_ensure_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"INSERT INTO {LDAP_DB_SYNC_LOG_TABLE} "
+                f"(started_at, completed_at, status, error_msg) "
+                f"VALUES (%s, %s, %s, %s)",
+                (started_at, datetime.now(timezone.utc),
+                 "error", delta["error_msg"]),
+            )
+            cur.close()
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return delta
+
+    # Force directory enrichment for every discovered user — single sync
+    # cost in exchange for cheap reads later.
+    for _u_dict in (ldap_blob.get("users") or {}).values():
+        if not _u_dict.get("email"):
+            info = _ldap_user_info_cached(_u_dict.get("username") or "")
+            if info:
+                if info.get("email"):
+                    _u_dict["email"] = str(info["email"]).strip().lower()
+                _disp = info.get("username") or _u_dict.get("username")
+                _u_dict["label"] = str(_disp or "").strip()
+                _u_dict["title"]      = (info.get("title") or "").strip()
+                _u_dict["department"] = (info.get("department") or "").strip()
+                _u_dict["company"]    = (
+                    info.get("ldapcompany") or info.get("company") or ""
+                ).strip()
+                _u_dict["manager"]    = (info.get("manager") or "").strip()
+
+    new_users = ldap_blob.get("users") or {}
+    new_team_rosters = ldap_blob.get("team_rosters") or {}
+    delta["ldap_users_total"] = len(new_users)
+    delta["ldap_teams_total"] = len(new_team_rosters)
+
+    # ── Phase 2: read current DB state for delta computation.
+    db_users_before = _ldap_db_load_users() or {}
+    db_team_members_before = _ldap_db_load_team_members() or {}
+
+    # Compute user-level delta
+    new_keys = set(new_users.keys())
+    old_keys = set(db_users_before.keys())
+    delta["added_users"]   = sorted(
+        new_users[k]["username"] for k in (new_keys - old_keys)
+    )
+    delta["removed_users"] = sorted(
+        db_users_before[k]["username"] for k in (old_keys - new_keys)
+    )
+
+    # Field changes for users present in both
+    for k in new_keys & old_keys:
+        _old = db_users_before[k]
+        _new = new_users[k]
+        _changes: dict[str, tuple[str, str]] = {}
+        for fld in ("email", "label", "title", "department", "company", "manager"):
+            _o = (_old.get(fld) or "").strip()
+            _n = (_new.get(fld) or "").strip()
+            if fld == "label":
+                # The DB column is display_name; map for the delta dict
+                pass
+            if _o != _n and (_o or _n):
+                _changes[fld] = (_o, _n)
+        if _changes:
+            delta["field_changes"][_new["username"]] = _changes
+
+    # Compute membership-level delta
+    new_membership_set: set[tuple[str, str]] = set()
+    for _team, _members in new_team_rosters.items():
+        for _u in _members:
+            new_membership_set.add((_team, _u))
+    old_membership_set: set[tuple[str, str]] = set()
+    for _team, _members in db_team_members_before.items():
+        for _u in _members:
+            old_membership_set.add((_team, _u))
+    delta["added_memberships"]   = sorted(new_membership_set - old_membership_set)
+    delta["removed_memberships"] = sorted(old_membership_set - new_membership_set)
+
+    # ── Phase 3: write everything atomically.
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _ldap_db_ensure_schema(conn)
+        cur = conn.cursor()
+        # Upsert users — paramaterised; never f-string user data.
+        for k, u in new_users.items():
+            cur.execute(
+                f"INSERT INTO {LDAP_DB_USERS_TABLE} "
+                f"(username, email, display_name, title, department, "
+                f"company, manager, updated_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, NOW()) "
+                f"ON CONFLICT (username) DO UPDATE SET "
+                f"email = EXCLUDED.email, "
+                f"display_name = EXCLUDED.display_name, "
+                f"title = EXCLUDED.title, "
+                f"department = EXCLUDED.department, "
+                f"company = EXCLUDED.company, "
+                f"manager = EXCLUDED.manager, "
+                f"updated_at = NOW()",
+                (
+                    u["username"], u.get("email") or "",
+                    u.get("label") or u["username"],
+                    u.get("title") or "", u.get("department") or "",
+                    u.get("company") or "", u.get("manager") or "",
+                ),
+            )
+        # Remove users absent from the fresh LDAP set
+        if delta["removed_users"]:
+            cur.execute(
+                f"DELETE FROM {LDAP_DB_USERS_TABLE} WHERE LOWER(username) = ANY(%s)",
+                ([u.lower() for u in delta["removed_users"]],),
+            )
+        # Replace memberships for every team we just queried (DELETE +
+        # INSERT). Other teams' memberships stay untouched, so a partial
+        # team scope doesn't wipe historical data.
+        if new_team_rosters:
+            cur.execute(
+                f"DELETE FROM {LDAP_DB_MEMBERS_TABLE} WHERE team_cn = ANY(%s)",
+                (list(new_team_rosters.keys()),),
+            )
+            for _team, _members in new_team_rosters.items():
+                for _u in _members:
+                    cur.execute(
+                        f"INSERT INTO {LDAP_DB_MEMBERS_TABLE} "
+                        f"(team_cn, username, updated_at) VALUES "
+                        f"(%s, %s, NOW()) ON CONFLICT DO NOTHING",
+                        (_team, _u),
+                    )
+        # Log this sync
+        cur.execute(
+            f"INSERT INTO {LDAP_DB_SYNC_LOG_TABLE} "
+            f"(started_at, completed_at, status, teams_count, "
+            f"users_count, delta_summary) VALUES "
+            f"(%s, %s, %s, %s, %s, %s)",
+            (
+                started_at, datetime.now(timezone.utc), "success",
+                len(new_team_rosters), len(new_users),
+                json.dumps({
+                    "added_users":         delta["added_users"],
+                    "removed_users":       delta["removed_users"],
+                    "added_memberships":   list(delta["added_memberships"]),
+                    "removed_memberships": list(delta["removed_memberships"]),
+                    "field_changes":       delta["field_changes"],
+                }),
+            ),
+        )
+        cur.close()
+        conn.commit()
+        delta["status"] = "success"
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        delta["status"] = "error"
+        delta["error_msg"] = f"DB write failed: {type(e).__name__}: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Bust caches so the next render sees the fresh state.
+    try:
+        _ldap_db_load_users.clear()
+        _ldap_db_load_team_members.clear()
+        _ldap_db_load_last_sync.clear()
+    except Exception:
+        pass
+    return delta
+
+
 @st.cache_resource(show_spinner=False)
 def _prisma_s3_client():
     """One-per-process S3Client backed by the platform's utils.s3 wrapper.
@@ -16987,9 +17503,53 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             elif _vals:
                 _ldap_team_set.add(str(_vals).strip())
     _ldap_team_set.discard("")
-    _ldap_blob = _resolve_ldap_users_from_teams(
-        tuple(sorted(_ldap_team_set)),
-    ) if _ldap_team_set else {"users": {}, "team_rosters": {}, "errors": {}}
+
+    # Reads come from Postgres (populated by `_ldap_sync_to_db` when the
+    # admin clicks "↻ Sync LDAP"). Page load is a single Postgres SELECT
+    # instead of 500 LDAP round-trips. Empty DB = first-time deployment;
+    # the integrations strip + sync banner will tell the admin to run
+    # the first sync.
+    _ldap_db_users = _ldap_db_load_users()
+    _ldap_db_members = _ldap_db_load_team_members()
+    # Reshape into the same blob shape the merge code expects.
+    _ldap_blob_users: dict[str, dict] = {}
+    for _k, _u in _ldap_db_users.items():
+        _ldap_blob_users[_k] = {
+            "username":   _u["username"],
+            "email":      _u.get("email") or "",
+            "label":      _u.get("label") or _u["username"],
+            "names":      [_u["username"]]
+                          + ([_u["label"]] if _u.get("label") and _u["label"] != _u["username"] else []),
+            "teams":      [],  # filled below from _ldap_db_members
+            "title":      _u.get("title") or "",
+            "department": _u.get("department") or "",
+            "company":    _u.get("company") or "",
+            "manager":    _u.get("manager") or "",
+        }
+    for _team_cn, _members in _ldap_db_members.items():
+        for _u in _members:
+            _k = _u.strip().lower()
+            if _k in _ldap_blob_users:
+                _ldap_blob_users[_k]["teams"].append(_team_cn)
+            else:
+                # Membership exists in DB for a user that isn't in
+                # ldap_users — surface them as a stub record so the
+                # team count still reflects them.
+                _ldap_blob_users[_k] = {
+                    "username": _u,
+                    "email":    "",
+                    "label":    _u,
+                    "names":    [_u],
+                    "teams":    [_team_cn],
+                    "title":    "", "department": "", "company": "", "manager": "",
+                }
+    for _u_dict in _ldap_blob_users.values():
+        _u_dict["teams"] = sorted(set(_u_dict["teams"]))
+    _ldap_blob = {
+        "users":        _ldap_blob_users,
+        "team_rosters": _ldap_db_members,
+        "errors":       {},
+    }
 
     _users_list_es: list[dict] = list(_users_blob.get("users") or [])
     # Indices for matching LDAP users against ES activity rows.
@@ -20134,6 +20694,146 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+        # ── Admin-only LDAP sync row ────────────────────────────────────
+        # Subtle "last sync" indicator + sync button. Reading from
+        # Postgres is fast; the live LDAP probe only fires on explicit
+        # admin click. Delta from the most recent sync is rendered
+        # below the row so admins see what changed.
+        with st.container(key="cc_ldap_sync_row"):
+            _last = _ldap_db_load_last_sync() or {}
+            _completed = (_last.get("completed_at") or "").replace("T", " ")[:19]
+            _last_status = _last.get("status") or ""
+            _u_count = int(_last.get("users_count") or 0)
+            _t_count = int(_last.get("teams_count") or 0)
+            if _completed:
+                _sync_label = (
+                    f"Last LDAP sync · {_completed} UTC · "
+                    f"{_u_count:,} users · {_t_count:,} teams"
+                )
+                if _last_status != "success":
+                    _sync_label += f" · <span style=\"color:var(--cc-red)\">{html.escape(_last_status)}</span>"
+            else:
+                _sync_label = (
+                    'No LDAP sync recorded yet · click ↻ Sync to '
+                    'populate the cache (first run will take a minute)'
+                )
+            _ls1, _ls2 = st.columns([6, 1])
+            with _ls1:
+                st.markdown(
+                    f'<div class="iv-src-pref-lbl" style="padding-top:6px">'
+                    f'{_sync_label}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _ls2:
+                if st.button("↻ Sync LDAP",
+                             key="_ldap_sync_btn",
+                             use_container_width=True,
+                             help=(
+                                 "Re-query LDAP for every team in the "
+                                 "current inventory, compute deltas vs "
+                                 "the Postgres cache, and write the "
+                                 "fresh state. Slow (~1 minute on the "
+                                 "first run); page reads stay fast "
+                                 "between syncs."
+                             )):
+                    with st.spinner("Syncing LDAP → Postgres..."):
+                        _sync_delta = _ldap_sync_to_db(
+                            tuple(sorted(_ldap_team_set))
+                        )
+                    st.session_state["_ldap_sync_last_delta_v1"] = _sync_delta
+                    st.rerun()
+
+        # ── Sync delta panel ────────────────────────────────────────────
+        # Shown when a sync just completed in this session. Persists in
+        # session_state until cleared (admin can dismiss).
+        _sync_delta_v1 = st.session_state.get("_ldap_sync_last_delta_v1")
+        if _sync_delta_v1:
+            _added_n   = len(_sync_delta_v1.get("added_users") or [])
+            _removed_n = len(_sync_delta_v1.get("removed_users") or [])
+            _add_mem   = len(_sync_delta_v1.get("added_memberships") or [])
+            _rem_mem   = len(_sync_delta_v1.get("removed_memberships") or [])
+            _fld_chg   = len(_sync_delta_v1.get("field_changes") or {})
+            _sync_status = _sync_delta_v1.get("status") or ""
+            _sync_err = _sync_delta_v1.get("error_msg") or ""
+            if _sync_status == "error":
+                inline_note(
+                    f"LDAP sync failed: {_sync_err}", "warning",
+                )
+            else:
+                _summary = (
+                    f"<b>{_added_n:,}</b> added · "
+                    f"<b>{_removed_n:,}</b> removed · "
+                    f"<b>{_fld_chg:,}</b> field changes · "
+                    f"<b>{_add_mem:,}</b> new memberships · "
+                    f"<b>{_rem_mem:,}</b> dropped memberships"
+                )
+                # Build collapsible per-bucket lists.
+                _added_chips = "".join(
+                    f'<span class="ldap-delta-chip is-add">'
+                    f'{html.escape(u)}</span>'
+                    for u in (_sync_delta_v1.get("added_users") or [])[:50]
+                )
+                _removed_chips = "".join(
+                    f'<span class="ldap-delta-chip is-rem">'
+                    f'{html.escape(u)}</span>'
+                    for u in (_sync_delta_v1.get("removed_users") or [])[:50]
+                )
+                _add_mem_chips = "".join(
+                    f'<span class="ldap-delta-chip is-add">'
+                    f'{html.escape(t)} ← {html.escape(u)}</span>'
+                    for (t, u) in (_sync_delta_v1.get("added_memberships") or [])[:80]
+                )
+                _rem_mem_chips = "".join(
+                    f'<span class="ldap-delta-chip is-rem">'
+                    f'{html.escape(t)} ← {html.escape(u)}</span>'
+                    for (t, u) in (_sync_delta_v1.get("removed_memberships") or [])[:80]
+                )
+                _detail_sections: list[str] = []
+                if _added_chips:
+                    _detail_sections.append(
+                        f'<div class="ldap-delta-block"><h6>Added users</h6>'
+                        f'<div>{_added_chips}</div></div>'
+                    )
+                if _removed_chips:
+                    _detail_sections.append(
+                        f'<div class="ldap-delta-block"><h6>Removed users</h6>'
+                        f'<div>{_removed_chips}</div></div>'
+                    )
+                if _add_mem_chips:
+                    _detail_sections.append(
+                        f'<div class="ldap-delta-block"><h6>New team memberships</h6>'
+                        f'<div>{_add_mem_chips}</div></div>'
+                    )
+                if _rem_mem_chips:
+                    _detail_sections.append(
+                        f'<div class="ldap-delta-block"><h6>Dropped team memberships</h6>'
+                        f'<div>{_rem_mem_chips}</div></div>'
+                    )
+                _details_html = (
+                    f'<details class="ldap-delta-details">'
+                    f'<summary>view per-bucket lists ({_added_n + _removed_n + _add_mem + _rem_mem:,} total entries)</summary>'
+                    + "".join(_detail_sections)
+                    + '</details>'
+                ) if _detail_sections else ""
+                st.markdown(
+                    f'<div class="ldap-delta-panel">'
+                    f'  <div class="ldap-delta-summary">'
+                    f'    <span class="ldap-delta-glyph">✦</span>'
+                    f'    LDAP sync delta · {_summary}'
+                    f'  </div>'
+                    f'  {_details_html}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            _ddc1, _ddc2 = st.columns([1, 7])
+            with _ddc1:
+                if st.button("✕ Dismiss delta",
+                             key="_ldap_sync_dismiss_btn",
+                             use_container_width=True):
+                    st.session_state.pop("_ldap_sync_last_delta_v1", None)
+                    st.rerun()
 
         if _src == "git-forced-failed":
             # Admin explicitly forced git but git failed. Don't fall back
