@@ -10327,7 +10327,37 @@ def _integrations_health() -> list[dict]:
                 ),
             })
 
-    # 7. Inventory sync check — surfaces the last-known diff count so
+    # 7. Ansible Vault password — read from vault path ANSIBLE_VAULT_PATH
+    # under variable ANSIBLE_VAULT_PW_KEY. Surfacing its resolution state
+    # separately from the umbrella Vault tile so admins can see at a
+    # glance whether ansible-decrypt is wired up, since vaulted YAMLs in
+    # the inventories repo silently fail to decrypt when this isn't set.
+    _av_pw = _ansible_vault_password()
+    _av_err = _vault_last_error(ANSIBLE_VAULT_PATH)
+    if _av_pw:
+        out.append({
+            "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
+            "state": "ok",
+            "detail": f"resolved · {len(_av_pw)} chars",
+            "tip": (
+                f"Password sourced from vault path "
+                f"{ANSIBLE_VAULT_PATH!r} · key {ANSIBLE_VAULT_PW_KEY!r}."
+            ),
+        })
+    else:
+        out.append({
+            "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
+            "state": "down" if _av_err else "skip",
+            "detail": "not resolved",
+            "tip": (
+                _av_err
+                or f"Expected key {ANSIBLE_VAULT_PW_KEY!r} under vault path "
+                   f"{ANSIBLE_VAULT_PATH!r}. Vaulted YAMLs won't decrypt "
+                   f"until this resolves."
+            ),
+        })
+
+    # 8. Inventory sync check — surfaces the last-known diff count so
     # admins see drift across sources without opening the dedicated tab.
     sync_sum = st.session_state.get("_sync_summary_v1") or {}
     if not sync_sum:
@@ -10371,7 +10401,7 @@ def _integrations_health() -> list[dict]:
                 ),
             })
 
-    # 8. Optional deps — soft signal so admins know which features
+    # 9. Optional deps — soft signal so admins know which features
     # would light up if a missing package were installed.
     missing_deps: list[str] = []
     if not _YAML_AVAILABLE:
@@ -19963,6 +19993,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Fires zero ES queries until the operator clicks "▶ Load people insights".
     _render_people_insights_panel(start_dt, end_dt)
 
+    # ── Prisma scan viewer — INLINE here so admins can pull a scan without
+    # leaving the inventory context. The renderer's internal idle gate
+    # (▶ Load) keeps it cost-free until explicitly requested.
+    if _is_admin:
+        _render_prisma_scan_viewer()
+
     # End of body_slot; the tab panel closes here.
     _body_container.__exit__(None, None, None)
 
@@ -20025,10 +20061,12 @@ if _show_inv and _inventory_slot is not None:
         _jk_show = _is_admin
         _jk_configured = bool(_jenkins_creds().get("host"))
         _jk_badge_txt = "  ·  ⏵" if (_jk_show and _jk_configured) else ""
-        # Scan Viewer — admin-only too. Doesn't add a badge until configured.
+        # Scan Viewer — formerly its own tab; now rendered INLINE inside
+        # the Pipelines Inventory tab so the operator can pull a scan
+        # without leaving the row context. Still admin-only and still
+        # smart-loaded (no fetch until ▶ Load is clicked) so opening the
+        # inventory tab never costs an S3 request.
         _psv_show = _is_admin
-        _psv_configured = bool(PRISMA_S3_BUCKET) and _BOTO3_AVAILABLE
-        _psv_badge_txt = "  ·  S3" if (_psv_show and _psv_configured) else ""
         # Sync check — admin-only. Badge surfaces the last-known drift
         # across BOTH internal panels (git↔ES + inventory↔Postgres).
         _sync_show = _is_admin
@@ -20049,8 +20087,6 @@ if _show_inv and _inventory_slot is not None:
         ]
         if _jk_show:
             _tab_labels.append(f"⚙  JENKINS{_jk_badge_txt}")
-        if _psv_show:
-            _tab_labels.append(f"🔬  SCAN VIEWER{_psv_badge_txt}")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         with st.container(key="cc_surface_tabs"):
@@ -20059,9 +20095,6 @@ if _show_inv and _inventory_slot is not None:
             _next_idx = 2
             _tab_jenkins = _tabs[_next_idx] if _jk_show else None
             if _jk_show:
-                _next_idx += 1
-            _tab_psv = _tabs[_next_idx] if _psv_show else None
-            if _psv_show:
                 _next_idx += 1
             _tab_sync = _tabs[_next_idx] if _sync_show else None
             with _tab_inv:
@@ -20100,19 +20133,6 @@ if _show_inv and _inventory_slot is not None:
                     _jk_slot = st.empty()
             else:
                 _jk_slot = None
-            if _tab_psv is not None:
-                with _tab_psv:
-                    st.markdown(
-                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
-                        'Prisma scan viewer · pick an app + version · '
-                        'click ▶ Load to fetch the full HTML report from S3 — '
-                        'never auto-loads, never lists the bucket'
-                        '</div>',
-                        unsafe_allow_html=True,
-                    )
-                    _psv_slot = st.empty()
-            else:
-                _psv_slot = None
             if _tab_sync is not None:
                 with _tab_sync:
                     st.markdown(
@@ -20141,13 +20161,6 @@ if _show_inv and _inventory_slot is not None:
         if _jk_slot is not None:
             with _jk_slot.container():
                 _render_jenkins_panel()
-
-        # Prisma scan viewer — picker pulls options from the inventory
-        # fragment's published session state, so this runs LAST so the
-        # picker is already populated.
-        if _psv_slot is not None:
-            with _psv_slot.container():
-                _render_prisma_scan_viewer()
 
         # Sync check — smart-loaded; uses the scope key the inventory
         # fragment publishes so its diff matches the visible scope.
