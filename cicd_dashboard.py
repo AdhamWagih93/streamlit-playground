@@ -2933,6 +2933,319 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: #b91c1c;
     border-color: rgba(220,38,38,.32);
 }
+
+/* ── TEAMS & MEMBERS TAB ─────────────────────────────────────────────────
+ * Admin-only directory view. Stat tiles + role chart + team cards +
+ * filterable members table. Visual style: refined, mostly whitespace,
+ * minimal chrome — keeps the page professional. */
+.tm-empty {
+    text-align: center;
+    padding: 30px 20px;
+    border: 1px dashed var(--cc-border);
+    border-radius: 14px;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+}
+.tm-empty-glyph { font-size: 2.4rem; opacity: .6; }
+.tm-empty-title {
+    font-family: var(--cc-mono);
+    font-size: 0.86rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text);
+    margin: 10px 0 4px 0;
+}
+.tm-empty-body {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    max-width: 540px;
+    margin: 0 auto;
+}
+
+.tm-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 10px;
+    margin: 4px 0 18px 0;
+}
+.tm-tile {
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid var(--cc-border);
+    background: var(--cc-surface);
+    box-shadow: 0 2px 6px rgba(10,14,30,.03);
+    transition: border-color .15s, box-shadow .15s;
+}
+.tm-tile:hover {
+    border-color: var(--cc-border-hi);
+    box-shadow: 0 6px 18px rgba(10,14,30,.06);
+}
+.tm-tile.is-team    { border-top: 3px solid var(--cc-teal);   }
+.tm-tile.is-member  { border-top: 3px solid var(--cc-accent); }
+.tm-tile.is-dept    { border-top: 3px solid var(--cc-blue);   }
+.tm-tile.is-company { border-top: 3px solid var(--cc-amber);  }
+.tm-tile.is-role    { border-top: 3px solid var(--cc-green);  }
+.tm-tile-lbl {
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.tm-tile-val {
+    font-family: var(--cc-mono);
+    font-size: 2.05rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    line-height: 1.05;
+    margin: 6px 0 4px 0;
+    font-variant-numeric: tabular-nums;
+}
+.tm-tile-sub {
+    font-size: 0.72rem;
+    color: var(--cc-text-dim);
+    line-height: 1.4;
+}
+.tm-tile-sub code {
+    background: var(--cc-surface2);
+    color: var(--cc-text);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+}
+
+.tm-section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 22px 0 10px 0;
+    padding: 6px 0;
+    font-family: var(--cc-sans);
+    font-size: 0.92rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--cc-text);
+    border-bottom: 1px solid var(--cc-border);
+}
+.tm-section-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px; height: 26px;
+    background: var(--cc-accent-lt);
+    color: var(--cc-accent);
+    border-radius: 7px;
+    font-size: 0.95rem;
+}
+.tm-section-count {
+    margin-left: auto;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--cc-border);
+}
+
+.tm-team-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px;
+    margin: 4px 0 8px 0;
+}
+.tm-team-card {
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    transition: border-color .15s, box-shadow .15s;
+}
+.tm-team-card:hover {
+    border-color: var(--cc-border-hi);
+    box-shadow: 0 4px 14px rgba(10,14,30,.06);
+}
+.tm-team-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.tm-team-name {
+    flex: 1;
+    font-family: var(--cc-mono);
+    font-size: 0.86rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    word-break: break-word;
+}
+.tm-team-count {
+    font-family: var(--cc-mono);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--cc-accent);
+    font-variant-numeric: tabular-nums;
+}
+.tm-team-roles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 7px 0 9px 0;
+}
+
+.tm-role-chip {
+    display: inline-flex;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    border: 1px solid;
+}
+.tm-role-chip.tm-role-developer  { background: rgba(79,70,229,.08);  color: var(--cc-accent); border-color: rgba(79,70,229,.30); }
+.tm-role-chip.tm-role-qc         { background: rgba(13,148,136,.08); color: var(--cc-teal);   border-color: rgba(13,148,136,.30); }
+.tm-role-chip.tm-role-operations { background: rgba(217,119,6,.10);  color: var(--cc-amber);  border-color: rgba(217,119,6,.34); }
+.tm-role-chip.tm-role-admin      { background: rgba(220,38,38,.06);  color: var(--cc-red);    border-color: rgba(220,38,38,.30); }
+.tm-role-chip.tm-role-clevel     { background: rgba(37,99,235,.08);  color: var(--cc-blue);   border-color: rgba(37,99,235,.30); }
+.tm-role-chip.is-unmapped {
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border-color: var(--cc-border);
+    font-style: italic;
+}
+
+.tm-top-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px dashed var(--cc-border);
+    padding-top: 6px;
+}
+.tm-top-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 0.76rem;
+}
+.tm-top-name {
+    color: var(--cc-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 70%;
+}
+.tm-top-stat {
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    color: var(--cc-accent);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+.tm-top-empty {
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-size: 0.74rem;
+}
+
+/* Members table */
+.tm-mem-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    background: var(--cc-surface);
+    margin-top: 8px;
+}
+.tm-mem-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.79rem;
+}
+.tm-mem-table th {
+    text-align: left;
+    padding: 9px 12px;
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    border-bottom: 1px solid var(--cc-border);
+}
+.tm-mem-table th.tm-th-num { text-align: right; }
+.tm-mem-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--cc-border);
+    vertical-align: top;
+}
+.tm-mem-table tbody tr:last-child td { border-bottom: none; }
+.tm-mem-table tbody tr:hover td { background: var(--cc-surface2); }
+.tm-mem-name { min-width: 180px; }
+.tm-mem-label {
+    font-weight: 700;
+    color: var(--cc-text);
+}
+.tm-mem-email {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+    margin-top: 2px;
+    word-break: break-all;
+}
+.tm-mem-meta { color: var(--cc-text); min-width: 160px; }
+.tm-mem-dim {
+    color: var(--cc-text-mute);
+    font-size: 0.72rem;
+    margin-top: 2px;
+}
+.tm-mem-num {
+    text-align: right;
+    font-family: var(--cc-mono);
+    color: var(--cc-text);
+    font-variant-numeric: tabular-nums;
+}
+.tm-mem-total {
+    font-weight: 700;
+    color: var(--cc-accent);
+}
+.tm-team-chip {
+    display: inline-block;
+    margin: 1px 4px 1px 0;
+    padding: 1px 7px;
+    border-radius: 5px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    background: var(--cc-teal-lt);
+    color: var(--cc-teal);
+    border: 1px solid rgba(13,148,136,.22);
+}
+.tm-team-chip.is-empty {
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border-color: var(--cc-border);
+    font-style: italic;
+}
+.tm-team-chip.is-more {
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border-color: var(--cc-border);
+    font-weight: 600;
+}
+.tm-overflow {
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+    font-size: 0.78rem;
+    color: var(--cc-text-mute);
+    text-align: center;
+    font-style: italic;
+}
 .st-key-cc_inv_src_pref [role="radiogroup"] {
     gap: 14px !important;
 }
@@ -10675,6 +10988,378 @@ def _render_sync_value(val: Any, side: str) -> str:
 # result is stashed in session_state until cleared or re-run.
 
 _PEOPLE_LOADED_KEY = "_people_insights_loaded_v1"
+
+
+# =============================================================================
+# TEAMS & MEMBERS TAB — admin-only standalone view
+# =============================================================================
+# Sits as the FIRST tab on the page (before Pipelines Inventory). Renders
+# a directory-style view of every LDAP-resolved team + member, alongside
+# their cross-index activity. Role classification per team comes from
+# which `*_team` inventory field the team appears in (dev_team →
+# Developer, qc_team → QC, uat_team / prd_team → Operations, etc.) via
+# the existing ROLE_TEAM_FIELDS map; users inherit the union of their
+# teams' roles.
+
+# Field-name → role label, derived from ROLE_TEAM_FIELDS. Reversed once at
+# import time so per-row lookups are O(1).
+_TEAM_FIELD_TO_ROLE: dict[str, str] = {}
+for _role_name, _fields in ROLE_TEAM_FIELDS.items():
+    for _f in _fields:
+        _bare = _f.replace(".keyword", "")
+        _TEAM_FIELD_TO_ROLE[_bare] = _role_name
+
+
+def _compute_team_role_map(inv_rows: list[dict]) -> dict[str, set[str]]:
+    """Walk inventory rows and build ``{team_name: {role_label, ...}}``.
+    A team that appears in both ``dev_team`` and ``qc_team`` fields
+    contributes to BOTH roles. Empty values + unknown field names are
+    silently skipped."""
+    out: dict[str, set[str]] = {}
+    for r in inv_rows or []:
+        teams_blob = r.get("teams") or {}
+        for fld, vals in teams_blob.items():
+            role = _TEAM_FIELD_TO_ROLE.get(fld)
+            if not role:
+                continue
+            if isinstance(vals, (list, tuple, set)):
+                _vals_iter = vals
+            else:
+                _vals_iter = [vals] if vals else []
+            for v in _vals_iter:
+                if not v:
+                    continue
+                out.setdefault(str(v).strip(), set()).add(role)
+    return out
+
+
+def _render_teams_and_members_view() -> None:
+    """Admin-only tab — directory + per-team + per-user breakdown with
+    role attribution. Reads from session_state slots the inventory
+    fragment publishes; never re-fetches anything itself.
+
+    Layout:
+      1. Stat-tile row (Teams · Members · Departments · Companies · Roles)
+      2. Role distribution horizontal bar chart
+      3. Teams grid (cards) with member counts + role badges
+      4. Filterable members table with role + activity counts
+    """
+    # ── Source data — everything is published by the inventory fragment
+    # which renders before this view in the late-render block.
+    _inv_rows_all = st.session_state.get("_inv_rows_all_v1") or []
+    _users_blob = st.session_state.get("_users_blob_v1") or {}
+    _users_list = list(_users_blob.get("users") or [])
+
+    if not _inv_rows_all and not _users_list:
+        st.markdown(
+            '<div class="tm-empty">'
+            '  <div class="tm-empty-glyph">👥</div>'
+            '  <div class="tm-empty-title">Nothing to show yet</div>'
+            '  <div class="tm-empty-body">'
+            '    Open the Pipelines Inventory tab first so the inventory '
+            '    rows + LDAP-cached user list load into session state. '
+            '    Then come back — this view derives roles + memberships '
+            '    from that data without any extra fetches.'
+            '  </div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Role classification per team + per user
+    _team_roles = _compute_team_role_map(_inv_rows_all)
+    # For each user, roles = union of teams' roles
+    for _u in _users_list:
+        _u_roles: set[str] = set()
+        for _t in _u.get("teams") or []:
+            _u_roles |= _team_roles.get(_t, set())
+        _u["_roles"] = sorted(_u_roles)
+
+    # ── Stat tiles ─────────────────────────────────────────────────────────
+    _total_teams = len(_team_roles)
+    _total_members = len(_users_list)
+    _depts = sorted({
+        (_u.get("ldap_department") or "").strip()
+        for _u in _users_list
+        if (_u.get("ldap_department") or "").strip()
+    })
+    _companies = sorted({
+        (_u.get("ldap_company") or "").strip()
+        for _u in _users_list
+        if (_u.get("ldap_company") or "").strip()
+    })
+    _roles_seen = sorted({r for rs in _team_roles.values() for r in rs})
+
+    st.markdown(
+        f'<div class="tm-tiles">'
+        f'  <div class="tm-tile is-team">'
+        f'    <div class="tm-tile-lbl">Teams</div>'
+        f'    <div class="tm-tile-val">{_total_teams:,}</div>'
+        f'    <div class="tm-tile-sub">resolved from inventory <code>*_team</code></div>'
+        f'  </div>'
+        f'  <div class="tm-tile is-member">'
+        f'    <div class="tm-tile-lbl">Members</div>'
+        f'    <div class="tm-tile-val">{_total_members:,}</div>'
+        f'    <div class="tm-tile-sub">from LDAP cache + ES activity</div>'
+        f'  </div>'
+        f'  <div class="tm-tile is-dept">'
+        f'    <div class="tm-tile-lbl">Departments</div>'
+        f'    <div class="tm-tile-val">{len(_depts):,}</div>'
+        f'    <div class="tm-tile-sub">distinct LDAP departments</div>'
+        f'  </div>'
+        f'  <div class="tm-tile is-company">'
+        f'    <div class="tm-tile-lbl">Companies</div>'
+        f'    <div class="tm-tile-val">{len(_companies):,}</div>'
+        f'    <div class="tm-tile-sub">distinct LDAP companies</div>'
+        f'  </div>'
+        f'  <div class="tm-tile is-role">'
+        f'    <div class="tm-tile-lbl">Roles</div>'
+        f'    <div class="tm-tile-val">{len(_roles_seen):,}</div>'
+        f'    <div class="tm-tile-sub">'
+        + html.escape(" · ".join(_roles_seen) or "—") +
+        f'</div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Role distribution chart (members per role + teams per role) ────────
+    _role_member_counts: dict[str, int] = {r: 0 for r in _roles_seen}
+    _role_team_counts: dict[str, int] = {r: 0 for r in _roles_seen}
+    for _u in _users_list:
+        for _r in _u["_roles"]:
+            _role_member_counts[_r] = _role_member_counts.get(_r, 0) + 1
+    for _team, _rs in _team_roles.items():
+        for _r in _rs:
+            _role_team_counts[_r] = _role_team_counts.get(_r, 0) + 1
+    if _roles_seen:
+        try:
+            _role_df = pd.DataFrame({
+                "Role":    _roles_seen + _roles_seen,
+                "Count":   ([_role_member_counts.get(r, 0) for r in _roles_seen]
+                            + [_role_team_counts.get(r, 0) for r in _roles_seen]),
+                "Series":  (["Members"] * len(_roles_seen)
+                            + ["Teams"]  * len(_roles_seen)),
+            })
+            _fig = px.bar(
+                _role_df, x="Count", y="Role", color="Series",
+                orientation="h", barmode="group",
+                height=max(220, 50 * len(_roles_seen) + 90),
+                color_discrete_map={
+                    "Members": "#4f46e5",   # accent
+                    "Teams":   "#0d9488",   # teal
+                },
+            )
+            _fig.update_layout(
+                margin=dict(l=10, r=10, t=20, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="system-ui, -apple-system, 'Segoe UI', sans-serif",
+                          size=12, color="#1a1d2e"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="right", x=1, title=None),
+                yaxis=dict(autorange="reversed", title=None),
+                xaxis=dict(title=None, gridcolor="#e3e6ee"),
+            )
+            st.markdown(
+                '<div class="tm-section-head">'
+                '  <span class="tm-section-glyph">⊞</span>'
+                '  Role distribution'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(_fig, use_container_width=True,
+                            config={"displayModeBar": False})
+        except Exception:
+            # If plotly fails for any reason, skip silently — the rest
+            # of the view stays functional.
+            pass
+
+    # ── Teams grid ────────────────────────────────────────────────────────
+    # Per-team stats: member count + role chips + top 3 most-active
+    # members by total activity. Cards sort by member count descending.
+    _team_members: dict[str, list[dict]] = {}
+    for _u in _users_list:
+        for _t in _u.get("teams") or []:
+            _team_members.setdefault(_t, []).append(_u)
+    # Include teams that exist in inventory but have zero LDAP-resolved
+    # members — show them too with a "no members yet" cue.
+    for _t in _team_roles:
+        _team_members.setdefault(_t, [])
+
+    _team_cards: list[str] = []
+    for _t in sorted(_team_members.keys(),
+                     key=lambda k: (-len(_team_members[k]), k.lower())):
+        _members = _team_members[_t]
+        _roles = sorted(_team_roles.get(_t, set()))
+        _role_chips = "".join(
+            f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
+            f'{html.escape(_r)}</span>'
+            for _r in _roles
+        ) or '<span class="tm-role-chip is-unmapped">unmapped</span>'
+        _top = sorted(_members,
+                      key=lambda u: -int(u.get("total", 0)))[:3]
+        _top_html = (
+            "".join(
+                f'<li>'
+                f'<span class="tm-top-name">{html.escape(_m.get("label") or _m.get("username") or "—")}</span>'
+                f'<span class="tm-top-stat">{int(_m.get("total", 0)):,}</span>'
+                f'</li>'
+                for _m in _top
+            )
+            if _top else
+            '<li class="tm-top-empty">no LDAP-resolved members</li>'
+        )
+        _team_cards.append(
+            f'<div class="tm-team-card">'
+            f'  <div class="tm-team-head">'
+            f'    <span class="tm-team-name">{html.escape(_t)}</span>'
+            f'    <span class="tm-team-count">{len(_members):,}</span>'
+            f'  </div>'
+            f'  <div class="tm-team-roles">{_role_chips}</div>'
+            f'  <ul class="tm-top-list">{_top_html}</ul>'
+            f'</div>'
+        )
+    st.markdown(
+        '<div class="tm-section-head">'
+        '  <span class="tm-section-glyph">▦</span>'
+        '  Teams'
+        f'  <span class="tm-section-count">{_total_teams:,}</span>'
+        '</div>'
+        f'<div class="tm-team-grid">{"".join(_team_cards)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Members table — filterable ───────────────────────────────────────
+    st.markdown(
+        '<div class="tm-section-head">'
+        '  <span class="tm-section-glyph">👤</span>'
+        '  Members'
+        f'  <span class="tm-section-count">{_total_members:,}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Filter controls — three small selects that drive the rendered list.
+    _f1, _f2, _f3, _f4 = st.columns([2, 2, 2, 4])
+    with _f1:
+        _role_pick = st.selectbox(
+            "Role", options=["— any role —"] + _roles_seen,
+            key="tm_role_filter_v1", label_visibility="visible",
+        )
+    with _f2:
+        _team_options = ["— any team —"] + sorted(
+            _team_members.keys(), key=str.lower,
+        )
+        _team_pick = st.selectbox(
+            "Team", options=_team_options,
+            key="tm_team_filter_v1", label_visibility="visible",
+        )
+    with _f3:
+        _dept_pick = st.selectbox(
+            "Department", options=["— any department —"] + _depts,
+            key="tm_dept_filter_v1", label_visibility="visible",
+        )
+    with _f4:
+        _search = st.text_input(
+            "Search (name / email / title)",
+            key="tm_search_filter_v1",
+            placeholder="type to filter the members table",
+        ).strip().lower()
+
+    # Apply filters
+    _filtered = list(_users_list)
+    if _role_pick and _role_pick != "— any role —":
+        _filtered = [u for u in _filtered if _role_pick in u["_roles"]]
+    if _team_pick and _team_pick != "— any team —":
+        _filtered = [
+            u for u in _filtered if _team_pick in (u.get("teams") or [])
+        ]
+    if _dept_pick and _dept_pick != "— any department —":
+        _filtered = [
+            u for u in _filtered
+            if (u.get("ldap_department") or "").strip() == _dept_pick
+        ]
+    if _search:
+        def _haystack(u: dict) -> str:
+            return " ".join((
+                u.get("label") or "",
+                u.get("email") or "",
+                u.get("username") or "",
+                u.get("ldap_title") or "",
+                u.get("ldap_department") or "",
+                " ".join(u.get("names") or []),
+            )).lower()
+        _filtered = [u for u in _filtered if all(
+            _t in _haystack(u) for _t in _search.split()
+        )]
+    _filtered.sort(key=lambda u: (-int(u.get("total", 0)),
+                                  (u.get("label") or "").lower()))
+
+    _members_cap = 200
+    _visible = _filtered[:_members_cap]
+    _row_html: list[str] = []
+    for _u in _visible:
+        _role_chips = "".join(
+            f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
+            f'{html.escape(_r)}</span>'
+            for _r in _u["_roles"]
+        ) or '<span class="tm-role-chip is-unmapped">—</span>'
+        _team_chips = "".join(
+            f'<span class="tm-team-chip">{html.escape(_t)}</span>'
+            for _t in (_u.get("teams") or [])[:5]
+        ) or '<span class="tm-team-chip is-empty">—</span>'
+        _team_overflow = ""
+        if (_u.get("teams") or []) and len(_u["teams"]) > 5:
+            _team_overflow = (
+                f'<span class="tm-team-chip is-more">+{len(_u["teams"]) - 5}</span>'
+            )
+        _row_html.append(
+            f'<tr>'
+            f'  <td class="tm-mem-name">'
+            f'    <div class="tm-mem-label">{html.escape(_u.get("label") or _u.get("username") or "—")}</div>'
+            f'    <div class="tm-mem-email">{html.escape(_u.get("email") or _u.get("username") or "—")}</div>'
+            f'  </td>'
+            f'  <td>{_role_chips}</td>'
+            f'  <td>{_team_chips}{_team_overflow}</td>'
+            f'  <td class="tm-mem-meta">'
+            f'    <div>{html.escape(_u.get("ldap_title") or "—")}</div>'
+            f'    <div class="tm-mem-dim">{html.escape(_u.get("ldap_department") or "")}</div>'
+            f'  </td>'
+            f'  <td class="tm-mem-num">{int(_u.get("commits", 0)):,}</td>'
+            f'  <td class="tm-mem-num">{int(_u.get("jira_authored", 0)) + int(_u.get("jira_assigned", 0)):,}</td>'
+            f'  <td class="tm-mem-num">{int(_u.get("requests_made", 0)) + int(_u.get("approvals", 0)) + int(_u.get("rejections", 0)):,}</td>'
+            f'  <td class="tm-mem-num">{int(_u.get("builds_requested", 0)) + int(_u.get("builds_approved", 0)) + int(_u.get("deploys_requested", 0)) + int(_u.get("deploys_approved", 0)):,}</td>'
+            f'  <td class="tm-mem-num tm-mem-total">{int(_u.get("total", 0)):,}</td>'
+            f'</tr>'
+        )
+    _overflow = ""
+    if len(_filtered) > _members_cap:
+        _overflow = (
+            f'<div class="tm-overflow">'
+            f'+{len(_filtered) - _members_cap:,} more members not shown · '
+            f'tighten filters to surface them</div>'
+        )
+    st.markdown(
+        f'<div class="tm-mem-table-wrap">'
+        f'  <table class="tm-mem-table">'
+        f'    <thead><tr>'
+        f'      <th>Member</th>'
+        f'      <th>Roles</th>'
+        f'      <th>Teams</th>'
+        f'      <th>Title · Department</th>'
+        f'      <th class="tm-th-num">Commits</th>'
+        f'      <th class="tm-th-num">Jira</th>'
+        f'      <th class="tm-th-num">Requests</th>'
+        f'      <th class="tm-th-num">Builds / Deploys</th>'
+        f'      <th class="tm-th-num">Total</th>'
+        f'    </tr></thead>'
+        f'    <tbody>{"".join(_row_html)}</tbody>'
+        f'  </table>'
+        f'</div>'
+        f'{_overflow}',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_people_insights_panel(start_dt, end_dt) -> None:
@@ -21052,16 +21737,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── People insights — per-user × per-team stats, smart-loaded ───────────
-    # Renders below the table so it never pushes inventory data off-screen.
-    # Fires zero ES queries until the operator clicks "▶ Load people insights".
-    _render_people_insights_panel(start_dt, end_dt)
-
     # ── Prisma scan viewer — INLINE here so admins can pull a scan without
     # leaving the inventory context. The renderer's internal idle gate
     # (▶ Load) keeps it cost-free until explicitly requested.
     if _is_admin:
         _render_prisma_scan_viewer()
+
+    # Publish the raw inventory rows so the Teams & Members tab (which
+    # renders before this one in the tab strip but actually executes
+    # AFTER, via the post-inventory render block) can derive role +
+    # team membership without re-fetching the inventory.
+    st.session_state["_inv_rows_all_v1"] = list(_inv_rows_all)
 
     # End of body_slot; the tab panel closes here.
     _body_container.__exit__(None, None, None)
@@ -21145,22 +21831,52 @@ if _show_inv and _inventory_slot is not None:
             _sync_badge_txt = (
                 "  ·  ✓ clean" if _t_total == 0 else f"  ·  ⚠ {_t_total} drift"
             )
-        _tab_labels = [
+        # Teams & Members tab — admin-only, sits FIRST. Reads inventory
+        # rows + LDAP-cached users from session state (which the
+        # inventory fragment publishes), so it doesn't trigger any
+        # extra fetches. Badge surfaces the cached user count.
+        _tm_show = _is_admin
+        _ldap_last = st.session_state.get("_ldap_last_count_v1") or 0
+        _tm_badge_txt = (
+            f"  ·  {_ldap_last:,}" if _tm_show and _ldap_last else ""
+        )
+        _tab_labels: list[str] = []
+        if _tm_show:
+            _tab_labels.append(f"👥  TEAMS & MEMBERS{_tm_badge_txt}")
+        _tab_labels.extend([
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
             f"⧗  EVENT LOG{_el_badge_txt}",
-        ]
+        ])
         if _jk_show:
             _tab_labels.append(f"⚙  JENKINS{_jk_badge_txt}")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         with st.container(key="cc_surface_tabs"):
             _tabs = st.tabs(_tab_labels)
-            _tab_inv, _tab_log = _tabs[0], _tabs[1]
-            _next_idx = 2
-            _tab_jenkins = _tabs[_next_idx] if _jk_show else None
+            _idx = 0
+            if _tm_show:
+                _tab_teams = _tabs[_idx]; _idx += 1
+            else:
+                _tab_teams = None
+            _tab_inv = _tabs[_idx]; _idx += 1
+            _tab_log = _tabs[_idx]; _idx += 1
+            _tab_jenkins = _tabs[_idx] if _jk_show else None
             if _jk_show:
-                _next_idx += 1
-            _tab_sync = _tabs[_next_idx] if _sync_show else None
+                _idx += 1
+            _tab_sync = _tabs[_idx] if _sync_show else None
+            if _tab_teams is not None:
+                with _tab_teams:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'People + teams + roles — directory view derived '
+                        'from inventory team fields, LDAP team rosters, and '
+                        'cross-index activity. Admin only.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _tm_slot = st.empty()
+            else:
+                _tm_slot = None
             with _tab_inv:
                 st.markdown(
                     '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
@@ -21212,8 +21928,16 @@ if _show_inv and _inventory_slot is not None:
                 _sync_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
-        # publishes the scope keys the event log needs.
+        # publishes scope keys + user blobs the other tabs depend on.
         _render_inventory_view(_iv_controls_slot, _iv_body_slot)
+
+        # Teams & Members tab reads from the session-state slots the
+        # inventory fragment just populated (inventory rows + LDAP-
+        # cached user blob). Render AFTER inventory ran but emit into
+        # the slot that's positioned BEFORE inventory in the tab strip.
+        if _tm_slot is not None:
+            with _tm_slot.container():
+                _render_teams_and_members_view()
 
         # Now the event log reads a fresh scope and fills slot C.
         with _el_slot.container():
