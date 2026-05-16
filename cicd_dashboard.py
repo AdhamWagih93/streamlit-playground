@@ -183,17 +183,55 @@ GIT_VAULT_PATH = os.environ.get("GIT_VAULT_PATH", "new_git").strip()
 ANSIBLE_VAULT_PATH = os.environ.get("ANSIBLE_VAULT_PATH", "ansible").strip()
 ANSIBLE_VAULT_PW_KEY = os.environ.get("ANSIBLE_VAULT_PW_KEY", "vault_password").strip()
 
+# Vault stored its prod secrets at different sibling paths in different
+# deployments — try these candidates in order when the configured one
+# returns empty. Last-one-wins doesn't apply: we accept the first
+# candidate that yields a non-empty value, then remember it for the
+# session via `_ansible_vault_resolved_path` so the integrations strip
+# can show which one actually worked.
+_ANSIBLE_VAULT_PATH_CANDIDATES = (
+    ANSIBLE_VAULT_PATH,                  # configured (default "ansible")
+    "ansible/vault",
+    "ansible-vault",
+    "ansible_vault",
+    "vault/ansible",
+)
+_ANSIBLE_VAULT_KEY_CANDIDATES = (
+    ANSIBLE_VAULT_PW_KEY,                # configured (default "vault_password")
+    "password",
+    "vault-password",
+    "ansible_vault_password",
+)
 
-def _ansible_vault_password() -> str:
+
+def _ansible_vault_password() -> tuple[str, str, str]:
     """Read the Ansible Vault password from HashiCorp vault.
 
-    Returns ``""`` when the vault entry is missing / inaccessible —
-    :func:`_decrypt_vault` raises in that case and the failure surfaces
-    in the integrations strip + git-diagnostic panel via the standard
-    ``_vault_last_error(ANSIBLE_VAULT_PATH)`` path.
+    Returns a 3-tuple ``(password, resolved_path, resolved_key)``. On
+    miss across every candidate, all three values are ``""``. Callers
+    that want only the password should index ``[0]``; the resolved path
+    + key are used by the integrations-strip tile so admins see which
+    vault entry actually worked.
     """
-    cfg = _vault_secrets(ANSIBLE_VAULT_PATH)
-    return str(cfg.get(ANSIBLE_VAULT_PW_KEY) or "")
+    for path in _ANSIBLE_VAULT_PATH_CANDIDATES:
+        if not path:
+            continue
+        cfg = _vault_secrets(path)
+        if not cfg:
+            continue
+        for key in _ANSIBLE_VAULT_KEY_CANDIDATES:
+            if not key:
+                continue
+            val = cfg.get(key)
+            if val:
+                return str(val), path, key
+    return "", "", ""
+
+
+def _ansible_vault_password_str() -> str:
+    """Just the password — for callsites that don't care about the
+    resolved (path, key) tuple."""
+    return _ansible_vault_password()[0]
 
 INVENTORY_REPO_PATH = "/tmp/inventories"
 INVENTORY_BRANCH = "main"
@@ -10332,28 +10370,42 @@ def _integrations_health() -> list[dict]:
     # separately from the umbrella Vault tile so admins can see at a
     # glance whether ansible-decrypt is wired up, since vaulted YAMLs in
     # the inventories repo silently fail to decrypt when this isn't set.
-    _av_pw = _ansible_vault_password()
-    _av_err = _vault_last_error(ANSIBLE_VAULT_PATH)
+    _av_pw, _av_path, _av_key = _ansible_vault_password()
+    # Collect every vault-path attempt's stashed error so admins can see
+    # which candidates failed and why (not just the configured one).
+    _av_errs = []
+    for _candidate in _ANSIBLE_VAULT_PATH_CANDIDATES:
+        _e = _vault_last_error(_candidate)
+        if _e:
+            _av_errs.append(f"{_candidate}: {_e}")
     if _av_pw:
         out.append({
             "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
             "state": "ok",
             "detail": f"resolved · {len(_av_pw)} chars",
             "tip": (
-                f"Password sourced from vault path "
-                f"{ANSIBLE_VAULT_PATH!r} · key {ANSIBLE_VAULT_PW_KEY!r}."
+                f"Password sourced from vault path {_av_path!r} · "
+                f"key {_av_key!r}."
             ),
         })
     else:
+        _candidates = ", ".join(
+            p for p in _ANSIBLE_VAULT_PATH_CANDIDATES if p
+        )
+        _keys = ", ".join(
+            k for k in _ANSIBLE_VAULT_KEY_CANDIDATES if k
+        )
         out.append({
             "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
-            "state": "down" if _av_err else "skip",
+            "state": "down" if _av_errs else "skip",
             "detail": "not resolved",
             "tip": (
-                _av_err
-                or f"Expected key {ANSIBLE_VAULT_PW_KEY!r} under vault path "
-                   f"{ANSIBLE_VAULT_PATH!r}. Vaulted YAMLs won't decrypt "
-                   f"until this resolves."
+                (" · ".join(_av_errs)[:280] if _av_errs else "")
+                or (
+                    f"Tried paths [{_candidates}] with keys [{_keys}]; "
+                    f"none returned a password. Vaulted YAMLs won't "
+                    f"decrypt until this resolves."
+                )
             ),
         })
 
@@ -10625,6 +10677,8 @@ def _render_people_insights_panel(start_dt, end_dt) -> None:
     visible = users[:_PPL_VIS_CAP]
     rows_html: list[str] = []
     for u in visible:
+        # Lazy LDAP enrichment — only fires for users actually displayed.
+        _ldap_backfill_user(u)
         _names = " / ".join(u["names"]) if u["names"] else u["email"]
         _email_chip = (
             f'<span class="ppl-email">{html.escape(u["email"])}</span>'
@@ -13298,6 +13352,8 @@ def _render_event_log() -> None:
             if _u and _u["key"] not in _users_in_view:
                 _users_in_view[_u["key"]] = _u
     for _u in _users_in_view.values():
+        # Lazy LDAP enrichment — only fires for users actually rendered.
+        _ldap_backfill_user(_u)
         _pid = _user_pop_id(_u["key"])
         _name = html.escape(_u.get("label") or _u.get("email") or _u["key"])
         _email = _u.get("email") or ""
@@ -14281,11 +14337,12 @@ def _decrypt_vault(blob: bytes) -> bytes:
     suppress so a wrong vault password is visible rather than silent."""
     if not _ANSIBLE_VAULT_AVAILABLE:
         raise RuntimeError("ansible.parsing.vault not installed")
-    _pw = _ansible_vault_password()
+    _pw = _ansible_vault_password_str()
     if not _pw:
         raise RuntimeError(
-            "Ansible Vault password not set — an admin must enter it via "
-            "the in-page input each session."
+            "Ansible Vault password not resolved from HashiCorp vault — "
+            "see the Ansible Vault tile in the Integrations strip for "
+            "the candidate paths that were tried."
         )
     vault = _VaultLib([("default", _VaultSecret(_pw.encode()))])
     return vault.decrypt(blob)
@@ -14361,11 +14418,11 @@ def _resolve_field(merged: dict, field: str) -> str:
 
 def _vault_pw_fingerprint() -> str:
     """Short opaque fingerprint of the current Ansible Vault password — a
-    cache-key marker so the inventory loader re-runs when the admin sets
-    or rotates the password mid-session, WITHOUT putting the secret
-    itself in any cache key. ``""`` when no password is set."""
+    cache-key marker so the inventory loader re-runs when the password
+    changes (rotation in vault), WITHOUT putting the secret itself in
+    any cache key. ``""`` when no password is set."""
     import hashlib
-    _pw = _ansible_vault_password()
+    _pw = _ansible_vault_password_str()
     if not _pw:
         return ""
     return hashlib.sha256(_pw.encode("utf-8")).hexdigest()[:12]
@@ -16127,11 +16184,13 @@ def _ldap_enrich_users(users_blob: dict) -> dict:
     return users_blob
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _ldap_team_members(team_cn: str) -> list[str]:
     """Cached wrapper around ``utils.ldap.get_team_members`` — keyed on
-    the team CN so repeated calls reuse the result. Returns ``[]`` when
-    LDAP is unavailable / unreachable / the team isn't found."""
+    the team CN. TTL is 1 hour because team rosters change slowly and
+    each call costs N+1 LDAP queries (1 for the team + 1 per member to
+    resolve the DN → sAMAccountName). Returns ``[]`` when LDAP is
+    unavailable / unreachable / the team isn't found."""
     if not _LDAP_AVAILABLE or not team_cn:
         return []
     try:
@@ -16156,89 +16215,70 @@ def _ldap_user_info_cached(username: str) -> dict:
         return {}
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _resolve_ldap_users_from_teams(team_cns_tuple: tuple[str, ...]) -> dict:
-    """LDAP-first user discovery: for each team CN, fetch the roster via
-    ``get_team_members`` and resolve each member to a fully-enriched
-    user record (email / display name / department / etc).
+    """LDAP-first user discovery — LIGHTWEIGHT version.
 
-    Returned shape:
+    Fetches team rosters in PARALLEL via ThreadPoolExecutor (one
+    `_ldap_team_members` call per team) and collects just the
+    sAMAccountNames into a per-user record. Per-user info enrichment
+    (email / title / department / manager) is DEFERRED — the popover
+    + People Insights table call :func:`_ldap_backfill_user` lazily on
+    only the users they actually display. That keeps page load fast:
+    the cold-cache cost is bounded by ``team_count`` LDAP roster
+    queries (parallel), not ``team_count × member_count`` enrichment
+    calls.
+
+    Returned shape (same as before, but most fields stay empty until
+    the lazy backfill runs):
 
         {
-          "users": {
-            sAMAccountName_lower: {
-              "username":   sAMAccountName,
-              "email":      "...",
-              "label":      display name (or sAMAccountName fallback),
-              "names":      [display name, sAMAccountName],
-              "teams":      [team_cn, ...],
-              "title":      "...",
-              "department": "...",
-              "company":    "...",
-              "manager":    "...",
-            },
-            ...
-          },
+          "users":        {sAMAccountName_lower: {...}},
           "team_rosters": {team_cn: [sAMAccountName, ...]},
-          "errors":      {team_cn: "ldap error msg"},
+          "errors":       {team_cn: "ldap error msg"},
         }
-
-    Cached on the sorted tuple of team CNs — when team scope changes,
-    re-resolves. The underlying ``utils.ldap`` calls are themselves
-    cached for 5 hours, so on a warm cache this is near-free."""
+    """
     out_users: dict[str, dict] = {}
     team_rosters: dict[str, list[str]] = {}
     errors: dict[str, str] = {}
     if not _LDAP_AVAILABLE or not team_cns_tuple:
         return {"users": {}, "team_rosters": {}, "errors": errors}
 
-    for team_cn in team_cns_tuple:
+    # Parallel team-roster fetch. ldap3 connection pooling is per-team
+    # (each `_ldap_team_members` opens its own conn), so up to 8
+    # concurrent queries is a comfortable default — saturates LDAP
+    # without overwhelming a single bind.
+    def _resolve_team(team_cn: str) -> tuple[str, list[str], str]:
         try:
             members = _ldap_team_members(team_cn) or []
+            return team_cn, list(members), ""
         except Exception as e:
-            errors[team_cn] = f"{type(e).__name__}: {e}"
-            members = []
-        team_rosters[team_cn] = list(members)
-        for username in members:
-            if not username:
-                continue
-            key = username.strip().lower()
-            if not key:
-                continue
-            u = out_users.setdefault(key, {
-                "username":   username.strip(),
-                "email":      "",
-                "label":      username.strip(),
-                "names":      set(),
-                "teams":      set(),
-                "title":      "",
-                "department": "",
-                "company":    "",
-                "manager":    "",
-            })
-            u["teams"].add(team_cn)
-            u["names"].add(username.strip())
-            # Lazy enrichment — only fetch info when we haven't filled
-            # the email yet (key absent or empty). Subsequent team
-            # iterations for the same user reuse the cached info.
-            if not u["email"]:
-                info = _ldap_user_info_cached(username)
-                if info:
-                    if info.get("email"):
-                        u["email"] = str(info["email"]).strip().lower()
-                    _disp = info.get("username") or username
-                    u["label"] = str(_disp).strip() or username.strip()
-                    u["title"]      = (info.get("title") or "").strip()
-                    u["department"] = (info.get("department") or "").strip()
-                    u["company"]    = (
-                        info.get("ldapcompany") or info.get("company") or ""
-                    ).strip()
-                    u["manager"]    = (info.get("manager") or "").strip()
-                    # Add the display name as another alias for ES matching.
-                    if _disp and _disp not in u["names"]:
-                        u["names"].add(str(_disp).strip())
+            return team_cn, [], f"{type(e).__name__}: {e}"
 
-    # Convert sets → sorted lists for serialisation.
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="ldap-team") as ex:
+        for team_cn, members, err in ex.map(_resolve_team, team_cns_tuple):
+            team_rosters[team_cn] = members
+            if err:
+                errors[team_cn] = err
+            for username in members:
+                if not username:
+                    continue
+                key = username.strip().lower()
+                if not key:
+                    continue
+                u = out_users.setdefault(key, {
+                    "username":   username.strip(),
+                    "email":      "",
+                    "label":      username.strip(),
+                    "names":      {username.strip()},
+                    "teams":      set(),
+                    "title":      "",
+                    "department": "",
+                    "company":    "",
+                    "manager":    "",
+                })
+                u["teams"].add(team_cn)
+
     for u in out_users.values():
         u["names"] = sorted({n for n in u["names"] if n})
         u["teams"] = sorted(u["teams"])
@@ -16248,6 +16288,39 @@ def _resolve_ldap_users_from_teams(team_cns_tuple: tuple[str, ...]) -> dict:
         "team_rosters": team_rosters,
         "errors":       errors,
     }
+
+
+def _ldap_backfill_user(user_dict: dict) -> None:
+    """In-place enrichment of a single user record with LDAP details.
+
+    Called LAZILY by popover + People Insights rendering, so only
+    visible users incur the directory lookup. Idempotent — guards on
+    whether ``ldap_username`` is already populated. Picks the lookup
+    username from ``ldap_username`` (already set), then the user's
+    ``username`` slot, then the first alias name.
+    """
+    if user_dict.get("ldap_username"):
+        return
+    username = (
+        user_dict.get("ldap_username")
+        or user_dict.get("username")
+        or (user_dict.get("names") or [""])[0]
+    )
+    username = (username or "").strip()
+    if not username:
+        return
+    info = _ldap_user_info_cached(username)
+    if not info:
+        return
+    user_dict["ldap_username"]   = str(info.get("username") or username)
+    user_dict["ldap_title"]      = (info.get("title") or "").strip()
+    user_dict["ldap_department"] = (info.get("department") or "").strip()
+    user_dict["ldap_company"]    = (
+        info.get("ldapcompany") or info.get("company") or ""
+    ).strip()
+    user_dict["ldap_manager"]    = (info.get("manager") or "").strip()
+    if not user_dict.get("email") and info.get("email"):
+        user_dict["email"] = str(info["email"]).strip().lower()
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -16998,24 +17071,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             )
             _users_list_es.append(_new)
 
-    # ES-side users that did NOT match an LDAP user still get the
-    # standard LDAP enrichment pass (best-effort directory lookup by
-    # email — handles people on teams that aren't in the inventory's
-    # scope, or whose team string doesn't resolve via LDAP).
-    for _u in _users_list_es:
-        if _u.get("ldap_username"):
-            continue
-        if not _u.get("email"):
-            continue
-        info = _ldap_user_info_cached(_u.get("ldap_username") or "")
-        if info:
-            _u["ldap_username"]   = info.get("username") or ""
-            _u["ldap_title"]      = info.get("title") or ""
-            _u["ldap_department"] = info.get("department") or ""
-            _u["ldap_company"]    = (
-                info.get("ldapcompany") or info.get("company") or ""
-            )
-            _u["ldap_manager"]    = info.get("manager") or ""
+    # ES-side users that did NOT match an LDAP user remain un-enriched
+    # at this point. The popover + People Insights renderers will call
+    # _ldap_backfill_user on each VISIBLE user, so the slow directory
+    # lookups only happen for what's actually on-screen — keeps the
+    # initial page render snappy.
 
     # Final dedupe + sort: collapse any duplicates that crept in via
     # both an email-keyed bucket AND a name-keyed bucket. Last-write
@@ -20039,20 +20099,31 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # the status so admins can see at a glance whether the secret
         # resolved (and if not, the underlying vault error).
         with st.container(key="cc_ansible_vault_pw"):
-            _pw_set = bool(_ansible_vault_password())
-            _pw_err = (
-                _vault_last_error(ANSIBLE_VAULT_PATH)
-                if not _pw_set else ""
-            )
+            _pw, _pw_path, _pw_key = _ansible_vault_password()
+            _pw_set = bool(_pw)
+            # When no candidate path produced a password, collect every
+            # path's last-known error so admins see WHICH candidates were
+            # tried + WHY each failed (not just the configured one).
+            _pw_err = ""
+            if not _pw_set:
+                _pw_err_parts = []
+                for _candidate in _ANSIBLE_VAULT_PATH_CANDIDATES:
+                    _e = _vault_last_error(_candidate)
+                    if _e:
+                        _pw_err_parts.append(f"{_candidate}: {_e}")
+                _pw_err = " · ".join(_pw_err_parts)
             _state_cls = "is-set" if _pw_set else "is-unset"
-            _state_txt = "✓ resolved from vault" if _pw_set else "○ not in vault"
+            _state_txt = (
+                "✓ resolved from vault" if _pw_set else "○ not in vault"
+            )
             _detail = (
-                f' · <code style="font-size:0.66rem">{html.escape(ANSIBLE_VAULT_PATH)}'
-                f'/{html.escape(ANSIBLE_VAULT_PW_KEY)}</code>'
+                f' · <code style="font-size:0.66rem">'
+                f'{html.escape(_pw_path or ANSIBLE_VAULT_PATH)}'
+                f'/{html.escape(_pw_key or ANSIBLE_VAULT_PW_KEY)}</code>'
             )
             _err_html = (
                 f' · <span style="color:var(--cc-red)">vault error: '
-                f'{html.escape(_pw_err)[:80]}</span>'
+                f'{html.escape(_pw_err)[:200]}</span>'
                 if _pw_err else ""
             )
             st.markdown(
