@@ -16897,10 +16897,23 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # not they did anything in this window. We resolve those team
     # rosters first, then merge ES activity counts into each LDAP
     # record by matching on email (canonical) or any known display name.
+    #
+    # Team collection is done inline here (instead of via the later-
+    # defined `_iv_row_teams` helper) so the LDAP probe doesn't depend
+    # on role-scoping decisions made downstream — LDAP enumeration
+    # always covers EVERY team in the loaded inventory regardless of
+    # the viewer's role.
     _ldap_team_set: set[str] = set()
     for _r in _inv_rows_all:
-        for _t in _iv_row_teams(_r):
-            _ldap_team_set.add(_t)
+        _t_blob = _r.get("teams") or {}
+        for _vals in _t_blob.values():
+            if isinstance(_vals, (list, tuple, set)):
+                for _v in _vals:
+                    if _v:
+                        _ldap_team_set.add(str(_v).strip())
+            elif _vals:
+                _ldap_team_set.add(str(_vals).strip())
+    _ldap_team_set.discard("")
     _ldap_blob = _resolve_ldap_users_from_teams(
         tuple(sorted(_ldap_team_set)),
     ) if _ldap_team_set else {"users": {}, "team_rosters": {}, "errors": {}}
