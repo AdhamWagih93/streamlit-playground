@@ -183,55 +183,19 @@ GIT_VAULT_PATH = os.environ.get("GIT_VAULT_PATH", "new_git").strip()
 ANSIBLE_VAULT_PATH = os.environ.get("ANSIBLE_VAULT_PATH", "ansible").strip()
 ANSIBLE_VAULT_PW_KEY = os.environ.get("ANSIBLE_VAULT_PW_KEY", "vault_password").strip()
 
-# Vault stored its prod secrets at different sibling paths in different
-# deployments — try these candidates in order when the configured one
-# returns empty. Last-one-wins doesn't apply: we accept the first
-# candidate that yields a non-empty value, then remember it for the
-# session via `_ansible_vault_resolved_path` so the integrations strip
-# can show which one actually worked.
-_ANSIBLE_VAULT_PATH_CANDIDATES = (
-    ANSIBLE_VAULT_PATH,                  # configured (default "ansible")
-    "ansible/vault",
-    "ansible-vault",
-    "ansible_vault",
-    "vault/ansible",
-)
-_ANSIBLE_VAULT_KEY_CANDIDATES = (
-    ANSIBLE_VAULT_PW_KEY,                # configured (default "vault_password")
-    "password",
-    "vault-password",
-    "ansible_vault_password",
-)
+
+def _ansible_vault_password() -> str:
+    """Read the Ansible Vault password from HashiCorp vault at the
+    configured path/key. No fallback chains — the user owns the
+    location and the dashboard reads exactly what they set."""
+    cfg = _vault_secrets(ANSIBLE_VAULT_PATH)
+    return str(cfg.get(ANSIBLE_VAULT_PW_KEY) or "")
 
 
-def _ansible_vault_password() -> tuple[str, str, str]:
-    """Read the Ansible Vault password from HashiCorp vault.
-
-    Returns a 3-tuple ``(password, resolved_path, resolved_key)``. On
-    miss across every candidate, all three values are ``""``. Callers
-    that want only the password should index ``[0]``; the resolved path
-    + key are used by the integrations-strip tile so admins see which
-    vault entry actually worked.
-    """
-    for path in _ANSIBLE_VAULT_PATH_CANDIDATES:
-        if not path:
-            continue
-        cfg = _vault_secrets(path)
-        if not cfg:
-            continue
-        for key in _ANSIBLE_VAULT_KEY_CANDIDATES:
-            if not key:
-                continue
-            val = cfg.get(key)
-            if val:
-                return str(val), path, key
-    return "", "", ""
-
-
+# Backwards-compat shim: callers that previously expected the 3-tuple
+# or the _str helper still resolve cleanly.
 def _ansible_vault_password_str() -> str:
-    """Just the password — for callsites that don't care about the
-    resolved (path, key) tuple."""
-    return _ansible_vault_password()[0]
+    return _ansible_vault_password()
 
 INVENTORY_REPO_PATH = "/tmp/inventories"
 INVENTORY_BRANCH = "main"
@@ -10759,44 +10723,29 @@ def _integrations_health() -> list[dict]:
     # 7. Ansible Vault password — read from vault path ANSIBLE_VAULT_PATH
     # under variable ANSIBLE_VAULT_PW_KEY. Surfacing its resolution state
     # separately from the umbrella Vault tile so admins can see at a
-    # glance whether ansible-decrypt is wired up, since vaulted YAMLs in
-    # the inventories repo silently fail to decrypt when this isn't set.
-    _av_pw, _av_path, _av_key = _ansible_vault_password()
-    # Collect every vault-path attempt's stashed error so admins can see
-    # which candidates failed and why (not just the configured one).
-    _av_errs = []
-    for _candidate in _ANSIBLE_VAULT_PATH_CANDIDATES:
-        _e = _vault_last_error(_candidate)
-        if _e:
-            _av_errs.append(f"{_candidate}: {_e}")
+    # glance whether ansible-decrypt is wired up.
+    _av_pw = _ansible_vault_password()
+    _av_err = _vault_last_error(ANSIBLE_VAULT_PATH)
     if _av_pw:
         out.append({
             "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
             "state": "ok",
             "detail": f"resolved · {len(_av_pw)} chars",
             "tip": (
-                f"Password sourced from vault path {_av_path!r} · "
-                f"key {_av_key!r}."
+                f"Password sourced from vault path "
+                f"{ANSIBLE_VAULT_PATH!r} · key {ANSIBLE_VAULT_PW_KEY!r}."
             ),
         })
     else:
-        _candidates = ", ".join(
-            p for p in _ANSIBLE_VAULT_PATH_CANDIDATES if p
-        )
-        _keys = ", ".join(
-            k for k in _ANSIBLE_VAULT_KEY_CANDIDATES if k
-        )
         out.append({
             "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
-            "state": "down" if _av_errs else "skip",
+            "state": "down" if _av_err else "skip",
             "detail": "not resolved",
             "tip": (
-                (" · ".join(_av_errs)[:280] if _av_errs else "")
-                or (
-                    f"Tried paths [{_candidates}] with keys [{_keys}]; "
-                    f"none returned a password. Vaulted YAMLs won't "
-                    f"decrypt until this resolves."
-                )
+                _av_err
+                or f"Expected key {ANSIBLE_VAULT_PW_KEY!r} under vault path "
+                   f"{ANSIBLE_VAULT_PATH!r}. Vaulted YAMLs won't decrypt "
+                   f"until this resolves."
             ),
         })
 
@@ -21344,41 +21293,57 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # the status so admins can see at a glance whether the secret
         # resolved (and if not, the underlying vault error).
         with st.container(key="cc_ansible_vault_pw"):
-            _pw, _pw_path, _pw_key = _ansible_vault_password()
+            _pw = _ansible_vault_password()
             _pw_set = bool(_pw)
-            # When no candidate path produced a password, collect every
-            # path's last-known error so admins see WHICH candidates were
-            # tried + WHY each failed (not just the configured one).
-            _pw_err = ""
-            if not _pw_set:
-                _pw_err_parts = []
-                for _candidate in _ANSIBLE_VAULT_PATH_CANDIDATES:
-                    _e = _vault_last_error(_candidate)
-                    if _e:
-                        _pw_err_parts.append(f"{_candidate}: {_e}")
-                _pw_err = " · ".join(_pw_err_parts)
+            _pw_err = "" if _pw_set else _vault_last_error(ANSIBLE_VAULT_PATH)
             _state_cls = "is-set" if _pw_set else "is-unset"
             _state_txt = (
                 "✓ resolved from vault" if _pw_set else "○ not in vault"
             )
             _detail = (
                 f' · <code style="font-size:0.66rem">'
-                f'{html.escape(_pw_path or ANSIBLE_VAULT_PATH)}'
-                f'/{html.escape(_pw_key or ANSIBLE_VAULT_PW_KEY)}</code>'
+                f'{html.escape(ANSIBLE_VAULT_PATH)}'
+                f'/{html.escape(ANSIBLE_VAULT_PW_KEY)}</code>'
             )
+            # Cache-bust affordance — useful right after fixing vault
+            # state on the server, since the 5-minute cache_data TTL
+            # would otherwise pin an old empty result.
+            _av_c1, _av_c2 = st.columns([6, 1])
             _err_html = (
                 f' · <span style="color:var(--cc-red)">vault error: '
                 f'{html.escape(_pw_err)[:200]}</span>'
                 if _pw_err else ""
             )
-            st.markdown(
-                f'<div class="iv-src-pref-lbl" style="padding-top:2px">'
-                f'Ansible Vault password '
-                f'<span class="iv-src-pref-state {_state_cls}">{_state_txt}</span>'
-                f'{_detail}{_err_html}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            with _av_c1:
+                st.markdown(
+                    f'<div class="iv-src-pref-lbl" style="padding-top:2px">'
+                    f'Ansible Vault password '
+                    f'<span class="iv-src-pref-state {_state_cls}">{_state_txt}</span>'
+                    f'{_detail}{_err_html}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _av_c2:
+                if st.button(
+                    "↻ Re-read",
+                    key="_ansible_vault_reread_btn",
+                    use_container_width=True,
+                    help=(
+                        "Drop the cached vault result for "
+                        f"{ANSIBLE_VAULT_PATH!r} and re-query. Useful "
+                        "after fixing the secret on the vault server "
+                        "so you don't have to wait for the 5-minute TTL."
+                    ),
+                ):
+                    try:
+                        _vault_secrets_raw.clear()
+                    except Exception:
+                        pass
+                    # Clear the per-path stashed error so a successful
+                    # re-read shows clean state.
+                    _store = st.session_state.get(_VAULT_ERR_KEY) or {}
+                    _store.pop(ANSIBLE_VAULT_PATH, None)
+                    st.rerun()
 
         # ── Admin-only LDAP sync row ────────────────────────────────────
         # Subtle "last sync" indicator + sync button. Reading from
