@@ -3013,6 +3013,22 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border-radius: 999px;
     border: 1px solid var(--cc-border);
 }
+.tm-section-trunc {
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-text-mute);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    margin-left: auto;
+}
+.tm-section-sub {
+    font-size: 0.78rem;
+    color: var(--cc-text-dim);
+    line-height: 1.5;
+    margin: 4px 0 8px 0;
+    max-width: 680px;
+}
 
 .tm-team-grid {
     display: grid;
@@ -11219,49 +11235,142 @@ def _render_teams_and_members_view() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Role distribution chart (members per role + teams per role) ────────
-    _role_member_counts: dict[str, int] = {r: 0 for r in _roles_seen}
-    _role_team_counts: dict[str, int] = {r: 0 for r in _roles_seen}
-    for _u in _users_list:
-        for _r in _u["_roles"]:
-            _role_member_counts[_r] = _role_member_counts.get(_r, 0) + 1
-    for _team, _rs in _team_roles.items():
-        for _r in _rs:
-            _role_team_counts[_r] = _role_team_counts.get(_r, 0) + 1
-    if _roles_seen:
+    # ── Teams × Projects involvement map ────────────────────────────────
+    # Replaces the previous role-distribution bar chart. For each
+    # (team, project) pair we count how many app rows that team owns in
+    # that project at any role (dev_team / qc_team / uat_team / prd_team).
+    # The resulting matrix surfaces "which teams are most involved
+    # across which projects" — admins read horizontal stripes to spot
+    # cross-project teams and vertical stripes to spot heavily-shared
+    # projects. Top-15 each dimension to keep the cell text legible;
+    # totals next to each row/column label tell the operator what the
+    # truncation hid.
+    _team_project_counts: dict[tuple[str, str], int] = {}
+    for _r in _inv_rows_all:
+        _proj = (_r.get("project") or "").strip()
+        if not _proj:
+            continue
+        _t_blob = _r.get("teams") or {}
+        _row_teams: set[str] = set()
+        for _vals in _t_blob.values():
+            if isinstance(_vals, (list, tuple, set)):
+                for _v in _vals:
+                    _v = (str(_v) or "").strip()
+                    if _v:
+                        _row_teams.add(_v)
+            elif _vals:
+                _row_teams.add(str(_vals).strip())
+        # Count each app row once per (team, project) — multi-role
+        # presence (same team in dev_team AND qc_team) shouldn't double-count.
+        for _team in _row_teams:
+            _team_project_counts[(_team, _proj)] = (
+                _team_project_counts.get((_team, _proj), 0) + 1
+            )
+
+    if _team_project_counts:
+        _team_totals: dict[str, int] = {}
+        _project_totals: dict[str, int] = {}
+        for (_team, _proj), _c in _team_project_counts.items():
+            _team_totals[_team] = _team_totals.get(_team, 0) + _c
+            _project_totals[_proj] = _project_totals.get(_proj, 0) + _c
+
+        _TOP_TEAMS_N = 15
+        _TOP_PROJECTS_N = 15
+        _top_teams_sorted = sorted(
+            _team_totals.items(),
+            key=lambda kv: (-kv[1], kv[0].lower()),
+        )[:_TOP_TEAMS_N]
+        _top_projects_sorted = sorted(
+            _project_totals.items(),
+            key=lambda kv: (-kv[1], kv[0].lower()),
+        )[:_TOP_PROJECTS_N]
+        _team_names = [t for t, _ in _top_teams_sorted]
+        _project_names = [p for p, _ in _top_projects_sorted]
+
+        # Build matrix; rows = teams (top→bottom by total), cols =
+        # projects (left→right by total). Plotly's imshow draws y-axis
+        # bottom-up by default; we flip via autorange="reversed".
+        _matrix = [
+            [_team_project_counts.get((_t, _p), 0) for _p in _project_names]
+            for _t in _team_names
+        ]
+        # Annotate axis labels with totals so the operator sees what
+        # got truncated when the dataset exceeds the top-N cap.
+        _y_labels = [
+            f"{_t}  · {_team_totals[_t]}"
+            for _t in _team_names
+        ]
+        _x_labels = [
+            f"{_p}<br><span style='font-size:9px;color:#8890a4'>· {_project_totals[_p]}</span>"
+            for _p in _project_names
+        ]
+
         try:
-            _role_df = pd.DataFrame({
-                "Role":    _roles_seen + _roles_seen,
-                "Count":   ([_role_member_counts.get(r, 0) for r in _roles_seen]
-                            + [_role_team_counts.get(r, 0) for r in _roles_seen]),
-                "Series":  (["Members"] * len(_roles_seen)
-                            + ["Teams"]  * len(_roles_seen)),
-            })
-            _fig = px.bar(
-                _role_df, x="Count", y="Role", color="Series",
-                orientation="h", barmode="group",
-                height=max(220, 50 * len(_roles_seen) + 90),
-                color_discrete_map={
-                    "Members": "#4f46e5",   # accent
-                    "Teams":   "#0d9488",   # teal
-                },
+            _fig = px.imshow(
+                _matrix,
+                x=_x_labels, y=_y_labels,
+                color_continuous_scale=[
+                    (0.00, "#f7f8fb"),
+                    (0.10, "#ccfbf1"),
+                    (0.40, "#5eead4"),
+                    (0.70, "#14b8a6"),
+                    (1.00, "#0f766e"),
+                ],
+                aspect="auto",
+                text_auto=True,
+                height=max(320, 28 * len(_team_names) + 130),
+            )
+            _fig.update_traces(
+                hovertemplate=(
+                    "<b>%{y}</b><br>%{x}<br>apps: %{z}<extra></extra>"
+                ),
+                textfont=dict(size=11),
             )
             _fig.update_layout(
-                margin=dict(l=10, r=10, t=20, b=10),
+                margin=dict(l=10, r=10, t=20, b=80),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="system-ui, -apple-system, 'Segoe UI', sans-serif",
-                          size=12, color="#1a1d2e"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                            xanchor="right", x=1, title=None),
-                yaxis=dict(autorange="reversed", title=None),
-                xaxis=dict(title=None, gridcolor="#e3e6ee"),
+                font=dict(
+                    family="system-ui, -apple-system, 'Segoe UI', sans-serif",
+                    size=11, color="#1a1d2e",
+                ),
+                xaxis=dict(
+                    title=None,
+                    tickangle=-32,
+                    tickfont=dict(size=11),
+                    side="bottom",
+                ),
+                yaxis=dict(
+                    autorange="reversed",
+                    title=None,
+                    tickfont=dict(size=11),
+                ),
+                coloraxis_colorbar=dict(
+                    title=dict(text="apps", font=dict(size=10)),
+                    thickness=10, len=0.6, x=1.02, xanchor="left",
+                    tickfont=dict(size=10),
+                ),
             )
+            _trunc_team_n = max(0, len(_team_totals) - _TOP_TEAMS_N)
+            _trunc_proj_n = max(0, len(_project_totals) - _TOP_PROJECTS_N)
+            _trunc_note = ""
+            if _trunc_team_n or _trunc_proj_n:
+                _trunc_note = (
+                    f' <span class="tm-section-trunc">· top '
+                    f'{len(_team_names)} of {len(_team_totals)} teams · '
+                    f'top {len(_project_names)} of {len(_project_totals)} projects</span>'
+                )
             st.markdown(
-                '<div class="tm-section-head">'
-                '  <span class="tm-section-glyph">⊞</span>'
-                '  Role distribution'
-                '</div>',
+                f'<div class="tm-section-head">'
+                f'  <span class="tm-section-glyph">⊞</span>'
+                f'  Teams × Projects involvement map{_trunc_note}'
+                f'</div>'
+                f'<div class="tm-section-sub">'
+                f'  Cell = # of app rows where the team owns that project at '
+                f'  any role (dev / qc / uat / prd). Row order = most-involved '
+                f'  teams; column order = most-shared projects. Numbers '
+                f'  after each label are row/column totals.'
+                f'</div>',
                 unsafe_allow_html=True,
             )
             st.plotly_chart(_fig, use_container_width=True,
