@@ -32,6 +32,7 @@ import html
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -188,6 +189,38 @@ def _ansible_vault_password() -> str:
 
 def _ansible_vault_password_str() -> str:
     return _ansible_vault_password()
+
+
+# Git-author fields in releases / builds / commits sometimes arrive as
+# the canonical "User Name <user@company.com>" format. LDAP usernames in
+# this org use underscores instead of spaces, so we strip the email
+# segment and underscore-collapse the remaining name to make matching
+# against LDAP records work.
+_AUTHOR_EMAIL_TAIL_RE = re.compile(r"\s*<[^>]*>\s*$")
+
+
+def _normalize_git_author(raw: str) -> str:
+    """Normalise a git-style author string to the LDAP-username shape.
+
+    "John Doe <john.doe@company.com>" → "John_Doe"
+    "John Doe"                        → "John_Doe"
+    "john.doe@company.com"            → "john.doe@company.com"  (no spaces)
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    # Drop the trailing "<email>" if present.
+    s = _AUTHOR_EMAIL_TAIL_RE.sub("", s).strip()
+    if not s:
+        return ""
+    # Collapse internal whitespace runs into single underscores. Leave
+    # pure email-shaped values untouched (they carry no spaces).
+    if " " in s or "\t" in s:
+        s = "_".join(s.split())
+    return s
+
 
 INVENTORY_REPO_PATH = "/tmp/inventories"
 INVENTORY_BRANCH = "main"
@@ -3214,6 +3247,37 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .tm-pop-mem-name .tm-mem-email {
     color: var(--cc-text-mute);
     font-size: 0.66rem;
+}
+
+/* Company-grouping sub-blocks inside the team popover roster */
+.tm-pop-co-group { margin-bottom: 12px; }
+.tm-pop-co-group:last-child { margin-bottom: 0; }
+.tm-pop-co-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0 4px 2px;
+    border-bottom: 1px solid var(--cc-border);
+    margin-bottom: 4px;
+}
+.tm-pop-co-glyph { font-size: 0.78rem; opacity: 0.8; }
+.tm-pop-co-name {
+    flex: 1;
+    font-weight: 700;
+    font-size: 0.74rem;
+    letter-spacing: 0.02em;
+    color: var(--cc-text);
+}
+.tm-pop-co-count {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border: 1px solid var(--cc-border);
+    font-variant-numeric: tabular-nums;
 }
 
 /* Members table */
@@ -11533,39 +11597,69 @@ def _render_teams_and_members_view() -> None:
                             unsafe_allow_html=True,
                         )
                         continue
-                    _sorted_members = sorted(
-                        _members,
-                        key=lambda u: (-int(u.get("total", 0)),
-                                       (u.get("label") or "").lower()),
-                    )
-                    _mem_rows = []
-                    for _m in _sorted_members:
-                        _mem_rows.append(
-                            f'<tr>'
-                            f'  <td class="tm-pop-mem-name">'
-                            f'    <div class="tm-mem-label">'
-                            f'{html.escape(_m.get("label") or _m.get("username") or "—")}'
+                    # Group members by Company — admins asked for this
+                    # cut explicitly. Unknown/missing company members
+                    # fall into a trailing "— no company —" bucket.
+                    _members_by_company: dict[str, list[dict]] = {}
+                    for _m in _members:
+                        _co = (_m.get("ldap_company") or "").strip()
+                        _key = _co or "— no company —"
+                        _members_by_company.setdefault(_key, []).append(_m)
+
+                    def _co_sort_key(item):
+                        # Real companies first (alphabetically); the
+                        # "no company" bucket trails regardless of name.
+                        _name, _ms = item
+                        _is_unknown = _name == "— no company —"
+                        return (_is_unknown, _name.lower())
+
+                    _co_html_blocks: list[str] = []
+                    for _co_name, _co_members in sorted(
+                        _members_by_company.items(), key=_co_sort_key,
+                    ):
+                        _sorted_members = sorted(
+                            _co_members,
+                            key=lambda u: (-int(u.get("total", 0)),
+                                           (u.get("label") or "").lower()),
+                        )
+                        _mem_rows = []
+                        for _m in _sorted_members:
+                            _mem_rows.append(
+                                f'<tr>'
+                                f'  <td class="tm-pop-mem-name">'
+                                f'    <div class="tm-mem-label">'
+                                f'{html.escape(_m.get("label") or _m.get("username") or "—")}'
+                                f'</div>'
+                                f'    <div class="tm-mem-email">'
+                                f'{html.escape(_m.get("email") or "")}</div>'
+                                f'  </td>'
+                                f'  <td class="tm-mem-meta">'
+                                f'{html.escape(_m.get("ldap_title") or "—")}'
+                                f'  </td>'
+                                f'  <td class="tm-mem-num">'
+                                f'{int(_m.get("total", 0)):,}</td>'
+                                f'</tr>'
+                            )
+                        _co_html_blocks.append(
+                            f'<div class="tm-pop-co-group">'
+                            f'  <div class="tm-pop-co-head">'
+                            f'    <span class="tm-pop-co-glyph">🏢</span>'
+                            f'    <span class="tm-pop-co-name">{html.escape(_co_name)}</span>'
+                            f'    <span class="tm-pop-co-count">{len(_co_members):,}</span>'
+                            f'  </div>'
+                            f'  <table class="tm-pop-mem-table">'
+                            f'    <thead><tr>'
+                            f'      <th>Member</th>'
+                            f'      <th>Title</th>'
+                            f'      <th class="tm-th-num">Total</th>'
+                            f'    </tr></thead>'
+                            f'    <tbody>{"".join(_mem_rows)}</tbody>'
+                            f'  </table>'
                             f'</div>'
-                            f'    <div class="tm-mem-email">'
-                            f'{html.escape(_m.get("email") or "")}</div>'
-                            f'  </td>'
-                            f'  <td class="tm-mem-meta">'
-                            f'{html.escape(_m.get("ldap_title") or "—")}'
-                            f'  </td>'
-                            f'  <td class="tm-mem-num">'
-                            f'{int(_m.get("total", 0)):,}</td>'
-                            f'</tr>'
                         )
                     st.markdown(
                         f'<div class="tm-pop-mem-table-wrap">'
-                        f'  <table class="tm-pop-mem-table">'
-                        f'    <thead><tr>'
-                        f'      <th>Member</th>'
-                        f'      <th>Title</th>'
-                        f'      <th class="tm-th-num">Total</th>'
-                        f'    </tr></thead>'
-                        f'    <tbody>{"".join(_mem_rows)}</tbody>'
-                        f'  </table>'
+                        + "".join(_co_html_blocks) +
                         f'</div>',
                         unsafe_allow_html=True,
                     )
@@ -13464,11 +13558,12 @@ def _render_event_log() -> None:
             _dv = _hit_date(_h, "build")
             # ef-cicd-builds has NO requester/approver — identity comes
             # from the commit-author triple (authorname / authormail /
-            # commitauthor). Surface a "Name / email" formatted string
-            # so _person_cell can resolve it via _user_lookup.
+            # commitauthor). authorname/mail are plain values; the
+            # commitauthor fallback may arrive as "Name <email>", which
+            # we normalise so LDAP matching works.
             _b_name = (_s.get("authorname") or "").strip()
             _b_mail = (_s.get("authormail") or "").strip()
-            _b_cauth = (_s.get("commitauthor") or "").strip()
+            _b_cauth = _normalize_git_author(_s.get("commitauthor") or "")
             if _b_name and _b_mail:
                 _b_person = f"{_b_name} / {_b_mail}"
             else:
@@ -13552,10 +13647,11 @@ def _render_event_log() -> None:
                 else _rlm_status
             )
             # ef-cicd-releases identity = `commitauthor` (no
-            # requester/approver fields in this index). Surface it in
-            # the Requester column so the existing per-user popover
-            # plumbing renders consistently with builds/commits.
-            _r_cauth = (_s.get("commitauthor") or "").strip()
+            # requester/approver fields in this index). The raw value
+            # arrives as "User Name <user@company.com>" so we strip the
+            # email tail and underscore-collapse spaces to match the
+            # LDAP-username shape this org uses.
+            _r_cauth = _normalize_git_author(_s.get("commitauthor") or "")
             events.append({
                 "_ts":         parse_dt(_dv),
                 "type":        "release",
@@ -13695,11 +13791,12 @@ def _render_event_log() -> None:
             _cmsg_first = _cmsg[0] if _cmsg else ""
             # ef-git-commits carries `authorname`, `authormail`, and
             # `commitauthor`. Build a "Name / email" person string for
-            # _person_cell, falling back to commitauthor when the
-            # name+mail pair is missing.
+            # _person_cell, falling back to commitauthor (normalised —
+            # commitauthor frequently arrives as "Name <email>") when
+            # the name+mail pair is missing.
             _a_name = (_s.get("authorname") or "").strip()
             _a_mail = (_s.get("authormail") or "").strip()
-            _a_cauth = (_s.get("commitauthor") or "").strip()
+            _a_cauth = _normalize_git_author(_s.get("commitauthor") or "")
             if _a_name and _a_mail:
                 _commit_person = f"{_a_name} / {_a_mail}"
             else:
@@ -13803,16 +13900,29 @@ def _render_event_log() -> None:
     _layout_badge = "per-project" if el_per_project else "consolidated"
 
     # Stats card: left = big total, middle = kicker + hint, right = mode chips.
-    # If commits are role-allowed, surface that they're opt-in by default so
-    # the empty-pill state isn't surprising.
-    _commit_optin_hint = _role_allows_type("Commits")
-    _hint_html = (
-        'Click any pill to include it · select multiple to combine · '
-        '<b>commits hidden by default — click ⎇ to surface</b>'
-        if _commit_optin_hint
-        else 'Click any pill to include it · select multiple to combine · '
-             'none selected = show all'
+    # Commits inclusion is now driven by a Filter Console toggle
+    # (`el_include_commits_v1`, default ON). The pill row still lets the
+    # operator narrow to specific types; an empty selection shows every
+    # type allowed by role (commits included when the toggle is on).
+    _commit_include = bool(
+        _role_allows_type("Commits")
+        and st.session_state.get("el_include_commits_v1", True)
     )
+    if not _role_allows_type("Commits"):
+        _hint_html = (
+            'Click any pill to include it · select multiple to combine · '
+            'none selected = show all'
+        )
+    elif _commit_include:
+        _hint_html = (
+            'Click any pill to include it · select multiple to combine · '
+            '<b>commits included</b> — toggle off in Filter Console to hide'
+        )
+    else:
+        _hint_html = (
+            'Click any pill to include it · select multiple to combine · '
+            '<b>commits hidden</b> — toggle on in Filter Console to surface'
+        )
     st.markdown(
         f'<div class="el-typefilter-head">'
         f'  <div class="el-tf-left">'
@@ -13856,13 +13966,16 @@ def _render_event_log() -> None:
     _active_types = {_pill_to_internal[o] for o in (_selected_opts or [])}
 
     # Filter semantics:
-    #   • No pills selected → show every visible-by-default type, but HIDE
-    #     commits (they're high-volume noise — opt-in via the ⎇ pill).
-    #   • Any pill selected → show ONLY those types (so clicking ⎇ Commits
-    #     surfaces commits, optionally combined with other selections).
+    #   • No pills selected → show every type allowed by role. Commits
+    #     pass-through is governed by the Filter Console toggle
+    #     `el_include_commits_v1` (default ON); when off, commits are
+    #     filtered out regardless of pill state.
+    #   • Any pill selected → show ONLY those types. Toggle still
+    #     applies — selecting the Commits pill but having the toggle off
+    #     still hides commits (intentional: toggle is authoritative).
     if _active_types:
         events = [ev for ev in events if ev["type"] in _active_types]
-    else:
+    if not _commit_include:
         events = [ev for ev in events if ev["type"] != "commit"]
 
     # Apply the text search filter — matches against every visible string field
@@ -17792,7 +17905,12 @@ def _fetch_users_aggregate(
             for b in _buckets:
                 k = b.get("key") or {}
                 email = (k.get("email") or "").strip()
-                name = (k.get("name") or "").strip()
+                name_raw = (k.get("name") or "").strip()
+                # Normalise the name to the underscore-collapsed shape
+                # used by LDAP (drops any "<email>" tail). Keeps name
+                # reconciliation consistent across commits / builds /
+                # releases — all three now key on the same form.
+                name = _normalize_git_author(name_raw)
                 if not email and not name:
                     continue
                 u = _ensure(email, name)
@@ -17815,7 +17933,7 @@ def _fetch_users_aggregate(
     # display-name keys keyword fields per platform schema). Capture
     # `reporterteam` to build user → team mapping.
     def _bucket_into(index_key, identity_fields, team_field, ctr_attr,
-                     filters, time_field):
+                     filters, time_field, ident_transform=None):
         """Try every candidate identity field; merge results from any that
         produce buckets. Indices in this org sometimes carry the same
         identity under multiple schema variants (e.g. ``Requester`` vs
@@ -17824,7 +17942,12 @@ def _fetch_users_aggregate(
 
         ``identity_fields`` may be a single string (legacy) or a list/tuple
         of candidate field names. ``.keyword``-suffixed variants are tried
-        FIRST since composite aggs require keyword fields."""
+        FIRST since composite aggs require keyword fields.
+
+        ``ident_transform`` is an optional callable applied to every
+        bucket-key identity string before it's used (e.g. to strip a
+        ``<email>`` tail and underscore-collapse spaces on commit-author
+        fields so the resulting key matches LDAP usernames)."""
         if isinstance(identity_fields, str):
             identity_fields = [identity_fields]
         _any_data = False
@@ -17856,8 +17979,14 @@ def _fetch_users_aggregate(
                 _any_data = True
                 for b in _buckets:
                     k = b.get("key") or {}
-                    ident = (k.get("id") or "").strip()
+                    ident_raw = (k.get("id") or "").strip()
                     tm = (k.get("team") or "").strip() if team_field else ""
+                    if not ident_raw:
+                        continue
+                    ident = (
+                        ident_transform(ident_raw) if ident_transform
+                        else ident_raw
+                    )
                     if not ident:
                         continue
                     # Reconcile name → email when commits saw the same person
@@ -17924,12 +18053,15 @@ def _fetch_users_aggregate(
     # identity fields (authormail / authorname / commitauthor, all text).
     # Try both .keyword subfield and bare; whichever the index publishes
     # as keyword will win. Team field is `team` (text → try .keyword).
+    # commitauthor frequently arrives as "Name <email>", so normalise on
+    # the way in so user keys match LDAP-style usernames.
     _bucket_into("builds",
                  ["authormail.keyword", "authorname.keyword",
                   "commitauthor.keyword",
                   "authormail", "authorname", "commitauthor"],
                  "team.keyword", "builds_authored",
-                 commit_scope_list, "startdate")
+                 commit_scope_list, "startdate",
+                 ident_transform=_normalize_git_author)
 
     # ── 6. DEPLOYMENTS — has actual requester / approver (both keyword
     # per the schema dump). Team is `team` (text → try .keyword).
@@ -17945,11 +18077,14 @@ def _fetch_users_aggregate(
                  commit_scope_list, "startdate")
 
     # ── 7. RELEASES — schema only carries `commitauthor` (text) as
-    # identity. Counts each user's release-commit attribution.
+    # identity. The raw value is "User Name <user@company.com>"; we
+    # normalise it to "User_Name" so the resulting key matches the
+    # username shape the LDAP directory exposes.
     _bucket_into("releases",
                  ["commitauthor.keyword", "commitauthor"],
                  "", "releases_authored",
-                 commit_scope_list, "releasedate")
+                 commit_scope_list, "releasedate",
+                 ident_transform=_normalize_git_author)
 
     # ── Final reconciliation pass — merge name-only buckets into
     # email-keyed buckets where the name has a known email from commits.
@@ -19908,6 +20043,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         help="Only count builds + deployments where "
                              "testflag = \"Normal\". Turn off to include "
                              "test-flagged runs (testflag = \"Test\").",
+                    )
+
+                    st.markdown(
+                        '<div class="iv-fc-section">'
+                        '<span class="iv-fc-section-glyph">⎇</span>'
+                        '<span class="iv-fc-section-label">Event log</span>'
+                        '</div>', unsafe_allow_html=True)
+                    if "el_include_commits_v1" not in st.session_state:
+                        st.session_state["el_include_commits_v1"] = True
+                    st.toggle(
+                        "Include commits", key="el_include_commits_v1",
+                        help="When off, commit events are hidden from the "
+                             "event log. Commit-based author detection in "
+                             "the user aggregator is unaffected.",
                     )
 
                     if _is_admin:
