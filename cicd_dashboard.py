@@ -175,25 +175,17 @@ ES_TIMEOUT = 60  # seconds for individual search calls
 # clone or fetch, so the service-account credentials only handle transport
 # while the commits carry the real author.
 GIT_VAULT_PATH = os.environ.get("GIT_VAULT_PATH", "new_git").strip()
-# Ansible Vault password is now stored in the same HashiCorp vault that
-# backs the rest of the platform's secrets, at path ``ansible`` with
-# variable ``vault_password``. No UI input, no env var — just an
-# auto-resolved read with the same caching / error-stash behaviour as
-# the other vault entries (Jenkins / S3 / Postgres / Git).
-ANSIBLE_VAULT_PATH = os.environ.get("ANSIBLE_VAULT_PATH", "ansible").strip()
-ANSIBLE_VAULT_PW_KEY = os.environ.get("ANSIBLE_VAULT_PW_KEY", "vault_password").strip()
+# Ansible Vault password — set this placeholder manually in the source
+# file before launching. The dashboard does NOT pull this from
+# HashiCorp vault; the user owns the literal value here.
+ANSIBLE_VAULT_PASSWORD = "SET_ANSIBLE_VAULT_PASSWORD"
 
 
 def _ansible_vault_password() -> str:
-    """Read the Ansible Vault password from HashiCorp vault at the
-    configured path/key. No fallback chains — the user owns the
-    location and the dashboard reads exactly what they set."""
-    cfg = _vault_secrets(ANSIBLE_VAULT_PATH)
-    return str(cfg.get(ANSIBLE_VAULT_PW_KEY) or "")
+    pw = ANSIBLE_VAULT_PASSWORD or ""
+    return "" if pw == "SET_ANSIBLE_VAULT_PASSWORD" else pw
 
 
-# Backwards-compat shim: callers that previously expected the 3-tuple
-# or the _str helper still resolve cleanly.
 def _ansible_vault_password_str() -> str:
     return _ansible_vault_password()
 
@@ -2897,6 +2889,28 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: #b91c1c;
     border-color: rgba(220,38,38,.32);
 }
+.ldap-sync-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border: 1px solid transparent;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.ldap-sync-chip.is-fresh {
+    background: rgba(5,150,105,.10);
+    color: #047857;
+    border-color: rgba(5,150,105,.30);
+}
+.ldap-sync-chip.is-stale {
+    background: rgba(217,119,6,.10);
+    color: #b45309;
+    border-color: rgba(217,119,6,.32);
+}
 
 /* ── TEAMS & MEMBERS TAB ─────────────────────────────────────────────────
  * Admin-only directory view. Stat tiles + role chart + team cards +
@@ -3129,6 +3143,77 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-text-mute);
     font-style: italic;
     font-size: 0.74rem;
+}
+
+/* Popover-team layout (used by Teams grid clicks) */
+.tm-pop-team-head {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 4px 10px 4px;
+    border-bottom: 1px solid var(--cc-border);
+    margin-bottom: 10px;
+}
+.tm-pop-team-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    letter-spacing: -0.01em;
+}
+.tm-pop-team-roles { display: flex; gap: 4px; flex-wrap: wrap; }
+.tm-pop-team-sub {
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.tm-pop-empty {
+    padding: 16px 8px;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    text-align: center;
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+    background: var(--cc-surface2);
+}
+.tm-pop-mem-table-wrap {
+    max-height: 360px;
+    overflow-y: auto;
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    background: var(--cc-surface);
+}
+.tm-pop-mem-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+.tm-pop-mem-table th {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--cc-border);
+    color: var(--cc-text-mute);
+    font-weight: 600;
+    font-size: 0.65rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: var(--cc-surface2);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.tm-pop-mem-table th.tm-th-num { text-align: right; }
+.tm-pop-mem-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--cc-border);
+    vertical-align: top;
+}
+.tm-pop-mem-table tbody tr:last-child td { border-bottom: none; }
+.tm-pop-mem-table tbody tr:hover td { background: var(--cc-surface2); }
+.tm-pop-mem-name .tm-mem-label { font-weight: 600; font-size: 0.78rem; }
+.tm-pop-mem-name .tm-mem-email {
+    color: var(--cc-text-mute);
+    font-size: 0.66rem;
 }
 
 /* Members table */
@@ -7483,6 +7568,14 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-size: 0.76rem;
 }
 
+/* Action toolbar — Jenkins / Prisma popover entries above the pager */
+.iv-toolbar-hint {
+    color: var(--cc-text-mute);
+    font-size: 0.72rem;
+    padding: 10px 4px;
+    line-height: 1.3;
+}
+
 /* CTA strip at the bottom — reveals on hover/expand */
 .iv-tile .iv-tile-cta {
     font-family: var(--cc-data);
@@ -10695,7 +10788,8 @@ def _integrations_health() -> list[dict]:
             "detail": "panel idle",
             "tip": (
                 f"Configured for {creds.get('public_name') or j_host}. "
-                f"Open the JENKINS tab and click ▶ Load to probe."
+                f"Open the ⚙ Jenkins pipelines popover above the inventory "
+                f"and click ▶ Load to probe."
             ),
         })
     else:
@@ -10801,32 +10895,31 @@ def _integrations_health() -> list[dict]:
                 ),
             })
 
-    # 7. Ansible Vault password — read from vault path ANSIBLE_VAULT_PATH
-    # under variable ANSIBLE_VAULT_PW_KEY. Surfacing its resolution state
-    # separately from the umbrella Vault tile so admins can see at a
-    # glance whether ansible-decrypt is wired up.
+    # 7. Ansible Vault password — sourced from the literal
+    # ANSIBLE_VAULT_PASSWORD constant in this file. Surfaces whether
+    # the placeholder has been set so admins can tell at a glance
+    # whether vaulted YAMLs will decrypt.
     _av_pw = _ansible_vault_password()
-    _av_err = _vault_last_error(ANSIBLE_VAULT_PATH)
     if _av_pw:
         out.append({
             "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
             "state": "ok",
-            "detail": f"resolved · {len(_av_pw)} chars",
+            "detail": f"set · {len(_av_pw)} chars",
             "tip": (
-                f"Password sourced from vault path "
-                f"{ANSIBLE_VAULT_PATH!r} · key {ANSIBLE_VAULT_PW_KEY!r}."
+                "Password sourced from the ANSIBLE_VAULT_PASSWORD "
+                "constant in cicd_dashboard.py."
             ),
         })
     else:
         out.append({
             "key": "ansible_vault", "label": "Ansible Vault", "glyph": "🔓",
-            "state": "down" if _av_err else "skip",
-            "detail": "not resolved",
+            "state": "skip",
+            "detail": "placeholder unset",
             "tip": (
-                _av_err
-                or f"Expected key {ANSIBLE_VAULT_PW_KEY!r} under vault path "
-                   f"{ANSIBLE_VAULT_PATH!r}. Vaulted YAMLs won't decrypt "
-                   f"until this resolves."
+                "Edit cicd_dashboard.py and replace "
+                "ANSIBLE_VAULT_PASSWORD = \"SET_ANSIBLE_VAULT_PASSWORD\" "
+                "with the literal password. Vaulted YAMLs won't decrypt "
+                "until this is set."
             ),
         })
 
@@ -11196,44 +11289,50 @@ def _render_teams_and_members_view() -> None:
             f'in DB no longer present in inventory — re-sync to clean up.'
             f'</div>'
         )
-    st.markdown(
-        '<div class="tm-section-head">'
-        '  <span class="tm-section-glyph">↻</span>'
-        '  Sync status'
-        '</div>'
-        f'<div class="tm-sync-grid">'
-        f'  <div class="tm-sync-box">'
-        f'    <div class="tm-sync-lbl">DB users</div>'
-        f'    <div class="tm-sync-val">{_db_users_count:,}</div>'
-        f'    <div class="tm-sync-sub">stored in <code>ldap_users</code></div>'
-        f'  </div>'
-        f'  <div class="tm-sync-box">'
-        f'    <div class="tm-sync-lbl">DB teams</div>'
-        f'    <div class="tm-sync-val">{len(_db_synced_teams):,}</div>'
-        f'    <div class="tm-sync-sub">rosters in <code>ldap_team_members</code></div>'
-        f'  </div>'
-        f'  <div class="tm-sync-box">'
-        f'    <div class="tm-sync-lbl">Inventory teams</div>'
-        f'    <div class="tm-sync-val">{len(_inv_team_set):,}</div>'
-        f'    <div class="tm-sync-sub">distinct <code>*_team</code> values</div>'
-        f'  </div>'
-        f'  <div class="tm-sync-box">'
-        f'    <div class="tm-sync-lbl">Visible after filter</div>'
-        f'    <div class="tm-sync-val">{_total_members:,}</div>'
-        f'    <div class="tm-sync-sub">{html.escape(_visible_count_hint)}</div>'
-        f'  </div>'
-        f'  <div class="tm-sync-box">'
-        f'    <div class="tm-sync-lbl">Last sync</div>'
-        f'    <div class="tm-sync-val tm-sync-val--ts">'
-        f'{html.escape(_last_sync_ts) or "never"}</div>'
-        f'    <div class="tm-sync-sub">'
-        f'covered {_last_sync_teams:,} teams · {_last_sync_users:,} users'
-        f'</div>'
-        f'  </div>'
-        f'</div>'
-        f'{_drift_warn_html}',
-        unsafe_allow_html=True,
+    _sync_popover_lbl = (
+        f"↻ Sync status · {_db_users_count:,} users · "
+        f"{len(_db_synced_teams):,}/{len(_inv_team_set):,} teams · "
+        f"last {_last_sync_ts or 'never'}"
     )
+    with st.popover(_sync_popover_lbl, use_container_width=True):
+        st.markdown(
+            '<div class="tm-section-head" style="margin:0 0 6px 0">'
+            '  <span class="tm-section-glyph">↻</span>'
+            '  Sync status'
+            '</div>'
+            f'<div class="tm-sync-grid">'
+            f'  <div class="tm-sync-box">'
+            f'    <div class="tm-sync-lbl">DB users</div>'
+            f'    <div class="tm-sync-val">{_db_users_count:,}</div>'
+            f'    <div class="tm-sync-sub">stored in <code>ldap_users</code></div>'
+            f'  </div>'
+            f'  <div class="tm-sync-box">'
+            f'    <div class="tm-sync-lbl">DB teams</div>'
+            f'    <div class="tm-sync-val">{len(_db_synced_teams):,}</div>'
+            f'    <div class="tm-sync-sub">rosters in <code>ldap_team_members</code></div>'
+            f'  </div>'
+            f'  <div class="tm-sync-box">'
+            f'    <div class="tm-sync-lbl">Inventory teams</div>'
+            f'    <div class="tm-sync-val">{len(_inv_team_set):,}</div>'
+            f'    <div class="tm-sync-sub">distinct <code>*_team</code> values</div>'
+            f'  </div>'
+            f'  <div class="tm-sync-box">'
+            f'    <div class="tm-sync-lbl">Visible after filter</div>'
+            f'    <div class="tm-sync-val">{_total_members:,}</div>'
+            f'    <div class="tm-sync-sub">{html.escape(_visible_count_hint)}</div>'
+            f'  </div>'
+            f'  <div class="tm-sync-box">'
+            f'    <div class="tm-sync-lbl">Last sync</div>'
+            f'    <div class="tm-sync-val tm-sync-val--ts">'
+            f'{html.escape(_last_sync_ts) or "never"}</div>'
+            f'    <div class="tm-sync-sub">'
+            f'covered {_last_sync_teams:,} teams · {_last_sync_users:,} users'
+            f'</div>'
+            f'  </div>'
+            f'</div>'
+            f'{_drift_warn_html}',
+            unsafe_allow_html=True,
+        )
 
     # ── Teams × Projects involvement map ────────────────────────────────
     # Replaces the previous role-distribution bar chart. For each
@@ -11305,266 +11404,305 @@ def _render_teams_and_members_view() -> None:
             for _p in _project_names
         ]
 
-        try:
-            _fig = px.imshow(
-                _matrix,
-                x=_x_labels, y=_y_labels,
-                color_continuous_scale=[
-                    (0.00, "#f7f8fb"),
-                    (0.10, "#ccfbf1"),
-                    (0.40, "#5eead4"),
-                    (0.70, "#14b8a6"),
-                    (1.00, "#0f766e"),
-                ],
-                aspect="auto",
-                text_auto=True,
-                height=max(320, 28 * len(_team_names) + 130),
-            )
-            _fig.update_traces(
-                hovertemplate=(
-                    "<b>%{y}</b><br>%{x}<br>apps: %{z}<extra></extra>"
-                ),
-                textfont=dict(size=11),
-            )
-            _fig.update_layout(
-                margin=dict(l=10, r=10, t=20, b=80),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(
-                    family="system-ui, -apple-system, 'Segoe UI', sans-serif",
-                    size=11, color="#1a1d2e",
-                ),
-                xaxis=dict(
-                    title=None,
-                    tickangle=-32,
-                    tickfont=dict(size=11),
-                    side="bottom",
-                ),
-                yaxis=dict(
-                    autorange="reversed",
-                    title=None,
-                    tickfont=dict(size=11),
-                ),
-                coloraxis_colorbar=dict(
-                    title=dict(text="apps", font=dict(size=10)),
-                    thickness=10, len=0.6, x=1.02, xanchor="left",
-                    tickfont=dict(size=10),
-                ),
-            )
-            _trunc_team_n = max(0, len(_team_totals) - _TOP_TEAMS_N)
-            _trunc_proj_n = max(0, len(_project_totals) - _TOP_PROJECTS_N)
-            _trunc_note = ""
-            if _trunc_team_n or _trunc_proj_n:
-                _trunc_note = (
-                    f' <span class="tm-section-trunc">· top '
-                    f'{len(_team_names)} of {len(_team_totals)} teams · '
-                    f'top {len(_project_names)} of {len(_project_totals)} projects</span>'
+        _trunc_team_n = max(0, len(_team_totals) - _TOP_TEAMS_N)
+        _trunc_proj_n = max(0, len(_project_totals) - _TOP_PROJECTS_N)
+        _map_popover_lbl = (
+            f"⊞ Teams × Projects involvement map  ·  "
+            f"top {len(_team_names)} / {len(_team_totals)} teams  ·  "
+            f"top {len(_project_names)} / {len(_project_totals)} projects"
+        )
+        with st.popover(_map_popover_lbl, use_container_width=True):
+            try:
+                _fig = px.imshow(
+                    _matrix,
+                    x=_x_labels, y=_y_labels,
+                    color_continuous_scale=[
+                        (0.00, "#f7f8fb"),
+                        (0.10, "#ccfbf1"),
+                        (0.40, "#5eead4"),
+                        (0.70, "#14b8a6"),
+                        (1.00, "#0f766e"),
+                    ],
+                    aspect="auto",
+                    text_auto=True,
+                    height=max(320, 28 * len(_team_names) + 130),
                 )
-            st.markdown(
-                f'<div class="tm-section-head">'
-                f'  <span class="tm-section-glyph">⊞</span>'
-                f'  Teams × Projects involvement map{_trunc_note}'
-                f'</div>'
-                f'<div class="tm-section-sub">'
-                f'  Cell = # of app rows where the team owns that project at '
-                f'  any role (dev / qc / uat / prd). Row order = most-involved '
-                f'  teams; column order = most-shared projects. Numbers '
-                f'  after each label are row/column totals.'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(_fig, use_container_width=True,
-                            config={"displayModeBar": False})
-        except Exception:
-            # If plotly fails for any reason, skip silently — the rest
-            # of the view stays functional.
-            pass
+                _fig.update_traces(
+                    hovertemplate=(
+                        "<b>%{y}</b><br>%{x}<br>apps: %{z}<extra></extra>"
+                    ),
+                    textfont=dict(size=11),
+                )
+                _fig.update_layout(
+                    margin=dict(l=10, r=10, t=20, b=80),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(
+                        family="system-ui, -apple-system, 'Segoe UI', sans-serif",
+                        size=11, color="#1a1d2e",
+                    ),
+                    xaxis=dict(
+                        title=None,
+                        tickangle=-32,
+                        tickfont=dict(size=11),
+                        side="bottom",
+                    ),
+                    yaxis=dict(
+                        autorange="reversed",
+                        title=None,
+                        tickfont=dict(size=11),
+                    ),
+                    coloraxis_colorbar=dict(
+                        title=dict(text="apps", font=dict(size=10)),
+                        thickness=10, len=0.6, x=1.02, xanchor="left",
+                        tickfont=dict(size=10),
+                    ),
+                )
+                st.markdown(
+                    '<div class="tm-section-sub" style="margin:0 0 8px 0">'
+                    '  Cell = # of app rows where the team owns that project at '
+                    '  any role (dev / qc / uat / prd). Row order = most-involved '
+                    '  teams; column order = most-shared projects. Numbers '
+                    '  after each label are row/column totals.'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                st.plotly_chart(_fig, use_container_width=True,
+                                config={"displayModeBar": False})
+            except Exception:
+                # If plotly fails for any reason, skip silently — the rest
+                # of the view stays functional.
+                pass
 
-    # ── Teams grid ────────────────────────────────────────────────────────
-    # Per-team stats: member count + role chips + top 3 most-active
-    # members by total activity. Cards sort by member count descending.
+    # ── Teams grid (popover-driven, compact) ──────────────────────────────
+    # Each team renders as a compact button-popover. Clicking opens the
+    # team's full member roster + role chips + activity totals. Cards
+    # sort by member count descending. Goal: keep the page surface
+    # short — detail only appears on click.
     _team_members: dict[str, list[dict]] = {}
     for _u in _users_list:
         for _t in _u.get("teams") or []:
             _team_members.setdefault(_t, []).append(_u)
-    # Include teams that exist in inventory but have zero LDAP-resolved
-    # members — show them too with a "no members yet" cue.
     for _t in _team_roles:
         _team_members.setdefault(_t, [])
 
-    _team_cards: list[str] = []
-    for _t in sorted(_team_members.keys(),
-                     key=lambda k: (-len(_team_members[k]), k.lower())):
-        _members = _team_members[_t]
-        _roles = sorted(_team_roles.get(_t, set()))
-        _role_chips = "".join(
-            f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
-            f'{html.escape(_r)}</span>'
-            for _r in _roles
-        ) or '<span class="tm-role-chip is-unmapped">unmapped</span>'
-        _top = sorted(_members,
-                      key=lambda u: -int(u.get("total", 0)))[:3]
-        _top_html = (
-            "".join(
-                f'<li>'
-                f'<span class="tm-top-name">{html.escape(_m.get("label") or _m.get("username") or "—")}</span>'
-                f'<span class="tm-top-stat">{int(_m.get("total", 0)):,}</span>'
-                f'</li>'
-                for _m in _top
-            )
-            if _top else
-            '<li class="tm-top-empty">no LDAP-resolved members</li>'
-        )
-        _team_cards.append(
-            f'<div class="tm-team-card">'
-            f'  <div class="tm-team-head">'
-            f'    <span class="tm-team-name">{html.escape(_t)}</span>'
-            f'    <span class="tm-team-count">{len(_members):,}</span>'
-            f'  </div>'
-            f'  <div class="tm-team-roles">{_role_chips}</div>'
-            f'  <ul class="tm-top-list">{_top_html}</ul>'
-            f'</div>'
-        )
+    _sorted_teams = sorted(
+        _team_members.keys(),
+        key=lambda k: (-len(_team_members[k]), k.lower()),
+    )
+
     st.markdown(
         '<div class="tm-section-head">'
         '  <span class="tm-section-glyph">▦</span>'
         '  Teams'
         f'  <span class="tm-section-count">{_total_teams:,}</span>'
-        '</div>'
-        f'<div class="tm-team-grid">{"".join(_team_cards)}</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Members table — filterable ───────────────────────────────────────
-    st.markdown(
-        '<div class="tm-section-head">'
-        '  <span class="tm-section-glyph">👤</span>'
-        '  Members'
-        f'  <span class="tm-section-count">{_total_members:,}</span>'
+        '  <span class="tm-section-trunc">· click any team to expand its full member list</span>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # Filter controls — three small selects that drive the rendered list.
-    _f1, _f2, _f3, _f4 = st.columns([2, 2, 2, 4])
-    with _f1:
-        _role_pick = st.selectbox(
-            "Role", options=["— any role —"] + _roles_seen,
-            key="tm_role_filter_v1", label_visibility="visible",
-        )
-    with _f2:
-        _team_options = ["— any team —"] + sorted(
-            _team_members.keys(), key=str.lower,
-        )
-        _team_pick = st.selectbox(
-            "Team", options=_team_options,
-            key="tm_team_filter_v1", label_visibility="visible",
-        )
-    with _f3:
-        _dept_pick = st.selectbox(
-            "Department", options=["— any department —"] + _depts,
-            key="tm_dept_filter_v1", label_visibility="visible",
-        )
-    with _f4:
-        _search = st.text_input(
-            "Search (name / email / title)",
-            key="tm_search_filter_v1",
-            placeholder="type to filter the members table",
-        ).strip().lower()
+    _PER_ROW = 4
+    for _row_start in range(0, len(_sorted_teams), _PER_ROW):
+        _cols = st.columns(_PER_ROW)
+        for _col_idx, _t in enumerate(_sorted_teams[_row_start:_row_start + _PER_ROW]):
+            _members = _team_members[_t]
+            _roles = sorted(_team_roles.get(_t, set()))
+            _btn_lbl = f"▦ {_t}  ·  {len(_members):,}"
+            with _cols[_col_idx]:
+                with st.popover(_btn_lbl, use_container_width=True):
+                    _role_chips = "".join(
+                        f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
+                        f'{html.escape(_r)}</span>'
+                        for _r in _roles
+                    ) or '<span class="tm-role-chip is-unmapped">unmapped</span>'
+                    st.markdown(
+                        f'<div class="tm-pop-team-head">'
+                        f'  <div class="tm-pop-team-name">{html.escape(_t)}</div>'
+                        f'  <div class="tm-pop-team-roles">{_role_chips}</div>'
+                        f'  <div class="tm-pop-team-sub">{len(_members):,} member'
+                        f'{"s" if len(_members) != 1 else ""}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if not _members:
+                        st.markdown(
+                            '<div class="tm-pop-empty">'
+                            '  no LDAP-resolved members for this team yet — '
+                            '  re-sync from the SYNC CHECK tab.'
+                            '</div>',
+                            unsafe_allow_html=True,
+                        )
+                        continue
+                    _sorted_members = sorted(
+                        _members,
+                        key=lambda u: (-int(u.get("total", 0)),
+                                       (u.get("label") or "").lower()),
+                    )
+                    _mem_rows = []
+                    for _m in _sorted_members:
+                        _mem_rows.append(
+                            f'<tr>'
+                            f'  <td class="tm-pop-mem-name">'
+                            f'    <div class="tm-mem-label">'
+                            f'{html.escape(_m.get("label") or _m.get("username") or "—")}'
+                            f'</div>'
+                            f'    <div class="tm-mem-email">'
+                            f'{html.escape(_m.get("email") or "")}</div>'
+                            f'  </td>'
+                            f'  <td class="tm-mem-meta">'
+                            f'{html.escape(_m.get("ldap_title") or "—")}'
+                            f'  </td>'
+                            f'  <td class="tm-mem-num">'
+                            f'{int(_m.get("total", 0)):,}</td>'
+                            f'</tr>'
+                        )
+                    st.markdown(
+                        f'<div class="tm-pop-mem-table-wrap">'
+                        f'  <table class="tm-pop-mem-table">'
+                        f'    <thead><tr>'
+                        f'      <th>Member</th>'
+                        f'      <th>Title</th>'
+                        f'      <th class="tm-th-num">Total</th>'
+                        f'    </tr></thead>'
+                        f'    <tbody>{"".join(_mem_rows)}</tbody>'
+                        f'  </table>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
-    # Apply filters
-    _filtered = list(_users_list)
-    if _role_pick and _role_pick != "— any role —":
-        _filtered = [u for u in _filtered if _role_pick in u["_roles"]]
-    if _team_pick and _team_pick != "— any team —":
-        _filtered = [
-            u for u in _filtered if _team_pick in (u.get("teams") or [])
-        ]
-    if _dept_pick and _dept_pick != "— any department —":
-        _filtered = [
-            u for u in _filtered
-            if (u.get("ldap_department") or "").strip() == _dept_pick
-        ]
-    if _search:
-        def _haystack(u: dict) -> str:
-            return " ".join((
-                u.get("label") or "",
-                u.get("email") or "",
-                u.get("username") or "",
-                u.get("ldap_title") or "",
-                u.get("ldap_department") or "",
-                " ".join(u.get("names") or []),
-            )).lower()
-        _filtered = [u for u in _filtered if all(
-            _t in _haystack(u) for _t in _search.split()
-        )]
-    _filtered.sort(key=lambda u: (-int(u.get("total", 0)),
-                                  (u.get("label") or "").lower()))
-
-    _members_cap = 200
-    _visible = _filtered[:_members_cap]
-    _row_html: list[str] = []
-    for _u in _visible:
-        _role_chips = "".join(
-            f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
-            f'{html.escape(_r)}</span>'
-            for _r in _u["_roles"]
-        ) or '<span class="tm-role-chip is-unmapped">—</span>'
-        _team_chips = "".join(
-            f'<span class="tm-team-chip">{html.escape(_t)}</span>'
-            for _t in (_u.get("teams") or [])[:5]
-        ) or '<span class="tm-team-chip is-empty">—</span>'
-        _team_overflow = ""
-        if (_u.get("teams") or []) and len(_u["teams"]) > 5:
-            _team_overflow = (
-                f'<span class="tm-team-chip is-more">+{len(_u["teams"]) - 5}</span>'
+    # ── Members directory (popover-gated) ────────────────────────────────
+    # Filterable members table lives inside a popover so the tab stays
+    # short — admins click to dig in. Filters live INSIDE the popover so
+    # the page-level surface stays minimal.
+    _members_popover_lbl = f"👤  Browse members directory  ·  {_total_members:,}"
+    with st.popover(_members_popover_lbl, use_container_width=True):
+        st.markdown(
+            '<div class="tm-section-head" style="margin:0 0 6px 0">'
+            '  <span class="tm-section-glyph">👤</span>'
+            '  Members directory'
+            f'  <span class="tm-section-count">{_total_members:,}</span>'
+            '  <span class="tm-section-trunc">· filter to narrow the list</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _f1, _f2, _f3, _f4 = st.columns([2, 2, 2, 4])
+        with _f1:
+            _role_pick = st.selectbox(
+                "Role", options=["— any role —"] + _roles_seen,
+                key="tm_role_filter_v1", label_visibility="visible",
             )
-        _row_html.append(
-            f'<tr>'
-            f'  <td class="tm-mem-name">'
-            f'    <div class="tm-mem-label">{html.escape(_u.get("label") or _u.get("username") or "—")}</div>'
-            f'    <div class="tm-mem-email">{html.escape(_u.get("email") or _u.get("username") or "—")}</div>'
-            f'  </td>'
-            f'  <td>{_role_chips}</td>'
-            f'  <td>{_team_chips}{_team_overflow}</td>'
-            f'  <td class="tm-mem-meta">'
-            f'    <div>{html.escape(_u.get("ldap_title") or "—")}</div>'
-            f'    <div class="tm-mem-dim">{html.escape(_u.get("ldap_department") or "")}</div>'
-            f'  </td>'
-            f'  <td class="tm-mem-num">{int(_u.get("commits", 0)):,}</td>'
-            f'  <td class="tm-mem-num">{int(_u.get("jira_authored", 0)) + int(_u.get("jira_assigned", 0)):,}</td>'
-            f'  <td class="tm-mem-num">{int(_u.get("requests_made", 0)) + int(_u.get("approvals", 0)) + int(_u.get("rejections", 0)):,}</td>'
-            f'  <td class="tm-mem-num">{int(_u.get("builds_requested", 0)) + int(_u.get("builds_approved", 0)) + int(_u.get("deploys_requested", 0)) + int(_u.get("deploys_approved", 0)):,}</td>'
-            f'  <td class="tm-mem-num tm-mem-total">{int(_u.get("total", 0)):,}</td>'
-            f'</tr>'
+        with _f2:
+            _team_options = ["— any team —"] + sorted(
+                _team_members.keys(), key=str.lower,
+            )
+            _team_pick = st.selectbox(
+                "Team", options=_team_options,
+                key="tm_team_filter_v1", label_visibility="visible",
+            )
+        with _f3:
+            _dept_pick = st.selectbox(
+                "Department", options=["— any department —"] + _depts,
+                key="tm_dept_filter_v1", label_visibility="visible",
+            )
+        with _f4:
+            _search = st.text_input(
+                "Search (name / email / title)",
+                key="tm_search_filter_v1",
+                placeholder="type to filter the members table",
+            ).strip().lower()
+
+        _filtered = list(_users_list)
+        if _role_pick and _role_pick != "— any role —":
+            _filtered = [u for u in _filtered if _role_pick in u["_roles"]]
+        if _team_pick and _team_pick != "— any team —":
+            _filtered = [
+                u for u in _filtered if _team_pick in (u.get("teams") or [])
+            ]
+        if _dept_pick and _dept_pick != "— any department —":
+            _filtered = [
+                u for u in _filtered
+                if (u.get("ldap_department") or "").strip() == _dept_pick
+            ]
+        if _search:
+            def _haystack(u: dict) -> str:
+                return " ".join((
+                    u.get("label") or "",
+                    u.get("email") or "",
+                    u.get("username") or "",
+                    u.get("ldap_title") or "",
+                    u.get("ldap_department") or "",
+                    " ".join(u.get("names") or []),
+                )).lower()
+            _filtered = [u for u in _filtered if all(
+                _t in _haystack(u) for _t in _search.split()
+            )]
+        _filtered.sort(key=lambda u: (-int(u.get("total", 0)),
+                                      (u.get("label") or "").lower()))
+
+        _members_cap = 200
+        _visible = _filtered[:_members_cap]
+        _row_html: list[str] = []
+        for _u in _visible:
+            _role_chips = "".join(
+                f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
+                f'{html.escape(_r)}</span>'
+                for _r in _u["_roles"]
+            ) or '<span class="tm-role-chip is-unmapped">—</span>'
+            _team_chips = "".join(
+                f'<span class="tm-team-chip">{html.escape(_t)}</span>'
+                for _t in (_u.get("teams") or [])[:5]
+            ) or '<span class="tm-team-chip is-empty">—</span>'
+            _team_overflow = ""
+            if (_u.get("teams") or []) and len(_u["teams"]) > 5:
+                _team_overflow = (
+                    f'<span class="tm-team-chip is-more">+{len(_u["teams"]) - 5}</span>'
+                )
+            _row_html.append(
+                f'<tr>'
+                f'  <td class="tm-mem-name">'
+                f'    <div class="tm-mem-label">{html.escape(_u.get("label") or _u.get("username") or "—")}</div>'
+                f'    <div class="tm-mem-email">{html.escape(_u.get("email") or _u.get("username") or "—")}</div>'
+                f'  </td>'
+                f'  <td>{_role_chips}</td>'
+                f'  <td>{_team_chips}{_team_overflow}</td>'
+                f'  <td class="tm-mem-meta">'
+                f'    <div>{html.escape(_u.get("ldap_title") or "—")}</div>'
+                f'    <div class="tm-mem-dim">{html.escape(_u.get("ldap_department") or "")}</div>'
+                f'  </td>'
+                f'  <td class="tm-mem-num">{int(_u.get("commits", 0)):,}</td>'
+                f'  <td class="tm-mem-num">{int(_u.get("jira_authored", 0)) + int(_u.get("jira_assigned", 0)):,}</td>'
+                f'  <td class="tm-mem-num">{int(_u.get("requests_made", 0)) + int(_u.get("approvals", 0)) + int(_u.get("rejections", 0)):,}</td>'
+                f'  <td class="tm-mem-num">{int(_u.get("builds_authored", 0)) + int(_u.get("deploys_requested", 0)) + int(_u.get("deploys_approved", 0)) + int(_u.get("releases_authored", 0)):,}</td>'
+                f'  <td class="tm-mem-num tm-mem-total">{int(_u.get("total", 0)):,}</td>'
+                f'</tr>'
+            )
+        _overflow = ""
+        if len(_filtered) > _members_cap:
+            _overflow = (
+                f'<div class="tm-overflow">'
+                f'+{len(_filtered) - _members_cap:,} more members not shown · '
+                f'tighten filters to surface them</div>'
+            )
+        st.markdown(
+            f'<div class="tm-mem-table-wrap">'
+            f'  <table class="tm-mem-table">'
+            f'    <thead><tr>'
+            f'      <th>Member</th>'
+            f'      <th>Roles</th>'
+            f'      <th>Teams</th>'
+            f'      <th>Title · Department</th>'
+            f'      <th class="tm-th-num">Commits</th>'
+            f'      <th class="tm-th-num">Jira</th>'
+            f'      <th class="tm-th-num">Requests</th>'
+            f'      <th class="tm-th-num">Builds / Deploys</th>'
+            f'      <th class="tm-th-num">Total</th>'
+            f'    </tr></thead>'
+            f'    <tbody>{"".join(_row_html)}</tbody>'
+            f'  </table>'
+            f'</div>'
+            f'{_overflow}',
+            unsafe_allow_html=True,
         )
-    _overflow = ""
-    if len(_filtered) > _members_cap:
-        _overflow = (
-            f'<div class="tm-overflow">'
-            f'+{len(_filtered) - _members_cap:,} more members not shown · '
-            f'tighten filters to surface them</div>'
-        )
-    st.markdown(
-        f'<div class="tm-mem-table-wrap">'
-        f'  <table class="tm-mem-table">'
-        f'    <thead><tr>'
-        f'      <th>Member</th>'
-        f'      <th>Roles</th>'
-        f'      <th>Teams</th>'
-        f'      <th>Title · Department</th>'
-        f'      <th class="tm-th-num">Commits</th>'
-        f'      <th class="tm-th-num">Jira</th>'
-        f'      <th class="tm-th-num">Requests</th>'
-        f'      <th class="tm-th-num">Builds / Deploys</th>'
-        f'      <th class="tm-th-num">Total</th>'
-        f'    </tr></thead>'
-        f'    <tbody>{"".join(_row_html)}</tbody>'
-        f'  </table>'
-        f'</div>'
-        f'{_overflow}',
-        unsafe_allow_html=True,
-    )
 
 
 def _render_people_insights_panel(start_dt, end_dt) -> None:
@@ -11763,7 +11901,35 @@ def _render_people_insights_panel(start_dt, end_dt) -> None:
 
 def _render_sync_check_panel(scope_json: str) -> None:
     """Admin-only sync-check panel. See section header for the UX contract."""
-    # ── Idle gate ──────────────────────────────────────────────────────────
+    # ── Auto-run gate ──────────────────────────────────────────────────────
+    # If the diff is stale (> 24h) or absent, auto-run once per session so
+    # admins always land on fresh results without clicking. Explicit
+    # ↻ Re-run / ✕ Clear controls remain available below.
+    _existing = st.session_state.get(_SYNC_LOADED_KEY) or {}
+    _checked_at_iso = _existing.get("checked_at") or ""
+    _is_fresh = False
+    if _checked_at_iso:
+        try:
+            _cat = datetime.fromisoformat(_checked_at_iso.replace("Z", "+00:00"))
+            if _cat.tzinfo is None:
+                _cat = _cat.replace(tzinfo=timezone.utc)
+            _is_fresh = (datetime.now(timezone.utc) - _cat).total_seconds() < _LDAP_SYNC_FRESH_SECONDS
+        except Exception:
+            _is_fresh = False
+
+    if not _existing or not _is_fresh:
+        if not st.session_state.get("_sync_check_auto_kicked_v1"):
+            st.session_state["_sync_check_auto_kicked_v1"] = True
+            with st.spinner("Comparing git vs Elasticsearch (auto-sync)..."):
+                diff = _inventory_compare(scope_json)
+            st.session_state[_SYNC_LOADED_KEY] = diff
+            st.session_state["_sync_summary_v1"] = {
+                "total":      _sync_count_total_diffs(diff),
+                "checked_at": diff.get("checked_at", ""),
+                "errors":     diff.get("errors", {}),
+            }
+            st.rerun()
+
     if not st.session_state.get(_SYNC_LOADED_KEY):
         st.markdown(
             '<div class="sync-gate">'
@@ -11771,15 +11937,8 @@ def _render_sync_check_panel(scope_json: str) -> None:
             '  <div class="sync-gate-title">Run inventory sync check</div>'
             '  <div class="sync-gate-body">'
             '    Compares the git inventory against the Elasticsearch '
-            '    projection for the <b>current scope</b> and surfaces:'
-            '    <ul>'
-            '      <li>applications present only in git</li>'
-            '      <li>applications present only in Elasticsearch</li>'
-            '      <li>applications in both that disagree on company / '
-            '          tech / image / teams</li>'
-            '    </ul>'
-            '    Two full inventory fetches per run — gated behind the '
-            '    button so the rest of the page never pays this cost.'
+            '    projection for the <b>current scope</b>. Auto-runs once '
+            '    per session when results are older than 24h.'
             '  </div>'
             '</div>',
             unsafe_allow_html=True,
@@ -11793,8 +11952,6 @@ def _render_sync_check_panel(scope_json: str) -> None:
                 with st.spinner("Comparing git vs Elasticsearch..."):
                     diff = _inventory_compare(scope_json)
                 st.session_state[_SYNC_LOADED_KEY] = diff
-                # Publish a tiny summary so the Integrations strip can
-                # show "sync clean" / "N diffs" without re-running.
                 st.session_state["_sync_summary_v1"] = {
                     "total":   _sync_count_total_diffs(diff),
                     "checked_at": diff.get("checked_at", ""),
@@ -12031,6 +12188,39 @@ def _render_postgres_compare_panel(scope_json: str) -> None:
             unsafe_allow_html=True,
         )
         return
+
+    # ── Auto-run gate ──────────────────────────────────────────────────────
+    # Same 24h freshness rule as the git↔ES panel.
+    _existing_pg = st.session_state.get(_PG_CHECK_LOADED_KEY) or {}
+    _pg_checked_iso = _existing_pg.get("checked_at") or ""
+    _pg_fresh = False
+    if _pg_checked_iso:
+        try:
+            _pcat = datetime.fromisoformat(_pg_checked_iso.replace("Z", "+00:00"))
+            if _pcat.tzinfo is None:
+                _pcat = _pcat.replace(tzinfo=timezone.utc)
+            _pg_fresh = (datetime.now(timezone.utc) - _pcat).total_seconds() < _LDAP_SYNC_FRESH_SECONDS
+        except Exception:
+            _pg_fresh = False
+    if (not _existing_pg or not _pg_fresh) and not st.session_state.get("_pg_check_auto_kicked_v1"):
+        st.session_state["_pg_check_auto_kicked_v1"] = True
+        with st.spinner("Comparing inventory vs Postgres (auto-sync)..."):
+            diff = _inventory_vs_postgres_compare(scope_json)
+        st.session_state[_PG_CHECK_LOADED_KEY] = diff
+        st.session_state["_pg_check_summary_v1"] = {
+            "total": (
+                len(diff.get("only_in_inv") or [])
+                + len(diff.get("only_in_pg") or [])
+                + len(diff.get("diffs") or [])
+            ),
+            "checked_at": diff.get("checked_at", ""),
+            "errors": diff.get("errors", {}),
+            "ops_inconsistent": sum(
+                1 for d in (diff.get("diffs") or [])
+                if d.get("ops_inconsistent")
+            ),
+        }
+        st.rerun()
 
     if not st.session_state.get(_PG_CHECK_LOADED_KEY):
         st.markdown(
@@ -12347,6 +12537,232 @@ def _render_postgres_compare_panel(scope_json: str) -> None:
             )
 
 
+# =============================================================================
+# LDAP SYNC PANEL — admin-only, lives inside the SYNC CHECK tab
+# =============================================================================
+# Mirrors the smart-load pattern of the other two sync panels. Reads the
+# latest sync log from Postgres (already persisted by _ldap_sync_to_db).
+# Auto-runs when the most recent sync is older than 24h OR has never run,
+# so admins don't need to remember to click. Re-run / dismiss controls
+# remain available for explicit re-syncs.
+
+_LDAP_SYNC_AUTO_KEY = "_ldap_sync_auto_kicked_v1"
+_LDAP_SYNC_FRESH_SECONDS = 24 * 60 * 60
+
+
+def _ldap_sync_last_age_seconds() -> float | None:
+    """Seconds since the last successful sync, or None if no sync yet."""
+    _last = _ldap_db_load_last_sync() or {}
+    _completed_iso = _last.get("completed_at") or ""
+    if not _completed_iso:
+        return None
+    try:
+        _completed = datetime.fromisoformat(_completed_iso.replace("Z", "+00:00"))
+        if _completed.tzinfo is None:
+            _completed = _completed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return (datetime.now(timezone.utc) - _completed).total_seconds()
+
+
+def _ldap_sync_collect_full_team_set() -> set[str]:
+    """Re-fetch the inventory with an EMPTY scope filter so the sync
+    always covers every team regardless of the admin's current view-all
+    toggle / project picker / role scope."""
+    _full_inv_rows, _, _, _ = _inventory_load("[]")
+    _full_team_set: set[str] = set()
+    for _r in _full_inv_rows:
+        _t_blob = _r.get("teams") or {}
+        for _vals in _t_blob.values():
+            if isinstance(_vals, (list, tuple, set)):
+                for _v in _vals:
+                    if _v:
+                        _full_team_set.add(str(_v).strip())
+            elif _vals:
+                _full_team_set.add(str(_vals).strip())
+    _full_team_set.discard("")
+    return _full_team_set
+
+
+def _render_ldap_sync_panel() -> None:
+    """Admin-only LDAP → Postgres sync panel inside the SYNC CHECK tab.
+    Auto-runs once per session when the last sync is older than 24h."""
+    _last = _ldap_db_load_last_sync() or {}
+    _completed = (_last.get("completed_at") or "").replace("T", " ")[:19]
+    _age = _ldap_sync_last_age_seconds()
+    _is_fresh = (_age is not None) and (_age < _LDAP_SYNC_FRESH_SECONDS)
+    _last_status = _last.get("status") or ""
+    _u_count = int(_last.get("users_count") or 0)
+    _t_count = int(_last.get("teams_count") or 0)
+
+    # ── Auto-run policy ────────────────────────────────────────────────
+    # Run once per session if data is stale OR no sync yet exists.
+    # Subsequent reruns within the same session are admin-driven.
+    _auto_eligible = (not _is_fresh) or (_last_status != "success")
+    _already_kicked = st.session_state.get(_LDAP_SYNC_AUTO_KEY, False)
+    if _auto_eligible and not _already_kicked:
+        st.session_state[_LDAP_SYNC_AUTO_KEY] = True
+        with st.spinner(
+            "LDAP cache is stale — auto-syncing in the background..."
+        ):
+            _full_team_set = _ldap_sync_collect_full_team_set()
+            _sync_delta = _ldap_sync_to_db(tuple(sorted(_full_team_set)))
+        st.session_state["_ldap_sync_last_delta_v1"] = _sync_delta
+        st.session_state["_ldap_sync_team_set_v1"] = sorted(_full_team_set)
+        st.rerun()
+
+    # Refresh after potential auto-run
+    _last = _ldap_db_load_last_sync() or {}
+    _completed = (_last.get("completed_at") or "").replace("T", " ")[:19]
+    _age = _ldap_sync_last_age_seconds()
+    _is_fresh = (_age is not None) and (_age < _LDAP_SYNC_FRESH_SECONDS)
+    _last_status = _last.get("status") or ""
+    _u_count = int(_last.get("users_count") or 0)
+    _t_count = int(_last.get("teams_count") or 0)
+
+    # ── Status row ──────────────────────────────────────────────────────
+    if _completed:
+        _age_h = int((_age or 0) // 3600)
+        _age_m = int(((_age or 0) % 3600) // 60)
+        _age_lbl = (
+            f"{_age_h}h {_age_m}m ago" if _age_h
+            else f"{_age_m}m ago"
+        )
+        _fresh_chip = (
+            '<span class="ldap-sync-chip is-fresh">FRESH</span>'
+            if _is_fresh else
+            '<span class="ldap-sync-chip is-stale">STALE</span>'
+        )
+        _sync_label = (
+            f'Last LDAP sync · {_completed} UTC · {_age_lbl} · '
+            f'{_u_count:,} users · {_t_count:,} teams {_fresh_chip}'
+        )
+        if _last_status != "success":
+            _sync_label += (
+                f' · <span style="color:var(--cc-red)">'
+                f'{html.escape(_last_status)}</span>'
+            )
+    else:
+        _sync_label = (
+            'No LDAP sync recorded yet · click <b>↻ Re-sync</b> to populate '
+            '(the first run takes ~1 minute).'
+        )
+    _ls1, _ls2 = st.columns([6, 1])
+    with _ls1:
+        st.markdown(
+            f'<div class="iv-src-pref-lbl" style="padding-top:6px">'
+            f'{_sync_label}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with _ls2:
+        if st.button(
+            "↻ Re-sync",
+            key="_ldap_sync_btn",
+            use_container_width=True,
+            help=(
+                "Re-query LDAP for every team across the UNSCOPED "
+                "inventory, compute deltas vs the Postgres cache, "
+                "and write the fresh state. Auto-runs once per "
+                "session when the cache is older than 24h."
+            ),
+        ):
+            with st.spinner("Syncing LDAP → Postgres (full fleet)..."):
+                _full_team_set = _ldap_sync_collect_full_team_set()
+                _sync_delta = _ldap_sync_to_db(tuple(sorted(_full_team_set)))
+            st.session_state["_ldap_sync_last_delta_v1"] = _sync_delta
+            st.session_state["_ldap_sync_team_set_v1"] = sorted(_full_team_set)
+            st.rerun()
+
+    # ── Sync delta panel ────────────────────────────────────────────────
+    _sync_delta_v1 = st.session_state.get("_ldap_sync_last_delta_v1")
+    if _sync_delta_v1:
+        _added_n   = len(_sync_delta_v1.get("added_users") or [])
+        _removed_n = len(_sync_delta_v1.get("removed_users") or [])
+        _add_mem   = len(_sync_delta_v1.get("added_memberships") or [])
+        _rem_mem   = len(_sync_delta_v1.get("removed_memberships") or [])
+        _fld_chg   = len(_sync_delta_v1.get("field_changes") or {})
+        _sync_status = _sync_delta_v1.get("status") or ""
+        _sync_err = _sync_delta_v1.get("error_msg") or ""
+        if _sync_status == "error":
+            inline_note(f"LDAP sync failed: {_sync_err}", "warning")
+        else:
+            _summary = (
+                f"<b>{_added_n:,}</b> added · "
+                f"<b>{_removed_n:,}</b> removed · "
+                f"<b>{_fld_chg:,}</b> field changes · "
+                f"<b>{_add_mem:,}</b> new memberships · "
+                f"<b>{_rem_mem:,}</b> dropped memberships"
+            )
+            _added_chips = "".join(
+                f'<span class="ldap-delta-chip is-add">'
+                f'{html.escape(u)}</span>'
+                for u in (_sync_delta_v1.get("added_users") or [])[:50]
+            )
+            _removed_chips = "".join(
+                f'<span class="ldap-delta-chip is-rem">'
+                f'{html.escape(u)}</span>'
+                for u in (_sync_delta_v1.get("removed_users") or [])[:50]
+            )
+            _add_mem_chips = "".join(
+                f'<span class="ldap-delta-chip is-add">'
+                f'{html.escape(t)} ← {html.escape(u)}</span>'
+                for (t, u) in (_sync_delta_v1.get("added_memberships") or [])[:80]
+            )
+            _rem_mem_chips = "".join(
+                f'<span class="ldap-delta-chip is-rem">'
+                f'{html.escape(t)} ← {html.escape(u)}</span>'
+                for (t, u) in (_sync_delta_v1.get("removed_memberships") or [])[:80]
+            )
+            _detail_sections: list[str] = []
+            if _added_chips:
+                _detail_sections.append(
+                    f'<div class="ldap-delta-block"><h6>Added users</h6>'
+                    f'<div>{_added_chips}</div></div>'
+                )
+            if _removed_chips:
+                _detail_sections.append(
+                    f'<div class="ldap-delta-block"><h6>Removed users</h6>'
+                    f'<div>{_removed_chips}</div></div>'
+                )
+            if _add_mem_chips:
+                _detail_sections.append(
+                    f'<div class="ldap-delta-block"><h6>New team memberships</h6>'
+                    f'<div>{_add_mem_chips}</div></div>'
+                )
+            if _rem_mem_chips:
+                _detail_sections.append(
+                    f'<div class="ldap-delta-block"><h6>Dropped team memberships</h6>'
+                    f'<div>{_rem_mem_chips}</div></div>'
+                )
+            _details_html = (
+                f'<details class="ldap-delta-details">'
+                f'<summary>view per-bucket lists '
+                f'({_added_n + _removed_n + _add_mem + _rem_mem:,} total entries)</summary>'
+                + "".join(_detail_sections)
+                + '</details>'
+            ) if _detail_sections else ""
+            st.markdown(
+                f'<div class="ldap-delta-panel">'
+                f'  <div class="ldap-delta-summary">'
+                f'    <span class="ldap-delta-glyph">✦</span>'
+                f'    LDAP sync delta · {_summary}'
+                f'  </div>'
+                f'  {_details_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        _ddc1, _ddc2 = st.columns([1, 7])
+        with _ddc1:
+            if st.button(
+                "✕ Dismiss delta",
+                key="_ldap_sync_dismiss_btn",
+                use_container_width=True,
+            ):
+                st.session_state.pop("_ldap_sync_last_delta_v1", None)
+                st.rerun()
+
+
 @st.fragment(run_every="30s")
 def _render_jenkins_panel_active() -> None:
     """Active half of the Jenkins panel — fires the API call + draws the
@@ -12388,7 +12804,7 @@ def _render_jenkins_panel_active() -> None:
         _hdr_glyph = "○"
 
     # Version pill — admin-only by feature requirement, but ALSO inherently
-    # gated here because the entire Jenkins tab is admin-only. Three states:
+    # gated here because the Jenkins popover is admin-only. Three states:
     #   current  → quiet teal "v2.450"
     #   outdated → amber "v2.440 → 2.450 available"
     #   unknown  → muted "v2.440 · update check unavailable" (or just v? when
@@ -13693,7 +14109,9 @@ def _render_event_log() -> None:
     def _person_cell(val: str) -> str:
         if not val:
             return '<span style="color:var(--cc-text-mute);font-size:0.72rem">—</span>'
-        _u = _user_lookup(val)
+        # Per-user popovers (with stats) are admin-only. Non-admins see
+        # the plain name without a clickable trigger.
+        _u = _user_lookup(val) if _is_admin else None
         if _u:
             _pid = _user_pop_id(_u["key"])
             return (
@@ -14307,11 +14725,10 @@ def _render_event_log() -> None:
 
     # ── Per-user popovers — one per unique user appearing in the visible
     # event rows. Built off the cached users aggregate so we get the full
-    # cross-index counts + inferred teams. Non-aggregate user mentions
-    # (e.g. a system bot the aggregator didn't track) just render as plain
-    # text via the fallback path in _person_cell.
+    # cross-index counts + inferred teams. Admin-only: non-admins never
+    # render user popovers (per-user counts are not surfaced to them).
     _users_in_view: dict[str, dict] = {}
-    for _ev in events:
+    for _ev in (events if _is_admin else []):
         for _fld in ("Requester", "Approver"):
             _v_str = (_ev.get(_fld) or "").strip()
             if not _v_str:
@@ -14360,10 +14777,10 @@ def _render_event_log() -> None:
             + _stat_pill("requests",    _u.get("requests_made", 0), "⇪")
             + _stat_pill("approvals",   _u.get("approvals", 0),     "✓")
             + _stat_pill("rejections",  _u.get("rejections", 0),    "✕")
-            + _stat_pill("builds req",  _u.get("builds_requested", 0), "▶")
-            + _stat_pill("builds appr", _u.get("builds_approved", 0),  "★")
+            + _stat_pill("builds",      _u.get("builds_authored", 0), "▶")
             + _stat_pill("deploys req", _u.get("deploys_requested", 0), "⇪")
             + _stat_pill("deploys appr", _u.get("deploys_approved", 0), "✓")
+            + _stat_pill("releases",    _u.get("releases_authored", 0), "★")
         )
 
         # LDAP enrichment block — only renders when ANY ldap_* field has
@@ -17273,10 +17690,14 @@ def _fetch_users_aggregate(
             "key": key, "email": "", "names": set(), "teams": set(),
             "commits": 0, "jira_authored": 0, "jira_assigned": 0,
             "requests_made": 0, "approvals": 0, "rejections": 0,
-            # CI events — builds + deployments carry plain-string
-            # ``requester`` and ``approver`` per the platform schema.
-            "builds_requested": 0, "builds_approved": 0,
+            # CI events — counters per the index schemas:
+            #   builds_authored:  user is the commit-author of the build.
+            #   deploys_requested/approved: deployments has requester /
+            #     approver fields (keyword) per the schema.
+            #   releases_authored: commitauthor on the release record.
+            "builds_authored": 0,
             "deploys_requested": 0, "deploys_approved": 0,
+            "releases_authored": 0,
         })
         if email and not u["email"]:
             u["email"] = _norm(email)
@@ -17418,17 +17839,27 @@ def _fetch_users_aggregate(
                 f"all candidate fields failed: {' · '.join(_failures[:4])}"
             )
 
-    # ── 2. JIRA — assignee + reporter, with multiple casing variants.
+    # Schema-confirmed identity probes (per the user's
+    # `get_index_fields.sh` dumps). Every aggregation also tries to attach
+    # the row's ``team`` field (where present) so users get team
+    # attribution directly from the event data, not just LDAP rosters.
+
+    # ── 2. JIRA — assignee / reporter / creator (all keyword). Team
+    # context comes from `reporterteam` (keyword).
     _bucket_into("jira",
                  ["assignee.keyword", "assignee"],
-                 "reporterteam", "jira_assigned",
+                 "reporterteam.keyword", "jira_assigned",
                  scope_filters_list, "created")
     _bucket_into("jira",
                  ["reporter.keyword", "reporter"],
-                 "reporterteam", "jira_authored",
+                 "reporterteam.keyword", "jira_authored",
+                 scope_filters_list, "created")
+    _bucket_into("jira",
+                 ["creator.keyword", "creator"],
+                 "reporterteam.keyword", "jira_authored",
                  scope_filters_list, "created")
 
-    # ── 3. REQUESTS — Requester field is typically a name string.
+    # ── 3. REQUESTS — Requester is the identity field.
     _bucket_into("requests",
                  ["Requester.keyword", "requester.keyword",
                   "Requester", "requester"],
@@ -17454,30 +17885,36 @@ def _fetch_users_aggregate(
                  "", "requests_made",
                  scope_filters_list, "RequestDate")
 
-    # ── 5. BUILDS — `requester` / `approver` plain name strings per the
-    # platform schema. Multiple casing + .keyword variants tried.
+    # ── 5. BUILDS — schema has NO requester/approver, only commit-author
+    # identity fields (authormail / authorname / commitauthor, all text).
+    # Try both .keyword subfield and bare; whichever the index publishes
+    # as keyword will win. Team field is `team` (text → try .keyword).
     _bucket_into("builds",
-                 ["requester.keyword", "Requester.keyword",
-                  "requester", "Requester"],
-                 "", "builds_requested",
-                 commit_scope_list, "startdate")
-    _bucket_into("builds",
-                 ["approver.keyword", "Approver.keyword",
-                  "approver", "Approver"],
-                 "", "builds_approved",
+                 ["authormail.keyword", "authorname.keyword",
+                  "commitauthor.keyword",
+                  "authormail", "authorname", "commitauthor"],
+                 "team.keyword", "builds_authored",
                  commit_scope_list, "startdate")
 
-    # ── 6. DEPLOYMENTS — same field shape as builds.
+    # ── 6. DEPLOYMENTS — has actual requester / approver (both keyword
+    # per the schema dump). Team is `team` (text → try .keyword).
     _bucket_into("deployments",
                  ["requester.keyword", "Requester.keyword",
                   "requester", "Requester"],
-                 "", "deploys_requested",
+                 "team.keyword", "deploys_requested",
                  commit_scope_list, "startdate")
     _bucket_into("deployments",
                  ["approver.keyword", "Approver.keyword",
                   "approver", "Approver"],
-                 "", "deploys_approved",
+                 "team.keyword", "deploys_approved",
                  commit_scope_list, "startdate")
+
+    # ── 7. RELEASES — schema only carries `commitauthor` (text) as
+    # identity. Counts each user's release-commit attribution.
+    _bucket_into("releases",
+                 ["commitauthor.keyword", "commitauthor"],
+                 "", "releases_authored",
+                 commit_scope_list, "releasedate")
 
     # ── Final reconciliation pass — merge name-only buckets into
     # email-keyed buckets where the name has a known email from commits.
@@ -17500,16 +17937,18 @@ def _fetch_users_aggregate(
                 "key": em, "email": em, "names": set(), "teams": set(),
                 "commits": 0, "jira_authored": 0, "jira_assigned": 0,
                 "requests_made": 0, "approvals": 0, "rejections": 0,
-                "builds_requested": 0, "builds_approved": 0,
+                "builds_authored": 0,
                 "deploys_requested": 0, "deploys_approved": 0,
+                "releases_authored": 0,
             })
             dst["email"] = em
             dst["names"].update(src["names"])
             dst["teams"].update(src["teams"])
             for fld in ("commits", "jira_authored", "jira_assigned",
                         "requests_made", "approvals", "rejections",
-                        "builds_requested", "builds_approved",
-                        "deploys_requested", "deploys_approved"):
+                        "builds_authored",
+                        "deploys_requested", "deploys_approved",
+                        "releases_authored"):
                 dst[fld] += src.get(fld, 0)
             dst["key"] = em
 
@@ -17523,8 +17962,9 @@ def _fetch_users_aggregate(
             + u["jira_authored"] + u["jira_assigned"]
             + u["requests_made"]
             + u["approvals"] + u["rejections"]
-            + u["builds_requested"] + u["builds_approved"]
+            + u["builds_authored"]
             + u["deploys_requested"] + u["deploys_approved"]
+            + u["releases_authored"]
         )
         if total == 0:
             continue
@@ -17540,10 +17980,10 @@ def _fetch_users_aggregate(
             "requests_made":    u["requests_made"],
             "approvals":        u["approvals"],
             "rejections":       u["rejections"],
-            "builds_requested": u["builds_requested"],
-            "builds_approved":  u["builds_approved"],
+            "builds_authored":  u["builds_authored"],
             "deploys_requested": u["deploys_requested"],
             "deploys_approved": u["deploys_approved"],
+            "releases_authored": u["releases_authored"],
             "total":            total,
             # LDAP enrichment slots — populated by the un-cached wrapper.
             "ldap_title":      "",
@@ -18459,8 +18899,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             "teams": [], "commits": 0, "jira_authored": 0,
             "jira_assigned": 0, "requests_made": 0,
             "approvals": 0, "rejections": 0,
-            "builds_requested": 0, "builds_approved": 0,
+            "builds_authored": 0,
             "deploys_requested": 0, "deploys_approved": 0,
+            "releases_authored": 0,
             "total": 0,
             "ldap_title": "", "ldap_department": "",
             "ldap_company": "", "ldap_manager": "", "ldap_username": "",
@@ -18540,7 +18981,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _existing = _users_dedup[_k]
             for _fld in ("commits", "jira_authored", "jira_assigned",
                          "requests_made", "approvals", "rejections",
-                         "builds_requested", "builds_approved",
+                         "builds_authored", "releases_authored",
                          "deploys_requested", "deploys_approved"):
                 _existing[_fld] = (
                     _existing.get(_fld, 0) + _u.get(_fld, 0)
@@ -18564,7 +19005,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 + _u.get("jira_authored", 0) + _u.get("jira_assigned", 0)
                 + _u.get("requests_made", 0)
                 + _u.get("approvals", 0) + _u.get("rejections", 0)
-                + _u.get("builds_requested", 0) + _u.get("builds_approved", 0)
+                + _u.get("builds_authored", 0) + _u.get("releases_authored", 0)
                 + _u.get("deploys_requested", 0) + _u.get("deploys_approved", 0)
             )
             _users_dedup[_k] = _u
@@ -18575,7 +19016,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + _u.get("jira_authored", 0) + _u.get("jira_assigned", 0)
             + _u.get("requests_made", 0)
             + _u.get("approvals", 0) + _u.get("rejections", 0)
-            + _u.get("builds_requested", 0) + _u.get("builds_approved", 0)
+            + _u.get("builds_authored", 0) + _u.get("releases_authored", 0)
             + _u.get("deploys_requested", 0) + _u.get("deploys_approved", 0)
         )
     _users_blob["users"] = sorted(
@@ -19278,47 +19719,47 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             f'</div>', unsafe_allow_html=True)
 
                     # ── Users (right after Teams, before Projects) ───────
-                    # Always render the section header so admins know the
-                    # facet exists even when zero users appear in scope.
-                    st.markdown(
-                        '<div class="iv-fc-section">'
-                        '<span class="iv-fc-section-glyph" '
-                        'style="color:var(--cc-amber)">👤</span>'
-                        '<span class="iv-fc-section-label">Users</span>'
-                        '</div>', unsafe_allow_html=True)
-                    if _iv_users_opts:
-                        _render_tile_ms_labeled("user", _iv_users_opts,
-                                                _iv_users_label,
-                                                "Select team members")
-                    else:
-                        _users_blob_v1 = (
-                            st.session_state.get("_users_blob_v1") or {}
-                        )
-                        _u_errors = _users_blob_v1.get("errors") or {}
-                        _err_summary = (
-                            " · ".join(
-                                f"{k}: {v}" for k, v in _u_errors.items() if v
-                            )
-                            if _u_errors else ""
-                        )
-                        if _err_summary:
-                            st.markdown(
-                                f'<div class="iv-fc-hint" style="color:var(--cc-red)">'
-                                f'No users detected in scope — aggregator '
-                                f'returned errors: {html.escape(_err_summary)[:280]}'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
+                    # Admin-only — non-admins never see the Users facet.
+                    if _is_admin:
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph" '
+                            'style="color:var(--cc-amber)">👤</span>'
+                            '<span class="iv-fc-section-label">Users</span>'
+                            '</div>', unsafe_allow_html=True)
+                        if _iv_users_opts:
+                            _render_tile_ms_labeled("user", _iv_users_opts,
+                                                    _iv_users_label,
+                                                    "Select team members")
                         else:
-                            st.markdown(
-                                '<div class="iv-fc-hint">'
-                                'No users detected in the current scope + '
-                                'time window. Widen the time window or '
-                                'change project / company filters to surface '
-                                'commits / jira / build / deploy activity.'
-                                '</div>',
-                                unsafe_allow_html=True,
+                            _users_blob_v1 = (
+                                st.session_state.get("_users_blob_v1") or {}
                             )
+                            _u_errors = _users_blob_v1.get("errors") or {}
+                            _err_summary = (
+                                " · ".join(
+                                    f"{k}: {v}" for k, v in _u_errors.items() if v
+                                )
+                                if _u_errors else ""
+                            )
+                            if _err_summary:
+                                st.markdown(
+                                    f'<div class="iv-fc-hint" style="color:var(--cc-red)">'
+                                    f'No users detected in scope — aggregator '
+                                    f'returned errors: {html.escape(_err_summary)[:280]}'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.markdown(
+                                    '<div class="iv-fc-hint">'
+                                    'No users detected in the current scope + '
+                                    'time window. Widen the time window or '
+                                    'change project / company filters to surface '
+                                    'commits / jira / build / deploy activity.'
+                                    '</div>',
+                                    unsafe_allow_html=True,
+                                )
 
                     st.markdown(
                         '<div class="iv-fc-section">'
@@ -19592,8 +20033,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
                             f"Across your {len(_iv_session_teams)} session teams"))
     # Users tile sits between Teams and Projects per the platform's
-    # mental model (people own teams, teams own projects).
-    _tile_specs.append(("user", "👤", "Users", _users_total, _users_sub))
+    # mental model (people own teams, teams own projects). Admin-only:
+    # non-admin roles never see per-user counts or the Users tile.
+    if _is_admin:
+        _tile_specs.append(("user", "👤", "Users", _users_total, _users_sub))
     _tile_specs.append(("project", "📁", "Projects", len(_post_projects),
                         f"<b>{len(_live_projects)}</b> live in PRD ({_proj_live_pct})"))
     _tile_specs.append(("app", "▣", "Applications", _iv_total,
@@ -20290,6 +20733,35 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _inv_total = len(_inv_rows_filtered)
     # Everything below this point renders inside the inventory tab (body_slot).
     _body_container.__enter__()
+
+    # ── Action toolbar — admin-only popover entries ────────────────────────
+    # Jenkins panel + Prisma scan viewer used to live as standalone tabs /
+    # sections. Now both are mounted as popover toolbar buttons so the
+    # page surface stays compact. Each popover lazy-loads (the underlying
+    # renderers preserve their internal ▶ Load / ▶ Run gates), so opening
+    # the inventory tab still costs zero remote calls.
+    if _is_admin:
+        with st.container(key="cc_iv_action_toolbar"):
+            _tb_c1, _tb_c2, _tb_c3 = st.columns([2, 2, 8])
+            with _tb_c1:
+                _jk_lbl = "⚙ Jenkins pipelines"
+                if _jenkins_creds().get("host"):
+                    _jk_lbl += "  ·  configured"
+                with st.popover(_jk_lbl, use_container_width=True):
+                    _render_jenkins_panel()
+            with _tb_c2:
+                with st.popover("🔬 Prisma scan viewer",
+                                use_container_width=True):
+                    _render_prisma_scan_viewer()
+            with _tb_c3:
+                st.markdown(
+                    '<div class="iv-toolbar-hint">'
+                    '  Jenkins triggers + Prisma full reports live in the '
+                    '  popovers on the left — both lazy-load on click.'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
     _iv_page, _iv_start, _iv_end = _render_pager(
         total=_inv_total,
         page_size=_IV_PAGE_SIZE,
@@ -21544,223 +22016,30 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 )
 
         # ── Admin-only Ansible Vault password status indicator ──────────
-        # The password is now read from HashiCorp vault at ANSIBLE_VAULT_PATH
-        # / ANSIBLE_VAULT_PW_KEY automatically — no UI input. We still surface
-        # the status so admins can see at a glance whether the secret
-        # resolved (and if not, the underlying vault error).
+        # Password is the literal ANSIBLE_VAULT_PASSWORD constant in
+        # cicd_dashboard.py. We just surface whether it's been set so
+        # admins see at a glance whether vaulted YAMLs will decrypt.
         with st.container(key="cc_ansible_vault_pw"):
             _pw = _ansible_vault_password()
             _pw_set = bool(_pw)
-            _pw_err = "" if _pw_set else _vault_last_error(ANSIBLE_VAULT_PATH)
             _state_cls = "is-set" if _pw_set else "is-unset"
-            _state_txt = (
-                "✓ resolved from vault" if _pw_set else "○ not in vault"
-            )
+            _state_txt = "✓ set in source" if _pw_set else "○ placeholder unset"
             _detail = (
-                f' · <code style="font-size:0.66rem">'
-                f'{html.escape(ANSIBLE_VAULT_PATH)}'
-                f'/{html.escape(ANSIBLE_VAULT_PW_KEY)}</code>'
+                ' · <code style="font-size:0.66rem">ANSIBLE_VAULT_PASSWORD'
+                '</code> in <code style="font-size:0.66rem">cicd_dashboard.py'
+                '</code>'
             )
-            # Cache-bust affordance — useful right after fixing vault
-            # state on the server, since the 5-minute cache_data TTL
-            # would otherwise pin an old empty result.
-            _av_c1, _av_c2 = st.columns([6, 1])
-            _err_html = (
-                f' · <span style="color:var(--cc-red)">vault error: '
-                f'{html.escape(_pw_err)[:200]}</span>'
-                if _pw_err else ""
+            st.markdown(
+                f'<div class="iv-src-pref-lbl" style="padding-top:2px">'
+                f'Ansible Vault password '
+                f'<span class="iv-src-pref-state {_state_cls}">{_state_txt}</span>'
+                f'{_detail}'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            with _av_c1:
-                st.markdown(
-                    f'<div class="iv-src-pref-lbl" style="padding-top:2px">'
-                    f'Ansible Vault password '
-                    f'<span class="iv-src-pref-state {_state_cls}">{_state_txt}</span>'
-                    f'{_detail}{_err_html}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with _av_c2:
-                if st.button(
-                    "↻ Re-read",
-                    key="_ansible_vault_reread_btn",
-                    use_container_width=True,
-                    help=(
-                        "Drop the cached vault result for "
-                        f"{ANSIBLE_VAULT_PATH!r} and re-query. Useful "
-                        "after fixing the secret on the vault server "
-                        "so you don't have to wait for the 5-minute TTL."
-                    ),
-                ):
-                    try:
-                        _vault_secrets_raw.clear()
-                    except Exception:
-                        pass
-                    # Clear the per-path stashed error so a successful
-                    # re-read shows clean state.
-                    _store = st.session_state.get(_VAULT_ERR_KEY) or {}
-                    _store.pop(ANSIBLE_VAULT_PATH, None)
-                    st.rerun()
 
-        # ── Admin-only LDAP sync row ────────────────────────────────────
-        # Subtle "last sync" indicator + sync button. Reading from
-        # Postgres is fast; the live LDAP probe only fires on explicit
-        # admin click. Delta from the most recent sync is rendered
-        # below the row so admins see what changed.
-        with st.container(key="cc_ldap_sync_row"):
-            _last = _ldap_db_load_last_sync() or {}
-            _completed = (_last.get("completed_at") or "").replace("T", " ")[:19]
-            _last_status = _last.get("status") or ""
-            _u_count = int(_last.get("users_count") or 0)
-            _t_count = int(_last.get("teams_count") or 0)
-            if _completed:
-                _sync_label = (
-                    f"Last LDAP sync · {_completed} UTC · "
-                    f"{_u_count:,} users · {_t_count:,} teams"
-                )
-                if _last_status != "success":
-                    _sync_label += f" · <span style=\"color:var(--cc-red)\">{html.escape(_last_status)}</span>"
-            else:
-                _sync_label = (
-                    'No LDAP sync recorded yet · click ↻ Sync to '
-                    'populate the cache (first run will take a minute)'
-                )
-            _ls1, _ls2 = st.columns([6, 1])
-            with _ls1:
-                st.markdown(
-                    f'<div class="iv-src-pref-lbl" style="padding-top:6px">'
-                    f'{_sync_label}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with _ls2:
-                if st.button("↻ Sync LDAP",
-                             key="_ldap_sync_btn",
-                             use_container_width=True,
-                             help=(
-                                 "Re-query LDAP for every team across "
-                                 "the UNSCOPED inventory (ignores the "
-                                 "current Filter Console selection so "
-                                 "the DB always reflects the full fleet), "
-                                 "compute deltas vs the Postgres cache, "
-                                 "and write the fresh state. Slow (~1 "
-                                 "minute on the first run); page reads "
-                                 "stay fast between syncs."
-                             )):
-                    # Re-fetch the inventory with an EMPTY scope filter
-                    # so the sync always covers every team, regardless of
-                    # the admin's current view-all toggle / project
-                    # picker / role scope. Without this, a sync done
-                    # under a narrow filter would persist only those
-                    # teams and the DB would silently miss the rest.
-                    with st.spinner("Syncing LDAP → Postgres (full fleet)..."):
-                        _full_inv_rows, _, _, _ = _inventory_load("[]")
-                        _full_team_set: set[str] = set()
-                        for _r in _full_inv_rows:
-                            _t_blob = _r.get("teams") or {}
-                            for _vals in _t_blob.values():
-                                if isinstance(_vals, (list, tuple, set)):
-                                    for _v in _vals:
-                                        if _v:
-                                            _full_team_set.add(str(_v).strip())
-                                elif _vals:
-                                    _full_team_set.add(str(_vals).strip())
-                        _full_team_set.discard("")
-                        _sync_delta = _ldap_sync_to_db(
-                            tuple(sorted(_full_team_set))
-                        )
-                    st.session_state["_ldap_sync_last_delta_v1"] = _sync_delta
-                    st.session_state["_ldap_sync_team_set_v1"] = sorted(_full_team_set)
-                    st.rerun()
-
-        # ── Sync delta panel ────────────────────────────────────────────
-        # Shown when a sync just completed in this session. Persists in
-        # session_state until cleared (admin can dismiss).
-        _sync_delta_v1 = st.session_state.get("_ldap_sync_last_delta_v1")
-        if _sync_delta_v1:
-            _added_n   = len(_sync_delta_v1.get("added_users") or [])
-            _removed_n = len(_sync_delta_v1.get("removed_users") or [])
-            _add_mem   = len(_sync_delta_v1.get("added_memberships") or [])
-            _rem_mem   = len(_sync_delta_v1.get("removed_memberships") or [])
-            _fld_chg   = len(_sync_delta_v1.get("field_changes") or {})
-            _sync_status = _sync_delta_v1.get("status") or ""
-            _sync_err = _sync_delta_v1.get("error_msg") or ""
-            if _sync_status == "error":
-                inline_note(
-                    f"LDAP sync failed: {_sync_err}", "warning",
-                )
-            else:
-                _summary = (
-                    f"<b>{_added_n:,}</b> added · "
-                    f"<b>{_removed_n:,}</b> removed · "
-                    f"<b>{_fld_chg:,}</b> field changes · "
-                    f"<b>{_add_mem:,}</b> new memberships · "
-                    f"<b>{_rem_mem:,}</b> dropped memberships"
-                )
-                # Build collapsible per-bucket lists.
-                _added_chips = "".join(
-                    f'<span class="ldap-delta-chip is-add">'
-                    f'{html.escape(u)}</span>'
-                    for u in (_sync_delta_v1.get("added_users") or [])[:50]
-                )
-                _removed_chips = "".join(
-                    f'<span class="ldap-delta-chip is-rem">'
-                    f'{html.escape(u)}</span>'
-                    for u in (_sync_delta_v1.get("removed_users") or [])[:50]
-                )
-                _add_mem_chips = "".join(
-                    f'<span class="ldap-delta-chip is-add">'
-                    f'{html.escape(t)} ← {html.escape(u)}</span>'
-                    for (t, u) in (_sync_delta_v1.get("added_memberships") or [])[:80]
-                )
-                _rem_mem_chips = "".join(
-                    f'<span class="ldap-delta-chip is-rem">'
-                    f'{html.escape(t)} ← {html.escape(u)}</span>'
-                    for (t, u) in (_sync_delta_v1.get("removed_memberships") or [])[:80]
-                )
-                _detail_sections: list[str] = []
-                if _added_chips:
-                    _detail_sections.append(
-                        f'<div class="ldap-delta-block"><h6>Added users</h6>'
-                        f'<div>{_added_chips}</div></div>'
-                    )
-                if _removed_chips:
-                    _detail_sections.append(
-                        f'<div class="ldap-delta-block"><h6>Removed users</h6>'
-                        f'<div>{_removed_chips}</div></div>'
-                    )
-                if _add_mem_chips:
-                    _detail_sections.append(
-                        f'<div class="ldap-delta-block"><h6>New team memberships</h6>'
-                        f'<div>{_add_mem_chips}</div></div>'
-                    )
-                if _rem_mem_chips:
-                    _detail_sections.append(
-                        f'<div class="ldap-delta-block"><h6>Dropped team memberships</h6>'
-                        f'<div>{_rem_mem_chips}</div></div>'
-                    )
-                _details_html = (
-                    f'<details class="ldap-delta-details">'
-                    f'<summary>view per-bucket lists ({_added_n + _removed_n + _add_mem + _rem_mem:,} total entries)</summary>'
-                    + "".join(_detail_sections)
-                    + '</details>'
-                ) if _detail_sections else ""
-                st.markdown(
-                    f'<div class="ldap-delta-panel">'
-                    f'  <div class="ldap-delta-summary">'
-                    f'    <span class="ldap-delta-glyph">✦</span>'
-                    f'    LDAP sync delta · {_summary}'
-                    f'  </div>'
-                    f'  {_details_html}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            _ddc1, _ddc2 = st.columns([1, 7])
-            with _ddc1:
-                if st.button("✕ Dismiss delta",
-                             key="_ldap_sync_dismiss_btn",
-                             use_container_width=True):
-                    st.session_state.pop("_ldap_sync_last_delta_v1", None)
-                    st.rerun()
+        # LDAP sync controls now live in the SYNC CHECK tab — see
+        # _render_ldap_sync_panel.
 
         if _src == "git-forced-failed":
             # Admin explicitly forced git but git failed. Don't fall back
@@ -21979,11 +22258,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Prisma scan viewer — INLINE here so admins can pull a scan without
-    # leaving the inventory context. The renderer's internal idle gate
-    # (▶ Load) keeps it cost-free until explicitly requested.
-    if _is_admin:
-        _render_prisma_scan_viewer()
+    # Prisma scan viewer + Jenkins panel now live in the action-toolbar
+    # popovers at the top of the inventory body — see `_iv_action_toolbar`
+    # earlier in this render. No standalone section here so the page
+    # stays compact.
 
     # Publish the raw inventory rows so the Teams & Members tab (which
     # renders before this one in the tab strip but actually executes
@@ -22046,18 +22324,14 @@ if _show_inv and _inventory_slot is not None:
         _el_badge_txt = (
             f"  ·  {_el_badge_n:,} apps" if _el_badge_n else ""
         )
-        # Jenkins panel — admin-only for now. Other roles eventually get a
-        # role-scoped variant (developer triggers Build, operations triggers
-        # Deploy / Release request) but the read-only status surface is
-        # intentionally gated to admins until that role-scoping lands.
+        # Jenkins + Prisma scan viewer — neither has its own tab anymore.
+        # Both are mounted as popover-toolbar entries inside the Pipelines
+        # Inventory tab so detail / actions stay one click away without
+        # adding new full-page sections. Still admin-only and still
+        # smart-loaded (no fetch until ▶ Load / ▶ Run is clicked) so
+        # opening the inventory tab never costs a remote request.
         _jk_show = _is_admin
         _jk_configured = bool(_jenkins_creds().get("host"))
-        _jk_badge_txt = "  ·  ⏵" if (_jk_show and _jk_configured) else ""
-        # Scan Viewer — formerly its own tab; now rendered INLINE inside
-        # the Pipelines Inventory tab so the operator can pull a scan
-        # without leaving the row context. Still admin-only and still
-        # smart-loaded (no fetch until ▶ Load is clicked) so opening the
-        # inventory tab never costs an S3 request.
         _psv_show = _is_admin
         # Sync check — admin-only. Badge surfaces the last-known drift
         # across BOTH internal panels (git↔ES + inventory↔Postgres).
@@ -22089,8 +22363,6 @@ if _show_inv and _inventory_slot is not None:
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
             f"⧗  EVENT LOG{_el_badge_txt}",
         ])
-        if _jk_show:
-            _tab_labels.append(f"⚙  JENKINS{_jk_badge_txt}")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         with st.container(key="cc_surface_tabs"):
@@ -22102,9 +22374,6 @@ if _show_inv and _inventory_slot is not None:
                 _tab_teams = None
             _tab_inv = _tabs[_idx]; _idx += 1
             _tab_log = _tabs[_idx]; _idx += 1
-            _tab_jenkins = _tabs[_idx] if _jk_show else None
-            if _jk_show:
-                _idx += 1
             _tab_sync = _tabs[_idx] if _sync_show else None
             if _tab_teams is not None:
                 with _tab_teams:
@@ -22142,19 +22411,6 @@ if _show_inv and _inventory_slot is not None:
                 # inventory fragment publishes `_el_inv_scope_apps`, so the
                 # event log always reflects the current filter state.
                 _el_slot = st.empty()
-            if _tab_jenkins is not None:
-                with _tab_jenkins:
-                    st.markdown(
-                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
-                        'Jenkins pipelines · build / deploy request / release '
-                        'request · live status of in-flight runs · click ▶ to '
-                        'load — refreshes every 30s once active'
-                        '</div>',
-                        unsafe_allow_html=True,
-                    )
-                    _jk_slot = st.empty()
-            else:
-                _jk_slot = None
             if _tab_sync is not None:
                 with _tab_sync:
                     st.markdown(
@@ -22185,13 +22441,6 @@ if _show_inv and _inventory_slot is not None:
         with _el_slot.container():
             _render_event_log()
 
-        # Jenkins panel — smart-loaded: nothing fetches until the user
-        # clicks "Load". After first load the panel runs as a fragment
-        # with run_every="30s" so it keeps itself fresh independently.
-        if _jk_slot is not None:
-            with _jk_slot.container():
-                _render_jenkins_panel()
-
         # Sync check — smart-loaded; uses the scope key the inventory
         # fragment publishes so its diff matches the visible scope.
         # Houses two independent panels: git↔ES first, then inventory↔Postgres.
@@ -22214,6 +22463,14 @@ if _show_inv and _inventory_slot is not None:
                     unsafe_allow_html=True,
                 )
                 _render_postgres_compare_panel(_scope_key_for_check)
+                st.markdown(
+                    '<div class="sync-section-divider">'
+                    '  <span class="sync-section-divider-glyph">👥</span>'
+                    '  LDAP ↔ Postgres ldap_users'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                _render_ldap_sync_panel()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
@@ -22295,11 +22552,12 @@ by name match).
 | Index | Identity fields probed | Counts toward |
 |---|---|---|
 | `ef-git-commits` | `authormail` + `authorname`, `author_mail` + `author_name`, `author.mail` + `author.name`, `commitauthormail` + `commitauthor`, `commit_author_mail` + `commit_author` (each with and without `.keyword`) | `commits` |
-| `ef-bs-jira-issues` | `assignee`, `reporter` (each with and without `.keyword`); `reporterteam` for team inference | `jira_assigned`, `jira_authored` |
+| `ef-bs-jira-issues` | `assignee`, `reporter`, `creator` (each with and without `.keyword`); `reporterteam` for team inference | `jira_assigned`, `jira_authored` |
 | `ef-devops-requests` | `Requester`, `requester` (with / without `.keyword`) | `requests_made` |
 | `ef-cicd-approval` | `ApprovedBy` / `approved_by`, `RejectedBy` / `rejected_by`, `RequestedBy` / `requested_by` / `Requester` / `requester` (each with / without `.keyword`) | `approvals`, `rejections`, `requests_made` |
-| `ef-cicd-builds` | `requester` / `Requester`, `approver` / `Approver` (with / without `.keyword`) | `builds_requested`, `builds_approved` |
-| `ef-cicd-deployments` | `requester` / `Requester`, `approver` / `Approver` (with / without `.keyword`) | `deploys_requested`, `deploys_approved` |
+| `ef-cicd-builds` | `authormail`, `authorname`, `commitauthor` (each with / without `.keyword`); `team` for team inference | `builds_authored` |
+| `ef-cicd-deployments` | `requester` / `Requester`, `approver` / `Approver` (with / without `.keyword`); `team` for team inference | `deploys_requested`, `deploys_approved` |
+| `ef-cicd-releases` | `commitauthor` (with / without `.keyword`) | `releases_authored` |
 
 Reconciliation key is the canonical lowercased email. Names from indices
 without an email field merge into the email-keyed record via the
@@ -22316,15 +22574,14 @@ are cached for 5 hours inside `utils.ldap`.
 
 When a `group_vars/{app}/*.yml` or similar inventory file begins with
 `$ANSIBLE_VAULT;` it's decrypted in-memory using the password sourced
-from HashiCorp vault at path **`ansible`** (configurable via
-`ANSIBLE_VAULT_PATH`) under variable **`vault_password`** (configurable
-via `ANSIBLE_VAULT_PW_KEY`). Reads share the same vault-error stash as
-Jenkins / S3 / Postgres / Git, so a missing or unauthorised entry
-surfaces in the integrations strip + git-diagnostic panel.
+from the **`ANSIBLE_VAULT_PASSWORD`** literal in `cicd_dashboard.py`.
+Edit the constant in source (replace the
+`"SET_ANSIBLE_VAULT_PASSWORD"` placeholder) and relaunch — the
+integrations strip flags the unset placeholder until then.
 
 The inventory-loader cache key includes a short fingerprint of the
-resolved password so a vault rotation invalidates the loader on the
-next render — no TTL wait.
+constant so rotating it invalidates the loader on the next render — no
+TTL wait.
 
 ### Prismacloud scan reports (S3)
 
