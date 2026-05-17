@@ -346,6 +346,11 @@ _INV_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "build_image_tag":   ("build_image_tag", "build_image.tag", "buildImageTag"),
     "deploy_image_name": ("deploy_image_name", "deploy_image.name", "deployImageName"),
     "deploy_image_tag":  ("deploy_image_tag", "deploy_image.tag", "deployImageTag"),
+    # Source repository — used to build the ADO repo URL inside app
+    # popovers. Accepts a few naming variants the inventories repo has
+    # historically used.
+    "repository_name":   ("repository_name", "repositoryName", "repository",
+                          "repo_name", "repo"),
 }
 # Environments we'll merge group_vars/{env}_{app} for. Same set used by
 # the existing dashboard stages.
@@ -1838,6 +1843,74 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     gap: 3px;
     align-items: flex-start;
     line-height: 1.15;
+}
+.iv-app-cell .iv-app-repo {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    text-decoration: none;
+    padding: 0 4px;
+    border-radius: 4px;
+    transition: background .15s ease, color .15s ease;
+}
+.iv-app-cell .iv-app-repo:hover {
+    color: var(--cc-accent);
+    background: var(--cc-surface2);
+}
+/* Move the ↗ pin onto the same row as the application button */
+.iv-app-cell > button.el-app-trigger { display: inline; }
+.iv-app-cell > button.el-app-trigger + .iv-app-repo {
+    margin-left: 4px;
+    vertical-align: baseline;
+}
+.iv-app-cell {
+    /* The first child row (button + repo link) should sit inline; the
+     * subsequent posture / outdated chips already wrap below. */
+    flex-direction: column;
+}
+
+/* Jenkins action grid inside the app popover */
+.el-app-pop .ap-jk-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin: 6px 0 4px 0;
+}
+.el-app-pop .ap-jk-tile {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    background: var(--cc-surface2);
+    color: var(--cc-text);
+    text-decoration: none;
+    font-size: 0.74rem;
+    font-weight: 600;
+    transition: border-color .15s ease, background .15s ease, transform .15s ease;
+}
+.el-app-pop .ap-jk-tile:hover {
+    border-color: var(--cc-accent);
+    background: var(--cc-surface);
+    transform: translateY(-1px);
+}
+.el-app-pop .ap-jk-glyph {
+    font-size: 0.95rem;
+    color: var(--cc-accent);
+}
+.el-app-pop .ap-jk-lbl { flex: 1; }
+.el-app-pop .ap-jk-arrow {
+    color: var(--cc-text-mute);
+    font-size: 0.85rem;
+}
+.el-app-pop .ap-url--repo {
+    font-family: var(--cc-mono);
+    font-weight: 700;
 }
 .iv-sec-row {
     display: inline-flex;
@@ -11220,10 +11293,16 @@ def _compute_team_role_map(inv_rows: list[dict]) -> dict[str, set[str]]:
     return out
 
 
+@st.fragment
 def _render_teams_and_members_view() -> None:
     """Admin-only tab — directory + per-team + per-user breakdown with
     role attribution. Reads from session_state slots the inventory
     fragment publishes; never re-fetches anything itself.
+
+    Decorated as a fragment so the filter widgets and per-team popovers
+    inside it (members directory filters, sync diagnostics, etc.) only
+    trigger fragment-scoped reruns. Filter Console changes upstream
+    still cascade because they trigger a full script rerun.
 
     Layout:
       1. Stat-tile row (Teams · Members · Departments · Companies · Roles)
@@ -16194,6 +16273,7 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
                 "build_image_tag":   _pick_env_field("build_image_tag"),
                 "deploy_image_name": _pick_env_field("deploy_image_name"),
                 "deploy_image_tag":  _pick_env_field("deploy_image_tag"),
+                "repository_name":   _resolve_field(app_merged, "repository_name"),
                 "teams":             teams,
             }
             rows.append(row)
@@ -21132,6 +21212,82 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         return (f'<span class="ap-v"><span class="ap-type-pill {_cls}">'
                 f'{_t}</span></span>')
 
+    # ── ADO repo URL helper (per-row) ─────────────────────────────────
+    # Built from the inventory row's `repository_name` field plus the
+    # vault-sourced ADO hostname. Returns "" when either piece is
+    # missing so callers can render an inert state instead of a broken
+    # link.
+    _iv_ado_host = (_git_creds().get("hostname") or "").strip()
+
+    def _iv_repo_url(r: dict) -> str:
+        _rn = (r.get("repository_name") or "").strip()
+        _co = (r.get("company") or "").strip()
+        _pj = (r.get("project") or "").strip()
+        if not (_iv_ado_host and _rn and _co and _pj):
+            return ""
+        return (
+            f"http://{_iv_ado_host}/"
+            f"{urllib.parse.quote(_co, safe='')}/"
+            f"{urllib.parse.quote(_pj, safe='')}/_git/"
+            f"{urllib.parse.quote(_rn, safe='')}"
+        )
+
+    # ── Jenkins per-app section ───────────────────────────────────────
+    # Lives inside each app popover as a small action grid. Each tile
+    # is a deep link to the pre-existing Jenkins job — the user lands
+    # on the job's parametric-build page with project / application
+    # query string filled in. No script-side trigger (popovers are
+    # plain HTML; can't call back into Streamlit), so admins always
+    # confirm the trigger inside Jenkins itself.
+    _iv_jk_host = (_jenkins_creds().get("host") or "").strip().rstrip("/")
+    _iv_jk_public = (_jenkins_creds().get("public_name") or _iv_jk_host).rstrip("/")
+    _iv_jk_ui_host = _iv_jk_public or _iv_jk_host
+
+    def _iv_jenkins_html(r: dict) -> str:
+        if not _iv_jk_ui_host:
+            return ""
+        _co = (r.get("company") or "").strip()
+        _pj = (r.get("project") or "").strip()
+        _ap = (r.get("application") or "").strip()
+        _tiles: list[str] = []
+        for _key, _cfg in JENKINS_PIPELINES.items():
+            # Build "/job/A/job/B/" from "A/B" path.
+            _job_path = "/".join(
+                f"job/{urllib.parse.quote(seg, safe='')}"
+                for seg in _cfg["path"].split("/") if seg
+            )
+            _params: dict[str, str] = {}
+            for _p in _cfg["params"]:
+                if _p == "project":     _params["project"] = _pj
+                elif _p == "application": _params["application"] = _ap
+                elif _p == "company":   _params["company"] = _co
+                elif _p == "branch":    _params["branch"] = "release"
+            _qs = urllib.parse.urlencode(
+                {k: v for k, v in _params.items() if v}
+            )
+            # Jenkins exposes both `parambuild` (one-click after a
+            # confirmation page) and the plain job page. The job page
+            # is the safer default — clicking through means the admin
+            # still has to fill in any missing params and press Build.
+            _job_url = f"{_iv_jk_ui_host}/{_job_path}/"
+            _build_url = (
+                f"{_iv_jk_ui_host}/{_job_path}/parambuild?{_qs}"
+                if _qs else _job_url
+            )
+            _tiles.append(
+                f'<a class="ap-jk-tile" href="{html.escape(_build_url, quote=True)}" '
+                f'target="_blank" rel="noopener noreferrer" '
+                f'title="{html.escape(_cfg["summary"])}">'
+                f'<span class="ap-jk-glyph">{html.escape(_cfg["glyph"])}</span>'
+                f'<span class="ap-jk-lbl">{html.escape(_cfg["label"])}</span>'
+                f'<span class="ap-jk-arrow">↗</span>'
+                f'</a>'
+            )
+        return (
+            '    <div class="ap-section">Jenkins actions</div>'
+            '    <div class="ap-jk-grid">' + "".join(_tiles) + '</div>'
+        )
+
     # Pre-compute app_type per application for stage-cell rendering logic.
     # Use the full filtered set so version popovers (built from _inv_rows_all)
     # and paginated stage cells resolve their kind consistently.
@@ -21301,11 +21457,25 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         )
 
     def _iv_app_cell(app: str) -> str:
+        # Find this app's row so we can resolve its repo URL — admins
+        # asked for a direct hyperlink to the ADO repo right beside the
+        # application name in the table.
+        _row_for_app = next(
+            (r for r in _inv_rows_all if r.get("application") == app), None,
+        )
+        _repo_url = _iv_repo_url(_row_for_app) if _row_for_app else ""
+        _repo_html = (
+            f'<a class="iv-app-repo" href="{html.escape(_repo_url, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer" '
+            f'title="Open ADO repo for {html.escape(app, quote=True)}">↗</a>'
+            if _repo_url else ""
+        )
         return (
             f'<div class="iv-app-cell">'
             f'<button type="button" class="el-app-trigger" '
             f'popovertarget="{_iv_app_pop_id(app)}" '
             f'title="Click for full inventory details">{app}</button>'
+            f'{_repo_html}'
             f'{_iv_outdated_pills(app)}'
             f'{_iv_app_posture_html(app)}'
             f'</div>'
@@ -21745,6 +21915,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if _ap_d_old else ""
         )
 
+        # Repo URL row — clickable hyperlink that opens the ADO repo
+        # in a new tab. Empty when the row carries no `repository_name`
+        # or the ADO hostname is unresolved.
+        _repo_url_for_pop = _iv_repo_url(r)
+        _repo_row = (
+            f'    <span class="ap-k">Repository</span>'
+            f'<span class="ap-v">'
+            f'<a class="ap-url ap-url--repo" href="{html.escape(_repo_url_for_pop, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer" '
+            f'title="{html.escape(_repo_url_for_pop, quote=True)}">'
+            f'↗ {html.escape(r.get("repository_name") or "—")}</a>'
+            f'</span>'
+            if _repo_url_for_pop else ""
+        )
+        _jenkins_section = _iv_jenkins_html(r)
         _iv_popovers.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop is-app">'
             f'  <div class="ap-head">'
@@ -21761,6 +21946,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <span class="ap-k">Project</span>{_iv_v(r.get("project", ""))}'
             f'    <span class="ap-k">Company</span>{_iv_v(r.get("company", ""))}'
             f'    <span class="ap-k">Type</span>{_iv_app_type_pill(r.get("app_type", ""))}'
+            f'    {_repo_row}'
             f'    <div class="ap-section">Build</div>'
             f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("build_technology", ""))}'
             f'    <span class="ap-k">Image name</span>{_iv_v(r.get("build_image_name", ""))}'
@@ -21780,9 +21966,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'{_deploy_tag_chip}'
             f'</span>'
             f'{_deploy_recommend_row}'
+            f'    {_jenkins_section}'
             f'    {_prisma_html}'
             f'  </div>'
-            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
+            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap · jenkins</div>'
             f'</div>'
         )
 
