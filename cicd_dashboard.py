@@ -11310,6 +11310,79 @@ def _render_teams_and_members_view() -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Aggregator diagnostics popover ──────────────────────────────────
+    # Per-counter sums + error stash from `_fetch_users_aggregate`. When
+    # all activity counters read zero it's almost always one of two
+    # things: an ES `_error` swallowed by `_run_search` (visible here as
+    # `<index>_<counter>: ES error: ...`) or a time-window mismatch (the
+    # event log uses its own window, independent of the page-wide one).
+    _agg_errors = _users_blob.get("errors") or {}
+    _agg_totals = {
+        "commits":           sum(int(u.get("commits", 0))           for u in _users_list),
+        "jira_authored":     sum(int(u.get("jira_authored", 0))     for u in _users_list),
+        "jira_assigned":     sum(int(u.get("jira_assigned", 0))     for u in _users_list),
+        "requests_made":     sum(int(u.get("requests_made", 0))     for u in _users_list),
+        "approvals":         sum(int(u.get("approvals", 0))         for u in _users_list),
+        "rejections":        sum(int(u.get("rejections", 0))        for u in _users_list),
+        "builds_authored":   sum(int(u.get("builds_authored", 0))   for u in _users_list),
+        "deploys_requested": sum(int(u.get("deploys_requested", 0)) for u in _users_list),
+        "deploys_approved":  sum(int(u.get("deploys_approved", 0))  for u in _users_list),
+        "releases_authored": sum(int(u.get("releases_authored", 0)) for u in _users_list),
+    }
+    _grand_total = sum(_agg_totals.values())
+    _err_chip = (
+        f' · ⚠ {len(_agg_errors)} probe error'
+        f'{"s" if len(_agg_errors) != 1 else ""}'
+        if _agg_errors else ""
+    )
+    _diag_lbl = (
+        f"🔍 Activity aggregator diagnostics  ·  Σ {_grand_total:,}{_err_chip}"
+    )
+    with st.popover(_diag_lbl, use_container_width=True):
+        _rows = "".join(
+            f'<tr><td class="tm-pop-mem-name">{html.escape(_n)}</td>'
+            f'<td class="tm-mem-num">{_v:,}</td></tr>'
+            for _n, _v in _agg_totals.items()
+        )
+        st.markdown(
+            f'<div class="tm-pop-mem-table-wrap">'
+            f'  <table class="tm-pop-mem-table">'
+            f'    <thead><tr><th>Counter</th><th class="tm-th-num">Sum across all users</th></tr></thead>'
+            f'    <tbody>{_rows}</tbody>'
+            f'  </table>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if _agg_errors:
+            _err_rows = "".join(
+                f'<tr><td class="tm-pop-mem-name">{html.escape(_k)}</td>'
+                f'<td class="tm-mem-meta">{html.escape(str(_v))[:300]}</td></tr>'
+                for _k, _v in _agg_errors.items()
+            )
+            st.markdown(
+                '<div class="tm-section-sub" style="margin:10px 0 4px 0">'
+                'Aggregator probe failures'
+                '</div>'
+                f'<div class="tm-pop-mem-table-wrap">'
+                f'  <table class="tm-pop-mem-table">'
+                f'    <thead><tr><th>Probe</th><th>Failure</th></tr></thead>'
+                f'    <tbody>{_err_rows}</tbody>'
+                f'  </table>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="tm-section-sub" style="margin:10px 0 0 0">'
+                '  No aggregator probe errors. If counters are still zero, '
+                '  the time window is likely too narrow — the user '
+                '  aggregator uses the global Filter Console window '
+                '  (default 7 days). Widen the window in Filter Console '
+                '  &rarr; View &amp; System &rarr; Time window.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
     # ── Sync coverage breakdown ────────────────────────────────────────
     # Shows the relationship between three counts admins care about:
     #   • DB total      — every user currently in ldap_users.
@@ -17898,6 +17971,14 @@ def _fetch_users_aggregate(
                     },
                 },
             )
+            # _run_search returns {"_error": ...} on ES failure instead
+                # of raising — log the failure and move on.
+            if r.get("_error"):
+                _commit_failures.append(
+                    f"({_email_field},{_name_field}): ES error: "
+                    f"{str(r['_error'])[:120]}"
+                )
+                continue
             _buckets = r.get("aggregations", {}).get("by_user", {}).get("buckets", [])
             if not _buckets:
                 continue
@@ -17947,18 +18028,29 @@ def _fetch_users_aggregate(
         ``ident_transform`` is an optional callable applied to every
         bucket-key identity string before it's used (e.g. to strip a
         ``<email>`` tail and underscore-collapse spaces on commit-author
-        fields so the resulting key matches LDAP usernames)."""
+        fields so the resulting key matches LDAP usernames).
+
+        Team attribution is opportunistic: if the supplied ``team_field``
+        doesn't exist (or is text without a keyword subfield) the composite
+        agg fails entirely. We therefore probe each identity field TWICE —
+        first with the team source attached, then (only if the with-team
+        attempt errored or returned nothing) without it. This keeps user
+        counters populating even on indices where team attribution isn't
+        queryable as a keyword."""
         if isinstance(identity_fields, str):
             identity_fields = [identity_fields]
         _any_data = False
         _failures: list[str] = []
-        for ident_field in identity_fields:
+
+        def _attempt(ident_field: str, attach_team: bool) -> bool:
+            """Run the composite agg once. Returns True if any buckets
+            were processed (so subsequent fallbacks can be skipped)."""
             try:
                 sources = [
                     {"id": {"terms": {"field": ident_field,
                                       "missing_bucket": True}}},
                 ]
-                if team_field:
+                if attach_team and team_field:
                     sources.append({"team": {"terms": {"field": team_field,
                                                        "missing_bucket": True}}})
                 r = es_search(
@@ -17973,14 +18065,26 @@ def _fetch_users_aggregate(
                         }}},
                     },
                 )
+                # _run_search swallows ES errors and returns them as
+                # {"_error": str(exc)}. Surface those so the caller can
+                # log + fall back to the next probe variant.
+                if r.get("_error"):
+                    _failures.append(
+                        f"{ident_field}{'(+team)' if attach_team else ''}: "
+                        f"ES error: {str(r['_error'])[:120]}"
+                    )
+                    return False
                 _buckets = r.get("aggregations", {}).get("by_user", {}).get("buckets", [])
                 if not _buckets:
-                    continue
-                _any_data = True
+                    return False
+                _local_any = False
                 for b in _buckets:
                     k = b.get("key") or {}
                     ident_raw = (k.get("id") or "").strip()
-                    tm = (k.get("team") or "").strip() if team_field else ""
+                    tm = (
+                        (k.get("team") or "").strip()
+                        if (attach_team and team_field) else ""
+                    )
                     if not ident_raw:
                         continue
                     ident = (
@@ -17995,9 +18099,24 @@ def _fetch_users_aggregate(
                     u[ctr_attr] += int(b.get("doc_count", 0))
                     if tm:
                         u["teams"].add(tm)
+                    _local_any = True
+                return _local_any
             except Exception as e:
-                _failures.append(f"{ident_field}: {type(e).__name__}")
-                continue
+                _failures.append(
+                    f"{ident_field}{'(+team)' if attach_team else ''}: "
+                    f"{type(e).__name__}: {str(e)[:80]}"
+                )
+                return False
+
+        for ident_field in identity_fields:
+            # First pass: with team attribution (only when caller supplied
+            # a team_field; otherwise this matches the legacy no-team path).
+            if team_field and _attempt(ident_field, attach_team=True):
+                _any_data = True
+            # Always retry without team if the with-team call yielded nothing
+            # (covers indices that lack a keyword team subfield).
+            if _attempt(ident_field, attach_team=False):
+                _any_data = True
         if not _any_data and _failures:
             errors[f"{index_key}_{ctr_attr}"] = (
                 f"all candidate fields failed: {' · '.join(_failures[:4])}"
@@ -18972,9 +19091,27 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # aggregator, then stashed for the Filter Console, the inventory user
     # filter, the People Insights panel, AND the event log's per-user
     # popovers. Cache hit on repeat renders.
+    #
+    # Use whichever is wider between the global Filter Console window
+    # and the event-log's own window (`el_time_v3`). Without this, the
+    # event log can render entries that the user aggregator doesn't see
+    # — admins then read "0 active" in the stat box while the event log
+    # below shows clear activity. The two windows now stay aligned.
+    _agg_start_dt = start_dt
+    _el_window_label = st.session_state.get("el_time_v3")
+    if _el_window_label and _el_window_label in _EL_TIME_WINDOWS:
+        _el_delta_for_agg = _EL_TIME_WINDOWS[_el_window_label]
+        _el_start_for_agg = (
+            _EL_ALLTIME_FLOOR if _el_delta_for_agg is None
+            else (datetime.now(timezone.utc) - _el_delta_for_agg)
+        )
+        # Pick the earlier (wider) of the two starts so we never see
+        # fewer events than the event log surfaces.
+        if _el_start_for_agg < _agg_start_dt:
+            _agg_start_dt = _el_start_for_agg
     _users_sf_json = json.dumps(list(scope_filters()), sort_keys=True, default=str)
     _users_cs_json = json.dumps(list(commit_scope_filters()), sort_keys=True, default=str)
-    _users_start_iso = start_dt.astimezone(timezone.utc).isoformat()
+    _users_start_iso = _agg_start_dt.astimezone(timezone.utc).isoformat()
     _users_end_iso = end_dt.astimezone(timezone.utc).isoformat()
     _users_blob = _fetch_users_aggregate(
         _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
