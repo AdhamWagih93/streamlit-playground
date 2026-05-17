@@ -13462,6 +13462,17 @@ def _render_event_log() -> None:
             if _sub not in _builds_allowed_subtypes:
                 continue
             _dv = _hit_date(_h, "build")
+            # ef-cicd-builds has NO requester/approver — identity comes
+            # from the commit-author triple (authorname / authormail /
+            # commitauthor). Surface a "Name / email" formatted string
+            # so _person_cell can resolve it via _user_lookup.
+            _b_name = (_s.get("authorname") or "").strip()
+            _b_mail = (_s.get("authormail") or "").strip()
+            _b_cauth = (_s.get("commitauthor") or "").strip()
+            if _b_name and _b_mail:
+                _b_person = f"{_b_name} / {_b_mail}"
+            else:
+                _b_person = _b_name or _b_mail or _b_cauth
             events.append({
                 "_ts":         parse_dt(_dv),
                 "type":        _sub,
@@ -13472,8 +13483,8 @@ def _render_event_log() -> None:
                 "Version":     _s.get("codeversion", ""),
                 "Detail":      f'{_s.get("branch","")} · {_s.get("technology","")}',
                 "Status":      _s.get("status", ""),
-                "Requester":   _s.get("requester", ""),
-                "Approver":    _s.get("approver", ""),
+                "Requester":   _b_person,
+                "Approver":    "",
                 "Extra":       "",
             })
 
@@ -13493,6 +13504,20 @@ def _render_event_log() -> None:
         for _h in _dep_r.get("hits", {}).get("hits", []):
             _s = _h.get("_source", {})
             _dv = _hit_date(_h, "deploy")
+            # ef-cicd-deployments DOES carry `requester` and `approver`
+            # (lowercase) per the schema dump. Fall back to capitalised
+            # variants and to triggeredby for legacy docs.
+            _d_req = (
+                _s.get("requester")
+                or _s.get("Requester")
+                or _s.get("triggeredby")
+                or ""
+            )
+            _d_app = (
+                _s.get("approver")
+                or _s.get("Approver")
+                or ""
+            )
             events.append({
                 "_ts":         parse_dt(_dv),
                 "type":        "deploy",
@@ -13503,8 +13528,8 @@ def _render_event_log() -> None:
                 "Version":     _s.get("codeversion", ""),
                 "Detail":      _s.get("technology", ""),
                 "Status":      _s.get("status", ""),
-                "Requester":   _s.get("requester", ""),
-                "Approver":    _s.get("approver", ""),
+                "Requester":   _d_req,
+                "Approver":    _d_app,
                 "Extra":       _s.get("triggeredby", ""),
             })
 
@@ -13526,6 +13551,11 @@ def _render_event_log() -> None:
                 if _rlm_status.strip().lower() == "no error"
                 else _rlm_status
             )
+            # ef-cicd-releases identity = `commitauthor` (no
+            # requester/approver fields in this index). Surface it in
+            # the Requester column so the existing per-user popover
+            # plumbing renders consistently with builds/commits.
+            _r_cauth = (_s.get("commitauthor") or "").strip()
             events.append({
                 "_ts":         parse_dt(_dv),
                 "type":        "release",
@@ -13536,8 +13566,8 @@ def _render_event_log() -> None:
                 "Version":     _s.get("codeversion", ""),
                 "Detail":      f'RLM: {_rlm_detail}' if _rlm_detail else "",
                 "Status":      "SUCCESS",
-                "Requester":   _s.get("requester", ""),
-                "Approver":    _s.get("approver", ""),
+                "Requester":   _r_cauth,
+                "Approver":    "",
                 "Extra":       "",
             })
 
@@ -13663,12 +13693,17 @@ def _render_event_log() -> None:
             _dv = _hit_date(_h, "commit")
             _cmsg = (_s.get("commitmessage") or "").strip().splitlines()
             _cmsg_first = _cmsg[0] if _cmsg else ""
-            _a_name = _s.get("authorname", "") or ""
-            _a_mail = _s.get("authormail", "") or ""
+            # ef-git-commits carries `authorname`, `authormail`, and
+            # `commitauthor`. Build a "Name / email" person string for
+            # _person_cell, falling back to commitauthor when the
+            # name+mail pair is missing.
+            _a_name = (_s.get("authorname") or "").strip()
+            _a_mail = (_s.get("authormail") or "").strip()
+            _a_cauth = (_s.get("commitauthor") or "").strip()
             if _a_name and _a_mail:
                 _commit_person = f"{_a_name} / {_a_mail}"
             else:
-                _commit_person = _a_name or _a_mail
+                _commit_person = _a_name or _a_mail or _a_cauth
             events.append({
                 "_ts":         parse_dt(_dv),
                 "type":        "commit",
@@ -13678,12 +13713,12 @@ def _render_event_log() -> None:
                 "Environment": "",
                 "Version":     "",
                 "Detail":      (
-                    f'{_s.get("branch","")} · {_s.get("authorname","")}'
+                    f'{_s.get("branch","")} · {_a_name or _a_cauth}'
                     + (f' — {_cmsg_first}' if _cmsg_first else "")
                 ),
                 "Status":      "SUCCESS",
                 "Requester":   _commit_person,
-                "Approver":    _commit_person,
+                "Approver":    "",
                 "Extra":       _cmsg_first,
             })
 
