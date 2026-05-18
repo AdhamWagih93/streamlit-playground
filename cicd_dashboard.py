@@ -20446,15 +20446,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             return False
         return _cur.lower() != _rec.lower()
 
-    def _iv_outdated_flags(app: str) -> tuple[bool, bool, dict]:
-        """Return ``(build_outdated, deploy_outdated, raw_dict)`` for an
-        app, where raw_dict carries the four versions for tooltips."""
-        _dp = _iv_devproj_map.get(app) or {}
-        _bc = (_dp.get("BuildCurrentVer") or "").strip()
-        _br = (_dp.get("BuildRecommendationVer") or "").strip()
-        _dc = (_dp.get("DeployCurrentVer") or "").strip()
-        _dr = (_dp.get("DeployRecommendationVer") or "").strip()
-        return (
+    # Precomputed outdated-flags per app — the per-row table cell and the
+    # app popover both call this; doing the dict lookup + string strip
+    # once per app trims a constant-per-row cost off the table render.
+    _iv_outdated_cache: dict[str, tuple[bool, bool, dict]] = {}
+    for _ofa, _ofdp in _iv_devproj_map.items():
+        _bc = (_ofdp.get("BuildCurrentVer") or "").strip()
+        _br = (_ofdp.get("BuildRecommendationVer") or "").strip()
+        _dc = (_ofdp.get("DeployCurrentVer") or "").strip()
+        _dr = (_ofdp.get("DeployRecommendationVer") or "").strip()
+        _iv_outdated_cache[_ofa] = (
             _iv_image_outdated(_bc, _br),
             _iv_image_outdated(_dc, _dr),
             {
@@ -20462,6 +20463,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 "deploy_current": _dc, "deploy_recommended": _dr,
             },
         )
+
+    _IV_OUTDATED_DEFAULT = (False, False, {
+        "build_current": "", "build_recommended": "",
+        "deploy_current": "", "deploy_recommended": "",
+    })
+
+    def _iv_outdated_flags(app: str) -> tuple[bool, bool, dict]:
+        """Return ``(build_outdated, deploy_outdated, raw_dict)`` for an
+        app, where raw_dict carries the four versions for tooltips."""
+        return _iv_outdated_cache.get(app, _IV_OUTDATED_DEFAULT)
 
     # OCP / K8s apps are containerised and so MUST have a Prismacloud image
     # scan for every shipped version. Other platforms (VM, serverless, etc.)
@@ -20910,13 +20921,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         )
 
     # ── Col 0: persistent search ─────────────────────────────────────────
+    # Streamlit's `st.text_input` fires a rerun on Enter / blur — there
+    # is no per-keystroke callback in vanilla Streamlit. The label
+    # below the input nudges the operator so they don't think the
+    # field is dead while still typing.
     with _iv_fb[0]:
         st.text_input(
             "Search",
             key="shared_search_v1",
-            placeholder="🔎  app · project · version · tech · person · detail…  (space-separated terms are AND)",
+            placeholder="🔎  app · project · version · tech · person · detail…  (space-separated terms are AND · press ↩ to apply)",
             help="Shared across event log and inventory · case-insensitive · "
-                 "space-separated terms are AND",
+                 "space-separated terms are AND · press Enter to apply.",
             label_visibility="collapsed",
         )
 
