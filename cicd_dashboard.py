@@ -313,24 +313,35 @@ JENKINS_PIPELINES: dict[str, dict] = {
         "label":   "Build",
         "path":    "CICD/Build",
         "glyph":   "⚒",
-        "params":  ("project", "application", "branch"),
-        "summary": "Kicks off CI for an app's branch (developer / release).",
+        # The Jenkins job itself carries branchName as a dropdown — we
+        # pre-fill it with "release" (the production build branch) and
+        # the confirmation panel lets the operator override it before
+        # the POST fires.
+        "params":  ("projectName", "applicationName", "branchName"),
+        "summary": "Kicks off CI for an app's branch.",
     },
     "deploy_request": {
         "label":   "Deploy request",
         "path":    "CICD/Request_deploy",
         "glyph":   "⇪",
-        "params":  ("project", "application", "environment", "version"),
+        "params":  ("projectName", "applicationName", "targetEnv", "codeVersion"),
         "summary": "Opens a deploy request to push a version into an environment.",
     },
     "release_request": {
         "label":   "Release request",
         "path":    "CICD/Request_promote",
         "glyph":   "✦",
-        "params":  ("project", "application", "version"),
-        "summary": "Opens a release request to promote a version.",
+        # qccomments is filled in the in-page confirmation panel by
+        # the QC member triggering the promotion — it never auto-fills.
+        "params":  ("projectName", "applicationName", "codeVersion", "qccomments"),
+        "summary": "Opens a release request to promote a version. QC-only.",
     },
 }
+# Operator-editable params in the in-page confirmation panel. Listed
+# here so the panel renders the right widget per parameter and so the
+# read-only summary table skips them (their value comes from the
+# Streamlit widget below, not the URL payload).
+JENKINS_FREEFORM_PARAMS: frozenset[str] = frozenset({"branchName", "qccomments"})
 
 # Field-alias table — maps the canonical row field names the rest of the
 # dashboard reads onto the variable keys you may find in the merged Ansible
@@ -13612,21 +13623,36 @@ def _render_jenkins_trigger_panel() -> None:
         _label = _cfg.get("label", _key)
         _glyph = _cfg.get("glyph", "▶")
         # Build the params dict Jenkins will see, per JENKINS_PIPELINES
-        # contract. Empty values are left in the dict so the user can
-        # see exactly what's missing.
+        # contract. The job's actual parameter names are
+        # projectName / applicationName / branchName / targetEnv /
+        # codeVersion / qccomments — we map our internal payload keys
+        # onto those exact names.
         _params: dict[str, str] = {}
         for _p in _cfg.get("params") or ():
-            if _p == "project":       _params["project"] = pending.get("project", "")
-            elif _p == "application": _params["application"] = pending.get("app", "")
-            elif _p == "company":     _params["company"] = pending.get("company", "")
-            elif _p == "branch":      _params["branch"] = pending.get("branch", "release")
-            elif _p == "version":     _params["version"] = pending.get("ver", "")
-            elif _p == "environment": _params["environment"] = pending.get("env", "")
-            else:                     _params[_p] = ""
+            if _p == "projectName":
+                _params[_p] = pending.get("project", "")
+            elif _p == "applicationName":
+                _params[_p] = pending.get("app", "")
+            elif _p == "branchName":
+                _params[_p] = pending.get("branch", "release")
+            elif _p == "targetEnv":
+                _params[_p] = pending.get("env", "")
+            elif _p == "codeVersion":
+                _params[_p] = pending.get("ver", "")
+            elif _p == "qccomments":
+                # User fills this via the textarea below — never
+                # pre-filled. Default empty so the widget shows blank.
+                _params[_p] = ""
+            else:
+                _params[_p] = ""
+
+        _readonly_params = {
+            k: v for k, v in _params.items() if k not in JENKINS_FREEFORM_PARAMS
+        }
         _rows = "".join(
             f'<tr><td class="iv-jkt-k">{html.escape(_k)}</td>'
             f'<td class="iv-jkt-v">{html.escape(str(_v) or "—")}</td></tr>'
-            for _k, _v in _params.items()
+            for _k, _v in _readonly_params.items()
         )
         st.markdown(
             '<div class="iv-jkt-panel">'
@@ -13648,22 +13674,94 @@ def _render_jenkins_trigger_panel() -> None:
             '</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Free-form param widgets (branchName / qccomments) ───────
+        # Streamlit-side inputs so the operator can supply or override
+        # values the popover couldn't carry. Their state lives in
+        # session_state keyed on the param name + the pending request
+        # signature so cancelling and re-opening starts fresh.
+        _sig = "|".join((_key, pending.get("app", ""), pending.get("ver", "")))
+        _user_inputs: dict[str, str] = {}
+        if "branchName" in _params:
+            # The Jenkins build job exposes branchName as a dropdown;
+            # mirror that here so the operator can switch between
+            # release / develop without leaving the page. Custom values
+            # are accepted via the free-text fallback.
+            _br_ss_key = f"_jk_trigger_branchname_v1_{_sig}"
+            _br_choices = ["release", "develop", "main", "(custom...)"]
+            _default_br = _params.get("branchName") or "release"
+            if _default_br not in _br_choices:
+                _br_choices.insert(0, _default_br)
+            _br_pick = st.selectbox(
+                "branchName",
+                options=_br_choices,
+                index=_br_choices.index(_default_br) if _default_br in _br_choices else 0,
+                key=_br_ss_key,
+                help="Submitted to Jenkins as the `branchName` parameter.",
+            )
+            if _br_pick == "(custom...)":
+                _br_custom = st.text_input(
+                    "Custom branch name",
+                    key=f"{_br_ss_key}__custom",
+                    placeholder="e.g. feature/login-rewrite",
+                )
+                _user_inputs["branchName"] = (_br_custom or "").strip()
+            else:
+                _user_inputs["branchName"] = _br_pick
+        if "qccomments" in _params:
+            _qc_ss_key = f"_jk_trigger_qccomments_v1_{_sig}"
+            _qc_value = st.text_area(
+                "QC comments",
+                key=_qc_ss_key,
+                placeholder="Summarise the QC sign-off rationale for this "
+                            "promotion request (required by Request_promote).",
+                help="Submitted to Jenkins as the `qccomments` parameter. "
+                     "Promotions without comments are usually rejected by "
+                     "the pipeline.",
+                height=88,
+            )
+            _user_inputs["qccomments"] = (_qc_value or "").strip()
+
         _b1, _b2, _b3 = st.columns([1, 1, 6])
         with _b1:
-            if st.button("▶ Trigger", key="_jk_trigger_confirm_btn",
-                         type="primary", use_container_width=True):
+            _confirm_disabled = False
+            _confirm_help = None
+            if "qccomments" in _params and not _user_inputs.get("qccomments"):
+                _confirm_disabled = True
+                _confirm_help = (
+                    "QC comments are required before Request_promote "
+                    "can be triggered."
+                )
+            if st.button(
+                "▶ Trigger", key="_jk_trigger_confirm_btn",
+                type="primary", use_container_width=True,
+                disabled=_confirm_disabled, help=_confirm_help,
+            ):
+                # Merge user-supplied inputs into the final POST payload.
+                _final_params = dict(_params)
+                _final_params.update(_user_inputs)
                 with st.spinner(f"Triggering {_label}..."):
-                    _res = _jenkins_post_trigger(_key, _params)
+                    _res = _jenkins_post_trigger(_key, _final_params)
                 _res["pipeline"]  = _label
                 _res["key"]       = _key
-                _res["params"]    = _params
+                _res["params"]    = _final_params
                 st.session_state["_jk_trigger_result_v1"] = _res
                 st.session_state.pop("_jk_trigger_pending_v1", None)
+                # Drop the freeform state so the next pending request
+                # opens with a clean textarea.
+                if "qccomments" in _params:
+                    st.session_state.pop(
+                        f"_jk_trigger_qccomments_v1_{_sig}", None,
+                    )
                 st.rerun()
         with _b2:
             if st.button("✕ Cancel", key="_jk_trigger_cancel_btn",
                          use_container_width=True):
                 st.session_state.pop("_jk_trigger_pending_v1", None)
+                if "qccomments" in _params:
+                    st.session_state.pop(
+                        f"_jk_trigger_qccomments_v1_{_sig}", None,
+                    )
                 st.rerun()
         return
 
@@ -21705,7 +21803,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Pad to 6 fields so dest tuple is consistent.
         _parts = (_parts + ["", "", "", "", "", ""])[:6]
         _jk_key, _jk_app, _jk_ver, _jk_env, _jk_co, _jk_pj = _parts
-        if _jk_key in JENKINS_PIPELINES and _jk_app:
+        _trigger_allowed = _jk_key in JENKINS_PIPELINES and _jk_app
+        _trigger_denial = ""
+        # Server-side QC gate for release_request — mirrors the UI
+        # gate inside _iv_jenkins_html so a hand-crafted URL can't
+        # bypass it. Requires (a) the viewer to carry the QC role and
+        # (b) one of their session teams to appear in the matched
+        # inventory row's qc_team field.
+        if _trigger_allowed and _jk_key == "release_request":
+            _viewer_has_qc = ("QC" in _detected_roles) or (role_pick == "QC")
+            _row_for_trigger = next(
+                (
+                    rr for rr in _inv_rows_all
+                    if rr.get("application") == _jk_app
+                    and (not _jk_pj or rr.get("project") == _jk_pj)
+                ),
+                None,
+            )
+            _qc_team_match = False
+            if _row_for_trigger is not None and _iv_session_teams:
+                _qc_teams = set(_row_teams_for_field(_row_for_trigger, "qc_team"))
+                _qc_team_match = bool(set(_iv_session_teams) & _qc_teams)
+            if not (_viewer_has_qc and _qc_team_match):
+                _trigger_allowed = False
+                _trigger_denial = (
+                    "Release_promote refused: requires the QC role plus a "
+                    "session team listed under this project's qc_team."
+                )
+        if _trigger_allowed:
             st.session_state["_jk_trigger_pending_v1"] = {
                 "key":     _jk_key,
                 "app":     _jk_app,
@@ -21718,6 +21843,15 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # Drop any prior result so we don't show the new pending
             # alongside last run's success/failure.
             st.session_state.pop("_jk_trigger_result_v1", None)
+        elif _trigger_denial:
+            st.session_state["_jk_trigger_result_v1"] = {
+                "ok": False, "msg": _trigger_denial, "queue_url": "",
+                "url": "", "status_code": 0,
+                "pipeline": JENKINS_PIPELINES.get(_jk_key, {}).get("label", _jk_key),
+                "key": _jk_key,
+                "params": {"projectName": _jk_pj, "applicationName": _jk_app,
+                           "codeVersion": _jk_ver},
+            }
         try:
             del st.query_params["jenkins_trigger"]
         except Exception:
@@ -21838,6 +21972,23 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_jk_public = (_jenkins_creds().get("public_name") or _iv_jk_host).rstrip("/")
     _iv_jk_ui_host = _iv_jk_public or _iv_jk_host
 
+    # ── QC promotion gate ─────────────────────────────────────────────
+    # "Request promote" is only allowed when (a) the viewer carries the
+    # QC role and (b) one of their session teams is listed under the
+    # row's ``qc_team`` field. Admins do NOT get a courtesy bypass per
+    # the platform's deliberate separation of duties.
+    _iv_viewer_has_qc = ("QC" in _detected_roles) or (role_pick == "QC")
+
+    def _iv_can_promote(r: dict) -> bool:
+        if not _iv_viewer_has_qc:
+            return False
+        if not _iv_session_teams:
+            return False
+        _qc_teams = set(_row_teams_for_field(r, "qc_team"))
+        if not _qc_teams:
+            return False
+        return bool(set(_iv_session_teams) & _qc_teams)
+
     def _iv_jenkins_html(r: dict, *, version: str = "",
                          environment: str = "",
                          only_keys: tuple[str, ...] | None = None,
@@ -21849,18 +22000,25 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         render, opens an in-page confirmation panel showing the
         pre-filled parameters, and only then POSTs to Jenkins's
         ``buildWithParameters`` (with CSRF crumb + basic auth) on
-        explicit operator confirmation. No redirect to Jenkins UI."""
+        explicit operator confirmation. No redirect to Jenkins UI.
+
+        ``release_request`` is filtered out automatically when the
+        viewer isn't a QC member of this row's qc_team — promotion is
+        a privileged action gated separately."""
         if not _iv_jk_ui_host:
             return ""
         _co = (r.get("company") or "").strip()
         _pj = (r.get("project") or "").strip()
         _ap = (r.get("application") or "").strip()
+        _can_promote = _iv_can_promote(r)
         _tiles: list[str] = []
         _items = (
             [(k, JENKINS_PIPELINES[k]) for k in only_keys if k in JENKINS_PIPELINES]
             if only_keys is not None else list(JENKINS_PIPELINES.items())
         )
         for _key, _cfg in _items:
+            if _key == "release_request" and not _can_promote:
+                continue
             # Suffix the version tag onto the tile label when present so
             # admins see at-a-glance which exact build / deploy / release
             # the tile will queue.
@@ -21887,6 +22045,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'<span class="ap-jk-arrow">▶</span>'
                 f'</a>'
             )
+        if not _tiles:
+            return ""
         return (
             f'    <div class="ap-section">{html.escape(section_label)}</div>'
             f'    <div class="ap-jk-grid">' + "".join(_tiles) + '</div>'
