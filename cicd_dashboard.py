@@ -11776,6 +11776,16 @@ def _render_teams_and_members_view() -> None:
                         )
                         _mem_rows = []
                         for _m in _sorted_members:
+                            # Per-index activity breakdown so admins see
+                            # each user's presence across commits, jira,
+                            # builds, deploys, releases, and requests
+                            # without leaving the team popover.
+                            _commits_n  = int(_m.get("commits", 0))
+                            _jira_n     = int(_m.get("jira_authored", 0)) + int(_m.get("jira_assigned", 0))
+                            _builds_n   = int(_m.get("builds_authored", 0))
+                            _deploys_n  = int(_m.get("deploys_requested", 0)) + int(_m.get("deploys_approved", 0))
+                            _releases_n = int(_m.get("releases_authored", 0))
+                            _requests_n = int(_m.get("requests_made", 0)) + int(_m.get("approvals", 0)) + int(_m.get("rejections", 0))
                             _mem_rows.append(
                                 f'<tr>'
                                 f'  <td class="tm-pop-mem-name">'
@@ -11788,7 +11798,13 @@ def _render_teams_and_members_view() -> None:
                                 f'  <td class="tm-mem-meta">'
                                 f'{html.escape(_m.get("ldap_title") or "—")}'
                                 f'  </td>'
-                                f'  <td class="tm-mem-num">'
+                                f'  <td class="tm-mem-num">{_commits_n:,}</td>'
+                                f'  <td class="tm-mem-num">{_jira_n:,}</td>'
+                                f'  <td class="tm-mem-num">{_builds_n:,}</td>'
+                                f'  <td class="tm-mem-num">{_deploys_n:,}</td>'
+                                f'  <td class="tm-mem-num">{_releases_n:,}</td>'
+                                f'  <td class="tm-mem-num">{_requests_n:,}</td>'
+                                f'  <td class="tm-mem-num tm-mem-total">'
                                 f'{int(_m.get("total", 0)):,}</td>'
                                 f'</tr>'
                             )
@@ -11803,6 +11819,12 @@ def _render_teams_and_members_view() -> None:
                             f'    <thead><tr>'
                             f'      <th>Member</th>'
                             f'      <th>Title</th>'
+                            f'      <th class="tm-th-num" title="ef-git-commits">Commits</th>'
+                            f'      <th class="tm-th-num" title="ef-bs-jira-issues (authored + assigned)">Jira</th>'
+                            f'      <th class="tm-th-num" title="ef-cicd-builds (authored)">Builds</th>'
+                            f'      <th class="tm-th-num" title="ef-cicd-deployments (requester + approver)">Deploys</th>'
+                            f'      <th class="tm-th-num" title="ef-cicd-releases (commitauthor)">Releases</th>'
+                            f'      <th class="tm-th-num" title="requests + approvals + rejections">Requests</th>'
                             f'      <th class="tm-th-num">Total</th>'
                             f'    </tr></thead>'
                             f'    <tbody>{"".join(_mem_rows)}</tbody>'
@@ -11903,6 +11925,15 @@ def _render_teams_and_members_view() -> None:
                 _team_overflow = (
                     f'<span class="tm-team-chip is-more">+{len(_u["teams"]) - 5}</span>'
                 )
+            # Per-index breakdown: each ES index the user can possibly
+            # show up in gets its own column so admins can spot index
+            # drift (e.g. user fires jira tickets but never deploys).
+            _commits_n  = int(_u.get("commits", 0))
+            _jira_n     = int(_u.get("jira_authored", 0)) + int(_u.get("jira_assigned", 0))
+            _builds_n   = int(_u.get("builds_authored", 0))
+            _deploys_n  = int(_u.get("deploys_requested", 0)) + int(_u.get("deploys_approved", 0))
+            _releases_n = int(_u.get("releases_authored", 0))
+            _requests_n = int(_u.get("requests_made", 0)) + int(_u.get("approvals", 0)) + int(_u.get("rejections", 0))
             _row_html.append(
                 f'<tr>'
                 f'  <td class="tm-mem-name">'
@@ -11915,10 +11946,12 @@ def _render_teams_and_members_view() -> None:
                 f'    <div>{html.escape(_u.get("ldap_title") or "—")}</div>'
                 f'    <div class="tm-mem-dim">{html.escape(_u.get("ldap_department") or "")}</div>'
                 f'  </td>'
-                f'  <td class="tm-mem-num">{int(_u.get("commits", 0)):,}</td>'
-                f'  <td class="tm-mem-num">{int(_u.get("jira_authored", 0)) + int(_u.get("jira_assigned", 0)):,}</td>'
-                f'  <td class="tm-mem-num">{int(_u.get("requests_made", 0)) + int(_u.get("approvals", 0)) + int(_u.get("rejections", 0)):,}</td>'
-                f'  <td class="tm-mem-num">{int(_u.get("builds_authored", 0)) + int(_u.get("deploys_requested", 0)) + int(_u.get("deploys_approved", 0)) + int(_u.get("releases_authored", 0)):,}</td>'
+                f'  <td class="tm-mem-num">{_commits_n:,}</td>'
+                f'  <td class="tm-mem-num">{_jira_n:,}</td>'
+                f'  <td class="tm-mem-num">{_builds_n:,}</td>'
+                f'  <td class="tm-mem-num">{_deploys_n:,}</td>'
+                f'  <td class="tm-mem-num">{_releases_n:,}</td>'
+                f'  <td class="tm-mem-num">{_requests_n:,}</td>'
                 f'  <td class="tm-mem-num tm-mem-total">{int(_u.get("total", 0)):,}</td>'
                 f'</tr>'
             )
@@ -11937,10 +11970,12 @@ def _render_teams_and_members_view() -> None:
             f'      <th>Roles</th>'
             f'      <th>Teams</th>'
             f'      <th>Title · Department</th>'
-            f'      <th class="tm-th-num">Commits</th>'
-            f'      <th class="tm-th-num">Jira</th>'
-            f'      <th class="tm-th-num">Requests</th>'
-            f'      <th class="tm-th-num">Builds / Deploys</th>'
+            f'      <th class="tm-th-num" title="ef-git-commits">Commits</th>'
+            f'      <th class="tm-th-num" title="ef-bs-jira-issues (authored + assigned)">Jira</th>'
+            f'      <th class="tm-th-num" title="ef-cicd-builds (authored)">Builds</th>'
+            f'      <th class="tm-th-num" title="ef-cicd-deployments (requester + approver)">Deploys</th>'
+            f'      <th class="tm-th-num" title="ef-cicd-releases (commitauthor)">Releases</th>'
+            f'      <th class="tm-th-num" title="ef-devops-requests + ef-cicd-approval">Requests</th>'
             f'      <th class="tm-th-num">Total</th>'
             f'    </tr></thead>'
             f'    <tbody>{"".join(_row_html)}</tbody>'
@@ -19172,23 +19207,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # filter, the People Insights panel, AND the event log's per-user
     # popovers. Cache hit on repeat renders.
     #
-    # Use whichever is wider between the global Filter Console window
-    # and the event-log's own window (`el_time_v3`). Without this, the
-    # event log can render entries that the user aggregator doesn't see
-    # — admins then read "0 active" in the stat box while the event log
-    # below shows clear activity. The two windows now stay aligned.
-    _agg_start_dt = start_dt
-    _el_window_label = st.session_state.get("el_time_v3")
-    if _el_window_label and _el_window_label in _EL_TIME_WINDOWS:
-        _el_delta_for_agg = _EL_TIME_WINDOWS[_el_window_label]
-        _el_start_for_agg = (
-            _EL_ALLTIME_FLOOR if _el_delta_for_agg is None
-            else (datetime.now(timezone.utc) - _el_delta_for_agg)
-        )
-        # Pick the earlier (wider) of the two starts so we never see
-        # fewer events than the event log surfaces.
-        if _el_start_for_agg < _agg_start_dt:
-            _agg_start_dt = _el_start_for_agg
+    # Window: ALWAYS use the all-time floor for the aggregator. The
+    # Teams & Members tab + Filter Console Users facet are admin views
+    # that benefit from the user's full activity history regardless of
+    # the global window picker. Narrowing the aggregator by time was
+    # the root cause behind admins seeing "0 active" in the stat box
+    # despite the event log clearly showing entries — drop that
+    # narrowing entirely.
+    _agg_start_dt = _EL_ALLTIME_FLOOR
     _users_sf_json = json.dumps(list(scope_filters()), sort_keys=True, default=str)
     _users_cs_json = json.dumps(list(commit_scope_filters()), sort_keys=True, default=str)
     _users_start_iso = _agg_start_dt.astimezone(timezone.utc).isoformat()
@@ -20275,6 +20301,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                              "event log. Commit-based author detection in "
                              "the user aggregator is unaffected.",
                     )
+
+                    if _is_admin:
+                        # Inventory source — moved here from the pipelines
+                        # inventory header. Same key drives _inventory_load
+                        # so the choice takes effect on the next rerun.
+                        st.session_state.setdefault(_INV_SRC_PREF_KEY, "auto")
+                        st.markdown(
+                            '<div class="iv-fc-section">'
+                            '<span class="iv-fc-section-glyph">❖</span>'
+                            '<span class="iv-fc-section-label">Inventory source</span>'
+                            '</div>', unsafe_allow_html=True)
+                        st.radio(
+                            "Inventory source",
+                            options=("auto", "git", "es"),
+                            format_func=lambda v: {
+                                "auto": "Auto · git → ES fallback",
+                                "git":  "Git only · no fallback",
+                                "es":   "Elasticsearch only",
+                            }.get(v, v),
+                            key=_INV_SRC_PREF_KEY,
+                            label_visibility="collapsed",
+                            help=(
+                                "Auto prefers git, falls back to "
+                                "Elasticsearch on any failure. Git-only "
+                                "refuses to fall back so a failure stays "
+                                "visible. Elasticsearch-only bypasses git."
+                            ),
+                        )
 
                     if _is_admin:
                         # Admin + CLevel both see the privileged toggles —
@@ -22492,36 +22546,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _stat = _iv_source_status or ""
         _warns = list(_iv_source_warnings)
 
-        # ── Source-selector radio — sticky in session_state, drives
-        # _inventory_load on the NEXT rerun. The current resolution
-        # (git/es/git-forced-failed) drives the pill / banner below.
-        st.session_state.setdefault(_INV_SRC_PREF_KEY, "auto")
-        _SRC_LABELS = {
-            "auto": "Auto (git, fall back to ES)",
-            "git":  "Git only (no fallback)",
-            "es":   "Elasticsearch only",
-        }
-        with st.container(key="cc_inv_src_pref"):
-            _c1, _c2 = st.columns([1, 6])
-            with _c1:
-                st.markdown(
-                    '<div class="iv-src-pref-lbl">Inventory source</div>',
-                    unsafe_allow_html=True,
-                )
-            with _c2:
-                st.radio(
-                    "Inventory source",
-                    options=("auto", "git", "es"),
-                    format_func=lambda v: _SRC_LABELS.get(v, v),
-                    horizontal=True,
-                    key=_INV_SRC_PREF_KEY,
-                    label_visibility="collapsed",
-                    help=(
-                        "Auto prefers git, falls back to Elasticsearch on any "
-                        "failure. Git-only refuses to fall back so a failure "
-                        "is visible. Elasticsearch-only bypasses git entirely."
-                    ),
-                )
+        # ── Source-selector radio relocated to the Filter Console
+        # (View & System tab → "Inventory source") so the inventory
+        # header stays compact. The same _INV_SRC_PREF_KEY drives
+        # _inventory_load.
 
         # ── Admin-only Ansible Vault password status indicator ──────────
         # Password is the literal ANSIBLE_VAULT_PASSWORD constant in
