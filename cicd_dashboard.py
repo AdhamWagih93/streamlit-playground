@@ -11884,12 +11884,27 @@ def _render_teams_and_members_view() -> None:
 
         _trunc_team_n = max(0, len(_team_totals) - _TOP_TEAMS_N)
         _trunc_proj_n = max(0, len(_project_totals) - _TOP_PROJECTS_N)
-        _map_popover_lbl = (
+        _map_btn_lbl = (
             f"⊞ Teams × Projects involvement map  ·  "
             f"top {len(_team_names)} / {len(_team_totals)} teams  ·  "
             f"top {len(_project_names)} / {len(_project_totals)} projects"
         )
-        with st.popover(_map_popover_lbl, use_container_width=True):
+        # Popovers pre-render their inner content on every script run
+        # — a plotly imshow build is expensive for big fleets. Gate
+        # behind an explicit toggle so the heatmap only builds when
+        # the operator asked for it.
+        if "_tm_heatmap_open_v1" not in st.session_state:
+            st.session_state["_tm_heatmap_open_v1"] = False
+        if st.button(
+            _map_btn_lbl + ("  ·  ✕ hide" if st.session_state["_tm_heatmap_open_v1"] else ""),
+            key="_tm_heatmap_toggle_btn",
+            use_container_width=True,
+            help="Toggle the heatmap — kept collapsed by default since "
+                 "the plotly build is expensive on big fleets.",
+        ):
+            st.session_state["_tm_heatmap_open_v1"] = not st.session_state["_tm_heatmap_open_v1"]
+            st.rerun()
+        if st.session_state["_tm_heatmap_open_v1"]:
             try:
                 _fig = px.imshow(
                     _matrix,
@@ -11969,20 +11984,68 @@ def _render_teams_and_members_view() -> None:
         key=lambda k: (-len(_team_members[k]), k.lower()),
     )
 
+    # ── Teams grid controls — search + show-all toggle ───────────────
+    # Each st.popover renders its inner content on every script run.
+    # Capping the visible teams (default 12) keeps the tab cheap to
+    # render on big fleets; the search box narrows the visible set
+    # further. Hidden teams aren't built at all — that's the perf win.
+    _tm_top_n = 12
+    _tm_ctl_l, _tm_ctl_r = st.columns([5, 2])
+    with _tm_ctl_l:
+        _tm_search = st.text_input(
+            "Find a team",
+            key="tm_grid_search_v1",
+            placeholder="🔎  filter teams by name…",
+            label_visibility="collapsed",
+        ).strip().lower()
+    with _tm_ctl_r:
+        _tm_show_all = st.toggle(
+            f"Show all {_total_teams:,}",
+            key="tm_grid_show_all_v1",
+            value=False,
+            help=f"By default only the top {_tm_top_n} teams (by member "
+                 f"count) render. Toggle to build the full grid — slower "
+                 f"on big fleets.",
+        )
+
+    _filtered_teams = (
+        [t for t in _sorted_teams if _tm_search in t.lower()]
+        if _tm_search else list(_sorted_teams)
+    )
+    _hidden_teams_n = 0
+    if not _tm_show_all and len(_filtered_teams) > _tm_top_n:
+        _hidden_teams_n = len(_filtered_teams) - _tm_top_n
+        _filtered_teams = _filtered_teams[:_tm_top_n]
+
+    _section_count_html = (
+        f'<span class="tm-section-count">{len(_filtered_teams):,}'
+        f' of {_total_teams:,}</span>'
+        if (_tm_search or _hidden_teams_n)
+        else f'<span class="tm-section-count">{_total_teams:,}</span>'
+    )
     st.markdown(
         '<div class="tm-section-head">'
         '  <span class="tm-section-glyph">▦</span>'
         '  Teams'
-        f'  <span class="tm-section-count">{_total_teams:,}</span>'
+        f'  {_section_count_html}'
         '  <span class="tm-section-trunc">· click any team to expand its full member list</span>'
         '</div>',
         unsafe_allow_html=True,
     )
+    if _hidden_teams_n:
+        st.markdown(
+            f'<div class="tm-section-sub" style="margin:0 0 6px 0">'
+            f'  Showing top {_tm_top_n} by member count · '
+            f'  <b>{_hidden_teams_n:,}</b> more hidden · toggle '
+            f'  "Show all" above to render the rest.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     _PER_ROW = 4
-    for _row_start in range(0, len(_sorted_teams), _PER_ROW):
+    for _row_start in range(0, len(_filtered_teams), _PER_ROW):
         _cols = st.columns(_PER_ROW)
-        for _col_idx, _t in enumerate(_sorted_teams[_row_start:_row_start + _PER_ROW]):
+        for _col_idx, _t in enumerate(_filtered_teams[_row_start:_row_start + _PER_ROW]):
             _members = _team_members[_t]
             _roles = sorted(_team_roles.get(_t, set()))
             _btn_lbl = f"▦ {_t}  ·  {len(_members):,}"
@@ -23813,23 +23876,22 @@ if _show_inv and _inventory_slot is not None:
         _tm_badge_txt = (
             f"  ·  {_ldap_last:,}" if _tm_show and _ldap_last else ""
         )
-        _tab_labels: list[str] = []
+        _tab_labels: list[str] = [
+            f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
+        ]
         if _tm_show:
             _tab_labels.append(f"👥  TEAMS & MEMBERS{_tm_badge_txt}")
-        _tab_labels.extend([
-            f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
-            f"⧗  EVENT LOG{_el_badge_txt}",
-        ])
+        _tab_labels.append(f"⧗  EVENT LOG{_el_badge_txt}")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         with st.container(key="cc_surface_tabs"):
             _tabs = st.tabs(_tab_labels)
             _idx = 0
+            _tab_inv = _tabs[_idx]; _idx += 1
             if _tm_show:
                 _tab_teams = _tabs[_idx]; _idx += 1
             else:
                 _tab_teams = None
-            _tab_inv = _tabs[_idx]; _idx += 1
             _tab_log = _tabs[_idx]; _idx += 1
             _tab_sync = _tabs[_idx] if _sync_show else None
             if _tab_teams is not None:
