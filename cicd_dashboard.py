@@ -1941,6 +1941,63 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .el-app-pop .ap-jk-tile.ap-prisma-link .ap-jk-glyph { color: var(--cc-accent); }
 
+/* Info-only chips inside HTML popovers (no anchor / no nav). */
+.el-app-pop .ap-jk-tile.is-info {
+    cursor: default;
+    pointer-events: none;
+    background: var(--cc-surface);
+    border-style: dashed;
+}
+.el-app-pop .ap-jk-hint {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    padding: 6px 10px;
+    font-size: 0.7rem;
+    line-height: 1.35;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border);
+    border-radius: 6px;
+}
+.el-app-pop .ap-jk-hint code {
+    font-family: var(--cc-mono);
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--cc-text);
+}
+
+/* ▶ Actions popover internals */
+.iv-act-empty {
+    padding: 10px 12px;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-size: 0.78rem;
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+    background: var(--cc-surface2);
+}
+.iv-act-section {
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    margin: 10px 0 6px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.iv-act-note {
+    margin-top: 8px;
+    padding: 6px 10px;
+    border: 1px solid rgba(217,119,6,0.32);
+    background: rgba(217,119,6,0.07);
+    border-radius: 8px;
+    font-size: 0.72rem;
+    color: #b45309;
+}
+
 /* Deep-link hint banner above the action toolbar */
 .iv-deeplink-hint {
     padding: 8px 14px;
@@ -13514,6 +13571,195 @@ def _psv_inventory_options() -> tuple[list[str], dict, dict]:
     )
 
 
+def _render_iv_actions_chooser(
+    inv_rows_all: list[dict],
+    stages_map: dict[str, dict],
+    detected_roles: list[str],
+    role_pick: str,
+    session_teams: list[str],
+) -> None:
+    """Streamlit-native version-action chooser.
+
+    Lives inside the inventory's ▶ Actions popover. Replaces the old
+    URL-anchor tiles inside HTML popovers (which forced a browser
+    navigation every click). Operator picks app + version + action;
+    pressing a button sets ``_jk_trigger_pending_v1`` /
+    ``_psv_inline_v1`` directly — no query-param navigation, no
+    Jenkins-UI redirects.
+    """
+    if not inv_rows_all:
+        st.markdown(
+            '<div class="iv-act-empty">Inventory not loaded yet — '
+            'open the Pipelines Inventory tab once.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── App + version pickers ──────────────────────────────────────────
+    _app_to_row = {r["application"]: r for r in inv_rows_all if r.get("application")}
+    _app_to_project = {
+        r["application"]: (r.get("project") or "")
+        for r in inv_rows_all if r.get("application")
+    }
+    _apps = sorted(_app_to_row.keys(), key=str.lower)
+    if not _apps:
+        st.markdown(
+            '<div class="iv-act-empty">No applications in the loaded '
+            'inventory scope.</div>', unsafe_allow_html=True,
+        )
+        return
+
+    # Pre-select via session-state hints from any prior interaction.
+    if "_iv_act_app_v1" not in st.session_state or st.session_state["_iv_act_app_v1"] not in _apps:
+        st.session_state["_iv_act_app_v1"] = _apps[0]
+    _picked_app = st.selectbox(
+        "Application", options=_apps, key="_iv_act_app_v1",
+    )
+
+    # Versions for the picked app: union of every stage's recorded
+    # version. Sorted with the freshest stage first so the operator's
+    # default is the most relevant.
+    _stages = stages_map.get(_picked_app) or {}
+    _ver_to_stage: dict[str, str] = {}
+    for _s in ("build", "dev", "qc", "uat", "prd"):
+        _v = ((_stages.get(_s) or {}).get("version") or "").strip()
+        if _v and _v not in _ver_to_stage:
+            _ver_to_stage[_v] = _s
+    _versions = list(_ver_to_stage.keys())
+    if not _versions:
+        st.markdown(
+            '<div class="iv-act-empty">No versions recorded for '
+            f'<code>{html.escape(_picked_app)}</code> yet.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+    if "_iv_act_ver_v1" not in st.session_state or st.session_state["_iv_act_ver_v1"] not in _versions:
+        st.session_state["_iv_act_ver_v1"] = _versions[0]
+    _picked_ver = st.selectbox(
+        "Version", options=_versions, key="_iv_act_ver_v1",
+        format_func=lambda v: f"{v}  ·  {_ver_to_stage.get(v, '—')}",
+    )
+
+    _row = _app_to_row.get(_picked_app, {})
+    _project = _row.get("project", "") or _app_to_project.get(_picked_app, "")
+    _company = _row.get("company", "")
+
+    # ── QC promotion gate ──────────────────────────────────────────────
+    _has_qc = ("QC" in detected_roles) or (role_pick == "QC")
+    _qc_teams_for_row = set(_row_teams_for_field(_row, "qc_team"))
+    _qc_team_match = bool(_qc_teams_for_row & set(session_teams or []))
+    _can_promote = _has_qc and _qc_team_match
+
+    # ── Action buttons ─────────────────────────────────────────────────
+    st.markdown(
+        '<div class="iv-act-section">Trigger</div>',
+        unsafe_allow_html=True,
+    )
+
+    def _queue(key: str, *, env: str = "", branch: str = "release") -> None:
+        """Set the pending state the confirmation panel reads."""
+        st.session_state["_jk_trigger_pending_v1"] = {
+            "key":     key,
+            "app":     _picked_app,
+            "ver":     _picked_ver,
+            "env":     env,
+            "company": _company,
+            "project": _project,
+            "branch":  branch,
+        }
+        st.session_state.pop("_jk_trigger_result_v1", None)
+
+    _b1, _b2, _b3 = st.columns(3)
+    with _b1:
+        if st.button(
+            "⚒  Build",
+            key="_iv_act_build_btn",
+            use_container_width=True,
+            help=(
+                f"Queue the Build pipeline for "
+                f"{_picked_app} @ {_picked_ver}. You'll confirm parameters "
+                f"in the panel above the toolbar before anything fires."
+            ),
+        ):
+            _queue("build")
+            st.rerun()
+    with _b2:
+        # Deploy → admin needs to pick a target environment.
+        if st.button(
+            "⇪  Deploy request",
+            key="_iv_act_deploy_btn",
+            use_container_width=True,
+            help=(
+                f"Open a deploy request for {_picked_app} @ {_picked_ver}. "
+                f"Pick the target environment in the dropdown below first."
+            ),
+        ):
+            _queue("deploy_request",
+                   env=st.session_state.get("_iv_act_env_v1", "qc"))
+            st.rerun()
+    with _b3:
+        _promote_disabled = not _can_promote
+        _promote_help = (
+            f"Open a release request to promote {_picked_app} @ {_picked_ver}."
+            if _can_promote else
+            "Disabled — Request_promote requires the QC role AND a session "
+            "team listed under this project's qc_team."
+        )
+        if st.button(
+            "✦  Promote",
+            key="_iv_act_promote_btn",
+            use_container_width=True,
+            disabled=_promote_disabled,
+            help=_promote_help,
+        ):
+            _queue("release_request")
+            st.rerun()
+
+    # Target environment for the Deploy action — separate row so it
+    # doesn't clutter the button row.
+    st.selectbox(
+        "Target environment (for Deploy)",
+        options=["dev", "qc", "uat", "prd"],
+        index=1,
+        key="_iv_act_env_v1",
+        help="Sent to Jenkins as the `targetEnv` parameter.",
+    )
+
+    # ── Prisma report button ───────────────────────────────────────────
+    st.markdown(
+        '<div class="iv-act-section">PrismaCloud</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "📄  Load Prisma report for this version",
+        key="_iv_act_prisma_btn",
+        use_container_width=True,
+        help=(
+            f"Download the PrismaCloud report for {_picked_app} @ "
+            f"{_picked_ver} from S3 and render it inline above the "
+            f"toolbar — no popover redirect."
+        ),
+    ):
+        st.session_state["_psv_inline_v1"] = {
+            "app": _picked_app, "ver": _picked_ver,
+        }
+        st.rerun()
+
+    # Tiny breadcrumb so the operator sees the QC-gating reason when
+    # promote is disabled.
+    if not _can_promote:
+        _reason = (
+            "Promote disabled — viewer doesn't carry the QC role."
+            if not _has_qc else
+            ("Promote disabled — none of your session teams are listed "
+             "under this project's qc_team.")
+        )
+        st.markdown(
+            f'<div class="iv-act-note">⚠ {html.escape(_reason)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def _render_prisma_inline_viewer() -> None:
     """Inline Prisma report panel rendered above the action toolbar.
 
@@ -21773,89 +22019,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Everything below this point renders inside the inventory tab (body_slot).
     _body_container.__enter__()
 
-    # ── Query-param handlers ───────────────────────────────────────────────
-    # Version-popover tiles navigate to either
-    #   ?prisma_open=app|ver           — download + display the report inline
-    #   ?jenkins_trigger=key|app|ver|env|company|project — trigger Jenkins
-    # We consume each param ONCE, stash the request into session_state,
-    # and clear the URL so a refresh doesn't repeat the side-effect.
-    _qp_prisma_open = ""
-    _qp_jenkins_trigger = ""
-    try:
-        _qp_prisma_open = str(st.query_params.get("prisma_open") or "").strip()
-        _qp_jenkins_trigger = str(st.query_params.get("jenkins_trigger") or "").strip()
-    except Exception:
-        pass
-    if _is_admin and _qp_prisma_open and "|" in _qp_prisma_open:
-        _qp_app, _, _qp_ver = _qp_prisma_open.partition("|")
-        _qp_app = urllib.parse.unquote(_qp_app or "").strip()
-        _qp_ver = urllib.parse.unquote(_qp_ver or "").strip()
-        if _qp_app and _qp_ver:
-            st.session_state["_psv_inline_v1"] = {
-                "app": _qp_app, "ver": _qp_ver,
-            }
-        try:
-            del st.query_params["prisma_open"]
-        except Exception:
-            pass
-    if _is_admin and _qp_jenkins_trigger:
-        _parts = [urllib.parse.unquote(p) for p in _qp_jenkins_trigger.split("|")]
-        # Pad to 6 fields so dest tuple is consistent.
-        _parts = (_parts + ["", "", "", "", "", ""])[:6]
-        _jk_key, _jk_app, _jk_ver, _jk_env, _jk_co, _jk_pj = _parts
-        _trigger_allowed = _jk_key in JENKINS_PIPELINES and _jk_app
-        _trigger_denial = ""
-        # Server-side QC gate for release_request — mirrors the UI
-        # gate inside _iv_jenkins_html so a hand-crafted URL can't
-        # bypass it. Requires (a) the viewer to carry the QC role and
-        # (b) one of their session teams to appear in the matched
-        # inventory row's qc_team field.
-        if _trigger_allowed and _jk_key == "release_request":
-            _viewer_has_qc = ("QC" in _detected_roles) or (role_pick == "QC")
-            _row_for_trigger = next(
-                (
-                    rr for rr in _inv_rows_all
-                    if rr.get("application") == _jk_app
-                    and (not _jk_pj or rr.get("project") == _jk_pj)
-                ),
-                None,
-            )
-            _qc_team_match = False
-            if _row_for_trigger is not None and _iv_session_teams:
-                _qc_teams = set(_row_teams_for_field(_row_for_trigger, "qc_team"))
-                _qc_team_match = bool(set(_iv_session_teams) & _qc_teams)
-            if not (_viewer_has_qc and _qc_team_match):
-                _trigger_allowed = False
-                _trigger_denial = (
-                    "Release_promote refused: requires the QC role plus a "
-                    "session team listed under this project's qc_team."
-                )
-        if _trigger_allowed:
-            st.session_state["_jk_trigger_pending_v1"] = {
-                "key":     _jk_key,
-                "app":     _jk_app,
-                "ver":     _jk_ver,
-                "env":     _jk_env,
-                "company": _jk_co,
-                "project": _jk_pj,
-                "branch":  "release",
-            }
-            # Drop any prior result so we don't show the new pending
-            # alongside last run's success/failure.
-            st.session_state.pop("_jk_trigger_result_v1", None)
-        elif _trigger_denial:
-            st.session_state["_jk_trigger_result_v1"] = {
-                "ok": False, "msg": _trigger_denial, "queue_url": "",
-                "url": "", "status_code": 0,
-                "pipeline": JENKINS_PIPELINES.get(_jk_key, {}).get("label", _jk_key),
-                "key": _jk_key,
-                "params": {"projectName": _jk_pj, "applicationName": _jk_app,
-                           "codeVersion": _jk_ver},
-            }
-        try:
-            del st.query_params["jenkins_trigger"]
-        except Exception:
-            pass
+    # URL-based query-param handlers (prisma_open / jenkins_trigger) were
+    # removed — they caused visible browser navigations every time the
+    # operator clicked an in-popover tile. Triggers + the Prisma loader
+    # now live entirely in the Streamlit-native ▶ Actions popover below
+    # so nothing redirects.
 
     # ── Action toolbar — admin-only popover entries ────────────────────────
     # Jenkins panel + Prisma scan viewer used to live as standalone tabs /
@@ -21866,10 +22034,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     if _is_admin:
         # ── Inline Jenkins trigger confirmation ────────────────────────
         _render_jenkins_trigger_panel()
-        # ── Inline Prisma report viewer (no popover redirect) ──────────
+        # ── Inline Prisma report viewer ────────────────────────────────
         _render_prisma_inline_viewer()
         with st.container(key="cc_iv_action_toolbar"):
-            _tb_c1, _tb_c2, _tb_c3 = st.columns([2, 2, 8])
+            _tb_c1, _tb_c2, _tb_c3, _tb_c4 = st.columns([2, 2, 2, 6])
             with _tb_c1:
                 _jk_lbl = "⚙ Jenkins pipelines"
                 if _jenkins_creds().get("host"):
@@ -21881,13 +22049,30 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                                 use_container_width=True):
                     _render_prisma_scan_viewer()
             with _tb_c3:
+                # ▶ Actions — Streamlit-native trigger panel. NO URL
+                # navigation, NO Jenkins-UI redirects. Operator picks
+                # app+version inside the popover; pressing Build /
+                # Deploy / Promote / Load report fires a Streamlit
+                # button which sets pending state for the confirmation
+                # panel rendered above the toolbar.
+                with st.popover("▶ Actions for a version",
+                                use_container_width=True):
+                    _render_iv_actions_chooser(
+                        _inv_rows_all,
+                        _iv_stages_map,
+                        _detected_roles,
+                        role_pick,
+                        _iv_session_teams,
+                    )
+            with _tb_c4:
                 st.markdown(
                     '<div class="iv-toolbar-hint">'
-                    '  Jenkins triggers + Prisma full reports live in the '
-                    '  popovers on the left — both lazy-load on click. '
-                    '  Click any <b>version chip</b> in the table to '
-                    '  trigger / view inline (with confirmation), '
-                    '  no Jenkins UI redirect.'
+                    '  Click any version chip in the table to see its '
+                    '  detail. To trigger a Jenkins job or load a '
+                    '  Prisma report for that version, open the '
+                    '  <b>▶ Actions</b> popover on the left — no '
+                    '  redirects, every action fires in-page after '
+                    '  confirmation.'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -21993,25 +22178,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                          environment: str = "",
                          only_keys: tuple[str, ...] | None = None,
                          section_label: str = "Jenkins actions") -> str:
-        """Render the Jenkins-action grid as in-page trigger tiles.
+        """Render a static "available Jenkins actions" hint for the row.
 
-        Each tile uses a same-origin ``?jenkins_trigger=...`` URL — the
-        inventory body's query-param handler consumes it on the next
-        render, opens an in-page confirmation panel showing the
-        pre-filled parameters, and only then POSTs to Jenkins's
-        ``buildWithParameters`` (with CSRF crumb + basic auth) on
-        explicit operator confirmation. No redirect to Jenkins UI.
-
-        ``release_request`` is filtered out automatically when the
-        viewer isn't a QC member of this row's qc_team — promotion is
-        a privileged action gated separately."""
+        The HTML popover is read-only — every Jenkins trigger lives in
+        the Streamlit-native "▶ Actions" popover above the inventory
+        table. This hint just enumerates which actions are reachable
+        for *this* row so the operator knows what's possible. No
+        anchors, no URL navigation."""
         if not _iv_jk_ui_host:
             return ""
-        _co = (r.get("company") or "").strip()
-        _pj = (r.get("project") or "").strip()
-        _ap = (r.get("application") or "").strip()
         _can_promote = _iv_can_promote(r)
-        _tiles: list[str] = []
+        _chips: list[str] = []
         _items = (
             [(k, JENKINS_PIPELINES[k]) for k in only_keys if k in JENKINS_PIPELINES]
             if only_keys is not None else list(JENKINS_PIPELINES.items())
@@ -22019,60 +22196,45 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         for _key, _cfg in _items:
             if _key == "release_request" and not _can_promote:
                 continue
-            # Suffix the version tag onto the tile label when present so
-            # admins see at-a-glance which exact build / deploy / release
-            # the tile will queue.
-            _vtag = (
-                f' <span class="ap-jk-ver">@ {html.escape(version)}</span>'
-                if version else ""
-            )
-            _envtag = (
-                f' <span class="ap-jk-env">→ {html.escape(environment.upper())}</span>'
-                if environment else ""
-            )
-            # Pipe-separated tuple consumed by the inventory body's
-            # query-param handler: key|app|ver|env|company|project
-            _payload = "|".join(
-                urllib.parse.quote(p, safe="")
-                for p in (_key, _ap, version, environment, _co, _pj)
-            )
-            _tiles.append(
-                f'<a class="ap-jk-tile" '
-                f'href="?jenkins_trigger={_payload}" '
-                f'title="{html.escape(_cfg["summary"])} · click to confirm in-page (no redirect).">'
+            _suffix = ""
+            if version:
+                _suffix += f' <span class="ap-jk-ver">@ {html.escape(version)}</span>'
+            if environment:
+                _suffix += f' <span class="ap-jk-env">→ {html.escape(environment.upper())}</span>'
+            _chips.append(
+                f'<span class="ap-jk-tile is-info" '
+                f'title="{html.escape(_cfg["summary"])}">'
                 f'<span class="ap-jk-glyph">{html.escape(_cfg["glyph"])}</span>'
-                f'<span class="ap-jk-lbl">{html.escape(_cfg["label"])}{_vtag}{_envtag}</span>'
-                f'<span class="ap-jk-arrow">▶</span>'
-                f'</a>'
+                f'<span class="ap-jk-lbl">{html.escape(_cfg["label"])}{_suffix}</span>'
+                f'</span>'
             )
-        if not _tiles:
+        if not _chips:
             return ""
         return (
             f'    <div class="ap-section">{html.escape(section_label)}</div>'
-            f'    <div class="ap-jk-grid">' + "".join(_tiles) + '</div>'
+            f'    <div class="ap-jk-grid">' + "".join(_chips) + '</div>'
+            f'    <div class="ap-jk-hint">'
+            f'      ▶ Trigger any of these from the <b>Actions</b> '
+            f'      popover above the inventory table — pick'
+            + (f' <code>{html.escape(version)}</code>' if version else " a version")
+            + ', then confirm.'
+            f'    </div>'
         )
 
     def _iv_prisma_link_html(app: str, version: str) -> str:
-        """Inline "view full Prisma report" tile for the version popover.
-
-        Same-origin URL nav (`?prisma_open=app|ver`) which Streamlit's
-        `st.query_params` API treats as a re-run trigger while
-        preserving session state. The inventory's top-of-render handler
-        reads the param, fetches the report from S3, and renders it
-        inline above the action toolbar (no popover redirect)."""
+        """Static hint pointing the operator at the Streamlit-native
+        Prisma loader in the Actions popover. No URL navigation."""
         if not (app and version):
             return ""
-        _q = urllib.parse.quote(f"{app}|{version}", safe="")
         return (
             f'    <div class="ap-section">Prisma report</div>'
-            f'    <a class="ap-jk-tile ap-prisma-link" '
-            f'href="?prisma_open={_q}" '
-            f'title="Download + display the full PrismaCloud report inline (no redirect).">'
-            f'<span class="ap-jk-glyph">📄</span>'
-            f'<span class="ap-jk-lbl">View Prisma report '
-            f'<span class="ap-jk-ver">@ {html.escape(version)}</span></span>'
-            f'<span class="ap-jk-arrow">▶</span>'
-            f'</a>'
+            f'    <div class="ap-jk-hint">'
+            f'      📄 Load the full PrismaCloud report from the '
+            f'      <b>Actions</b> popover above the inventory table — '
+            f'      pick <code>{html.escape(app)}</code> @ '
+            f'      <code>{html.escape(version)}</code> and click '
+            f'      <b>📄 Load report</b>.'
+            f'    </div>'
         )
 
     # Pre-compute app_type per application for stage-cell rendering logic.
