@@ -1912,6 +1912,42 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-family: var(--cc-mono);
     font-weight: 700;
 }
+.el-app-pop .ap-jk-ver,
+.el-app-pop .ap-jk-env {
+    display: inline-block;
+    font-family: var(--cc-mono);
+    font-weight: 600;
+    color: var(--cc-text-mute);
+    margin-left: 4px;
+    font-size: 0.66rem;
+    letter-spacing: 0.01em;
+}
+.el-app-pop .ap-jk-env { color: var(--cc-amber); font-weight: 700; }
+.el-app-pop .ap-jk-tile.ap-prisma-link {
+    grid-column: 1 / -1;
+    border-color: rgba(99,102,241,0.32);
+    background: rgba(99,102,241,0.06);
+}
+.el-app-pop .ap-jk-tile.ap-prisma-link .ap-jk-glyph { color: var(--cc-accent); }
+
+/* Deep-link hint banner above the action toolbar */
+.iv-deeplink-hint {
+    padding: 8px 14px;
+    border: 1px solid rgba(99,102,241,0.28);
+    background: rgba(99,102,241,0.08);
+    border-radius: 10px;
+    margin: 0 0 8px 0;
+    font-size: 0.78rem;
+    color: var(--cc-text);
+}
+.iv-deeplink-hint code {
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    padding: 1px 6px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 4px;
+}
 .iv-sec-row {
     display: inline-flex;
     gap: 4px;
@@ -13422,6 +13458,16 @@ def _render_prisma_scan_viewer() -> None:
             disabled=not (app and version),
         )
 
+    # Deep-link auto-load: a version popover's "View Prisma report"
+    # link sets ?prisma_open=app|ver, the inventory render handler
+    # consumes it into session state, and this branch fires the fetch
+    # automatically on the next render.
+    if (
+        st.session_state.pop("_psv_auto_load_v1", False)
+        and app and version
+    ):
+        load = True
+
     project = app_to_project.get(app or "", "")
     s3_key = _prisma_scan_s3_key(project, app, version) if (app and version) else ""
 
@@ -21189,6 +21235,29 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Everything below this point renders inside the inventory tab (body_slot).
     _body_container.__enter__()
 
+    # ── Query-param handler: ?prisma_open=app|ver ──────────────────────────
+    # Triggered by the "View Prisma report" link inside any version
+    # popover. We consume the param ONCE, preselect the viewer + flag
+    # for auto-load, then clear the URL so a refresh doesn't repeat.
+    _qp_prisma_open = ""
+    try:
+        _qp_prisma_open = str(st.query_params.get("prisma_open") or "").strip()
+    except Exception:
+        _qp_prisma_open = ""
+    if _is_admin and _qp_prisma_open and "|" in _qp_prisma_open:
+        _qp_app, _, _qp_ver = _qp_prisma_open.partition("|")
+        _qp_app = _qp_app.strip()
+        _qp_ver = _qp_ver.strip()
+        if _qp_app and _qp_ver:
+            st.session_state["_psv_app_v1"] = _qp_app
+            st.session_state["_psv_ver_v1"] = _qp_ver
+            st.session_state["_psv_auto_load_v1"] = True
+            st.session_state["_psv_open_hint_v1"] = (_qp_app, _qp_ver)
+        try:
+            del st.query_params["prisma_open"]
+        except Exception:
+            pass
+
     # ── Action toolbar — admin-only popover entries ────────────────────────
     # Jenkins panel + Prisma scan viewer used to live as standalone tabs /
     # sections. Now both are mounted as popover toolbar buttons so the
@@ -21196,6 +21265,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # renderers preserve their internal ▶ Load / ▶ Run gates), so opening
     # the inventory tab still costs zero remote calls.
     if _is_admin:
+        # Show a one-shot hint when the user arrived via a version
+        # popover's "View Prisma report" link. The report is already
+        # loaded in the Prisma viewer popover — point the user there.
+        _psv_open_hint = st.session_state.pop("_psv_open_hint_v1", None)
+        if _psv_open_hint:
+            _h_app, _h_ver = _psv_open_hint
+            st.markdown(
+                '<div class="iv-deeplink-hint">'
+                '  📄 <b>Prisma report ready</b> for '
+                f'  <code>{html.escape(_h_app)}</code> @ '
+                f'  <code>{html.escape(_h_ver)}</code> — '
+                '  open the <b>🔬 Prisma scan viewer</b> popover below.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
         with st.container(key="cc_iv_action_toolbar"):
             _tb_c1, _tb_c2, _tb_c3 = st.columns([2, 2, 8])
             with _tb_c1:
@@ -21205,14 +21289,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 with st.popover(_jk_lbl, use_container_width=True):
                     _render_jenkins_panel()
             with _tb_c2:
-                with st.popover("🔬 Prisma scan viewer",
-                                use_container_width=True):
+                _psv_lbl = "🔬 Prisma scan viewer"
+                if _psv_open_hint:
+                    _psv_lbl = (
+                        f"🔬 Prisma · {_psv_open_hint[0]} @ {_psv_open_hint[1]}"
+                    )
+                with st.popover(_psv_lbl, use_container_width=True):
                     _render_prisma_scan_viewer()
             with _tb_c3:
                 st.markdown(
                     '<div class="iv-toolbar-hint">'
                     '  Jenkins triggers + Prisma full reports live in the '
-                    '  popovers on the left — both lazy-load on click.'
+                    '  popovers on the left — both lazy-load on click. '
+                    '  Click any <b>version chip</b> in the table to see '
+                    '  trigger / report shortcuts scoped to that version.'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -21297,14 +21387,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_jk_public = (_jenkins_creds().get("public_name") or _iv_jk_host).rstrip("/")
     _iv_jk_ui_host = _iv_jk_public or _iv_jk_host
 
-    def _iv_jenkins_html(r: dict) -> str:
+    def _iv_jenkins_html(r: dict, *, version: str = "",
+                         environment: str = "",
+                         only_keys: tuple[str, ...] | None = None,
+                         section_label: str = "Jenkins actions") -> str:
+        """Render the Jenkins-action grid.
+
+        Args:
+          r: inventory row (project / application / company).
+          version: when set, pre-fills the Jenkins `version` param.
+          environment: when set, pre-fills the Jenkins `environment`
+            param (used for deploy requests scoped to a stage).
+          only_keys: when provided, restricts to a subset of
+            JENKINS_PIPELINES keys — handy for version popovers where
+            the build pipeline doesn't apply (build is per-branch, not
+            per-version).
+          section_label: header label above the grid.
+        """
         if not _iv_jk_ui_host:
             return ""
         _co = (r.get("company") or "").strip()
         _pj = (r.get("project") or "").strip()
         _ap = (r.get("application") or "").strip()
         _tiles: list[str] = []
-        for _key, _cfg in JENKINS_PIPELINES.items():
+        _items = (
+            [(k, JENKINS_PIPELINES[k]) for k in only_keys if k in JENKINS_PIPELINES]
+            if only_keys is not None else list(JENKINS_PIPELINES.items())
+        )
+        for _key, _cfg in _items:
             # Build "/job/A/job/B/" from "A/B" path.
             _job_path = "/".join(
                 f"job/{urllib.parse.quote(seg, safe='')}"
@@ -21312,10 +21422,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             )
             _params: dict[str, str] = {}
             for _p in _cfg["params"]:
-                if _p == "project":     _params["project"] = _pj
+                if _p == "project":       _params["project"] = _pj
                 elif _p == "application": _params["application"] = _ap
-                elif _p == "company":   _params["company"] = _co
-                elif _p == "branch":    _params["branch"] = "release"
+                elif _p == "company":     _params["company"] = _co
+                elif _p == "branch":      _params["branch"] = "release"
+                elif _p == "version":     _params["version"] = version
+                elif _p == "environment": _params["environment"] = environment
             _qs = urllib.parse.urlencode(
                 {k: v for k, v in _params.items() if v}
             )
@@ -21328,18 +21440,52 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f"{_iv_jk_ui_host}/{_job_path}/parambuild?{_qs}"
                 if _qs else _job_url
             )
+            # Suffix the version tag onto the tile label when present so
+            # admins see at-a-glance which exact build / deploy / release
+            # the link will trigger.
+            _vtag = (
+                f' <span class="ap-jk-ver">@ {html.escape(version)}</span>'
+                if version else ""
+            )
+            _envtag = (
+                f' <span class="ap-jk-env">→ {html.escape(environment.upper())}</span>'
+                if environment else ""
+            )
             _tiles.append(
                 f'<a class="ap-jk-tile" href="{html.escape(_build_url, quote=True)}" '
                 f'target="_blank" rel="noopener noreferrer" '
                 f'title="{html.escape(_cfg["summary"])}">'
                 f'<span class="ap-jk-glyph">{html.escape(_cfg["glyph"])}</span>'
-                f'<span class="ap-jk-lbl">{html.escape(_cfg["label"])}</span>'
+                f'<span class="ap-jk-lbl">{html.escape(_cfg["label"])}{_vtag}{_envtag}</span>'
                 f'<span class="ap-jk-arrow">↗</span>'
                 f'</a>'
             )
         return (
-            '    <div class="ap-section">Jenkins actions</div>'
-            '    <div class="ap-jk-grid">' + "".join(_tiles) + '</div>'
+            f'    <div class="ap-section">{html.escape(section_label)}</div>'
+            f'    <div class="ap-jk-grid">' + "".join(_tiles) + '</div>'
+        )
+
+    def _iv_prisma_link_html(app: str, version: str) -> str:
+        """Inline "view full Prisma report" link for the version popover.
+
+        Uses a same-origin URL nav (`?prisma_open=app|ver`) which
+        Streamlit's `st.query_params` API treats as a re-run trigger
+        while preserving session state. The page's top-of-render
+        handler reads the param and auto-fetches the report into the
+        Prisma viewer slot."""
+        if not (app and version):
+            return ""
+        _q = urllib.parse.quote(f"{app}|{version}", safe="")
+        return (
+            f'    <div class="ap-section">Prisma report</div>'
+            f'    <a class="ap-jk-tile ap-prisma-link" '
+            f'href="?prisma_open={_q}" '
+            f'title="Load the full PrismaCloud report for {html.escape(app)} @ {html.escape(version)}">'
+            f'<span class="ap-jk-glyph">📄</span>'
+            f'<span class="ap-jk-lbl">View Prisma report '
+            f'<span class="ap-jk-ver">@ {html.escape(version)}</span></span>'
+            f'<span class="ap-jk-arrow">↗</span>'
+            f'</a>'
         )
 
     # Pre-compute app_type per application for stage-cell rendering logic.
@@ -22375,6 +22521,30 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'    <div class="ap-scan-grid">' + "".join(_scan_cards) + '</div>'
             )
 
+            # Per-version Jenkins triggers — pre-fill project / app /
+            # version (and environment for deploys) so the operator
+            # lands on Jenkins with all params already populated.
+            # Build pipeline is per-branch, not per-version, so it's
+            # only meaningful in the version popover when the stage is
+            # the build row itself.
+            _v_row = next(
+                (rr for rr in _inv_rows_all if rr.get("application") == _app),
+                None,
+            )
+            if _v_row is not None:
+                if _stage == "build":
+                    _ver_only_keys = ("build", "release_request")
+                else:
+                    _ver_only_keys = ("deploy_request", "release_request")
+                _jenkins_section_v = _iv_jenkins_html(
+                    _v_row, version=_ver,
+                    environment=_stage if _stage in ("dev", "qc", "uat", "prd") else "",
+                    only_keys=_ver_only_keys,
+                    section_label="Trigger this version",
+                )
+            else:
+                _jenkins_section_v = ""
+            _prisma_link_v = _iv_prisma_link_html(_app, _ver)
             _iv_popovers.append(
                 f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
                 f'  <div class="ap-head">'
@@ -22388,9 +22558,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'  <div class="ap-body">'
                 f'    {_banner}'
                 f'    {_stage_block}'
+                f'    {_jenkins_section_v}'
                 f'    {_prisma_block}'
+                f'    {_prisma_link_v}'
                 f'  </div>'
-                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap</div>'
+                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap · jenkins</div>'
                 f'</div>'
             )
 
