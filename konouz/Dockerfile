@@ -44,6 +44,25 @@ COPY . /var/www/html
 #    &&
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
+# Disable every Magento_ReCaptcha* module. The lock pins framework 103.0.4
+# (Magento 2.4.4) but ships reCAPTCHA modules from the 2.4.6 line that
+# reference ResetAfterRequestInterface (added in 103.0.5+). Disabling in
+# app/etc/config.php keeps their code on disk but excluded from bootstrap.
+RUN php -r '\
+    $f = "app/etc/config.php"; \
+    if (!is_file($f)) { fwrite(STDERR, "config.php missing\n"); exit(1); } \
+    $c = require $f; \
+    if (!isset($c["modules"])) { $c["modules"] = []; } \
+    $n = 0; \
+    foreach (array_keys($c["modules"]) as $k) { \
+        if (strpos($k, "Magento_ReCaptcha") === 0 && $c["modules"][$k] !== 0) { \
+            $c["modules"][$k] = 0; $n++; \
+        } \
+    } \
+    file_put_contents($f, "<?php\nreturn " . var_export($c, true) . ";\n"); \
+    echo "Disabled $n Magento_ReCaptcha* modules\n";' \
+ && rm -rf generated/code generated/metadata var/cache var/page_cache var/view_preprocessed
+
 RUN usermod -u 1000 www-data && groupmod -g 1000 www-data \
     && chown -R www-data:www-data /var/www/html
 
