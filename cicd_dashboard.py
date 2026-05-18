@@ -1948,6 +1948,164 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border: 1px solid var(--cc-border);
     border-radius: 4px;
 }
+
+/* Inline Prisma report panel (above the action toolbar) */
+.iv-prisma-inline-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0 4px 0;
+}
+.iv-prisma-inline-glyph { font-size: 1.05rem; }
+.iv-prisma-inline-title {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--cc-text);
+}
+.iv-prisma-inline-title code {
+    font-family: var(--cc-mono);
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.76rem;
+}
+.iv-prisma-inline-meta {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 6px 0 8px 0;
+    padding: 6px 10px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+}
+.iv-prisma-inline-meta code {
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    color: var(--cc-text);
+}
+
+/* Inline Jenkins trigger confirmation panel */
+.iv-jkt-panel {
+    padding: 12px 14px;
+    border: 1px solid rgba(217,119,6,0.32);
+    background: rgba(217,119,6,0.07);
+    border-radius: 10px;
+    margin: 0 0 6px 0;
+}
+.iv-jkt-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.iv-jkt-glyph { font-size: 1.1rem; color: var(--cc-amber); }
+.iv-jkt-title {
+    flex: 1;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--cc-text);
+}
+.iv-jkt-tag {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(217,119,6,0.18);
+    color: #b45309;
+    border: 1px solid rgba(217,119,6,0.34);
+}
+.iv-jkt-summary {
+    font-size: 0.76rem;
+    color: var(--cc-text-mute);
+    margin-bottom: 8px;
+}
+.iv-jkt-summary code {
+    font-family: var(--cc-mono);
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--cc-text);
+    font-size: 0.72rem;
+}
+.iv-jkt-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--cc-surface);
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--cc-border);
+}
+.iv-jkt-table th {
+    text-align: left;
+    padding: 5px 10px;
+    color: var(--cc-text-mute);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: var(--cc-surface2);
+    border-bottom: 1px solid var(--cc-border);
+}
+.iv-jkt-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--cc-border);
+    font-size: 0.76rem;
+}
+.iv-jkt-table tbody tr:last-child td { border-bottom: none; }
+.iv-jkt-k { color: var(--cc-text-mute); font-weight: 600; width: 35%; }
+.iv-jkt-v { font-family: var(--cc-mono); color: var(--cc-text); }
+
+.iv-jkt-result {
+    padding: 10px 14px;
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    margin: 0 0 6px 0;
+    background: var(--cc-surface2);
+}
+.iv-jkt-result.is-ok {
+    border-color: rgba(5,150,105,0.32);
+    background: rgba(5,150,105,0.07);
+}
+.iv-jkt-result.is-err {
+    border-color: rgba(220,38,38,0.32);
+    background: rgba(220,38,38,0.07);
+}
+.iv-jkt-result-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.iv-jkt-result.is-ok .iv-jkt-result-glyph { color: #047857; font-size: 1.1rem; }
+.iv-jkt-result.is-err .iv-jkt-result-glyph { color: #b91c1c; font-size: 1.1rem; }
+.iv-jkt-result-title { font-weight: 700; font-size: 0.86rem; }
+.iv-jkt-result-msg {
+    color: var(--cc-text-mute);
+    font-size: 0.76rem;
+    margin-bottom: 4px;
+}
+.iv-jkt-result-params {
+    font-size: 0.72rem;
+    color: var(--cc-text);
+    margin-bottom: 4px;
+}
+.iv-jkt-result-params code {
+    font-family: var(--cc-mono);
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    padding: 0 4px;
+    border-radius: 4px;
+    color: var(--cc-text);
+}
+.iv-jkt-result-link { margin-top: 4px; font-size: 0.74rem; }
 .iv-sec-row {
     display: inline-flex;
     gap: 4px;
@@ -13345,6 +13503,209 @@ def _psv_inventory_options() -> tuple[list[str], dict, dict]:
     )
 
 
+def _render_prisma_inline_viewer() -> None:
+    """Inline Prisma report panel rendered above the action toolbar.
+
+    Activated by the version-popover "View Prisma report" tile (which
+    navigates to ``?prisma_open=app|ver``). The query-param handler in
+    ``_render_inventory_view`` consumes the param and stashes the
+    request into ``session_state["_psv_inline_v1"]``; this renderer
+    fetches the scan from S3 and embeds the HTML inline so the operator
+    sees the report without leaving the inventory tab — no popover, no
+    Jenkins-UI-style redirect."""
+    req = st.session_state.get("_psv_inline_v1")
+    if not req:
+        return
+    _app = req.get("app") or ""
+    _ver = req.get("ver") or ""
+    if not (_app and _ver):
+        return
+    # Resolve project from the inventory cache so we can build the
+    # S3 key without the operator having to re-pick it.
+    _apps_all, _app_to_project, _ = _psv_inventory_options()
+    _project = _app_to_project.get(_app, "")
+    if not _project:
+        st.markdown(
+            '<div class="iv-deeplink-hint" style="border-color:rgba(220,38,38,.32);'
+            'background:rgba(220,38,38,.08);color:#b91c1c">'
+            f'  ⚠ Prisma viewer: project for <code>{html.escape(_app)}</code> '
+            '  isn\'t in the loaded inventory yet — open the Pipelines '
+            '  Inventory tab once, then click the version chip again.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    _h1, _h2 = st.columns([10, 1])
+    with _h1:
+        st.markdown(
+            '<div class="iv-prisma-inline-head">'
+            f'  <span class="iv-prisma-inline-glyph">📄</span>'
+            f'  <span class="iv-prisma-inline-title">Prisma report · '
+            f'  <code>{html.escape(_app)}</code> @ '
+            f'  <code>{html.escape(_ver)}</code></span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    with _h2:
+        if st.button("✕ Close", key="_psv_inline_close_v1",
+                     use_container_width=True,
+                     help="Drop the inline report"):
+            st.session_state.pop("_psv_inline_v1", None)
+            st.rerun()
+
+    # Sanity-gate the S3 client; we want a precise diagnostic when
+    # vault / boto3 aren't wired so the user fixes the right thing.
+    if not _BOTO3_AVAILABLE:
+        st.warning("boto3 not installed on the streamlit host.")
+        return
+    _s3_status = _prisma_s3_status()
+    if not _s3_status.get("ok"):
+        _err = _s3_status.get("error") or _vault_last_error(PRISMA_S3_VAULT_PATH)
+        st.warning(f"S3 client unavailable: {_err}")
+        return
+    _key = _prisma_scan_s3_key(_project, _app, _ver)
+    with st.spinner(f"Downloading PrismaCloud report for {_app} @ {_ver}..."):
+        _html_doc, _size, _err = _fetch_prisma_scan_html(PRISMA_S3_BUCKET, _key)
+    if _err:
+        st.warning(
+            f"Couldn't load `{_key}`: {_err}. The report may not exist for "
+            f"this version yet."
+        )
+        return
+    _viewer_url = _prisma_scan_console_url(
+        _s3_status.get("endpoint") or "", PRISMA_S3_BUCKET, _key,
+    )
+    st.markdown(
+        '<div class="iv-prisma-inline-meta">'
+        f'  <span><b>Size:</b> {(_size or 0)/1024:,.1f} KB</span>'
+        f'  <span><b>Key:</b> <code>{html.escape(_key)}</code></span>'
+        + (
+            f'  <a class="ap-url" href="{html.escape(_viewer_url, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer">↗ raw</a>'
+            if _viewer_url else ""
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    # Cap iframe height so the rest of the page stays reachable.
+    st.components.v1.html(_html_doc or "", height=600, scrolling=True)
+
+
+def _render_jenkins_trigger_panel() -> None:
+    """In-page Jenkins trigger confirmation + execution panel.
+
+    Pending requests are placed into
+    ``session_state["_jk_trigger_pending_v1"]`` by the inventory's
+    query-param handler when an operator clicks a version-popover
+    Jenkins tile. This panel shows the pipeline name + every parameter
+    that will be POSTed, with explicit Trigger / Cancel buttons —
+    so a misclick on the popover never silently fires a build."""
+    pending = st.session_state.get("_jk_trigger_pending_v1")
+    result = st.session_state.get("_jk_trigger_result_v1")
+    if not pending and not result:
+        return
+
+    if pending:
+        _key = pending["key"]
+        _cfg = JENKINS_PIPELINES.get(_key, {})
+        _label = _cfg.get("label", _key)
+        _glyph = _cfg.get("glyph", "▶")
+        # Build the params dict Jenkins will see, per JENKINS_PIPELINES
+        # contract. Empty values are left in the dict so the user can
+        # see exactly what's missing.
+        _params: dict[str, str] = {}
+        for _p in _cfg.get("params") or ():
+            if _p == "project":       _params["project"] = pending.get("project", "")
+            elif _p == "application": _params["application"] = pending.get("app", "")
+            elif _p == "company":     _params["company"] = pending.get("company", "")
+            elif _p == "branch":      _params["branch"] = pending.get("branch", "release")
+            elif _p == "version":     _params["version"] = pending.get("ver", "")
+            elif _p == "environment": _params["environment"] = pending.get("env", "")
+            else:                     _params[_p] = ""
+        _rows = "".join(
+            f'<tr><td class="iv-jkt-k">{html.escape(_k)}</td>'
+            f'<td class="iv-jkt-v">{html.escape(str(_v) or "—")}</td></tr>'
+            for _k, _v in _params.items()
+        )
+        st.markdown(
+            '<div class="iv-jkt-panel">'
+            '  <div class="iv-jkt-head">'
+            f'    <span class="iv-jkt-glyph">{html.escape(_glyph)}</span>'
+            f'    <span class="iv-jkt-title">Trigger Jenkins · {html.escape(_label)}</span>'
+            '    <span class="iv-jkt-tag">PENDING CONFIRMATION</span>'
+            '  </div>'
+            f'  <div class="iv-jkt-summary">'
+            f'    Job <code>{html.escape(_cfg.get("path", _key))}</code> will be '
+            f'    queued on the configured Jenkins controller with the '
+            f'    parameters below. Nothing fires until you click '
+            f'    <b>▶ Trigger</b>.'
+            '  </div>'
+            f'  <table class="iv-jkt-table">'
+            f'    <thead><tr><th>Parameter</th><th>Value</th></tr></thead>'
+            f'    <tbody>{_rows}</tbody>'
+            '  </table>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _b1, _b2, _b3 = st.columns([1, 1, 6])
+        with _b1:
+            if st.button("▶ Trigger", key="_jk_trigger_confirm_btn",
+                         type="primary", use_container_width=True):
+                with st.spinner(f"Triggering {_label}..."):
+                    _res = _jenkins_post_trigger(_key, _params)
+                _res["pipeline"]  = _label
+                _res["key"]       = _key
+                _res["params"]    = _params
+                st.session_state["_jk_trigger_result_v1"] = _res
+                st.session_state.pop("_jk_trigger_pending_v1", None)
+                st.rerun()
+        with _b2:
+            if st.button("✕ Cancel", key="_jk_trigger_cancel_btn",
+                         use_container_width=True):
+                st.session_state.pop("_jk_trigger_pending_v1", None)
+                st.rerun()
+        return
+
+    # Result branch — the trigger ran (success or failure).
+    _ok = bool(result.get("ok"))
+    _msg = result.get("msg") or ""
+    _queue = result.get("queue_url") or ""
+    _label = result.get("pipeline") or result.get("key") or ""
+    _params = result.get("params") or {}
+    _params_html = " · ".join(
+        f"<b>{html.escape(_k)}</b>=<code>{html.escape(str(_v))}</code>"
+        for _k, _v in _params.items() if _v
+    ) or "—"
+    _state_cls = "ok" if _ok else "err"
+    _glyph = "✓" if _ok else "⚠"
+    st.markdown(
+        f'<div class="iv-jkt-result is-{_state_cls}">'
+        f'  <div class="iv-jkt-result-head">'
+        f'    <span class="iv-jkt-result-glyph">{_glyph}</span>'
+        f'    <span class="iv-jkt-result-title">Jenkins · {html.escape(_label)}'
+        f'    {"queued" if _ok else "failed"}</span>'
+        f'  </div>'
+        f'  <div class="iv-jkt-result-msg">{html.escape(_msg)}</div>'
+        f'  <div class="iv-jkt-result-params">{_params_html}</div>'
+        + (
+            f'  <div class="iv-jkt-result-link">'
+            f'    <a class="ap-url" href="{html.escape(_queue, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer">↗ queue item</a>'
+            f'  </div>'
+            if _queue else ""
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    _r1, _r2 = st.columns([1, 7])
+    with _r1:
+        if st.button("✕ Dismiss", key="_jk_trigger_result_dismiss_btn",
+                     use_container_width=True):
+            st.session_state.pop("_jk_trigger_result_v1", None)
+            st.rerun()
+
+
 def _render_prisma_scan_viewer() -> None:
     """Admin-only Prisma scan viewer. See module-level UX contract above."""
     # Empty-state when configuration is missing — keep it actionable so
@@ -13457,16 +13818,6 @@ def _render_prisma_scan_viewer() -> None:
             use_container_width=True,
             disabled=not (app and version),
         )
-
-    # Deep-link auto-load: a version popover's "View Prisma report"
-    # link sets ?prisma_open=app|ver, the inventory render handler
-    # consumes it into session state, and this branch fires the fetch
-    # automatically on the next render.
-    if (
-        st.session_state.pop("_psv_auto_load_v1", False)
-        and app and version
-    ):
-        load = True
 
     project = app_to_project.get(app or "", "")
     s3_key = _prisma_scan_s3_key(project, app, version) if (app and version) else ""
@@ -17627,6 +17978,95 @@ def _jenkins_request(url: str) -> Any:
     return body
 
 
+def _jenkins_get_crumb() -> tuple[str, str]:
+    """Fetch a Jenkins CSRF crumb. Returns ``(field_name, value)``;
+    both empty when CSRF protection is disabled or unreachable. The
+    crumb header MUST be sent on POSTs alongside basic auth or the
+    Jenkins controller will reject the request with 403."""
+    root = _jenkins_root_url()
+    if not root:
+        return "", ""
+    url = f"{root}/crumbIssuer/api/json"
+    try:
+        body = _jenkins_request(url)
+    except RuntimeError:
+        return "", ""
+    if not isinstance(body, dict):
+        return "", ""
+    return (body.get("crumbRequestField") or "", body.get("crumb") or "")
+
+
+def _jenkins_post_trigger(pipeline_key: str,
+                          params: dict[str, str]) -> dict:
+    """POST to Jenkins ``buildWithParameters`` for *pipeline_key*.
+
+    Returns a status dict with shape::
+
+        {"ok": bool, "msg": str, "queue_url": str,
+         "url": str, "status_code": int}
+
+    All fields are always present so callers can render the result
+    without per-field guards. ``ok=False`` carries a human-readable
+    failure reason in ``msg``."""
+    out = {"ok": False, "msg": "", "queue_url": "", "url": "",
+           "status_code": 0}
+    cfg = JENKINS_PIPELINES.get(pipeline_key)
+    if not cfg:
+        out["msg"] = f"Unknown pipeline key: {pipeline_key!r}"
+        return out
+    root = _jenkins_root_url()
+    if not root:
+        out["msg"] = "Jenkins host not resolved (vault / env not configured)."
+        return out
+    creds = _jenkins_creds()
+    if not (creds.get("username") and creds.get("token")):
+        out["msg"] = "Jenkins username / api_token missing in vault."
+        return out
+    _job_path = "/".join(
+        f"job/{urllib.parse.quote(seg, safe='')}"
+        for seg in str(cfg["path"]).split("/") if seg
+    )
+    _build_url = f"{root}/{_job_path}/buildWithParameters"
+    out["url"] = _build_url
+    # Filter to declared params + drop empties so Jenkins picks its
+    # defaults rather than blocking on missing values.
+    _post_params = {
+        k: v for k, v in params.items()
+        if k in cfg["params"] and (v or v == 0)
+    }
+    body = urllib.parse.urlencode(_post_params).encode("utf-8")
+    crumb_field, crumb_value = _jenkins_get_crumb()
+    auth = base64.b64encode(
+        f"{creds['username']}:{creds['token']}".encode()
+    ).decode()
+    req = urllib.request.Request(_build_url, data=body, method="POST")
+    req.add_header("Authorization", f"Basic {auth}")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    if crumb_field and crumb_value:
+        req.add_header(crumb_field, crumb_value)
+    try:
+        with urllib.request.urlopen(req, timeout=JENKINS_TIMEOUT) as resp:
+            out["status_code"] = int(resp.status or 0)
+            out["queue_url"] = resp.headers.get("Location") or ""
+            out["ok"] = 200 <= out["status_code"] < 400
+            out["msg"] = (
+                f"Build queued ({out['status_code']})"
+                if out["ok"] else
+                f"Unexpected HTTP {out['status_code']}"
+            )
+    except urllib.error.HTTPError as e:
+        out["status_code"] = int(e.code or 0)
+        out["msg"] = f"HTTP {e.code} {e.reason}"
+        # Jenkins occasionally answers 201/302 with no body; the urlopen
+        # path above already handles success codes, so anything here is
+        # a real failure (auth, missing params, no permission, etc.).
+    except urllib.error.URLError as e:
+        out["msg"] = f"unreachable: {e.reason}"
+    except Exception as e:
+        out["msg"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def _jk_version_tuple(ver: str) -> tuple:
     """Parse a Jenkins version string (e.g. ``2.440.1``, ``2.440``) into a
     tuple suitable for comparison. Non-numeric segments fall through as
@@ -21235,26 +21675,51 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Everything below this point renders inside the inventory tab (body_slot).
     _body_container.__enter__()
 
-    # ── Query-param handler: ?prisma_open=app|ver ──────────────────────────
-    # Triggered by the "View Prisma report" link inside any version
-    # popover. We consume the param ONCE, preselect the viewer + flag
-    # for auto-load, then clear the URL so a refresh doesn't repeat.
+    # ── Query-param handlers ───────────────────────────────────────────────
+    # Version-popover tiles navigate to either
+    #   ?prisma_open=app|ver           — download + display the report inline
+    #   ?jenkins_trigger=key|app|ver|env|company|project — trigger Jenkins
+    # We consume each param ONCE, stash the request into session_state,
+    # and clear the URL so a refresh doesn't repeat the side-effect.
     _qp_prisma_open = ""
+    _qp_jenkins_trigger = ""
     try:
         _qp_prisma_open = str(st.query_params.get("prisma_open") or "").strip()
+        _qp_jenkins_trigger = str(st.query_params.get("jenkins_trigger") or "").strip()
     except Exception:
-        _qp_prisma_open = ""
+        pass
     if _is_admin and _qp_prisma_open and "|" in _qp_prisma_open:
         _qp_app, _, _qp_ver = _qp_prisma_open.partition("|")
-        _qp_app = _qp_app.strip()
-        _qp_ver = _qp_ver.strip()
+        _qp_app = urllib.parse.unquote(_qp_app or "").strip()
+        _qp_ver = urllib.parse.unquote(_qp_ver or "").strip()
         if _qp_app and _qp_ver:
-            st.session_state["_psv_app_v1"] = _qp_app
-            st.session_state["_psv_ver_v1"] = _qp_ver
-            st.session_state["_psv_auto_load_v1"] = True
-            st.session_state["_psv_open_hint_v1"] = (_qp_app, _qp_ver)
+            st.session_state["_psv_inline_v1"] = {
+                "app": _qp_app, "ver": _qp_ver,
+            }
         try:
             del st.query_params["prisma_open"]
+        except Exception:
+            pass
+    if _is_admin and _qp_jenkins_trigger:
+        _parts = [urllib.parse.unquote(p) for p in _qp_jenkins_trigger.split("|")]
+        # Pad to 6 fields so dest tuple is consistent.
+        _parts = (_parts + ["", "", "", "", "", ""])[:6]
+        _jk_key, _jk_app, _jk_ver, _jk_env, _jk_co, _jk_pj = _parts
+        if _jk_key in JENKINS_PIPELINES and _jk_app:
+            st.session_state["_jk_trigger_pending_v1"] = {
+                "key":     _jk_key,
+                "app":     _jk_app,
+                "ver":     _jk_ver,
+                "env":     _jk_env,
+                "company": _jk_co,
+                "project": _jk_pj,
+                "branch":  "release",
+            }
+            # Drop any prior result so we don't show the new pending
+            # alongside last run's success/failure.
+            st.session_state.pop("_jk_trigger_result_v1", None)
+        try:
+            del st.query_params["jenkins_trigger"]
         except Exception:
             pass
 
@@ -21265,21 +21730,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # renderers preserve their internal ▶ Load / ▶ Run gates), so opening
     # the inventory tab still costs zero remote calls.
     if _is_admin:
-        # Show a one-shot hint when the user arrived via a version
-        # popover's "View Prisma report" link. The report is already
-        # loaded in the Prisma viewer popover — point the user there.
-        _psv_open_hint = st.session_state.pop("_psv_open_hint_v1", None)
-        if _psv_open_hint:
-            _h_app, _h_ver = _psv_open_hint
-            st.markdown(
-                '<div class="iv-deeplink-hint">'
-                '  📄 <b>Prisma report ready</b> for '
-                f'  <code>{html.escape(_h_app)}</code> @ '
-                f'  <code>{html.escape(_h_ver)}</code> — '
-                '  open the <b>🔬 Prisma scan viewer</b> popover below.'
-                '</div>',
-                unsafe_allow_html=True,
-            )
+        # ── Inline Jenkins trigger confirmation ────────────────────────
+        _render_jenkins_trigger_panel()
+        # ── Inline Prisma report viewer (no popover redirect) ──────────
+        _render_prisma_inline_viewer()
         with st.container(key="cc_iv_action_toolbar"):
             _tb_c1, _tb_c2, _tb_c3 = st.columns([2, 2, 8])
             with _tb_c1:
@@ -21289,20 +21743,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 with st.popover(_jk_lbl, use_container_width=True):
                     _render_jenkins_panel()
             with _tb_c2:
-                _psv_lbl = "🔬 Prisma scan viewer"
-                if _psv_open_hint:
-                    _psv_lbl = (
-                        f"🔬 Prisma · {_psv_open_hint[0]} @ {_psv_open_hint[1]}"
-                    )
-                with st.popover(_psv_lbl, use_container_width=True):
+                with st.popover("🔬 Prisma scan viewer",
+                                use_container_width=True):
                     _render_prisma_scan_viewer()
             with _tb_c3:
                 st.markdown(
                     '<div class="iv-toolbar-hint">'
                     '  Jenkins triggers + Prisma full reports live in the '
                     '  popovers on the left — both lazy-load on click. '
-                    '  Click any <b>version chip</b> in the table to see '
-                    '  trigger / report shortcuts scoped to that version.'
+                    '  Click any <b>version chip</b> in the table to '
+                    '  trigger / view inline (with confirmation), '
+                    '  no Jenkins UI redirect.'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -21391,19 +21842,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                          environment: str = "",
                          only_keys: tuple[str, ...] | None = None,
                          section_label: str = "Jenkins actions") -> str:
-        """Render the Jenkins-action grid.
+        """Render the Jenkins-action grid as in-page trigger tiles.
 
-        Args:
-          r: inventory row (project / application / company).
-          version: when set, pre-fills the Jenkins `version` param.
-          environment: when set, pre-fills the Jenkins `environment`
-            param (used for deploy requests scoped to a stage).
-          only_keys: when provided, restricts to a subset of
-            JENKINS_PIPELINES keys — handy for version popovers where
-            the build pipeline doesn't apply (build is per-branch, not
-            per-version).
-          section_label: header label above the grid.
-        """
+        Each tile uses a same-origin ``?jenkins_trigger=...`` URL — the
+        inventory body's query-param handler consumes it on the next
+        render, opens an in-page confirmation panel showing the
+        pre-filled parameters, and only then POSTs to Jenkins's
+        ``buildWithParameters`` (with CSRF crumb + basic auth) on
+        explicit operator confirmation. No redirect to Jenkins UI."""
         if not _iv_jk_ui_host:
             return ""
         _co = (r.get("company") or "").strip()
@@ -21415,34 +21861,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if only_keys is not None else list(JENKINS_PIPELINES.items())
         )
         for _key, _cfg in _items:
-            # Build "/job/A/job/B/" from "A/B" path.
-            _job_path = "/".join(
-                f"job/{urllib.parse.quote(seg, safe='')}"
-                for seg in _cfg["path"].split("/") if seg
-            )
-            _params: dict[str, str] = {}
-            for _p in _cfg["params"]:
-                if _p == "project":       _params["project"] = _pj
-                elif _p == "application": _params["application"] = _ap
-                elif _p == "company":     _params["company"] = _co
-                elif _p == "branch":      _params["branch"] = "release"
-                elif _p == "version":     _params["version"] = version
-                elif _p == "environment": _params["environment"] = environment
-            _qs = urllib.parse.urlencode(
-                {k: v for k, v in _params.items() if v}
-            )
-            # Jenkins exposes both `parambuild` (one-click after a
-            # confirmation page) and the plain job page. The job page
-            # is the safer default — clicking through means the admin
-            # still has to fill in any missing params and press Build.
-            _job_url = f"{_iv_jk_ui_host}/{_job_path}/"
-            _build_url = (
-                f"{_iv_jk_ui_host}/{_job_path}/parambuild?{_qs}"
-                if _qs else _job_url
-            )
             # Suffix the version tag onto the tile label when present so
             # admins see at-a-glance which exact build / deploy / release
-            # the link will trigger.
+            # the tile will queue.
             _vtag = (
                 f' <span class="ap-jk-ver">@ {html.escape(version)}</span>'
                 if version else ""
@@ -21451,13 +21872,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f' <span class="ap-jk-env">→ {html.escape(environment.upper())}</span>'
                 if environment else ""
             )
+            # Pipe-separated tuple consumed by the inventory body's
+            # query-param handler: key|app|ver|env|company|project
+            _payload = "|".join(
+                urllib.parse.quote(p, safe="")
+                for p in (_key, _ap, version, environment, _co, _pj)
+            )
             _tiles.append(
-                f'<a class="ap-jk-tile" href="{html.escape(_build_url, quote=True)}" '
-                f'target="_blank" rel="noopener noreferrer" '
-                f'title="{html.escape(_cfg["summary"])}">'
+                f'<a class="ap-jk-tile" '
+                f'href="?jenkins_trigger={_payload}" '
+                f'title="{html.escape(_cfg["summary"])} · click to confirm in-page (no redirect).">'
                 f'<span class="ap-jk-glyph">{html.escape(_cfg["glyph"])}</span>'
                 f'<span class="ap-jk-lbl">{html.escape(_cfg["label"])}{_vtag}{_envtag}</span>'
-                f'<span class="ap-jk-arrow">↗</span>'
+                f'<span class="ap-jk-arrow">▶</span>'
                 f'</a>'
             )
         return (
@@ -21466,13 +21893,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         )
 
     def _iv_prisma_link_html(app: str, version: str) -> str:
-        """Inline "view full Prisma report" link for the version popover.
+        """Inline "view full Prisma report" tile for the version popover.
 
-        Uses a same-origin URL nav (`?prisma_open=app|ver`) which
-        Streamlit's `st.query_params` API treats as a re-run trigger
-        while preserving session state. The page's top-of-render
-        handler reads the param and auto-fetches the report into the
-        Prisma viewer slot."""
+        Same-origin URL nav (`?prisma_open=app|ver`) which Streamlit's
+        `st.query_params` API treats as a re-run trigger while
+        preserving session state. The inventory's top-of-render handler
+        reads the param, fetches the report from S3, and renders it
+        inline above the action toolbar (no popover redirect)."""
         if not (app and version):
             return ""
         _q = urllib.parse.quote(f"{app}|{version}", safe="")
@@ -21480,11 +21907,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <div class="ap-section">Prisma report</div>'
             f'    <a class="ap-jk-tile ap-prisma-link" '
             f'href="?prisma_open={_q}" '
-            f'title="Load the full PrismaCloud report for {html.escape(app)} @ {html.escape(version)}">'
+            f'title="Download + display the full PrismaCloud report inline (no redirect).">'
             f'<span class="ap-jk-glyph">📄</span>'
             f'<span class="ap-jk-lbl">View Prisma report '
             f'<span class="ap-jk-ver">@ {html.escape(version)}</span></span>'
-            f'<span class="ap-jk-arrow">↗</span>'
+            f'<span class="ap-jk-arrow">▶</span>'
             f'</a>'
         )
 
