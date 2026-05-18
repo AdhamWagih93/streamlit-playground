@@ -44,6 +44,12 @@ COPY . /var/www/html
 #    &&
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
+# Patch framework code-generator for PHP 8.1 union/intersection types.
+# Magento framework 103.0.4 (Magento 2.4.4) calls ReflectionType::getName()
+# unguarded, crashing on every Proxy/Interceptor generation against a class
+# with a union-typed parameter (e.g. Psr\Log\LoggerInterface::log).
+RUN php docker/app/patches/fix-union-types.php
+
 # Disable every Magento_ReCaptcha* module. The lock pins framework 103.0.4
 # (Magento 2.4.4) but ships reCAPTCHA modules from the 2.4.6 line that
 # reference ResetAfterRequestInterface (added in 103.0.5+). Disabling in
