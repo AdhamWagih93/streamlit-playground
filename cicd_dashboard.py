@@ -222,10 +222,28 @@ def _normalize_git_author(raw: str) -> str:
     return s
 
 
-INVENTORY_REPO_PATH = "/tmp/inventories"
+# All cloned ADO repos live under one tidy base directory so the
+# streamlit host doesn't litter /tmp with project-specific dirs.
+CICD_REPO_BASE = os.environ.get("CICD_REPO_BASE", "/tmp/cicd-dashboard").rstrip("/")
+INVENTORY_REPO_PATH = os.path.join(CICD_REPO_BASE, "inventories")
 INVENTORY_BRANCH = "main"
 INVENTORY_SYNC_TTL = 60  # seconds between origin fetches
 INVENTORY_REPO_URL_TEMPLATE = "http://{host}/DevOps/Platform/_git/inventories"
+
+# Sibling repositories that the dashboard mirrors alongside `inventories`.
+# They share the same ADO project + auth — only the repository name changes
+# in the URL. The mirrored clones make their state visible in the
+# integrations strip (head SHA + last-sync status) so admins know whether
+# the platform's full source-of-truth set is in sync.
+CICD_MIRROR_REPO_URL_TEMPLATE = "http://{host}/DevOps/Platform/_git/{repo}"
+CICD_MIRROR_REPOS: tuple[tuple[str, str], ...] = (
+    # (display name, default branch)
+    ("inventories",   "main"),
+    ("Engine",        "main"),
+    ("ocp-templates", "main"),
+    ("Tools",         "main"),
+    ("UI",            "main"),
+)
 
 # =============================================================================
 # JENKINS PIPELINE STATUS — smart-loaded panel
@@ -11234,7 +11252,12 @@ def _integrations_health() -> list[dict]:
             "tip": f"ES query failed: {e}",
         })
 
-    # 2. Git inventories — host comes from vault path GIT_VAULT_PATH.
+    # 2. Mirrored ADO repos — inventories + Engine + ocp-templates +
+    # Tools + UI. Each gets its own integrations row so admins see the
+    # sync state of the platform's whole source-of-truth set at a
+    # glance. inventories also drives the page's inventory loader, so
+    # its row gets the "Git inventories" label (the rest are
+    # informational mirror rows).
     _git_host = _git_creds().get("hostname", "")
     if not _git_host:
         v_err = _vault_last_error(GIT_VAULT_PATH)
@@ -11250,25 +11273,41 @@ def _integrations_health() -> list[dict]:
                  "While unset the page reads from the ES projection.")
             ),
         })
+        # No host means we also can't mirror the sibling repos; render
+        # a single combined skip row instead of one-per-repo noise.
+        out.append({
+            "key": "git_mirrors", "label": "Git mirrors", "glyph": "⎇",
+            "state": "skip",
+            "detail": "host unresolved",
+            "tip": (
+                "Engine / ocp-templates / Tools / UI clones blocked — "
+                "no ADO hostname resolved from vault."
+            ),
+        })
     else:
-        ok, head, msg = _ensure_inventory_repo(_git_host)
-        if ok:
-            out.append({
-                "key": "git", "label": "Git inventories", "glyph": "⎇",
-                "state": "ok",
-                "detail": (head[:8] if head else "OK"),
-                "tip": (
-                    f"clone path: {INVENTORY_REPO_PATH} · "
-                    f"branch: {INVENTORY_BRANCH} · {msg}"
-                ),
-            })
-        else:
-            out.append({
-                "key": "git", "label": "Git inventories", "glyph": "⎇",
-                "state": "down",
-                "detail": "sync failed",
-                "tip": msg or "Git sync failed — page is on ES fallback.",
-            })
+        for _row in _mirror_repo_status_all():
+            _name = _row["name"]
+            # `inventories` powers the inventory loader; keep the legacy
+            # label so the existing tip's wording stays familiar.
+            _label = "Git inventories" if _name == "inventories" else f"Git · {_name}"
+            _key   = "git" if _name == "inventories" else f"git_{_name.lower()}"
+            if _row["ok"]:
+                out.append({
+                    "key": _key, "label": _label, "glyph": "⎇",
+                    "state": "ok",
+                    "detail": (_row["head"][:8] if _row["head"] else "OK"),
+                    "tip": (
+                        f"clone path: {_row['path']} · "
+                        f"branch: {_row['branch']} · {_row['msg']}"
+                    ),
+                })
+            else:
+                out.append({
+                    "key": _key, "label": _label, "glyph": "⎇",
+                    "state": "down",
+                    "detail": "sync failed",
+                    "tip": _row["msg"] or f"{_name} sync failed.",
+                })
 
     # 3. Vault — single status across all known paths.
     if not _VAULT_AVAILABLE:
@@ -16865,6 +16904,124 @@ def _ensure_inventory_repo(host_marker: str, trace_into: list | None = None) -> 
         return False, "", "git executable not found on PATH"
     except Exception as e:  # pragma: no cover — last-resort safety net
         return False, "", f"unexpected: {type(e).__name__}: {e}"
+
+
+def _mirror_repo_path(repo: str) -> str:
+    """Local clone path for *repo* under :data:`CICD_REPO_BASE`."""
+    return os.path.join(CICD_REPO_BASE, repo)
+
+
+def _mirror_repo_url(host: str, repo: str) -> str:
+    """Build the canonical clone URL for *repo* on the same ADO host /
+    project the inventories repo lives on. Returns ``""`` when the host
+    isn't resolved."""
+    h = (host or "").strip()
+    if not h:
+        return ""
+    return CICD_MIRROR_REPO_URL_TEMPLATE.format(host=h, repo=repo)
+
+
+@st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _ensure_mirror_repo(host_marker: str, repo: str, branch: str
+                        ) -> tuple[bool, str, str]:
+    """Clone-or-pull *repo* under :data:`CICD_REPO_BASE`.
+
+    Shared logic for every sibling repository this dashboard mirrors —
+    inventories, Engine, ocp-templates, Tools, UI. Returns
+    ``(ok, head_sha, status_msg)`` identical in shape to
+    :func:`_ensure_inventory_repo` so the integrations strip can render
+    one row per repo without per-repo special cases.
+
+    Same credential helper, same shallow-clone-with-reset strategy,
+    same TTL cache so a single Streamlit process makes at most one
+    sync attempt per repo per minute.
+    """
+    if not host_marker:
+        return False, "", "Git host not resolved (vault unreachable?)"
+    cred_ok, cred_err = _configure_git_credentials()
+    if not cred_ok:
+        return False, "", f"git auth setup failed: {cred_err}"
+    url = _mirror_repo_url(host_marker, repo)
+    if not url:
+        return False, "", "Git URL could not be built (host missing)"
+    repo_path = _mirror_repo_path(repo)
+    git_dir = os.path.join(repo_path, ".git")
+    try:
+        os.makedirs(CICD_REPO_BASE, exist_ok=True)
+        if os.path.isdir(git_dir):
+            r = _run_git("remote", "set-url", "origin", url, cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git remote set-url failed: {r.stderr.strip()}"
+            r = _run_git("fetch", "--depth", "1", "origin", branch, cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git fetch failed: {r.stderr.strip()}"
+            r = _run_git("checkout", branch, cwd=repo_path)
+            if r.returncode != 0:
+                r = _run_git("checkout", "-B", branch, "FETCH_HEAD", cwd=repo_path)
+                if r.returncode != 0:
+                    return False, "", f"git checkout failed: {r.stderr.strip()}"
+            r = _run_git("reset", "--hard", f"origin/{branch}", cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git reset failed: {r.stderr.strip()}"
+        else:
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path, ignore_errors=True)
+            r = _run_git(
+                "clone", "--depth", "1", "--branch", branch, url, repo_path,
+            )
+            if r.returncode != 0:
+                return False, "", f"git clone failed: {r.stderr.strip()}"
+        r = _run_git("rev-parse", "HEAD", cwd=repo_path, inject_auth=False)
+        if r.returncode != 0:
+            return False, "", f"git rev-parse failed: {r.stderr.strip()}"
+        head = (r.stdout or "").strip()
+        return True, head, f"OK · {head[:8]}"
+    except subprocess.TimeoutExpired:
+        return False, "", "git operation timed out (120s)"
+    except FileNotFoundError:
+        return False, "", "git executable not found on PATH"
+    except Exception as e:  # pragma: no cover — last-resort safety net
+        return False, "", f"unexpected: {type(e).__name__}: {e}"
+
+
+def _mirror_repo_status_all() -> list[dict]:
+    """Probe every mirrored repo's clone state.
+
+    Returns one dict per repo with keys ``name`` / ``branch`` / ``path``
+    / ``ok`` / ``head`` / ``msg`` / ``url`` suitable for direct rendering
+    in the integrations strip. Skips silently when the vault hostname
+    isn't resolved — the caller renders a single combined error row
+    instead of one-per-repo noise.
+
+    The ``inventories`` row delegates to :func:`_ensure_inventory_repo`
+    so its diagnostic-trace-capable clone-or-pull path is shared
+    between the inventory loader and the integrations strip (one cache
+    entry instead of two competing ones on the same on-disk path)."""
+    out: list[dict] = []
+    host = (_git_creds().get("hostname") or "").strip()
+    for _name, _branch in CICD_MIRROR_REPOS:
+        if not host:
+            out.append({
+                "name": _name, "branch": _branch,
+                "path": _mirror_repo_path(_name),
+                "ok": False, "head": "",
+                "msg": "host unresolved", "url": "",
+            })
+            continue
+        if _name == "inventories":
+            ok, head, msg = _ensure_inventory_repo(host)
+        else:
+            ok, head, msg = _ensure_mirror_repo(host, _name, _branch)
+        out.append({
+            "name":   _name,
+            "branch": _branch,
+            "path":   _mirror_repo_path(_name),
+            "ok":     ok,
+            "head":   head,
+            "msg":    msg,
+            "url":    _mirror_repo_url(host, _name),
+        })
+    return out
 
 
 # =============================================================================
