@@ -10908,8 +10908,23 @@ _TYPE_BADGE = {
     "build-release": ('<span style="background:#e0e7ff;color:#3730a3;border-radius:4px;'
                       'padding:1px 7px;font-size:0.70rem;font-weight:700;letter-spacing:.02em">'
                       'BUILD · REL</span>'),
-    "deploy":  ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
-                'padding:1px 7px;font-size:0.72rem;font-weight:700">DEPLOY</span>'),
+    # Generic deploy badge (used when the environment field is missing
+    # so we can't pick a more specific colour). Real rows are typed
+    # as `deploy-dev` / `deploy-qc` / `deploy-uat` / `deploy-prd` below.
+    "deploy":     ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
+                   'padding:1px 7px;font-size:0.72rem;font-weight:700">DEPLOY</span>'),
+    "deploy-dev": ('<span style="background:#dbeafe;color:#1d4ed8;border-radius:4px;'
+                   'padding:1px 7px;font-size:0.70rem;font-weight:700;letter-spacing:.02em">'
+                   'DEPLOY · DEV</span>'),
+    "deploy-qc":  ('<span style="background:#cffafe;color:#0e7490;border-radius:4px;'
+                   'padding:1px 7px;font-size:0.70rem;font-weight:700;letter-spacing:.02em">'
+                   'DEPLOY · QC</span>'),
+    "deploy-uat": ('<span style="background:#fef9c3;color:#854d0e;border-radius:4px;'
+                   'padding:1px 7px;font-size:0.70rem;font-weight:700;letter-spacing:.02em">'
+                   'DEPLOY · UAT</span>'),
+    "deploy-prd": ('<span style="background:#fee2e2;color:#991b1b;border-radius:4px;'
+                   'padding:1px 7px;font-size:0.70rem;font-weight:700;letter-spacing:.02em">'
+                   'DEPLOY · PRD</span>'),
     "release": ('<span style="background:#fce7f3;color:#be185d;border-radius:4px;'
                 'padding:1px 7px;font-size:0.72rem;font-weight:700">RELEASE</span>'),
     "request": ('<span style="background:#fef3c7;color:#92400e;border-radius:4px;'
@@ -15053,13 +15068,21 @@ def _render_event_log() -> None:
                 or _s.get("Approver")
                 or ""
             )
+            _env_lc = (_s.get("environment", "") or "").lower()
+            # Break deployment events out by environment so the pill
+            # filter can drill in on "Deploy · DEV" vs "Deploy · QC"
+            # vs "Deploy · UAT" vs "Deploy · PRD" — same granularity
+            # the Pipelines Inventory exposes per stage column.
+            # Falls back to the generic `deploy` type when the row
+            # has no environment value (rare; legacy docs).
+            _dep_type = f"deploy-{_env_lc}" if _env_lc else "deploy"
             events.append({
                 "_ts":         parse_dt(_dv),
-                "type":        "deploy",
+                "type":        _dep_type,
                 "When":        fmt_dt(_dv, "%Y-%m-%d %H:%M"),
                 "Who":         _s.get("application") or _s.get("project", ""),
                 "Project":     _s.get("project", ""),
-                "Environment": (_s.get("environment", "") or "").lower(),
+                "Environment": _env_lc,
                 "Version":     _s.get("codeversion", ""),
                 "Detail":      _s.get("technology", ""),
                 "Status":      _s.get("status", ""),
@@ -15320,21 +15343,43 @@ def _render_event_log() -> None:
         _type_counts_full[_ev["type"]] = _type_counts_full.get(_ev["type"], 0) + 1
 
     # Pill metadata — order is deliberate (left-to-right: build ladder →
-    # deploys → releases → requests → commits).
+    # deploys-per-env (matching the Inventory stage columns) → releases
+    # → requests → commits). Each deploy environment gets its own pill
+    # so the operator can drill in on "Deploy · QC" without seeing
+    # PRD churn.
     _TYPE_FILTER_META: list[tuple[str, str, str, str]] = [
-        # (internal_type, display_label, icon, role-gate name for _role_allows_type)
-        ("build-develop", "Dev builds",  "◇", "Build-develop"),
-        ("build-release", "Rel builds",  "◆", "Build-release"),
-        ("deploy",        "Deploys",     "⬢", "Deployments"),
-        ("release",       "Releases",    "★", "Releases"),
-        ("request",       "Requests",    "✦", "Requests"),
-        ("commit",        "Commits",     "⎇", "Commits"),
+        # (internal_type, display_label, icon, role-gate name)
+        ("build-develop", "Dev builds",   "◇", "Build-develop"),
+        ("build-release", "Rel builds",   "◆", "Build-release"),
+        ("deploy-dev",    "Deploy · DEV", "⬢", "Deployments"),
+        ("deploy-qc",     "Deploy · QC",  "⬢", "Deployments"),
+        ("deploy-uat",    "Deploy · UAT", "⬢", "Deployments"),
+        ("deploy-prd",    "Deploy · PRD", "⬢", "Deployments"),
+        ("release",       "Releases",     "★", "Releases"),
+        ("request",       "Requests",     "✦", "Requests"),
+        ("commit",        "Commits",      "⎇", "Commits"),
     ]
-    _pill_entries = [
-        (_it, _lbl, _ico, _type_counts_full.get(_it, 0))
-        for _it, _lbl, _ico, _gate in _TYPE_FILTER_META
-        if _role_allows_type(_gate)
-    ]
+    # Pills are gated by (a) role-allows-type and (b) for env-scoped
+    # deploys, role-allows-env so a non-Operations role doesn't see
+    # PRD-only events it can't operate on. The generic `deploy` type
+    # still slots in only when at least one bucketed event landed there
+    # (legacy docs with no environment) — we add it dynamically below.
+    _pill_entries: list[tuple[str, str, str, int]] = []
+    for _it, _lbl, _ico, _gate in _TYPE_FILTER_META:
+        if not _role_allows_type(_gate):
+            continue
+        if _it.startswith("deploy-"):
+            _env = _it.split("-", 1)[1]
+            if not _role_allows_env(_env):
+                continue
+        _pill_entries.append((_it, _lbl, _ico, _type_counts_full.get(_it, 0)))
+    if _type_counts_full.get("deploy", 0):
+        # Legacy / env-less deploy docs still get an explicit pill so
+        # they aren't silently dropped from the filter UI.
+        _pill_entries.insert(
+            min(2, len(_pill_entries)),
+            ("deploy", "Deploy · (no env)", "⬢", _type_counts_full["deploy"]),
+        )
 
     _total_events_unfiltered = len(events)
     _layout_badge = "per-project" if el_per_project else "consolidated"
@@ -15517,7 +15562,11 @@ def _render_event_log() -> None:
     # Types whose "Who" column carries a real application name (vs commits'
     # repository or requests' project). Keep this list in one place so the
     # type-gating stays consistent across popover wiring below.
-    _APP_EVENT_TYPES = ("build-develop", "build-release", "deploy", "release")
+    _APP_EVENT_TYPES = (
+        "build-develop", "build-release",
+        "deploy", "deploy-dev", "deploy-qc", "deploy-uat", "deploy-prd",
+        "release",
+    )
 
     # Collect unique application names from build/deploy/release events (only
     # these carry reliable inventory identity) and fetch their inventory cards.
@@ -20333,12 +20382,17 @@ def _build_event_ribbon(
     Events are bucketed by ``_ts`` and stacked by ``type``. Empty windows
     render a minimal placeholder so the slot doesn't collapse jarringly.
     """
-    _types_order = ["build-develop", "build-release", "deploy",
-                    "release", "request", "commit"]
+    _types_order = ["build-develop", "build-release",
+                    "deploy-dev", "deploy-qc", "deploy-uat", "deploy-prd",
+                    "deploy", "release", "request", "commit"]
     _type_colors = {
         "build-develop": "var(--cc-teal)",
         "build-release": "var(--cc-accent)",
         "deploy":        "var(--cc-green)",
+        "deploy-dev":    "var(--cc-blue)",
+        "deploy-qc":     "var(--cc-teal)",
+        "deploy-uat":    "var(--cc-amber)",
+        "deploy-prd":    "var(--cc-red)",
         "release":       "var(--cc-amber)",
         "request":       "var(--cc-blue)",
         "commit":        "var(--cc-text-mute)",
@@ -20347,6 +20401,10 @@ def _build_event_ribbon(
         "build-develop": "dev build",
         "build-release": "rel build",
         "deploy":        "deploy",
+        "deploy-dev":    "deploy → dev",
+        "deploy-qc":     "deploy → qc",
+        "deploy-uat":    "deploy → uat",
+        "deploy-prd":    "deploy → prd",
         "release":       "release",
         "request":       "request",
         "commit":        "commit",
@@ -22948,25 +23006,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         )
 
     def _iv_app_cell(app: str) -> str:
-        # Find this app's row so we can resolve its repo URL — admins
-        # asked for a direct hyperlink to the ADO repo right beside the
-        # application name in the table.
-        _row_for_app = next(
-            (r for r in _inv_rows_all if r.get("application") == app), None,
-        )
-        _repo_url = _iv_repo_url(_row_for_app) if _row_for_app else ""
-        _repo_html = (
-            f'<a class="iv-app-repo" href="{html.escape(_repo_url, quote=True)}" '
-            f'target="_blank" rel="noopener noreferrer" '
-            f'title="Open ADO repo for {html.escape(app, quote=True)}">↗</a>'
-            if _repo_url else ""
-        )
+        # Repo link removed from the table cell — it now only appears
+        # inside the application popover (and only when the row carries
+        # a non-empty `repository_name`).
         return (
             f'<div class="iv-app-cell">'
             f'<button type="button" class="el-app-trigger" '
             f'popovertarget="{_iv_app_pop_id(app)}" '
             f'title="Click for full inventory details">{app}</button>'
-            f'{_repo_html}'
             f'{_iv_outdated_pills(app)}'
             f'{_iv_app_posture_html(app)}'
             f'</div>'
