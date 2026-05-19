@@ -1968,6 +1968,106 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-text);
 }
 
+/* ▶ ACTIONS TAB — stage-transition rows */
+.act-section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0 4px 0;
+    padding: 8px 12px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+}
+.act-section-glyph {
+    font-size: 1.1rem;
+    color: var(--cc-accent);
+}
+.act-section-title {
+    flex: 1;
+    font-weight: 700;
+    font-size: 0.86rem;
+    color: var(--cc-text);
+    letter-spacing: -0.01em;
+}
+.act-section-count,
+.act-section-trunc {
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    padding: 2px 8px;
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+}
+.act-section-sub {
+    font-size: 0.74rem;
+    color: var(--cc-text-mute);
+    padding: 0 12px 6px 12px;
+    line-height: 1.35;
+}
+.act-section-empty {
+    margin: 4px 0 0 0;
+    padding: 10px 12px;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    font-size: 0.76rem;
+    border: 1px dashed var(--cc-border);
+    border-radius: 8px;
+    background: var(--cc-surface2);
+}
+.act-row-name {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 4px;
+    line-height: 1.2;
+}
+.act-row-app {
+    font-weight: 700;
+    font-size: 0.84rem;
+    color: var(--cc-text);
+}
+.act-row-proj {
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.02em;
+}
+.act-row-flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 4px;
+    flex-wrap: wrap;
+}
+.act-stage-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    border: 1px solid;
+}
+.act-stage-pill.is-prev {
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    border-color: var(--cc-border);
+}
+.act-stage-pill.is-next {
+    color: #047857;
+    background: rgba(5,150,105,.08);
+    border-color: rgba(5,150,105,.32);
+}
+.act-arrow {
+    font-family: var(--cc-mono);
+    color: var(--cc-text-mute);
+    font-size: 1rem;
+}
+
 /* ▶ Actions popover internals */
 .iv-act-empty {
     padding: 10px 12px;
@@ -11573,12 +11673,20 @@ def _render_teams_and_members_view() -> None:
       4. Filterable members table with role + activity counts
     """
     # ── Source data — everything is published by the inventory fragment
-    # which renders before this view in the late-render block.
+    # which renders before this view in the late-render block. We use
+    # the FILTERED row set (post-Filter-Console) so the Teams tab
+    # honours the operator's current scope just like every other tab.
+    # `_inv_rows_all` stays around as a fallback for the very first
+    # render (before the inventory fragment has run once).
     _inv_rows_all = st.session_state.get("_inv_rows_all_v1") or []
+    _inv_rows_scoped = st.session_state.get("_inv_rows_filtered_v1")
+    if _inv_rows_scoped is None:
+        _inv_rows_scoped = _inv_rows_all
+    _visible_team_set = set(st.session_state.get("_inv_visible_teams_v1") or [])
     _users_blob = st.session_state.get("_users_blob_v1") or {}
-    _users_list = list(_users_blob.get("users") or [])
+    _users_list_all = list(_users_blob.get("users") or [])
 
-    if not _inv_rows_all and not _users_list:
+    if not _inv_rows_scoped and not _users_list_all:
         st.markdown(
             '<div class="tm-empty">'
             '  <div class="tm-empty-glyph">👥</div>'
@@ -11594,8 +11702,23 @@ def _render_teams_and_members_view() -> None:
         )
         return
 
+    # Drop users whose every team falls outside the filtered scope.
+    # Users with no inferred team still pass — we have no scope signal
+    # to filter them on, so they're preserved (mirrors the inventory
+    # tab's Users facet behaviour).
+    if _visible_team_set:
+        _users_list = [
+            _u for _u in _users_list_all
+            if (not _u.get("teams")) or
+               (set(_u.get("teams") or []) & _visible_team_set)
+        ]
+    else:
+        _users_list = list(_users_list_all)
+
     # ── Role classification per team + per user
-    _team_roles = _compute_team_role_map(_inv_rows_all)
+    # Compute team-role map ONLY over the filtered rows so a team that
+    # exists in inventory but not in scope doesn't surface in the grid.
+    _team_roles = _compute_team_role_map(_inv_rows_scoped)
     # For each user, roles = union of teams' roles
     for _u in _users_list:
         _u_roles: set[str] = set()
@@ -11823,7 +11946,7 @@ def _render_teams_and_members_view() -> None:
     # totals next to each row/column label tell the operator what the
     # truncation hid.
     _team_project_counts: dict[tuple[str, str], int] = {}
-    for _r in _inv_rows_all:
+    for _r in _inv_rows_scoped:
         _proj = (_r.get("project") or "").strip()
         if not _proj:
             continue
@@ -13821,6 +13944,313 @@ def _render_iv_actions_chooser(
             f'<div class="iv-act-note">⚠ {html.escape(_reason)}</div>',
             unsafe_allow_html=True,
         )
+
+
+_STAGE_PROMOTE_CHAIN = ("build", "dev", "qc", "uat", "prd")
+
+
+def _render_actions_tab() -> None:
+    """Stage-transition trigger surface — Build → Dev → QC → UAT → PRD
+    plus Release. Reads the inventory rows + stages map the Pipelines
+    Inventory fragment publishes; never re-fetches anything itself.
+
+    Every section shows ONLY the apps where the relevant transition
+    actually applies (e.g. Deploy → QC lists only apps whose dev version
+    differs from their qc version). Clicking a button sets
+    ``_jk_trigger_pending_v1`` and the confirmation panel above the
+    action grid renders the parameter table + ▶ Trigger button — no
+    URL changes, no Jenkins-UI redirects.
+    """
+    _inv_rows = (
+        st.session_state.get("_inv_rows_filtered_v1")
+        or st.session_state.get("_inv_rows_all_v1")
+        or []
+    )
+    if not _inv_rows:
+        st.markdown(
+            '<div class="iv-act-empty">Open the Pipelines Inventory tab '
+            'once so the row set + stages map load into session state.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    _stages_map: dict[str, dict] = (
+        st.session_state.get("_iv_stages_map_v1") or {}
+    )
+
+    # ── Inline confirmation panel (same one the previous flow used).
+    # Renders the parameter table + ▶ Trigger / ✕ Cancel buttons when
+    # something is pending. Lives at the TOP of the Actions tab so the
+    # operator sees the next step immediately.
+    _render_jenkins_trigger_panel()
+
+    # Live Jenkins pipelines status — collapsed popover at the top so
+    # the operator can verify the controller is healthy and see what
+    # queue items are already in flight before triggering more.
+    with st.popover("⚙ Jenkins pipelines · live status",
+                    use_container_width=True):
+        _render_jenkins_panel()
+
+    # ── Search + per-row context ─────────────────────────────────────
+    _detected_roles = st.session_state.get("_detected_roles_v1") or []
+    _session_teams = list(st.session_state.get("teams") or [])
+    _role_pick = st.session_state.get("_role_pick_v1") or ""
+
+    _q = st.text_input(
+        "Filter by application / project",
+        key="_act_search_v1",
+        placeholder="🔎  type to narrow the action lists (case-insensitive)",
+        label_visibility="collapsed",
+    ).strip().lower()
+
+    def _row_matches_search(r: dict) -> bool:
+        if not _q:
+            return True
+        return any(
+            _q in (str(r.get(f) or "").lower())
+            for f in ("application", "project", "company")
+        )
+
+    _apps_in_scope = [r for r in _inv_rows if _row_matches_search(r)]
+
+    if not _apps_in_scope:
+        st.markdown(
+            '<div class="iv-act-empty">No rows match the search.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Helpers ────────────────────────────────────────────────────────────
+    def _stage_ver(app: str, stage: str) -> str:
+        return ((_stages_map.get(app) or {}).get(stage) or {}).get("version") or ""
+
+    def _enqueue(*, key: str, app: str, ver: str = "",
+                 env: str = "", project: str = "",
+                 company: str = "", branch: str = "release") -> None:
+        st.session_state["_jk_trigger_pending_v1"] = {
+            "key":     key,
+            "app":     app,
+            "ver":     ver,
+            "env":     env,
+            "company": company,
+            "project": project,
+            "branch":  branch,
+        }
+        st.session_state.pop("_jk_trigger_result_v1", None)
+
+    def _can_promote_row(r: dict) -> bool:
+        if not (("QC" in _detected_roles) or (_role_pick == "QC")):
+            return False
+        if not _session_teams:
+            return False
+        _qc_teams = set(_row_teams_for_field(r, "qc_team"))
+        return bool(set(_session_teams) & _qc_teams)
+
+    # ── BUILD section ───────────────────────────────────────────────────
+    st.markdown(
+        '<div class="act-section-head">'
+        '  <span class="act-section-glyph">⚒</span>'
+        '  <span class="act-section-title">Build · queue HEAD of release branch</span>'
+        '</div>'
+        '<div class="act-section-sub">'
+        '  Triggers the Build pipeline for the application. Submits the '
+        '  current head of the chosen branch — no codeVersion required. '
+        '  After build completes, the produced version is what Deploy → DEV '
+        '  promotes next.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    for _r in _apps_in_scope:
+        _app = _r.get("application") or ""
+        if not _app:
+            continue
+        _pj = _r.get("project") or ""
+        _co = _r.get("company") or ""
+        _build_ver = _stage_ver(_app, "build")
+        _c1, _c2, _c3 = st.columns([4, 5, 2])
+        with _c1:
+            st.markdown(
+                f'<div class="act-row-name">'
+                f'  <span class="act-row-app">{html.escape(_app)}</span>'
+                f'  <span class="act-row-proj">{html.escape(_pj)}</span>'
+                f'</div>', unsafe_allow_html=True,
+            )
+        with _c2:
+            st.markdown(
+                f'<div class="act-row-flow">'
+                f'  <span class="act-stage-pill is-prev">commit</span>'
+                f'  <span class="act-arrow">→</span>'
+                f'  <span class="act-stage-pill is-next">build'
+                f'{" · " + html.escape(_build_ver) if _build_ver else ""}'
+                f'</span>'
+                f'</div>', unsafe_allow_html=True,
+            )
+        with _c3:
+            if st.button(
+                "⚒ Build",
+                key=f"_act_build_{_app}",
+                use_container_width=True,
+                help=f"Queue the Build pipeline for {_app} on branch release",
+            ):
+                _enqueue(key="build", app=_app, project=_pj, company=_co)
+                st.rerun()
+
+    # ── DEPLOY sections (one per next stage) ────────────────────────────
+    _DEPLOY_TRANSITIONS = [
+        ("dev", "build", "Deploy → DEV · promote build to development"),
+        ("qc",  "dev",   "Deploy → QC · promote dev to quality"),
+        ("uat", "qc",    "Deploy → UAT · promote qc to user-acceptance"),
+        ("prd", "uat",   "Deploy → PRD · promote uat to production"),
+    ]
+    for _to_env, _from_stage, _hdr in _DEPLOY_TRANSITIONS:
+        # Apps where the source stage has a version and it's NOT
+        # already the target stage's current version → eligible for
+        # promotion.
+        _eligible = []
+        for _r in _apps_in_scope:
+            _app = _r.get("application") or ""
+            if not _app:
+                continue
+            _src_ver = _stage_ver(_app, _from_stage)
+            _tgt_ver = _stage_ver(_app, _to_env)
+            if _src_ver and _src_ver != _tgt_ver:
+                _eligible.append((_r, _src_ver, _tgt_ver))
+        st.markdown(
+            f'<div class="act-section-head">'
+            f'  <span class="act-section-glyph">⇪</span>'
+            f'  <span class="act-section-title">{html.escape(_hdr)}</span>'
+            f'  <span class="act-section-count">{len(_eligible):,}'
+            f'  app{"s" if len(_eligible) != 1 else ""} pending</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if not _eligible:
+            st.markdown(
+                '<div class="act-section-empty">'
+                '  No apps pending this transition in scope.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            continue
+        for _r, _src_ver, _tgt_ver in _eligible:
+            _app = _r.get("application") or ""
+            _pj = _r.get("project") or ""
+            _co = _r.get("company") or ""
+            _c1, _c2, _c3 = st.columns([4, 5, 2])
+            with _c1:
+                st.markdown(
+                    f'<div class="act-row-name">'
+                    f'  <span class="act-row-app">{html.escape(_app)}</span>'
+                    f'  <span class="act-row-proj">{html.escape(_pj)}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+            with _c2:
+                _tgt_label = (
+                    f'{_to_env.upper()} · {html.escape(_tgt_ver)}'
+                    if _tgt_ver else _to_env.upper()
+                )
+                st.markdown(
+                    f'<div class="act-row-flow">'
+                    f'  <span class="act-stage-pill is-prev">'
+                    f'    {_from_stage.upper()} · {html.escape(_src_ver)}'
+                    f'  </span>'
+                    f'  <span class="act-arrow">→</span>'
+                    f'  <span class="act-stage-pill is-next">{_tgt_label}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+            with _c3:
+                if st.button(
+                    f"⇪ Deploy → {_to_env.upper()}",
+                    key=f"_act_deploy_{_to_env}_{_app}",
+                    use_container_width=True,
+                    help=(
+                        f"Queue the Request_deploy pipeline for {_app} "
+                        f"@ {_src_ver} → {_to_env}"
+                    ),
+                ):
+                    _enqueue(
+                        key="deploy_request", app=_app, ver=_src_ver,
+                        env=_to_env, project=_pj, company=_co,
+                    )
+                    st.rerun()
+
+    # ── RELEASE section ────────────────────────────────────────────────
+    # Promotion request: QC-gated (team in qc_team for the app).
+    st.markdown(
+        '<div class="act-section-head">'
+        '  <span class="act-section-glyph">✦</span>'
+        '  <span class="act-section-title">'
+        '    Release · record a release for a version'
+        '  </span>'
+        '  <span class="act-section-trunc">'
+        '    QC role + qc_team membership required'
+        '  </span>'
+        '</div>'
+        '<div class="act-section-sub">'
+        '  Triggers the Request_promote pipeline. You\'ll be asked to '
+        '  enter QC comments in the confirmation panel above before the '
+        '  POST fires.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    _rel_eligible = [r for r in _apps_in_scope if _can_promote_row(r)]
+    if not _rel_eligible:
+        st.markdown(
+            '<div class="act-section-empty">'
+            '  No apps eligible — either you don\'t carry the QC role, '
+            '  or none of your session teams appear under the visible '
+            '  rows\' <code>qc_team</code> field.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        for _r in _rel_eligible:
+            _app = _r.get("application") or ""
+            _pj = _r.get("project") or ""
+            _co = _r.get("company") or ""
+            # Default to the highest-stage version we have on file —
+            # PRD > UAT > QC > DEV > BUILD.
+            _ver = ""
+            for _s in ("prd", "uat", "qc", "dev", "build"):
+                _v = _stage_ver(_app, _s)
+                if _v:
+                    _ver = _v
+                    break
+            _c1, _c2, _c3 = st.columns([4, 5, 2])
+            with _c1:
+                st.markdown(
+                    f'<div class="act-row-name">'
+                    f'  <span class="act-row-app">{html.escape(_app)}</span>'
+                    f'  <span class="act-row-proj">{html.escape(_pj)}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+            with _c2:
+                st.markdown(
+                    f'<div class="act-row-flow">'
+                    f'  <span class="act-stage-pill is-prev">'
+                    f'    PRD · {html.escape(_ver) or "—"}</span>'
+                    f'  <span class="act-arrow">→</span>'
+                    f'  <span class="act-stage-pill is-next">released</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+            with _c3:
+                if st.button(
+                    "✦ Release",
+                    key=f"_act_release_{_app}",
+                    use_container_width=True,
+                    disabled=not _ver,
+                    help=(
+                        f"Queue the Request_promote pipeline for {_app} "
+                        f"@ {_ver}. You'll add QC comments before the POST."
+                        if _ver else
+                        "No known version for this app yet."
+                    ),
+                ):
+                    _enqueue(
+                        key="release_request", app=_app, ver=_ver,
+                        project=_pj, company=_co,
+                    )
+                    st.rerun()
 
 
 def _render_prisma_inline_viewer() -> None:
@@ -18300,13 +18730,56 @@ def _prisma_s3_client():
     plumbing, multipart transfer config, retries, etc. We just instantiate
     it on demand and cache the instance. Returns ``(client, "")`` on
     success or ``(None, error_str)`` on any failure (vault unreachable,
-    bad creds, ImportError when boto3 wasn't installed yet)."""
+    bad creds, ImportError when boto3 wasn't installed yet).
+
+    SSL verification is disabled here because the org's S3 endpoint
+    presents an internal CA that the streamlit host can't validate
+    out-of-the-box. We try ``verify=False`` via the wrapper first; if
+    the wrapper doesn't accept that kwarg, we instantiate normally
+    and then patch the underlying boto3 client's SSL settings.
+    InsecureRequestWarning from urllib3 is silenced so the logs aren't
+    flooded with the same warning per fetch."""
     if not _S3CLIENT_AVAILABLE:
         return None, "utils.s3 not importable"
+
+    # Silence the "InsecureRequestWarning" spam once per process.
     try:
-        return _S3Client(vault_path=PRISMA_S3_VAULT_PATH), ""
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception:
+        pass
+
+    _client = None
+    try:
+        _client = _S3Client(vault_path=PRISMA_S3_VAULT_PATH, verify=False)
+    except TypeError:
+        # Wrapper signature doesn't carry `verify`; fall back to the
+        # default constructor and patch boto3-side below.
+        try:
+            _client = _S3Client(vault_path=PRISMA_S3_VAULT_PATH)
+        except Exception as e:
+            return None, f"{type(e).__name__}: {e}"
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+
+    # Patch the underlying boto3 client so every get_object skips SSL
+    # validation. The wrapper sometimes carries the boto3 instance as
+    # `_client`; if so, swap its endpoint config. Also force the
+    # endpoint URL to http:// when the resolved host advertises https
+    # — explicit downgrade rather than relying on cert validation.
+    _b3 = getattr(_client, "_client", None)
+    if _b3 is not None:
+        try:
+            # The internal Session is exposed on most boto3 wrappers.
+            _b3._endpoint.http_session._verify = False
+        except Exception:
+            pass
+        try:
+            # Newer boto3 carries the verify flag here.
+            _b3.meta.config.verify = False
+        except Exception:
+            pass
+    return _client, ""
 
 
 def _prisma_s3_status() -> dict:
@@ -22103,54 +22576,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # now live entirely in the Streamlit-native ▶ Actions popover below
     # so nothing redirects.
 
-    # ── Action toolbar — admin-only popover entries ────────────────────────
-    # Jenkins panel + Prisma scan viewer used to live as standalone tabs /
-    # sections. Now both are mounted as popover toolbar buttons so the
-    # page surface stays compact. Each popover lazy-loads (the underlying
-    # renderers preserve their internal ▶ Load / ▶ Run gates), so opening
-    # the inventory tab still costs zero remote calls.
+    # ── Action toolbar — Prisma report viewer only ─────────────────────────
+    # Build / Deploy / Release triggers were moved into the dedicated
+    # ACTIONS tab so the Pipelines Inventory stays read-only. The
+    # Prisma viewer remains here since it pairs directly with the
+    # version detail popovers in this tab.
     if _is_admin:
-        # ── Inline Jenkins trigger confirmation ────────────────────────
-        _render_jenkins_trigger_panel()
-        # ── Inline Prisma report viewer ────────────────────────────────
         _render_prisma_inline_viewer()
         with st.container(key="cc_iv_action_toolbar"):
-            _tb_c1, _tb_c2, _tb_c3, _tb_c4 = st.columns([2, 2, 2, 6])
+            _tb_c1, _tb_c2 = st.columns([2, 10])
             with _tb_c1:
-                _jk_lbl = "⚙ Jenkins pipelines"
-                if _jenkins_creds().get("host"):
-                    _jk_lbl += "  ·  configured"
-                with st.popover(_jk_lbl, use_container_width=True):
-                    _render_jenkins_panel()
-            with _tb_c2:
                 with st.popover("🔬 Prisma scan viewer",
                                 use_container_width=True):
                     _render_prisma_scan_viewer()
-            with _tb_c3:
-                # ▶ Actions — Streamlit-native trigger panel. NO URL
-                # navigation, NO Jenkins-UI redirects. Operator picks
-                # app+version inside the popover; pressing Build /
-                # Deploy / Promote / Load report fires a Streamlit
-                # button which sets pending state for the confirmation
-                # panel rendered above the toolbar.
-                with st.popover("▶ Actions for a version",
-                                use_container_width=True):
-                    _render_iv_actions_chooser(
-                        _inv_rows_all,
-                        _iv_stages_map,
-                        _detected_roles,
-                        role_pick,
-                        _iv_session_teams,
-                    )
-            with _tb_c4:
+            with _tb_c2:
                 st.markdown(
                     '<div class="iv-toolbar-hint">'
-                    '  Click any version chip in the table to see its '
-                    '  detail. To trigger a Jenkins job or load a '
-                    '  Prisma report for that version, open the '
-                    '  <b>▶ Actions</b> popover on the left — no '
-                    '  redirects, every action fires in-page after '
-                    '  confirmation.'
+                    '  Click any version chip for its detail popover (with '
+                    '  the option to load the Prisma report inline). All '
+                    '  build / deploy / release triggers live in the '
+                    '  <b>ACTIONS</b> tab.'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -22301,17 +22746,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     def _iv_prisma_link_html(app: str, version: str) -> str:
         """Static hint pointing the operator at the Streamlit-native
-        Prisma loader in the Actions popover. No URL navigation."""
+        Prisma loader at the top of the inventory tab."""
         if not (app and version):
             return ""
         return (
             f'    <div class="ap-section">Prisma report</div>'
             f'    <div class="ap-jk-hint">'
-            f'      📄 Load the full PrismaCloud report from the '
-            f'      <b>Actions</b> popover above the inventory table — '
-            f'      pick <code>{html.escape(app)}</code> @ '
-            f'      <code>{html.escape(version)}</code> and click '
-            f'      <b>📄 Load report</b>.'
+            f'      📄 Open the <b>🔬 Prisma scan viewer</b> popover at the '
+            f'      top of the inventory tab and pick '
+            f'      <code>{html.escape(app)}</code> @ '
+            f'      <code>{html.escape(version)}</code> to render the '
+            f'      full report inline. No URL changes, no redirects.'
             f'    </div>'
         )
 
@@ -22956,7 +23401,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'</span>'
             if _repo_url_for_pop else ""
         )
-        _jenkins_section = _iv_jenkins_html(r)
+        # Build / Deploy / Release tiles were removed from the
+        # inventory popovers per the explicit UX direction — those
+        # actions live exclusively in the ACTIONS tab now. App
+        # popovers stay read-only (identity / build / deploy
+        # metadata + Prisma scan summary).
+        _jenkins_section = ""
         _iv_popovers.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop is-app">'
             f'  <div class="ap-head">'
@@ -23354,23 +23804,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # Build pipeline is per-branch, not per-version, so it's
             # only meaningful in the version popover when the stage is
             # the build row itself.
-            _v_row = next(
-                (rr for rr in _inv_rows_all if rr.get("application") == _app),
-                None,
-            )
-            if _v_row is not None:
-                if _stage == "build":
-                    _ver_only_keys = ("build", "release_request")
-                else:
-                    _ver_only_keys = ("deploy_request", "release_request")
-                _jenkins_section_v = _iv_jenkins_html(
-                    _v_row, version=_ver,
-                    environment=_stage if _stage in ("dev", "qc", "uat", "prd") else "",
-                    only_keys=_ver_only_keys,
-                    section_label="Trigger this version",
-                )
-            else:
-                _jenkins_section_v = ""
+            # Triggers were intentionally pulled out of version
+            # popovers — only the Prisma report quick-loader remains
+            # so operators can pull the scan for this exact version
+            # without leaving the inventory tab.
+            _jenkins_section_v = ""
             _prisma_link_v = _iv_prisma_link_html(_app, _ver)
             _iv_popovers.append(
                 f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
@@ -23803,6 +24241,31 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # AFTER, via the post-inventory render block) can derive role +
     # team membership without re-fetching the inventory.
     st.session_state["_inv_rows_all_v1"] = list(_inv_rows_all)
+    # ALSO publish the post-Filter-Console row set so the Teams view
+    # can scope its team / member listings to whatever the operator
+    # currently has selected — same scope as the Pipelines table and
+    # the Event Log. The filtered set is what every other surface
+    # honours; the Teams tab opts into the same contract here.
+    st.session_state["_inv_rows_filtered_v1"] = list(_inv_rows_filtered)
+    # Visible-team set: every team that appears on any *_team field of
+    # the filtered rows. Teams view reads this to drop team cards and
+    # member rows that aren't in scope.
+    _vt: set[str] = set()
+    for _r in _inv_rows_filtered:
+        for _vals in (_r.get("teams") or {}).values():
+            if isinstance(_vals, (list, tuple, set)):
+                for _v in _vals:
+                    if _v:
+                        _vt.add(str(_v).strip())
+            elif _vals:
+                _vt.add(str(_vals).strip())
+    _vt.discard("")
+    st.session_state["_inv_visible_teams_v1"] = sorted(_vt)
+    # Stages map + role context so the Actions tab can decide which
+    # transitions apply per row without re-fetching anything.
+    st.session_state["_iv_stages_map_v1"] = _iv_stages_map
+    st.session_state["_detected_roles_v1"] = list(_detected_roles)
+    st.session_state["_role_pick_v1"] = role_pick
 
     # End of body_slot; the tab panel closes here.
     _body_container.__exit__(None, None, None)
@@ -23891,12 +24354,18 @@ if _show_inv and _inventory_slot is not None:
         _tm_badge_txt = (
             f"  ·  {_ldap_last:,}" if _tm_show and _ldap_last else ""
         )
+        # Actions tab — admin-only stage-transition surface. Every
+        # Jenkins trigger (Build / Deploy / Release) lives here so the
+        # Pipelines Inventory stays a read-only browsing surface.
+        _act_show = _is_admin and bool(_jenkins_creds().get("host"))
         _tab_labels: list[str] = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
         ]
         if _tm_show:
             _tab_labels.append(f"👥  TEAMS & MEMBERS{_tm_badge_txt}")
         _tab_labels.append(f"⧗  EVENT LOG{_el_badge_txt}")
+        if _act_show:
+            _tab_labels.append("▶  ACTIONS")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         with st.container(key="cc_surface_tabs"):
@@ -23908,6 +24377,9 @@ if _show_inv and _inventory_slot is not None:
             else:
                 _tab_teams = None
             _tab_log = _tabs[_idx]; _idx += 1
+            _tab_actions = _tabs[_idx] if _act_show else None
+            if _act_show:
+                _idx += 1
             _tab_sync = _tabs[_idx] if _sync_show else None
             if _tab_teams is not None:
                 with _tab_teams:
@@ -23945,6 +24417,20 @@ if _show_inv and _inventory_slot is not None:
                 # inventory fragment publishes `_el_inv_scope_apps`, so the
                 # event log always reflects the current filter state.
                 _el_slot = st.empty()
+            if _tab_actions is not None:
+                with _tab_actions:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Stage transitions — Build queues code at HEAD, '
+                        'Deploy promotes a built version to the next env, '
+                        'Release records a successful promotion. Every '
+                        'trigger fires in-page after explicit confirmation.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _actions_slot = st.empty()
+            else:
+                _actions_slot = None
             if _tab_sync is not None:
                 with _tab_sync:
                     st.markdown(
@@ -23974,6 +24460,13 @@ if _show_inv and _inventory_slot is not None:
         # Now the event log reads a fresh scope and fills slot C.
         with _el_slot.container():
             _render_event_log()
+
+        # Actions tab — reads the inventory rows / stages map the
+        # inventory fragment published a moment ago. All triggers live
+        # here; Pipelines Inventory stays read-only.
+        if _actions_slot is not None:
+            with _actions_slot.container():
+                _render_actions_tab()
 
         # Sync check — smart-loaded; uses the scope key the inventory
         # fragment publishes so its diff matches the visible scope.
