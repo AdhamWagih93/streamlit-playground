@@ -8682,10 +8682,29 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # =============================================================================
 
 def _run_search(index: str, body_json: str, size: int) -> dict:
-    """Execute one search. Isolated so the caller can cache on JSON-serializable args."""
+    """Execute one search. Isolated so the caller can cache on JSON-serializable args.
+
+    The body may already carry a ``size`` key (callers building
+    composite-agg queries often write ``{"size": 0, "aggs": {...}}``).
+    Forwarding it AS BOTH a body field and a kwarg trips newer
+    elasticsearch-py builds with::
+
+        Received multiple values for 'size', specify parameters using
+        either body or parameters, not both.
+
+    We strip it from the body and pass the kwarg as the single source
+    of truth — kwargs land in the URL query string the ES server
+    already supports."""
     body = json.loads(body_json)
+    if isinstance(body, dict) and "size" in body:
+        # Body's `size` wins when explicitly set there and the kwarg is
+        # the default (0); otherwise the kwarg dominates.
+        _body_size = body.pop("size")
+        if not size:
+            size = _body_size
     try:
-        res = es_prd.search(index=index, body=body, size=size, request_timeout=ES_TIMEOUT)
+        res = es_prd.search(index=index, body=body, size=size,
+                            request_timeout=ES_TIMEOUT)
         return res.body if hasattr(res, "body") else dict(res)
     except Exception as exc:
         return {
