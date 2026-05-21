@@ -243,6 +243,7 @@ CICD_MIRROR_REPOS: tuple[tuple[str, str], ...] = (
     ("ocp-templates", "main"),
     ("Tools",         "main"),
     ("UI",            "main"),
+    ("DocMDs",        "main"),
 )
 
 # =============================================================================
