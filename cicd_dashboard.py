@@ -14194,6 +14194,15 @@ def _render_actions_tab() -> None:
         '</div>',
         unsafe_allow_html=True,
     )
+    # An ``application`` value (e.g. "filebeat") can legitimately repeat
+    # across projects / companies in the inventory. Keys must therefore
+    # combine company + project + application so Streamlit's per-widget
+    # uniqueness check doesn't trip the moment two rows share the same
+    # app name.
+    def _act_row_id(co: str, pj: str, app: str, *suffixes: str) -> str:
+        _parts = [(co or "_"), (pj or "_"), (app or "_"), *suffixes]
+        return "_act_" + "__".join(p.replace("/", "_") for p in _parts)
+
     for _r in _apps_in_scope:
         _app = _r.get("application") or ""
         if not _app:
@@ -14222,7 +14231,7 @@ def _render_actions_tab() -> None:
         with _c3:
             if st.button(
                 "⚒ Build",
-                key=f"_act_build_{_app}",
+                key=_act_row_id(_co, _pj, _app, "build"),
                 use_container_width=True,
                 help=f"Queue the Build pipeline for {_app} on branch release",
             ):
@@ -14295,7 +14304,7 @@ def _render_actions_tab() -> None:
             with _c3:
                 if st.button(
                     f"⇪ Deploy → {_to_env.upper()}",
-                    key=f"_act_deploy_{_to_env}_{_app}",
+                    key=_act_row_id(_co, _pj, _app, "deploy", _to_env),
                     use_container_width=True,
                     help=(
                         f"Queue the Request_deploy pipeline for {_app} "
@@ -14370,7 +14379,7 @@ def _render_actions_tab() -> None:
             with _c3:
                 if st.button(
                     "✦ Release",
-                    key=f"_act_release_{_app}",
+                    key=_act_row_id(_co, _pj, _app, "release"),
                     use_container_width=True,
                     disabled=not _ver,
                     help=(
