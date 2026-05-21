@@ -12168,12 +12168,72 @@ def _render_teams_and_members_view() -> None:
     # team's full member roster + role chips + activity totals. Cards
     # sort by member count descending. Goal: keep the page surface
     # short — detail only appears on click.
-    _team_members: dict[str, list[dict]] = {}
+    #
+    # ROSTER SOURCE: each team's member list is read STRAIGHT FROM
+    # `ldap_team_members` (via `_ldap_db_load_team_members`) keyed on
+    # the team CN. Building the roster from the merged users blob's
+    # per-user `teams` field caused leakage — admin / service accounts
+    # that appear in many teams (or that get merged into an ES record
+    # via a name collision) ended up showing under teams they weren't
+    # actually in. The DB roster is the single source of truth.
+    _db_rosters_lc: dict[str, list[str]] = {}  # team_cn_lower → [username_lower]
+    for _t_cn, _members_list in (_db_team_rosters or {}).items():
+        _db_rosters_lc[str(_t_cn).strip().lower()] = [
+            str(_m).strip().lower() for _m in (_members_list or []) if _m
+        ]
+
+    # Map every visible user back to its lower-cased lookup keys so
+    # the per-team roster can resolve display info without re-walking
+    # the users list every time.
+    _user_by_key: dict[str, dict] = {}
     for _u in _users_list:
-        for _t in _u.get("teams") or []:
-            _team_members.setdefault(_t, []).append(_u)
+        for _k in (
+            (_u.get("ldap_username") or ""),
+            (_u.get("email") or ""),
+            *(_u.get("names") or []),
+        ):
+            _k_lc = str(_k).strip().lower()
+            if _k_lc:
+                _user_by_key.setdefault(_k_lc, _u)
+
+    def _build_team_member_list(team_cn: str) -> list[dict]:
+        """Resolve a team's roster from the LDAP DB and project each
+        member onto the merged user-blob record (so activity counts +
+        LDAP enrichment carry through). Members with no merged record
+        get a minimal stub so the count still reflects them."""
+        roster = _db_rosters_lc.get(team_cn.strip().lower(), [])
+        seen: set[str] = set()
+        out: list[dict] = []
+        for _user_lc in roster:
+            if not _user_lc or _user_lc in seen:
+                continue
+            seen.add(_user_lc)
+            _u = _user_by_key.get(_user_lc)
+            if _u is None:
+                out.append({
+                    "key": _user_lc, "email": "", "names": [_user_lc],
+                    "label": _user_lc, "teams": [team_cn],
+                    "commits": 0, "jira_authored": 0, "jira_assigned": 0,
+                    "requests_made": 0, "approvals": 0, "rejections": 0,
+                    "builds_authored": 0, "releases_authored": 0,
+                    "deploys_requested": 0, "deploys_approved": 0,
+                    "total": 0,
+                    "ldap_title": "", "ldap_department": "",
+                    "ldap_company": "", "ldap_manager": "",
+                    "ldap_username": _user_lc, "_roles": [],
+                })
+            else:
+                out.append(_u)
+        return out
+
+    _team_members: dict[str, list[dict]] = {}
+    # The grid renders only teams visible in the current inventory
+    # scope — `_team_roles` already reflects that (it's keyed on the
+    # filtered inventory rows). Building rosters exclusively for those
+    # teams keeps the visible set aligned with the rest of the page
+    # and avoids loading every LDAP team into memory on every render.
     for _t in _team_roles:
-        _team_members.setdefault(_t, [])
+        _team_members[_t] = _build_team_member_list(_t)
 
     _sorted_teams = sorted(
         _team_members.keys(),
