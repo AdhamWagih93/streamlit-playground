@@ -1987,6 +1987,239 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-text);
 }
 
+/* 📚 HISTORY → PGSQL — per-index cards + rollup tiles */
+.hist-source-banner {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 6px 12px;
+    align-items: center;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+}
+.hist-source-glyph {
+    grid-row: span 2;
+    font-size: 1.2rem;
+}
+.hist-source-title {
+    font-weight: 700;
+    font-size: 0.86rem;
+    color: var(--cc-text);
+}
+.hist-source-sub {
+    grid-column: 2 / -1;
+    font-size: 0.74rem;
+    color: var(--cc-text-mute);
+    line-height: 1.35;
+}
+.hist-rollup {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    background: var(--cc-surface);
+}
+.hist-rollup-row {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px;
+}
+.hist-rollup-tile {
+    padding: 6px 10px;
+    border-left: 3px solid var(--cc-border);
+    background: var(--cc-surface2);
+    border-radius: 6px;
+}
+.hist-rollup-tile.is-pg { border-left-color: var(--cc-accent); }
+.hist-rollup-tile.is-err {
+    border-left-color: #b91c1c;
+    background: rgba(220,38,38,.06);
+}
+.hist-rollup-lbl {
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+}
+.hist-rollup-val {
+    font-family: var(--cc-mono);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    font-variant-numeric: tabular-nums;
+}
+.hist-rollup-sub {
+    font-size: 0.62rem;
+    color: var(--cc-text-mute);
+    font-variant-numeric: tabular-nums;
+}
+.hist-bulk-hint {
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+    padding: 6px 8px;
+    line-height: 1.4;
+}
+.hist-card {
+    padding: 10px 14px;
+    margin-bottom: 6px;
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    background: var(--cc-surface);
+    transition: border-color .15s ease;
+}
+.hist-card.is-running { border-color: rgba(99,102,241,.4); background: rgba(99,102,241,.04); }
+.hist-card.is-paused  { border-color: rgba(217,119,6,.4);  background: rgba(217,119,6,.05); }
+.hist-card.is-done    { border-color: rgba(5,150,105,.4);  background: rgba(5,150,105,.04); }
+.hist-card.is-error   { border-color: rgba(220,38,38,.4);  background: rgba(220,38,38,.05); }
+.hist-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.hist-card-check { accent-color: var(--cc-accent); }
+.hist-card-key {
+    font-weight: 700;
+    font-size: 0.86rem;
+    color: var(--cc-text);
+}
+.hist-card-idx {
+    flex: 1;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+}
+.hist-card-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--cc-text-mute);
+}
+.hist-card.is-running .hist-card-state {
+    color: #3730a3; background: rgba(99,102,241,.10); border-color: rgba(99,102,241,.32);
+}
+.hist-card.is-paused .hist-card-state {
+    color: #92400e; background: rgba(217,119,6,.10); border-color: rgba(217,119,6,.32);
+}
+.hist-card.is-done .hist-card-state {
+    color: #065f46; background: rgba(5,150,105,.10); border-color: rgba(5,150,105,.32);
+}
+.hist-card.is-error .hist-card-state {
+    color: #991b1b; background: rgba(220,38,38,.10); border-color: rgba(220,38,38,.32);
+}
+.hist-card-body {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    align-items: center;
+    gap: 10px;
+}
+.hist-card-count {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    font-family: var(--cc-mono);
+    font-variant-numeric: tabular-nums;
+}
+.hist-card-count.is-pg { background: rgba(99,102,241,.08); border-color: rgba(99,102,241,.28); }
+.hist-c-lbl {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    letter-spacing: 0.05em;
+}
+.hist-c-val {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--cc-text);
+}
+.hist-card-arrow { color: var(--cc-text-mute); font-size: 1rem; }
+.hist-card-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.hist-card-bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--cc-surface2);
+    overflow: hidden;
+    border: 1px solid var(--cc-border);
+}
+.hist-card-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--cc-accent), var(--cc-teal));
+    transition: width .25s ease;
+}
+.hist-card-pct {
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    font-variant-numeric: tabular-nums;
+    width: 48px;
+    text-align: right;
+}
+.hist-card-meta {
+    margin-top: 6px;
+    font-size: 0.66rem;
+    color: var(--cc-text-mute);
+}
+.hist-card-meta code {
+    font-family: var(--cc-mono);
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--cc-text);
+    font-size: 0.62rem;
+}
+.hist-card-err {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: #991b1b;
+    padding: 4px 8px;
+    background: rgba(220,38,38,.05);
+    border: 1px solid rgba(220,38,38,.28);
+    border-radius: 4px;
+}
+.hist-sample-head {
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-text-mute);
+    margin: 8px 0 4px 0;
+}
+.hist-tick {
+    position: sticky;
+    bottom: 0;
+    margin-top: 12px;
+    padding: 6px 12px;
+    background: rgba(99,102,241,.1);
+    border: 1px solid rgba(99,102,241,.3);
+    border-radius: 8px;
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: #3730a3;
+    text-align: center;
+}
+
 /* ▶ ACTIONS TAB — stage-transition rows */
 .act-section-head {
     display: flex;
@@ -14202,6 +14435,363 @@ def _render_iv_actions_chooser(
 _STAGE_PROMOTE_CHAIN = ("build", "dev", "qc", "uat", "prd")
 
 
+def _render_history_to_pg_tab() -> None:
+    """Admin-only History → Postgres migration surface.
+
+    Lists every ES index the dashboard knows about with a card showing
+    ES count vs PG count, last sync timestamp, status, and per-index
+    Start / Pause / Resume / Re-sync / Sample controls. A bulk action
+    bar lets the operator queue multiple indexes at once.
+
+    Migrations are chunk-based and checkpoint after every batch in the
+    `history_es_migration_jobs` table, so they survive page navigation
+    + browser refresh and can be paused / resumed cleanly. Status
+    'running' rows get processed one chunk per script rerun via the
+    auto-progress fragment below.
+    """
+    if not _POSTGRES_AVAILABLE:
+        st.warning(
+            "psycopg / psycopg2 isn't installed on the streamlit host. "
+            "Install one of them to enable the History → Postgres feature."
+        )
+        return
+
+    # ── Source-preference toggle ───────────────────────────────────────
+    # Drives `_history_use_pg()` — admin-controlled flag. Hot-path
+    # fetchers can branch on this; the toggle defaults to ES.
+    if "_history_use_pg_v1" not in st.session_state:
+        st.session_state["_history_use_pg_v1"] = False
+    _t1, _t2 = st.columns([5, 1])
+    with _t1:
+        st.markdown(
+            '<div class="hist-source-banner">'
+            '  <span class="hist-source-glyph">🗄</span>'
+            '  <span class="hist-source-title">Historic data source</span>'
+            '  <span class="hist-source-sub">'
+            '    Toggle to route hot-path queries through the migrated '
+            '    Postgres tables once they\'re populated. Defaults to '
+            '    Elasticsearch.'
+            '  </span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    with _t2:
+        st.toggle(
+            "Use Postgres",
+            key="_history_use_pg_v1",
+            help=(
+                "When on, any subsequent code paths that opt into the "
+                "PG-backed historic data source will read from "
+                "Postgres instead of Elasticsearch. Migration rows "
+                "must exist first."
+            ),
+        )
+
+    # ── Bulk action bar + per-index snapshot ───────────────────────────
+    _statuses = _history_status_for_all()
+    if "_hist_selected_v1" not in st.session_state:
+        st.session_state["_hist_selected_v1"] = set()
+
+    # Aggregate roll-up so admins see overall progress at a glance.
+    _es_total = sum(int(s["es_count"]) for s in _statuses)
+    _pg_total = sum(int(s["pg_count"]) for s in _statuses)
+    _pct_total = (_pg_total / _es_total * 100) if _es_total else 0.0
+    _running = sum(
+        1 for s in _statuses if (s["job"] or {}).get("status") == "running"
+    )
+    _paused  = sum(
+        1 for s in _statuses if (s["job"] or {}).get("status") == "paused"
+    )
+    _done    = sum(
+        1 for s in _statuses if (s["job"] or {}).get("status") == "done"
+    )
+    _errored = sum(
+        1 for s in _statuses if (s["job"] or {}).get("status") == "error"
+    )
+
+    st.markdown(
+        f'<div class="hist-rollup">'
+        f'  <div class="hist-rollup-row">'
+        f'    <div class="hist-rollup-tile">'
+        f'      <div class="hist-rollup-lbl">ES total</div>'
+        f'      <div class="hist-rollup-val">{_es_total:,}</div>'
+        f'    </div>'
+        f'    <div class="hist-rollup-tile is-pg">'
+        f'      <div class="hist-rollup-lbl">PG migrated</div>'
+        f'      <div class="hist-rollup-val">{_pg_total:,}</div>'
+        f'      <div class="hist-rollup-sub">{_pct_total:.1f}% of ES</div>'
+        f'    </div>'
+        f'    <div class="hist-rollup-tile">'
+        f'      <div class="hist-rollup-lbl">Running</div>'
+        f'      <div class="hist-rollup-val">{_running}</div>'
+        f'    </div>'
+        f'    <div class="hist-rollup-tile">'
+        f'      <div class="hist-rollup-lbl">Paused</div>'
+        f'      <div class="hist-rollup-val">{_paused}</div>'
+        f'    </div>'
+        f'    <div class="hist-rollup-tile">'
+        f'      <div class="hist-rollup-lbl">Done</div>'
+        f'      <div class="hist-rollup-val">{_done}</div>'
+        f'    </div>'
+        f'    <div class="hist-rollup-tile {"is-err" if _errored else ""}">'
+        f'      <div class="hist-rollup-lbl">Errors</div>'
+        f'      <div class="hist-rollup-val">{_errored}</div>'
+        f'    </div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Bulk action bar ────────────────────────────────────────────────
+    _ba_c1, _ba_c2, _ba_c3, _ba_c4 = st.columns([1, 1, 1, 5])
+    with _ba_c1:
+        if st.button("☑ Select all",
+                     key="_hist_select_all_btn",
+                     use_container_width=True):
+            st.session_state["_hist_selected_v1"] = {s["index_key"] for s in _statuses}
+            st.rerun()
+    with _ba_c2:
+        if st.button("☐ Clear",
+                     key="_hist_clear_sel_btn",
+                     use_container_width=True):
+            st.session_state["_hist_selected_v1"] = set()
+            st.rerun()
+    with _ba_c3:
+        if st.button("▶ Start selected",
+                     key="_hist_start_sel_btn",
+                     type="primary",
+                     use_container_width=True,
+                     disabled=not st.session_state["_hist_selected_v1"]):
+            for _k in list(st.session_state["_hist_selected_v1"]):
+                _es_index = IDX.get(_k)
+                if not _es_index:
+                    continue
+                _total = _history_es_count(_es_index)
+                _sort = _history_pick_sort_field(_k)
+                _history_job_upsert(_k, _es_index, _sort, _total)
+            st.rerun()
+    with _ba_c4:
+        _sel_n = len(st.session_state["_hist_selected_v1"])
+        st.markdown(
+            f'<div class="hist-bulk-hint">'
+            f'  <b>{_sel_n}</b> index'
+            f'{"es" if _sel_n != 1 else ""} selected · '
+            f'  click <b>▶ Start selected</b> to flip every selected '
+            f'  row to running. The auto-progress loop processes one '
+            f'  chunk ({HISTORY_CHUNK_SIZE} docs) per index per '
+            f'  rerun — paused / errored rows stay still until you '
+            f'  explicitly resume them.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+
+    # ── Per-index cards ───────────────────────────────────────────────
+    for _s in _statuses:
+        _k = _s["index_key"]
+        _es_index = _s["es_index"]
+        _table = _s["table"]
+        _es_n = int(_s["es_count"])
+        _pg_n = int(_s["pg_count"])
+        _job = _s["job"] or {}
+        _status = (_job.get("status") or "idle").lower()
+        _pct = (_pg_n / _es_n * 100) if _es_n else 0.0
+        _err = (_job.get("error_msg") or "").strip()
+        _started = (_job.get("started_at") or "").replace("T", " ")[:19]
+        _updated = (_job.get("updated_at") or "").replace("T", " ")[:19]
+
+        _state_class = {
+            "idle": "is-idle", "running": "is-running",
+            "paused": "is-paused", "done": "is-done",
+            "error": "is-error",
+        }.get(_status, "is-idle")
+        _state_glyph = {
+            "idle": "○", "running": "↻", "paused": "⏸",
+            "done": "✓", "error": "⚠",
+        }.get(_status, "○")
+
+        with st.container(key=f"hist_card_{_k}"):
+            st.markdown(
+                f'<div class="hist-card {_state_class}">'
+                f'  <div class="hist-card-head">'
+                f'    <input type="checkbox" class="hist-card-check" disabled '
+                f'       {"checked" if _k in st.session_state["_hist_selected_v1"] else ""}>'
+                f'    <span class="hist-card-key">{html.escape(_k)}</span>'
+                f'    <span class="hist-card-idx">{html.escape(_es_index)}</span>'
+                f'    <span class="hist-card-state">'
+                f'      <span class="hist-card-glyph">{_state_glyph}</span>'
+                f'      {html.escape(_status.upper())}'
+                f'    </span>'
+                f'  </div>'
+                f'  <div class="hist-card-body">'
+                f'    <div class="hist-card-count">'
+                f'      <span class="hist-c-lbl">ES</span>'
+                f'      <span class="hist-c-val">{_es_n:,}</span>'
+                f'    </div>'
+                f'    <div class="hist-card-arrow">→</div>'
+                f'    <div class="hist-card-count is-pg">'
+                f'      <span class="hist-c-lbl">PG</span>'
+                f'      <span class="hist-c-val">{_pg_n:,}</span>'
+                f'    </div>'
+                f'    <div class="hist-card-progress">'
+                f'      <div class="hist-card-bar">'
+                f'        <div class="hist-card-bar-fill" '
+                f'             style="width:{min(_pct, 100):.1f}%"></div>'
+                f'      </div>'
+                f'      <div class="hist-card-pct">{_pct:.1f}%</div>'
+                f'    </div>'
+                f'  </div>'
+                + (
+                    f'  <div class="hist-card-meta">'
+                    f'    table <code>{html.escape(_table)}</code> · '
+                    f'    sort by <code>{html.escape(_job.get("sort_field") or "_id")}</code> · '
+                    f'    started {html.escape(_started) or "—"} · '
+                    f'    updated {html.escape(_updated) or "—"}'
+                    f'  </div>' if _job else ""
+                )
+                + (
+                    f'  <div class="hist-card-err">⚠ {html.escape(_err)[:300]}</div>'
+                    if _err else ""
+                )
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Action button row. The mix depends on status.
+            _btns: list[tuple[str, str, str, str]] = []  # (label, key, action, help)
+            _sel = _k in st.session_state["_hist_selected_v1"]
+            _btns.append((
+                ("☐ Deselect" if _sel else "☑ Select"),
+                f"_hist_sel_{_k}", "select",
+                "Toggle membership in the bulk selection set",
+            ))
+            if _status in ("idle", "paused"):
+                _btns.append((
+                    ("▶ Start" if _status == "idle" else "▶ Resume"),
+                    f"_hist_start_{_k}", "start",
+                    "Set status to running so the auto-progress loop "
+                    "processes a chunk every couple of seconds",
+                ))
+            if _status == "running":
+                _btns.append((
+                    "⏸ Pause", f"_hist_pause_{_k}", "pause",
+                    "Stop processing new chunks (last checkpoint is "
+                    "kept so resume picks up where it left off)",
+                ))
+            if _status in ("done", "error", "paused"):
+                _btns.append((
+                    "↻ Re-sync", f"_hist_rerun_{_k}", "rerun",
+                    "Drop all migrated rows for this index and start "
+                    "over from scratch",
+                ))
+            _btns.append((
+                "ⓘ Sample", f"_hist_sample_{_k}", "sample",
+                "Show a few ES + PG documents side by side",
+            ))
+
+            _cols = st.columns(min(len(_btns), 5))
+            for _i, (_lbl, _bkey, _act, _hlp) in enumerate(_btns):
+                with _cols[_i]:
+                    if _act == "sample":
+                        with st.popover(_lbl, use_container_width=True,
+                                        help=_hlp):
+                            _es_samples = _history_es_sample(_es_index)
+                            _pg_samples = _history_pg_sample(_table) if _pg_n else []
+                            st.markdown(
+                                '<div class="hist-sample-head">'
+                                '  Elasticsearch (top {:,})'
+                                '</div>'.format(len(_es_samples)),
+                                unsafe_allow_html=True,
+                            )
+                            for _sm in _es_samples:
+                                st.json(_sm.get("doc") or {}, expanded=False)
+                            st.markdown(
+                                '<div class="hist-sample-head">'
+                                '  Postgres (latest {:,})'
+                                '</div>'.format(len(_pg_samples)),
+                                unsafe_allow_html=True,
+                            )
+                            if not _pg_samples:
+                                st.caption("nothing migrated yet")
+                            else:
+                                for _sm in _pg_samples:
+                                    st.json(_sm.get("doc") or {}, expanded=False)
+                    else:
+                        if st.button(_lbl, key=_bkey,
+                                     use_container_width=True, help=_hlp):
+                            if _act == "select":
+                                _sel_set = st.session_state["_hist_selected_v1"]
+                                if _k in _sel_set:
+                                    _sel_set.discard(_k)
+                                else:
+                                    _sel_set.add(_k)
+                            elif _act == "start":
+                                _total = _history_es_count(_es_index)
+                                _sort = (
+                                    _job.get("sort_field") or
+                                    _history_pick_sort_field(_k)
+                                )
+                                _history_job_upsert(_k, _es_index, _sort, _total)
+                            elif _act == "pause":
+                                _history_job_set_status(_k, "paused")
+                            elif _act == "rerun":
+                                _history_job_reset(_k)
+                                _total = _history_es_count(_es_index)
+                                _sort = _history_pick_sort_field(_k)
+                                _history_job_upsert(_k, _es_index, _sort, _total)
+                            st.rerun()
+
+
+@st.fragment(run_every="2s")
+def _render_history_autoprogress_fragment() -> None:
+    """Background ticker — looks for jobs in 'running' status and
+    processes one chunk per index per tick. Lives in its own fragment
+    so the wider page doesn't re-render every 2s; the fragment itself
+    just iterates the jobs table and calls `_history_migrate_chunk`."""
+    if not _POSTGRES_AVAILABLE:
+        return
+    # Skim the jobs table once per tick — cheap query.
+    conn = None
+    running_keys: list[str] = []
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT index_key FROM {HISTORY_JOBS_TABLE} "
+            f"WHERE status = 'running' "
+            f"ORDER BY updated_at ASC"
+        )
+        running_keys = [r[0] for r in cur.fetchall()]
+        cur.close()
+    except Exception:
+        running_keys = []
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+    for _k in running_keys[:6]:  # cap concurrent work per tick
+        try:
+            _history_migrate_chunk(_k)
+        except Exception:
+            # _history_migrate_chunk already records its own error
+            # state on failure; this except is just belt-and-braces
+            # so a single bad chunk doesn't break the tick.
+            pass
+    # When something was running, surface a small live-status badge so
+    # the operator knows the fragment is alive.
+    if running_keys:
+        st.markdown(
+            f'<div class="hist-tick">'
+            f'  ↻ auto-processing {len(running_keys)} job'
+            f'{"s" if len(running_keys) != 1 else ""} · '
+            f'  chunk size {HISTORY_CHUNK_SIZE}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def _render_actions_tab() -> None:
     """Stage-transition trigger surface — Build → Dev → QC → UAT → PRD
     plus Release. Reads the inventory rows + stages map the Pipelines
@@ -14317,12 +14907,21 @@ def _render_actions_tab() -> None:
     # across projects / companies in the inventory. Keys must therefore
     # combine company + project + application so Streamlit's per-widget
     # uniqueness check doesn't trip the moment two rows share the same
-    # app name.
-    def _act_row_id(co: str, pj: str, app: str, *suffixes: str) -> str:
-        _parts = [(co or "_"), (pj or "_"), (app or "_"), *suffixes]
-        return "_act_" + "__".join(p.replace("/", "_") for p in _parts)
+    # app name. We also fold the row's positional index into the key
+    # as a final tiebreaker — two rows with empty company AND empty
+    # project AND the same app name (rare but possible) would
+    # otherwise still collide.
+    def _act_row_id(co: str, pj: str, app: str, row_idx: int,
+                    *suffixes: str) -> str:
+        _parts = [
+            (co or "_"), (pj or "_"), (app or "_"),
+            f"r{row_idx}", *suffixes,
+        ]
+        return "_act_" + "__".join(
+            re.sub(r"[^A-Za-z0-9_]", "_", str(p)) for p in _parts
+        )
 
-    for _r in _apps_in_scope:
+    for _row_idx, _r in enumerate(_apps_in_scope):
         _app = _r.get("application") or ""
         if not _app:
             continue
@@ -14350,7 +14949,7 @@ def _render_actions_tab() -> None:
         with _c3:
             if st.button(
                 "⚒ Build",
-                key=_act_row_id(_co, _pj, _app, "build"),
+                key=_act_row_id(_co, _pj, _app, _row_idx, "build"),
                 use_container_width=True,
                 help=f"Queue the Build pipeline for {_app} on branch release",
             ):
@@ -14368,15 +14967,15 @@ def _render_actions_tab() -> None:
         # Apps where the source stage has a version and it's NOT
         # already the target stage's current version → eligible for
         # promotion.
-        _eligible = []
-        for _r in _apps_in_scope:
+        _eligible: list[tuple[int, dict, str, str]] = []
+        for _row_idx, _r in enumerate(_apps_in_scope):
             _app = _r.get("application") or ""
             if not _app:
                 continue
             _src_ver = _stage_ver(_app, _from_stage)
             _tgt_ver = _stage_ver(_app, _to_env)
             if _src_ver and _src_ver != _tgt_ver:
-                _eligible.append((_r, _src_ver, _tgt_ver))
+                _eligible.append((_row_idx, _r, _src_ver, _tgt_ver))
         st.markdown(
             f'<div class="act-section-head">'
             f'  <span class="act-section-glyph">⇪</span>'
@@ -14394,7 +14993,7 @@ def _render_actions_tab() -> None:
                 unsafe_allow_html=True,
             )
             continue
-        for _r, _src_ver, _tgt_ver in _eligible:
+        for _row_idx, _r, _src_ver, _tgt_ver in _eligible:
             _app = _r.get("application") or ""
             _pj = _r.get("project") or ""
             _co = _r.get("company") or ""
@@ -14423,7 +15022,7 @@ def _render_actions_tab() -> None:
             with _c3:
                 if st.button(
                     f"⇪ Deploy → {_to_env.upper()}",
-                    key=_act_row_id(_co, _pj, _app, "deploy", _to_env),
+                    key=_act_row_id(_co, _pj, _app, _row_idx, "deploy", _to_env),
                     use_container_width=True,
                     help=(
                         f"Queue the Request_deploy pipeline for {_app} "
@@ -14466,7 +15065,7 @@ def _render_actions_tab() -> None:
             unsafe_allow_html=True,
         )
     else:
-        for _r in _rel_eligible:
+        for _row_idx, _r in enumerate(_rel_eligible):
             _app = _r.get("application") or ""
             _pj = _r.get("project") or ""
             _co = _r.get("company") or ""
@@ -14498,7 +15097,7 @@ def _render_actions_tab() -> None:
             with _c3:
                 if st.button(
                     "✦ Release",
-                    key=_act_row_id(_co, _pj, _app, "release"),
+                    key=_act_row_id(_co, _pj, _app, _row_idx, "release"),
                     use_container_width=True,
                     disabled=not _ver,
                     help=(
@@ -19134,6 +19733,505 @@ def _ldap_sync_to_db(team_cns_tuple: tuple[str, ...]) -> dict:
     except Exception:
         pass
     return delta
+
+
+# =============================================================================
+# HISTORY → POSTGRES MIGRATION — re-runnable, pausable, resumable
+# =============================================================================
+# Migrates every ES index the dashboard uses into Postgres as a JSONB
+# document table per index. Each chunk is processed in a Streamlit
+# rerun so the operator can watch progress live and the migration
+# survives a page navigation / browser refresh (state lives in the
+# `history_es_migration_jobs` table — checkpoint after every chunk).
+
+HISTORY_TABLE_PREFIX = "history_es_"
+HISTORY_JOBS_TABLE = "history_es_migration_jobs"
+HISTORY_CHUNK_SIZE = 500           # docs per ES → PG batch
+HISTORY_SAMPLE_LIMIT = 3           # rows shown in the sample popover
+
+# Sort-field preference per index family. ES rejects search_after when
+# the underlying field isn't indexed, so we fall back to `_id` (always
+# present and always sortable) when no date field works.
+_HISTORY_SORT_FIELDS: dict[str, list[str]] = {
+    "builds":       ["startdate"],
+    "deployments":  ["startdate"],
+    "releases":     ["releasedate"],
+    "commits":      ["commitdate"],
+    "approval":     ["RequestDate", "CreatedDate", "Created"],
+    "requests":     ["RequestDate"],
+    "jira":         ["created", "Created"],
+    "inventory":    [],   # no time field — fall back to _id
+    "versions":     [],
+    "prismacloud": ["scandate", "ScanDate", "@timestamp"],
+    "invicti":     ["scandate", "ScanDate", "@timestamp"],
+    "zap":         ["scandate", "ScanDate", "@timestamp"],
+    "devops_projects": [],
+}
+
+
+def _history_table_name(index_key: str) -> str:
+    """Sanitised Postgres table name for an ES index key. The key is
+    the dashboard's logical name (commits / builds / …), not the raw
+    ES index name."""
+    safe = re.sub(r"[^a-z0-9_]", "_", index_key.lower())
+    return f"{HISTORY_TABLE_PREFIX}{safe}"
+
+
+def _history_db_ensure_jobs_table(conn) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {HISTORY_JOBS_TABLE} (
+            index_key       TEXT PRIMARY KEY,
+            es_index        TEXT NOT NULL,
+            table_name      TEXT NOT NULL,
+            sort_field      TEXT NOT NULL DEFAULT '_id',
+            total_docs      BIGINT NOT NULL DEFAULT 0,
+            migrated_docs   BIGINT NOT NULL DEFAULT 0,
+            last_sort_value TEXT,
+            last_sort_id    TEXT,
+            status          TEXT NOT NULL DEFAULT 'idle',
+            started_at      TIMESTAMPTZ,
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at    TIMESTAMPTZ,
+            error_msg       TEXT
+        )
+        """
+    )
+    cur.close()
+    conn.commit()
+
+
+def _history_db_ensure_index_table(conn, index_key: str) -> str:
+    """Create the per-index data table (JSONB doc + supporting indexes)
+    if it doesn't exist. Returns the table name."""
+    tbl = _history_table_name(index_key)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {tbl} (
+            id           TEXT PRIMARY KEY,
+            doc          JSONB NOT NULL,
+            migrated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    # GIN index on the JSONB doc lets every key lookup hit the index
+    # and not table-scan — the supporting structure for "use PG for
+    # historic queries". Created idempotently.
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS {tbl}_doc_gin "
+        f"ON {tbl} USING GIN (doc jsonb_path_ops)"
+    )
+    # Common hot extracted columns — speed up the typical filter set.
+    for _expr_name, _expr in (
+        (f"{tbl}_project",     "(doc->>'project')"),
+        (f"{tbl}_application", "(doc->>'application')"),
+        (f"{tbl}_codeversion", "(doc->>'codeversion')"),
+        (f"{tbl}_environment", "(doc->>'environment')"),
+        (f"{tbl}_company",     "(doc->>'company')"),
+    ):
+        try:
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS {_expr_name} ON {tbl} ({_expr})"
+            )
+        except Exception:
+            # Some fields don't exist in every index — the partial
+            # `jsonb->>` index still creates; this except catches
+            # exotic permission errors so one bad column doesn't abort
+            # the whole table setup.
+            pass
+    cur.close()
+    conn.commit()
+    return tbl
+
+
+def _history_pg_count(table_name: str) -> int:
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(table_name):
+        return 0
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+        row = cur.fetchone()
+        cur.close()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_pg_sample(table_name: str, limit: int = HISTORY_SAMPLE_LIMIT
+                       ) -> list[dict]:
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(table_name):
+        return []
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, doc, migrated_at FROM {table_name} "
+            f"ORDER BY migrated_at DESC LIMIT %s",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        out: list[dict] = []
+        for r in rows:
+            _doc = r[1]
+            # psycopg v2 returns JSONB as dict; v3 may return string in
+            # some envs — normalise both ways.
+            if isinstance(_doc, str):
+                try:
+                    _doc = json.loads(_doc)
+                except Exception:
+                    _doc = {}
+            out.append({
+                "id":          r[0],
+                "doc":         _doc or {},
+                "migrated_at": r[2].isoformat() if r[2] else "",
+            })
+        return out
+    except Exception:
+        return []
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _history_es_count(es_index: str) -> int:
+    """Cached ES doc count. 60s TTL is enough for the live counter on
+    the migration cards without overloading the cluster."""
+    try:
+        body = {"query": {"match_all": {}}}
+        res = es_search(es_index, body, size=0)
+        if res.get("_error"):
+            return 0
+        return int((res.get("hits") or {}).get("total", {}).get("value") or 0)
+    except Exception:
+        return 0
+
+
+def _history_es_sample(es_index: str, limit: int = HISTORY_SAMPLE_LIMIT
+                       ) -> list[dict]:
+    try:
+        res = es_search(
+            es_index,
+            {"query": {"match_all": {}}, "sort": [{"_doc": "asc"}]},
+            size=limit,
+        )
+        if res.get("_error"):
+            return []
+        return [
+            {"id": h.get("_id") or "", "doc": h.get("_source") or {}}
+            for h in (res.get("hits") or {}).get("hits", [])
+        ]
+    except Exception:
+        return []
+
+
+def _history_job_load(index_key: str) -> dict:
+    if not _POSTGRES_AVAILABLE:
+        return {}
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT index_key, es_index, table_name, sort_field, "
+            f"total_docs, migrated_docs, last_sort_value, last_sort_id, "
+            f"status, started_at, updated_at, completed_at, error_msg "
+            f"FROM {HISTORY_JOBS_TABLE} WHERE index_key = %s",
+            (index_key,),
+        )
+        r = cur.fetchone()
+        cur.close()
+        if not r:
+            return {}
+        return {
+            "index_key":       r[0],
+            "es_index":        r[1],
+            "table_name":      r[2],
+            "sort_field":      r[3],
+            "total_docs":      int(r[4] or 0),
+            "migrated_docs":   int(r[5] or 0),
+            "last_sort_value": r[6] or "",
+            "last_sort_id":    r[7] or "",
+            "status":          r[8] or "idle",
+            "started_at":      r[9].isoformat() if r[9] else "",
+            "updated_at":      r[10].isoformat() if r[10] else "",
+            "completed_at":    r[11].isoformat() if r[11] else "",
+            "error_msg":       r[12] or "",
+        }
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_job_upsert(index_key: str, es_index: str, sort_field: str,
+                        total_docs: int) -> None:
+    if not _POSTGRES_AVAILABLE:
+        return
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        tbl = _history_db_ensure_index_table(conn, index_key)
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            INSERT INTO {HISTORY_JOBS_TABLE}
+              (index_key, es_index, table_name, sort_field, total_docs,
+               migrated_docs, status, started_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, 0, 'running', NOW(), NOW())
+            ON CONFLICT (index_key) DO UPDATE SET
+              es_index    = EXCLUDED.es_index,
+              table_name  = EXCLUDED.table_name,
+              sort_field  = EXCLUDED.sort_field,
+              total_docs  = EXCLUDED.total_docs,
+              status      = 'running',
+              error_msg   = NULL,
+              started_at  = COALESCE({HISTORY_JOBS_TABLE}.started_at, NOW()),
+              updated_at  = NOW()
+            """,
+            (index_key, es_index, tbl, sort_field, total_docs),
+        )
+        cur.close()
+        conn.commit()
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_job_set_status(index_key: str, status: str,
+                            err: str = "") -> None:
+    if not _POSTGRES_AVAILABLE:
+        return
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        cur = conn.cursor()
+        _completed_clause = ", completed_at = NOW()" if status == "done" else ""
+        cur.execute(
+            f"UPDATE {HISTORY_JOBS_TABLE} "
+            f"SET status = %s, error_msg = %s, updated_at = NOW() "
+            f"{_completed_clause} "
+            f"WHERE index_key = %s",
+            (status, err or None, index_key),
+        )
+        cur.close()
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_job_reset(index_key: str) -> None:
+    """Drop all migrated rows + reset progress so the next start
+    re-migrates from scratch. Job row is kept (with progress zeroed)."""
+    if not _POSTGRES_AVAILABLE:
+        return
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        tbl = _history_db_ensure_index_table(conn, index_key)
+        cur = conn.cursor()
+        cur.execute(f"TRUNCATE TABLE {tbl}")
+        cur.execute(
+            f"UPDATE {HISTORY_JOBS_TABLE} "
+            f"SET migrated_docs = 0, last_sort_value = NULL, "
+            f"last_sort_id = NULL, status = 'idle', "
+            f"completed_at = NULL, error_msg = NULL, updated_at = NOW() "
+            f"WHERE index_key = %s",
+            (index_key,),
+        )
+        cur.close()
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_pick_sort_field(index_key: str) -> str:
+    """Decide which field to search_after on. We probe the candidates
+    via a 1-doc sort and use the first one that doesn't error. ``_id``
+    is always a safe last resort."""
+    candidates = list(_HISTORY_SORT_FIELDS.get(index_key) or [])
+    for fld in candidates:
+        try:
+            r = es_search(
+                IDX[index_key],
+                {"query": {"match_all": {}},
+                 "sort": [{fld: {"order": "asc", "unmapped_type": "long"}}]},
+                size=1,
+            )
+            if not r.get("_error"):
+                return fld
+        except Exception:
+            continue
+    return "_id"
+
+
+def _history_migrate_chunk(index_key: str) -> dict:
+    """Pull the next chunk from ES and write to PG. Returns a small
+    status dict so the caller can render progress without re-loading
+    the job row."""
+    out = {"index_key": index_key, "ok": False, "migrated_now": 0,
+           "completed": False, "error": ""}
+    if index_key not in IDX:
+        out["error"] = f"unknown index key: {index_key!r}"
+        return out
+    es_index = IDX[index_key]
+    job = _history_job_load(index_key)
+    sort_field = (job.get("sort_field") if job else "") or _history_pick_sort_field(index_key)
+    total = int(job.get("total_docs") or 0)
+    if not total:
+        total = _history_es_count(es_index)
+        _history_job_upsert(index_key, es_index, sort_field, total)
+        job = _history_job_load(index_key)
+    last_sort_value = (job or {}).get("last_sort_value") or ""
+    last_sort_id    = (job or {}).get("last_sort_id") or ""
+
+    # Build the search_after request.
+    body: dict = {
+        "query": {"match_all": {}},
+        "sort":  [
+            {sort_field: {"order": "asc", "unmapped_type": "long"}},
+            {"_id":      {"order": "asc"}},
+        ],
+    }
+    if last_sort_value or last_sort_id:
+        try:
+            # The sort value is stored as a string; ES is tolerant of
+            # numeric strings on date / long fields, so we keep it
+            # opaque on the dashboard side.
+            sv = last_sort_value
+            try:
+                sv = int(last_sort_value)
+            except Exception:
+                try:
+                    sv = float(last_sort_value)
+                except Exception:
+                    pass
+            body["search_after"] = [sv, last_sort_id]
+        except Exception:
+            pass
+
+    try:
+        res = es_search(es_index, body, size=HISTORY_CHUNK_SIZE)
+    except Exception as e:
+        out["error"] = f"ES error: {type(e).__name__}: {e}"
+        _history_job_set_status(index_key, "error", out["error"])
+        return out
+    if res.get("_error"):
+        out["error"] = f"ES error: {str(res['_error'])[:200]}"
+        _history_job_set_status(index_key, "error", out["error"])
+        return out
+
+    hits = (res.get("hits") or {}).get("hits") or []
+    if not hits:
+        _history_job_set_status(index_key, "done")
+        out["ok"] = True
+        out["completed"] = True
+        return out
+
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        tbl = _history_db_ensure_index_table(conn, index_key)
+        cur = conn.cursor()
+        # psycopg v3 uses Jsonb wrapper for JSONB inserts; v2 accepts
+        # a JSON string directly via psycopg2.extras.Json. We pass a
+        # JSON string + cast to JSONB which works on both.
+        rows = [
+            (h.get("_id") or "", json.dumps(h.get("_source") or {},
+                                            default=str))
+            for h in hits
+        ]
+        cur.executemany(
+            f"INSERT INTO {tbl} (id, doc, migrated_at) "
+            f"VALUES (%s, %s::jsonb, NOW()) "
+            f"ON CONFLICT (id) DO UPDATE SET "
+            f"  doc = EXCLUDED.doc, migrated_at = NOW()",
+            rows,
+        )
+        # Record progress + checkpoint.
+        last = hits[-1]
+        last_sort = last.get("sort") or []
+        _new_sort_value = str(last_sort[0]) if len(last_sort) > 0 else ""
+        _new_sort_id    = str(last_sort[1]) if len(last_sort) > 1 else (last.get("_id") or "")
+        cur.execute(
+            f"UPDATE {HISTORY_JOBS_TABLE} SET "
+            f"  migrated_docs = migrated_docs + %s, "
+            f"  last_sort_value = %s, last_sort_id = %s, "
+            f"  updated_at = NOW() "
+            f"WHERE index_key = %s",
+            (len(hits), _new_sort_value, _new_sort_id, index_key),
+        )
+        cur.close()
+        conn.commit()
+        out["ok"] = True
+        out["migrated_now"] = len(hits)
+        if len(hits) < HISTORY_CHUNK_SIZE:
+            _history_job_set_status(index_key, "done")
+            out["completed"] = True
+    except Exception as e:
+        out["error"] = f"PG error: {type(e).__name__}: {e}"
+        _history_job_set_status(index_key, "error", out["error"])
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+    return out
+
+
+def _history_status_for_all() -> list[dict]:
+    """Snapshot per index — ES count + PG count + job state, used by
+    the History tab to render every card without per-row DB chatter."""
+    out: list[dict] = []
+    for _key, _es_index in IDX.items():
+        _job = _history_job_load(_key)
+        _tbl = _history_table_name(_key)
+        _es_n = _history_es_count(_es_index)
+        _pg_n = _history_pg_count(_tbl) if _POSTGRES_AVAILABLE else 0
+        out.append({
+            "index_key": _key,
+            "es_index":  _es_index,
+            "table":     _tbl,
+            "es_count":  _es_n,
+            "pg_count":  _pg_n,
+            "job":       _job,
+        })
+    return out
+
+
+def _history_use_pg() -> bool:
+    """Returns True when the operator has flipped the history-source
+    toggle to "Postgres" AND Postgres is reachable. Hot-path fetchers
+    can branch on this to read from the migrated tables instead of ES.
+    The toggle is admin-only and defaults to False (ES)."""
+    if not _POSTGRES_AVAILABLE:
+        return False
+    return bool(st.session_state.get("_history_use_pg_v1", False))
 
 
 @st.cache_resource(show_spinner=False)
@@ -24886,6 +25984,9 @@ if _show_inv and _inventory_slot is not None:
         # Jenkins trigger (Build / Deploy / Release) lives here so the
         # Pipelines Inventory stays a read-only browsing surface.
         _act_show = _is_admin and bool(_jenkins_creds().get("host"))
+        # History → PGSQL tab — admin-only, only when Postgres is wired.
+        # The actual reachability check happens inside the renderer.
+        _hist_show = _is_admin and _POSTGRES_AVAILABLE
         _tab_labels: list[str] = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
         ]
@@ -24896,6 +25997,8 @@ if _show_inv and _inventory_slot is not None:
             _tab_labels.append("▶  ACTIONS")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
+        if _hist_show:
+            _tab_labels.append("📚  HISTORY → PGSQL")
         with st.container(key="cc_surface_tabs"):
             _tabs = st.tabs(_tab_labels)
             _idx = 0
@@ -24909,6 +26012,9 @@ if _show_inv and _inventory_slot is not None:
             if _act_show:
                 _idx += 1
             _tab_sync = _tabs[_idx] if _sync_show else None
+            if _sync_show:
+                _idx += 1
+            _tab_history = _tabs[_idx] if _hist_show else None
             if _tab_teams is not None:
                 with _tab_teams:
                     st.markdown(
@@ -24972,6 +26078,21 @@ if _show_inv and _inventory_slot is not None:
                     _sync_slot = st.empty()
             else:
                 _sync_slot = None
+            if _tab_history is not None:
+                with _tab_history:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Migrate every Elasticsearch index into Postgres as '
+                        'a JSONB document table — pausable, resumable, and '
+                        're-runnable. Toggle the source preference at the '
+                        'top to route historic queries through PG once the '
+                        'migration covers what you need.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _history_slot = st.empty()
+            else:
+                _history_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes scope keys + user blobs the other tabs depend on.
@@ -25026,6 +26147,14 @@ if _show_inv and _inventory_slot is not None:
                     unsafe_allow_html=True,
                 )
                 _render_ldap_sync_panel()
+
+        # History → PGSQL — last in the late-render order so the
+        # auto-progress fragment ticks independently of the heavier
+        # inventory render path above.
+        if _history_slot is not None:
+            with _history_slot.container():
+                _render_history_to_pg_tab()
+                _render_history_autoprogress_fragment()
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
