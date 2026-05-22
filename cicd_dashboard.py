@@ -24107,6 +24107,48 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # now live entirely in the Streamlit-native ▶ Actions popover below
     # so nothing redirects.
 
+    # ── DEVOPS misassignment detector (admin-only flag) ───────────────
+    # Computed up here — before the action toolbar that surfaces the
+    # summary banner AND before the popover-building block that paints
+    # the per-project ⚠ chip + banner. Rolling all three call sites off
+    # the same dict avoids the recurring "variable not associated with
+    # a value" bug we kept hitting when the dict was assembled later.
+    _DEVOPS_FLAG_TOKEN = "DEVOPS"
+    _DEVOPS_OPS_FIELDS_FOR_FLAG = (
+        "qc_team", "uat_team", "prd_team", "preprod_team",
+    )
+    _iv_devops_misassigned_projects: dict[str, list[str]] = {}
+    if _is_admin:
+        # Aggregate every team value seen per project across the
+        # filtered inventory rows, bucketed by ownership field.
+        _devops_per_proj: dict[str, dict[str, set]] = {}
+        for _r_chk in _inv_rows_filtered:
+            _pj_chk = (_r_chk.get("project") or "").strip()
+            if not _pj_chk:
+                continue
+            _t_blob = _r_chk.get("teams") or {}
+            _bucket = _devops_per_proj.setdefault(_pj_chk, {})
+            for _f_chk in ("dev_team",) + _DEVOPS_OPS_FIELDS_FOR_FLAG:
+                _vals_chk = _t_blob.get(_f_chk) or []
+                if isinstance(_vals_chk, (list, tuple, set)):
+                    _iter = _vals_chk
+                else:
+                    _iter = [_vals_chk] if _vals_chk else []
+                _bucket.setdefault(_f_chk, set()).update(
+                    str(_v).strip().upper() for _v in _iter if _v
+                )
+        for _pj_chk, _bucket in _devops_per_proj.items():
+            # Skip if DEVOPS already owns dev_team — it's a real dev
+            # team in that project so the ops/qc assignment is fine.
+            if _DEVOPS_FLAG_TOKEN in _bucket.get("dev_team", set()):
+                continue
+            _hits = [
+                _f for _f in _DEVOPS_OPS_FIELDS_FOR_FLAG
+                if _DEVOPS_FLAG_TOKEN in _bucket.get(_f, set())
+            ]
+            if _hits:
+                _iv_devops_misassigned_projects[_pj_chk] = _hits
+
     # ── Action toolbar — Prisma report viewer only ─────────────────────────
     # Build / Deploy / Release triggers were moved into the dedicated
     # ACTIONS tab so the Pipelines Inventory stays read-only. The
@@ -24512,44 +24554,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'</div>'
         )
 
-    # ── DEVOPS misassignment detector (admin-only flag) ────────────────
-    # Projects where the literal team "DEVOPS" lands as the qc owner OR
-    # any ops owner (uat / prd / preprod) WITHOUT also being assigned
-    # as dev are misconfigured: DEVOPS is supposed to enable pipelines,
-    # not be the QA / Operations team of record. The flag surfaces a
-    # subtle ⚠ next to the project name in the inventory + a red banner
-    # at the top of the project popover.
-    _DEVOPS_FLAG_TOKEN = "DEVOPS"
-    _DEVOPS_OPS_FIELDS = ("qc_team",) + _INV_OPS_FIELDS  # qc / uat / prd / preprod
-
-    def _devops_misassigned(teams_blob: dict) -> tuple[bool, list[str]]:
-        """Return ``(flagged, fields)``. ``fields`` lists the ownership
-        slots where DEVOPS was found — empty when not flagged."""
-        if not isinstance(teams_blob, dict) or not teams_blob:
-            return False, []
-        def _has_devops(field: str) -> bool:
-            vals = teams_blob.get(field) or []
-            if not isinstance(vals, (list, tuple, set)):
-                vals = [vals] if vals else []
-            return any(
-                str(v).strip().upper() == _DEVOPS_FLAG_TOKEN
-                for v in vals
-            )
-        if _has_devops("dev_team"):
-            return False, []
-        _hits = [f for f in _DEVOPS_OPS_FIELDS if _has_devops(f)]
-        return (bool(_hits), _hits)
-
-    # Precompute the misassigned-project set so per-row + popover
-    # renders are O(1) lookups.
-    _iv_devops_misassigned_projects: dict[str, list[str]] = {}
-    if _is_admin:
-        for _pj_k, _pdata_k in (_iv_proj_map or {}).items():
-            _flagged, _fields_hit = _devops_misassigned(
-                _pdata_k.get("teams") or {}
-            )
-            if _flagged:
-                _iv_devops_misassigned_projects[_pj_k] = _fields_hit
+    # DEVOPS misassignment detection was hoisted earlier in the
+    # function (right after `_inv_rows_filtered` is computed) so the
+    # summary banner above the action toolbar and the popover/ribbon
+    # decorators below share the same `_iv_devops_misassigned_projects`
+    # dict.
 
     def _iv_proj_cell(proj: str) -> str:
         if not proj:
