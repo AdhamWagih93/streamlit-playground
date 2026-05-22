@@ -5238,6 +5238,125 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     white-space: nowrap;
     line-height: 1.3;
 }
+/* DEVOPS-misassignment indicators (admin-only) */
+.iv-proj-ribbon .iv-pr-devops {
+    display: inline-flex;
+    align-items: center;
+    margin: 0 4px;
+    color: #b91c1c;
+    font-size: 0.7rem;
+    font-weight: 800;
+}
+.iv-proj-cell-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.iv-devops-flag {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 700;
+    background: rgba(220,38,38,.08);
+    color: #b91c1c;
+    border: 1px solid rgba(220,38,38,.32);
+    border-radius: 999px;
+    line-height: 1.2;
+}
+.iv-devops-summary {
+    padding: 8px 14px;
+    border: 1px solid rgba(220,38,38,.32);
+    background: rgba(220,38,38,.08);
+    border-radius: 10px;
+    font-size: 0.78rem;
+    color: #b91c1c;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px 0;
+}
+.iv-devops-summary-glyph { font-size: 1.05rem; }
+.iv-devops-summary code,
+.iv-devops-list code {
+    font-family: var(--cc-mono);
+    background: #fff;
+    border: 1px solid rgba(220,38,38,.24);
+    color: #991b1b;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+}
+.iv-devops-list-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    max-height: 360px;
+    overflow-y: auto;
+}
+.iv-devops-list {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76rem;
+}
+.iv-devops-list th {
+    text-align: left;
+    padding: 6px 10px;
+    background: var(--cc-surface2);
+    border-bottom: 1px solid var(--cc-border);
+    font-weight: 700;
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    position: sticky;
+    top: 0;
+}
+.iv-devops-list td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.iv-devops-list tbody tr:last-child td { border-bottom: none; }
+
+/* Project popover banner */
+.el-app-pop .ap-devops-banner {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 6px 10px;
+    align-items: center;
+    padding: 10px 12px;
+    margin: 0 0 8px 0;
+    background: rgba(220,38,38,.07);
+    border: 1px solid rgba(220,38,38,.32);
+    border-radius: 8px;
+    color: #7f1d1d;
+}
+.el-app-pop .ap-devops-glyph {
+    grid-row: span 2;
+    font-size: 1.15rem;
+    color: #b91c1c;
+}
+.el-app-pop .ap-devops-title {
+    font-weight: 700;
+    font-size: 0.84rem;
+    color: #991b1b;
+}
+.el-app-pop .ap-devops-detail {
+    grid-column: 2 / -1;
+    font-size: 0.74rem;
+    line-height: 1.4;
+    color: #7f1d1d;
+}
+.el-app-pop .ap-devops-detail code {
+    font-family: var(--cc-mono);
+    background: #fff;
+    border: 1px solid rgba(220,38,38,.24);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: #991b1b;
+}
 .iv-proj-ribbon .iv-pr-chip.is-crit  { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
 .iv-proj-ribbon .iv-pr-chip.is-high  { border-color:#fed7aa; background:#fff7ed; color:#9a3412; }
 .iv-proj-ribbon .iv-pr-chip.is-med   { border-color:#fde68a; background:#fffbeb; color:#854d0e; }
@@ -22886,6 +23005,45 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Prisma viewer remains here since it pairs directly with the
     # version detail popovers in this tab.
     if _is_admin:
+        # ── DEVOPS misassignment summary (admin-only) ──────────────────
+        # Surfaces in one place how many projects have DEVOPS sitting
+        # in qc / uat / prd / preprod ownership without also being on
+        # dev_team. Each flagged project is listed in a popover with
+        # the misassigned slots so the operator knows exactly which
+        # ownership rows to fix in inventory YAML.
+        if _iv_devops_misassigned_projects:
+            _flagged_n = len(_iv_devops_misassigned_projects)
+            with st.container(key="cc_iv_devops_misassign_banner"):
+                _b1, _b2 = st.columns([6, 1])
+                with _b1:
+                    st.markdown(
+                        '<div class="iv-devops-summary">'
+                        '  <span class="iv-devops-summary-glyph">⚠</span>'
+                        f'  <b>{_flagged_n}</b> project'
+                        f'{"s have" if _flagged_n != 1 else " has"} '
+                        '  <code>DEVOPS</code> as an ops / qc owner without '
+                        '  <code>dev_team</code> — admins should reconcile.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                with _b2:
+                    with st.popover("View list", use_container_width=True):
+                        _rows_html = "".join(
+                            f'<tr><td>{html.escape(_p)}</td>'
+                            f'<td><code>{html.escape(" + ".join(_iv_devops_misassigned_projects[_p]))}'
+                            f'</code></td></tr>'
+                            for _p in sorted(_iv_devops_misassigned_projects)
+                        )
+                        st.markdown(
+                            '<div class="iv-devops-list-wrap">'
+                            '  <table class="iv-devops-list">'
+                            '    <thead><tr><th>Project</th>'
+                            '      <th>DEVOPS owns</th></tr></thead>'
+                            f'    <tbody>{_rows_html}</tbody>'
+                            '  </table>'
+                            '</div>',
+                            unsafe_allow_html=True,
+                        )
         _render_prisma_inline_viewer()
         with st.container(key="cc_iv_action_toolbar"):
             _tb_c1, _tb_c2 = st.columns([2, 10])
@@ -23246,14 +23404,67 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'</div>'
         )
 
+    # ── DEVOPS misassignment detector (admin-only flag) ────────────────
+    # Projects where the literal team "DEVOPS" lands as the qc owner OR
+    # any ops owner (uat / prd / preprod) WITHOUT also being assigned
+    # as dev are misconfigured: DEVOPS is supposed to enable pipelines,
+    # not be the QA / Operations team of record. The flag surfaces a
+    # subtle ⚠ next to the project name in the inventory + a red banner
+    # at the top of the project popover.
+    _DEVOPS_FLAG_TOKEN = "DEVOPS"
+    _DEVOPS_OPS_FIELDS = ("qc_team",) + _INV_OPS_FIELDS  # qc / uat / prd / preprod
+
+    def _devops_misassigned(teams_blob: dict) -> tuple[bool, list[str]]:
+        """Return ``(flagged, fields)``. ``fields`` lists the ownership
+        slots where DEVOPS was found — empty when not flagged."""
+        if not isinstance(teams_blob, dict) or not teams_blob:
+            return False, []
+        def _has_devops(field: str) -> bool:
+            vals = teams_blob.get(field) or []
+            if not isinstance(vals, (list, tuple, set)):
+                vals = [vals] if vals else []
+            return any(
+                str(v).strip().upper() == _DEVOPS_FLAG_TOKEN
+                for v in vals
+            )
+        if _has_devops("dev_team"):
+            return False, []
+        _hits = [f for f in _DEVOPS_OPS_FIELDS if _has_devops(f)]
+        return (bool(_hits), _hits)
+
+    # Precompute the misassigned-project set so per-row + popover
+    # renders are O(1) lookups.
+    _iv_devops_misassigned_projects: dict[str, list[str]] = {}
+    if _is_admin:
+        for _pj_k, _pdata_k in (_iv_proj_map or {}).items():
+            _flagged, _fields_hit = _devops_misassigned(
+                _pdata_k.get("teams") or {}
+            )
+            if _flagged:
+                _iv_devops_misassigned_projects[_pj_k] = _fields_hit
+
     def _iv_proj_cell(proj: str) -> str:
         if not proj:
             return '<span style="color:var(--cc-text-mute);font-size:.72rem">—</span>'
         if proj in _iv_proj_map:
+            _flag_html = ""
+            if _is_admin and proj in _iv_devops_misassigned_projects:
+                _fields = _iv_devops_misassigned_projects[proj]
+                _tip = (
+                    f"DEVOPS is listed as {' + '.join(_fields)} "
+                    f"but not as dev_team — misassignment."
+                )
+                _flag_html = (
+                    f'<span class="iv-devops-flag" '
+                    f'title="{html.escape(_tip, quote=True)}">⚠ DEVOPS</span>'
+                )
             return (
+                f'<span class="iv-proj-cell-wrap">'
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_iv_proj_pop_id(proj)}" '
                 f'title="Click for teams & applications">{proj}</button>'
+                f'{_flag_html}'
+                f'</span>'
             )
         return f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>'
 
@@ -23351,17 +23562,25 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f"{_proj} · {_n} app{'s' if _n != 1 else ''} · "
                 f"{_b['covered']} scanned · worst tier: {_t}"
             )
+            _devops_chip = (
+                '<span class="iv-pr-devops" '
+                'title="DEVOPS misassigned as ops/qc owner without dev_team">⚠</span>'
+                if _is_admin and _proj in _iv_devops_misassigned_projects
+                else ""
+            )
             if _pid_pr:
                 _pr_chips.append(
                     f'<button type="button" class="iv-pr-chip is-{_t}" '
                     f'popovertarget="{_pid_pr}" title="{_tip}">'
                     f'<span class="iv-pr-dot is-{_t}"></span>{_proj}'
+                    f'{_devops_chip}'
                     f'<span class="iv-pr-n">{_n}</span></button>'
                 )
             else:
                 _pr_chips.append(
                     f'<span class="iv-pr-chip is-{_t}" title="{_tip}">'
                     f'<span class="iv-pr-dot is-{_t}"></span>{_proj}'
+                    f'{_devops_chip}'
                     f'<span class="iv-pr-n">{_n}</span></span>'
                 )
         if _pr_overflow > 0:
@@ -24209,6 +24428,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 + _remedy_rows
             )
 
+        _devops_banner_p = ""
+        if _is_admin and _proj in _iv_devops_misassigned_projects:
+            _fields_hit = _iv_devops_misassigned_projects[_proj]
+            _devops_banner_p = (
+                f'    <div class="ap-devops-banner">'
+                f'      <span class="ap-devops-glyph">⚠</span>'
+                f'      <span class="ap-devops-title">DEVOPS misassigned</span>'
+                f'      <span class="ap-devops-detail">'
+                f'        DEVOPS owns <b>{html.escape(" + ".join(_fields_hit))}</b> '
+                f'        for this project but is <b>not</b> listed under '
+                f'        <code>dev_team</code>. DEVOPS is supposed to enable '
+                f'        pipelines, not be the QA / Ops team of record.'
+                f'      </span>'
+                f'    </div>'
+            )
         _iv_popovers.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -24220,6 +24454,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <button class="ap-close" popovertarget="{_pid_p}" popovertargetaction="hide" aria-label="Close">×</button>'
             f'  </div>'
             f'  <div class="ap-body">'
+            f'    {_devops_banner_p}'
             f'    {_company_block_p}'
             f'    <div class="ap-section">Teams</div>'
             + "".join(_team_rows_p)
