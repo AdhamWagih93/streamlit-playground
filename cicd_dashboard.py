@@ -14243,7 +14243,17 @@ def _psv_inventory_options() -> tuple[list[str], dict, dict]:
     )
 
 
-def _render_iv_actions_chooser(
+def _render_iv_actions_chooser(*args, **kwargs) -> None:
+    """Deprecated. The inventory's "▶ Actions for a version" popover
+    was replaced by the dedicated ACTIONS tab. Kept as a no-op so any
+    older call site keeps importing but never renders a button —
+    eliminates one historical source of duplicate-key conflicts
+    where the inline chooser and the Actions tab could both run
+    in the same script."""
+    return
+
+
+def _LEGACY_render_iv_actions_chooser_REMOVED(
     inv_rows_all: list[dict],
     stages_map: dict[str, dict],
     detected_roles: list[str],
