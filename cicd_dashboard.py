@@ -3035,6 +3035,79 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-style: italic;
 }
 
+/* ── Inventory parse-warning popover ─────────────────────────────────────
+ * Replaces the always-open <details> list (which ate vertical space) with
+ * a compact amber chip; the count + affected-project total read at a
+ * glance, the full list opens on click. */
+.st-key-cc_iv_warn_pop { margin: 2px 0 10px 0; }
+.st-key-cc_iv_warn_pop [data-testid="stPopover"] button,
+.st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button {
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)) !important;
+    background: color-mix(in srgb, var(--cc-amber) 10%, transparent) !important;
+    color: var(--cc-amber) !important;
+    font-family: var(--cc-mono) !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+    border-radius: 999px !important;
+    padding: 3px 14px !important;
+    min-height: 0 !important;
+    transition: background .15s ease, box-shadow .15s ease !important;
+}
+.st-key-cc_iv_warn_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button:hover {
+    background: color-mix(in srgb, var(--cc-amber) 18%, transparent) !important;
+    box-shadow: 0 3px 12px color-mix(in srgb, var(--cc-amber) 28%, transparent) !important;
+}
+.iv-warnpop-head {
+    font-size: 0.86rem;
+    color: var(--cc-text);
+    margin: 2px 0 8px 0;
+    line-height: 1.5;
+}
+.iv-warnpop-head b { color: var(--cc-amber); }
+.iv-warnpop-glyph { color: var(--cc-amber); margin-right: 4px; }
+.iv-warnpop-sub {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    margin-top: 1px;
+}
+.iv-warnpop-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin: 0 0 10px 0;
+    max-height: 84px;
+    overflow-y: auto;
+}
+.iv-warnpop-chip {
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--cc-amber);
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 38%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-amber) 8%, transparent);
+    white-space: nowrap;
+}
+.iv-warnpop-none {
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+}
+.iv-warnpop-list {
+    max-height: 320px;
+    overflow-y: auto;
+    margin: 0;
+    padding-left: 22px;
+    border-top: 1px solid var(--cc-border);
+    padding-top: 8px;
+}
+
 /* ── ES-FALLBACK ALARM BANNER ────────────────────────────────────────────
  * The user explicitly asked for the fallback case to be UNMISSABLE. This
  * is a full-width red/amber gradient block with a pulsing left stripe,
@@ -23012,6 +23085,31 @@ def _build_event_ribbon(
     )
 
 
+def _iv_warning_affected_projects(warnings: list[str]) -> list[str]:
+    """Best-effort set of project names implicated by loader *warnings*.
+
+    Warning strings are free-form but consistently reference a project
+    either explicitly (``project 'X' produced 0 apps``) or via a file path
+    under the inventory repo (``read <repo>/<project>/group_vars/...``).
+    We harvest both forms; anything we can't attribute to a project simply
+    doesn't contribute to the count (the headline still shows the raw
+    warning total). Sorted, de-duplicated, case-preserved."""
+    _skip = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
+    _base = re.escape(INVENTORY_REPO_PATH.rstrip("/"))
+    _path_re = re.compile(_base + r"/([^/\s:,]+)")
+    _named_re = re.compile(r"project '([^']+)'")
+    _found: set[str] = set()
+    for _w in warnings:
+        for _m in _named_re.finditer(_w):
+            _found.add(_m.group(1).strip())
+        for _m in _path_re.finditer(_w):
+            _seg = _m.group(1).strip()
+            if _seg and _seg not in _skip and not _seg.startswith("."):
+                _found.add(_seg)
+    _found.discard("")
+    return sorted(_found, key=str.lower)
+
+
 def _render_inventory_view(controls_slot, body_slot) -> None:
     """Pipelines inventory table — one row per registered pipeline.
 
@@ -26698,7 +26796,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # ── Diagnostic affordance ──────────────────────────────────────
             _render_git_diag_controls()
         elif _src == "git":
-            # Quiet success pill stays.
+            # Quiet success pill stays — the inline warning span is gone;
+            # warnings now live in a compact popover so they no longer eat
+            # vertical space under the tab header.
             st.markdown(
                 f'<div class="iv-src-row">'
                 f'  <span class="iv-src is-git">'
@@ -26707,40 +26807,59 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'    <span class="iv-src-lbl">Git source</span>'
                 f'    <span class="iv-src-stat">{html.escape(_stat)}</span>'
                 f'  </span>'
-                + (
-                    f'<span class="iv-src-warn" title="{html.escape(_warns[0])}">'
-                    f'⚠ {len(_warns)} parse warning'
-                    f'{"s" if len(_warns) != 1 else ""}</span>'
-                    if _warns else ""
-                )
                 + '</div>',
                 unsafe_allow_html=True,
             )
-            # When git works but emitted warnings, surface every one so
-            # admins can fix the underlying YAML / vault issue.
+            # When git works but emitted warnings, surface a single amber
+            # popover: headline = warning count + how many projects they
+            # affect; click to read every warning (+ the affected projects).
             if _warns:
-                _detail_items = "".join(
-                    f'<li>{html.escape(w)}</li>' for w in _warns[:20]
+                _affected = _iv_warning_affected_projects(_warns)
+                _n = len(_warns)
+                _np = len(_affected)
+                _proj_txt = (
+                    f" · {_np} project{'s' if _np != 1 else ''} affected"
+                    if _np else ""
                 )
-                _overflow = (
-                    f'<li class="iv-src-detail-overflow">'
-                    f'… +{len(_warns) - 20} more (truncated)</li>'
-                    if len(_warns) > 20 else ""
-                )
-                st.markdown(
-                    f'<details class="iv-src-detail" open>'
-                    f'  <summary>'
-                    f'    <span class="iv-src-detail-glyph">⚠</span>'
-                    f'    Git checkout parsed with {len(_warns)} warning'
-                    f'{"s" if len(_warns) != 1 else ""} — '
-                    f'    <em>some rows may be missing fields</em>'
-                    f'  </summary>'
-                    f'  <ul class="iv-src-detail-list">'
-                    f'    {_detail_items}{_overflow}'
-                    f'  </ul>'
-                    f'</details>',
-                    unsafe_allow_html=True,
-                )
+                with st.container(key="cc_iv_warn_pop"):
+                    with st.popover(
+                        f"⚠  {_n} parse warning{'s' if _n != 1 else ''}{_proj_txt}",
+                        use_container_width=False,
+                        help="Git checkout succeeded but some YAML / vault "
+                             "files didn't parse — affected rows may be "
+                             "missing fields. Click for the full list.",
+                    ):
+                        _chips = "".join(
+                            f'<span class="iv-warnpop-chip">{html.escape(p)}</span>'
+                            for p in _affected
+                        ) or (
+                            '<span class="iv-warnpop-none">could not attribute '
+                            'to specific projects</span>'
+                        )
+                        _items = "".join(
+                            f'<li>{html.escape(w)}</li>' for w in _warns[:200]
+                        )
+                        _overflow = (
+                            f'<li class="iv-src-detail-overflow">'
+                            f'… +{_n - 200} more (truncated)</li>'
+                            if _n > 200 else ""
+                        )
+                        st.markdown(
+                            f'<div class="iv-warnpop-head">'
+                            f'  <span class="iv-warnpop-glyph">⚠</span>'
+                            f'  <b>{_n}</b> parse warning'
+                            f'{"s" if _n != 1 else ""}'
+                            + (f' across <b>{_np}</b> project'
+                               f'{"s" if _np != 1 else ""}' if _np else "")
+                            + '  <span class="iv-warnpop-sub">some rows may be '
+                            'missing fields</span>'
+                            f'</div>'
+                            f'<div class="iv-warnpop-chips">{_chips}</div>'
+                            f'<ul class="iv-src-detail-list iv-warnpop-list">'
+                            f'  {_items}{_overflow}'
+                            f'</ul>',
+                            unsafe_allow_html=True,
+                        )
         else:
             # ES fallback — the loud case. Compute a remediation hint based
             # on the failure category so admins know exactly what to fix.
