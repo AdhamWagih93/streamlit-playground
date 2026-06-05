@@ -246,6 +246,35 @@ CICD_MIRROR_REPOS: tuple[tuple[str, str], ...] = (
     ("DocMDs",        "main"),
 )
 
+# ── Per-team CONFIGURATION repositories ──────────────────────────────────
+# Every team owns one git repository under a SEPARATE ADO project named
+# "Control" (same collection + auth as the Platform repos above — only the
+# project segment of the URL changes). Each team repo's working tree is:
+#
+#     <project>/<env>_<app>/config.yml          (config.yml mandatory)
+#                          /<anything-else>      (optional extra ymls/files/dirs)
+#
+# They are cloned side-by-side with the platform mirrors but grouped under a
+# dedicated "Configurations/" directory so each team is one folder beneath it:
+#
+#     <CICD_REPO_BASE>/Configurations/<team>/...
+#
+# The dashboard discovers the team repos from the Control project (ADO REST,
+# falling back to the known team set), clones the one being viewed on demand,
+# and exposes every file for in-place edit → commit → push to `main`.
+CONFIG_ADO_COLLECTION = os.environ.get("CONFIG_ADO_COLLECTION", "DevOps").strip()
+CONFIG_ADO_PROJECT = os.environ.get("CONFIG_ADO_PROJECT", "Control").strip()
+CONFIG_REPO_URL_TEMPLATE = (
+    "http://{host}/" + CONFIG_ADO_COLLECTION + "/" + CONFIG_ADO_PROJECT
+    + "/_git/{repo}"
+)
+CONFIG_REPOS_DIRNAME = "Configurations"
+CONFIGURATIONS_DIR = os.path.join(CICD_REPO_BASE, CONFIG_REPOS_DIRNAME)
+CONFIG_BRANCH = os.environ.get("CONFIG_BRANCH", "main").strip() or "main"
+CONFIG_LIST_TTL = 300        # repo-discovery cache window (seconds)
+CONFIG_SCAN_TTL = 30         # on-disk tree-scan cache window (seconds)
+CONFIG_MANDATORY_FILE = "config.yml"
+
 # =============================================================================
 # JENKINS PIPELINE STATUS — smart-loaded panel
 # =============================================================================
@@ -2414,6 +2443,140 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-paper, #0b0d12) !important;
     border-color: var(--cc-accent) !important;
     box-shadow: 0 4px 18px color-mix(in srgb, var(--cc-accent) 38%, transparent) !important;
+}
+/* ── Team configurations tab ───────────────────────────────────────── */
+.cfg-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    margin: 2px 0 12px;
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    background:
+        linear-gradient(180deg,
+            color-mix(in srgb, var(--cc-accent) 6%, transparent),
+            transparent 60%),
+        var(--cc-surface2);
+}
+.cfg-head-l { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cfg-head-glyph { font-size: 1.15rem; opacity: 0.9; }
+.cfg-head-title {
+    font-family: var(--cc-display, var(--cc-sans));
+    font-weight: 700;
+    font-size: 0.98rem;
+    letter-spacing: 0.03em;
+    color: var(--cc-text);
+}
+.cfg-head-meta, .cfg-head-path {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+}
+.cfg-head-path code {
+    background: transparent;
+    color: var(--cc-text-dim);
+}
+.cfg-statbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 4px 0 12px;
+}
+.cfg-stat {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text-dim);
+    padding: 3px 10px;
+    border: 1px solid var(--cc-border);
+    border-radius: 999px;
+    background: var(--cc-surface2);
+}
+.cfg-stat b { color: var(--cc-text); font-weight: 700; }
+.cfg-stat-ok   { color: var(--cc-green); border-color: color-mix(in srgb, var(--cc-green) 40%, var(--cc-border)); }
+.cfg-stat-ok b { color: var(--cc-green); }
+.cfg-stat-warn { color: var(--cc-amber); border-color: color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)); }
+.cfg-stat-warn b { color: var(--cc-amber); }
+.cfg-stat-head { margin-left: auto; opacity: 0.75; }
+.cfg-badge {
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 3px 10px;
+    border-radius: 999px;
+}
+.cfg-badge-edit {
+    color: var(--cc-accent);
+    background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 45%, var(--cc-border));
+}
+.cfg-badge-ro {
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+}
+.cfg-crumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-family: var(--cc-mono);
+    font-size: 0.8rem;
+    padding: 8px 14px;
+    margin: 6px 0 10px;
+    border-left: 3px solid var(--cc-accent);
+    border-radius: 0 10px 10px 0;
+    background: var(--cc-surface2);
+}
+.cfg-crumb-sep { color: var(--cc-text-mute); opacity: 0.6; }
+.cfg-crumb-team { color: var(--cc-text-dim); font-weight: 700; }
+.cfg-crumb-proj { color: var(--cc-text); }
+.cfg-crumb-env {
+    color: var(--cc-blue);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--cc-blue) 14%, transparent);
+}
+.cfg-crumb-app { color: var(--cc-accent); font-weight: 700; }
+.cfg-empty, .cfg-warn, .cfg-clone-bad {
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    margin: 6px 0;
+}
+.cfg-empty {
+    color: var(--cc-text-mute);
+    border: 1px dashed var(--cc-border);
+    background: var(--cc-surface2);
+}
+.cfg-warn {
+    color: var(--cc-amber);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 38%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-amber) 8%, transparent);
+}
+.cfg-clone-bad {
+    color: var(--cc-red);
+    border: 1px solid color-mix(in srgb, var(--cc-red) 40%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-red) 8%, transparent);
+}
+.cfg-yaml-bad {
+    font-family: var(--cc-mono); font-size: 0.74rem;
+    color: var(--cc-red); padding: 5px 2px;
+}
+.cfg-yaml-ok {
+    font-family: var(--cc-mono); font-size: 0.74rem;
+    color: var(--cc-amber); padding: 5px 2px;
+}
+.cfg-clean {
+    font-family: var(--cc-mono); font-size: 0.74rem;
+    color: var(--cc-green); padding: 5px 2px;
 }
 .iv-act-note {
     margin-top: 8px;
@@ -17923,6 +18086,729 @@ def _mirror_repo_status_all() -> list[dict]:
 
 
 # =============================================================================
+# PER-TEAM CONFIGURATION REPOS — clone, scan, edit → commit → push
+# =============================================================================
+# Each team owns a repo under the Control ADO project. We discover them
+# (ADO REST, falling back to the known team set), clone the one in view under
+# Configurations/<team>/, scan the project/<env>_<app>/ tree, and write edits
+# straight back to `main`. Everything is admin view-all + team-scoped edit.
+
+def _config_sanitize_name(name: str) -> str:
+    """Filesystem-safe single path segment for a team / repo name. ADO repo
+    names can contain spaces and the odd punctuation char; keep it readable
+    but harmless as a directory name."""
+    s = (name or "").strip()
+    s = re.sub(r"[\\/]+", "-", s)              # never let a name spawn subdirs
+    s = re.sub(r"[^\w.\- ]+", "_", s)          # drop anything exotic
+    return s.strip(". ").strip() or "_"
+
+
+def _config_team_repo_path(team: str) -> str:
+    """Local clone path for *team*'s config repo, under Configurations/."""
+    return os.path.join(CONFIGURATIONS_DIR, _config_sanitize_name(team))
+
+
+def _config_repo_url(host: str, team: str) -> str:
+    """Clone URL for *team*'s repo in the Control project. ``""`` when the
+    host isn't resolved."""
+    h = (host or "").strip()
+    if not h:
+        return ""
+    # The repo name carries the raw team name (URL-encoded) — only the
+    # on-disk folder is sanitised. ADO matches repos case-insensitively.
+    return CONFIG_REPO_URL_TEMPLATE.format(
+        host=h, repo=urllib.parse.quote(team, safe=""),
+    )
+
+
+def _config_repos_api_url(host: str) -> str:
+    """ADO REST endpoint that lists every repository in the Control project."""
+    h = (host or "").strip()
+    if not h:
+        return ""
+    return (
+        f"http://{h}/{CONFIG_ADO_COLLECTION}/{CONFIG_ADO_PROJECT}"
+        f"/_apis/git/repositories?api-version=6.0"
+    )
+
+
+def _config_derive_team_fallback() -> list[str]:
+    """Best-effort team list when ADO REST discovery is unavailable.
+
+    Unions the teams currently visible in the inventory with the full
+    LDAP-synced team set so an admin still gets a working picker even if
+    the repositories API is blocked."""
+    teams: set[str] = set()
+    for _t in (st.session_state.get("_inv_visible_teams_v1") or []):
+        if _t:
+            teams.add(str(_t).strip())
+    try:
+        teams |= {str(_t).strip() for _t in _ldap_sync_collect_full_team_set() if _t}
+    except Exception:
+        pass
+    teams.discard("")
+    return sorted(teams, key=str.lower)
+
+
+@st.cache_data(ttl=CONFIG_LIST_TTL, show_spinner=False)
+def _config_list_team_repos(host_marker: str) -> tuple[list[str], str]:
+    """Discover every team config repo in the Control project.
+
+    Returns ``(repo_names, source)`` where *source* is ``"ado"`` (REST
+    discovery succeeded), ``"fallback"`` (derived from inventory + LDAP),
+    or ``"none"`` (nothing resolvable). Cached on the host so the REST
+    round-trip happens at most once per ``CONFIG_LIST_TTL`` window."""
+    if not host_marker:
+        return [], "none"
+    api = _config_repos_api_url(host_marker)
+    creds = _git_creds()
+    user = creds.get("username", "")
+    pw = creds.get("password", "")
+    if api and user and pw:
+        try:
+            token = base64.b64encode(f"{user}:{pw}".encode()).decode()
+            req = urllib.request.Request(api, headers={
+                "Authorization": f"Basic {token}",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8", "replace"))
+            names = sorted(
+                {
+                    str(r.get("name")).strip()
+                    for r in (payload.get("value") or [])
+                    if r.get("name")
+                },
+                key=str.lower,
+            )
+            if names:
+                return names, "ado"
+        except Exception:
+            # Fall through to the derived set — the REST API may be
+            # disabled or the PAT may lack the read scope.
+            pass
+    derived = _config_derive_team_fallback()
+    return (derived, "fallback") if derived else ([], "none")
+
+
+@st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _ensure_config_repo(host_marker: str, team: str) -> tuple[bool, str, str]:
+    """Clone-or-pull *team*'s config repo under Configurations/<team>/.
+
+    Returns ``(ok, head_sha, status_msg)``. Unlike the shallow platform
+    mirrors this is a FULL clone — config repos are small and we push
+    write-back commits, which is brittle from a ``--depth 1`` checkout.
+    Edits live in the editor (session) until the user commits, so the
+    working tree stays clean between saves and the hard-reset-to-origin
+    sync is safe."""
+    if not host_marker:
+        return False, "", "Git host not resolved (vault unreachable?)"
+    if not team:
+        return False, "", "No team selected"
+    cred_ok, cred_err = _configure_git_credentials()
+    if not cred_ok:
+        return False, "", f"git auth setup failed: {cred_err}"
+    url = _config_repo_url(host_marker, team)
+    if not url:
+        return False, "", "Git URL could not be built (host missing)"
+    repo_path = _config_team_repo_path(team)
+    git_dir = os.path.join(repo_path, ".git")
+    try:
+        os.makedirs(CONFIGURATIONS_DIR, exist_ok=True)
+        if os.path.isdir(git_dir):
+            r = _run_git("remote", "set-url", "origin", url, cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git remote set-url failed: {r.stderr.strip()}"
+            r = _run_git("fetch", "origin", CONFIG_BRANCH, cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git fetch failed: {r.stderr.strip()}"
+            r = _run_git("checkout", CONFIG_BRANCH, cwd=repo_path)
+            if r.returncode != 0:
+                r = _run_git("checkout", "-B", CONFIG_BRANCH, "FETCH_HEAD",
+                             cwd=repo_path)
+                if r.returncode != 0:
+                    return False, "", f"git checkout failed: {r.stderr.strip()}"
+            r = _run_git("reset", "--hard", f"origin/{CONFIG_BRANCH}",
+                         cwd=repo_path)
+            if r.returncode != 0:
+                return False, "", f"git reset failed: {r.stderr.strip()}"
+        else:
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path, ignore_errors=True)
+            r = _run_git("clone", "--branch", CONFIG_BRANCH, url, repo_path)
+            if r.returncode != 0:
+                return False, "", f"git clone failed: {r.stderr.strip()}"
+        # Stamp the operator's identity so write-back commits are authored
+        # as them, not the transport service account.
+        _git_set_author(
+            repo_path,
+            (st.session_state.get("username") or "").strip(),
+            (st.session_state.get("email") or "").strip(),
+        )
+        r = _run_git("rev-parse", "HEAD", cwd=repo_path, inject_auth=False)
+        if r.returncode != 0:
+            return False, "", f"git rev-parse failed: {r.stderr.strip()}"
+        head = (r.stdout or "").strip()
+        return True, head, f"OK · {head[:8]}"
+    except subprocess.TimeoutExpired:
+        return False, "", "git operation timed out (120s)"
+    except FileNotFoundError:
+        return False, "", "git executable not found on PATH"
+    except Exception as e:  # pragma: no cover
+        return False, "", f"unexpected: {type(e).__name__}: {e}"
+
+
+def _config_split_env_app(env_app: str) -> tuple[str, str]:
+    """Split an ``<env>_<app>`` directory name into (env, app).
+
+    The env is the prefix up to the first underscore; everything after is
+    the application (which may itself contain underscores)."""
+    if "_" in env_app:
+        env, app = env_app.split("_", 1)
+        return env, app
+    return "", env_app
+
+
+@st.cache_data(ttl=CONFIG_SCAN_TTL, show_spinner=False)
+def _config_scan_team(team: str, head_marker: str) -> dict:
+    """Walk *team*'s cloned tree → project → ``<env>_<app>`` → files.
+
+    *head_marker* (the repo HEAD sha) is part of the cache key so a
+    re-sync that advances HEAD invalidates the scan. Returns a structured
+    dict ready for rendering; never raises (a broken tree yields empty
+    sections)."""
+    repo_path = _config_team_repo_path(team)
+    out: dict[str, Any] = {
+        "team": team, "path": repo_path, "projects": [],
+        "n_projects": 0, "n_apps": 0, "n_files": 0, "missing_config": [],
+    }
+    if not os.path.isdir(repo_path):
+        return out
+    try:
+        _projects = sorted(
+            d for d in os.listdir(repo_path)
+            if d != ".git" and os.path.isdir(os.path.join(repo_path, d))
+        )
+    except OSError:
+        return out
+    for _proj in _projects:
+        _proj_abs = os.path.join(repo_path, _proj)
+        try:
+            _apps = sorted(
+                d for d in os.listdir(_proj_abs)
+                if os.path.isdir(os.path.join(_proj_abs, d))
+            )
+        except OSError:
+            _apps = []
+        _app_entries: list[dict] = []
+        for _ea in _apps:
+            _ea_abs = os.path.join(_proj_abs, _ea)
+            _files: list[str] = []
+            for _root, _dirs, _fnames in os.walk(_ea_abs):
+                if ".git" in _dirs:
+                    _dirs.remove(".git")
+                for _fn in _fnames:
+                    _rel = os.path.relpath(os.path.join(_root, _fn), _ea_abs)
+                    _files.append(_rel.replace(os.sep, "/"))
+            _files.sort(key=lambda p: (p != CONFIG_MANDATORY_FILE, p.lower()))
+            _has_cfg = CONFIG_MANDATORY_FILE in _files
+            _env, _app = _config_split_env_app(_ea)
+            _rel_dir = f"{_proj}/{_ea}"
+            if not _has_cfg:
+                out["missing_config"].append(_rel_dir)
+            _app_entries.append({
+                "env_app": _ea, "env": _env, "app": _app,
+                "rel": _rel_dir, "files": _files,
+                "has_config": _has_cfg, "n_files": len(_files),
+            })
+            out["n_files"] += len(_files)
+        out["projects"].append({"project": _proj, "apps": _app_entries})
+        out["n_apps"] += len(_app_entries)
+    out["n_projects"] = len(out["projects"])
+    return out
+
+
+def _config_abs_under_repo(team: str, relpath: str) -> str | None:
+    """Resolve *relpath* (repo-root relative) to an absolute path and verify
+    it stays inside the team repo. Returns ``None`` on traversal attempts."""
+    repo_path = os.path.realpath(_config_team_repo_path(team))
+    target = os.path.realpath(os.path.join(repo_path, relpath))
+    if target == repo_path or target.startswith(repo_path + os.sep):
+        return target
+    return None
+
+
+@st.cache_data(ttl=CONFIG_SCAN_TTL, show_spinner=False)
+def _config_read_file(team: str, relpath: str, head_marker: str
+                      ) -> tuple[str, bool, str]:
+    """Read a file from *team*'s tree. Returns ``(text, is_binary, error)``.
+
+    *head_marker* keys the cache to the current HEAD. Binary files are
+    reported (so the UI offers a download/replace path instead of a broken
+    text editor) rather than mangled into the editor."""
+    target = _config_abs_under_repo(team, relpath)
+    if not target or not os.path.isfile(target):
+        return "", False, "file not found"
+    try:
+        with open(target, "rb") as fh:
+            raw = fh.read()
+        if b"\x00" in raw:
+            return "", True, ""
+        return raw.decode("utf-8", "replace"), False, ""
+    except Exception as e:
+        return "", False, f"{type(e).__name__}: {e}"
+
+
+def _config_yaml_error(text: str) -> str:
+    """Return a YAML parse error string for *text*, or ``""`` when it parses
+    (or PyYAML is unavailable, in which case we don't block the save)."""
+    if not _YAML_AVAILABLE or _yaml is None:
+        return ""
+    try:
+        _yaml.safe_load(text)
+        return ""
+    except Exception as e:  # yaml.YAMLError and friends
+        return str(e).strip().splitlines()[0] if str(e).strip() else "invalid YAML"
+
+
+def _config_save_file(team: str, relpath: str, content: str, message: str
+                      ) -> tuple[bool, str, str]:
+    """Write *content* to *relpath*, then ``add`` → ``commit`` → ``push`` to
+    ``origin/main``. Returns ``(ok, message, new_head)``.
+
+    The whole operation is atomic from the dashboard's POV — on success the
+    working tree matches origin again, so the next background sync's
+    hard-reset is a no-op. Clears the clone/scan/read caches so the very
+    next render reflects the new HEAD."""
+    target = _config_abs_under_repo(team, relpath)
+    if target is None:
+        return False, "refusing to write outside the repo (path traversal)", ""
+    repo_path = _config_team_repo_path(team)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        return False, "team repo is not cloned yet — open it first", ""
+    cred_ok, cred_err = _configure_git_credentials()
+    if not cred_ok:
+        return False, f"git auth setup failed: {cred_err}", ""
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        # Normalise to a trailing newline like a hand-edited file.
+        _body = content if content.endswith("\n") else content + "\n"
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(_body)
+        _git_set_author(
+            repo_path,
+            (st.session_state.get("username") or "").strip(),
+            (st.session_state.get("email") or "").strip(),
+        )
+        r = _run_git("add", "--", relpath, cwd=repo_path)
+        if r.returncode != 0:
+            return False, f"git add failed: {r.stderr.strip()}", ""
+        # Nothing staged → the on-disk content already matched origin.
+        diff = _run_git("diff", "--cached", "--quiet", cwd=repo_path,
+                        inject_auth=False)
+        if diff.returncode == 0:
+            return True, "no changes to commit — file already up to date", ""
+        msg = (message or f"Update {relpath}").strip() or f"Update {relpath}"
+        r = _run_git("commit", "-m", msg, cwd=repo_path)
+        if r.returncode != 0:
+            return False, f"git commit failed: {r.stderr.strip()}", ""
+        r = _run_git("push", "origin", CONFIG_BRANCH, cwd=repo_path)
+        if r.returncode != 0:
+            # Roll the local commit back so a retry isn't blocked by a
+            # diverged local tip; origin is unchanged.
+            _run_git("reset", "--hard", "HEAD~1", cwd=repo_path)
+            return False, f"git push failed: {r.stderr.strip()}", ""
+        head = ""
+        rp = _run_git("rev-parse", "HEAD", cwd=repo_path, inject_auth=False)
+        if rp.returncode == 0:
+            head = (rp.stdout or "").strip()
+        # Invalidate caches so the UI re-reads from the new HEAD.
+        try:
+            _ensure_config_repo.clear()
+            _config_scan_team.clear()
+            _config_read_file.clear()
+        except Exception:
+            pass
+        return True, f"committed & pushed · {head[:8]}", head
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}", ""
+
+
+def _config_viewable_teams(all_repos: list[str]) -> list[str]:
+    """Teams the current operator may VIEW. Admins see every discovered
+    repo; everyone else sees only the team(s) they belong to (matched
+    case-insensitively against their session teams)."""
+    if _is_admin:
+        return list(all_repos)
+    _mine = {str(t).strip().lower() for t in (st.session_state.get("teams") or []) if t}
+    return [r for r in all_repos if r.strip().lower() in _mine]
+
+
+def _config_can_edit(team: str) -> bool:
+    """Whether the operator may EDIT *team*'s config. Admins edit all; others
+    edit only their own teams."""
+    if _is_admin:
+        return True
+    _mine = {str(t).strip().lower() for t in (st.session_state.get("teams") or []) if t}
+    return team.strip().lower() in _mine
+
+
+def _config_key(*parts: str) -> str:
+    """Stable, widget-safe key from arbitrary path parts."""
+    raw = "::".join(str(p) for p in parts)
+    return "_cfg_" + re.sub(r"[^A-Za-z0-9_]", "_", raw)
+
+
+def _config_file_glyph(name: str) -> str:
+    """A small leading glyph per file kind so the file list reads at a glance."""
+    low = name.lower()
+    if low == CONFIG_MANDATORY_FILE:
+        return "★"
+    if low.endswith((".yml", ".yaml")):
+        return "⬡"
+    if low.endswith((".json",)):
+        return "◇"
+    if low.endswith((".md", ".txt")):
+        return "✎"
+    if low.endswith((".sh", ".py", ".j2", ".tpl")):
+        return "⌘"
+    return "•"
+
+
+@st.fragment
+def _render_configurations_tab() -> None:
+    """Per-team configuration browser + editor.
+
+    Admin view-all + team-scoped edit. Discovers the Control-project team
+    repos, clones the selected one under Configurations/<team>/, walks its
+    project → <env>_<app> → files tree, and lets authorised operators edit
+    any file with an in-page diff and a single commit-and-push to main.
+
+    Decorated as a fragment so picking a team / app / file and typing in
+    the editor only re-runs THIS surface — the inventory, event log and the
+    rest of the page are never redrawn while you navigate configs."""
+    host = (_git_creds().get("hostname") or "").strip()
+    if not host:
+        st.markdown(
+            '<div class="cfg-empty">⚠ Git host not resolved from vault — '
+            'configuration repos cannot be discovered. Check the '
+            '<b>Sync Check</b> tab’s git diagnostics.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    _repos, _src = _config_list_team_repos(host)
+    _viewable = _config_viewable_teams(_repos)
+
+    # ── Overview / discovery strip ──────────────────────────────────────
+    _src_label = {
+        "ado": "discovered via ADO", "fallback": "derived from inventory + LDAP",
+        "none": "none found",
+    }.get(_src, _src)
+    st.markdown(
+        '<div class="cfg-head">'
+        '  <div class="cfg-head-l">'
+        '    <span class="cfg-head-glyph">🗂</span>'
+        '    <span class="cfg-head-title">Team configurations</span>'
+        f'    <span class="cfg-head-meta">{len(_viewable)} team'
+        f'{"s" if len(_viewable) != 1 else ""} visible · '
+        f'{html.escape(_src_label)}</span>'
+        '  </div>'
+        f'  <div class="cfg-head-path"><code>{html.escape(CONFIGURATIONS_DIR)}'
+        f'/&lt;team&gt;</code></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not _viewable:
+        if _repos and not _is_admin:
+            st.markdown(
+                '<div class="cfg-empty">No configuration repository matches '
+                'your team membership. Ask an admin if you believe you should '
+                'have access.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="cfg-empty">No team configuration repositories '
+                'were found in the <b>Control</b> project. They appear here '
+                'automatically once they exist.</div>',
+                unsafe_allow_html=True,
+            )
+        return
+
+    # ── Admin bulk-clone — fulfils "ensure ALL team repos are cloned" on
+    # demand without paying the cost on every page load. ────────────────
+    if _is_admin and len(_viewable) > 1:
+        with st.popover(f"⟳  Sync all {len(_viewable)} team repos",
+                        use_container_width=False):
+            st.caption(
+                "Clone or refresh every discovered team repository under "
+                f"`{CONFIGURATIONS_DIR}/`. Runs sequentially; safe to re-run."
+            )
+            if st.button("▶  Clone / refresh all now", key="_cfg_sync_all",
+                         type="primary"):
+                _ok_n = 0
+                with st.status("Syncing team repositories…",
+                               expanded=True) as _status:
+                    for _t in _viewable:
+                        _ok, _h, _m = _ensure_config_repo(host, _t)
+                        _ok_n += 1 if _ok else 0
+                        _icon = "✓" if _ok else "✗"
+                        st.write(f"{_icon}  **{_t}** — {_m}")
+                    _status.update(
+                        label=f"Synced {_ok_n}/{len(_viewable)} team repos",
+                        state="complete" if _ok_n == len(_viewable) else "error",
+                    )
+
+    # ── Team picker ─────────────────────────────────────────────────────
+    # Pop a stale persisted selection that's no longer a valid option (e.g.
+    # discovery returned a different repo set) — Streamlit raises otherwise.
+    _team_key = "_cfg_team_v1"
+    if st.session_state.get(_team_key) not in _viewable:
+        st.session_state.pop(_team_key, None)
+    _team = st.selectbox(
+        "Team", _viewable, key=_team_key, label_visibility="collapsed",
+    )
+
+    _ok, _head, _msg = _ensure_config_repo(host, _team)
+    _editable = _config_can_edit(_team)
+    _edit_badge = (
+        '<span class="cfg-badge cfg-badge-edit">✎ editable</span>' if _editable
+        else '<span class="cfg-badge cfg-badge-ro">read-only</span>'
+    )
+    if not _ok:
+        st.markdown(
+            f'<div class="cfg-clone-bad">✗ Could not sync <b>{html.escape(_team)}</b>'
+            f' · {html.escape(_msg)}</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("↻ Retry sync", key=_config_key("retry", _team)):
+            _ensure_config_repo.clear()
+            st.rerun(scope="fragment")
+        return
+
+    _scan = _config_scan_team(_team, _head)
+    _missing = _scan.get("missing_config") or []
+    st.markdown(
+        '<div class="cfg-statbar">'
+        f'  <span class="cfg-stat"><b>{_scan["n_projects"]}</b> projects</span>'
+        f'  <span class="cfg-stat"><b>{_scan["n_apps"]}</b> env·apps</span>'
+        f'  <span class="cfg-stat"><b>{_scan["n_files"]}</b> files</span>'
+        + (f'  <span class="cfg-stat cfg-stat-warn"><b>{len(_missing)}</b> '
+           f'missing config.yml</span>' if _missing else
+           '  <span class="cfg-stat cfg-stat-ok">✓ all config.yml present</span>')
+        + f'  {_edit_badge}'
+        + f'  <span class="cfg-stat cfg-stat-head">HEAD {html.escape(_head[:8])}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    _projects = _scan.get("projects") or []
+    if not _projects:
+        st.markdown(
+            '<div class="cfg-empty">This team repo has no '
+            '<code>&lt;project&gt;/&lt;env&gt;_&lt;app&gt;/</code> folders yet.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Project → env·app navigation ────────────────────────────────────
+    _nav = st.columns([1.0, 1.0])
+    _proj_names = [p["project"] for p in _projects]
+    with _nav[0]:
+        _pkey = _config_key("proj", _team)
+        if st.session_state.get(_pkey) not in _proj_names:
+            st.session_state.pop(_pkey, None)
+        _proj = st.selectbox("Project", _proj_names, key=_pkey)
+    _proj_obj = next((p for p in _projects if p["project"] == _proj), _projects[0])
+    _apps = _proj_obj.get("apps") or []
+    with _nav[1]:
+        if _apps:
+            _akey = _config_key("app", _team, _proj)
+            _app_labels = {
+                a["env_app"]: (
+                    f'{a["env_app"]}'
+                    + ("" if a["has_config"] else "  ⚠ no config.yml")
+                )
+                for a in _apps
+            }
+            _ea_names = [a["env_app"] for a in _apps]
+            if st.session_state.get(_akey) not in _ea_names:
+                st.session_state.pop(_akey, None)
+            _ea = st.selectbox(
+                "Env · App", _ea_names, key=_akey,
+                format_func=lambda v: _app_labels.get(v, v),
+            )
+        else:
+            st.markdown(
+                '<div class="cfg-empty">No <code>&lt;env&gt;_&lt;app&gt;</code> '
+                'folders under this project.</div>',
+                unsafe_allow_html=True,
+            )
+            _ea = None
+
+    if not _ea:
+        return
+    _app_obj = next((a for a in _apps if a["env_app"] == _ea), _apps[0])
+    _env, _appname = _app_obj["env"], _app_obj["app"]
+    _files = list(_app_obj.get("files") or [])
+
+    st.markdown(
+        '<div class="cfg-crumb">'
+        f'  <span class="cfg-crumb-team">{html.escape(_team)}</span>'
+        f'  <span class="cfg-crumb-sep">/</span>'
+        f'  <span class="cfg-crumb-proj">{html.escape(_proj)}</span>'
+        f'  <span class="cfg-crumb-sep">/</span>'
+        + (f'<span class="cfg-crumb-env">{html.escape(_env)}</span>'
+           if _env else '')
+        + f'  <span class="cfg-crumb-app">{html.escape(_appname)}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not _app_obj["has_config"]:
+        st.markdown(
+            '<div class="cfg-warn">⚠ <b>config.yml</b> is mandatory but '
+            'missing from this env·app.</div>',
+            unsafe_allow_html=True,
+        )
+        if _editable and st.button("➕ Create config.yml", type="primary",
+                                   key=_config_key("mkcfg", _team, _proj, _ea)):
+            _rel = f"{_proj}/{_ea}/{CONFIG_MANDATORY_FILE}"
+            _seed = (
+                f"# config.yml for {_appname} ({_env or 'no-env'}) — {_proj}\n"
+                f"# Created via the dashboard.\n"
+            )
+            _sok, _smsg, _ = _config_save_file(
+                _team, _rel, _seed, f"Add config.yml for {_proj}/{_ea}")
+            (st.success if _sok else st.error)(_smsg)
+            if _sok:
+                st.rerun(scope="fragment")
+
+    # ── File picker + editor ────────────────────────────────────────────
+    if _files:
+        _fkey = _config_key("file", _team, _proj, _ea)
+        if st.session_state.get(_fkey) not in _files:
+            st.session_state.pop(_fkey, None)
+        _file = st.radio(
+            "File", _files, key=_fkey,
+            format_func=lambda f: f"{_config_file_glyph(f)}  {f}",
+            horizontal=True, label_visibility="collapsed",
+        )
+        _rel = f"{_proj}/{_ea}/{_file}"
+        _text, _is_bin, _err = _config_read_file(_team, _rel, _head)
+
+        if _err:
+            st.markdown(
+                f'<div class="cfg-warn">Could not read <code>{html.escape(_file)}'
+                f'</code> · {html.escape(_err)}</div>',
+                unsafe_allow_html=True,
+            )
+        elif _is_bin:
+            st.markdown(
+                f'<div class="cfg-warn">📦 <code>{html.escape(_file)}</code> is a '
+                'binary file — not editable here.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            _is_yaml = _file.lower().endswith((".yml", ".yaml"))
+            _lang = "yaml" if _is_yaml else (
+                "json" if _file.lower().endswith(".json") else None)
+            if not _editable:
+                st.code(_text, language=_lang, line_numbers=True)
+                st.caption(
+                    f"Read-only · you are not a member of **{_team}**. "
+                    "Admins and team members can edit."
+                )
+            else:
+                _edit_key = _config_key("edit", _team, _proj, _ea, _file)
+                _new = st.text_area(
+                    "content", value=_text, key=_edit_key, height=420,
+                    label_visibility="collapsed",
+                )
+                _dirty = _new != _text
+                _yaml_err = _config_yaml_error(_new) if _is_yaml else ""
+                _c1, _c2 = st.columns([3, 1])
+                with _c1:
+                    if _yaml_err:
+                        st.markdown(
+                            f'<div class="cfg-yaml-bad">✗ YAML: '
+                            f'{html.escape(_yaml_err)}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    elif _dirty:
+                        st.markdown(
+                            '<div class="cfg-yaml-ok">● unsaved changes — '
+                            'review the diff below, then commit.</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            '<div class="cfg-clean">✓ in sync with origin/main'
+                            '</div>',
+                            unsafe_allow_html=True,
+                        )
+                _msg_key = _config_key("msg", _team, _proj, _ea, _file)
+                with _c2:
+                    _commit_disabled = (not _dirty) or bool(_yaml_err)
+                    _do_commit = st.button(
+                        "⬆ Commit & push", type="primary",
+                        use_container_width=True, disabled=_commit_disabled,
+                        key=_config_key("commit", _team, _proj, _ea, _file),
+                    )
+                if _dirty:
+                    import difflib
+                    _diff = "".join(difflib.unified_diff(
+                        _text.splitlines(keepends=True),
+                        _new.splitlines(keepends=True),
+                        fromfile=f"a/{_rel}", tofile=f"b/{_rel}",
+                    )) or "(no textual diff)"
+                    with st.expander("▤ Review diff", expanded=True):
+                        st.code(_diff, language="diff")
+                    st.text_input(
+                        "Commit message", key=_msg_key,
+                        placeholder=f"Update {_rel}",
+                        label_visibility="collapsed",
+                    )
+                if _do_commit and _dirty and not _yaml_err:
+                    _cmsg = (st.session_state.get(_msg_key) or "").strip()
+                    _sok, _smsg, _ = _config_save_file(_team, _rel, _new, _cmsg)
+                    if _sok:
+                        st.success(_smsg)
+                        st.rerun(scope="fragment")
+                    else:
+                        st.error(_smsg)
+
+    # ── Add a new file to this env·app ──────────────────────────────────
+    if _editable:
+        with st.popover("➕ Add file", use_container_width=False):
+            st.caption(f"New file under `{_proj}/{_ea}/`")
+            _nf_key = _config_key("newfile", _team, _proj, _ea)
+            _nf_body_key = _config_key("newbody", _team, _proj, _ea)
+            _nf_name = st.text_input(
+                "Path (relative to this env·app, e.g. `overrides/prod.yml`)",
+                key=_nf_key, placeholder="filename.yml",
+            ).strip()
+            _nf_body = st.text_area("Content", key=_nf_body_key, height=200)
+            if st.button("Create & push", type="primary",
+                         key=_config_key("mkfile", _team, _proj, _ea),
+                         disabled=not _nf_name):
+                _safe_rel = _nf_name.lstrip("/")
+                _rel = f"{_proj}/{_ea}/{_safe_rel}"
+                _sok, _smsg, _ = _config_save_file(
+                    _team, _rel, _nf_body or "", f"Add {_rel}")
+                if _sok:
+                    st.success(_smsg)
+                    st.session_state.pop(_nf_key, None)
+                    st.session_state.pop(_nf_body_key, None)
+                    st.rerun(scope="fragment")
+                else:
+                    st.error(_smsg)
+
+
+# =============================================================================
 # GIT DIAGNOSTIC PROBE — admin-only on-demand
 # =============================================================================
 # Distinguishes "vault unreachable" from "credentials malformed" from "host
@@ -26143,6 +27029,9 @@ if _show_inv and _inventory_slot is not None:
         # History → PGSQL tab — admin-only, only when Postgres is wired.
         # The actual reachability check happens inside the renderer.
         _hist_show = _is_admin and _POSTGRES_AVAILABLE
+        # Configurations tab — per-team config repos in the Control project.
+        # Admins view-all; any operator who belongs to a team sees their own.
+        _cfg_show = _is_admin or bool(st.session_state.get("teams"))
         _tab_labels: list[str] = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
         ]
@@ -26151,6 +27040,8 @@ if _show_inv and _inventory_slot is not None:
         _tab_labels.append(f"⧗  EVENT LOG{_el_badge_txt}")
         if _act_show:
             _tab_labels.append("▶  ACTIONS")
+        if _cfg_show:
+            _tab_labels.append("🗂  CONFIGURATIONS")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         if _hist_show:
@@ -26166,6 +27057,9 @@ if _show_inv and _inventory_slot is not None:
             _tab_log = _tabs[_idx]; _idx += 1
             _tab_actions = _tabs[_idx] if _act_show else None
             if _act_show:
+                _idx += 1
+            _tab_cfg = _tabs[_idx] if _cfg_show else None
+            if _cfg_show:
                 _idx += 1
             _tab_sync = _tabs[_idx] if _sync_show else None
             if _sync_show:
@@ -26221,6 +27115,21 @@ if _show_inv and _inventory_slot is not None:
                     _actions_slot = st.empty()
             else:
                 _actions_slot = None
+            if _tab_cfg is not None:
+                with _tab_cfg:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Per-team configuration repositories (Control project) '
+                        '— browse every <code>project / env_app</code> and edit '
+                        'any file with an in-page diff before a single '
+                        'commit-and-push to <code>main</code>. Admins see every '
+                        'team; members see their own.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _cfg_slot = st.empty()
+            else:
+                _cfg_slot = None
             if _tab_sync is not None:
                 with _tab_sync:
                     st.markdown(
@@ -26287,6 +27196,20 @@ if _show_inv and _inventory_slot is not None:
                     hint="Stage-transition triggers — Build · Deploy · "
                          "Release. Loads on open; trigger confirmations "
                          "always surface here.",
+                )
+
+        # Configurations — per-team config repos. Lazy-gated like the other
+        # secondary surfaces so a Filter Console change never rebuilds it;
+        # the renderer is itself a fragment so navigating/editing inside it
+        # is isolated from the rest of the page.
+        if _cfg_slot is not None:
+            with _cfg_slot.container():
+                _lazy_tab_body(
+                    "_tab_open_cfg_v1", "Configurations",
+                    _render_configurations_tab,
+                    hint="Per-team config repos (Control project) — browse "
+                         "project / env_app and edit files with commit-and-push "
+                         "to main. Loads on open.",
                 )
 
         # Sync check — smart-loaded; uses the scope key the inventory
