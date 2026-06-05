@@ -2340,6 +2340,81 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     padding-bottom: 4px;
     border-bottom: 1px solid var(--cc-border);
 }
+/* ── Lazy-load "module bay" — placeholder for deferred secondary tabs.
+   Off-screen surfaces (Teams / Actions / History) render this instead of
+   their heavy bodies until the operator opens them, so a Filter Console
+   change never pays their cost. Styled to read as an intentional, dormant
+   module rather than an empty panel. */
+.cc-lazybay {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 7px;
+    padding: 38px 28px 30px;
+    margin: 6px 0 12px;
+    border: 1px dashed var(--cc-border-hi, var(--cc-border));
+    border-radius: 16px;
+    background:
+        radial-gradient(120% 90% at 50% -10%,
+            color-mix(in srgb, var(--cc-accent) 9%, transparent) 0%,
+            transparent 62%),
+        var(--cc-surface2);
+    overflow: hidden;
+}
+.cc-lazybay::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(var(--cc-border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--cc-border) 1px, transparent 1px);
+    background-size: 22px 22px;
+    opacity: 0.10;
+    pointer-events: none;
+    mask-image: radial-gradient(70% 70% at 50% 30%, #000 0%, transparent 75%);
+    -webkit-mask-image: radial-gradient(70% 70% at 50% 30%, #000 0%, transparent 75%);
+}
+.cc-lazybay-glyph {
+    font-size: 1.45rem;
+    line-height: 1;
+    color: var(--cc-accent);
+    opacity: 0.85;
+    text-shadow: 0 0 18px color-mix(in srgb, var(--cc-accent) 55%, transparent);
+}
+.cc-lazybay-title {
+    font-family: var(--cc-display, var(--cc-sans));
+    font-weight: 700;
+    font-size: 0.96rem;
+    letter-spacing: 0.04em;
+    color: var(--cc-text);
+}
+.cc-lazybay-hint {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    max-width: 46ch;
+    color: var(--cc-text-mute);
+}
+/* The Streamlit loader button beneath each bay — wide accent-outlined
+   pill that fills on hover. Targeted by the auto-generated st-key class. */
+[class*="st-key-_lazyload_"] button {
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 55%, var(--cc-border)) !important;
+    background: color-mix(in srgb, var(--cc-accent) 8%, transparent) !important;
+    color: var(--cc-accent) !important;
+    font-family: var(--cc-mono) !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.04em !important;
+    border-radius: 11px !important;
+    transition: background .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease !important;
+}
+[class*="st-key-_lazyload_"] button:hover {
+    background: var(--cc-accent) !important;
+    color: var(--cc-paper, #0b0d12) !important;
+    border-color: var(--cc-accent) !important;
+    box-shadow: 0 4px 18px color-mix(in srgb, var(--cc-accent) 38%, transparent) !important;
+}
 .iv-act-note {
     margin-top: 8px;
     padding: 6px 10px;
@@ -14509,6 +14584,12 @@ def _render_history_to_pg_tab() -> None:
     _running = sum(
         1 for s in _statuses if (s["job"] or {}).get("status") == "running"
     )
+    # Publish live running-count so the auto-progress ticker only schedules
+    # its 2-second fragment while there is actually work in flight. When
+    # nothing is running the call site renders a static idle badge instead,
+    # so an idle session pays ZERO background DB round-trips. See the
+    # late-render block + `_render_history_autoprogress_fragment`.
+    st.session_state["_history_jobs_running_v1"] = _running > 0
     _paused  = sum(
         1 for s in _statuses if (s["job"] or {}).get("status") == "paused"
     )
@@ -14800,6 +14881,25 @@ def _render_history_autoprogress_fragment() -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
+    else:
+        # Nothing left running — flip the published flag off and force a
+        # single full-app rerun so the call site drops to the static idle
+        # branch and STOPS scheduling this 2-second fragment. Without this
+        # the ticker would keep firing a DB round-trip every 2s forever.
+        if st.session_state.get("_history_jobs_running_v1"):
+            st.session_state["_history_jobs_running_v1"] = False
+            st.rerun(scope="app")
+
+
+def _render_history_autoprogress_idle() -> None:
+    """No-op stand-in rendered when no migration job is running.
+
+    Crucially this is NOT decorated with ``run_every`` — when the
+    History migration is idle the page must not keep waking up every 2s
+    to poll Postgres. The moment a job is flipped to ``running`` (Start /
+    Resume) the renderer republishes ``_history_jobs_running_v1`` and the
+    call site swaps back to the ticking fragment."""
+    return
 
 
 def _render_actions_tab() -> None:
@@ -25931,6 +26031,43 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     st.session_state["_iv_total_v1"] = _inv_total
 
 
+def _lazy_tab_body(flag_key: str, title: str, render_fn, *,
+                   force: bool = False, hint: str = "") -> None:
+    """Defer a secondary surface's heavy render until the operator opens it.
+
+    Streamlit's ``st.tabs`` renders EVERY panel on EVERY script run, so
+    without gating a single Filter Console change rebuilds Teams,
+    Actions and History in full even though they sit off-screen behind
+    the active tab. That is the bulk of the "whole page reruns on every
+    filter" cost.
+
+    This helper renders a lightweight, on-brand placeholder with a
+    one-click loader the first time. Once opened (or when ``force`` is
+    set — e.g. a pending Jenkins trigger that must surface its
+    confirmation panel) the flag sticks for the rest of the session and
+    the real body renders normally on subsequent runs. Inventory and the
+    Event Log are NOT gated — they are the scope-driven pair the filters
+    exist to manipulate, so they always reflect the live selection.
+    """
+    if bool(st.session_state.get(flag_key)) or force:
+        st.session_state[flag_key] = True
+        render_fn()
+        return
+    _hint = hint or "Deferred for speed — renders only when you open it, so filter changes stay instant."
+    st.markdown(
+        '<div class="cc-lazybay">'
+        '  <div class="cc-lazybay-glyph">▟</div>'
+        f'  <div class="cc-lazybay-title">{html.escape(title)}</div>'
+        f'  <div class="cc-lazybay-hint">{html.escape(_hint)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button(f"▶  Load {title}", key=f"_lazyload_{flag_key}",
+                 use_container_width=True):
+        st.session_state[flag_key] = True
+        st.rerun()
+
+
 # ── Late render into the top-of-page slot ─────────────────────────────────
 # Both data surfaces live inside a custom-styled tab group. The inventory
 # tab is rendered first (it publishes the app-scope set via
@@ -26123,7 +26260,13 @@ if _show_inv and _inventory_slot is not None:
         # the slot that's positioned BEFORE inventory in the tab strip.
         if _tm_slot is not None:
             with _tm_slot.container():
-                _render_teams_and_members_view()
+                _lazy_tab_body(
+                    "_tab_open_teams_v1", "Teams & Members",
+                    _render_teams_and_members_view,
+                    hint="People · teams · roles · cross-index activity. "
+                         "Deferred until opened so Filter Console changes "
+                         "stay instant.",
+                )
 
         # Now the event log reads a fresh scope and fills slot C.
         with _el_slot.container():
@@ -26134,7 +26277,17 @@ if _show_inv and _inventory_slot is not None:
         # here; Pipelines Inventory stays read-only.
         if _actions_slot is not None:
             with _actions_slot.container():
-                _render_actions_tab()
+                # Force the body open whenever a Jenkins trigger is pending
+                # so the confirmation panel always surfaces, even if the
+                # operator never explicitly "loaded" the tab this session.
+                _act_force = bool(st.session_state.get("_jk_trigger_pending_v1"))
+                _lazy_tab_body(
+                    "_tab_open_actions_v1", "Actions",
+                    _render_actions_tab, force=_act_force,
+                    hint="Stage-transition triggers — Build · Deploy · "
+                         "Release. Loads on open; trigger confirmations "
+                         "always surface here.",
+                )
 
         # Sync check — smart-loaded; uses the scope key the inventory
         # fragment publishes so its diff matches the visible scope.
@@ -26172,8 +26325,24 @@ if _show_inv and _inventory_slot is not None:
         # inventory render path above.
         if _history_slot is not None:
             with _history_slot.container():
-                _render_history_to_pg_tab()
-                _render_history_autoprogress_fragment()
+                def _history_body() -> None:
+                    _render_history_to_pg_tab()
+                    # The 2-second auto-progress fragment only schedules
+                    # itself while a migration is actually running. When
+                    # idle we render the no-tick stand-in so the page is
+                    # not woken up every 2s to poll Postgres.
+                    if st.session_state.get("_history_jobs_running_v1"):
+                        _render_history_autoprogress_fragment()
+                    else:
+                        _render_history_autoprogress_idle()
+
+                _lazy_tab_body(
+                    "_tab_open_history_v1", "History → PGSQL",
+                    _history_body,
+                    hint="Elasticsearch → Postgres migration console. "
+                         "Loads on open; the 2s progress ticker runs only "
+                         "while a job is migrating.",
+                )
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
     # but the mapping allows it). Render the event log standalone with no
