@@ -19033,10 +19033,10 @@ def _config_file_glyph(name: str) -> str:
 def _render_configurations_tab() -> None:
     """Per-team configuration browser + editor.
 
-    NOTE: No longer wired to a tab — per-env configs now surface as a ⚙ cog
-    popover inside the Pipelines Inventory table (`_iv_cfg_*` in
-    `_render_inventory_view`). Kept here because it holds the editable
-    commit-and-push flow, ready to re-expose (e.g. via a dialog) if needed.
+    Mounted inside the "⚙ Edit configs" popover on the Pipelines Inventory
+    toolbar (NOT a standalone tab). Per-env STATUS + a read-only view live
+    on the in-table ⚙ cog; this is the editable surface (browser popovers
+    can't run Streamlit actions, so edit/commit/push lives here).
 
     Admin view-all + team-scoped edit. Discovers the Control-project team
     repos, clones the selected one under Configurations/<team>/, walks its
@@ -25782,6 +25782,35 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     unsafe_allow_html=True,
                 )
 
+    # ── Config editor toolbar — Streamlit-native edit + commit + push ──────
+    # The in-table ⚙ cog is a native HTML popover (view + status only —
+    # browser popovers can't run Streamlit actions). Editing lives here: a
+    # popover hosting the full team → project → env_app → file → diff →
+    # commit-and-push flow, team-scoped (admins all teams; members their
+    # own). Available to anyone with config access, not just admins.
+    _iv_cfg_edit_show = _is_admin or bool(_iv_session_teams)
+    if _iv_cfg_edit_show and _iv_ado_host:
+        with st.container(key="cc_iv_cfg_editor_toolbar"):
+            with st.popover("⚙  Edit configs", use_container_width=False,
+                            help="Open the team configuration editor — fix "
+                                 "missing / incorrect config.yml files and "
+                                 "commit-and-push to main. Scoped to teams "
+                                 "you belong to (admins: all teams)."):
+                # Gate the heavy editor (discovery + clone) behind one click
+                # so merely having the popover in the DOM costs nothing.
+                if not st.session_state.get("_cfg_editor_loaded_v1"):
+                    st.caption(
+                        "Browse and edit per-team configuration repos "
+                        "(Control project). Loads on open."
+                    )
+                    if st.button("▶  Load configuration editor",
+                                 key="_cfg_editor_load_btn",
+                                 use_container_width=True):
+                        st.session_state["_cfg_editor_loaded_v1"] = True
+                        st.rerun()
+                else:
+                    _render_configurations_tab()
+
     _iv_page, _iv_start, _iv_end = _render_pager(
         total=_inv_total,
         page_size=_IV_PAGE_SIZE,
@@ -25965,8 +25994,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Discover which team config repos actually exist (cached ADO REST) so a
     # cell never wastes a slow failed-clone on a team that has no repo. When
     # discovery is unavailable (empty set) we fall back to attempting any
-    # team the row names.
-    if _is_admin and _iv_ado_host:
+    # team the row names. Available to admins (all teams) and to any member
+    # who belongs to a team (their own teams only — see `_iv_cfg_status`).
+    _iv_cfg_session_teams_lc = {
+        str(t).strip().lower() for t in _iv_session_teams if str(t).strip()
+    }
+    if _iv_ado_host and (_is_admin or _iv_cfg_session_teams_lc):
         _iv_cfg_repos, _iv_cfg_repo_src = _config_list_team_repos(_iv_ado_host)
     else:
         _iv_cfg_repos, _iv_cfg_repo_src = [], "none"
@@ -25977,10 +26010,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     def _iv_cfg_status(app: str, env: str) -> dict | None:
         """Resolve the config.yml state for one (app, env). Returns None
-        when no cog should render (non-admin or git host unresolved).
-        Otherwise a dict the cell + popover both consume. Memoised per
-        render so the cell render and the popover build share one probe."""
-        if not _is_admin or not _iv_ado_host:
+        when no cog should render (git host unresolved, or the viewer is a
+        non-admin who doesn't own this env's team). Admins see every env's
+        cog; members see the cog only for cells their team owns.
+        Memoised per render so the cell render and the popover build share
+        one probe."""
+        if not _iv_ado_host:
             return None
         _k = (app, env)
         if _k in _iv_cfg_memo:
@@ -25994,6 +26029,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _teams = [str(_raw).strip()]
         else:
             _teams = []
+        # Team-scoped visibility: admins always; otherwise the viewer must
+        # own (be a member of) one of this env's teams.
+        if not _is_admin:
+            if not (_iv_cfg_session_teams_lc
+                    & {t.strip().lower() for t in _teams}):
+                _iv_cfg_memo[_k] = None
+                return None
         _out: dict = {
             "app": app, "env": env, "project": _project, "team": "",
             "state": "norepo", "present": False, "yaml_ok": False,
@@ -26168,7 +26210,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  </div>'
             f'  <div class="ap-foot">Source: '
             f'{html.escape(CONFIG_ADO_PROJECT)}/{html.escape(cs["team"] or "—")} '
-            f'· read-only view</div>'
+            f'· view only — edit &amp; commit via the <b>⚙ Edit configs</b> '
+            f'toolbar above the table</div>'
             f'</div>'
         )
 
