@@ -3978,6 +3978,169 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     gap: 10px;
     margin: 4px 0 18px 0;
 }
+/* ── Coverage stat cards — Teams×Projects / Users×Projects ───────────── */
+.tmx-card {
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    background: var(--cc-surface);
+    padding: 14px 16px 6px;
+    box-shadow: 0 2px 6px rgba(10,14,30,.03);
+}
+.tmx-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.tmx-card-glyph { font-size: 1.05rem; opacity: .85; }
+.tmx-card-title {
+    font-family: var(--cc-display, var(--cc-sans));
+    font-weight: 700;
+    font-size: 0.92rem;
+    letter-spacing: 0.02em;
+    color: var(--cc-text);
+}
+.tmx-card-meta {
+    margin-left: auto;
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    color: var(--cc-text-mute);
+}
+.tmx-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.tmx-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+}
+.tmx-metric b {
+    font-family: var(--cc-data, var(--cc-mono));
+    font-size: 1.18rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--cc-text);
+}
+.tmx-metric span {
+    font-size: 0.64rem;
+    color: var(--cc-text-mute);
+    line-height: 1.25;
+}
+.tmx-lead {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 0 10px;
+    font-size: 0.76rem;
+}
+.tmx-lead-k {
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--cc-text-mute);
+}
+.tmx-lead-v { color: var(--cc-text); font-weight: 600; }
+.tmx-bars-head {
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--cc-text-mute);
+    border-top: 1px solid var(--cc-border);
+    padding-top: 8px;
+    margin-bottom: 6px;
+}
+.tmx-bars { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
+.tmx-bar-row {
+    display: grid;
+    grid-template-columns: 38% 1fr auto;
+    align-items: center;
+    gap: 8px;
+}
+.tmx-bar-lbl {
+    font-size: 0.72rem;
+    color: var(--cc-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tmx-bar-track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--cc-surface2);
+    overflow: hidden;
+}
+.tmx-bar-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    min-width: 3px;
+}
+.tmx-bar-num {
+    font-family: var(--cc-data, var(--cc-mono));
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    text-align: right;
+    min-width: 1.6em;
+}
+.tmx-empty {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+    font-style: italic;
+    padding: 6px 0;
+}
+/* full breakdown table inside the popover */
+.tmx-bd-wrap { max-height: 420px; overflow-y: auto; }
+.tmx-bd-table { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+.tmx-bd-table th {
+    position: sticky; top: 0;
+    background: var(--cc-surface2);
+    text-align: left;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cc-text-mute);
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.tmx-bd-table th.tmx-th-num { text-align: right; }
+.tmx-bd-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--cc-border);
+    vertical-align: top;
+}
+.tmx-bd-name { font-weight: 600; color: var(--cc-text); white-space: nowrap; }
+.tmx-bd-num {
+    font-family: var(--cc-data, var(--cc-mono));
+    font-weight: 700;
+    text-align: right;
+    color: var(--cc-teal);
+}
+.tmx-bd-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.tmx-chip {
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-text-dim);
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--cc-border);
+    background: var(--cc-surface2);
+    white-space: nowrap;
+}
+@media (max-width: 760px) {
+    .tmx-metrics { grid-template-columns: 1fr 1fr; }
+    .tmx-bar-row { grid-template-columns: 42% 1fr auto; }
+}
 .tm-tile {
     padding: 14px 16px;
     border-radius: 14px;
@@ -12826,6 +12989,216 @@ def _render_teams_and_members_view() -> None:
                 # If plotly fails for any reason, skip silently — the rest
                 # of the view stays functional.
                 pass
+
+    # ── Coverage stats — Teams × Projects and Users × Projects ─────────────
+    # Two compact summary panels derived from the same scoped inventory
+    # rows (+ DB rosters for the user→team link). Where the heatmap above
+    # shows raw app-row intensity, these answer the "how spread out" /
+    # "who covers the most" questions at a glance:
+    #   • Teams × Projects — projects each team touches (any role).
+    #   • Users × Projects — projects each user reaches via team membership.
+    # All in-memory dict work over already-loaded data; no fetches.
+    _team_projects: dict[str, set[str]] = {}
+    _project_teams: dict[str, set[str]] = {}
+    for (_tm_k, _pj_k) in _team_project_counts.keys():
+        _team_projects.setdefault(_tm_k, set()).add(_pj_k)
+        _project_teams.setdefault(_pj_k, set()).add(_tm_k)
+    _all_projects_cov = set(_project_teams.keys())
+
+    # team name (lowercased) → projects, so DB roster CNs match inventory
+    # team values regardless of case.
+    _team_projects_lc: dict[str, set[str]] = {}
+    for _tm_k, _pjs in _team_projects.items():
+        _team_projects_lc.setdefault(_tm_k.strip().lower(), set()).update(_pjs)
+
+    # username (lowercased) → display label, resolved from the scoped users.
+    _user_label_by_lc: dict[str, str] = {}
+    for _u in _users_list:
+        _lbl = (
+            _u.get("label")
+            or _u.get("ldap_username")
+            or (next(iter(_u.get("names") or []), ""))
+            or _u.get("email")
+            or ""
+        )
+        for _k in (
+            (_u.get("ldap_username") or ""),
+            (_u.get("email") or ""),
+            *(_u.get("names") or []),
+        ):
+            _k_lc = str(_k).strip().lower()
+            if _k_lc and _k_lc not in _user_label_by_lc:
+                _user_label_by_lc[_k_lc] = str(_lbl).strip() or _k_lc
+
+    # user → projects: each synced team's roster inherits that team's
+    # projects. Teams outside the current scope contribute nothing (they
+    # never enter `_team_projects`), so this is naturally scope-aware.
+    _user_projects: dict[str, set[str]] = {}
+    for _tcn, _members in (_db_team_rosters or {}).items():
+        _tprojs = _team_projects_lc.get(str(_tcn).strip().lower())
+        if not _tprojs:
+            continue
+        for _m in _members or []:
+            _mlc = str(_m).strip().lower()
+            if _mlc:
+                _user_projects.setdefault(_mlc, set()).update(_tprojs)
+
+    def _cov_bars(items: list[tuple[str, int]], accent: str,
+                  unit: str) -> str:
+        """Horizontal mini-bar ranking. *items* = [(label, count)] sorted
+        descending; bar width scales to the top count."""
+        if not items:
+            return '<div class="tmx-empty">no data in scope</div>'
+        _mx = max(c for _, c in items) or 1
+        _out = []
+        for _lbl, _c in items:
+            _w = max(4, round(_c / _mx * 100))
+            _out.append(
+                f'<div class="tmx-bar-row">'
+                f'  <span class="tmx-bar-lbl" title="{html.escape(_lbl)}">'
+                f'{html.escape(_lbl)}</span>'
+                f'  <span class="tmx-bar-track">'
+                f'    <span class="tmx-bar-fill" style="width:{_w}%;'
+                f'background:{accent}"></span>'
+                f'  </span>'
+                f'  <span class="tmx-bar-num">{_c}</span>'
+                f'</div>'
+            )
+        return "".join(_out)
+
+    # Aggregate metrics.
+    _tp_n_teams = len(_team_projects)
+    _tp_n_projects = len(_all_projects_cov)
+    _tp_links = sum(len(v) for v in _team_projects.values())
+    _tp_avg = (_tp_links / _tp_n_teams) if _tp_n_teams else 0.0
+    _tp_multi = sum(1 for v in _team_projects.values() if len(v) > 1)
+    _tp_proj_avg = (_tp_links / _tp_n_projects) if _tp_n_projects else 0.0
+    _tp_top_team = max(_team_projects.items(),
+                       key=lambda kv: len(kv[1]), default=("—", set()))
+    _tp_top_proj = max(_project_teams.items(),
+                       key=lambda kv: len(kv[1]), default=("—", set()))
+
+    _up_n_users = len(_user_projects)
+    _up_links = sum(len(v) for v in _user_projects.values())
+    _up_avg = (_up_links / _up_n_users) if _up_n_users else 0.0
+    _up_multi = sum(1 for v in _user_projects.values() if len(v) > 1)
+    _up_top_user = max(_user_projects.items(),
+                       key=lambda kv: len(kv[1]), default=("—", set()))
+
+    _tp_top = sorted(
+        ((t, len(p)) for t, p in _team_projects.items()),
+        key=lambda kv: (-kv[1], kv[0].lower()),
+    )[:8]
+    _up_top = sorted(
+        ((_user_label_by_lc.get(u, u), len(p)) for u, p in _user_projects.items()),
+        key=lambda kv: (-kv[1], kv[0].lower()),
+    )[:8]
+
+    if _team_project_counts or _user_projects:
+        _cov_cols = st.columns(2)
+        # Panel A — Teams × Projects
+        with _cov_cols[0]:
+            st.markdown(
+                f'<div class="tmx-card">'
+                f'  <div class="tmx-card-head">'
+                f'    <span class="tmx-card-glyph">⬡</span>'
+                f'    <span class="tmx-card-title">Teams × Projects</span>'
+                f'    <span class="tmx-card-meta">{_tp_n_teams} teams · '
+                f'{_tp_n_projects} projects</span>'
+                f'  </div>'
+                f'  <div class="tmx-metrics">'
+                f'    <div class="tmx-metric"><b>{_tp_avg:.1f}</b>'
+                f'<span>avg projects / team</span></div>'
+                f'    <div class="tmx-metric"><b>{_tp_multi}</b>'
+                f'<span>cross-project teams</span></div>'
+                f'    <div class="tmx-metric"><b>{_tp_proj_avg:.1f}</b>'
+                f'<span>avg teams / project</span></div>'
+                f'  </div>'
+                f'  <div class="tmx-lead">'
+                f'    <span class="tmx-lead-k">Widest team</span>'
+                f'    <span class="tmx-lead-v">{html.escape(_tp_top_team[0])}'
+                f' · {len(_tp_top_team[1])} projects</span>'
+                f'  </div>'
+                f'  <div class="tmx-bars-head">Top teams by project span</div>'
+                f'  <div class="tmx-bars">'
+                + _cov_bars(_tp_top, "var(--cc-teal)", "projects") +
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            with st.popover("⊞ Full teams → projects breakdown",
+                            use_container_width=True):
+                _rows = "".join(
+                    f'<tr><td class="tmx-bd-name">{html.escape(_t)}</td>'
+                    f'<td class="tmx-bd-num">{len(_team_projects[_t])}</td>'
+                    f'<td class="tmx-bd-chips">'
+                    + "".join(f'<span class="tmx-chip">{html.escape(_p)}</span>'
+                              for _p in sorted(_team_projects[_t], key=str.lower))
+                    + '</td></tr>'
+                    for _t, _ in sorted(
+                        ((t, len(p)) for t, p in _team_projects.items()),
+                        key=lambda kv: (-kv[1], kv[0].lower()))
+                )
+                st.markdown(
+                    '<div class="tmx-bd-wrap"><table class="tmx-bd-table">'
+                    '<thead><tr><th>Team</th><th class="tmx-th-num">#</th>'
+                    '<th>Projects</th></tr></thead>'
+                    f'<tbody>{_rows}</tbody></table></div>',
+                    unsafe_allow_html=True,
+                )
+        # Panel B — Users × Projects
+        with _cov_cols[1]:
+            _up_top_lbl = _user_label_by_lc.get(_up_top_user[0], _up_top_user[0])
+            st.markdown(
+                f'<div class="tmx-card">'
+                f'  <div class="tmx-card-head">'
+                f'    <span class="tmx-card-glyph">◷</span>'
+                f'    <span class="tmx-card-title">Users × Projects</span>'
+                f'    <span class="tmx-card-meta">{_up_n_users} users · '
+                f'{_tp_n_projects} projects</span>'
+                f'  </div>'
+                f'  <div class="tmx-metrics">'
+                f'    <div class="tmx-metric"><b>{_up_avg:.1f}</b>'
+                f'<span>avg projects / user</span></div>'
+                f'    <div class="tmx-metric"><b>{_up_multi}</b>'
+                f'<span>multi-project users</span></div>'
+                f'    <div class="tmx-metric"><b>{_up_links:,}</b>'
+                f'<span>user · project links</span></div>'
+                f'  </div>'
+                f'  <div class="tmx-lead">'
+                f'    <span class="tmx-lead-k">Widest reach</span>'
+                f'    <span class="tmx-lead-v">{html.escape(_up_top_lbl)}'
+                f' · {len(_up_top_user[1])} projects</span>'
+                f'  </div>'
+                f'  <div class="tmx-bars-head">Top users by project reach</div>'
+                f'  <div class="tmx-bars">'
+                + _cov_bars(_up_top, "var(--cc-accent)", "projects") +
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            with st.popover("⊞ Full users → projects breakdown",
+                            use_container_width=True):
+                _rows = "".join(
+                    f'<tr><td class="tmx-bd-name">'
+                    f'{html.escape(_user_label_by_lc.get(_u_lc, _u_lc))}</td>'
+                    f'<td class="tmx-bd-num">{len(_projs)}</td>'
+                    f'<td class="tmx-bd-chips">'
+                    + "".join(f'<span class="tmx-chip">{html.escape(_p)}</span>'
+                              for _p in sorted(_projs, key=str.lower))
+                    + '</td></tr>'
+                    for _u_lc, _projs in sorted(
+                        _user_projects.items(),
+                        key=lambda kv: (-len(kv[1]),
+                                        _user_label_by_lc.get(kv[0], kv[0]).lower()))
+                )
+                st.markdown(
+                    '<div class="tmx-bd-wrap"><table class="tmx-bd-table">'
+                    '<thead><tr><th>User</th><th class="tmx-th-num">#</th>'
+                    '<th>Projects</th></tr></thead>'
+                    f'<tbody>{_rows}</tbody></table></div>',
+                    unsafe_allow_html=True,
+                )
 
     # ── Teams grid (popover-driven, compact) ──────────────────────────────
     # Each team renders as a compact button-popover. Clicking opens the
