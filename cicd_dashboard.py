@@ -1821,6 +1821,114 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     align-items: flex-start;
     line-height: 1.15;
 }
+.iv-stage-top {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+}
+/* ── Per-env config ⚙ cog (next to the version chip) ─────────────────── */
+.iv-cfg-cog {
+    position: relative;
+    flex: 0 0 auto;
+    border: 1px solid var(--cc-border);
+    background: var(--cc-surface2);
+    color: var(--cc-text-mute);
+    border-radius: 5px;
+    padding: 1px 4px 1px 3px;
+    font-size: 0.78rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s, transform .12s;
+}
+.iv-cfg-cog:hover { transform: translateY(-1px); }
+.iv-cfg-mark {
+    font-size: 0.58rem;
+    font-weight: 800;
+    margin-left: 1px;
+    vertical-align: super;
+    line-height: 1;
+}
+/* present + valid → green; present + invalid → amber; missing → red;
+   no repo / no team → muted grey. Colour conveys the status OUTSIDE the
+   popover, the superscript glyph repeats it for non-colour reads. */
+.iv-cfg-cog.is-ok {
+    color: var(--cc-green);
+    border-color: color-mix(in srgb, var(--cc-green) 42%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-green) 9%, transparent);
+}
+.iv-cfg-cog.is-ok:hover { background: var(--cc-green); color: #fff; }
+.iv-cfg-cog.is-bad {
+    color: var(--cc-amber);
+    border-color: color-mix(in srgb, var(--cc-amber) 50%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-amber) 12%, transparent);
+}
+.iv-cfg-cog.is-bad:hover { background: var(--cc-amber); color: #fff; }
+.iv-cfg-cog.is-missing {
+    color: var(--cc-red);
+    border-color: color-mix(in srgb, var(--cc-red) 45%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-red) 9%, transparent);
+}
+.iv-cfg-cog.is-missing:hover { background: var(--cc-red); color: #fff; }
+.iv-cfg-cog.is-norepo { opacity: 0.6; }
+.iv-cfg-cog.is-norepo:hover { opacity: 1; }
+/* Config popover — reuses the .el-app-pop skeleton with a slate accent */
+.el-app-pop.is-config { width: min(560px, 92vw); }
+.el-app-pop.is-config .ap-icon {
+    background: color-mix(in srgb, var(--cc-text-dim) 16%, transparent);
+    color: var(--cc-text);
+}
+.ap-cfg-banner {
+    grid-column: 1 / -1;
+    border-radius: 8px;
+    padding: 8px 11px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    border: 1px solid var(--cc-border);
+}
+.ap-cfg-banner code { font-family: var(--cc-mono); font-size: 0.72rem; }
+.ap-cfg-banner.is-ok {
+    color: var(--cc-green);
+    border-color: color-mix(in srgb, var(--cc-green) 40%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-green) 8%, transparent);
+}
+.ap-cfg-banner.is-bad {
+    color: var(--cc-amber);
+    border-color: color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-amber) 9%, transparent);
+}
+.ap-cfg-banner.is-missing {
+    color: var(--cc-red);
+    border-color: color-mix(in srgb, var(--cc-red) 42%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-red) 8%, transparent);
+}
+.ap-cfg-banner.is-na {
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+}
+.ap-cfg-path { font-size: 0.70rem !important; word-break: break-all; }
+.ap-cfg-pre {
+    grid-column: 1 / -1;
+    margin: 0;
+    max-height: 340px;
+    overflow: auto;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    line-height: 1.5;
+    color: var(--cc-text);
+    white-space: pre;
+    tab-size: 2;
+}
+.ap-cfg-files {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
 .iv-stage-ver {
     background: var(--cc-accent-lt);
     color: var(--cc-accent);
@@ -18925,6 +19033,11 @@ def _config_file_glyph(name: str) -> str:
 def _render_configurations_tab() -> None:
     """Per-team configuration browser + editor.
 
+    NOTE: No longer wired to a tab — per-env configs now surface as a ⚙ cog
+    popover inside the Pipelines Inventory table (`_iv_cfg_*` in
+    `_render_inventory_view`). Kept here because it holds the editable
+    commit-and-push flow, ready to re-expose (e.g. via a dialog) if needed.
+
     Admin view-all + team-scoped edit. Discovers the Control-project team
     repos, clones the selected one under Configurations/<team>/, walks its
     project → <env>_<app> → files tree, and lets authorised operators edit
@@ -25836,6 +25949,228 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         r["application"]: (r.get("app_type") or "").strip().lower()
         for r in _inv_rows_filtered
     }
+    # app → full row, so a stage cell can resolve the env-owning team +
+    # project when locating that env's config.yml in the team config repo.
+    _iv_row_by_app: dict[str, dict] = {
+        r["application"]: r for r in _inv_rows_filtered if r.get("application")
+    }
+
+    # ── Per-(app, env) config.yml status — drives the in-table ⚙ cog ───────
+    # Each environment cell carries a cog that opens a read-only popover
+    # showing that env's config repo content (Control/<team>/<project>/
+    # <env>_<app>/). The cell itself signals, OUTSIDE the popover, whether
+    # config.yml exists and whether it parses. Admin-only (resolving status
+    # clones the team repo on demand; non-admins never pay that cost).
+    _iv_cfg_memo: dict[tuple[str, str], dict | None] = {}
+    # Discover which team config repos actually exist (cached ADO REST) so a
+    # cell never wastes a slow failed-clone on a team that has no repo. When
+    # discovery is unavailable (empty set) we fall back to attempting any
+    # team the row names.
+    if _is_admin and _iv_ado_host:
+        _iv_cfg_repos, _iv_cfg_repo_src = _config_list_team_repos(_iv_ado_host)
+    else:
+        _iv_cfg_repos, _iv_cfg_repo_src = [], "none"
+    _iv_cfg_repos_lc = {str(r).strip().lower() for r in _iv_cfg_repos}
+
+    def _iv_cfg_pop_id(app: str, env: str) -> str:
+        return _iv_slug(f"{app}__{env}", "ivcfg")
+
+    def _iv_cfg_status(app: str, env: str) -> dict | None:
+        """Resolve the config.yml state for one (app, env). Returns None
+        when no cog should render (non-admin or git host unresolved).
+        Otherwise a dict the cell + popover both consume. Memoised per
+        render so the cell render and the popover build share one probe."""
+        if not _is_admin or not _iv_ado_host:
+            return None
+        _k = (app, env)
+        if _k in _iv_cfg_memo:
+            return _iv_cfg_memo[_k]
+        _row = _iv_row_by_app.get(app) or {}
+        _project = (_row.get("project") or "").strip()
+        _raw = (_row.get("teams") or {}).get(f"{env}_team")
+        if isinstance(_raw, (list, tuple, set)):
+            _teams = [str(t).strip() for t in _raw if str(t).strip()]
+        elif _raw:
+            _teams = [str(_raw).strip()]
+        else:
+            _teams = []
+        _out: dict = {
+            "app": app, "env": env, "project": _project, "team": "",
+            "state": "norepo", "present": False, "yaml_ok": False,
+            "yaml_err": "", "content": "", "other_files": [], "rel_dir": "",
+            "pop_id": _iv_cfg_pop_id(app, env), "no_team": not _teams,
+        }
+        if not _project or not _teams:
+            _iv_cfg_memo[_k] = _out
+            return _out
+        # Only attempt teams that actually have a config repo (when we know
+        # the repo set). Keeps cloning bounded to repos that exist.
+        if _iv_cfg_repos_lc:
+            _teams = [t for t in _teams if t.strip().lower() in _iv_cfg_repos_lc]
+        if not _teams:
+            _iv_cfg_memo[_k] = _out
+            return _out
+        _chosen = None
+        _fallback = None
+        for _team in _teams:
+            try:
+                _ok, _head, _ = _ensure_config_repo(_iv_ado_host, _team)
+            except Exception:
+                _ok = False
+            if not _ok:
+                continue
+            _ea_rel = f"{_project}/{env}_{app}"
+            _ea_abs = _config_abs_under_repo(_team, _ea_rel)
+            _cfg_abs = _config_abs_under_repo(
+                _team, f"{_ea_rel}/{CONFIG_MANDATORY_FILE}")
+            if _cfg_abs and os.path.isfile(_cfg_abs):
+                _chosen = (_team, _ea_abs, _cfg_abs, _ea_rel)
+                break
+            if _fallback is None:
+                _fallback = (_team, _ea_abs, None, _ea_rel)
+        _pick = _chosen or _fallback
+        if not _pick:
+            _iv_cfg_memo[_k] = _out      # repo clone failed for every team
+            return _out
+        _team, _ea_abs, _cfg_abs, _ea_rel = _pick
+        _out["team"] = _team
+        _out["rel_dir"] = _ea_rel
+        if _ea_abs and os.path.isdir(_ea_abs):
+            _others: list[str] = []
+            for _r2, _d2, _f2 in os.walk(_ea_abs):
+                if ".git" in _d2:
+                    _d2.remove(".git")
+                for _fn in _f2:
+                    _rel = os.path.relpath(
+                        os.path.join(_r2, _fn), _ea_abs).replace(os.sep, "/")
+                    if _rel != CONFIG_MANDATORY_FILE:
+                        _others.append(_rel)
+            _out["other_files"] = sorted(_others, key=str.lower)
+        if _cfg_abs and os.path.isfile(_cfg_abs):
+            _out["present"] = True
+            try:
+                with open(_cfg_abs, "r", encoding="utf-8", errors="replace") as fh:
+                    _out["content"] = fh.read()
+            except Exception as e:
+                _out["content"] = ""
+                _out["yaml_err"] = f"read error: {type(e).__name__}"
+            _err = _config_yaml_error(_out["content"]) if not _out["yaml_err"] else _out["yaml_err"]
+            _out["yaml_ok"] = (_err == "")
+            _out["yaml_err"] = _err
+            _out["state"] = "ok" if _out["yaml_ok"] else "bad"
+        else:
+            _out["state"] = "missing"
+        _iv_cfg_memo[_k] = _out
+        return _out
+
+    _IV_CFG_COG_STATE = {
+        "ok":      ("✓", "config.yml present · YAML valid"),
+        "bad":     ("!", "config.yml present · YAML INVALID"),
+        "missing": ("✗", "config.yml MISSING for this env"),
+        "norepo":  ("∅", "config repo unavailable for this env"),
+    }
+
+    def _iv_cfg_cog_html(app: str, env: str) -> str:
+        _s = _iv_cfg_status(app, env)
+        if not _s:
+            return ""
+        _state = _s["state"]
+        _mark, _tip = _IV_CFG_COG_STATE.get(_state, ("∅", "config"))
+        if _s["no_team"]:
+            _tip = f"No team owns the {env} environment for this app"
+        elif _state == "bad" and _s["yaml_err"]:
+            _tip = f"config.yml present · YAML INVALID: {_s['yaml_err']}"
+        return (
+            f'<button type="button" class="iv-cfg-cog is-{_state}" '
+            f'popovertarget="{_s["pop_id"]}" '
+            f'title="{html.escape(_tip, quote=True)}">'
+            f'⚙<sup class="iv-cfg-mark">{_mark}</sup></button>'
+        )
+
+    def _iv_cfg_popover_html(cs: dict) -> str:
+        _pid = cs["pop_id"]
+        _env = cs["env"]
+        _app = cs["app"]
+        _state = cs["state"]
+        if cs["no_team"]:
+            _banner = (
+                f'<div class="ap-cfg-banner is-na">⊘ No team owns the '
+                f'<b>{html.escape(_env)}</b> environment for this app — no '
+                f'config repository applies.</div>'
+            )
+        elif _state == "norepo":
+            _banner = (
+                '<div class="ap-cfg-banner is-na">⊘ Config repository could '
+                'not be cloned for this env’s team.</div>'
+            )
+        elif _state == "missing":
+            _banner = (
+                f'<div class="ap-cfg-banner is-missing">✗ <b>config.yml</b> '
+                f'is missing in this env’s config folder.</div>'
+            )
+        elif _state == "bad":
+            _banner = (
+                f'<div class="ap-cfg-banner is-bad">⚠ <b>config.yml</b> is '
+                f'present but the YAML is invalid: '
+                f'<code>{html.escape(cs["yaml_err"] or "parse error")}</code></div>'
+            )
+        else:
+            _banner = (
+                '<div class="ap-cfg-banner is-ok">✓ <b>config.yml</b> present '
+                '· YAML valid.</div>'
+            )
+        _path = (
+            f'{CONFIGURATIONS_DIR}/{cs["team"]}/{cs["rel_dir"]}'
+            if cs["team"] and cs["rel_dir"] else ""
+        )
+        _meta = ""
+        if cs["team"]:
+            _meta += (
+                f'<span class="ap-k">Team</span>'
+                f'<span class="ap-v">{html.escape(cs["team"])}</span>'
+            )
+        if _path:
+            _meta += (
+                f'<span class="ap-k">Path</span>'
+                f'<span class="ap-v"><code class="ap-cfg-path">'
+                f'{html.escape(_path)}</code></span>'
+            )
+        _content_block = ""
+        if cs["present"]:
+            _content_block = (
+                '<div class="ap-section">config.yml</div>'
+                f'<pre class="ap-cfg-pre">{html.escape(cs["content"]) or "(empty file)"}</pre>'
+            )
+        _others_block = ""
+        if cs["other_files"]:
+            _chips = "".join(
+                f'<span class="ap-chip">{html.escape(_f)}</span>'
+                for _f in cs["other_files"]
+            )
+            _others_block = (
+                f'<div class="ap-section">Other files '
+                f'({len(cs["other_files"])})</div>'
+                f'<div class="ap-cfg-files">{_chips}</div>'
+            )
+        return (
+            f'<div id="{_pid}" popover="auto" class="el-app-pop is-config">'
+            f'  <div class="ap-head">'
+            f'    <div class="ap-icon">⚙</div>'
+            f'    <div class="ap-title-wrap">'
+            f'      <div class="ap-kicker">Config · {html.escape(_env.upper())}</div>'
+            f'      <div class="ap-title">{html.escape(_app)}</div>'
+            f'    </div>'
+            f'    <button class="ap-close" popovertarget="{_pid}" '
+            f'popovertargetaction="hide" aria-label="Close">×</button>'
+            f'  </div>'
+            f'  <div class="ap-body">'
+            f'    {_banner}{_meta}{_content_block}{_others_block}'
+            f'  </div>'
+            f'  <div class="ap-foot">Source: '
+            f'{html.escape(CONFIG_ADO_PROJECT)}/{html.escape(cs["team"] or "—")} '
+            f'· read-only view</div>'
+            f'</div>'
+        )
 
     # ── Stage cell — version chip popover trigger + compact date ───────────
     _iv_th = 'style="padding:6px 4px;color:var(--cc-text-mute);font-size:0.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase"'
@@ -25846,23 +26181,37 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _when = fmt_dt(_data.get("when"), "%Y-%m-%d %H:%M") or ""
         _rel  = _relative_age(_data.get("when")) if _data.get("when") else ""
         _kind = _iv_app_type_map.get(app, "")
+        # Config cog — present under EVERY environment column regardless of
+        # whether the app is deployed there. Empty for non-env stages
+        # (build / release) and for non-admins.
+        _cog = _iv_cfg_cog_html(app, stage) if stage in _INV_ENVIRONMENTS else ""
+
+        def _fin(main: str, sub: str = "") -> str:
+            # Top row keeps the primary chip and the ⚙ cog side by side;
+            # the relative-age line (if any) sits beneath them.
+            return (
+                f'<div class="iv-stage-cell">'
+                f'<div class="iv-stage-top">{main}{_cog}</div>{sub}'
+                f'</div>'
+            )
+
         # Lib applications are build-only — everything after "build" is N/A
         # and should read as a positive, not a gap.
         if not _ver and _kind == "lib" and stage != "build":
-            return (
+            return _fin(
                 '<span class="iv-stage-nn" title="Libraries do not progress '
                 'past build">✓ Not needed</span>'
             )
         # App applications that haven't reached a stage get a subtle warning
         # so the gap is visible without being alarming.
         if not _ver and _kind == "app" and stage != "build":
-            return (
+            return _fin(
                 f'<span class="iv-stage-gap" '
                 f'title="No {stage} record for this application yet">'
                 f'△ Not reached</span>'
             )
         if not _ver:
-            return '<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>'
+            return _fin('<span style="color:var(--cc-text-mute);font-size:.70rem">—</span>')
         # For prd stage, attach a live dot when this version matches what's
         # actually live in prd (per _iv_prd_map).
         _dot = ""
@@ -25909,7 +26258,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             )
         else:
             _date_html = ""
-        return f'<div class="iv-stage-cell">{_btn}{_date_html}</div>'
+        return _fin(_btn, _date_html)
 
     # Severity tier → ("class", count) helper. Picks the worst non-zero tier
     # so each chip shows the most severe signal at a glance; tooltip carries
@@ -26917,6 +27266,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'</div>'
             )
 
+    # ── Per-env config popovers (the ⚙ cog targets) ─────────────────────
+    # One per (visible-page app × environment). Read-only views of the
+    # team config repo content; their status is also surfaced on the cog
+    # in the cell. Admin-only — `_iv_cfg_status` returns None otherwise.
+    for _cfg_app in (sorted(_visible_page_apps) if _build_popovers_flag else []):
+        for _cfg_env in _INV_ENVIRONMENTS:
+            _cfg_cs = _iv_cfg_status(_cfg_app, _cfg_env)
+            if not _cfg_cs:
+                continue
+            _iv_popovers.append(_iv_cfg_popover_html(_cfg_cs))
+
     # Project popovers — only for projects reachable on this render: rows on
     # the current page + the up-to-24 chips in the project ribbon.
     for _proj in (_iv_pop_projects if _build_popovers_flag else []):
@@ -27521,9 +27881,9 @@ if _show_inv and _inventory_slot is not None:
         # History → PGSQL tab — admin-only, only when Postgres is wired.
         # The actual reachability check happens inside the renderer.
         _hist_show = _is_admin and _POSTGRES_AVAILABLE
-        # Configurations tab — per-team config repos in the Control project.
-        # Admins view-all; any operator who belongs to a team sees their own.
-        _cfg_show = _is_admin or bool(st.session_state.get("teams"))
+        # NOTE: per-team configurations are no longer a standalone tab — they
+        # now live as a ⚙ cog popover inside each environment cell of the
+        # Pipelines Inventory table (see `_iv_cfg_*` in `_render_inventory_view`).
         _tab_labels: list[str] = [
             f"❖  PIPELINES INVENTORY{_iv_badge_txt}",
         ]
@@ -27532,8 +27892,6 @@ if _show_inv and _inventory_slot is not None:
         _tab_labels.append(f"⧗  EVENT LOG{_el_badge_txt}")
         if _act_show:
             _tab_labels.append("▶  ACTIONS")
-        if _cfg_show:
-            _tab_labels.append("🗂  CONFIGURATIONS")
         if _sync_show:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         if _hist_show:
@@ -27549,9 +27907,6 @@ if _show_inv and _inventory_slot is not None:
             _tab_log = _tabs[_idx]; _idx += 1
             _tab_actions = _tabs[_idx] if _act_show else None
             if _act_show:
-                _idx += 1
-            _tab_cfg = _tabs[_idx] if _cfg_show else None
-            if _cfg_show:
                 _idx += 1
             _tab_sync = _tabs[_idx] if _sync_show else None
             if _sync_show:
@@ -27607,21 +27962,6 @@ if _show_inv and _inventory_slot is not None:
                     _actions_slot = st.empty()
             else:
                 _actions_slot = None
-            if _tab_cfg is not None:
-                with _tab_cfg:
-                    st.markdown(
-                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
-                        'Per-team configuration repositories (Control project) '
-                        '— browse every <code>project / env_app</code> and edit '
-                        'any file with an in-page diff before a single '
-                        'commit-and-push to <code>main</code>. Admins see every '
-                        'team; members see their own.'
-                        '</div>',
-                        unsafe_allow_html=True,
-                    )
-                    _cfg_slot = st.empty()
-            else:
-                _cfg_slot = None
             if _tab_sync is not None:
                 with _tab_sync:
                     st.markdown(
@@ -27690,19 +28030,8 @@ if _show_inv and _inventory_slot is not None:
                          "always surface here.",
                 )
 
-        # Configurations — per-team config repos. Lazy-gated like the other
-        # secondary surfaces so a Filter Console change never rebuilds it;
-        # the renderer is itself a fragment so navigating/editing inside it
-        # is isolated from the rest of the page.
-        if _cfg_slot is not None:
-            with _cfg_slot.container():
-                _lazy_tab_body(
-                    "_tab_open_cfg_v1", "Configurations",
-                    _render_configurations_tab,
-                    hint="Per-team config repos (Control project) — browse "
-                         "project / env_app and edit files with commit-and-push "
-                         "to main. Loads on open.",
-                )
+        # (Configurations moved into the inventory table as a per-env ⚙ cog
+        # popover — no standalone tab. See `_iv_cfg_*` in _render_inventory_view.)
 
         # Sync check — smart-loaded; uses the scope key the inventory
         # fragment publishes so its diff matches the visible scope.
