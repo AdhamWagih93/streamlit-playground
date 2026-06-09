@@ -4266,6 +4266,28 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .tm-tile.is-dept    { border-top: 3px solid var(--cc-blue);   }
 .tm-tile.is-company { border-top: 3px solid var(--cc-amber);  }
 .tm-tile.is-role    { border-top: 3px solid var(--cc-green);  }
+.tm-tile.is-unknown { border-top: 3px solid var(--cc-red);    }
+/* Unknown-members resolution rows */
+.tm-unk-name { font-size: 0.84rem; font-weight: 600; color: var(--cc-text); }
+.tm-unk-email {
+    font-family: var(--cc-mono); font-size: 0.70rem; color: var(--cc-text-mute);
+}
+.tm-unk-teams {
+    font-family: var(--cc-mono); font-size: 0.66rem; color: var(--cc-text-dim);
+    margin-top: 1px;
+}
+.tm-unk-act {
+    font-family: var(--cc-data, var(--cc-mono));
+    font-size: 0.80rem; font-weight: 700; color: var(--cc-accent);
+    text-align: right; padding-top: 3px;
+}
+.tm-unk-rtag {
+    font-family: var(--cc-mono); font-size: 0.62rem; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--cc-text-mute);
+    border: 1px solid var(--cc-border); border-radius: 999px;
+    padding: 1px 7px; margin-left: 6px; white-space: nowrap;
+}
 .tm-tile-lbl {
     font-family: var(--cc-mono);
     font-size: 0.64rem;
@@ -12680,40 +12702,173 @@ def _render_teams_and_members_view() -> None:
       3. Teams grid (cards) with member counts + role badges
       4. Filterable members table with role + activity counts
     """
-    # ── Source data — everything is published by the inventory fragment
-    # which renders before this view in the late-render block. We use
-    # the FILTERED row set (post-Filter-Console) so the Teams tab
-    # honours the operator's current scope just like every other tab.
-    # `_inv_rows_all` stays around as a fallback for the very first
-    # render (before the inventory fragment has run once).
+    # ── Source data ─────────────────────────────────────────────────────
     _inv_rows_all = st.session_state.get("_inv_rows_all_v1") or []
     _inv_rows_scoped = st.session_state.get("_inv_rows_filtered_v1")
     if _inv_rows_scoped is None:
         _inv_rows_scoped = _inv_rows_all
     _visible_team_set = set(st.session_state.get("_inv_visible_teams_v1") or [])
     _users_blob = st.session_state.get("_users_blob_v1") or {}
-    _users_list_all = list(_users_blob.get("users") or [])
+    _es_users_raw = list(_users_blob.get("users") or [])
 
-    if not _inv_rows_scoped and not _users_list_all:
+    # ── Authoritative member list — driven from the LDAP→Postgres sync ──
+    # "Members with access to the DevOps platform" == every user synced from
+    # LDAP into Postgres (`ldap_users`). We START from THAT list, so the
+    # member COUNT is the real headcount — NOT the inflated count of unique
+    # identities across every ES index (a person with several email
+    # addresses no longer multiplies). We then FOLD ES activity into each
+    # member by matching every ES identity to an LDAP user (email /
+    # username / display name, plus admin-curated aliases). ES identities
+    # that match no LDAP user surface as "Unknown members" for resolution
+    # (alias → existing member, or tag as resigned); fixes persist in
+    # `ldap_member_resolutions`.
+    _ldap_users_db   = _ldap_db_load_users() or {}
+    _db_team_rosters = _ldap_db_load_team_members() or {}
+    _resolutions     = _ldap_db_load_resolutions() or {}
+
+    _user_teams_db: dict[str, set[str]] = {}   # username_lc → {team_cn}
+    for _tcn, _members in _db_team_rosters.items():
+        for _m in _members:
+            _user_teams_db.setdefault(str(_m).strip().lower(), set()).add(_tcn)
+
+    _ACT_FIELDS = (
+        "commits", "jira_authored", "jira_assigned", "requests_made",
+        "approvals", "rejections", "builds_authored", "deploys_requested",
+        "deploys_approved", "releases_authored",
+    )
+
+    # One base record per LDAP user (activity zeroed, folded in below).
+    _member_by_un: dict[str, dict] = {}
+    for _un_lc, _info in _ldap_users_db.items():
+        _rec = {
+            "key": _un_lc,
+            "ldap_username": _info.get("username") or _un_lc,
+            "email": (_info.get("email") or "").strip().lower(),
+            "label": _info.get("label") or _info.get("username") or _un_lc,
+            "names": [_info["label"]] if _info.get("label") else [],
+            "teams": sorted(_user_teams_db.get(_un_lc, set())),
+            "ldap_title": _info.get("title") or "",
+            "ldap_department": _info.get("department") or "",
+            "ldap_company": _info.get("company") or "",
+            "ldap_manager": _info.get("manager") or "",
+            "_es_count": 0,
+        }
+        for _f in _ACT_FIELDS:
+            _rec[_f] = 0
+        _rec["total"] = 0
+        _member_by_un[_un_lc] = _rec
+
+    # Match index: any identity string → username_lc.
+    _match_index: dict[str, str] = {}
+
+    def _mi_add(_s, _un):
+        _s = (str(_s) or "").strip().lower()
+        if _s and _s not in _match_index:
+            _match_index[_s] = _un
+
+    for _un_lc, _info in _ldap_users_db.items():
+        _mi_add(_un_lc, _un_lc)
+        _mi_add(_info.get("username"), _un_lc)
+        _mi_add(_info.get("email"), _un_lc)
+        _lbl = _info.get("label") or ""
+        _mi_add(_lbl, _un_lc)
+        _mi_add(_normalize_git_author(_lbl), _un_lc)
+
+    # Admin-curated resolutions: aliases force-map an unknown identity onto
+    # an existing member; resigned identities are tracked but kept out of
+    # the active count.
+    _resigned_lookup: dict[str, dict] = {}
+    for _ak, _r in _resolutions.items():
+        if _r.get("kind") == "alias":
+            _tu = (_r.get("target_username") or "").strip().lower()
+            if _tu in _member_by_un:
+                _match_index[_ak] = _tu
+        elif _r.get("kind") == "resigned":
+            _resigned_lookup[_ak] = _r
+
+    def _es_candidate_keys(_eu: dict) -> list[str]:
+        _c: list[str] = [
+            (_eu.get("email") or "").strip().lower(),
+            (_eu.get("key") or "").strip().lower(),
+            (_eu.get("ldap_username") or "").strip().lower(),
+        ]
+        for _nm in (_eu.get("names") or []):
+            _c.append(str(_nm).strip().lower())
+            _c.append(_normalize_git_author(str(_nm)).strip().lower())
+        return [x for x in _c if x]
+
+    _unknown: dict[str, dict] = {}
+    _resigned: dict[str, dict] = {}
+    for _eu in _es_users_raw:
+        _cands = _es_candidate_keys(_eu)
+        _un = next((_match_index[_c] for _c in _cands if _c in _match_index), None)
+        if _un and _un in _member_by_un:
+            _tgt = _member_by_un[_un]
+            for _f in _ACT_FIELDS:
+                _tgt[_f] += int(_eu.get(_f, 0) or 0)
+            _tgt["_es_count"] += 1
+            for _nm in (_eu.get("names") or []):
+                if _nm and _nm not in _tgt["names"]:
+                    _tgt["names"].append(_nm)
+            continue
+        # Unmatched ES identity → unknown (or resigned, if resolved so).
+        _uk = ((_eu.get("email") or "").strip().lower()
+               or (_eu.get("key") or "").strip().lower()
+               or (_eu.get("label") or "").strip().lower())
+        if not _uk:
+            continue
+        _res = next((_resigned_lookup[_c] for _c in _cands
+                     if _c in _resigned_lookup), None)
+        _bucket = _resigned if _res else _unknown
+        _agg = _bucket.get(_uk)
+        if _agg is None:
+            _agg = {
+                "key": _uk,
+                "email": (_eu.get("email") or "").strip(),
+                "names": list(_eu.get("names") or []),
+                "label": _eu.get("label") or _eu.get("email") or _uk,
+                "teams": list(_eu.get("teams") or []),
+                "resigned_team": (_res or {}).get("team_cn", ""),
+                "note": (_res or {}).get("note", ""),
+            }
+            for _f in _ACT_FIELDS:
+                _agg[_f] = 0
+            _agg["total"] = 0
+            _bucket[_uk] = _agg
+        for _f in _ACT_FIELDS:
+            _agg[_f] += int(_eu.get(_f, 0) or 0)
+
+    for _rec in _member_by_un.values():
+        _rec["total"] = sum(int(_rec[_f]) for _f in _ACT_FIELDS)
+    for _b in (_unknown, _resigned):
+        for _agg in _b.values():
+            _agg["total"] = sum(int(_agg[_f]) for _f in _ACT_FIELDS)
+
+    _users_list_all  = list(_member_by_un.values())
+    _unknown_members = sorted(_unknown.values(),
+                              key=lambda u: (-u["total"], u["label"].lower()))
+    _resigned_list   = sorted(_resigned.values(),
+                              key=lambda u: u["label"].lower())
+
+    if not _users_list_all and not _unknown_members and not _inv_rows_scoped:
         st.markdown(
             '<div class="tm-empty">'
             '  <div class="tm-empty-glyph">👥</div>'
             '  <div class="tm-empty-title">Nothing to show yet</div>'
             '  <div class="tm-empty-body">'
-            '    Open the Pipelines Inventory tab first so the inventory '
-            '    rows + LDAP-cached user list load into session state. '
-            '    Then come back — this view derives roles + memberships '
-            '    from that data without any extra fetches.'
+            '    No LDAP users are synced into Postgres yet and the '
+            '    inventory hasn’t loaded. Run the LDAP → Postgres sync in '
+            '    the <b>Sync Check</b> tab, then open the Pipelines '
+            '    Inventory tab once so activity loads.'
             '  </div>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
 
-    # Drop users whose every team falls outside the filtered scope.
-    # Users with no inferred team still pass — we have no scope signal
-    # to filter them on, so they're preserved (mirrors the inventory
-    # tab's Users facet behaviour).
+    # Drop members whose every team falls outside the filtered scope.
+    # Members with no team (synced LDAP users not on any DevOps team) still
+    # pass — there's no scope signal to filter them on.
     if _visible_team_set:
         _users_list = [
             _u for _u in _users_list_all
@@ -12759,7 +12914,7 @@ def _render_teams_and_members_view() -> None:
         f'  <div class="tm-tile is-member">'
         f'    <div class="tm-tile-lbl">Members</div>'
         f'    <div class="tm-tile-val">{_total_members:,}</div>'
-        f'    <div class="tm-tile-sub">from LDAP cache + ES activity</div>'
+        f'    <div class="tm-tile-sub">synced LDAP users · ES activity folded in</div>'
         f'  </div>'
         f'  <div class="tm-tile is-dept">'
         f'    <div class="tm-tile-lbl">Departments</div>'
@@ -12778,9 +12933,172 @@ def _render_teams_and_members_view() -> None:
         + html.escape(" · ".join(_roles_seen) or "—") +
         f'</div>'
         f'  </div>'
+        f'  <div class="tm-tile is-unknown">'
+        f'    <div class="tm-tile-lbl">Unknown</div>'
+        f'    <div class="tm-tile-val">{len(_unknown_members):,}</div>'
+        f'    <div class="tm-tile-sub">ES identities with no LDAP match'
+        + (f' · {len(_resigned_list)} resigned' if _resigned_list else '')
+        + f'</div>'
+        f'  </div>'
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    if not _ldap_users_db:
+        st.markdown(
+            '<div class="tm-sync-drift">⚠ No LDAP users are synced into '
+            'Postgres yet — the member list is empty and every ES identity '
+            'shows as <b>unknown</b>. Run the <b>LDAP → Postgres</b> sync in '
+            'the <b>Sync Check</b> tab to populate the authoritative member '
+            'directory.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Unknown members — resolve to a real member, or tag as resigned ──
+    # ES activity identities that match no synced LDAP user. Admins map an
+    # unknown to an existing member (activity folds in) or tag it as a
+    # resigner (kept tracked, out of the active headcount). Persisted in
+    # `ldap_member_resolutions`. Admin-only actions.
+    if (_unknown_members or _resigned_list) and _is_admin:
+        def _tm_uk_key(prefix: str, k: str) -> str:
+            return "_tmunk_" + prefix + "_" + re.sub(r"[^A-Za-z0-9_]", "_", k)[:80]
+
+        _member_opts = sorted(
+            _member_by_un.values(),
+            key=lambda m: (m["label"] or m["ldap_username"]).lower(),
+        )
+        _MAP_PH = "— pick a member —"
+        _map_labels = [_MAP_PH] + [
+            f'{m["label"]} · {m["ldap_username"]}' for m in _member_opts
+        ]
+        _map_to_un = {
+            f'{m["label"]} · {m["ldap_username"]}': m["key"] for m in _member_opts
+        }
+        _all_teams_sorted = sorted(
+            set(_db_team_rosters.keys()) | set(_team_roles.keys()), key=str.lower)
+        _NO_TEAM = "— no specific team —"
+
+        with st.expander(
+            f"⚠ Unknown members · {len(_unknown_members)} unresolved"
+            + (f" · {len(_resigned_list)} resigned" if _resigned_list else ""),
+            expanded=False,
+        ):
+            st.markdown(
+                '<div class="tm-section-sub">Activity identities from the ES '
+                'indices that don’t match any synced LDAP user — usually a '
+                'second email/account for an existing person, or someone who '
+                'has left. Map one to an existing member (its activity folds '
+                'into them) or tag it as a resigner (kept tracked, excluded '
+                'from the active headcount). Fixes persist in Postgres.</div>',
+                unsafe_allow_html=True,
+            )
+            _uq = st.text_input(
+                "Filter unknown members", key="_tm_unknown_search_v1",
+                placeholder="🔎  filter by name / email…",
+                label_visibility="collapsed",
+            ).strip().lower()
+            _filtered = [
+                u for u in _unknown_members
+                if not _uq or _uq in (
+                    u["label"] + " " + u["email"] + " " + " ".join(u["names"])
+                ).lower()
+            ]
+            _UK_CAP = 25
+            _shown = _filtered[:_UK_CAP]
+            if not _shown:
+                st.caption("No matches." if _uq
+                           else "No unresolved unknown members. 🎉")
+            for _um in _shown:
+                _uk = _um["key"]
+                _c1, _c2, _c3 = st.columns([3.2, 0.9, 1.3])
+                with _c1:
+                    st.markdown(
+                        f'<div class="tm-unk-name">{html.escape(_um["label"])}</div>'
+                        + (f'<div class="tm-unk-email">{html.escape(_um["email"])}</div>'
+                           if _um["email"] else "")
+                        + (f'<div class="tm-unk-teams">teams: '
+                           f'{html.escape(", ".join(_um["teams"]))}</div>'
+                           if _um["teams"] else ""),
+                        unsafe_allow_html=True,
+                    )
+                with _c2:
+                    st.markdown(
+                        f'<div class="tm-unk-act" title="total tracked activity">'
+                        f'Σ {_um["total"]:,}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with _c3:
+                    with st.popover("⚙ Resolve", use_container_width=True):
+                        st.caption(f"Resolve **{_um['label']}**")
+                        _sel = st.selectbox(
+                            "Map to existing member", _map_labels,
+                            key=_tm_uk_key("map", _uk),
+                            label_visibility="collapsed",
+                        )
+                        if st.button("✓ Save as alias", use_container_width=True,
+                                     key=_tm_uk_key("alias", _uk),
+                                     disabled=(_sel == _MAP_PH)):
+                            _ok, _msg = _ldap_db_save_resolution(
+                                _uk, "alias",
+                                target_username=_map_to_un.get(_sel, ""))
+                            if _ok:
+                                st.rerun(scope="fragment")
+                            else:
+                                st.error(_msg)
+                        st.divider()
+                        _rt = st.selectbox(
+                            "Resigned from team (optional)",
+                            [_NO_TEAM] + _all_teams_sorted,
+                            key=_tm_uk_key("rteam", _uk),
+                            label_visibility="collapsed",
+                        )
+                        if st.button("⊘ Mark as resigned",
+                                     use_container_width=True,
+                                     key=_tm_uk_key("resign", _uk)):
+                            _ok, _msg = _ldap_db_save_resolution(
+                                _uk, "resigned",
+                                team_cn=("" if _rt == _NO_TEAM else _rt))
+                            if _ok:
+                                st.rerun(scope="fragment")
+                            else:
+                                st.error(_msg)
+            if len(_filtered) > _UK_CAP:
+                st.caption(
+                    f"Showing top {_UK_CAP} of {len(_filtered):,} by activity "
+                    f"— narrow with the filter above.")
+
+            if _resigned_list:
+                st.markdown(
+                    '<div class="tm-section-sub" style="margin-top:12px">'
+                    'Tagged as resigned (excluded from the active headcount)'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                for _rm in _resigned_list:
+                    _rk = _rm["key"]
+                    _rc1, _rc2 = st.columns([4.5, 1])
+                    with _rc1:
+                        _rtag = (
+                            '<span class="tm-unk-rtag">resigned'
+                            + (f' · {html.escape(_rm["resigned_team"])}'
+                               if _rm["resigned_team"] else '')
+                            + '</span>'
+                        )
+                        st.markdown(
+                            f'<div class="tm-unk-name">{html.escape(_rm["label"])} '
+                            f'{_rtag}</div>'
+                            + (f'<div class="tm-unk-email">{html.escape(_rm["email"])}</div>'
+                               if _rm["email"] else ""),
+                            unsafe_allow_html=True,
+                        )
+                    with _rc2:
+                        if st.button("↩ Undo", use_container_width=True,
+                                     key=_tm_uk_key("undo", _rk)):
+                            _ok, _msg = _ldap_db_delete_resolution(_rk)
+                            if _ok:
+                                st.rerun(scope="fragment")
+                            else:
+                                st.error(_msg)
 
     # ── Aggregator diagnostics popover ──────────────────────────────────
     # Per-counter sums + error stash from `_fetch_users_aggregate`. When
@@ -20870,6 +21188,13 @@ def _fetch_devops_projects_from_postgres() -> tuple[list[dict], str]:
 LDAP_DB_USERS_TABLE = os.environ.get("LDAP_DB_USERS_TABLE", "ldap_users").strip()
 LDAP_DB_MEMBERS_TABLE = os.environ.get("LDAP_DB_MEMBERS_TABLE", "ldap_team_members").strip()
 LDAP_DB_SYNC_LOG_TABLE = os.environ.get("LDAP_DB_SYNC_LOG_TABLE", "ldap_sync_log").strip()
+# Admin-curated resolutions for "Unknown members" — ES identities (emails /
+# names) that don't match any LDAP user. Each row maps an unknown identity
+# key either to an existing LDAP member (kind='alias' → activity folds into
+# that member) or tags it as a departed account (kind='resigned', optionally
+# of a team) so it stays tracked but out of the active headcount.
+LDAP_DB_RESOLUTIONS_TABLE = os.environ.get(
+    "LDAP_DB_RESOLUTIONS_TABLE", "ldap_member_resolutions").strip()
 
 
 def _pg_connect_rw():
@@ -20904,7 +21229,8 @@ def _ldap_db_ensure_schema(conn) -> None:
     """Idempotent CREATE TABLE IF NOT EXISTS for the three LDAP tables.
     Called once per sync invocation. Cheap on warm runs; safe to
     re-execute on every cold start."""
-    for _name in (LDAP_DB_USERS_TABLE, LDAP_DB_MEMBERS_TABLE, LDAP_DB_SYNC_LOG_TABLE):
+    for _name in (LDAP_DB_USERS_TABLE, LDAP_DB_MEMBERS_TABLE,
+                  LDAP_DB_SYNC_LOG_TABLE, LDAP_DB_RESOLUTIONS_TABLE):
         if not _ldap_db_safe_ident(_name):
             raise RuntimeError(f"unsafe table identifier: {_name!r}")
     cur = conn.cursor()
@@ -20938,6 +21264,17 @@ def _ldap_db_ensure_schema(conn) -> None:
             users_count   INT,
             delta_summary TEXT,
             error_msg     TEXT
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {LDAP_DB_RESOLUTIONS_TABLE} (
+            alias_key       TEXT PRIMARY KEY,
+            kind            TEXT NOT NULL,
+            target_username TEXT,
+            team_cn         TEXT,
+            note            TEXT,
+            resolved_by     TEXT,
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
     cur.close()
@@ -21017,6 +21354,129 @@ def _ldap_db_load_team_members() -> dict:
         return out
     except Exception:
         return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ldap_db_load_resolutions() -> dict:
+    """Cached read of ldap_member_resolutions. Returns
+    ``{alias_key_lower: {kind, target_username, team_cn, note}}``. Ensures
+    the table exists first so a brand-new deployment doesn't error before
+    the first sync. Empty dict on failure."""
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(LDAP_DB_RESOLUTIONS_TABLE):
+        return {}
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _ldap_db_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT alias_key, kind, target_username, team_cn, note "
+            f"FROM {LDAP_DB_RESOLUTIONS_TABLE}"
+        )
+        rows = cur.fetchall()
+        cur.close()
+        out: dict[str, dict] = {}
+        for r in rows:
+            _ak = str(r[0] or "").strip().lower()
+            if not _ak:
+                continue
+            out[_ak] = {
+                "kind":            (str(r[1] or "").strip().lower()),
+                "target_username": (str(r[2] or "").strip()),
+                "team_cn":         (str(r[3] or "").strip()),
+                "note":            (str(r[4] or "").strip()),
+            }
+        return out
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _ldap_db_save_resolution(alias_key: str, kind: str,
+                             target_username: str = "", team_cn: str = "",
+                             note: str = "") -> tuple[bool, str]:
+    """Upsert one Unknown-member resolution. ``kind`` is 'alias' (set
+    target_username) or 'resigned' (optionally set team_cn). Returns
+    ``(ok, message)`` and clears the resolutions cache on success."""
+    _ak = (alias_key or "").strip().lower()
+    if not _ak:
+        return False, "empty identity key"
+    if kind not in ("alias", "resigned"):
+        return False, f"unknown resolution kind: {kind!r}"
+    if kind == "alias" and not (target_username or "").strip():
+        return False, "alias requires a target member"
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(LDAP_DB_RESOLUTIONS_TABLE):
+        return False, "Postgres unavailable"
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _ldap_db_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO {LDAP_DB_RESOLUTIONS_TABLE} "
+            f"(alias_key, kind, target_username, team_cn, note, resolved_by, updated_at) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, NOW()) "
+            f"ON CONFLICT (alias_key) DO UPDATE SET "
+            f"kind = EXCLUDED.kind, target_username = EXCLUDED.target_username, "
+            f"team_cn = EXCLUDED.team_cn, note = EXCLUDED.note, "
+            f"resolved_by = EXCLUDED.resolved_by, updated_at = NOW()",
+            (_ak, kind, (target_username or "").strip(),
+             (team_cn or "").strip(), (note or "").strip(),
+             (st.session_state.get("username") or "").strip()),
+        )
+        cur.close()
+        conn.commit()
+        try:
+            _ldap_db_load_resolutions.clear()
+        except Exception:
+            pass
+        return True, "saved"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _ldap_db_delete_resolution(alias_key: str) -> tuple[bool, str]:
+    """Remove a resolution (returns the unknown member to the unresolved
+    bucket). Clears the cache on success."""
+    _ak = (alias_key or "").strip().lower()
+    if not _ak:
+        return False, "empty identity key"
+    if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(LDAP_DB_RESOLUTIONS_TABLE):
+        return False, "Postgres unavailable"
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(
+            f"DELETE FROM {LDAP_DB_RESOLUTIONS_TABLE} WHERE alias_key = %s",
+            (_ak,),
+        )
+        cur.close()
+        conn.commit()
+        try:
+            _ldap_db_load_resolutions.clear()
+        except Exception:
+            pass
+        return True, "removed"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
     finally:
         if conn is not None:
             try:
