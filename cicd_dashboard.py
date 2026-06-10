@@ -4305,6 +4305,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     background: var(--cc-surface);
     box-shadow: 0 2px 6px rgba(10,14,30,.03);
     transition: border-color .15s, box-shadow .15s;
+    cursor: help;   /* each tile carries a title= explaining its derivation */
 }
 .tm-tile:hover {
     border-color: var(--cc-border-hi);
@@ -8789,6 +8790,23 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+/* ⓘ derivation tooltip — the tile itself has pointer-events:none (clicks
+   fall through to the filter overlay), so the info glyph re-enables pointer
+   events for itself to surface its native title on hover. */
+.iv-tile .iv-tile-info {
+    pointer-events: auto;
+    cursor: help;
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    line-height: 1;
+    color: var(--cc-text-mute);
+    opacity: 0.55;
+    transition: opacity .15s ease, color .15s ease;
+}
+.iv-tile .iv-tile-info:hover {
+    opacity: 1;
+    color: var(--iv-stat-accent, var(--cc-accent));
 }
 /* Active-selection badge (glowing pill in the top-right) */
 .iv-tile .iv-tile-badge {
@@ -13320,34 +13338,46 @@ def _render_teams_and_members_view() -> None:
 
     st.markdown(
         f'<div class="tm-tiles">'
-        f'  <div class="tm-tile is-team">'
+        f'  <div class="tm-tile is-team" title="Distinct owner teams on the '
+        f'in-scope inventory rows (dev / qc / uat / prd / preprod fields), '
+        f'merged case-insensitively. Mirrors the Pipelines Inventory '
+        f'&quot;Teams&quot; tile.">'
         f'    <div class="tm-tile-lbl">Teams</div>'
         f'    <div class="tm-tile-val">{_total_teams:,}</div>'
         f'    <div class="tm-tile-sub">resolved from inventory <code>*_team</code></div>'
         f'  </div>'
-        f'  <div class="tm-tile is-member">'
+        f'  <div class="tm-tile is-member" title="Every user synced from LDAP '
+        f'into Postgres (ldap_users) whose team is in scope — the authoritative '
+        f'headcount. The Pipelines Inventory &quot;Users&quot; tile counts only '
+        f'people with tracked activity in scope, so it is usually smaller.">'
         f'    <div class="tm-tile-lbl">Members</div>'
         f'    <div class="tm-tile-val">{_total_members:,}</div>'
         f'    <div class="tm-tile-sub">synced LDAP users · ES activity folded in</div>'
         f'  </div>'
-        f'  <div class="tm-tile is-dept">'
+        f'  <div class="tm-tile is-dept" title="Distinct LDAP department values '
+        f'across the visible members.">'
         f'    <div class="tm-tile-lbl">Departments</div>'
         f'    <div class="tm-tile-val">{len(_depts):,}</div>'
         f'    <div class="tm-tile-sub">distinct LDAP departments</div>'
         f'  </div>'
-        f'  <div class="tm-tile is-company">'
+        f'  <div class="tm-tile is-company" title="Distinct LDAP company values '
+        f'across the visible members.">'
         f'    <div class="tm-tile-lbl">Companies</div>'
         f'    <div class="tm-tile-val">{len(_companies):,}</div>'
         f'    <div class="tm-tile-sub">distinct LDAP companies</div>'
         f'  </div>'
-        f'  <div class="tm-tile is-role">'
+        f'  <div class="tm-tile is-role" title="Distinct platform roles '
+        f'(Developer / QC / Operations / …) mapped from the in-scope teams via '
+        f'their *_team ownership fields.">'
         f'    <div class="tm-tile-lbl">Roles</div>'
         f'    <div class="tm-tile-val">{len(_roles_seen):,}</div>'
         f'    <div class="tm-tile-sub">'
         + html.escape(" · ".join(_roles_seen) or "—") +
         f'</div>'
         f'  </div>'
-        f'  <div class="tm-tile is-unknown">'
+        f'  <div class="tm-tile is-unknown" title="ES activity identities that '
+        f'match no synced LDAP user — resolve each as an alias of an existing '
+        f'member or tag it as resigned below.">'
         f'    <div class="tm-tile-lbl">Unknown</div>'
         f'    <div class="tm-tile-val">{len(_unknown_members):,}</div>'
         f'    <div class="tm-tile-sub">ES identities with no LDAP match'
@@ -26253,10 +26283,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # users have known teams, we narrow to those teams so the number
     # tracks the rest of the row's scope; users without inferred teams
     # still contribute (no team data → can't filter them, so they pass).
+    _post_teams_ci = _ci_set(_post_teams)
     _users_scoped: list[dict] = []
     for _u in _users_list:
-        _u_teams = set(_u.get("teams") or [])
-        if _post_teams and _u_teams and not (_u_teams & _post_teams):
+        _u_teams = _ci_set(_u.get("teams"))
+        if _post_teams_ci and _u_teams and not (_u_teams & _post_teams_ci):
             continue
         _users_scoped.append(_u)
     _users_total = len(_users_scoped)
@@ -26270,15 +26301,47 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         "no users resolved · check LDAP / widen window"
     )
 
+    # Counts are CASE-INSENSITIVE distinct (My-Team == my-team) so they line
+    # up with the Teams & Members tab, which merges team names the same way.
+    _post_companies_ci = _ci_set(_post_companies)
+    _n_companies = len(_post_companies_ci)
+    _n_teams = len(_post_teams_ci)
+
+    # Per-tile tooltips spelling out EXACTLY how each number was deduced, so
+    # the same dimension reads consistently across the page (and any gap vs.
+    # the Teams & Members tab is explained rather than mysterious).
+    _TILE_TIPS = {
+        "company": (f"Distinct company values across the {_iv_total:,} "
+                    "in-scope pipeline rows (case-insensitive)."),
+        "team": ("Distinct owner teams (dev / qc / uat / prd / preprod fields) "
+                 "named on the in-scope pipelines, matched case-insensitively. "
+                 "The Teams & Members tab counts teams that have an LDAP-synced "
+                 "roster, so the two can differ slightly."),
+        "user": ("Distinct people the activity aggregator resolved for this "
+                 "scope + time window (commits / jira / builds / deploys / "
+                 "releases), folded onto LDAP identities. The Teams & Members "
+                 "'Members' tile counts ALL synced LDAP users, so it is "
+                 "usually larger."),
+        "project": ("Distinct projects across the in-scope pipeline rows "
+                    f"({len(_live_projects):,} live in PRD)."),
+        "app": (f"{_iv_total:,} in-scope pipeline rows — one per registered "
+                f"application ({_iv_live:,} live in PRD)."),
+        "build": "Distinct build_technology values across the in-scope rows.",
+        "deploy": "Distinct deploy_technology values across the in-scope rows.",
+        "platform": "Distinct deploy_platform values across the in-scope rows.",
+        "combo": ("Distinct build × deploy × platform combinations across the "
+                  "in-scope rows."),
+    }
+
     # Tile specs: (dim_key, glyph, label, number, sub_markdown)
     _tile_specs: list[tuple[str, str, str, int, str]] = []
     if _is_admin:
-        _tile_specs.append(("company", "🏢", "Companies", len(_post_companies),
-                            "Tenant boundaries in scope"))
-        _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
-                            "Distinct owner teams"))
+        _tile_specs.append(("company", "🏢", "Companies", _n_companies,
+                            "Distinct tenant boundaries in scope"))
+        _tile_specs.append(("team", "👥", "Teams", _n_teams,
+                            "Distinct owner teams (case-insensitive)"))
     elif len(_iv_session_teams) > 1:
-        _tile_specs.append(("team", "👥", "Teams", len(_post_teams),
+        _tile_specs.append(("team", "👥", "Teams", _n_teams,
                             f"Across your {len(_iv_session_teams)} session teams"))
     # Users tile sits between Teams and Projects per the platform's
     # mental model (people own teams, teams own projects). Admin-only:
@@ -26329,13 +26392,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     )
                 else:
                     _number_html = f'<div class="iv-tile-number">{_tnum}</div>'
+                _tip = _TILE_TIPS.get(_dk, "")
                 _tile_html = (
                     f'<div class="iv-tile" '
-                    f'style="--iv-stat-accent:{_accent}">'
+                    f'style="--iv-stat-accent:{_accent}" '
+                    f'title="{html.escape(_tip, quote=True)}">'
                     f'<div class="iv-tile-head">'
                     f'<span class="iv-tile-glyph">{_glyph}</span>'
                     f'<span class="iv-tile-label">{_tlabel}</span>'
-                    f'{_badge_html}'
+                    + ('<span class="iv-tile-info" '
+                       f'title="{html.escape(_tip, quote=True)}">ⓘ</span>'
+                       if _tip else '')
+                    + f'{_badge_html}'
                     f'</div>'
                     f'{_number_html}'
                     f'<div class="iv-tile-sub">{_tsub_md}</div>'
