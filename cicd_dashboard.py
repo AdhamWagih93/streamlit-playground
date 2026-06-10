@@ -222,6 +222,19 @@ def _normalize_git_author(raw: str) -> str:
     return s
 
 
+def _ci_key(s: Any) -> str:
+    """Canonical case-insensitive match key for a team or user identity.
+    Team/user names are matched case-insensitively everywhere (``My-Team``
+    == ``my-team`` == ``MY-TEAM``); DISPLAY strings keep their original
+    casing — only comparisons / dict keys / set membership go through this."""
+    return (str(s) if s is not None else "").strip().lower()
+
+
+def _ci_set(items) -> set:
+    """A set of canonical match keys for *items* (empty/falsy dropped)."""
+    return {_ci_key(x) for x in (items or []) if str(x or "").strip()}
+
+
 # All cloned ADO repos live under one tidy base directory so the
 # streamlit host doesn't litter /tmp with project-specific dirs.
 CICD_REPO_BASE = os.environ.get("CICD_REPO_BASE", "/tmp/cicd-dashboard").rstrip("/")
@@ -10580,8 +10593,11 @@ def _load_team_applications(role: str, team: str) -> list[str]:
     if not fields or not team:
         return []
     # One field per role today; keep the OR structure in case a role is ever
-    # scoped against multiple ownership fields again.
-    should_clauses = [{"term": {f: team}} for f in fields]
+    # scoped against multiple ownership fields again. Team match is
+    # case-insensitive (My-Team == my-team) via ES term `case_insensitive`.
+    should_clauses = [
+        {"term": {f: {"value": team, "case_insensitive": True}}} for f in fields
+    ]
     query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
     try:
         return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
@@ -11555,7 +11571,12 @@ def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str
     fields = ROLE_TEAM_FIELDS.get(role, [])
     if not fields or not teams:
         return []
-    should = [{"terms": {f: list(teams)}} for f in fields]
+    # Case-insensitive team match: one term-with-case_insensitive per
+    # (field, team) since ES `terms` doesn't support case-folding.
+    should = [
+        {"term": {f: {"value": t, "case_insensitive": True}}}
+        for f in fields for t in teams
+    ]
     query = {"bool": {"should": should, "minimum_should_match": 1}}
     try:
         return sorted(composite_terms(IDX["inventory"], "project.keyword", query).keys())
@@ -11739,7 +11760,9 @@ def _load_apps_for_user_teams(team: str, fields_json: str) -> list[str]:
     fields: list[str] = json.loads(fields_json)
     if not fields or not team:
         return []
-    should = [{"term": {f: team}} for f in fields]
+    should = [
+        {"term": {f: {"value": team, "case_insensitive": True}}} for f in fields
+    ]
     query = {"bool": {"should": should, "minimum_should_match": 1}}
     try:
         return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
@@ -11756,7 +11779,10 @@ def _load_projects_for_user_teams(teams_json: str, fields_json: str) -> list[str
     teams:  list[str] = json.loads(teams_json)
     if not fields or not teams:
         return []
-    should = [{"terms": {f: teams}} for f in fields]
+    should = [
+        {"term": {f: {"value": t, "case_insensitive": True}}}
+        for f in fields for t in teams
+    ]
     query = {"bool": {"should": should, "minimum_should_match": 1}}
     try:
         return sorted(composite_terms(IDX["inventory"], "project.keyword", query).keys())
@@ -13056,8 +13082,12 @@ def _compute_team_role_map(inv_rows: list[dict]) -> dict[str, set[str]]:
     """Walk inventory rows and build ``{team_name: {role_label, ...}}``.
     A team that appears in both ``dev_team`` and ``qc_team`` fields
     contributes to BOTH roles. Empty values + unknown field names are
-    silently skipped."""
-    out: dict[str, set[str]] = {}
+    silently skipped.
+
+    Team names are merged CASE-INSENSITIVELY (``My-Team`` / ``my-team`` /
+    ``MY-TEAM`` are one team); the display key keeps the first-seen casing."""
+    out: dict[str, set[str]] = {}        # canonical-lower → roles
+    display: dict[str, str] = {}         # canonical-lower → display name
     for r in inv_rows or []:
         teams_blob = r.get("teams") or {}
         for fld, vals in teams_blob.items():
@@ -13071,8 +13101,11 @@ def _compute_team_role_map(inv_rows: list[dict]) -> dict[str, set[str]]:
             for v in _vals_iter:
                 if not v:
                     continue
-                out.setdefault(str(v).strip(), set()).add(role)
-    return out
+                _name = str(v).strip()
+                _ck = _name.lower()
+                out.setdefault(_ck, set()).add(role)
+                display.setdefault(_ck, _name)
+    return {display[_ck]: _roles for _ck, _roles in out.items()}
 
 
 @st.fragment
@@ -13262,10 +13295,11 @@ def _render_teams_and_members_view() -> None:
     # Members with no team (synced LDAP users not on any DevOps team) still
     # pass — there's no scope signal to filter them on.
     if _visible_team_set:
+        _visible_team_ci = _ci_set(_visible_team_set)
         _users_list = [
             _u for _u in _users_list_all
             if (not _u.get("teams")) or
-               (set(_u.get("teams") or []) & _visible_team_set)
+               (_ci_set(_u.get("teams")) & _visible_team_ci)
         ]
     else:
         _users_list = list(_users_list_all)
@@ -13274,11 +13308,14 @@ def _render_teams_and_members_view() -> None:
     # Compute team-role map ONLY over the filtered rows so a team that
     # exists in inventory but not in scope doesn't surface in the grid.
     _team_roles = _compute_team_role_map(_inv_rows_scoped)
+    # Case-insensitive index so a user's roster team (LDAP casing) resolves
+    # to the inventory role map regardless of casing.
+    _team_roles_ci = {_ci_key(_k): _v for _k, _v in _team_roles.items()}
     # For each user, roles = union of teams' roles
     for _u in _users_list:
         _u_roles: set[str] = set()
         for _t in _u.get("teams") or []:
-            _u_roles |= _team_roles.get(_t, set())
+            _u_roles |= _team_roles_ci.get(_ci_key(_t), set())
         _u["_roles"] = sorted(_u_roles)
 
     # ── Stat tiles ─────────────────────────────────────────────────────────
@@ -13622,8 +13659,15 @@ def _render_teams_and_members_view() -> None:
     _db_team_rosters = _ldap_db_load_team_members() or {}
     _db_synced_teams = set(_db_team_rosters.keys())
     _inv_team_set = set(_team_roles.keys())
-    _missing_teams_in_db = sorted(_inv_team_set - _db_synced_teams)
-    _stale_teams_in_db = sorted(_db_synced_teams - _inv_team_set)
+    # Drift is compared case-insensitively (a team is "synced" regardless of
+    # casing differences between inventory `*_team` values and LDAP CNs);
+    # display keeps each side's original casing.
+    _db_synced_ci = _ci_set(_db_synced_teams)
+    _inv_team_ci = _ci_set(_inv_team_set)
+    _missing_teams_in_db = sorted(
+        t for t in _inv_team_set if _ci_key(t) not in _db_synced_ci)
+    _stale_teams_in_db = sorted(
+        t for t in _db_synced_teams if _ci_key(t) not in _inv_team_ci)
     _last_sync = _ldap_db_load_last_sync() or {}
     _last_sync_ts = (_last_sync.get("completed_at") or "").replace("T", " ")[:19]
     _last_sync_teams = int(_last_sync.get("teams_count") or 0)
@@ -15940,8 +15984,8 @@ def _LEGACY_render_iv_actions_chooser_REMOVED(
 
     # ── QC promotion gate ──────────────────────────────────────────────
     _has_qc = ("QC" in detected_roles) or (role_pick == "QC")
-    _qc_teams_for_row = set(_row_teams_for_field(_row, "qc_team"))
-    _qc_team_match = bool(_qc_teams_for_row & set(session_teams or []))
+    _qc_teams_for_row = _ci_set(_row_teams_for_field(_row, "qc_team"))
+    _qc_team_match = bool(_qc_teams_for_row & _ci_set(session_teams or []))
     _can_promote = _has_qc and _qc_team_match
 
     # ── Action buttons ─────────────────────────────────────────────────
@@ -16544,8 +16588,8 @@ def _render_actions_tab() -> None:
             return False
         if not _session_teams:
             return False
-        _qc_teams = set(_row_teams_for_field(r, "qc_team"))
-        return bool(set(_session_teams) & _qc_teams)
+        _qc_teams = _ci_set(_row_teams_for_field(r, "qc_team"))
+        return bool(_ci_set(_session_teams) & _qc_teams)
 
     # ── BUILD section ───────────────────────────────────────────────────
     st.markdown(
@@ -25419,9 +25463,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     elif not _is_admin and len(_iv_session_teams) > 1:
         # Clamp any previously-persisted team selection to session_teams so
         # a leaked co-team value from a shared project can't widen the view.
-        _legal_teams = set(_iv_session_teams)
+        _legal_teams = _ci_set(_iv_session_teams)
         _prev_team_sel = list(st.session_state.get(_iv_filter_keys["team"]) or [])
-        _clean_team_sel = [t for t in _prev_team_sel if t in _legal_teams]
+        _clean_team_sel = [t for t in _prev_team_sel if _ci_key(t) in _legal_teams]
         if _clean_team_sel != _prev_team_sel:
             st.session_state[_iv_filter_keys["team"]] = _clean_team_sel
     elif not _is_admin and len(_iv_session_teams) == 0:
@@ -25490,14 +25534,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _s = set(_sel_company)
             out = [r for r in out if (r.get("company") or "") in _s]
         if exclude != "team" and _sel_team:
-            _s = set(_sel_team)
-            out = [r for r in out if _iv_row_teams(r) & _s]
+            # Case-insensitive: a selected team matches a row team regardless
+            # of casing (My-Team == my-team), so a non-admin's auto-selected
+            # session team still matches the inventory's casing.
+            _s = _ci_set(_sel_team)
+            out = [r for r in out if _ci_set(_iv_row_teams(r)) & _s]
         # Users → inventory link is indirect (via their teams). When users
         # are selected, narrow rows to projects owned by ANY of those
         # users' teams. Users without an inferred team don't narrow the
         # inventory at all (they only affect the event log filter).
         if exclude != "user" and _sel_user and _sel_user_teams:
-            out = [r for r in out if _iv_row_teams(r) & _sel_user_teams]
+            _sut = _ci_set(_sel_user_teams)
+            out = [r for r in out if _ci_set(_iv_row_teams(r)) & _sut]
         if exclude != "project" and _sel_project:
             _s = set(_sel_project)
             out = [r for r in out if (r.get("project") or "") in _s]
@@ -25544,8 +25592,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # teams — even if a shared project surfaces co-assigned teams in its
     # inventory document. Strip the options dict down to the legal set.
     if not _is_admin and _iv_session_teams:
-        _legal = set(_iv_session_teams)
-        _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if t in _legal}
+        _legal = _ci_set(_iv_session_teams)
+        _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if _ci_key(t) in _legal}
     # ── Users option dict — leave-one-out by user-filter exclusion ────────
     # Each user has a key (canonical email/name) + display label. We surface
     # the activity total in the count so users sort by impact in the
@@ -25562,8 +25610,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Admin sees everyone. Non-admin only sees users on a team they own,
         # plus themselves (so each user can always find their own activity).
         if not _is_admin:
-            _u_teams = set(_u.get("teams") or [])
-            if _u_teams and _iv_session_teams and not (_u_teams & set(_iv_session_teams)):
+            _u_teams = _ci_set(_u.get("teams"))
+            if _u_teams and _iv_session_teams and not (_u_teams & _ci_set(_iv_session_teams)):
                 # User has known teams, none match the viewer's — hide.
                 continue
         # When user filter narrows the inventory by their team, also align
@@ -27172,10 +27220,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             return False
         if not _iv_session_teams:
             return False
-        _qc_teams = set(_row_teams_for_field(r, "qc_team"))
+        _qc_teams = _ci_set(_row_teams_for_field(r, "qc_team"))
         if not _qc_teams:
             return False
-        return bool(set(_iv_session_teams) & _qc_teams)
+        return bool(_ci_set(_iv_session_teams) & _qc_teams)
 
     def _iv_jenkins_html(r: dict, *, version: str = "",
                          environment: str = "",
