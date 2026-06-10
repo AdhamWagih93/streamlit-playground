@@ -1873,15 +1873,19 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .iv-cfg-cog.is-norepo { opacity: 0.6; }
 .iv-cfg-cog.is-norepo:hover { opacity: 1; }
 /* Config popover — reuses the .el-app-pop skeleton with a slate accent */
-.el-app-pop.is-config { width: min(560px, 92vw); }
+.el-app-pop.is-config { width: min(600px, 94vw); }
+/* The config popover stacks its rows vertically — it must NOT inherit the
+   two-column key/value grid that the app/version popovers use, or Team /
+   Path get pushed into the right-hand column. */
+.el-app-pop.is-config .ap-body { display: block; }
 .el-app-pop.is-config .ap-icon {
     background: color-mix(in srgb, var(--cc-text-dim) 16%, transparent);
     color: var(--cc-text);
 }
 .ap-cfg-banner {
-    grid-column: 1 / -1;
     border-radius: 8px;
     padding: 8px 11px;
+    margin: 0 0 8px;
     font-size: 0.78rem;
     line-height: 1.4;
     border: 1px solid var(--cc-border);
@@ -1907,10 +1911,35 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     background: var(--cc-surface2);
 }
 .ap-cfg-path { font-size: 0.70rem !important; word-break: break-all; }
-.ap-cfg-pre {
-    grid-column: 1 / -1;
-    margin: 0;
-    max-height: 340px;
+/* Config meta rows (Team / Path) — full-width stacked rows. */
+.cfg-meta-row {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    margin: 3px 0;
+}
+.cfg-meta-k {
+    flex: 0 0 auto;
+    min-width: 44px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cc-text-mute);
+}
+.cfg-meta-v {
+    font-family: var(--cc-mono);
+    font-size: 0.74rem;
+    color: var(--cc-text);
+    word-break: break-all;
+}
+/* Highlighted config.yml. Newlines are emitted as <br> and indentation as
+   &nbsp; so neither the markdown renderer nor HTML whitespace-collapsing can
+   join the lines (the previous <pre> lost its line breaks). */
+.cfg-code {
+    display: block;
+    margin: 4px 0 2px;
+    max-height: 360px;
     overflow: auto;
     background: var(--cc-surface2);
     border: 1px solid var(--cc-border);
@@ -1918,16 +1947,23 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     padding: 10px 12px;
     font-family: var(--cc-mono);
     font-size: 0.74rem;
-    line-height: 1.5;
+    line-height: 1.6;
     color: var(--cc-text);
-    white-space: pre;
+    white-space: normal;
+    word-break: break-word;
     tab-size: 2;
 }
+.cfg-yk  { color: var(--cc-accent); font-weight: 600; }   /* key      */
+.cfg-yc  { color: var(--cc-text-mute); font-style: italic; }  /* comment */
+.cfg-yd  { color: var(--cc-text-mute); }                  /* list dash */
+.cfg-yv  { color: var(--cc-text); }                       /* value    */
+.cfg-ystr{ color: var(--cc-green); }                      /* "string" */
+.cfg-ynum{ color: var(--cc-blue); }                       /* number / bool */
 .ap-cfg-files {
-    grid-column: 1 / -1;
     display: flex;
     flex-wrap: wrap;
     gap: 5px;
+    margin-top: 4px;
 }
 .iv-stage-ver {
     background: var(--cc-accent-lt);
@@ -6221,6 +6257,10 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 
 /* Project popover banner */
 .el-app-pop .ap-devops-banner {
+    /* Span the full width of the parent `.ap-body` grid — without this the
+       banner is squeezed into the narrow first column and shoves the rest
+       of the popover out of alignment. */
+    grid-column: 1 / -1;
     display: grid;
     grid-template-columns: auto auto 1fr;
     gap: 6px 10px;
@@ -24755,6 +24795,75 @@ def _iv_warning_affected_projects(warnings: list[str]) -> list[str]:
     return sorted(_found, key=str.lower)
 
 
+def _iv_cfg_yaml_html(text: str) -> str:
+    """Render YAML text as highlighted, newline-preserving HTML for a native
+    HTML popover.
+
+    The previous ``<pre>`` lost its line breaks (the popover blob is rendered
+    through Streamlit's markdown, which collapses raw newlines), so lines
+    appeared joined. Here every newline becomes ``<br>`` and every leading
+    space becomes ``&nbsp;`` — neither markdown nor HTML whitespace-collapsing
+    can touch them. The file is preserved verbatim (comments included); we
+    only colourise, never reflow."""
+    _src = text or ""
+    if not _src.strip():
+        return '<span class="cfg-yc">(empty file)</span>'
+
+    def _val_html(v: str) -> str:
+        v = v.strip()
+        if not v:
+            return ""
+        _cmt = ""
+        if v[0] not in "\"'":
+            _m = re.search(r"\s#\s.*$", v)
+            if _m:
+                _cmt = f'<span class="cfg-yc">{html.escape(v[_m.start():].strip())}</span>'
+                v = v[:_m.start()].rstrip()
+        if not v:
+            return _cmt
+        if v[0] in "\"'" and v[-1] == v[0] and len(v) > 1:
+            _cls = "cfg-ystr"
+        elif (re.fullmatch(r"-?\d+(\.\d+)?", v)
+              or v.lower() in ("true", "false", "null", "yes", "no", "~")):
+            _cls = "cfg-ynum"
+        else:
+            _cls = "cfg-yv"
+        _out = f'<span class="{_cls}">{html.escape(v)}</span>'
+        return (_out + " " + _cmt) if _cmt else _out
+
+    _lines: list[str] = []
+    for _raw in _src.replace("\t", "  ").split("\n"):
+        _stripped = _raw.lstrip(" ")
+        _lead = "&nbsp;" * (len(_raw) - len(_stripped))
+        if not _stripped:
+            _lines.append(_lead or "&nbsp;")
+            continue
+        if _stripped.startswith("#"):
+            _lines.append(_lead + f'<span class="cfg-yc">{html.escape(_stripped)}</span>')
+            continue
+        _dash = ""
+        _rest = _stripped
+        if _stripped.startswith("- "):
+            _dash = '<span class="cfg-yd">- </span>'
+            _rest = _stripped[2:]
+        elif _stripped == "-":
+            _lines.append(_lead + '<span class="cfg-yd">-</span>')
+            continue
+        _m = re.match(r"^([^:#]+):(?:\s|$)(.*)$", _rest)
+        if _m:
+            _line = (_lead + _dash
+                     + f'<span class="cfg-yk">{html.escape(_m.group(1))}</span>'
+                     + '<span class="cfg-yv">:</span>')
+            _vh = _val_html(_m.group(2))
+            if _vh:
+                _line += " " + _vh
+            _lines.append(_line)
+        else:
+            _lines.append(_lead + _dash
+                          + f'<span class="cfg-yv">{html.escape(_rest)}</span>')
+    return "<br>".join(_lines)
+
+
 def _render_inventory_view(controls_slot, body_slot) -> None:
     """Pipelines inventory table — one row per registered pipeline.
 
@@ -27328,20 +27437,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _meta = ""
         if cs["team"]:
             _meta += (
-                f'<span class="ap-k">Team</span>'
-                f'<span class="ap-v">{html.escape(cs["team"])}</span>'
+                f'<div class="cfg-meta-row"><span class="cfg-meta-k">Team</span>'
+                f'<span class="cfg-meta-v">{html.escape(cs["team"])}</span></div>'
             )
         if _path:
             _meta += (
-                f'<span class="ap-k">Path</span>'
-                f'<span class="ap-v"><code class="ap-cfg-path">'
-                f'{html.escape(_path)}</code></span>'
+                f'<div class="cfg-meta-row"><span class="cfg-meta-k">Path</span>'
+                f'<span class="cfg-meta-v"><code class="ap-cfg-path">'
+                f'{html.escape(_path)}</code></span></div>'
             )
         _content_block = ""
         if cs["present"]:
             _content_block = (
                 '<div class="ap-section">config.yml</div>'
-                f'<pre class="ap-cfg-pre">{html.escape(cs["content"]) or "(empty file)"}</pre>'
+                f'<div class="cfg-code">{_iv_cfg_yaml_html(cs["content"])}</div>'
             )
         _others_block = ""
         if cs["other_files"]:
