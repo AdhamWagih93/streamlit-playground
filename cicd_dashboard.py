@@ -22514,19 +22514,29 @@ def _history_db_ensure_index_table(conn, index_key: str) -> str:
         cur.close()
         conn.rollback()
 
-    # Common hot scalar columns — speed up the typical filter set. Each is
-    # committed independently so a missing/odd field can't abort the rest.
-    for _expr_name, _expr in (
-        (f"{tbl}_project",     "(doc->>'project')"),
-        (f"{tbl}_application", "(doc->>'application')"),
-        (f"{tbl}_codeversion", "(doc->>'codeversion')"),
-        (f"{tbl}_environment", "(doc->>'environment')"),
-        (f"{tbl}_company",     "(doc->>'company')"),
+    # Common hot scalar columns — speed up the read-router's equality
+    # filters. These are HASH indexes, NOT btree: a btree index row can't
+    # exceed ~2704 bytes, which Jira's free-text `environment` field blows
+    # past ("index row size N exceeds btree version 4 maximum"), failing the
+    # INSERT. A hash index stores only the hash of the value, so it has no
+    # size limit and still serves the `=` / `IN` lookups these columns get
+    # (range/sort happen on date fields, which aren't indexed here). Any
+    # legacy btree index from before this change is dropped first so a stuck
+    # table recovers on its next chunk. Each statement is committed on its
+    # own so one odd field can't abort the rest.
+    for _field, _expr in (
+        ("project",     "(doc->>'project')"),
+        ("application", "(doc->>'application')"),
+        ("codeversion", "(doc->>'codeversion')"),
+        ("environment", "(doc->>'environment')"),
+        ("company",     "(doc->>'company')"),
     ):
         cur = conn.cursor()
         try:
+            cur.execute(f"DROP INDEX IF EXISTS {tbl}_{_field}")
             cur.execute(
-                f"CREATE INDEX IF NOT EXISTS {_expr_name} ON {tbl} ({_expr})"
+                f"CREATE INDEX IF NOT EXISTS {tbl}_{_field}_h "
+                f"ON {tbl} USING hash ({_expr})"
             )
             cur.close()
             conn.commit()
