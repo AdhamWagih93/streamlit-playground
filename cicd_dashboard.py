@@ -15729,6 +15729,7 @@ def _LEGACY_render_iv_actions_chooser_REMOVED(
 _STAGE_PROMOTE_CHAIN = ("build", "dev", "qc", "uat", "prd")
 
 
+@st.fragment
 def _render_history_to_pg_tab() -> None:
     """Admin-only History → Postgres migration surface.
 
@@ -15849,13 +15850,13 @@ def _render_history_to_pg_tab() -> None:
                      key="_hist_select_all_btn",
                      use_container_width=True):
             st.session_state["_hist_selected_v1"] = {s["index_key"] for s in _statuses}
-            st.rerun()
+            st.rerun(scope="fragment")
     with _ba_c2:
         if st.button("☐ Clear",
                      key="_hist_clear_sel_btn",
                      use_container_width=True):
             st.session_state["_hist_selected_v1"] = set()
-            st.rerun()
+            st.rerun(scope="fragment")
     with _ba_c3:
         if st.button("▶ Start selected",
                      key="_hist_start_sel_btn",
@@ -15869,7 +15870,7 @@ def _render_history_to_pg_tab() -> None:
                 _total = _history_es_count(_es_index)
                 _sort = _history_pick_sort_field(_k)
                 _history_job_upsert(_k, _es_index, _sort, _total)
-            st.rerun()
+            st.rerun(scope="app")
     with _ba_c4:
         _sel_n = len(st.session_state["_hist_selected_v1"])
         st.markdown(
@@ -16020,6 +16021,11 @@ def _render_history_to_pg_tab() -> None:
                     else:
                         if st.button(_lbl, key=_bkey,
                                      use_container_width=True, help=_hlp):
+                            # start/pause/rerun flip a job's running state, so
+                            # they must reach the late-render gate that swaps
+                            # the live ↔ idle auto-progress fragment → app
+                            # scope. select is pure in-tab state → fragment.
+                            _is_state_transition = _act in ("start", "pause", "rerun")
                             if _act == "select":
                                 _sel_set = st.session_state["_hist_selected_v1"]
                                 if _k in _sel_set:
@@ -16040,7 +16046,7 @@ def _render_history_to_pg_tab() -> None:
                                 _total = _history_es_count(_es_index)
                                 _sort = _history_pick_sort_field(_k)
                                 _history_job_upsert(_k, _es_index, _sort, _total)
-                            st.rerun()
+                            st.rerun(scope="app" if _is_state_transition else "fragment")
 
 
 @st.fragment(run_every="2s")
@@ -22069,6 +22075,8 @@ def _history_db_ensure_jobs_table(conn) -> None:
             migrated_docs   BIGINT NOT NULL DEFAULT 0,
             last_sort_value TEXT,
             last_sort_id    TEXT,
+            pit_id          TEXT,
+            pit_keep_alive  TEXT DEFAULT '1m',
             status          TEXT NOT NULL DEFAULT 'idle',
             started_at      TIMESTAMPTZ,
             updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -22077,13 +22085,29 @@ def _history_db_ensure_jobs_table(conn) -> None:
         )
         """
     )
+    # Add new columns idempotently if they don't exist (pre-existing tables).
+    try:
+        cur.execute(f"ALTER TABLE {HISTORY_JOBS_TABLE} ADD COLUMN IF NOT EXISTS pit_id TEXT")
+    except Exception:
+        pass
+    try:
+        cur.execute(f"ALTER TABLE {HISTORY_JOBS_TABLE} ADD COLUMN IF NOT EXISTS pit_keep_alive TEXT DEFAULT '1m'")
+    except Exception:
+        pass
     cur.close()
     conn.commit()
 
 
 def _history_db_ensure_index_table(conn, index_key: str) -> str:
     """Create the per-index data table (JSONB doc + supporting indexes)
-    if it doesn't exist. Returns the table name."""
+    if it doesn't exist. Returns the table name.
+
+    Each index is created in its OWN committed statement. In Postgres a
+    failed statement aborts the whole transaction until rollback — so the
+    previous single-transaction version, where one bad expression index
+    poisoned the chunk INSERT (and the `except: pass` hid it), is the
+    likely cause of mid-migration 'current transaction is aborted' errors.
+    Per-statement commit/rollback isolates every index."""
     tbl = _history_table_name(index_key)
     cur = conn.cursor()
     cur.execute(
@@ -22095,14 +22119,26 @@ def _history_db_ensure_index_table(conn, index_key: str) -> str:
         )
         """
     )
-    # GIN index on the JSONB doc lets every key lookup hit the index
-    # and not table-scan — the supporting structure for "use PG for
-    # historic queries". Created idempotently.
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS {tbl}_doc_gin "
-        f"ON {tbl} USING GIN (doc jsonb_path_ops)"
-    )
-    # Common hot extracted columns — speed up the typical filter set.
+    cur.close()
+    conn.commit()
+
+    # GIN index on the JSONB doc — this is what makes EVERY key lookup
+    # (including NESTED fields, via containment `@>`) hit an index instead
+    # of table-scanning. Committed on its own.
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS {tbl}_doc_gin "
+            f"ON {tbl} USING GIN (doc jsonb_path_ops)"
+        )
+        cur.close()
+        conn.commit()
+    except Exception:
+        cur.close()
+        conn.rollback()
+
+    # Common hot scalar columns — speed up the typical filter set. Each is
+    # committed independently so a missing/odd field can't abort the rest.
     for _expr_name, _expr in (
         (f"{tbl}_project",     "(doc->>'project')"),
         (f"{tbl}_application", "(doc->>'application')"),
@@ -22110,18 +22146,16 @@ def _history_db_ensure_index_table(conn, index_key: str) -> str:
         (f"{tbl}_environment", "(doc->>'environment')"),
         (f"{tbl}_company",     "(doc->>'company')"),
     ):
+        cur = conn.cursor()
         try:
             cur.execute(
                 f"CREATE INDEX IF NOT EXISTS {_expr_name} ON {tbl} ({_expr})"
             )
+            cur.close()
+            conn.commit()
         except Exception:
-            # Some fields don't exist in every index — the partial
-            # `jsonb->>` index still creates; this except catches
-            # exotic permission errors so one bad column doesn't abort
-            # the whole table setup.
-            pass
-    cur.close()
-    conn.commit()
+            cur.close()
+            conn.rollback()
     return tbl
 
 
@@ -22226,7 +22260,8 @@ def _history_job_load(index_key: str) -> dict:
         cur.execute(
             f"SELECT index_key, es_index, table_name, sort_field, "
             f"total_docs, migrated_docs, last_sort_value, last_sort_id, "
-            f"status, started_at, updated_at, completed_at, error_msg "
+            f"status, started_at, updated_at, completed_at, error_msg, "
+            f"pit_id "
             f"FROM {HISTORY_JOBS_TABLE} WHERE index_key = %s",
             (index_key,),
         )
@@ -22248,6 +22283,7 @@ def _history_job_load(index_key: str) -> dict:
             "updated_at":      r[10].isoformat() if r[10] else "",
             "completed_at":    r[11].isoformat() if r[11] else "",
             "error_msg":       r[12] or "",
+            "pit_id":          r[13] or "",
         }
     except Exception:
         return {}
@@ -22335,8 +22371,33 @@ def _history_job_reset(index_key: str) -> None:
         cur.execute(
             f"UPDATE {HISTORY_JOBS_TABLE} "
             f"SET migrated_docs = 0, last_sort_value = NULL, "
-            f"last_sort_id = NULL, status = 'idle', "
+            f"last_sort_id = NULL, pit_id = NULL, status = 'idle', "
             f"completed_at = NULL, error_msg = NULL, updated_at = NOW() "
+            f"WHERE index_key = %s",
+            (index_key,),
+        )
+        cur.close()
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_job_clear_pit(index_key: str) -> None:
+    """Null the stored PIT id (e.g. after a migration completes or its PIT
+    closes) so the next run opens a fresh context. Best-effort."""
+    if not _POSTGRES_AVAILABLE:
+        return
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE {HISTORY_JOBS_TABLE} SET pit_id = NULL, updated_at = NOW() "
             f"WHERE index_key = %s",
             (index_key,),
         )
@@ -22354,6 +22415,12 @@ def _history_pick_sort_field(index_key: str) -> str:
     """Decide which field to search_after on. We probe the candidates
     via a 1-doc sort and use the first one that doesn't error. ``_id``
     is always a safe last resort."""
+    # Probe each candidate with a plain (non-PIT) sort — `_shard_doc` is
+    # ONLY valid inside a PIT search, so it must NOT appear here or every
+    # probe would error and we'd fall back to `_id`. The migration chunk
+    # adds the `_shard_doc` tiebreaker itself (inside its PIT). When no
+    # date field works we return "" (sort by `_shard_doc` alone) — never
+    # `_id`, whose fielddata access ES forbids.
     candidates = list(_HISTORY_SORT_FIELDS.get(index_key) or [])
     for fld in candidates:
         try:
@@ -22367,13 +22434,51 @@ def _history_pick_sort_field(index_key: str) -> str:
                 return fld
         except Exception:
             continue
-    return "_id"
+    return ""
+
+
+_HISTORY_PIT_KEEP_ALIVE = "2m"
+
+
+def _history_open_pit(es_index: str, keep_alive: str = _HISTORY_PIT_KEEP_ALIVE
+                      ) -> tuple[str, dict]:
+    """Open a Point-in-Time context for *es_index*. Returns
+    ``(pit_id, error)`` where ``error`` is empty on success. PIT gives us a
+    stable, fielddata-free pagination order via the ``_shard_doc`` sort —
+    the supported replacement for sorting on ``_id`` (which ES forbids)."""
+    try:
+        res = es_prd.open_point_in_time(index=es_index, keep_alive=keep_alive)
+        body = res.body if hasattr(res, "body") else res
+        pit_id = (body or {}).get("id") if isinstance(body, dict) else ""
+        if pit_id:
+            return pit_id, {}
+        return "", {"_error": "open_point_in_time returned no id"}
+    except Exception as e:
+        return "", {"_error": f"{type(e).__name__}: {e}"}
+
+
+def _history_close_pit(pit_id: str) -> None:
+    """Best-effort close of a PIT context. Errors are swallowed."""
+    if not pit_id:
+        return
+    try:
+        es_prd.close_point_in_time(body={"id": pit_id})
+    except Exception:
+        pass
 
 
 def _history_migrate_chunk(index_key: str) -> dict:
-    """Pull the next chunk from ES and write to PG. Returns a small
-    status dict so the caller can render progress without re-loading
-    the job row."""
+    """Pull the next chunk from ES and write it to PG using Point-in-Time
+    cursoring. Returns a small status dict so the caller can render
+    progress without re-loading the job row.
+
+    Reads ES *directly* via ``es_prd.search`` (NOT ``es_search``) so the
+    PG read-routing layer never intercepts the migration's own source —
+    otherwise a partially-filled PG table would route the reads we're
+    trying to fill. Sort is ``[<date field?>, _shard_doc]`` — never
+    ``_id`` (fielddata access on ``_id`` is forbidden). The full sort
+    tuple of the last hit is the resumable cursor (stored as JSON in
+    ``last_sort_value``)."""
     out = {"index_key": index_key, "ok": False, "migrated_now": 0,
            "completed": False, "error": ""}
     if index_key not in IDX:
@@ -22387,48 +22492,83 @@ def _history_migrate_chunk(index_key: str) -> dict:
         total = _history_es_count(es_index)
         _history_job_upsert(index_key, es_index, sort_field, total)
         job = _history_job_load(index_key)
-    last_sort_value = (job or {}).get("last_sort_value") or ""
-    last_sort_id    = (job or {}).get("last_sort_id") or ""
 
-    # Build the search_after request.
-    body: dict = {
-        "query": {"match_all": {}},
-        "sort":  [
-            {sort_field: {"order": "asc", "unmapped_type": "long"}},
-            {"_id":      {"order": "asc"}},
-        ],
-    }
-    if last_sort_value or last_sort_id:
+    pit_id = (job or {}).get("pit_id") or ""
+    # Resumable cursor = the full sort tuple of the last migrated hit,
+    # stored as a JSON array (handles 1- or 2-element sorts uniformly).
+    search_after = None
+    _cur_raw = (job or {}).get("last_sort_value") or ""
+    if _cur_raw:
         try:
-            # The sort value is stored as a string; ES is tolerant of
-            # numeric strings on date / long fields, so we keep it
-            # opaque on the dashboard side.
-            sv = last_sort_value
-            try:
-                sv = int(last_sort_value)
-            except Exception:
-                try:
-                    sv = float(last_sort_value)
-                except Exception:
-                    pass
-            body["search_after"] = [sv, last_sort_id]
+            _parsed = json.loads(_cur_raw)
+            if isinstance(_parsed, list) and _parsed:
+                search_after = _parsed
         except Exception:
-            pass
+            search_after = None
+
+    if not pit_id:
+        pit_id, _err = _history_open_pit(es_index)
+        if _err:
+            out["error"] = f"PIT open error: {_err.get('_error', 'unknown')}"
+            _history_job_set_status(index_key, "error", out["error"])
+            return out
+        search_after = None  # fresh PIT — cursor restarts
+
+    # Sort: real date field (when one was found) + the PIT-only
+    # `_shard_doc` tiebreaker. When no date field works, `_shard_doc`
+    # alone gives a complete stable order.
+    sort: list = []
+    if sort_field and sort_field != "_id":
+        sort.append({sort_field: {"order": "asc", "unmapped_type": "long"}})
+    sort.append({"_shard_doc": "asc"})
+
+    def _do_search(_pit: str, _after):
+        _body: dict = {
+            "pit": {"id": _pit, "keep_alive": _HISTORY_PIT_KEEP_ALIVE},
+            "query": {"match_all": {}},
+            "sort": sort,
+        }
+        if _after:
+            _body["search_after"] = _after
+        _o = es_prd.search(body=_body, size=HISTORY_CHUNK_SIZE,
+                           request_timeout=ES_TIMEOUT)
+        return _o.body if hasattr(_o, "body") else dict(_o)
 
     try:
-        res = es_search(es_index, body, size=HISTORY_CHUNK_SIZE)
-    except Exception as e:
-        out["error"] = f"ES error: {type(e).__name__}: {e}"
-        _history_job_set_status(index_key, "error", out["error"])
-        return out
+        res = _do_search(pit_id, search_after)
+    except Exception:
+        # The PIT most likely expired (e.g. paused longer than keep_alive).
+        # Reopen once and restart the cursor — the ON CONFLICT upsert makes
+        # the re-scan idempotent, so correctness holds.
+        _history_close_pit(pit_id)
+        pit_id, _err = _history_open_pit(es_index)
+        if _err:
+            out["error"] = f"PIT reopen error: {_err.get('_error', 'unknown')}"
+            _history_job_set_status(index_key, "error", out["error"])
+            return out
+        search_after = None
+        try:
+            res = _do_search(pit_id, None)
+        except Exception as e2:
+            out["error"] = f"ES PIT search error: {type(e2).__name__}: {e2}"
+            _history_job_set_status(index_key, "error", out["error"])
+            _history_close_pit(pit_id)
+            return out
+
+    # PIT id can rotate across searches — always carry the latest forward.
+    new_pit_id = (res.get("pit") or {}).get("id") or pit_id
     if res.get("_error"):
         out["error"] = f"ES error: {str(res['_error'])[:200]}"
         _history_job_set_status(index_key, "error", out["error"])
+        _history_close_pit(new_pit_id)
         return out
 
     hits = (res.get("hits") or {}).get("hits") or []
     if not hits:
         _history_job_set_status(index_key, "done")
+        _history_close_pit(new_pit_id)
+        # Clear the stored PIT so a future re-run opens a fresh one.
+        _history_job_clear_pit(index_key)
         out["ok"] = True
         out["completed"] = True
         return out
@@ -22438,9 +22578,8 @@ def _history_migrate_chunk(index_key: str) -> dict:
         conn = _pg_connect_rw()
         tbl = _history_db_ensure_index_table(conn, index_key)
         cur = conn.cursor()
-        # psycopg v3 uses Jsonb wrapper for JSONB inserts; v2 accepts
-        # a JSON string directly via psycopg2.extras.Json. We pass a
-        # JSON string + cast to JSONB which works on both.
+        # JSON string + ::jsonb cast works on both psycopg v2 and v3 and
+        # preserves nested objects/arrays natively in the JSONB column.
         rows = [
             (h.get("_id") or "", json.dumps(h.get("_source") or {},
                                             default=str))
@@ -22453,18 +22592,17 @@ def _history_migrate_chunk(index_key: str) -> dict:
             f"  doc = EXCLUDED.doc, migrated_at = NOW()",
             rows,
         )
-        # Record progress + checkpoint.
-        last = hits[-1]
-        last_sort = last.get("sort") or []
-        _new_sort_value = str(last_sort[0]) if len(last_sort) > 0 else ""
-        _new_sort_id    = str(last_sort[1]) if len(last_sort) > 1 else (last.get("_id") or "")
+        # Checkpoint: store the full sort tuple of the last hit (JSON) +
+        # the rotated PIT id.
+        _last_sort = hits[-1].get("sort") or []
         cur.execute(
             f"UPDATE {HISTORY_JOBS_TABLE} SET "
             f"  migrated_docs = migrated_docs + %s, "
-            f"  last_sort_value = %s, last_sort_id = %s, "
+            f"  last_sort_value = %s, pit_id = %s, "
             f"  updated_at = NOW() "
             f"WHERE index_key = %s",
-            (len(hits), _new_sort_value, _new_sort_id, index_key),
+            (len(hits), json.dumps(_last_sort, default=str),
+             new_pit_id, index_key),
         )
         cur.close()
         conn.commit()
@@ -22472,6 +22610,8 @@ def _history_migrate_chunk(index_key: str) -> dict:
         out["migrated_now"] = len(hits)
         if len(hits) < HISTORY_CHUNK_SIZE:
             _history_job_set_status(index_key, "done")
+            _history_close_pit(new_pit_id)
+            _history_job_clear_pit(index_key)
             out["completed"] = True
     except Exception as e:
         out["error"] = f"PG error: {type(e).__name__}: {e}"
