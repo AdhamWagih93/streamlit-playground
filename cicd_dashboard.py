@@ -10586,23 +10586,40 @@ def _load_teams_for_role(role: str) -> list[str]:
     return sorted(t for t in teams if t)
 
 
+def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
+    """Resolve inventory apps / projects owned by ANY of *teams* across ANY
+    of *fields*, matching team names CASE-INSENSITIVELY (My-Team == my-team).
+
+    Tries an ES ``case_insensitive`` term query first; if that yields nothing
+    it falls back to an EXACT match. The fallback is essential: ``es_search``
+    swallows ES errors into an empty result, so an index that rejects
+    ``case_insensitive`` would otherwise make this return ``[]`` and silently
+    collapse a non-admin's whole scope to "no apps". Falling back on empty
+    covers both the error case and a genuinely empty result."""
+    _fields = [f for f in (fields or []) if f]
+    _teams = [t for t in (teams or []) if str(t or "").strip()]
+    if not _fields or not _teams:
+        return []
+    for _ci in (True, False):
+        _should = [
+            {"term": {f: ({"value": t, "case_insensitive": True} if _ci else t)}}
+            for f in _fields for t in _teams
+        ]
+        _q = {"bool": {"should": _should, "minimum_should_match": 1}}
+        try:
+            _res = composite_terms(IDX["inventory"], agg_field, _q)
+        except Exception:
+            _res = {}
+        if _res:
+            return sorted(_res.keys())
+    return []
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _load_team_applications(role: str, team: str) -> list[str]:
     """Return list of application names assigned to this team for this role."""
-    fields = ROLE_TEAM_FIELDS.get(role, [])
-    if not fields or not team:
-        return []
-    # One field per role today; keep the OR structure in case a role is ever
-    # scoped against multiple ownership fields again. Team match is
-    # case-insensitive (My-Team == my-team) via ES term `case_insensitive`.
-    should_clauses = [
-        {"term": {f: {"value": team, "case_insensitive": True}}} for f in fields
-    ]
-    query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
-    try:
-        return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
-    except Exception:
-        return []
+    return _resolve_inventory_by_teams(
+        ROLE_TEAM_FIELDS.get(role, []), [team], "application.keyword")
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -11568,20 +11585,8 @@ def _load_projects_for_role_teams(role: str, teams: tuple[str, ...]) -> list[str
     OR ``prd_team`` (both ownership lanes — Operations runs UAT + PRD).
     Admin (or an empty team list) returns an empty list to signal "no scoping".
     """
-    fields = ROLE_TEAM_FIELDS.get(role, [])
-    if not fields or not teams:
-        return []
-    # Case-insensitive team match: one term-with-case_insensitive per
-    # (field, team) since ES `terms` doesn't support case-folding.
-    should = [
-        {"term": {f: {"value": t, "case_insensitive": True}}}
-        for f in fields for t in teams
-    ]
-    query = {"bool": {"should": should, "minimum_should_match": 1}}
-    try:
-        return sorted(composite_terms(IDX["inventory"], "project.keyword", query).keys())
-    except Exception:
-        return []
+    return _resolve_inventory_by_teams(
+        ROLE_TEAM_FIELDS.get(role, []), list(teams), "project.keyword")
 
 
 _all_companies, _all_projects = _load_inventory_choices()
@@ -11757,17 +11762,8 @@ def _load_apps_for_user_teams(team: str, fields_json: str) -> list[str]:
     ``fields_json`` is a JSON-encoded list because Streamlit's cache key
     requires a hashable arg. Falls back to an empty list when the user
     has no role-team fields (admin / unknown role)."""
-    fields: list[str] = json.loads(fields_json)
-    if not fields or not team:
-        return []
-    should = [
-        {"term": {f: {"value": team, "case_insensitive": True}}} for f in fields
-    ]
-    query = {"bool": {"should": should, "minimum_should_match": 1}}
-    try:
-        return sorted(composite_terms(IDX["inventory"], "application.keyword", query).keys())
-    except Exception:
-        return []
+    return _resolve_inventory_by_teams(
+        json.loads(fields_json), [team], "application.keyword")
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -11775,19 +11771,8 @@ def _load_projects_for_user_teams(teams_json: str, fields_json: str) -> list[str
     """Projects where ANY of the user's role-team fields contains
     ANY team in ``teams_json``. Same JSON-encoded args pattern as
     ``_load_apps_for_user_teams``."""
-    fields: list[str] = json.loads(fields_json)
-    teams:  list[str] = json.loads(teams_json)
-    if not fields or not teams:
-        return []
-    should = [
-        {"term": {f: {"value": t, "case_insensitive": True}}}
-        for f in fields for t in teams
-    ]
-    query = {"bool": {"should": should, "minimum_should_match": 1}}
-    try:
-        return sorted(composite_terms(IDX["inventory"], "project.keyword", query).keys())
-    except Exception:
-        return []
+    return _resolve_inventory_by_teams(
+        json.loads(fields_json), json.loads(teams_json), "project.keyword")
 
 
 # Team auto-detection (from st.session_state.teams) — resolves team_filter and
