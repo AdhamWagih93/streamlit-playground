@@ -13100,6 +13100,49 @@ def _render_teams_and_members_view() -> None:
                             else:
                                 st.error(_msg)
 
+    # ── Multi-team members — subtle data-quality warning ────────────────
+    # Surfaces members resolved to more than one team in the LDAP rosters.
+    # Often legitimate (a lead spanning squads) but worth a glance — it can
+    # also signal a stale or duplicated roster membership. Kept subtle: a
+    # collapsed expander that only appears when there's something to show.
+    _multi_team = [
+        _u for _u in _users_list if len(_u.get("teams") or []) >= 2
+    ]
+    if _multi_team:
+        _multi_team.sort(key=lambda u: (-len(u["teams"]), u["label"].lower()))
+        with st.expander(
+            f"⚠ {len(_multi_team)} member"
+            f"{'s' if len(_multi_team) != 1 else ''} on multiple teams",
+            expanded=False,
+        ):
+            st.markdown(
+                '<div class="tm-section-sub">Members the LDAP rosters place '
+                'on more than one team. Usually fine (someone who genuinely '
+                'spans teams) — but a quick check for stale or duplicated '
+                'memberships.</div>',
+                unsafe_allow_html=True,
+            )
+            _mt_rows = "".join(
+                f'<tr><td class="tmx-bd-name">{html.escape(_u["label"])}'
+                + (f' <span class="tm-unk-email">{html.escape(_u["email"])}'
+                   f'</span>' if _u.get("email") else '')
+                + f'</td><td class="tmx-bd-num">{len(_u["teams"])}</td>'
+                f'<td class="tmx-bd-chips">'
+                + "".join(
+                    f'<span class="tmx-chip">{html.escape(_t)}</span>'
+                    for _t in _u["teams"]
+                )
+                + '</td></tr>'
+                for _u in _multi_team
+            )
+            st.markdown(
+                '<div class="tmx-bd-wrap"><table class="tmx-bd-table">'
+                '<thead><tr><th>Member</th><th class="tmx-th-num">#</th>'
+                '<th>Teams</th></tr></thead>'
+                f'<tbody>{_mt_rows}</tbody></table></div>',
+                unsafe_allow_html=True,
+            )
+
     # ── Aggregator diagnostics popover ──────────────────────────────────
     # Per-counter sums + error stash from `_fetch_users_aggregate`. When
     # all activity counters read zero it's almost always one of two
