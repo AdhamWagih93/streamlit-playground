@@ -4616,6 +4616,68 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     margin-top: 2px;
     word-break: break-all;
 }
+/* whenCreated / whenChanged — subtle per-member line + recency tags */
+.tm-mem-when {
+    font-family: var(--cc-mono);
+    font-size: 0.64rem;
+    color: var(--cc-text-dim);
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+.tm-mem-newtag, .tm-mem-chgtag {
+    font-family: var(--cc-mono);
+    font-size: 0.56rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 0 6px;
+    border-radius: 999px;
+    line-height: 1.5;
+}
+.tm-mem-newtag {
+    color: var(--cc-green);
+    background: color-mix(in srgb, var(--cc-green) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-green) 42%, var(--cc-border));
+}
+.tm-mem-chgtag {
+    color: var(--cc-blue);
+    background: color-mix(in srgb, var(--cc-blue) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 40%, var(--cc-border));
+}
+/* Per-team "recently new / changed" banner inside the team popover */
+.tm-pop-recent {
+    margin: 8px 0 4px;
+    padding: 7px 10px;
+    border-radius: 9px;
+    border: 1px solid color-mix(in srgb, var(--cc-green) 30%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-green) 7%, transparent);
+}
+.tm-pop-recent-line {
+    font-size: 0.76rem;
+    color: var(--cc-text);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.tm-pop-recent-line b { color: var(--cc-text); }
+.tm-pop-recent-win {
+    font-family: var(--cc-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cc-text-mute);
+}
+.tm-pop-recent-names {
+    font-family: var(--cc-mono);
+    font-size: 0.68rem;
+    color: var(--cc-text-dim);
+    margin-top: 3px;
+    word-break: break-word;
+}
 .tm-mem-meta { color: var(--cc-text); min-width: 160px; }
 .tm-mem-dim {
     color: var(--cc-text-mute);
@@ -12751,6 +12813,8 @@ def _render_teams_and_members_view() -> None:
             "ldap_department": _info.get("department") or "",
             "ldap_company": _info.get("company") or "",
             "ldap_manager": _info.get("manager") or "",
+            "when_created": _info.get("when_created") or "",
+            "when_changed": _info.get("when_changed") or "",
             "_es_count": 0,
         }
         for _f in _ACT_FIELDS:
@@ -13726,6 +13790,7 @@ def _render_teams_and_members_view() -> None:
                     "total": 0,
                     "ldap_title": "", "ldap_department": "",
                     "ldap_company": "", "ldap_manager": "",
+                    "when_created": "", "when_changed": "",
                     "ldap_username": _user_lc, "_roles": [],
                 })
             else:
@@ -13745,6 +13810,36 @@ def _render_teams_and_members_view() -> None:
         _team_members.keys(),
         key=lambda k: (-len(_team_members[k]), k.lower()),
     )
+
+    # ── whenCreated / whenChanged recency — drives the subtle per-member
+    # "joined / updated" line and the per-team "new members / recent
+    # changes" highlight in each team popover. ───────────────────────────
+    _ldap_now = datetime.now(timezone.utc)
+    _ldap_recent_cut = _ldap_now - timedelta(days=_LDAP_RECENT_WINDOW_DAYS)
+
+    def _mem_recency(_m: dict):
+        """(is_new, is_changed, created_dt, changed_dt). is_changed excludes
+        brand-new members so the two signals don't overlap."""
+        _cd = _ldap_parse_gentime(_m.get("when_created"))
+        _hd = _ldap_parse_gentime(_m.get("when_changed"))
+        _is_new = bool(_cd and _cd >= _ldap_recent_cut)
+        _is_chg = bool(_hd and _hd >= _ldap_recent_cut and not _is_new)
+        return _is_new, _is_chg, _cd, _hd
+
+    def _mem_when_html(_m: dict) -> str:
+        _is_new, _is_chg, _cd, _hd = _mem_recency(_m)
+        _bits = []
+        if _cd:
+            _bits.append(f'joined {_cd.strftime("%Y-%m-%d")}')
+        if _hd:
+            _bits.append(f'updated {html.escape(_relative_age(_hd))}')
+        if not _bits and not (_is_new or _is_chg):
+            return ""
+        _tag = ('<span class="tm-mem-newtag">NEW</span>' if _is_new
+                else '<span class="tm-mem-chgtag">updated</span>' if _is_chg
+                else "")
+        return (f'<div class="tm-mem-when">{" · ".join(_bits)}'
+                f'{(" " + _tag) if _tag else ""}</div>')
 
     # ── Teams grid controls — search + show-all toggle ───────────────
     # Each st.popover renders its inner content on every script run.
@@ -13810,7 +13905,15 @@ def _render_teams_and_members_view() -> None:
         for _col_idx, _t in enumerate(_filtered_teams[_row_start:_row_start + _PER_ROW]):
             _members = _team_members[_t]
             _roles = sorted(_team_roles.get(_t, set()))
-            _btn_lbl = f"▦ {_t}  ·  {len(_members):,}"
+            # Recently-new / recently-changed members drive the highlight.
+            _new_ms = [_m for _m in _members if _mem_recency(_m)[0]]
+            _upd_ms = [_m for _m in _members if _mem_recency(_m)[1]]
+            _badge = ""
+            if _new_ms:
+                _badge += f"  ·  🆕{len(_new_ms)}"
+            if _upd_ms:
+                _badge += f"  ·  ✎{len(_upd_ms)}"
+            _btn_lbl = f"▦ {_t}  ·  {len(_members):,}{_badge}"
             with _cols[_col_idx]:
                 with st.popover(_btn_lbl, use_container_width=True):
                     _role_chips = "".join(
@@ -13827,6 +13930,32 @@ def _render_teams_and_members_view() -> None:
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+                    # Subtle "what changed lately" banner inside the popover.
+                    if _new_ms or _upd_ms:
+                        _hl_bits = []
+                        if _new_ms:
+                            _hl_bits.append(
+                                f'🆕 <b>{len(_new_ms)}</b> new member'
+                                f'{"s" if len(_new_ms) != 1 else ""}')
+                        if _upd_ms:
+                            _hl_bits.append(
+                                f'✎ <b>{len(_upd_ms)}</b> recently updated')
+                        _new_names = ", ".join(
+                            html.escape(_m.get("label") or _m.get("username") or "—")
+                            for _m in _new_ms[:6])
+                        st.markdown(
+                            f'<div class="tm-pop-recent">'
+                            f'  <div class="tm-pop-recent-line">'
+                            f'{" · ".join(_hl_bits)} '
+                            f'<span class="tm-pop-recent-win">last '
+                            f'{_LDAP_RECENT_WINDOW_DAYS}d</span></div>'
+                            + (f'<div class="tm-pop-recent-names">new: '
+                               f'{_new_names}'
+                               f'{" …" if len(_new_ms) > 6 else ""}</div>'
+                               if _new_ms else "")
+                            + '</div>',
+                            unsafe_allow_html=True,
+                        )
                     if not _members:
                         st.markdown(
                             '<div class="tm-pop-empty">'
@@ -13881,6 +14010,7 @@ def _render_teams_and_members_view() -> None:
                                 f'</div>'
                                 f'    <div class="tm-mem-email">'
                                 f'{html.escape(_m.get("email") or "")}</div>'
+                                f'{_mem_when_html(_m)}'
                                 f'  </td>'
                                 f'  <td class="tm-mem-meta">'
                                 f'{html.escape(_m.get("ldap_title") or "—")}'
@@ -14026,6 +14156,7 @@ def _render_teams_and_members_view() -> None:
                 f'  <td class="tm-mem-name">'
                 f'    <div class="tm-mem-label">{html.escape(_u.get("label") or _u.get("username") or "—")}</div>'
                 f'    <div class="tm-mem-email">{html.escape(_u.get("email") or _u.get("username") or "—")}</div>'
+                f'{_mem_when_html(_u)}'
                 f'  </td>'
                 f'  <td>{_role_chips}</td>'
                 f'  <td>{_team_chips}{_team_overflow}</td>'
@@ -21286,9 +21417,19 @@ def _ldap_db_ensure_schema(conn) -> None:
             department    TEXT,
             company       TEXT,
             manager       TEXT,
+            when_created  TEXT,
+            when_changed  TEXT,
             updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    # Additive migration for deployments created before whenCreated /
+    # whenChanged were tracked — no-op once the columns exist.
+    cur.execute(
+        f"ALTER TABLE {LDAP_DB_USERS_TABLE} "
+        f"ADD COLUMN IF NOT EXISTS when_created TEXT")
+    cur.execute(
+        f"ALTER TABLE {LDAP_DB_USERS_TABLE} "
+        f"ADD COLUMN IF NOT EXISTS when_changed TEXT")
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS {LDAP_DB_MEMBERS_TABLE} (
             team_cn    TEXT NOT NULL,
@@ -21339,10 +21480,14 @@ def _ldap_db_load_users() -> dict:
     conn = None
     try:
         conn = _pg_connect_rw()
+        # Ensure the (additive) schema so the when_created / when_changed
+        # columns exist on deployments created before they were tracked.
+        _ldap_db_ensure_schema(conn)
         cur = conn.cursor()
         cur.execute(
             f"SELECT username, email, display_name, title, department, "
-            f"company, manager FROM {LDAP_DB_USERS_TABLE}"
+            f"company, manager, when_created, when_changed "
+            f"FROM {LDAP_DB_USERS_TABLE}"
         )
         rows = cur.fetchall()
         cur.close()
@@ -21359,6 +21504,8 @@ def _ldap_db_load_users() -> dict:
                 "department": (str(r[4] or "").strip()),
                 "company":    (str(r[5] or "").strip()),
                 "manager":    (str(r[6] or "").strip()),
+                "when_created": (str(r[7] or "").strip()),
+                "when_changed": (str(r[8] or "").strip()),
             }
         return out
     except Exception:
@@ -21572,6 +21719,63 @@ def _ldap_db_load_last_sync() -> dict:
                 pass
 
 
+# How recent a member's whenCreated / whenChanged must be to count as
+# "new" / "recently changed" for the Teams-grid highlights.
+_LDAP_RECENT_WINDOW_DAYS = int(
+    os.environ.get("LDAP_RECENT_WINDOW_DAYS", "14") or 14)
+
+
+def _ldap_parse_gentime(val) -> "datetime | None":
+    """Parse an LDAP GeneralizedTime value (e.g. ``20260601073635.0Z``) into
+    a UTC datetime. Tolerant: accepts a datetime as-is, the leading
+    ``YYYYMMDDHHMMSS`` of a GeneralizedTime string, a bare ``YYYYMMDD``, or
+    an ISO-8601 string. Returns None on anything unparseable."""
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    s = str(val or "").strip()
+    if not s:
+        return None
+    m = re.match(r"(\d{14})", s)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(
+                tzinfo=timezone.utc)
+        except Exception:
+            pass
+    if re.fullmatch(r"\d{8}", s):
+        try:
+            return datetime.strptime(s, "%Y%m%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _ldap_pick_when(info: dict, *keys: str) -> str:
+    """First non-empty value among *keys* (and common case/underscore
+    variants) from an LDAP info dict, as a raw string. ldap3 may hand back
+    a list or a datetime — both are coerced to a string we can re-parse."""
+    if not isinstance(info, dict):
+        return ""
+    _seen: set[str] = set()
+    _variants: list[str] = []
+    for k in keys:
+        for v in (k, k.lower(), k.replace("_", ""), k.replace("_", "").lower()):
+            if v not in _seen:
+                _seen.add(v)
+                _variants.append(v)
+    for k in _variants:
+        v = info.get(k)
+        if isinstance(v, (list, tuple)):
+            v = v[0] if v else None
+        if v:
+            return str(v).strip()
+    return ""
+
+
 def _ldap_sync_to_db(team_cns_tuple: tuple[str, ...]) -> dict:
     """Run a live LDAP probe over *team_cns_tuple*, compute deltas vs
     the current DB state, write the new state, log the sync attempt,
@@ -21634,21 +21838,34 @@ def _ldap_sync_to_db(team_cns_tuple: tuple[str, ...]) -> dict:
         return delta
 
     # Force directory enrichment for every discovered user — single sync
-    # cost in exchange for cheap reads later.
+    # cost in exchange for cheap reads later. We always fetch the info
+    # record (cached) so whenCreated / whenChanged are captured for EVERY
+    # user, not only the ones still missing an email.
     for _u_dict in (ldap_blob.get("users") or {}).values():
+        info = _ldap_user_info_cached(_u_dict.get("username") or "")
+        if not info:
+            continue
         if not _u_dict.get("email"):
-            info = _ldap_user_info_cached(_u_dict.get("username") or "")
-            if info:
-                if info.get("email"):
-                    _u_dict["email"] = str(info["email"]).strip().lower()
-                _disp = info.get("username") or _u_dict.get("username")
-                _u_dict["label"] = str(_disp or "").strip()
-                _u_dict["title"]      = (info.get("title") or "").strip()
-                _u_dict["department"] = (info.get("department") or "").strip()
-                _u_dict["company"]    = (
-                    info.get("ldapcompany") or info.get("company") or ""
-                ).strip()
-                _u_dict["manager"]    = (info.get("manager") or "").strip()
+            if info.get("email"):
+                _u_dict["email"] = str(info["email"]).strip().lower()
+            _disp = info.get("username") or _u_dict.get("username")
+            _u_dict["label"] = str(_disp or "").strip()
+            _u_dict["title"]      = (info.get("title") or "").strip()
+            _u_dict["department"] = (info.get("department") or "").strip()
+            _u_dict["company"]    = (
+                info.get("ldapcompany") or info.get("company") or ""
+            ).strip()
+            _u_dict["manager"]    = (info.get("manager") or "").strip()
+        # whenCreated / whenChanged — LDAP GeneralizedTime strings (e.g.
+        # 20260601073635.0Z). Stored raw; parsed for display. If your
+        # `utils.ldap.get_user_info` doesn't return these keys they stay
+        # empty (the dashboard degrades gracefully).
+        _wc = _ldap_pick_when(info, "whenCreated", "when_created", "createTimeStamp")
+        _wh = _ldap_pick_when(info, "whenChanged", "when_changed", "modifyTimeStamp")
+        if _wc:
+            _u_dict["when_created"] = _wc
+        if _wh:
+            _u_dict["when_changed"] = _wh
 
     new_users = ldap_blob.get("users") or {}
     new_team_rosters = ldap_blob.get("team_rosters") or {}
@@ -21708,8 +21925,8 @@ def _ldap_sync_to_db(team_cns_tuple: tuple[str, ...]) -> dict:
             cur.execute(
                 f"INSERT INTO {LDAP_DB_USERS_TABLE} "
                 f"(username, email, display_name, title, department, "
-                f"company, manager, updated_at) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, NOW()) "
+                f"company, manager, when_created, when_changed, updated_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()) "
                 f"ON CONFLICT (username) DO UPDATE SET "
                 f"email = EXCLUDED.email, "
                 f"display_name = EXCLUDED.display_name, "
@@ -21717,12 +21934,16 @@ def _ldap_sync_to_db(team_cns_tuple: tuple[str, ...]) -> dict:
                 f"department = EXCLUDED.department, "
                 f"company = EXCLUDED.company, "
                 f"manager = EXCLUDED.manager, "
+                f"when_created = COALESCE(NULLIF(EXCLUDED.when_created, ''), "
+                f"{LDAP_DB_USERS_TABLE}.when_created), "
+                f"when_changed = EXCLUDED.when_changed, "
                 f"updated_at = NOW()",
                 (
                     u["username"], u.get("email") or "",
                     u.get("label") or u["username"],
                     u.get("title") or "", u.get("department") or "",
                     u.get("company") or "", u.get("manager") or "",
+                    u.get("when_created") or "", u.get("when_changed") or "",
                 ),
             )
         # Remove users absent from the fresh LDAP set
@@ -23462,6 +23683,8 @@ def _resolve_ldap_users_from_teams(team_cns_tuple: tuple[str, ...]) -> dict:
                     "department": "",
                     "company":    "",
                     "manager":    "",
+                    "when_created": "",
+                    "when_changed": "",
                 })
                 u["teams"].add(team_cn)
 
