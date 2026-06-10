@@ -26291,6 +26291,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # popover hosting the full team → project → env_app → file → diff →
     # commit-and-push flow, team-scoped (admins all teams; members their
     # own). Available to anyone with config access, not just admins.
+    # Resolve the ADO host once here so the toolbar (above) and the per-row
+    # repo-URL / config helpers (below) all share it.
+    _iv_ado_host = (_git_creds().get("hostname") or "").strip()
     _iv_cfg_edit_show = _is_admin or bool(_iv_session_teams)
     if _iv_cfg_edit_show and _iv_ado_host:
         with st.container(key="cc_iv_cfg_editor_toolbar"):
@@ -26365,11 +26368,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     # ── ADO repo URL helper (per-row) ─────────────────────────────────
     # Built from the inventory row's `repository_name` field plus the
-    # vault-sourced ADO hostname. Returns "" when either piece is
-    # missing so callers can render an inert state instead of a broken
-    # link.
-    _iv_ado_host = (_git_creds().get("hostname") or "").strip()
-
+    # vault-sourced ADO hostname (`_iv_ado_host`, resolved earlier with the
+    # config toolbar). Returns "" when either piece is missing so callers
+    # can render an inert state instead of a broken link.
     def _iv_repo_url(r: dict) -> str:
         _rn = (r.get("repository_name") or "").strip()
         _co = (r.get("company") or "").strip()
