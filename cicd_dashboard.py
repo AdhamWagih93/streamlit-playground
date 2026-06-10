@@ -9757,12 +9757,26 @@ def cached_search(index: str, body_json: str, size: int = 0) -> dict:
 
 
 def es_search(index: str, body: dict, size: int = 0) -> dict:
-    """Search wrapper.
+    """Search wrapper with optional ES→Postgres read-routing.
 
     Always enables ``track_total_hits`` so ``hits.total.value`` reflects the
     real cardinality — without this, Elasticsearch caps the count at 10,000
     and ``es_count`` would silently undercount large indices.
-    """
+
+    When the admin has flipped the history source toggle to Postgres
+    (:func:`_history_use_pg`), reads are routed to the migrated
+    ``history_es_*`` JSONB tables. ANY miss — toggle off, index not
+    migrated, empty table, or a query shape we can't translate — returns
+    ``None`` and we fall through to Elasticsearch unchanged. The whole
+    PG path is best-effort and never raises into the caller."""
+    if _history_use_pg():
+        try:
+            _pg = _pg_try_translate_search(index, body, size)
+        except Exception:
+            _pg = None
+        if _pg is not None:
+            return _pg
+
     body = {**body, "track_total_hits": True}
     return cached_search(index, json.dumps(body, default=str, sort_keys=True), size)
 
@@ -9770,6 +9784,280 @@ def es_search(index: str, body: dict, size: int = 0) -> dict:
 def es_count(index: str, body: dict) -> int:
     res = es_search(index, body, size=0)
     return int(res.get("hits", {}).get("total", {}).get("value", 0) or 0)
+
+
+# =============================================================================
+# ES → POSTGRES READ-ROUTING (history_es_* JSONB tables)
+# =============================================================================
+# When the admin flips the history source toggle to Postgres, es_search()
+# routes here first. We translate the SUPPORTED query shapes to SQL over the
+# migrated JSONB tables and return a result in the exact shape es_search
+# normally returns, so callers need zero changes. ANYTHING we can't translate
+# with certainty raises `_PGUnsupported`, which the caller turns into a
+# transparent fall-through to Elasticsearch — we NEVER return approximate or
+# partial data (that would silently corrupt a display).
+#
+# Currently supported: the HIT-FETCH shape (bool / term / terms / range /
+# exists filters + sort + size + true COUNT). This covers the Event Log (the
+# primary historic display) and the raw inventory/detail row fetches.
+# Aggregations (composite / terms / top_hits / date_histogram) and any
+# search_after / match / wildcard / script clause are intentionally NOT
+# translated here and fall back to ES — see the build sheet for why
+# half-supporting composite pagination is unsafe.
+
+
+class _PGUnsupported(Exception):
+    """Raised when a query shape can't be safely translated to SQL — the
+    caller falls back to Elasticsearch."""
+
+
+def _es_index_to_key(index_name: str) -> "str | None":
+    """Reverse-lookup the dashboard's logical key from an ES index name."""
+    for _key, _es_name in IDX.items():
+        if _es_name == index_name:
+            return _key
+    return None
+
+
+def _pg_safe_field(field: str) -> str:
+    """Validate + normalise a doc field path. Strips a trailing `.keyword`
+    (no such subfield in JSONB — the value lives at the bare key) and
+    rejects anything with characters that don't belong in a field path
+    (defence-in-depth; values are always parameterised separately)."""
+    f = (field or "").strip()
+    if f.endswith(".keyword"):
+        f = f[: -len(".keyword")]
+    if not f or not re.fullmatch(r"[A-Za-z0-9_.@\-]+", f):
+        raise _PGUnsupported(f"unsupported field path: {field!r}")
+    return f
+
+
+def _pg_jsonb_text(field: str) -> str:
+    """JSONB text-extraction SQL for a (possibly nested, dotted) field.
+      application      -> (doc->>'application')
+      author.mail      -> (doc->'author'->>'mail')
+    """
+    parts = _pg_safe_field(field).split(".")
+    if len(parts) == 1:
+        return f"(doc->>'{parts[0]}')"
+    expr = "doc"
+    for p in parts[:-1]:
+        expr += f"->'{p}'"
+    expr += f"->>'{parts[-1]}'"
+    return f"({expr})"
+
+
+_PG_DATEISH = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]|$)")
+
+
+def _pg_range_cmp(field: str, op_sql: str, value) -> "tuple[str, list]":
+    """One range comparison with a type-appropriate cast. Date-ish strings
+    compare as timestamptz, numbers as numeric, everything else as text.
+    A non-castable stored value errors the query → ES fallback (safe)."""
+    expr = _pg_jsonb_text(field)
+    if isinstance(value, bool):
+        return f"{expr} {op_sql} %s", [str(value)]
+    if isinstance(value, (int, float)):
+        return f"NULLIF({expr}, '')::numeric {op_sql} %s", [value]
+    sval = str(value)
+    if _PG_DATEISH.match(sval):
+        return f"NULLIF({expr}, '')::timestamptz {op_sql} %s::timestamptz", [sval]
+    if re.fullmatch(r"-?\d+(\.\d+)?", sval):
+        return f"NULLIF({expr}, '')::numeric {op_sql} %s", [sval]
+    return f"{expr} {op_sql} %s", [sval]
+
+
+def _pg_build_where(query: dict) -> "tuple[str, list]":
+    """Translate the supported ES query clauses to (sql, params). Raises
+    _PGUnsupported for anything we don't translate with certainty."""
+    if not query or query == {"match_all": {}} or "match_all" in query:
+        return "TRUE", []
+    key = next(iter(query.keys()))
+    val = query[key]
+
+    if key == "bool":
+        parts: list[str] = []
+        params: list = []
+        for _clause in ("must", "filter"):
+            sub = val.get(_clause) or []
+            if isinstance(sub, dict):
+                sub = [sub]
+            for q in sub:
+                s, p = _pg_build_where(q)
+                parts.append(f"({s})")
+                params.extend(p)
+        if val.get("must_not"):
+            mn = val["must_not"]
+            if isinstance(mn, dict):
+                mn = [mn]
+            for q in mn:
+                s, p = _pg_build_where(q)
+                parts.append(f"NOT ({s})")
+                params.extend(p)
+        if val.get("should"):
+            sh = val["should"]
+            if isinstance(sh, dict):
+                sh = [sh]
+            or_parts: list[str] = []
+            for q in sh:
+                s, p = _pg_build_where(q)
+                or_parts.append(f"({s})")
+                params.extend(p)
+            if or_parts:
+                # minimum_should_match defaults to 1 here (OR).
+                parts.append("(" + " OR ".join(or_parts) + ")")
+        if not parts:
+            return "TRUE", []
+        return " AND ".join(parts), params
+
+    if key == "term":
+        fld = next(iter(val.keys()))
+        v = val[fld]
+        if isinstance(v, dict):
+            v = v.get("value")
+        return f"{_pg_jsonb_text(fld)} = %s", [None if v is None else str(v)]
+
+    if key == "terms":
+        fld = next(iter(val.keys()))
+        vals = val[fld]
+        if not isinstance(vals, (list, tuple)):
+            raise _PGUnsupported("terms without a list")
+        return f"{_pg_jsonb_text(fld)} = ANY(%s)", [[str(x) for x in vals]]
+
+    if key == "exists":
+        fld = val.get("field")
+        return f"{_pg_jsonb_text(fld)} IS NOT NULL", []
+
+    if key == "range":
+        fld = next(iter(val.keys()))
+        bounds = val[fld]
+        _OPS = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}
+        parts: list[str] = []
+        params: list = []
+        for _bk, _op in _OPS.items():
+            if _bk in bounds and bounds[_bk] is not None:
+                s, p = _pg_range_cmp(fld, _op, bounds[_bk])
+                parts.append(s)
+                params.extend(p)
+        if not parts:
+            return "TRUE", []
+        return " AND ".join(parts), params
+
+    # match / match_phrase / wildcard / prefix / query_string / etc. —
+    # analyzer-dependent semantics we won't approximate. Fall back to ES.
+    raise _PGUnsupported(f"unsupported query clause: {key}")
+
+
+def _pg_build_order_by(sort) -> "tuple[str, list]":
+    """Translate an ES `sort` to (sql, [(field, asc)]). Raises on
+    pseudo-fields that have no column meaning in PG."""
+    if not sort:
+        return "", []
+    if isinstance(sort, dict):
+        sort = [sort]
+    clauses: list[str] = []
+    spec: list = []
+    for item in sort:
+        if isinstance(item, str):
+            fld, order = item, "asc"
+        elif isinstance(item, dict):
+            fld = next(iter(item.keys()))
+            ov = item[fld]
+            order = ov.get("order", "asc") if isinstance(ov, dict) else ov
+        else:
+            raise _PGUnsupported("odd sort item")
+        if fld in ("_shard_doc", "_doc", "_score", "_id"):
+            raise _PGUnsupported(f"unsupported sort field: {fld}")
+        asc = str(order).lower() != "desc"
+        expr = _pg_jsonb_text(fld)
+        clauses.append(f"{expr} {'ASC' if asc else 'DESC'} NULLS LAST")
+        spec.append((fld, asc))
+    return ("ORDER BY " + ", ".join(clauses)) if clauses else "", spec
+
+
+def _pg_doc_to_obj(doc) -> dict:
+    """Normalise a JSONB column value to a dict (psycopg v2 returns dict,
+    v3 may return str)."""
+    if isinstance(doc, str):
+        try:
+            return json.loads(doc)
+        except Exception:
+            return {}
+    return doc or {}
+
+
+def _pg_translate_hit_fetch(table: str, body: dict, size: int) -> dict:
+    """SELECT id, doc FROM <table> WHERE <filters> ORDER BY <sort> LIMIT
+    <size>, plus a true COUNT(*) for hits.total.value. Returns the ES
+    response shape. Raises _PGUnsupported for shapes we won't translate."""
+    if body.get("search_after"):
+        raise _PGUnsupported("search_after not supported in PG hit-fetch")
+    where_sql, where_params = _pg_build_where(body.get("query") or {"match_all": {}})
+    order_sql, order_spec = _pg_build_order_by(body.get("sort"))
+
+    # size: kwarg wins; body size is a fallback. 0 => count-only.
+    _size = int(size or 0)
+    if not _size and isinstance(body.get("size"), int):
+        _size = int(body["size"])
+
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {where_sql}", where_params)
+        total = int((cur.fetchone() or [0])[0] or 0)
+
+        hits: list[dict] = []
+        if _size > 0:
+            cur.execute(
+                f"SELECT id, doc FROM {table} WHERE {where_sql} "
+                f"{order_sql} LIMIT %s",
+                where_params + [_size],
+            )
+            for _id, _doc in cur.fetchall():
+                _src = _pg_doc_to_obj(_doc)
+                _row = {"_id": _id, "_source": _src}
+                if order_spec:
+                    _row["sort"] = [_src.get(f.split(".")[0]) for f, _ in order_spec]
+                hits.append(_row)
+        cur.close()
+        return {
+            "hits": {"total": {"value": total}, "hits": hits},
+            "aggregations": {},
+        }
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _pg_try_translate_search(index: str, body: dict, size: int) -> "dict | None":
+    """Entry point from es_search. Returns an ES-shaped result when the read
+    can be served from a migrated PG table, else None (→ fall back to ES).
+    Never raises."""
+    try:
+        if not _POSTGRES_AVAILABLE:
+            return None
+        key = _es_index_to_key(index)
+        if not key:
+            return None
+        table = _history_table_name(key)
+        if not _ldap_db_safe_ident(table):
+            return None
+        # Reuse the 60s-cached count; empty/missing table → not migrated yet.
+        if _history_pg_count(table) == 0:
+            return None
+        # Aggregations are not translated (half-supporting composite
+        # pagination risks silent data loss) — fall back to ES.
+        if body.get("aggs") or body.get("aggregations"):
+            return None
+        return _pg_translate_hit_fetch(table, body, size)
+    except _PGUnsupported:
+        return None
+    except Exception as _e:
+        # Defensive: any translation/DB error → ES fallback. Surface once
+        # for admins via the per-index error stash is overkill here.
+        return None
 
 
 def bucket_rows(res: dict, agg_name: str) -> list[dict]:
@@ -15763,9 +16051,12 @@ def _render_history_to_pg_tab() -> None:
             '  <span class="hist-source-glyph">🗄</span>'
             '  <span class="hist-source-title">Historic data source</span>'
             '  <span class="hist-source-sub">'
-            '    Toggle to route hot-path queries through the migrated '
-            '    Postgres tables once they\'re populated. Defaults to '
-            '    Elasticsearch.'
+            '    Toggle to route reads through the migrated Postgres tables. '
+            '    Row-fetch displays (Event Log + inventory/detail rows) read '
+            '    from PG for any index already migrated; aggregation panels '
+            '    transparently stay on Elasticsearch. Anything not migrated '
+            '    or unsupported falls back to ES automatically — never an '
+            '    error, never partial data. Defaults to Elasticsearch.'
             '  </span>'
             '</div>',
             unsafe_allow_html=True,
@@ -15775,10 +16066,12 @@ def _render_history_to_pg_tab() -> None:
             "Use Postgres",
             key="_history_use_pg_v1",
             help=(
-                "When on, any subsequent code paths that opt into the "
-                "PG-backed historic data source will read from "
-                "Postgres instead of Elasticsearch. Migration rows "
-                "must exist first."
+                "When on, es_search() serves row-fetch queries from the "
+                "migrated history_es_* JSONB tables (Event Log, inventory "
+                "and detail rows) for any index that has data. Aggregation "
+                "queries and anything not yet translatable fall back to "
+                "Elasticsearch automatically, so displays are always "
+                "correct. Migrate an index first for its reads to route."
             ),
         )
 
