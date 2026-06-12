@@ -129,6 +129,89 @@ from utils.elasticsearch import es_prd  # type: ignore  # noqa: F401
 
 
 # =============================================================================
+# RENDER PROFILER (admin-only) — lightweight phase checkpoints
+# =============================================================================
+# The whole script reruns top-to-bottom on every interaction, so a module
+# global list reset here is fresh per render. `_perf_mark(label)` records a
+# checkpoint; a step's duration is the gap to the NEXT checkpoint. The
+# collected timeline is rendered into a subtle top-of-page popover at the end
+# of the run (admins only). Cost is a few `perf_counter()` calls — negligible.
+from time import perf_counter as _perf_counter
+
+_PERF_T0: float = _perf_counter()
+_PERF_MARKS: list[tuple[str, float]] = [("python init · imports · page config", _PERF_T0)]
+
+
+def _perf_mark(label: str) -> None:
+    """Record a render-phase checkpoint. Safe to call anywhere during the run."""
+    try:
+        _PERF_MARKS.append((str(label), _perf_counter()))
+    except Exception:
+        pass
+
+
+def _perf_render_into(slot) -> None:
+    """Render the admin render-profiler popover into *slot* (an ``st.empty``).
+    Shows each phase's wall-clock in execution order with bars relative to
+    the slowest step, and highlights the slowest few."""
+    _marks = list(_PERF_MARKS)
+    if len(_marks) < 2:
+        return
+    _segs = [
+        (_marks[_i][0], max(0.0, (_marks[_i][1] - _marks[_i - 1][1]) * 1000.0))
+        for _i in range(1, len(_marks))
+    ]
+    _total = max(0.0, (_marks[-1][1] - _marks[0][1]) * 1000.0)
+    if _total <= 0:
+        return
+    _max = max((_d for _, _d in _segs), default=0.0) or 1.0
+    _ranked = sorted(range(len(_segs)), key=lambda _k: _segs[_k][1], reverse=True)
+    _slow = set(_ranked[:3])
+    _slowest = _ranked[0] if _ranked else -1
+
+    def _bar_color(_d: float) -> str:
+        _r = _d / _max
+        return ("var(--cc-red)" if _r >= 0.66
+                else "var(--cc-amber)" if _r >= 0.33
+                else "var(--cc-teal)")
+
+    _rows = []
+    for _i, (_lbl, _d) in enumerate(_segs):
+        _cls = (" is-slow" if _i in _slow else "") + (" is-max" if _i == _slowest else "")
+        _rows.append(
+            f'<div class="perf-row{_cls}">'
+            f'<span class="perf-row-lbl">{html.escape(_lbl)}</span>'
+            f'<span class="perf-row-bar"><span class="perf-row-fill" '
+            f'style="width:{max(2.0, _d / _max * 100.0):.1f}%;'
+            f'background:{_bar_color(_d)}"></span></span>'
+            f'<span class="perf-row-ms">{_d:,.0f}<small>ms</small></span>'
+            f'</div>'
+        )
+    _slow_lbl = html.escape(_segs[_slowest][0]) if _slowest >= 0 else "—"
+    _slow_ms = _segs[_slowest][1] if _slowest >= 0 else 0.0
+    with slot.container():
+        with st.container(key="cc_perf_pop"):
+            with st.popover(
+                f"⏱  {_total:,.0f} ms",
+                use_container_width=False,
+                help="Render profiler (admin only) — time spent in each "
+                     "page-render phase this run; slowest steps highlighted.",
+            ):
+                st.markdown(
+                    '<div class="perf-panel">'
+                    f'  <div class="perf-head">Rendered in <b>{_total:,.0f} ms</b>'
+                    f' · {len(_segs)} steps · slowest <b>{_slow_lbl}</b>'
+                    f' ({_slow_ms:,.0f} ms)</div>'
+                    '  <div class="perf-sub">Wall-clock per phase, in execution '
+                    'order. Bars are relative to the slowest step. Excludes the '
+                    'OS-level Python import before the first checkpoint.</div>'
+                    f'  <div class="perf-rows">{"".join(_rows)}</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+# =============================================================================
 # CONSTANTS
 # =============================================================================
 
@@ -8808,6 +8891,84 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     opacity: 1;
     color: var(--iv-stat-accent, var(--cc-accent));
 }
+/* ── Admin render profiler — subtle ⏱ pill at the top of the page ─────── */
+.st-key-cc_perf_pop { margin: 0 0 4px 0; }
+.st-key-cc_perf_pop [data-testid="stPopover"] button,
+.st-key-cc_perf_pop [data-testid="stPopoverButton"] button {
+    border: 1px solid var(--cc-border) !important;
+    background: var(--cc-surface2) !important;
+    color: var(--cc-text-mute) !important;
+    font-family: var(--cc-mono) !important;
+    font-size: 0.68rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+    border-radius: 999px !important;
+    padding: 2px 12px !important;
+    min-height: 0 !important;
+    opacity: 0.75;
+    transition: opacity .15s ease, border-color .15s ease, color .15s ease;
+}
+.st-key-cc_perf_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_perf_pop [data-testid="stPopoverButton"] button:hover {
+    opacity: 1;
+    color: var(--cc-text) !important;
+    border-color: var(--cc-border-hi) !important;
+}
+.perf-panel { min-width: 380px; max-width: 540px; }
+.perf-head {
+    font-size: 0.86rem;
+    color: var(--cc-text);
+    margin-bottom: 2px;
+}
+.perf-head b { color: var(--cc-text); }
+.perf-sub {
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-text-mute);
+    line-height: 1.45;
+    margin-bottom: 10px;
+}
+.perf-rows { display: flex; flex-direction: column; gap: 3px; }
+.perf-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.6fr) 2fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 0;
+}
+.perf-row-lbl {
+    font-size: 0.74rem;
+    color: var(--cc-text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.perf-row-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    overflow: hidden;
+}
+.perf-row-fill { display: block; height: 100%; border-radius: 999px; min-width: 2px; }
+.perf-row-ms {
+    font-family: var(--cc-data, var(--cc-mono));
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    text-align: right;
+    white-space: nowrap;
+}
+.perf-row-ms small { font-size: 0.6rem; color: var(--cc-text-mute); margin-left: 1px; }
+.perf-row.is-slow .perf-row-lbl { color: var(--cc-text); font-weight: 600; }
+.perf-row.is-max {
+    background: color-mix(in srgb, var(--cc-red) 7%, transparent);
+    border-radius: 6px;
+    padding: 3px 6px;
+    margin: 0 -6px;
+}
+.perf-row.is-max .perf-row-lbl { color: var(--cc-red); font-weight: 700; }
+.perf-row.is-max .perf-row-ms { color: var(--cc-red); }
 /* Active-selection badge (glowing pill in the top-right) */
 .iv-tile .iv-tile-badge {
     font-family: var(--cc-data);
@@ -12148,6 +12309,14 @@ st.markdown('<a class="anchor" id="sec-eventlog"></a>', unsafe_allow_html=True)
 # the page's main scroll context (the natural one), instead of the
 # inventory slot's containing block which would only let the bar stick
 # WHILE the inventory tab is in view.
+# Everything from the first checkpoint to here is module setup: vault/creds,
+# role + team detection, inventory choice load, team→app/project scope
+# resolution, and the rail. Reserve a TOP-of-page slot for the admin render
+# profiler now (it sits ABOVE the inventory content and is filled at the very
+# end of the run with the full timeline).
+_perf_mark("setup · vault · roles · scope · rail")
+_perf_slot = st.empty() if _is_admin else None
+
 _iv_top_controls_slot = st.empty()
 _inventory_slot = st.empty()
 
@@ -25001,7 +25170,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # the safety net if the clone or parse fails. The source & status are
     # stashed for the admin-only source pill rendered just below the
     # inventory tab header.
+    _perf_mark("inventory: tab strip + integrations strip")
     _inv_rows_all, _iv_source, _iv_source_status, _iv_source_warnings = _inventory_load(_iv_scope_key)
+    _perf_mark("inventory: source load (git / ES)")
     st.session_state["_iv_source_v1"] = _iv_source
     st.session_state["_iv_source_status_v1"] = _iv_source_status
     st.session_state["_iv_source_warnings_v1"] = list(_iv_source_warnings)
@@ -25026,6 +25197,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _users_blob = _fetch_users_aggregate(
         _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
     )
+    _perf_mark("inventory: users activity aggregate")
     # LDAP-FIRST USER DISCOVERY ─────────────────────────────────────────────
     # The ES aggregator only surfaces people who had activity in the
     # current window. LDAP team rosters are the authoritative count —
@@ -25294,6 +25466,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if all(_t in _iv_haystack(r) for _t in _iv_terms)
         ]
 
+    _perf_mark("inventory: LDAP rosters + activity merge")
     # ── Fetch PRD status + latest-at-each-stage + Prismacloud ───────────────
     # Fetches use the FULL scope so results are stable across search/pill
     # narrowing and the @st.cache_data caches hit across interactions.
@@ -25346,6 +25519,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _iv_vermeta_map = _f_vmd.result()
     else:
         _iv_prisma_map = _iv_invicti_map = _iv_zap_map = _iv_vermeta_map = {}
+    _perf_mark("inventory: PRD · stages · security · version fetches")
 
     def _iv_image_outdated(current: str, recommended: str) -> bool:
         """True when the recommended image version is set and differs from
@@ -27945,6 +28119,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         )
 
     # ── Build table(s) ──────────────────────────────────────────────────────
+    _perf_mark("inventory: ribbon + stat tiles + cell helpers")
     if iv_per_project:
         _iv_groups: dict[str, list[dict]] = {}
         for r in _inv_rows:
@@ -27975,6 +28150,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     else:
         _rows = "".join(_iv_row_html(r, include_project=True) for r in _inv_rows)
         _iv_main = _iv_table_shell(_rows, include_project=True, max_h="60vh")
+    _perf_mark("inventory: table HTML build")
 
     # ── Build popovers — app detail + project detail ────────────────────────
     # Popover HTML is bulky (each version popover carries 3 security cards +
@@ -28847,6 +29023,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # Touch: move this key to the end so LRU eviction favours stale ones.
         _iv_pop_store.pop(_iv_pop_cache_key, None)
         _iv_pop_store[_iv_pop_cache_key] = _iv_popovers_html
+    _perf_mark("inventory: detail popovers build"
+               + ("" if _build_popovers_flag else " (cached)"))
 
     # ── Source telemetry — admin-only, calibrated to severity ──────────────
     # Non-admins never need to know the dashboard talks to git OR ES; this
@@ -29417,6 +29595,7 @@ if _show_inv and _inventory_slot is not None:
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes scope keys + user blobs the other tabs depend on.
         _render_inventory_view(_iv_controls_slot, _iv_body_slot)
+        _perf_mark("inventory: source telemetry + table DOM emit")
 
         # Teams & Members tab reads from the session-state slots the
         # inventory fragment just populated (inventory rows + LDAP-
@@ -29431,10 +29610,12 @@ if _show_inv and _inventory_slot is not None:
                          "Deferred until opened so Filter Console changes "
                          "stay instant.",
                 )
+        _perf_mark("teams & members tab")
 
         # Now the event log reads a fresh scope and fills slot C.
         with _el_slot.container():
             _render_event_log()
+        _perf_mark("event log")
 
         # Actions tab — reads the inventory rows / stages map the
         # inventory fragment published a moment ago. All triggers live
@@ -29651,3 +29832,16 @@ if auto_refresh:
         '<meta http-equiv="refresh" content="60">',
         unsafe_allow_html=True,
     )
+
+
+# =============================================================================
+# RENDER PROFILER — fill the top-of-page slot with this run's full timeline.
+# =============================================================================
+# Done dead last so every phase mark above is captured. Admin-only (the slot
+# is None for non-admins, so this is a cheap no-op for them).
+_perf_mark("tabs (actions / sync / history) + glossary + tail")
+if _perf_slot is not None:
+    try:
+        _perf_render_into(_perf_slot)
+    except Exception:
+        pass
