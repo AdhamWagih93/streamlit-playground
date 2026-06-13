@@ -3281,7 +3281,9 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
  * glance, the full list opens on click. */
 .st-key-cc_iv_warn_pop { margin: 2px 0 10px 0; }
 .st-key-cc_iv_warn_pop [data-testid="stPopover"] button,
-.st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button {
+.st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button,
+.st-key-cc_iv_dupname_pop [data-testid="stPopover"] button,
+.st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button {
     border: 1px solid color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)) !important;
     background: color-mix(in srgb, var(--cc-amber) 10%, transparent) !important;
     color: var(--cc-amber) !important;
@@ -3295,10 +3297,55 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     transition: background .15s ease, box-shadow .15s ease !important;
 }
 .st-key-cc_iv_warn_pop [data-testid="stPopover"] button:hover,
-.st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button:hover {
+.st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button:hover,
+.st-key-cc_iv_dupname_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button:hover {
     background: color-mix(in srgb, var(--cc-amber) 18%, transparent) !important;
     box-shadow: 0 3px 12px color-mix(in srgb, var(--cc-amber) 28%, transparent) !important;
 }
+.st-key-cc_iv_dupname_pop { margin: 0 0 6px 0; }
+.iv-dup-intro {
+    font-size: 0.78rem;
+    color: var(--cc-text-mute);
+    line-height: 1.5;
+    margin: 0 0 10px 0;
+    max-width: 460px;
+}
+.iv-dup-sec-head {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    margin: 10px 0 4px 0;
+    border-bottom: 1px solid var(--cc-border);
+    padding-bottom: 3px;
+}
+.iv-dup-sec-head b { color: var(--cc-amber); }
+.iv-dup-table { width: 100%; border-collapse: collapse; }
+.iv-dup-table td {
+    padding: 4px 8px 4px 0;
+    vertical-align: top;
+    border-bottom: 1px solid color-mix(in srgb, var(--cc-border) 50%, transparent);
+}
+.iv-dup-key {
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text-mute);
+    white-space: nowrap;
+}
+.iv-dup-chip {
+    display: inline-block;
+    font-family: var(--cc-mono);
+    font-size: 0.72rem;
+    color: var(--cc-text);
+    background: color-mix(in srgb, var(--cc-amber) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 35%, var(--cc-border));
+    border-radius: 6px;
+    padding: 1px 7px;
+    margin: 0 4px 4px 0;
+}
+.iv-dup-chip small { color: var(--cc-amber); font-weight: 700; }
 .iv-warnpop-head {
     font-size: 0.86rem;
     color: var(--cc-text);
@@ -27272,6 +27319,39 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if _hits:
                 _iv_devops_misassigned_projects[_pj_chk] = _hits
 
+    # ── Duplicate-name detector (admin-only flag) ─────────────────────────
+    # Now that all name matching is case-insensitive, a name spelled two
+    # different ways (My-App / my-app) is a real data-quality hazard. For
+    # APPLICATIONS we also flag an exact name landing on more than one
+    # inventory row (apps should be one row each). Projects + companies
+    # legitimately repeat across rows, so for them we flag only casing
+    # collisions. Each dict: canonical-lower key → {surface spelling: rows}.
+    _iv_dup_apps: dict[str, dict[str, int]] = {}
+    _iv_dup_projects: dict[str, dict[str, int]] = {}
+    _iv_dup_companies: dict[str, dict[str, int]] = {}
+    if _is_admin:
+        def _iv_collect_surface(_field: str) -> dict[str, dict[str, int]]:
+            _out: dict[str, dict[str, int]] = {}
+            for _r_d in _inv_rows_filtered:
+                _v = (_r_d.get(_field) or "").strip()
+                if not _v:
+                    continue
+                _slot = _out.setdefault(_v.lower(), {})
+                _slot[_v] = _slot.get(_v, 0) + 1
+            return _out
+        for _ck, _sm in _iv_collect_surface("application").items():
+            # Multiple spellings (casing collision) OR the same spelling on
+            # 2+ rows (a genuine duplicate app entry).
+            if len(_sm) > 1 or any(_c > 1 for _c in _sm.values()):
+                _iv_dup_apps[_ck] = _sm
+        for _ck, _sm in _iv_collect_surface("project").items():
+            if len(_sm) > 1:
+                _iv_dup_projects[_ck] = _sm
+        for _ck, _sm in _iv_collect_surface("company").items():
+            if len(_sm) > 1:
+                _iv_dup_companies[_ck] = _sm
+    _iv_dup_total = len(_iv_dup_apps) + len(_iv_dup_projects) + len(_iv_dup_companies)
+
     # ── Action toolbar — Prisma report viewer only ─────────────────────────
     # Build / Deploy / Release triggers were moved into the dedicated
     # ACTIONS tab so the Pipelines Inventory stays read-only. The
@@ -27317,6 +27397,51 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             '</div>',
                             unsafe_allow_html=True,
                         )
+
+        # ── Duplicate-name warning (admin-only, subtle popover) ─────────
+        if _iv_dup_total:
+            def _dup_section(_title: str, _glyph: str,
+                             _d: dict[str, dict[str, int]]) -> str:
+                if not _d:
+                    return ""
+                _rows = []
+                for _ck in sorted(_d):
+                    _spellings = "".join(
+                        f'<span class="iv-dup-chip">{html.escape(_s)}'
+                        + (f' <small>×{_n}</small>' if _n > 1 else '')
+                        + '</span>'
+                        for _s, _n in sorted(_d[_ck].items(), key=lambda kv: kv[0].lower())
+                    )
+                    _rows.append(
+                        f'<tr><td class="iv-dup-key">{html.escape(_ck)}</td>'
+                        f'<td>{_spellings}</td></tr>'
+                    )
+                return (
+                    f'<div class="iv-dup-sec-head">{_glyph} {_title} '
+                    f'<b>{len(_d)}</b></div>'
+                    f'<table class="iv-dup-table"><tbody>{"".join(_rows)}</tbody></table>'
+                )
+
+            with st.container(key="cc_iv_dupname_pop"):
+                with st.popover(
+                    f"⚠ {_iv_dup_total} naming duplicate"
+                    f"{'s' if _iv_dup_total != 1 else ''}",
+                    use_container_width=False,
+                    help="Application / project / company names that collide "
+                         "case-insensitively (or duplicate app rows) in the "
+                         "current scope. Admin-only.",
+                ):
+                    st.markdown(
+                        '<div class="iv-dup-intro">Names that resolve to the '
+                        'same value once case is ignored — reconcile the '
+                        'spelling in the inventory YAML so matching stays '
+                        'unambiguous.</div>'
+                        + _dup_section("Applications", "▣", _iv_dup_apps)
+                        + _dup_section("Projects", "📁", _iv_dup_projects)
+                        + _dup_section("Companies", "🏢", _iv_dup_companies),
+                        unsafe_allow_html=True,
+                    )
+
         _render_prisma_inline_viewer()
         with st.container(key="cc_iv_action_toolbar"):
             _tb_c1, _tb_c2 = st.columns([2, 10])
