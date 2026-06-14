@@ -127,6 +127,16 @@ import streamlit as st
 # -----------------------------------------------------------------------------
 from utils.elasticsearch import es_prd  # type: ignore  # noqa: F401
 
+# -----------------------------------------------------------------------------
+# Isolated doc-chat assistant panel (self-contained; nothing runs on import).
+# Mounted once at the very end of the script inside its own @st.fragment, so
+# every chat interaction reruns ONLY the panel — never this ~30k-line page.
+# -----------------------------------------------------------------------------
+try:
+    from cc_docchat import render_docchat_panel as _render_docchat_panel  # type: ignore
+except Exception:  # pragma: no cover - panel is optional, never fatal
+    _render_docchat_panel = None  # type: ignore
+
 
 # =============================================================================
 # RENDER PROFILER (admin-only) — lightweight phase checkpoints
@@ -10044,6 +10054,166 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
    buffer. Independent of --header-height. */
 [data-testid="stMainBlockContainer"] {
     padding-top: 84px !important;
+}
+
+/* =========================================================================
+   DOC-CHAT ASSISTANT — isolated floating panel (cc_docchat.render_docchat_panel)
+   Always visible, bottom-right, above all page chrome. Two states: a compact
+   launcher bubble (collapsed) and a full conversation panel (open). Styled to
+   the bright ops palette so it reads as a first-class part of the dashboard.
+   ========================================================================= */
+
+/* --- Collapsed: floating circular launcher bubble --- */
+.st-key-cc_docchat_launcher {
+    position: fixed !important;
+    bottom: 22px !important;
+    right: 22px !important;
+    width: auto !important;
+    z-index: 2147483000 !important;
+}
+.st-key-cc_docchat_launcher [data-testid="stButton"] > button {
+    width: 56px !important;
+    height: 56px !important;
+    min-height: 56px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    border: 1px solid var(--cc-accent) !important;
+    background: linear-gradient(145deg, #6366f1 0%, var(--cc-accent) 100%) !important;
+    color: #fff !important;
+    font-size: 1.4rem !important;
+    line-height: 1 !important;
+    box-shadow: 0 8px 24px rgba(79,70,229,.38), 0 2px 6px rgba(0,0,0,.12) !important;
+    transition: transform .15s ease, box-shadow .15s ease !important;
+}
+.st-key-cc_docchat_launcher [data-testid="stButton"] > button:hover {
+    transform: translateY(-2px) scale(1.04) !important;
+    box-shadow: 0 12px 30px rgba(79,70,229,.46), 0 3px 8px rgba(0,0,0,.16) !important;
+}
+
+/* --- Open: full conversation panel --- */
+.st-key-cc_docchat_panel {
+    position: fixed !important;
+    bottom: 22px !important;
+    right: 22px !important;
+    width: 416px !important;
+    max-width: calc(100vw - 32px) !important;
+    max-height: min(78vh, 760px) !important;
+    overflow-y: auto !important;
+    z-index: 2147483000 !important;
+    background: var(--cc-surface) !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 24px 60px rgba(26,29,46,.22), 0 6px 18px rgba(26,29,46,.10) !important;
+    padding: 14px 14px 12px !important;
+}
+.st-key-cc_docchat_panel::-webkit-scrollbar { width: 8px; }
+.st-key-cc_docchat_panel::-webkit-scrollbar-thumb {
+    background: var(--cc-border-hi); border-radius: 8px;
+}
+
+/* Header */
+.dc-title {
+    font-family: var(--cc-sans);
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: var(--cc-text);
+    display: flex; align-items: center; gap: 8px;
+    letter-spacing: -.01em;
+}
+.dc-model {
+    font-family: var(--cc-mono);
+    font-size: .62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--cc-accent);
+    background: var(--cc-accent-lt);
+    border: 1px solid #dfe3ff;
+    padding: 2px 7px;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+
+/* Close button (header) */
+.st-key-cc_docchat_panel [data-testid="stButton"] button[kind] {
+    border-radius: 9px !important;
+}
+
+/* Empty state */
+.dc-empty {
+    color: var(--cc-text-dim);
+    font-size: .9rem;
+    line-height: 1.55;
+    padding: 18px 14px;
+    text-align: center;
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border-hi);
+    border-radius: 12px;
+}
+
+/* Per-message meta line (time · duration · tokens) */
+.dc-meta {
+    font-family: var(--cc-mono);
+    font-size: .64rem;
+    color: var(--cc-text-mute);
+    margin-top: 2px;
+    letter-spacing: .02em;
+}
+
+/* Scrollable conversation surface */
+.st-key-cc_docchat_msgs, .st-key-cc_docchat_msgs_live {
+    background: var(--cc-surface2) !important;
+    border: 1px solid var(--cc-border) !important;
+    border-radius: 12px !important;
+    padding: 6px 10px !important;
+}
+
+/* Context popover — attached-doc listing */
+.dc-doc-app {
+    font-size: .82rem;
+    font-weight: 650;
+    color: var(--cc-text);
+    margin: 8px 0 3px;
+    display: flex; align-items: center; gap: 6px;
+}
+.dc-doc-n {
+    font-family: var(--cc-mono);
+    font-size: .6rem;
+    font-weight: 600;
+    color: var(--cc-teal);
+    background: var(--cc-teal-bg);
+    border: 1px solid var(--cc-teal-lt);
+    padding: 1px 6px;
+    border-radius: 5px;
+}
+.dc-doc-files {
+    display: flex; flex-wrap: wrap; gap: 5px;
+    margin: 0 0 6px 2px;
+}
+.dc-doc-file {
+    font-family: var(--cc-mono);
+    font-size: .66rem;
+    color: var(--cc-text-dim);
+    background: var(--cc-surface);
+    border: 1px solid var(--cc-border);
+    padding: 2px 7px;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+.dc-doc-file.is-none {
+    color: var(--cc-text-mute);
+    font-style: italic;
+    border-style: dashed;
+}
+
+/* Footer */
+.dc-foot {
+    font-family: var(--cc-mono);
+    font-size: .64rem;
+    color: var(--cc-text-mute);
+    text-align: right;
+    line-height: 2.4;
+    letter-spacing: .02em;
 }
 
 </style>
@@ -30258,5 +30428,18 @@ _perf_mark("tabs (actions / sync / history) + glossary + tail")
 if _perf_slot is not None:
     try:
         _perf_render_into(_perf_slot)
+    except Exception:
+        pass
+
+
+# =============================================================================
+# DOC-CHAT ASSISTANT — mount the always-visible, fully-isolated chat panel.
+# =============================================================================
+# Rendered dead last and inside its own @st.fragment, so it overlays the page
+# without affecting layout and every interaction reruns only the panel. Wrapped
+# defensively: a panel failure must never take down the dashboard.
+if _render_docchat_panel is not None:
+    try:
+        _render_docchat_panel()
     except Exception:
         pass
