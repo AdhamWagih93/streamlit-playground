@@ -10142,13 +10142,23 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
 /* Empty state */
 .dc-empty {
     color: var(--cc-text-dim);
-    font-size: .9rem;
-    line-height: 1.55;
-    padding: 18px 14px;
+    font-size: .82rem;
+    line-height: 1.5;
+    padding: 14px 12px;
     text-align: center;
-    background: var(--cc-surface2);
+    background: var(--cc-surface);
     border: 1px dashed var(--cc-border-hi);
-    border-radius: 12px;
+    border-radius: 10px;
+}
+
+/* Chat input */
+.st-key-cc_docchat_panel [data-testid="stChatInput"] {
+    margin-top: 8px !important;
+    border-radius: 11px !important;
+    border-color: var(--cc-border-hi) !important;
+}
+.st-key-cc_docchat_panel [data-testid="stChatInput"] textarea {
+    font-size: .82rem !important;
 }
 
 /* Per-message meta line (time · duration · tokens) */
@@ -10165,10 +10175,73 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     background: var(--cc-surface2) !important;
     border: 1px solid var(--cc-border) !important;
     border-radius: 12px !important;
-    padding: 6px 10px !important;
+    padding: 4px 10px !important;
+    margin-top: 8px !important;
+}
+/* Tighter, smaller chat text inside the panel */
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"],
+.st-key-cc_docchat_msgs_live [data-testid="stChatMessageContent"] {
+    font-size: .82rem !important;
+    line-height: 1.5 !important;
+}
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] p,
+.st-key-cc_docchat_msgs_live [data-testid="stChatMessageContent"] p {
+    margin-bottom: .35rem !important;
+}
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] code,
+.st-key-cc_docchat_msgs_live [data-testid="stChatMessageContent"] code {
+    font-size: .76rem !important;
+}
+/* Slim the chat-message avatar/gutter so text has more room */
+.st-key-cc_docchat_msgs [data-testid="stChatMessage"],
+.st-key-cc_docchat_msgs_live [data-testid="stChatMessage"] {
+    padding: .35rem .25rem !important;
+    gap: .4rem !important;
+    background: transparent !important;
+}
+.st-key-cc_docchat_msgs [data-testid="stChatMessageAvatar"],
+.st-key-cc_docchat_msgs_live [data-testid="stChatMessageAvatar"] {
+    width: 26px !important; height: 26px !important;
 }
 
-/* Context popover — attached-doc listing */
+/* Inline context picker */
+.dc-ctx-label {
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--cc-text-mute);
+    margin: 10px 0 4px;
+    display: flex; align-items: center; gap: 7px;
+}
+.dc-ctx-n {
+    font-family: var(--cc-mono);
+    font-size: .6rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--cc-accent);
+    background: var(--cc-accent-lt);
+    border: 1px solid #dfe3ff;
+    padding: 1px 6px;
+    border-radius: 5px;
+}
+.dc-ctx-hint {
+    font-size: .76rem;
+    line-height: 1.45;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border-hi);
+    border-radius: 9px;
+    padding: 8px 10px;
+}
+/* Compact the multiselect inside the panel */
+.st-key-cc_docchat_panel [data-testid="stMultiSelect"] { margin-bottom: 2px; }
+.st-key-cc_docchat_panel [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+    font-size: .7rem !important;
+}
+
+/* Attached-doc listing */
 .dc-doc-app {
     font-size: .82rem;
     font-weight: 650;

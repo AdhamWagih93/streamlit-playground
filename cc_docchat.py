@@ -405,51 +405,60 @@ def render_docchat_panel() -> None:
                 st.session_state["_dc_open"] = False
                 st.rerun(scope="fragment")
 
-        # ── Document context picker (DocMDs folders matching in-scope apps) ──
+        # ── Document context picker (inline — DocMDs folders matching apps) ──
+        # Rendered inline rather than inside a popover: a popover's content
+        # layer portals to <body> with a normal z-index and would render
+        # BEHIND this near-max-z-index fixed panel (invisible). Inline keeps
+        # it in the panel's own stacking context, always visible.
         _matched = _matched_docmds()
         _folders = _docmds_folders()
-        with st.popover(
-            ("📎 Context"
-             + (f" · {len(st.session_state['_dc_selected_apps'])}"
-                if st.session_state["_dc_selected_apps"] else "")),
-            use_container_width=True,
-        ):
-            if not _folders:
-                st.caption("DocMDs repository not cloned yet — it syncs with the "
-                           "other platform repos; check the Sync Check tab.")
-            elif not _matched:
-                st.caption("No DocMDs folder matches an application in your "
-                           "current scope.")
-            else:
-                _sel = st.multiselect(
-                    "Attach application docs",
-                    options=_matched,
-                    default=[a for a in st.session_state["_dc_selected_apps"]
-                             if a in _matched],
-                    key="_dc_apps_ms",
-                    label_visibility="collapsed",
-                    placeholder="Select application(s) to add their docs…",
+        _n_sel = len(st.session_state["_dc_selected_apps"])
+        st.markdown(
+            '<div class="dc-ctx-label">📎 Context'
+            + (f'<span class="dc-ctx-n">{_n_sel} app'
+               f'{"s" if _n_sel != 1 else ""}</span>' if _n_sel else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        if not _folders:
+            st.markdown(
+                '<div class="dc-ctx-hint">DocMDs repository not cloned yet — it '
+                "syncs with the other platform repos (Sync Check tab).</div>",
+                unsafe_allow_html=True,
+            )
+        elif not _matched:
+            st.markdown(
+                '<div class="dc-ctx-hint">No DocMDs folder matches an application '
+                "in your current scope.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            _sel = st.multiselect(
+                "Attach application docs",
+                options=_matched,
+                default=[a for a in st.session_state["_dc_selected_apps"]
+                         if a in _matched],
+                key="_dc_apps_ms",
+                label_visibility="collapsed",
+                placeholder="Attach application docs…",
+            )
+            # Persist directly — no rerun needed (the new value is in hand and
+            # the file list below renders from it immediately).
+            st.session_state["_dc_selected_apps"] = _sel
+            # List the markdown files that will be added, compactly.
+            for _app in _sel:
+                _mds = _folders.get(_app, [])
+                st.markdown(
+                    f'<div class="dc-doc-app">📁 {html.escape(_app)} '
+                    f'<span class="dc-doc-n">{len(_mds)} file'
+                    f'{"s" if len(_mds) != 1 else ""}</span></div>'
+                    + '<div class="dc-doc-files">' + "".join(
+                        f'<span class="dc-doc-file">⬡ {html.escape(_f)}</span>'
+                        for _f in _mds
+                    ) + ('<span class="dc-doc-file is-none">no .md files</span>'
+                         if not _mds else "") + "</div>",
+                    unsafe_allow_html=True,
                 )
-                if _sel != st.session_state["_dc_selected_apps"]:
-                    st.session_state["_dc_selected_apps"] = _sel
-                    st.rerun(scope="fragment")
-                # List the markdown files that will be added.
-                for _app in _sel:
-                    _mds = _folders.get(_app, [])
-                    st.markdown(
-                        f'<div class="dc-doc-app">📁 {html.escape(_app)} '
-                        f'<span class="dc-doc-n">{len(_mds)} file'
-                        f'{"s" if len(_mds) != 1 else ""}</span></div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(
-                        '<div class="dc-doc-files">' + "".join(
-                            f'<span class="dc-doc-file">⬡ {html.escape(_f)}</span>'
-                            for _f in _mds
-                        ) + ('<span class="dc-doc-file is-none">no .md files</span>'
-                             if not _mds else "") + '</div>',
-                        unsafe_allow_html=True,
-                    )
 
         # ── Conversation (scrollable, fixed height) ─────────────────────────
         with st.container(height=300, key="cc_docchat_msgs"):
