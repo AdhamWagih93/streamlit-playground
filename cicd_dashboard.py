@@ -3365,6 +3365,45 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     margin: 0 4px 3px 0;
 }
 .iv-dup-proj.is-none { color: var(--cc-text-mute); background: transparent; font-style: italic; }
+/* Non-admin "why is my scope empty" self-diagnostic */
+.iv-scope-diag {
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 40%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-amber) 7%, transparent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 4px 0 12px;
+}
+.iv-scope-diag-head {
+    font-weight: 700;
+    color: var(--cc-amber);
+    margin-bottom: 8px;
+}
+.iv-scope-diag-kv {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    font-size: 0.78rem;
+    margin: 2px 0;
+}
+.iv-scope-diag-kv span {
+    flex: 0 0 130px;
+    color: var(--cc-text-mute);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.iv-scope-diag-kv code {
+    font-family: var(--cc-mono);
+    color: var(--cc-text);
+    word-break: break-all;
+}
+.iv-scope-diag-why {
+    font-size: 0.76rem;
+    color: var(--cc-text);
+    line-height: 1.5;
+    margin-top: 6px;
+}
+.iv-scope-diag-why code { font-family: var(--cc-mono); font-size: 0.72rem; }
 .iv-warnpop-head {
     font-size: 0.86rem;
     color: var(--cc-text);
@@ -25300,7 +25339,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _users_sf_json = json.dumps(list(scope_filters()), sort_keys=True, default=str)
     _users_cs_json = json.dumps(list(commit_scope_filters()), sort_keys=True, default=str)
     _users_start_iso = _agg_start_dt.astimezone(timezone.utc).isoformat()
-    _users_end_iso = end_dt.astimezone(timezone.utc).isoformat()
+    # `end_dt` is datetime.now() at microsecond precision — passing it raw made
+    # the aggregator's @st.cache_data key change EVERY rerun, so the ~8s call
+    # never hit cache. Quantise the end to the cache-TTL boundary so reruns
+    # within the window share one key (the aggregator is all-time, so the exact
+    # end is immaterial to the result).
+    _agg_end_bucket = int(end_dt.timestamp() // CACHE_TTL) * CACHE_TTL
+    _users_end_iso = datetime.fromtimestamp(
+        _agg_end_bucket, tz=timezone.utc).isoformat()
     # DEFER the ES activity aggregator (~8s cold, fans out composite aggs over
     # commits/jira/builds/deploys/releases/requests). NOTHING on the default
     # Inventory paint shows per-user activity — it's only used by the Teams
@@ -27349,6 +27395,52 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _inv_total = len(_inv_rows_filtered)
     # Everything below this point renders inside the inventory tab (body_slot).
     _body_container.__enter__()
+
+    # ── Non-admin scope self-diagnostic ───────────────────────────────────
+    # When a non-admin's inventory is empty, show THEM (and, via screenshot,
+    # the admin) exactly what their session resolved — the only way to see
+    # the live session's role/team/field values. Reveals the real cause:
+    # an unrecognised role string, no session teams, a team-name mismatch,
+    # or a role whose ownership field (qc/uat/prd_team) doesn't hold the
+    # team that owns the apps under dev_team.
+    if not _is_admin:
+        _sd_teams = list(_session_teams)
+        _sd_fields = [_f.replace(".keyword", "") for _f in _user_team_fields]
+        _sd_apps_n = len(_team_apps)
+        _sd_proj_n = len(_scoped_projects)
+        if _inv_total == 0 or not (_sd_apps_n or _sd_proj_n):
+            _sd_reasons = []
+            if not _sd_teams:
+                _sd_reasons.append("your session carries <b>no teams</b>")
+            if not _user_team_fields:
+                _sd_reasons.append(
+                    "your role maps to <b>no ownership field</b> "
+                    f"(detected roles: {html.escape(str(_detected_roles) or '[]')})")
+            if _sd_teams and _user_team_fields and not (_sd_apps_n or _sd_proj_n):
+                _sd_reasons.append(
+                    "your team(s) own <b>no apps</b> under "
+                    f"<code>{html.escape(', '.join(_sd_fields))}</code> — the "
+                    "apps may be owned by a different ownership field "
+                    "(e.g. they sit under <code>dev_team</code> but your role "
+                    "resolves <code>qc_team</code>/<code>prd_team</code>), or "
+                    "the team name doesn't match the inventory")
+            st.markdown(
+                '<div class="iv-scope-diag">'
+                '<div class="iv-scope-diag-head">⚠ No apps in your scope — '
+                'here\'s why</div>'
+                f'<div class="iv-scope-diag-kv"><span>Detected role(s)</span>'
+                f'<code>{html.escape(", ".join(_detected_roles) or "(none → defaulted " + html.escape(role_pick) + ")")}</code></div>'
+                f'<div class="iv-scope-diag-kv"><span>Ownership field(s)</span>'
+                f'<code>{html.escape(", ".join(_sd_fields) or "—")}</code></div>'
+                f'<div class="iv-scope-diag-kv"><span>Your team(s)</span>'
+                f'<code>{html.escape(", ".join(_sd_teams) or "—")}</code></div>'
+                f'<div class="iv-scope-diag-kv"><span>Resolved</span>'
+                f'<code>{_sd_apps_n} apps · {_sd_proj_n} projects</code></div>'
+                + (''.join(f'<div class="iv-scope-diag-why">• {_r}</div>'
+                           for _r in _sd_reasons))
+                + '</div>',
+                unsafe_allow_html=True,
+            )
 
     # URL-based query-param handlers (prisma_open / jenkins_trigger) were
     # removed — they caused visible browser navigations every time the
