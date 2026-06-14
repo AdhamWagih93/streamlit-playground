@@ -14074,24 +14074,34 @@ def _render_teams_and_members_view() -> None:
     # projects. Top-15 each dimension to keep the cell text legible;
     # totals next to each row/column label tell the operator what the
     # truncation hid.
+    # Teams AND projects are merged CASE-INSENSITIVELY (My-Team == my-team)
+    # — the canonical-lower form is the key; the first-seen spelling is the
+    # display label. Everything downstream (this heatmap, the Teams×Projects
+    # and Users×Projects coverage panels) derives from these counts, so this
+    # one merge makes the whole breakdown case-insensitive.
     _team_project_counts: dict[tuple[str, str], int] = {}
+    _tmx_team_disp: dict[str, str] = {}     # team ci → display spelling
+    _tmx_proj_disp: dict[str, str] = {}     # project ci → display spelling
     for _r in _inv_rows_scoped:
-        _proj = (_r.get("project") or "").strip()
-        if not _proj:
+        _proj_raw = (_r.get("project") or "").strip()
+        if not _proj_raw:
             continue
+        _proj = _tmx_proj_disp.setdefault(_proj_raw.lower(), _proj_raw)
         _t_blob = _r.get("teams") or {}
-        _row_teams: set[str] = set()
+        _row_team_cks: set[str] = set()
         for _vals in _t_blob.values():
-            if isinstance(_vals, (list, tuple, set)):
-                for _v in _vals:
-                    _v = (str(_v) or "").strip()
-                    if _v:
-                        _row_teams.add(_v)
-            elif _vals:
-                _row_teams.add(str(_vals).strip())
-        # Count each app row once per (team, project) — multi-role
-        # presence (same team in dev_team AND qc_team) shouldn't double-count.
-        for _team in _row_teams:
+            _it = _vals if isinstance(_vals, (list, tuple, set)) else (
+                [_vals] if _vals else [])
+            for _v in _it:
+                _v = (str(_v) or "").strip()
+                if _v:
+                    _ck = _v.lower()
+                    _tmx_team_disp.setdefault(_ck, _v)
+                    _row_team_cks.add(_ck)
+        # Count each app row once per (team, project) — multi-role presence
+        # (same team in dev_team AND qc_team) shouldn't double-count.
+        for _ck in _row_team_cks:
+            _team = _tmx_team_disp[_ck]
             _team_project_counts[(_team, _proj)] = (
                 _team_project_counts.get((_team, _proj), 0) + 1
             )
