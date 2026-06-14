@@ -132,10 +132,16 @@ from utils.elasticsearch import es_prd  # type: ignore  # noqa: F401
 # Mounted once at the very end of the script inside its own @st.fragment, so
 # every chat interaction reruns ONLY the panel — never this ~30k-line page.
 # -----------------------------------------------------------------------------
+# Deployment nests page modules under the `mypages` package; the flat
+# playground root imports them bare. Try the deployed path first, fall back to
+# the local one — and never let a missing panel be fatal.
 try:
     from mypages.cc_docchat import render_docchat_panel as _render_docchat_panel  # type: ignore
 except Exception:  # pragma: no cover - panel is optional, never fatal
-    _render_docchat_panel = None  # type: ignore
+    try:
+        from cc_docchat import render_docchat_panel as _render_docchat_panel  # type: ignore
+    except Exception:
+        _render_docchat_panel = None  # type: ignore
 
 
 # =============================================================================
