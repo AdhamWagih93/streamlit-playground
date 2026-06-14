@@ -3349,6 +3349,22 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     margin: 0 4px 4px 0;
 }
 .iv-dup-chip small { color: var(--cc-amber); font-weight: 700; }
+.iv-dup-projs {
+    margin-top: 3px;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-text-mute);
+}
+.iv-dup-proj {
+    display: inline-block;
+    color: var(--cc-blue);
+    background: color-mix(in srgb, var(--cc-blue) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 30%, var(--cc-border));
+    border-radius: 5px;
+    padding: 0 6px;
+    margin: 0 4px 3px 0;
+}
+.iv-dup-proj.is-none { color: var(--cc-text-mute); background: transparent; font-style: italic; }
 .iv-warnpop-head {
     font-size: 0.86rem;
     color: var(--cc-text);
@@ -10815,16 +10831,45 @@ def _load_teams_for_role(role: str) -> list[str]:
     return sorted(t for t in teams if t)
 
 
+def _resolve_inventory_by_teams_git(_bare_fields, _teams_ci, _bare_agg) -> list[str]:
+    """Resolve apps / projects for the given teams straight from the GIT
+    inventory rows (the authoritative source). Used as a fallback when the
+    ES ``ef-devops-inventory`` index returns nothing — which happens when the
+    ES projection is stale/empty while git holds the real data. Matching is
+    case-insensitive on both team values and field names."""
+    try:
+        _rows, _src, _status, _warn = _load_inventory_from_git_scoped("[]")
+    except Exception:
+        return []
+    _out: set[str] = set()
+    for _r in _rows or []:
+        _blob = _r.get("teams") or {}
+        _row_teams: set[str] = set()
+        for _bf in _bare_fields:
+            _v = _blob.get(_bf)
+            if isinstance(_v, (list, tuple, set)):
+                _row_teams.update(str(_x).strip().lower() for _x in _v if _x)
+            elif _v:
+                _row_teams.add(str(_v).strip().lower())
+        if _row_teams & _teams_ci:
+            _av = (_r.get(_bare_agg) or "").strip()
+            if _av:
+                _out.add(_av)
+    return sorted(_out)
+
+
 def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
     """Resolve inventory apps / projects owned by ANY of *teams* across ANY
     of *fields*, matching team names CASE-INSENSITIVELY (My-Team == my-team).
 
-    Tries an ES ``case_insensitive`` term query first; if that yields nothing
-    it falls back to an EXACT match. The fallback is essential: ``es_search``
-    swallows ES errors into an empty result, so an index that rejects
-    ``case_insensitive`` would otherwise make this return ``[]`` and silently
-    collapse a non-admin's whole scope to "no apps". Falling back on empty
-    covers both the error case and a genuinely empty result."""
+    Order of attempts (first non-empty wins):
+      1. ES ``case_insensitive`` term query,
+      2. ES exact term query (``es_search`` swallows errors into an empty
+         result, so a rejected ``case_insensitive`` clause lands here),
+      3. the GIT inventory rows directly — the authoritative source. This is
+         the critical one: if the ES ``ef-devops-inventory`` projection is
+         stale or empty, 1 & 2 return nothing and a non-admin's whole scope
+         would collapse to "no apps". Resolving from git guarantees scope."""
     _fields = [f for f in (fields or []) if f]
     _teams = [t for t in (teams or []) if str(t or "").strip()]
     if not _fields or not _teams:
@@ -10841,7 +10886,12 @@ def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
             _res = {}
         if _res:
             return sorted(_res.keys())
-    return []
+    # ES gave nothing — resolve from the authoritative git inventory.
+    return _resolve_inventory_by_teams_git(
+        [f.replace(".keyword", "") for f in _fields],
+        {t.strip().lower() for t in _teams},
+        agg_field.replace(".keyword", ""),
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -21280,7 +21330,12 @@ def _row_matches_es_filters(row: dict, filters: list) -> bool:
 
 
 def _row_field_match(row: dict, key: str, values: list[Any]) -> bool:
-    """Read a row field by ES key (strips ``.keyword``) and check membership."""
+    """Read a row field by ES key (strips ``.keyword``) and check membership.
+
+    Comparison is CASE-INSENSITIVE so a git row matches an ES-derived scope
+    value (or a session team) regardless of casing — otherwise an app/project
+    whose casing differs between the ES projection and the git source would
+    be silently dropped from a non-admin's scope."""
     bare = key[:-8] if key.endswith(".keyword") else key
     val = row.get(bare)
     # *_team fields can be a list (we store under row["teams"][bare]) — but
@@ -21290,9 +21345,10 @@ def _row_field_match(row: dict, key: str, values: list[Any]) -> bool:
     if val is None and bare.endswith("_team"):
         teams = row.get("teams") or {}
         val = teams.get(bare) or []
+    _wanted = {str(x).strip().lower() for x in values}
     if isinstance(val, (list, tuple, set)):
-        return any(str(v) in {str(x) for x in values} for v in val)
-    return str(val or "") in {str(x) for x in values}
+        return any(str(v).strip().lower() in _wanted for v in val)
+    return str(val or "").strip().lower() in _wanted
 
 
 # Admin-controlled source preference. Default ``"auto"`` keeps the legacy
@@ -27349,7 +27405,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # inventory row (apps should be one row each). Projects + companies
     # legitimately repeat across rows, so for them we flag only casing
     # collisions. Each dict: canonical-lower key → {surface spelling: rows}.
-    _iv_dup_apps: dict[str, dict[str, int]] = {}
+    # Apps map: canonical-lower → {surface spelling: {"count": rows,
+    # "projects": [project, ...]}}. Projects/companies stay {surface: rows}.
+    _iv_dup_apps: dict[str, dict[str, dict]] = {}
     _iv_dup_projects: dict[str, dict[str, int]] = {}
     _iv_dup_companies: dict[str, dict[str, int]] = {}
     if _is_admin:
@@ -27362,10 +27420,22 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 _slot = _out.setdefault(_v.lower(), {})
                 _slot[_v] = _slot.get(_v, 0) + 1
             return _out
-        for _ck, _sm in _iv_collect_surface("application").items():
+        # Applications — also capture which project(s) each spelling sits in.
+        _app_surface: dict[str, dict[str, dict]] = {}
+        for _r_d in _inv_rows_filtered:
+            _app = (_r_d.get("application") or "").strip()
+            if not _app:
+                continue
+            _pj_d = (_r_d.get("project") or "").strip()
+            _slot = _app_surface.setdefault(_app.lower(), {}).setdefault(
+                _app, {"count": 0, "projects": set()})
+            _slot["count"] += 1
+            if _pj_d:
+                _slot["projects"].add(_pj_d)
+        for _ck, _sm in _app_surface.items():
             # Multiple spellings (casing collision) OR the same spelling on
-            # 2+ rows (a genuine duplicate app entry).
-            if len(_sm) > 1 or any(_c > 1 for _c in _sm.values()):
+            # 2+ rows (a genuine duplicate app entry, usually across projects).
+            if len(_sm) > 1 or any(_d["count"] > 1 for _d in _sm.values()):
                 _iv_dup_apps[_ck] = _sm
         for _ck, _sm in _iv_collect_surface("project").items():
             if len(_sm) > 1:
@@ -27445,6 +27515,36 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'<table class="iv-dup-table"><tbody>{"".join(_rows)}</tbody></table>'
                 )
 
+            def _dup_apps_section(_d: dict[str, dict[str, dict]]) -> str:
+                if not _d:
+                    return ""
+                _rows = []
+                for _ck in sorted(_d):
+                    _spellings = "".join(
+                        f'<span class="iv-dup-chip">{html.escape(_s)}'
+                        + (f' <small>×{_v["count"]}</small>' if _v["count"] > 1 else '')
+                        + '</span>'
+                        for _s, _v in sorted(_d[_ck].items(), key=lambda kv: kv[0].lower())
+                    )
+                    # Union of projects this app name appears under.
+                    _projs = sorted(
+                        {_p for _v in _d[_ck].values() for _p in _v["projects"]},
+                        key=str.lower)
+                    _proj_html = "".join(
+                        f'<span class="iv-dup-proj">{html.escape(_p)}</span>'
+                        for _p in _projs
+                    ) or '<span class="iv-dup-proj is-none">— no project —</span>'
+                    _rows.append(
+                        f'<tr><td class="iv-dup-key">{html.escape(_ck)}</td>'
+                        f'<td>{_spellings}'
+                        f'<div class="iv-dup-projs">in: {_proj_html}</div></td></tr>'
+                    )
+                return (
+                    f'<div class="iv-dup-sec-head">▣ Applications '
+                    f'<b>{len(_d)}</b></div>'
+                    f'<table class="iv-dup-table"><tbody>{"".join(_rows)}</tbody></table>'
+                )
+
             with st.container(key="cc_iv_dupname_pop"):
                 with st.popover(
                     f"⚠ {_iv_dup_total} naming duplicate"
@@ -27459,9 +27559,64 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         'same value once case is ignored — reconcile the '
                         'spelling in the inventory YAML so matching stays '
                         'unambiguous.</div>'
-                        + _dup_section("Applications", "▣", _iv_dup_apps)
+                        + _dup_apps_section(_iv_dup_apps)
                         + _dup_section("Projects", "📁", _iv_dup_projects)
                         + _dup_section("Companies", "🏢", _iv_dup_companies),
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Non-admin scope diagnostic (admin-only) ─────────────────────
+        # Lets an admin reproduce exactly what a non-admin with a given
+        # role + team resolves for their app/project scope, and shows
+        # whether the ES projection or the git fallback supplied it — the
+        # fastest way to see WHY a non-admin's inventory was empty.
+        with st.container(key="cc_iv_scope_diag"):
+            with st.popover("🔎 Non-admin scope check",
+                            use_container_width=False,
+                            help="Reproduce a non-admin's app/project scope "
+                                 "for a role + team. ES vs git resolution."):
+                _sd_c1, _sd_c2 = st.columns(2)
+                _sd_role = _sd_c1.selectbox(
+                    "Role", [r for r in ROLE_TEAM_FIELDS if r not in ("Admin", "CLevel")],
+                    key="_scopediag_role")
+                _sd_team = _sd_c2.text_input("Team", key="_scopediag_team",
+                                             placeholder="exact team name").strip()
+                if _sd_team:
+                    _sd_fields = ROLE_TEAM_FIELDS.get(_sd_role, [])
+                    _sd_es = {}
+                    for _ci in (True, False):
+                        _q = {"bool": {"should": [
+                            {"term": {f: ({"value": _sd_team, "case_insensitive": True} if _ci else _sd_team)}}
+                            for f in _sd_fields], "minimum_should_match": 1}}
+                        try:
+                            _sd_es = composite_terms(IDX["inventory"], "application.keyword", _q)
+                        except Exception:
+                            _sd_es = {}
+                        if _sd_es:
+                            break
+                    _sd_git = _resolve_inventory_by_teams_git(
+                        [f.replace(".keyword", "") for f in _sd_fields],
+                        {_sd_team.lower()}, "application")
+                    _sd_final_apps = _resolve_inventory_by_teams(
+                        _sd_fields, [_sd_team], "application.keyword")
+                    _sd_final_proj = _resolve_inventory_by_teams(
+                        _sd_fields, [_sd_team], "project.keyword")
+                    st.markdown(
+                        f'<div class="iv-dup-intro">Role <b>{html.escape(_sd_role)}</b> '
+                        f'→ fields <code>{html.escape(", ".join(_sd_fields) or "—")}</code></div>'
+                        f'<table class="iv-dup-table"><tbody>'
+                        f'<tr><td class="iv-dup-key">ES apps</td><td>{len(_sd_es)}</td></tr>'
+                        f'<tr><td class="iv-dup-key">Git apps</td><td>{len(_sd_git)}</td></tr>'
+                        f'<tr><td class="iv-dup-key">Resolved apps</td><td><b>{len(_sd_final_apps)}</b> '
+                        f'<small>({"ES" if _sd_es else ("git" if _sd_final_apps else "none")})</small></td></tr>'
+                        f'<tr><td class="iv-dup-key">Resolved projects</td><td><b>{len(_sd_final_proj)}</b></td></tr>'
+                        f'</tbody></table>'
+                        + ('<div class="iv-dup-intro" style="margin-top:8px;color:var(--cc-red)">'
+                           'Empty scope → this non-admin would see no apps. Check the team '
+                           'spelling and that the team owns rows in the git inventory.</div>'
+                           if not _sd_final_apps and not _sd_final_proj else
+                           '<div class="iv-dup-intro" style="margin-top:8px">'
+                           'Non-empty → this non-admin will see these apps/projects.</div>'),
                         unsafe_allow_html=True,
                     )
 
