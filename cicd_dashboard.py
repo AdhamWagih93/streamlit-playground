@@ -323,7 +323,10 @@ def _ci_set(items) -> set:
 CICD_REPO_BASE = os.environ.get("CICD_REPO_BASE", "/tmp/cicd-dashboard").rstrip("/")
 INVENTORY_REPO_PATH = os.path.join(CICD_REPO_BASE, "inventories")
 INVENTORY_BRANCH = "main"
-INVENTORY_SYNC_TTL = 60  # seconds between origin fetches
+INVENTORY_SYNC_TTL = 600  # seconds between origin fetches (10 min) — the git
+# inventory changes rarely, so a short window made every interaction after a
+# minute pay the ~4–5s clone/fetch again. The Sync Check tab still forces a
+# fresh pull on demand.
 INVENTORY_REPO_URL_TEMPLATE = "http://{host}/DevOps/Platform/_git/inventories"
 
 # Sibling repositories that the dashboard mirrors alongside `inventories`.
@@ -12808,6 +12811,7 @@ def _jk_duration(ms: int) -> str:
 # to stay quiet on a healthy day and visibly surface a failing integration
 # without dominating the page.
 
+@st.cache_data(ttl=90, show_spinner=False)
 def _integrations_health() -> list[dict]:
     """Probe every integration the dashboard depends on. Each call is
     cheap (no network round-trips beyond what was already cached) so the
@@ -25241,10 +25245,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _users_cs_json = json.dumps(list(commit_scope_filters()), sort_keys=True, default=str)
     _users_start_iso = _agg_start_dt.astimezone(timezone.utc).isoformat()
     _users_end_iso = end_dt.astimezone(timezone.utc).isoformat()
-    _users_blob = _fetch_users_aggregate(
-        _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
+    # DEFER the ES activity aggregator (~8s cold, fans out composite aggs over
+    # commits/jira/builds/deploys/releases/requests). NOTHING on the default
+    # Inventory paint shows per-user activity — it's only used by the Teams
+    # tab, the event log's per-user popovers, and the admin Users facet. So we
+    # only run it once one of those is actually engaged. The (cheap) LDAP
+    # member list below still loads, so member COUNTS are correct immediately;
+    # only the activity numbers are deferred until needed.
+    _users_needed = _is_admin and bool(
+        st.session_state.get("_tab_open_teams_v1")
+        or st.session_state.get("_tab_open_eventlog_v1")
+        or st.session_state.get("iv_f_user_v1")
     )
-    _perf_mark("inventory: users activity aggregate")
+    if _users_needed:
+        _users_blob = _fetch_users_aggregate(
+            _users_sf_json, _users_cs_json, _users_start_iso, _users_end_iso,
+        )
+    else:
+        _users_blob = {"users": [], "errors": {}, "deferred": True}
+    _perf_mark("inventory: users activity aggregate"
+               + ("" if _users_needed else " (deferred)"))
     # LDAP-FIRST USER DISCOVERY ─────────────────────────────────────────────
     # The ES aggregator only surfaces people who had activity in the
     # current window. LDAP team rosters are the authoritative count —
@@ -26515,12 +26535,15 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _users_with_email = sum(1 for _u in _users_scoped if _u.get("email"))
     _users_active = sum(1 for _u in _users_scoped if (_u.get("total") or 0) > 0)
     _users_ldap_count = int(_users_blob.get("ldap_user_count") or 0)
-    _users_sub = (
-        f"<b>{_users_active}</b> active · "
-        f"{_users_ldap_count} via LDAP team rosters"
-        if _users_total else
-        "no users resolved · check LDAP / widen window"
-    )
+    if _users_blob.get("deferred"):
+        _users_sub = "activity deferred · opens with Teams / Event Log"
+    elif _users_total:
+        _users_sub = (
+            f"<b>{_users_active}</b> active · "
+            f"{_users_ldap_count} via LDAP team rosters"
+        )
+    else:
+        _users_sub = "no users resolved · check LDAP / widen window"
 
     # Counts are CASE-INSENSITIVE distinct (My-Team == my-team) so they line
     # up with the Teams & Members tab, which merges team names the same way.
@@ -29737,9 +29760,19 @@ if _show_inv and _inventory_slot is not None:
                 )
         _perf_mark("teams & members tab")
 
-        # Now the event log reads a fresh scope and fills slot C.
+        # Event log — lazy-gated like the other secondary tabs. It runs a
+        # fan-out of ES queries across every event index (~8s cold) that
+        # NOTHING on the default Inventory tab needs, so we defer it until
+        # its tab is actually opened. The inventory fragment already
+        # published the scope it consumes, so it renders correctly on open.
         with _el_slot.container():
-            _render_event_log()
+            _lazy_tab_body(
+                "_tab_open_eventlog_v1", "Event Log",
+                _render_event_log,
+                hint="Builds · deployments · releases · commits · requests "
+                     "across every index. Deferred until opened so the "
+                     "Inventory tab paints fast.",
+            )
         _perf_mark("event log")
 
         # Actions tab — reads the inventory rows / stages map the
