@@ -15,10 +15,12 @@ IP detection strategy (first match wins):
 The detected method is stored alongside the IP so the activity dashboard can
 show *how* each IP was resolved.
 
-NOTE: this adds two columns to the table — `client_ip` and `ip_method`.
-If the table already exists, run once:
-    ALTER TABLE session_states ADD COLUMN client_ip   TEXT;
-    ALTER TABLE session_states ADD COLUMN ip_method    TEXT;
+The two extra columns (`client_ip`, `ip_method`) are added automatically and
+SAFELY on first log via `ALTER TABLE IF EXISTS ... ADD COLUMN IF NOT EXISTS`:
+  - idempotent — re-running does nothing once the columns exist;
+  - non-destructive — existing rows keep all their data, the new columns are
+    simply back-filled with NULL;
+  - no-ops if the table does not exist yet (the first insert creates it).
 """
 
 import uuid
@@ -26,10 +28,20 @@ from datetime import datetime, timezone
 
 import streamlit as st
 import pandas as pd
+from sqlalchemy import text
 
 from utils.postgres import get_engine
 
 TABLE_NAME = "session_states"
+
+# Columns added on top of the original schema. name -> SQL type.
+_EXTRA_COLUMNS = {
+    "client_ip": "TEXT",
+    "ip_method": "TEXT",
+}
+
+# Run the (idempotent) migration once per process rather than on every insert.
+_schema_ensured = False
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +128,35 @@ def detect_client_ip() -> tuple[str | None, str]:
 
 
 # ---------------------------------------------------------------------------
+# Schema migration (safe + idempotent)
+# ---------------------------------------------------------------------------
+def _ensure_columns(engine) -> None:
+    """Add the IP columns if they don't already exist, without touching any
+    existing data.
+
+    `ALTER TABLE IF EXISTS ... ADD COLUMN IF NOT EXISTS` is fully idempotent and
+    non-destructive on Postgres:
+      - if the table doesn't exist yet -> no-op (to_sql will create it);
+      - if a column already exists      -> no-op;
+      - otherwise the column is added as NULLable, existing rows back-filled
+        with NULL. No rewrite of existing values, no data loss.
+    """
+    global _schema_ensured
+    if _schema_ensured:
+        return
+
+    with engine.begin() as conn:  # transactional: commits or rolls back cleanly
+        for name, col_type in _EXTRA_COLUMNS.items():
+            conn.execute(
+                text(
+                    f'ALTER TABLE IF EXISTS "{TABLE_NAME}" '
+                    f'ADD COLUMN IF NOT EXISTS "{name}" {col_type}'
+                )
+            )
+    _schema_ensured = True
+
+
+# ---------------------------------------------------------------------------
 # Logger
 # ---------------------------------------------------------------------------
 def log_session_state_db():
@@ -138,4 +179,5 @@ def log_session_state_db():
 
     df = pd.DataFrame([state_data])
     engine = get_engine()
+    _ensure_columns(engine)
     df.to_sql(TABLE_NAME, engine, if_exists="append", index=False)
