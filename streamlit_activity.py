@@ -175,6 +175,8 @@ def load_session_data(start_time, end_time):
 
     df["original_user"] = df.get("original_user", None)
     df["current_page"] = df.get("current_page", None)
+    df["client_ip"] = df.get("client_ip", None)
+    df["ip_method"] = df.get("ip_method", None)
     df["session_id"] = df.get("session_id", pd.util.hash_pandas_object(df["timestamp"], index=False))
 
     df["is_assumed"] = (
@@ -324,11 +326,13 @@ active_users = sorted(active_sessions_df["display_user"].unique())
 
 last_event = df["timestamp"].max()
 last_event_str = humanize_time_diff(last_event.to_pydatetime())
+n_unique_ips = df["client_ip"].nunique(dropna=True)
 st.markdown(
     f"""<div class="status-bar">
         <span><span class="live-dot"></span><b>{len(active_users)}</b> active in last 15 min</span>
         <span>📡 Last interaction: <b>{last_event_str}</b></span>
         <span>📊 <b>{len(df):,}</b> total interactions in window</span>
+        <span>🌐 <b>{n_unique_ips}</b> unique IPs</span>
     </div>""",
     unsafe_allow_html=True,
 )
@@ -437,6 +441,50 @@ with tab1:
                                 background: linear-gradient(90deg, #ec4899, #f59e0b);"></div>
                 </div>
             </div>""", unsafe_allow_html=True)
+
+    # 🌐 Network insights
+    st.markdown("#### 🌐 Network Insights")
+    ic1, ic2 = st.columns(2)
+    with ic1:
+        st.markdown("**📍 Top Client IPs**")
+        if df["client_ip"].notna().any():
+            ip_stats = (
+                df[df["client_ip"].notna()]
+                .groupby("client_ip")
+                .agg(hits=("client_ip", "count"), users=("username", "nunique"))
+                .sort_values("hits", ascending=False)
+                .head(5)
+            )
+            max_hits = ip_stats["hits"].max() if len(ip_stats) else 1
+            for ip_addr, row in ip_stats.iterrows():
+                pct = row["hits"] / max_hits * 100
+                st.markdown(f"""
+                <div class="top-card">
+                    <b>{ip_addr}</b>
+                    <span class="chip">🔁 {row['hits']} hits</span>
+                    <span class="chip">👥 {row['users']} users</span>
+                    <div style="height: 4px; border-radius: 4px; background: #e2e8f0; margin-top: 8px;">
+                        <div style="height: 100%; width: {pct:.0f}%; border-radius: 4px;
+                                    background: linear-gradient(90deg, #06b6d4, #3b82f6);"></div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.info("No IP data captured yet for this window.")
+    with ic2:
+        st.markdown("**🛰 IP Detection Method**")
+        if df["ip_method"].notna().any():
+            method_counts = df["ip_method"].fillna("undetected").value_counts().reset_index()
+            method_counts.columns = ["method", "count"]
+            fig_method = px.pie(
+                method_counts, names="method", values="count", hole=0.55,
+                template=PLOTLY_TEMPLATE,
+                color_discrete_sequence=COLOR_SEQUENCE,
+            )
+            fig_method.update_traces(textinfo="label+percent")
+            fig_method.update_layout(height=260)
+            st.plotly_chart(style_fig(fig_method), width="stretch")
+        else:
+            st.info("No detection-method data captured yet.")
 
     # 📉 Trends
     st.markdown("#### 📊 Interaction Trends")
@@ -614,10 +662,14 @@ with tab3:
         last_activity = user_df["timestamp"].max()
         user_fav_page = user_df["current_page"].mode().iloc[0] if user_df["current_page"].notna().any() else "N/A"
         live_marker = "🟢 " if display_user in active_users else ""
+        last_ip = (
+            user_df["client_ip"].dropna().iloc[-1]
+            if user_df["client_ip"].notna().any() else "—"
+        )
 
         with st.expander(
             f"{live_marker}{display_user} — {len(user_df)} interactions — Favorite: {user_fav_page} — "
-            f"Last seen: {humanize_time_diff(last_activity.to_pydatetime(), now)}"
+            f"IP: {last_ip} — Last seen: {humanize_time_diff(last_activity.to_pydatetime(), now)}"
         ):
             u = user_df.sort_values("timestamp", ascending=True).copy()
             order = {p: i for i, p in enumerate(u["current_page"].dropna().unique())}
@@ -635,4 +687,7 @@ with tab3:
             fig.update_layout(height=320)
             st.plotly_chart(style_fig(fig), width="stretch")
 
-            st.dataframe(u[["timestamp", "current_page", "session_id"]], width="stretch")
+            st.dataframe(
+                u[["timestamp", "current_page", "client_ip", "ip_method", "session_id"]],
+                width="stretch",
+            )
