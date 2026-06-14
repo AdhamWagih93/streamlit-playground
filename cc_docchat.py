@@ -103,35 +103,68 @@ def _get_conn():
         return None
 
 
+# Non-key columns of chatbot_history, with their definitions. Used both to
+# create the table fresh and to additively migrate an older/partial table.
+# Order matters only for a fresh CREATE; ADD COLUMN IF NOT EXISTS is order-free.
+_HISTORY_COLUMNS: list[tuple[str, str]] = [
+    ("session_id",    "TEXT NOT NULL DEFAULT ''"),
+    ("username",      "TEXT"),
+    ("role",          "TEXT NOT NULL DEFAULT 'user'"),
+    ("content",       "TEXT NOT NULL DEFAULT ''"),
+    ("timestamp_utc", "TIMESTAMPTZ NOT NULL DEFAULT now()"),
+    ("duration_s",    "NUMERIC"),
+    ("tokens_est",    "INTEGER"),
+    ("model",         "TEXT"),
+    ("documents",     "TEXT[]"),
+    ("chat_mode",     "TEXT DEFAULT 'normal'"),
+    ("has_images",    "BOOLEAN DEFAULT FALSE"),
+    ("has_error",     "BOOLEAN DEFAULT FALSE"),
+    ("intent_score",  "INTEGER"),
+]
+
+
 def db_ensure_table() -> None:
-    """Create chatbot_history if missing. Runs at most once per session."""
+    """Ensure chatbot_history exists AND has every expected column.
+
+    Strictly additive and non-destructive:
+      • ``CREATE TABLE IF NOT EXISTS`` never touches an existing table.
+      • Each missing column is added with ``ALTER TABLE … ADD COLUMN IF NOT
+        EXISTS`` — this only appends columns, never drops, renames, retypes, or
+        rewrites existing rows. Columns carry the same defaults the schema would
+        have used, so pre-existing rows are backfilled in place (metadata-only
+        on PG 11+). No historic data is read, moved, or lost.
+
+    Runs at most once per session (gated by ``_dc_table_ready``).
+    """
     if st.session_state.get("_dc_table_ready"):
         return
     conn = _get_conn()
     if conn is None:
         return
+    _fqtn = f"{HISTORY_SCHEMA}.{HISTORY_TABLE}"
     try:
         with conn.cursor() as cur:
+            # 1) Create the table if it's entirely absent (existing tables are
+            #    left exactly as-is by IF NOT EXISTS).
             cur.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {HISTORY_SCHEMA}.{HISTORY_TABLE} (
-                    id              BIGSERIAL PRIMARY KEY,
-                    session_id      TEXT        NOT NULL,
-                    username        TEXT,
-                    role            TEXT        NOT NULL,
-                    content         TEXT        NOT NULL,
-                    timestamp_utc   TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    duration_s      NUMERIC,
-                    tokens_est      INTEGER,
-                    model           TEXT,
-                    documents       TEXT[],
-                    chat_mode       TEXT DEFAULT 'normal',
-                    has_images      BOOLEAN DEFAULT FALSE,
-                    has_error       BOOLEAN DEFAULT FALSE,
-                    intent_score    INTEGER
+                CREATE TABLE IF NOT EXISTS {_fqtn} (
+                    id BIGSERIAL PRIMARY KEY
                 )
                 """
             )
+            # 2) Additively reconcile columns — adds only what's missing.
+            for _col, _ddl in _HISTORY_COLUMNS:
+                try:
+                    cur.execute(
+                        f"ALTER TABLE {_fqtn} "
+                        f"ADD COLUMN IF NOT EXISTS {_col} {_ddl}"
+                    )
+                except Exception:
+                    # One column failing (e.g. a pre-existing column with a
+                    # different but compatible definition) must not abort the
+                    # rest. autocommit means each statement stands alone.
+                    pass
         st.session_state["_dc_table_ready"] = True
     except Exception:
         pass
