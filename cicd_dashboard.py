@@ -133,7 +133,7 @@ from utils.elasticsearch import es_prd  # type: ignore  # noqa: F401
 # every chat interaction reruns ONLY the panel — never this ~30k-line page.
 # -----------------------------------------------------------------------------
 try:
-    from cc_docchat import render_docchat_panel as _render_docchat_panel  # type: ignore
+    from mypages.cc_docchat import render_docchat_panel as _render_docchat_panel  # type: ignore
 except Exception:  # pragma: no cover - panel is optional, never fatal
     _render_docchat_panel = None  # type: ignore
 
