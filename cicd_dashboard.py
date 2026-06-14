@@ -328,6 +328,30 @@ def _ci_set(items) -> set:
     return {_ci_key(x) for x in (items or []) if str(x or "").strip()}
 
 
+# Team names drift between sources in separator style as well as case: LDAP /
+# auth hand us a session team like "My Team" (spaces) while the inventory YAML
+# stores "my_team" (underscores) or "My-Team" (hyphen). A plain lower-case key
+# (`_ci_key`) treats those as DIFFERENT, which silently collapses a non-admin's
+# whole scope to zero apps. `_team_match_key` canonicalises case AND collapses
+# any run of whitespace / underscores / hyphens to a single underscore so all
+# three forms compare equal — the same spirit as `_normalize_git_author`.
+_TEAM_SEP_RE = re.compile(r"[\s_\-]+")
+
+
+def _team_match_key(s: Any) -> str:
+    """Separator- and case-insensitive match key for a team name.
+    "My Team" == "my_team" == "My-Team" == "MY  TEAM" → "my_team"."""
+    k = (str(s) if s is not None else "").strip().lower()
+    if not k:
+        return ""
+    return _TEAM_SEP_RE.sub("_", k).strip("_")
+
+
+def _team_match_set(items) -> set:
+    """Set of separator-tolerant team match keys (empty/falsy dropped)."""
+    return {_team_match_key(x) for x in (items or []) if str(x or "").strip()}
+
+
 # All cloned ADO repos live under one tidy base directory so the
 # streamlit host doesn't litter /tmp with project-specific dirs.
 CICD_REPO_BASE = os.environ.get("CICD_REPO_BASE", "/tmp/cicd-dashboard").rstrip("/")
@@ -1935,6 +1959,12 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     align-items: center;
     gap: 5px;
     max-width: 100%;
+}
+/* ⚙ config cog on its own line beneath the version chip (keeps env columns
+   narrow so every stage — including PRD — stays on-screen). */
+.iv-stage-cog-row {
+    display: flex;
+    margin-top: 1px;
 }
 /* ── Per-env config ⚙ cog (next to the version chip) ─────────────────── */
 .iv-cfg-cog {
@@ -6396,9 +6426,12 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .iv-proj-cell-wrap {
     display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    flex-direction: column;   /* DEVOPS ⚠ flag drops to its own line below the
+                                 project name so the Project column stays narrow */
+    align-items: flex-start;
+    gap: 3px;
 }
+.iv-proj-flag-row { display: flex; }
 .iv-devops-flag {
     display: inline-flex;
     align-items: center;
@@ -11113,16 +11146,20 @@ def _load_teams_for_role(role: str) -> list[str]:
     return sorted(t for t in teams if t)
 
 
-def _resolve_inventory_by_teams_git(_bare_fields, _teams_ci, _bare_agg) -> list[str]:
+def _resolve_inventory_by_teams_git(_bare_fields, _teams_ci, _bare_agg,
+                                    _rows=None) -> list[str]:
     """Resolve apps / projects for the given teams straight from the GIT
-    inventory rows (the authoritative source). Used as a fallback when the
-    ES ``ef-devops-inventory`` index returns nothing — which happens when the
-    ES projection is stale/empty while git holds the real data. Matching is
-    case-insensitive on both team values and field names."""
-    try:
-        _rows, _src, _status, _warn = _load_inventory_from_git_scoped("[]")
-    except Exception:
-        return []
+    inventory rows (the authoritative source). Matching is case- AND
+    separator-tolerant on team values. ``_rows`` may be passed by a caller
+    that already loaded the inventory to avoid a second clone/parse."""
+    if _rows is None:
+        try:
+            _rows, _src, _status, _warn = _load_inventory_from_git_scoped("[]")
+        except Exception:
+            return []
+    # Caller passes separator-tolerant keys; canonicalise row teams the same
+    # way so "My Team" (session) matches "my_team" / "My-Team" (inventory).
+    _want = {_team_match_key(t) for t in _teams_ci if str(t or "").strip()}
     _out: set[str] = set()
     for _r in _rows or []:
         _blob = _r.get("teams") or {}
@@ -11130,10 +11167,10 @@ def _resolve_inventory_by_teams_git(_bare_fields, _teams_ci, _bare_agg) -> list[
         for _bf in _bare_fields:
             _v = _blob.get(_bf)
             if isinstance(_v, (list, tuple, set)):
-                _row_teams.update(str(_x).strip().lower() for _x in _v if _x)
+                _row_teams.update(_team_match_key(_x) for _x in _v if _x)
             elif _v:
-                _row_teams.add(str(_v).strip().lower())
-        if _row_teams & _teams_ci:
+                _row_teams.add(_team_match_key(_v))
+        if _row_teams & _want:
             _av = (_r.get(_bare_agg) or "").strip()
             if _av:
                 _out.add(_av)
@@ -11144,18 +11181,36 @@ def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
     """Resolve inventory apps / projects owned by ANY of *teams* across ANY
     of *fields*, matching team names CASE-INSENSITIVELY (My-Team == my-team).
 
-    Order of attempts (first non-empty wins):
-      1. ES ``case_insensitive`` term query,
-      2. ES exact term query (``es_search`` swallows errors into an empty
-         result, so a rejected ``case_insensitive`` clause lands here),
-      3. the GIT inventory rows directly — the authoritative source. This is
-         the critical one: if the ES ``ef-devops-inventory`` projection is
-         stale or empty, 1 & 2 return nothing and a non-admin's whole scope
-         would collapse to "no apps". Resolving from git guarantees scope."""
+    Resolution order:
+      1. the GIT inventory rows directly — the AUTHORITATIVE source. Matching
+         is case- AND separator-tolerant (``_team_match_key``), so a session
+         team "My Team" resolves apps owned by inventory "my_team" / "My-Team".
+         ES ``term`` queries can only match exact tokens (case-insensitively at
+         best), so a separator drift between the auth layer's team names and the
+         YAML's team names would collapse a non-admin's whole scope to zero —
+         the recurring "non-admins see 0 apps" bug. Git resolution fixes that.
+      2. ES (``case_insensitive`` then exact) — used ONLY when git is
+         unavailable (clone/parse failed → zero rows), so the panel still
+         resolves *something* rather than nothing."""
     _fields = [f for f in (fields or []) if f]
     _teams = [t for t in (teams or []) if str(t or "").strip()]
     if not _fields or not _teams:
         return []
+
+    # 1) Authoritative git inventory — separator/case tolerant.
+    try:
+        _git_rows, _src, _status, _warn = _load_inventory_from_git_scoped("[]")
+    except Exception:
+        _git_rows = None
+    if _git_rows:
+        return _resolve_inventory_by_teams_git(
+            [f.replace(".keyword", "") for f in _fields],
+            _team_match_set(_teams),
+            agg_field.replace(".keyword", ""),
+            _rows=_git_rows,
+        )
+
+    # 2) Git unavailable — fall back to the ES projection (exact tokens only).
     for _ci in (True, False):
         _should = [
             {"term": {f: ({"value": t, "case_insensitive": True} if _ci else t)}}
@@ -11168,12 +11223,7 @@ def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
             _res = {}
         if _res:
             return sorted(_res.keys())
-    # ES gave nothing — resolve from the authoritative git inventory.
-    return _resolve_inventory_by_teams_git(
-        [f.replace(".keyword", "") for f in _fields],
-        {t.strip().lower() for t in _teams},
-        agg_field.replace(".keyword", ""),
-    )
+    return []
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -28432,11 +28482,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _cog = _iv_cfg_cog_html(app, stage) if stage in _INV_ENVIRONMENTS else ""
 
         def _fin(main: str, sub: str = "") -> str:
-            # Top row keeps the primary chip and the ⚙ cog side by side;
-            # the relative-age line (if any) sits beneath them.
+            # Stacked vertically so a stage column is only as wide as its
+            # version chip: version on top, relative-age beneath, and the ⚙
+            # config cog on its OWN line below. Keeping the cog inline used to
+            # widen every env column enough to push PRD off the right edge.
+            _cog_row = (
+                f'<div class="iv-stage-cog-row">{_cog}</div>' if _cog else ""
+            )
             return (
                 f'<div class="iv-stage-cell">'
-                f'<div class="iv-stage-top">{main}{_cog}</div>{sub}'
+                f'<div class="iv-stage-top">{main}</div>{sub}{_cog_row}'
                 f'</div>'
             )
 
@@ -28631,8 +28686,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_iv_proj_pop_id(proj)}" '
                 f'title="Click for teams & applications">{proj}</button>'
-                f'{_flag_html}'
-                f'</span>'
+                + (f'<span class="iv-proj-flag-row">{_flag_html}</span>'
+                   if _flag_html else "")
+                + '</span>'
             )
         return f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>'
 
@@ -28670,6 +28726,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     def _iv_table_shell(rows_html: str, *, include_project: bool, max_h: str = "60vh") -> str:
         return (
             f'<div class="el-tf el-tf-shell is-inventory" style="overflow-y:auto;'
+            f'overflow-x:auto;'
             f'max-height:{max_h};border:1px solid var(--cc-border);border-radius:10px">'
             f'<table style="width:100%;border-collapse:collapse;font-family:inherit">'
             f'{_iv_thead(include_project)}'
