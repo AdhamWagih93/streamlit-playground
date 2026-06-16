@@ -279,33 +279,58 @@ def _read_md(folder: str, rel: str) -> str:
         return ""
 
 
-def _scope_app_names() -> set[str]:
-    """Lowercased application + repository names in the current inventory scope
-    (read straight from session state the inventory fragment publishes — no
-    fetches). Used to surface only DocMDs folders that match a real app."""
+# Names drift between the inventory (application / repository_name) and the
+# DocMDs folder names in separator style as well as case ("My App" vs "my_app"
+# vs "My-App"). Normalise both sides so a real match is never missed — the same
+# spirit as the dashboard's team-name matching.
+_NAME_SEP_RE = re.compile(r"[\s_\-]+")
+
+
+def _norm_name(s) -> str:
+    """Separator- and case-insensitive match key for an app/repo/folder name."""
+    k = (str(s) if s is not None else "").strip().lower()
+    return _NAME_SEP_RE.sub("_", k).strip("_") if k else ""
+
+
+def _scope_app_keys() -> set[str]:
+    """Normalised application + repository names in the current inventory scope
+    (read straight from session state the inventory publishes — no fetches).
+    Used to FLAG which DocMDs folders belong to an app the user can see."""
     _rows = (st.session_state.get("_inv_rows_filtered_v1")
              or st.session_state.get("_inv_rows_all_v1") or [])
-    _names: set[str] = set()
+    _keys: set[str] = set()
     for _r in _rows:
         for _k in ("application", "repository_name"):
-            _v = (_r.get(_k) or "").strip().lower()
+            _v = _norm_name(_r.get(_k))
             if _v:
-                _names.add(_v)
-    return _names
+                _keys.add(_v)
+    return _keys
 
 
-def _matched_docmds() -> list[str]:
-    """DocMDs folders that match an in-scope app/repository (case-insensitive).
-    Falls back to ALL folders when the inventory scope is empty (so the panel
-    is still useful before the inventory has loaded)."""
+def _matched_folder_set() -> set[str]:
+    """Set of DocMDs folder names whose normalised key matches an in-scope
+    app/repository. Empty when the inventory scope hasn't loaded yet."""
+    _scope = _scope_app_keys()
+    if not _scope:
+        return set()
+    return {f for f in _docmds_folders() if _norm_name(f) in _scope}
+
+
+def _docmds_options() -> tuple[list[str], set[str]]:
+    """Return ``(ordered_folder_names, matched_set)`` for the context picker.
+
+    The picker always offers EVERY DocMDs folder (so it's never empty just
+    because a name didn't line up with the current scope), but folders that
+    match an in-scope app are listed first and flagged. ``matched_set`` lets the
+    UI mark them."""
     _folders = _docmds_folders()
     if not _folders:
-        return []
-    _scope = _scope_app_names()
-    if not _scope:
-        return sorted(_folders.keys(), key=str.lower)
-    _matched = [f for f in _folders if f.strip().lower() in _scope]
-    return sorted(_matched, key=str.lower)
+        return [], set()
+    _matched = _matched_folder_set()
+    _all = sorted(_folders.keys(), key=str.lower)
+    # Matched folders first (still alphabetical within each group).
+    _ordered = sorted(_matched, key=str.lower) + [f for f in _all if f not in _matched]
+    return _ordered, _matched
 
 
 # =============================================================================
@@ -438,18 +463,22 @@ def render_docchat_panel() -> None:
                 st.session_state["_dc_open"] = False
                 st.rerun(scope="fragment")
 
-        # ── Document context picker (inline — DocMDs folders matching apps) ──
+        # ── Document context picker (inline — DocMDs folders) ───────────────
         # Rendered inline rather than inside a popover: a popover's content
         # layer portals to <body> with a normal z-index and would render
         # BEHIND this near-max-z-index fixed panel (invisible). Inline keeps
         # it in the panel's own stacking context, always visible.
-        _matched = _matched_docmds()
+        #
+        # The picker offers EVERY DocMDs folder (never empty just because a name
+        # didn't line up with the loaded inventory scope); folders matching an
+        # in-scope app are listed first and flagged with ●.
         _folders = _docmds_folders()
+        _options, _matched = _docmds_options()
         _n_sel = len(st.session_state["_dc_selected_apps"])
         st.markdown(
             '<div class="dc-ctx-label">📎 Context'
-            + (f'<span class="dc-ctx-n">{_n_sel} app'
-               f'{"s" if _n_sel != 1 else ""}</span>' if _n_sel else "")
+            + (f'<span class="dc-ctx-n">{_n_sel} attached</span>'
+               if _n_sel else "")
             + "</div>",
             unsafe_allow_html=True,
         )
@@ -459,25 +488,32 @@ def render_docchat_panel() -> None:
                 "syncs with the other platform repos (Sync Check tab).</div>",
                 unsafe_allow_html=True,
             )
-        elif not _matched:
-            st.markdown(
-                '<div class="dc-ctx-hint">No DocMDs folder matches an application '
-                "in your current scope.</div>",
-                unsafe_allow_html=True,
-            )
         else:
+            def _fmt_folder(_f: str) -> str:
+                _n = len(_folders.get(_f, []))
+                _mark = "● " if _f in _matched else ""
+                return f"{_mark}{_f}  ·  {_n} doc{'s' if _n != 1 else ''}"
+
             _sel = st.multiselect(
                 "Attach application docs",
-                options=_matched,
+                options=_options,
                 default=[a for a in st.session_state["_dc_selected_apps"]
-                         if a in _matched],
+                         if a in _options],
                 key="_dc_apps_ms",
                 label_visibility="collapsed",
-                placeholder="Attach application docs…",
+                placeholder="Search apps to attach their docs…",
+                format_func=_fmt_folder,
             )
             # Persist directly — no rerun needed (the new value is in hand and
             # the file list below renders from it immediately).
             st.session_state["_dc_selected_apps"] = _sel
+            # Subtle caption: how many of the offered folders match the scope.
+            _cap = (f"● {len(_matched)} match your current scope · "
+                    f"{len(_options)} available"
+                    if _matched else f"{len(_options)} application doc set"
+                    f"{'s' if len(_options) != 1 else ''} available")
+            st.markdown(f'<div class="dc-ctx-cap">{html.escape(_cap)}</div>',
+                        unsafe_allow_html=True)
             # List the markdown files that will be added, compactly.
             for _app in _sel:
                 _mds = _folders.get(_app, [])

@@ -10318,6 +10318,14 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     border-radius: 9px;
     padding: 8px 10px;
 }
+/* Subtle caption under the context multiselect (match count) */
+.dc-ctx-cap {
+    font-family: var(--cc-mono);
+    font-size: .62rem;
+    color: var(--cc-text-mute);
+    letter-spacing: .02em;
+    margin: 1px 0 4px 2px;
+}
 /* Compact the multiselect inside the panel */
 .st-key-cc_docchat_panel [data-testid="stMultiSelect"] { margin-bottom: 2px; }
 .st-key-cc_docchat_panel [data-testid="stMultiSelect"] [data-baseweb="tag"] {
