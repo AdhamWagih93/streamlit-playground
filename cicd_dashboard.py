@@ -6606,6 +6606,50 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: #fff;
     background: var(--cc-amber);
 }
+/* Subtle per-app OpenShift-templates indicator (count only; the file list
+   lives in the application popover). Quiet blue so it reads as informational,
+   not a warning like the amber outdated pill. */
+.iv-ocp-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 6px;
+    vertical-align: middle;
+    font-family: var(--cc-mono);
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--cc-blue);
+    background: color-mix(in srgb, var(--cc-blue) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 32%, transparent);
+    border-radius: 3px;
+    padding: 1px 4px;
+    line-height: 1.25;
+    cursor: help;
+    transition: background .15s ease, color .15s ease;
+}
+.iv-ocp-pill:hover { color: #fff; background: var(--cc-blue); }
+/* OpenShift-templates file list inside the application popover */
+.el-app-pop .ap-ocp-files {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 2px;
+}
+.el-app-pop .ap-ocp-file {
+    font-family: var(--cc-mono);
+    font-size: 0.7rem;
+    color: var(--cc-blue);
+    background: color-mix(in srgb, var(--cc-blue) 7%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-blue) 26%, transparent);
+    border-radius: 6px;
+    padding: 2px 8px;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 /* "Not reached" — subtle warning for App apps that haven't hit this stage */
 .iv-stage-gap {
     display: inline-flex;
@@ -20034,6 +20078,57 @@ def _mirror_repo_path(repo: str) -> str:
     return os.path.join(CICD_REPO_BASE, repo)
 
 
+@st.cache_data(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _ocp_templates_index() -> dict[str, list[str]]:
+    """Index the cloned **ocp-templates** repo by application.
+
+    Repo layout is ``ocp-templates/<project>/<application>/*.yml|*.yaml``
+    (templates may sit in nested sub-dirs under the app). Returns
+    ``{"<project_ci>/<app_ci>": [relative file paths]}`` keyed on
+    case-insensitive project + application so the inventory can surface each
+    app's OpenShift templates inline. Cached on the same TTL as the other
+    mirror syncs so the tree is walked at most once per window."""
+    base = _mirror_repo_path("ocp-templates")
+    out: dict[str, list[str]] = {}
+    if not os.path.isdir(base):
+        return out
+    try:
+        for _proj in sorted(os.listdir(base)):
+            if _proj.startswith(".") or _proj == ".git":
+                continue
+            _pdir = os.path.join(base, _proj)
+            if not os.path.isdir(_pdir):
+                continue
+            for _app in sorted(os.listdir(_pdir)):
+                if _app.startswith("."):
+                    continue
+                _adir = os.path.join(_pdir, _app)
+                if not os.path.isdir(_adir):
+                    continue
+                _files: list[str] = []
+                for _root, _dirs, _fs in os.walk(_adir):
+                    if ".git" in _dirs:
+                        _dirs.remove(".git")
+                    for _fn in _fs:
+                        if _fn.lower().endswith((".yml", ".yaml")):
+                            _rel = os.path.relpath(
+                                os.path.join(_root, _fn), _adir
+                            ).replace(os.sep, "/")
+                            _files.append(_rel)
+                if _files:
+                    out[f"{_ci_key(_proj)}/{_ci_key(_app)}"] = sorted(
+                        _files, key=str.lower)
+    except OSError:
+        pass
+    return out
+
+
+def _ocp_templates_for(project: str, app: str) -> list[str]:
+    """Relative ocp-template file paths for ``(project, app)``; ``[]`` if the
+    repo isn't cloned or the app has no templates."""
+    return _ocp_templates_index().get(f"{_ci_key(project)}/{_ci_key(app)}", [])
+
+
 def _mirror_repo_url(host: str, repo: str) -> str:
     """Build the canonical clone URL for *repo* on the same ADO host /
     project the inventories repo lives on. Returns ``""`` when the host
@@ -28652,7 +28747,22 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             '<span class="iv-outdated-row">' + "".join(_pills) + '</span>'
         )
 
-    def _iv_app_cell(app: str) -> str:
+    def _iv_ocp_pill(project: str, app: str) -> str:
+        """Subtle inline indicator: how many OpenShift templates this app has
+        under ``ocp-templates/<project>/<app>/``. The file list itself lives in
+        the application popover — keeping the cell quiet but discoverable."""
+        _files = _ocp_templates_for(project, app)
+        if not _files:
+            return ""
+        _n = len(_files)
+        _tip = (f"{_n} OpenShift template file{'s' if _n != 1 else ''} — "
+                f"open the application for the list")
+        return (
+            f'<span class="iv-ocp-pill" title="{html.escape(_tip, quote=True)}">'
+            f'⎈ {_n}</span>'
+        )
+
+    def _iv_app_cell(app: str, project: str = "") -> str:
         # Repo link removed from the table cell — it now only appears
         # inside the application popover (and only when the row carries
         # a non-empty `repository_name`).
@@ -28662,6 +28772,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'popovertarget="{_iv_app_pop_id(app)}" '
             f'title="Click for full inventory details">{app}</button>'
             f'{_iv_outdated_pills(app)}'
+            f'{_iv_ocp_pill(project, app)}'
             f'{_iv_app_posture_html(app)}'
             f'</div>'
         )
@@ -28711,7 +28822,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         return (
             f'<tr>'
             f'{_proj_td}'
-            f'<td style="padding:5px 4px">{_iv_app_cell(_app)}</td>'
+            f'<td style="padding:5px 4px">{_iv_app_cell(_app, r.get("project", ""))}</td>'
             f'{_stage_tds}'
             f'</tr>'
         )
@@ -29152,6 +29263,28 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # popovers stay read-only (identity / build / deploy
         # metadata + Prisma scan summary).
         _jenkins_section = ""
+
+        # ── OpenShift templates section ─────────────────────────────────────
+        # Lists every *.yml/*.yaml under ocp-templates/<project>/<app>/. Shown
+        # only when the app actually has templates, so the popover stays compact
+        # for apps that aren't deployed via OpenShift templates.
+        _ocp_files = _ocp_templates_for(r.get("project", ""), _app)
+        if _ocp_files:
+            _ocp_items = "".join(
+                f'<span class="ap-ocp-file" '
+                f'title="{html.escape(_f, quote=True)}">⎈ {html.escape(_f)}</span>'
+                for _f in _ocp_files
+            )
+            _ocp_section = (
+                f'    <div class="ap-section ap-section--ocp"><span>OpenShift '
+                f'templates</span><span class="ap-section-note">'
+                f'{len(_ocp_files)} file{"s" if len(_ocp_files) != 1 else ""}'
+                f'</span></div>'
+                f'    <div class="ap-ocp-files">{_ocp_items}</div>'
+            )
+        else:
+            _ocp_section = ""
+
         _iv_popovers.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop is-app">'
             f'  <div class="ap-head">'
@@ -29188,10 +29321,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'{_deploy_tag_chip}'
             f'</span>'
             f'{_deploy_recommend_row}'
+            f'    {_ocp_section}'
             f'    {_jenkins_section}'
             f'    {_prisma_html}'
             f'  </div>'
-            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap · jenkins</div>'
+            f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap · jenkins · ocp-templates</div>'
             f'</div>'
         )
 
