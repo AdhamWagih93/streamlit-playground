@@ -14932,13 +14932,15 @@ def _render_teams_and_members_view() -> None:
     # changes" highlight in each team popover. ───────────────────────────
     _ldap_now = datetime.now(timezone.utc)
     _ldap_recent_cut = _ldap_now - timedelta(days=_LDAP_RECENT_WINDOW_DAYS)
+    _ldap_new_cut = _ldap_now - timedelta(days=_LDAP_NEW_WINDOW_DAYS)
 
     def _mem_recency(_m: dict):
-        """(is_new, is_changed, created_dt, changed_dt). is_changed excludes
-        brand-new members so the two signals don't overlap."""
+        """(is_new, is_changed, created_dt, changed_dt). "New" = joined within
+        the ~3-month new-member window; is_changed uses the shorter change
+        window and excludes brand-new members so the two signals don't overlap."""
         _cd = _ldap_parse_gentime(_m.get("when_created"))
         _hd = _ldap_parse_gentime(_m.get("when_changed"))
-        _is_new = bool(_cd and _cd >= _ldap_recent_cut)
+        _is_new = bool(_cd and _cd >= _ldap_new_cut)
         _is_chg = bool(_hd and _hd >= _ldap_recent_cut and not _is_new)
         return _is_new, _is_chg, _cd, _hd
 
@@ -15059,12 +15061,17 @@ def _render_teams_and_members_view() -> None:
                         _new_names = ", ".join(
                             html.escape(_m.get("label") or _m.get("username") or "—")
                             for _m in _new_ms[:6])
+                        _win_bits = []
+                        if _new_ms:
+                            _win_bits.append(f"new ≤{_LDAP_NEW_WINDOW_DAYS}d")
+                        if _upd_ms:
+                            _win_bits.append(f"updated ≤{_LDAP_RECENT_WINDOW_DAYS}d")
                         st.markdown(
                             f'<div class="tm-pop-recent">'
                             f'  <div class="tm-pop-recent-line">'
                             f'{" · ".join(_hl_bits)} '
-                            f'<span class="tm-pop-recent-win">last '
-                            f'{_LDAP_RECENT_WINDOW_DAYS}d</span></div>'
+                            f'<span class="tm-pop-recent-win">'
+                            f'{" · ".join(_win_bits)}</span></div>'
                             + (f'<div class="tm-pop-recent-names">new: '
                                f'{_new_names}'
                                f'{" …" if len(_new_ms) > 6 else ""}</div>'
@@ -22903,10 +22910,14 @@ def _ldap_db_load_last_sync() -> dict:
                 pass
 
 
-# How recent a member's whenCreated / whenChanged must be to count as
-# "new" / "recently changed" for the Teams-grid highlights.
+# How recent a member's whenChanged must be to count as "recently changed"
+# for the Teams-grid highlights.
 _LDAP_RECENT_WINDOW_DAYS = int(
     os.environ.get("LDAP_RECENT_WINDOW_DAYS", "14") or 14)
+# A "new" member is one who joined (whenCreated) within this window — kept
+# separate from (and wider than) the change window: ~3 months by default.
+_LDAP_NEW_WINDOW_DAYS = int(
+    os.environ.get("LDAP_NEW_WINDOW_DAYS", "90") or 90)
 
 
 def _ldap_parse_gentime(val) -> "datetime | None":
