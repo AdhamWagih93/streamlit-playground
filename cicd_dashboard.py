@@ -13812,10 +13812,19 @@ def _render_teams_and_members_view() -> None:
     _db_team_rosters = _ldap_db_load_team_members() or {}
     _resolutions     = _ldap_db_load_resolutions() or {}
 
-    _user_teams_db: dict[str, set[str]] = {}   # username_lc → {team_cn}
+    # username_lc → {team_match_key: display_cn}. Keying on the case- AND
+    # separator-tolerant match key dedupes a team that appears under more than
+    # one casing/separator in the rosters (e.g. "DevOps" vs "devops"), so a
+    # member isn't falsely counted as being on multiple teams. First-seen
+    # spelling wins as the display value.
+    _user_teams_db: dict[str, dict[str, str]] = {}
     for _tcn, _members in _db_team_rosters.items():
+        _tkey = _team_match_key(_tcn)
+        if not _tkey:
+            continue
         for _m in _members:
-            _user_teams_db.setdefault(str(_m).strip().lower(), set()).add(_tcn)
+            _user_teams_db.setdefault(str(_m).strip().lower(), {}).setdefault(
+                _tkey, str(_tcn))
 
     _ACT_FIELDS = (
         "commits", "jira_authored", "jira_assigned", "requests_made",
@@ -13832,7 +13841,7 @@ def _render_teams_and_members_view() -> None:
             "email": (_info.get("email") or "").strip().lower(),
             "label": _info.get("label") or _info.get("username") or _un_lc,
             "names": [_info["label"]] if _info.get("label") else [],
-            "teams": sorted(_user_teams_db.get(_un_lc, set())),
+            "teams": sorted(_user_teams_db.get(_un_lc, {}).values(), key=str.lower),
             "ldap_title": _info.get("title") or "",
             "ldap_department": _info.get("department") or "",
             "ldap_company": _info.get("company") or "",
@@ -14209,9 +14218,23 @@ def _render_teams_and_members_view() -> None:
     # Often legitimate (a lead spanning squads) but worth a glance — it can
     # also signal a stale or duplicated roster membership. Kept subtle: a
     # collapsed expander that only appears when there's something to show.
-    _multi_team = [
-        _u for _u in _users_list if len(_u.get("teams") or []) >= 2
-    ]
+    # Count DISTINCT teams case-/separator-insensitively (a member listed on
+    # "DevOps" and "devops" is on one team, not two). The distinct display set
+    # is stashed on each record so the count + chips below stay consistent.
+    def _distinct_teams(_teams) -> list[str]:
+        _seen: dict[str, str] = {}
+        for _t in _teams or []:
+            _k = _team_match_key(_t)
+            if _k and _k not in _seen:
+                _seen[_k] = str(_t)
+        return sorted(_seen.values(), key=str.lower)
+
+    _multi_team = []
+    for _u in _users_list:
+        _dt = _distinct_teams(_u.get("teams") or [])
+        if len(_dt) >= 2:
+            _u = {**_u, "teams": _dt}
+            _multi_team.append(_u)
     if _multi_team:
         _multi_team.sort(key=lambda u: (-len(u["teams"]), u["label"].lower()))
         with st.expander(
