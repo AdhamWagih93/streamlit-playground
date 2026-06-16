@@ -2221,6 +2221,20 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     flex-direction: column;
 }
 
+/* Git-derived "added <date>" line under an app / project name in the table. */
+.iv-created-line {
+    font-family: var(--cc-mono);
+    font-size: .58rem;
+    color: var(--cc-text-mute);
+    letter-spacing: .02em;
+    margin-top: 2px;
+    white-space: nowrap;
+    cursor: help;
+}
+.iv-created-line .iv-created-rel { color: var(--cc-text-dim); }
+/* "· age" suffix on the popover Created value */
+.el-app-pop .ap-created-rel { color: var(--cc-text-mute); font-size: .8em; }
+
 /* Jenkins action grid inside the app popover */
 .el-app-pop .ap-jk-grid {
     display: grid;
@@ -20059,6 +20073,73 @@ def _git_set_author(repo_path: str, username: str, email: str) -> None:
                  inject_auth=False)
 
 
+@st.cache_data(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _inventory_head_sha() -> str:
+    """Current HEAD of the cloned inventories repo ("" if not checked out).
+    Used as the cache key for git-derived creation dates so a pull refreshes
+    them."""
+    repo = INVENTORY_REPO_PATH
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        return ""
+    try:
+        r = _run_git("rev-parse", "HEAD", cwd=repo, inject_auth=False)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+@st.cache_data(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _git_inventory_creation_dates(head_sha: str) -> dict:
+    """Earliest git-commit date for each project dir and each application
+    inventory file in the cloned inventories repo.
+
+    Layout (see :func:`_load_inventory_from_git`): every project is a top-level
+    directory and every application is a ``{project}/{app}.yml|.yaml`` file at
+    that project's root. We walk the whole history **oldest-first**, restricted
+    to file ADDITIONS (``--diff-filter=A``), and record the first time each path
+    appears — i.e. when it was created.
+
+    Returns ``{"projects": {project: iso_date},
+               "apps": {"project/app": iso_date}}`` (author dates, ISO-8601).
+    Keyed on HEAD so a fresh pull invalidates the cache. One git invocation for
+    the whole repo — cheap and cached for the sync window. Renamed files show
+    their creation at the rename commit (git's bulk log doesn't follow renames),
+    which is an acceptable proxy."""
+    out: dict = {"projects": {}, "apps": {}}
+    repo = INVENTORY_REPO_PATH
+    if not head_sha or not os.path.isdir(os.path.join(repo, ".git")):
+        return out
+    _skip_top = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
+    try:
+        r = _run_git(
+            "log", "--reverse", "--diff-filter=A", "--name-only",
+            "--format=__C__%aI", cwd=repo, inject_auth=False,
+        )
+    except Exception:
+        return out
+    if r.returncode != 0:
+        return out
+    _cur = ""
+    for _line in r.stdout.splitlines():
+        if _line.startswith("__C__"):
+            _cur = _line[5:].strip()
+            continue
+        _p = _line.strip()
+        if not _p or not _cur:
+            continue
+        _parts = _p.split("/")
+        _proj = _parts[0]
+        if _proj in _skip_top or _proj.startswith("."):
+            continue
+        # First add anywhere under the project dir = project creation.
+        out["projects"].setdefault(_proj, _cur)
+        # App inventory file: {project}/{app}.yml|.yaml at the project root.
+        if len(_parts) == 2 and _parts[1].lower().endswith((".yml", ".yaml")):
+            _app = _parts[1].rsplit(".", 1)[0]
+            out["apps"].setdefault(f"{_proj}/{_app}", _cur)
+    return out
+
+
 @st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
 def _ensure_inventory_repo(host_marker: str, trace_into: list | None = None) -> tuple[bool, str, str]:
     """Idempotent clone-or-pull of the inventories repo onto INVENTORY_BRANCH.
@@ -28260,6 +28341,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_pop_projects = sorted({r["project"] for r in _inv_rows_all if r.get("project")})
     _iv_proj_map = _fetch_project_details(tuple(_iv_pop_projects)) if _iv_pop_projects else {}
 
+    # Git-derived creation dates: when each project dir / app inventory file
+    # first appeared in the inventories repo history. One cached git pass; keyed
+    # on HEAD so a pull refreshes it. Empty dict when reading from ES (no clone).
+    _iv_created = _git_inventory_creation_dates(_inventory_head_sha())
+    _iv_created_projects = _iv_created.get("projects") or {}
+    _iv_created_apps = _iv_created.get("apps") or {}
+
+    def _iv_proj_created(proj: str) -> str:
+        return _iv_created_projects.get(proj, "")
+
+    def _iv_app_created(proj: str, app: str) -> str:
+        return _iv_created_apps.get(f"{proj}/{app}", "")
+
     def _iv_slug(val: str, prefix: str) -> str:
         return prefix + "".join(c.lower() if c.isalnum() else "-" for c in val)[:80]
 
@@ -28840,6 +28934,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'⎈ {_n}</span>'
         )
 
+    def _iv_created_line(iso: str, label: str) -> str:
+        """Short subtle 'added <date>' line from a git creation ISO date."""
+        if not iso:
+            return ""
+        _d = fmt_dt(iso, "%Y-%m-%d")
+        _rel = _relative_age(iso)
+        _tip = f"{label} first added to the inventories repo on {_d}"
+        return (
+            f'<div class="iv-created-line" title="{html.escape(_tip, quote=True)}">'
+            f'◷ added {html.escape(_d)}'
+            + (f' <span class="iv-created-rel">· {html.escape(_rel)}</span>'
+               if _rel else "")
+            + '</div>'
+        )
+
     def _iv_app_cell(app: str, project: str = "") -> str:
         # Repo link removed from the table cell — it now only appears
         # inside the application popover (and only when the row carries
@@ -28852,6 +28961,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'{_iv_outdated_pills(app)}'
             f'{_iv_ocp_pill(project, app)}'
             f'{_iv_app_posture_html(app)}'
+            f'{_iv_created_line(_iv_app_created(project, app), "Application inventory")}'
             f'</div>'
         )
 
@@ -28883,9 +28993,15 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'title="Click for teams & applications">{proj}</button>'
                 + (f'<span class="iv-proj-flag-row">{_flag_html}</span>'
                    if _flag_html else "")
+                + _iv_created_line(_iv_proj_created(proj), "Project inventory")
                 + '</span>'
             )
-        return f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>'
+        return (
+            f'<span class="iv-proj-cell-wrap">'
+            f'<span style="color:var(--cc-text-dim);font-size:.78rem">{proj}</span>'
+            + _iv_created_line(_iv_proj_created(proj), "Project inventory")
+            + '</span>'
+        )
 
     def _iv_row_html(r: dict, *, include_project: bool = True) -> str:
         _proj_td = (
@@ -29363,6 +29479,23 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         else:
             _ocp_section = ""
 
+        # Git-derived "Created" row for the Identity section (when the inventory
+        # came from git; empty under the ES source).
+        _app_created_iso = _iv_app_created(r.get("project", ""), _app)
+        if _app_created_iso:
+            _ac_d = fmt_dt(_app_created_iso, "%Y-%m-%d")
+            _ac_rel = _relative_age(_app_created_iso)
+            _app_created_row = (
+                f'    <span class="ap-k">Created</span>'
+                f'<span class="ap-v" title="First added to the inventories repo">'
+                f'◷ {html.escape(_ac_d)}'
+                + (f' <span class="ap-created-rel">· {html.escape(_ac_rel)}</span>'
+                   if _ac_rel else "")
+                + '</span>'
+            )
+        else:
+            _app_created_row = ""
+
         _iv_popovers.append(
             f'<div id="{_pid}" popover="auto" class="el-app-pop is-app">'
             f'  <div class="ap-head">'
@@ -29380,6 +29513,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'    <span class="ap-k">Company</span>{_iv_v(r.get("company", ""))}'
             f'    <span class="ap-k">Type</span>{_iv_app_type_pill(r.get("app_type", ""))}'
             f'    {_repo_row}'
+            f'    {_app_created_row}'
             f'    <div class="ap-section">Build</div>'
             f'    <span class="ap-k">Technology</span>{_iv_chip(r.get("build_technology", ""))}'
             f'    <span class="ap-k">Image name</span>{_iv_v(r.get("build_image_name", ""))}'
@@ -29899,6 +30033,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'      </span>'
                 f'    </div>'
             )
+        # Git-derived project-inventory "Created" line.
+        _proj_created_iso = _iv_proj_created(_proj)
+        _proj_created_block_p = ""
+        if _proj_created_iso:
+            _pc_d = fmt_dt(_proj_created_iso, "%Y-%m-%d")
+            _pc_rel = _relative_age(_proj_created_iso)
+            _proj_created_block_p = (
+                '    <div class="ap-section">Inventory</div>'
+                f'    <span class="ap-k">Created</span>'
+                f'<span class="ap-v" title="Project first added to the '
+                f'inventories repo">◷ {html.escape(_pc_d)}'
+                + (f' <span class="ap-created-rel">· {html.escape(_pc_rel)}'
+                   f'</span>' if _pc_rel else "")
+                + '</span>'
+            )
         _iv_popovers.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -29912,6 +30061,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  <div class="ap-body">'
             f'    {_devops_banner_p}'
             f'    {_company_block_p}'
+            f'    {_proj_created_block_p}'
             f'    <div class="ap-section">Teams</div>'
             + "".join(_team_rows_p)
             + _remedy_block_p +
