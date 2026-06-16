@@ -10369,6 +10369,42 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     font-style: italic;
     border-style: dashed;
 }
+/* Which application(s) a matched folder covers */
+.dc-doc-apps {
+    font-size: .66rem;
+    color: var(--cc-text-mute);
+    margin: 0 0 3px 2px;
+}
+/* Apps in the chosen projects that had no DocMDs match */
+.dc-doc-miss {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+    margin: 6px 0 2px 2px;
+}
+.dc-doc-miss-h {
+    font-size: .62rem; font-weight: 700; letter-spacing: .03em;
+    text-transform: uppercase; color: var(--cc-amber);
+    margin-right: 2px;
+}
+.dc-doc-miss-i {
+    font-family: var(--cc-mono);
+    font-size: .64rem;
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    border: 1px dashed var(--cc-border-hi);
+    padding: 1px 6px;
+    border-radius: 5px;
+}
+
+/* --- Dropdown option lists must float ABOVE the doc-chat panel ---
+   st.multiselect / st.selectbox render their option list in a baseweb popover
+   layer portaled to <body> with an ordinary z-index — behind this panel's
+   near-max z-index, so options were invisible (you had to type blind). Lift any
+   baseweb popover that contains a listbox/menu above the panel. */
+div[data-baseweb="popover"]:has(ul[role="listbox"]),
+div[data-baseweb="popover"]:has([role="listbox"]),
+div[data-baseweb="popover"]:has([data-baseweb="menu"]) {
+    z-index: 2147483601 !important;
+}
 
 /* Footer */
 .dc-foot {
