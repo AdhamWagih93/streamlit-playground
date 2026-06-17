@@ -10190,218 +10190,160 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
 /* --- Open: full conversation panel --- */
 .st-key-cc_docchat_panel {
     position: fixed !important;
-    bottom: 22px !important;
-    right: 22px !important;
-    width: 416px !important;
-    max-width: calc(100vw - 32px) !important;
-    max-height: min(78vh, 760px) !important;
+    bottom: 24px !important;
+    right: 24px !important;
+    width: 472px !important;
+    max-width: calc(100vw - 36px) !important;
+    max-height: min(86vh, 900px) !important;
     overflow-y: auto !important;
+    overflow-x: hidden !important;
     z-index: 2147483000 !important;
     background: var(--cc-surface) !important;
     border: 1px solid var(--cc-border-hi) !important;
-    border-radius: 18px !important;
-    box-shadow: 0 24px 60px rgba(26,29,46,.22), 0 6px 18px rgba(26,29,46,.10) !important;
-    padding: 14px 14px 12px !important;
+    border-radius: 20px !important;
+    box-shadow: 0 28px 70px rgba(26,29,46,.26), 0 8px 22px rgba(26,29,46,.12) !important;
+    padding: 0 0 14px !important;
 }
-.st-key-cc_docchat_panel::-webkit-scrollbar { width: 8px; }
+.st-key-cc_docchat_panel > div { padding: 0 16px; }
+.st-key-cc_docchat_panel::-webkit-scrollbar { width: 9px; }
 .st-key-cc_docchat_panel::-webkit-scrollbar-thumb {
     background: var(--cc-border-hi); border-radius: 8px;
 }
+.st-key-cc_docchat_panel::-webkit-scrollbar-track { background: transparent; }
 
-/* Header */
+/* Header — full-bleed gradient bar pinned to the panel top */
+.st-key-cc_docchat_panel [data-testid="stHorizontalBlock"]:first-of-type {
+    background: linear-gradient(135deg, #eef2ff 0%, #f7f8fb 70%);
+    margin: 0 -16px 4px !important;
+    padding: 13px 16px !important;
+    border-bottom: 1px solid var(--cc-border);
+    border-radius: 20px 20px 0 0;
+    align-items: center;
+}
 .dc-title {
     font-family: var(--cc-sans);
-    font-size: 1.02rem;
-    font-weight: 700;
+    font-size: 1.08rem;
+    font-weight: 800;
     color: var(--cc-text);
     display: flex; align-items: center; gap: 8px;
-    letter-spacing: -.01em;
+    letter-spacing: -.015em;
+}
+.dc-title-ic {
+    font-size: 1.15rem;
+    filter: drop-shadow(0 1px 2px rgba(79,70,229,.25));
 }
 .dc-model {
     font-family: var(--cc-mono);
-    font-size: .62rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: var(--cc-accent);
-    background: var(--cc-accent-lt);
-    border: 1px solid #dfe3ff;
-    padding: 2px 7px;
-    border-radius: 6px;
-    white-space: nowrap;
-}
-
-/* Close button (header) */
-.st-key-cc_docchat_panel [data-testid="stButton"] button[kind] {
-    border-radius: 9px !important;
-}
-
-/* Empty state */
-.dc-empty {
-    color: var(--cc-text-dim);
-    font-size: .82rem;
-    line-height: 1.5;
-    padding: 14px 12px;
-    text-align: center;
-    background: var(--cc-surface);
-    border: 1px dashed var(--cc-border-hi);
-    border-radius: 10px;
-}
-
-/* Chat input */
-.st-key-cc_docchat_panel [data-testid="stChatInput"] {
-    margin-top: 8px !important;
-    border-radius: 11px !important;
-    border-color: var(--cc-border-hi) !important;
-}
-.st-key-cc_docchat_panel [data-testid="stChatInput"] textarea {
-    font-size: .82rem !important;
-}
-
-/* Per-message meta line (time · duration · tokens) */
-.dc-meta {
-    font-family: var(--cc-mono);
-    font-size: .64rem;
-    color: var(--cc-text-mute);
-    margin-top: 2px;
-    letter-spacing: .02em;
-}
-
-/* Scrollable conversation surface */
-.st-key-cc_docchat_msgs, .st-key-cc_docchat_msgs_live {
-    background: var(--cc-surface2) !important;
-    border: 1px solid var(--cc-border) !important;
-    border-radius: 12px !important;
-    padding: 4px 10px !important;
-    margin-top: 8px !important;
-}
-/* Tighter, smaller chat text inside the panel */
-.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"],
-.st-key-cc_docchat_msgs_live [data-testid="stChatMessageContent"] {
-    font-size: .82rem !important;
-    line-height: 1.5 !important;
-}
-.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] p,
-.st-key-cc_docchat_msgs_live [data-testid="stChatMessageContent"] p {
-    margin-bottom: .35rem !important;
-}
-.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] code,
-.st-key-cc_docchat_msgs_live [data-testid="stChatMessageContent"] code {
-    font-size: .76rem !important;
-}
-/* Slim the chat-message avatar/gutter so text has more room */
-.st-key-cc_docchat_msgs [data-testid="stChatMessage"],
-.st-key-cc_docchat_msgs_live [data-testid="stChatMessage"] {
-    padding: .35rem .25rem !important;
-    gap: .4rem !important;
-    background: transparent !important;
-}
-.st-key-cc_docchat_msgs [data-testid="stChatMessageAvatar"],
-.st-key-cc_docchat_msgs_live [data-testid="stChatMessageAvatar"] {
-    width: 26px !important; height: 26px !important;
-}
-
-/* Inline context picker */
-.dc-ctx-label {
-    font-size: .72rem;
+    font-size: .58rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .05em;
+    color: var(--cc-accent);
+    background: #fff;
+    border: 1px solid #dfe3ff;
+    padding: 2px 7px;
+    border-radius: 999px;
+    white-space: nowrap;
+    margin-left: 2px;
+}
+/* Close button (header) */
+.st-key-cc_docchat_panel .st-key-_dc_close_btn button {
+    border-radius: 9px !important;
+    border: 1px solid var(--cc-border) !important;
+    background: #fff !important;
+    color: var(--cc-text-dim) !important;
+    padding: 0 !important;
+    min-height: 34px !important;
+}
+.st-key-cc_docchat_panel .st-key-_dc_close_btn button:hover {
+    background: var(--cc-red-lt) !important;
+    color: var(--cc-red) !important;
+    border-color: var(--cc-red-lt) !important;
+}
+
+/* ── Context picker ─────────────────────────────────────────────────────── */
+.dc-ctx-label {
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
     color: var(--cc-text-mute);
-    margin: 10px 0 4px;
-    display: flex; align-items: center; gap: 7px;
+    margin: 6px 0 6px;
+    display: flex; align-items: center; justify-content: space-between; gap: 7px;
 }
 .dc-ctx-n {
     font-family: var(--cc-mono);
-    font-size: .6rem;
-    font-weight: 600;
+    font-size: .58rem;
+    font-weight: 700;
     text-transform: none;
     letter-spacing: 0;
     color: var(--cc-accent);
     background: var(--cc-accent-lt);
     border: 1px solid #dfe3ff;
-    padding: 1px 6px;
-    border-radius: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+}
+.dc-ctx-n.is-empty {
+    color: var(--cc-text-mute);
+    background: var(--cc-surface2);
+    border-color: var(--cc-border);
 }
 .dc-ctx-hint {
     font-size: .76rem;
     line-height: 1.45;
-    color: var(--cc-text-mute);
+    color: var(--cc-text-dim);
     background: var(--cc-surface2);
     border: 1px dashed var(--cc-border-hi);
-    border-radius: 9px;
-    padding: 8px 10px;
+    border-radius: 10px;
+    padding: 9px 11px;
 }
-/* Subtle caption under the context multiselect (match count) */
+/* Project pills — capped, scrollable so a big fleet never floods the panel */
+.st-key-cc_docchat_projbox {
+    max-height: 108px;
+    overflow-y: auto;
+    background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    border-radius: 11px;
+    padding: 7px 8px !important;
+}
+.st-key-cc_docchat_projbox [data-testid="stButtonGroup"] { gap: 5px !important; }
+.st-key-cc_docchat_projbox button {
+    font-size: .72rem !important;
+    padding: 2px 10px !important;
+    border-radius: 999px !important;
+}
 .dc-ctx-cap {
     font-family: var(--cc-mono);
     font-size: .62rem;
-    color: var(--cc-text-mute);
-    letter-spacing: .02em;
-    margin: 1px 0 4px 2px;
-}
-/* Compact the multiselect inside the panel */
-.st-key-cc_docchat_panel [data-testid="stMultiSelect"] { margin-bottom: 2px; }
-.st-key-cc_docchat_panel [data-testid="stMultiSelect"] [data-baseweb="tag"] {
-    font-size: .7rem !important;
-}
-
-/* Attached-doc listing */
-.dc-doc-app {
-    font-size: .82rem;
-    font-weight: 650;
-    color: var(--cc-text);
-    margin: 8px 0 3px;
-    display: flex; align-items: center; gap: 6px;
-}
-.dc-doc-n {
-    font-family: var(--cc-mono);
-    font-size: .6rem;
     font-weight: 600;
     color: var(--cc-teal);
+    letter-spacing: .02em;
+    margin: 7px 0 4px 1px;
+}
+/* Matched-folder chips */
+.dc-doc-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 4px 1px; }
+.dc-doc-chip {
+    font-size: .68rem;
+    color: var(--cc-text);
     background: var(--cc-teal-bg);
     border: 1px solid var(--cc-teal-lt);
-    padding: 1px 6px;
-    border-radius: 5px;
-}
-.dc-doc-files {
-    display: flex; flex-wrap: wrap; gap: 5px;
-    margin: 0 0 6px 2px;
-}
-.dc-doc-file {
-    font-family: var(--cc-mono);
-    font-size: .66rem;
-    color: var(--cc-text-dim);
-    background: var(--cc-surface);
-    border: 1px solid var(--cc-border);
-    padding: 2px 7px;
-    border-radius: 6px;
+    padding: 2px 9px;
+    border-radius: 999px;
     white-space: nowrap;
 }
-.dc-doc-file.is-none {
-    color: var(--cc-text-mute);
-    font-style: italic;
-    border-style: dashed;
-}
-/* Which application(s) a matched folder covers */
-.dc-doc-apps {
-    font-size: .66rem;
-    color: var(--cc-text-mute);
-    margin: 0 0 3px 2px;
-}
-/* Apps in the chosen projects that had no DocMDs match */
+.dc-doc-chip b { color: var(--cc-teal); font-family: var(--cc-mono); margin-left: 2px; }
+/* Apps with no DocMDs match */
 .dc-doc-miss {
     display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
-    margin: 6px 0 2px 2px;
+    margin: 5px 0 2px 1px;
 }
 .dc-doc-miss-h {
-    font-size: .62rem; font-weight: 700; letter-spacing: .03em;
-    text-transform: uppercase; color: var(--cc-amber);
-    margin-right: 2px;
+    font-size: .58rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--cc-amber); margin-right: 2px;
 }
 .dc-doc-miss-i {
     font-family: var(--cc-mono);
-    font-size: .64rem;
+    font-size: .62rem;
     color: var(--cc-text-mute);
     background: var(--cc-surface2);
     border: 1px dashed var(--cc-border-hi);
@@ -10409,24 +10351,106 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     border-radius: 5px;
 }
 
-/* --- Dropdown option lists must float ABOVE the doc-chat panel ---
-   st.multiselect / st.selectbox render their option list in a baseweb popover
-   layer portaled to <body> with an ordinary z-index — behind this panel's
-   near-max z-index, so options were invisible (you had to type blind). Lift any
-   baseweb popover that contains a listbox/menu above the panel. */
-div[data-baseweb="popover"]:has(ul[role="listbox"]),
-div[data-baseweb="popover"]:has([role="listbox"]),
-div[data-baseweb="popover"]:has([data-baseweb="menu"]) {
-    z-index: 2147483601 !important;
+/* ── Conversation surface ───────────────────────────────────────────────── */
+.st-key-cc_docchat_msgs {
+    background: var(--cc-surface2) !important;
+    border: 1px solid var(--cc-border) !important;
+    border-radius: 14px !important;
+    padding: 6px 8px !important;
+    margin-top: 6px !important;
+}
+.st-key-cc_docchat_msgs::-webkit-scrollbar { width: 8px; }
+.st-key-cc_docchat_msgs::-webkit-scrollbar-thumb {
+    background: var(--cc-border-hi); border-radius: 8px;
+}
+/* Message rows → speech bubbles. Role is detected via the avatar testid. */
+.st-key-cc_docchat_msgs [data-testid="stChatMessage"] {
+    padding: .3rem .15rem !important;
+    gap: .45rem !important;
+    background: transparent !important;
+    align-items: flex-start !important;
+}
+.st-key-cc_docchat_msgs [data-testid="stChatMessageAvatar"] {
+    width: 28px !important; height: 28px !important;
+    border: 1px solid var(--cc-border) !important;
+    background: #fff !important;
+}
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] {
+    font-size: .85rem !important;
+    line-height: 1.55 !important;
+    border-radius: 13px !important;
+    padding: 8px 12px !important;
+    border: 1px solid var(--cc-border) !important;
+    background: #fff !important;
+    box-shadow: 0 1px 2px rgba(26,29,46,.04) !important;
+}
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] p:last-child { margin-bottom: 0 !important; }
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] p { margin-bottom: .4rem !important; }
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] code { font-size: .78rem !important; }
+.st-key-cc_docchat_msgs [data-testid="stChatMessageContent"] pre {
+    border-radius: 9px !important;
+    font-size: .76rem !important;
+}
+/* User bubble — accent tint, lifted */
+.st-key-cc_docchat_msgs [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+    background: var(--cc-accent-lt) !important;
+    border-color: #dfe3ff !important;
+    color: #2a2750 !important;
+}
+/* Assistant bubble — clean white (default above) with a teal edge */
+.st-key-cc_docchat_msgs [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
+    border-left: 3px solid var(--cc-teal) !important;
+}
+/* Per-message meta line (time · duration · tokens) */
+.dc-meta {
+    font-family: var(--cc-mono);
+    font-size: .6rem;
+    color: var(--cc-text-mute);
+    margin-top: 3px;
+    letter-spacing: .02em;
 }
 
+/* Empty state */
+.dc-empty {
+    text-align: center;
+    padding: 26px 18px;
+}
+.dc-empty-glyph { font-size: 2rem; margin-bottom: 6px; opacity: .9; }
+.dc-empty-h {
+    font-size: .92rem; font-weight: 700; color: var(--cc-text);
+    margin-bottom: 4px;
+}
+.dc-empty-b {
+    font-size: .78rem; line-height: 1.5; color: var(--cc-text-mute);
+    max-width: 320px; margin: 0 auto;
+}
+
+/* Chat input */
+.st-key-cc_docchat_panel [data-testid="stChatInput"] {
+    margin-top: 10px !important;
+    border-radius: 13px !important;
+    border-color: var(--cc-border-hi) !important;
+    box-shadow: 0 2px 8px rgba(26,29,46,.05) !important;
+}
+.st-key-cc_docchat_panel [data-testid="stChatInput"] textarea { font-size: .85rem !important; }
+
 /* Footer */
+.st-key-cc_docchat_panel .st-key-_dc_clear_btn button {
+    border-radius: 9px !important;
+    font-size: .74rem !important;
+    min-height: 32px !important;
+    color: var(--cc-text-dim) !important;
+}
+.st-key-cc_docchat_panel .st-key-_dc_clear_btn button:hover {
+    background: var(--cc-red-lt) !important; color: var(--cc-red) !important;
+    border-color: var(--cc-red-lt) !important;
+}
 .dc-foot {
     font-family: var(--cc-mono);
     font-size: .64rem;
-    color: var(--cc-text-mute);
+    color: var(--cc-green);
     text-align: right;
-    line-height: 2.4;
+    line-height: 2.6;
     letter-spacing: .02em;
 }
 

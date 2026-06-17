@@ -422,8 +422,13 @@ def _render_messages() -> None:
     _msgs = st.session_state["_dc_messages"]
     if not _msgs:
         st.markdown(
-            '<div class="dc-empty">👋 Ask anything about your platform. '
-            'Attach an application below to ground answers in its DocMDs.</div>',
+            '<div class="dc-empty">'
+            '<div class="dc-empty-glyph">📘</div>'
+            '<div class="dc-empty-h">Documentation assistant</div>'
+            '<div class="dc-empty-b">Pick one or more projects above to ground '
+            'answers in their DocMDs, then ask anything — architecture, configs, '
+            'runbooks, dependencies.</div>'
+            '</div>',
             unsafe_allow_html=True,
         )
         return
@@ -466,11 +471,12 @@ def render_docchat_panel() -> None:
     db_ensure_table()
 
     with st.container(key="cc_docchat_panel"):
-        # Header
-        _h1, _h2 = st.columns([5, 1])
+        # ── Header ──────────────────────────────────────────────────────────
+        _h1, _h2 = st.columns([6, 1], vertical_alignment="center")
         with _h1:
             st.markdown(
-                '<div class="dc-title">📚 Docs Assistant'
+                '<div class="dc-title"><span class="dc-title-ic">📘</span>'
+                '<span class="dc-title-tx">Docs Assistant</span>'
                 f'<span class="dc-model">{html.escape(MODEL)}</span></div>',
                 unsafe_allow_html=True,
             )
@@ -479,20 +485,21 @@ def render_docchat_panel() -> None:
                 st.session_state["_dc_open"] = False
                 st.rerun(scope="fragment")
 
-        # ── Context picker (PROJECT-based) ──────────────────────────────────
-        # The user picks one or more projects from the current inventory scope;
-        # for every application in those projects we auto-detect the DocMDs
-        # folder matching its repository_name (case-/separator-tolerant) and
-        # fold its markdown into the LLM context. The dropdown's option list is
-        # forced above the panel's z-index (CSS) so the choices + app counts are
-        # actually visible while picking — no typing from memory.
+        # ── Context picker (PROJECT-based, inline pills — no dropdown) ──────
+        # Projects render as inline toggle pills (st.pills) instead of a
+        # dropdown: a dropdown's option layer portals to <body> and rendered
+        # behind this fixed panel (invisible). Pills live in the panel's own
+        # flow, always visible, with the app count on each. Selecting projects
+        # auto-resolves the DocMDs folder for each app's repository_name.
         _folders = _docmds_folders()
         _scope_proj = _scope_projects()
-        _n_sel = len(st.session_state["_dc_selected_apps"])
+        _n_docsets = len(st.session_state["_dc_selected_apps"])
         st.markdown(
-            '<div class="dc-ctx-label">📎 Context'
-            + (f'<span class="dc-ctx-n">{_n_sel} doc set'
-               f'{"s" if _n_sel != 1 else ""}</span>' if _n_sel else "")
+            '<div class="dc-ctx-label"><span>📎 Context</span>'
+            + (f'<span class="dc-ctx-n">{_n_docsets} doc set'
+               f'{"s" if _n_docsets != 1 else ""} attached</span>'
+               if _n_docsets else
+               '<span class="dc-ctx-n is-empty">none attached</span>')
             + "</div>",
             unsafe_allow_html=True,
         )
@@ -514,80 +521,92 @@ def render_docchat_panel() -> None:
 
             def _fmt_project(_p: str) -> str:
                 _n = len(_scope_proj.get(_p, []))
-                return f"{_p}  ·  {_n} app{'s' if _n != 1 else ''}"
+                return f"{_p} · {_n}"
 
-            _sel_proj = st.multiselect(
-                "Select project(s)",
-                options=_proj_opts,
-                default=[p for p in st.session_state["_dc_selected_projects"]
-                         if p in _proj_opts],
-                key="_dc_proj_ms",
-                label_visibility="collapsed",
-                placeholder="Select project(s) to attach their docs…",
-                format_func=_fmt_project,
-            )
+            with st.container(key="cc_docchat_projbox"):
+                if hasattr(st, "pills"):
+                    _sel_proj = st.pills(
+                        "Projects", options=_proj_opts,
+                        selection_mode="multi", format_func=_fmt_project,
+                        key="_dc_proj_pills", label_visibility="collapsed",
+                    ) or []
+                else:  # pragma: no cover — older Streamlit fallback
+                    _sel_proj = st.multiselect(
+                        "Projects", options=_proj_opts, format_func=_fmt_project,
+                        key="_dc_proj_pills", label_visibility="collapsed",
+                        placeholder="Select project(s)…",
+                    ) or []
             st.session_state["_dc_selected_projects"] = _sel_proj
 
             # Resolve DocMDs folders for the chosen projects' apps.
             _matched_folders, _detail = _resolve_project_folders(_sel_proj)
             st.session_state["_dc_selected_apps"] = _matched_folders  # → context
 
-            _n_apps = len(_detail)
-            _n_hit = sum(1 for _d in _detail if _d["folder"])
             if _sel_proj:
-                _cap = (f"{_n_hit}/{_n_apps} application"
-                        f"{'s' if _n_apps != 1 else ''} matched a DocMDs folder")
-                st.markdown(f'<div class="dc-ctx-cap">{html.escape(_cap)}</div>',
-                            unsafe_allow_html=True)
-
-            # Attached docs — one block per matched folder with its files.
-            for _folder in _matched_folders:
-                _mds = _folders.get(_folder, [])
-                _apps_here = sorted({_d["application"] for _d in _detail
-                                     if _d["folder"] == _folder and _d["application"]},
-                                    key=str.lower)
-                _sub = (" · ".join(html.escape(_a) for _a in _apps_here)
-                        if _apps_here else "")
+                _n_apps = len(_detail)
+                _n_hit = sum(1 for _d in _detail if _d["folder"])
+                _tot_files = sum(len(_folders.get(_f, []))
+                                 for _f in _matched_folders)
+                _chips = "".join(
+                    f'<span class="dc-doc-chip" title="'
+                    f'{len(_folders.get(_f, []))} markdown file'
+                    f'{"s" if len(_folders.get(_f, [])) != 1 else ""}">'
+                    f'📁 {html.escape(_f)} '
+                    f'<b>{len(_folders.get(_f, []))}</b></span>'
+                    for _f in _matched_folders
+                )
+                _missing = sorted({_d["application"] for _d in _detail
+                                   if not _d["folder"] and _d["application"]},
+                                  key=str.lower)
                 st.markdown(
-                    f'<div class="dc-doc-app">📁 {html.escape(_folder)} '
-                    f'<span class="dc-doc-n">{len(_mds)} file'
-                    f'{"s" if len(_mds) != 1 else ""}</span></div>'
-                    + (f'<div class="dc-doc-apps">{_sub}</div>' if _sub else "")
-                    + '<div class="dc-doc-files">' + "".join(
-                        f'<span class="dc-doc-file">⬡ {html.escape(_f)}</span>'
-                        for _f in _mds
-                    ) + ('<span class="dc-doc-file is-none">no .md files</span>'
-                         if not _mds else "") + "</div>",
+                    f'<div class="dc-ctx-cap">{_n_hit}/{_n_apps} app'
+                    f'{"s" if _n_apps != 1 else ""} matched · '
+                    f'{_tot_files} doc{"s" if _tot_files != 1 else ""} in context'
+                    f'</div>'
+                    + (f'<div class="dc-doc-chips">{_chips}</div>'
+                       if _chips else "")
+                    + ('<div class="dc-doc-miss"><span class="dc-doc-miss-h">'
+                       f'{len(_missing)} without docs</span>'
+                       + "".join(
+                           f'<span class="dc-doc-miss-i">{html.escape(_a)}</span>'
+                           for _a in _missing[:12])
+                       + (f'<span class="dc-doc-miss-i">+{len(_missing) - 12}'
+                          f'</span>' if len(_missing) > 12 else "")
+                       + '</div>' if _missing else ""),
                     unsafe_allow_html=True,
                 )
 
-            # Apps in the chosen projects that had no DocMDs match — surfaced
-            # subtly so the user sees coverage gaps rather than silent misses.
-            _missing = sorted({_d["application"] for _d in _detail
-                               if not _d["folder"] and _d["application"]},
-                              key=str.lower)
-            if _missing:
-                st.markdown(
-                    '<div class="dc-doc-miss"><span class="dc-doc-miss-h">'
-                    f'{len(_missing)} app'
-                    f'{"s" if len(_missing) != 1 else ""} without docs</span>'
-                    + "".join(f'<span class="dc-doc-miss-i">{html.escape(_a)}</span>'
-                              for _a in _missing) + "</div>",
-                    unsafe_allow_html=True,
-                )
+        # ── Conversation (single scroll container — slot reserved here) ─────
+        # Reserve the messages slot now and fill it AFTER the input is declared,
+        # so the input docks below the conversation. Everything (history +
+        # live stream) renders in this ONE container — no second container, so
+        # messages never stack/overlap.
+        _msgs_box = st.container(height=380, key="cc_docchat_msgs")
 
-        # ── Conversation (scrollable, fixed height) ─────────────────────────
-        with st.container(height=300, key="cc_docchat_msgs"):
-            _render_messages()
-
-        # ── Input ───────────────────────────────────────────────────────────
+        # ── Input + footer (declared after the messages slot → appear below) ─
         _prompt = st.chat_input("Ask about your docs…", key="_dc_input")
+        _f1, _f2 = st.columns([1, 1.3], vertical_alignment="center")
+        with _f1:
+            if st.button("🗑 Clear chat", key="_dc_clear_btn",
+                         use_container_width=True,
+                         disabled=not st.session_state["_dc_messages"]):
+                st.session_state["_dc_messages"] = []
+                st.session_state["_dc_session_id"] = uuid.uuid4().hex
+                st.rerun(scope="fragment")
+        with _f2:
+            _nmsg = len(st.session_state["_dc_messages"])
+            st.markdown(
+                f'<div class="dc-foot">✓ logged · {_nmsg} message'
+                f'{"s" if _nmsg != 1 else ""}</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Render the conversation into the reserved slot ──────────────────
         if _prompt:
             _sid = st.session_state["_dc_session_id"]
             _uname = st.session_state.get("username", "")
             _ctx_text, _doc_ids = _build_context(
                 st.session_state["_dc_selected_apps"])
-
             _user_msg = {
                 "role": "user", "content": _prompt,
                 "timestamp": datetime.now().strftime("%H:%M"),
@@ -596,12 +615,13 @@ def render_docchat_panel() -> None:
             st.session_state["_dc_messages"].append(_user_msg)
             db_save_message(_user_msg, _sid, _uname, _doc_ids)
 
-            _api = [{"role": "system", "content": build_system_prompt(_ctx_text)}]
-            _api += [{"role": _m["role"], "content": _m["content"]}
-                     for _m in st.session_state["_dc_messages"]]
-
-            with st.container(height=300, key="cc_docchat_msgs_live"):
-                _render_messages()
+        with _msgs_box:
+            _render_messages()  # all committed messages (incl. the new prompt)
+            if _prompt:
+                _api = [{"role": "system",
+                         "content": build_system_prompt(_ctx_text)}]
+                _api += [{"role": _m["role"], "content": _m["content"]}
+                         for _m in st.session_state["_dc_messages"]]
                 with st.chat_message("assistant"):
                     _ph = st.empty()
                     _full = ""
@@ -610,7 +630,7 @@ def render_docchat_panel() -> None:
                     try:
                         for _tok in chat_stream(_api):
                             _full += _tok
-                            _ph.markdown(_full + "▌")
+                            _ph.markdown(_full + " ▌")
                         _ph.markdown(_full)
                     except Exception as _e:
                         _is_err = True
@@ -620,27 +640,13 @@ def render_docchat_panel() -> None:
                             f"`{OLLAMA_URL}` is reachable."
                         )
                         _ph.error(_full)
-            _asst = {
-                "role": "assistant", "content": _full,
-                "timestamp": datetime.now().strftime("%H:%M"),
-                "duration": round(time.time() - _t0, 2),
-                "tokens": _estimate_tokens(_full),
-            }
-            st.session_state["_dc_messages"].append(_asst)
-            db_save_message(_asst, _sid, _uname, _doc_ids, has_error=_is_err)
-            st.rerun(scope="fragment")
-
-        # Footer controls
-        _f1, _f2 = st.columns([1, 1])
-        with _f1:
-            if st.button("🗑 Clear", key="_dc_clear_btn",
-                         use_container_width=True,
-                         disabled=not st.session_state["_dc_messages"]):
-                st.session_state["_dc_messages"] = []
-                st.session_state["_dc_session_id"] = uuid.uuid4().hex
+                _asst = {
+                    "role": "assistant", "content": _full,
+                    "timestamp": datetime.now().strftime("%H:%M"),
+                    "duration": round(time.time() - _t0, 2),
+                    "tokens": _estimate_tokens(_full),
+                }
+                st.session_state["_dc_messages"].append(_asst)
+                db_save_message(_asst, _sid, _uname, _doc_ids,
+                                has_error=_is_err)
                 st.rerun(scope="fragment")
-        with _f2:
-            st.markdown(
-                f'<div class="dc-foot">logged · {len(st.session_state["_dc_messages"])} msgs</div>',
-                unsafe_allow_html=True,
-            )
