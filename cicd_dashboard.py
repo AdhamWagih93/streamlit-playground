@@ -30955,7 +30955,11 @@ if _perf_slot is not None:
 # Rendered dead last and inside its own @st.fragment, so it overlays the page
 # without affecting layout and every interaction reruns only the panel. Wrapped
 # defensively: a panel failure must never take down the dashboard.
-if _render_docchat_panel is not None:
+#
+# ADMIN-ONLY for now: the assistant can surface any DocMDs content, so it stays
+# gated to admins until per-member RBAC lands (each member scoped to their own
+# projects/apps). Flip this gate once that scoping is enforced inside the panel.
+if _render_docchat_panel is not None and _is_admin:
     try:
         _render_docchat_panel()
     except Exception:
