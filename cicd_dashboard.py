@@ -20101,14 +20101,28 @@ def _git_inventory_creation_dates(head_sha: str) -> dict:
 
     Returns ``{"projects": {project: iso_date},
                "apps": {"project/app": iso_date}}`` (author dates, ISO-8601).
-    Keyed on HEAD so a fresh pull invalidates the cache. One git invocation for
-    the whole repo — cheap and cached for the sync window. Renamed files show
+    Keyed on HEAD so a fresh pull invalidates the cache. Renamed files show
     their creation at the rename commit (git's bulk log doesn't follow renames),
-    which is an acceptable proxy."""
+    which is an acceptable proxy.
+
+    IMPORTANT: the inventories repo is cloned shallow (``--depth 1``) for sync
+    speed, but a shallow repo holds ONLY the tip commit — so every file looks
+    "added" in that one commit and all creation dates collapse to the tip's
+    date. We therefore fetch the FULL history (``--unshallow``) once before
+    reading dates; cached on HEAD, so the deepen happens at most once per sync
+    window."""
     out: dict = {"projects": {}, "apps": {}}
     repo = INVENTORY_REPO_PATH
     if not head_sha or not os.path.isdir(os.path.join(repo, ".git")):
         return out
+    # Deepen to full history if the clone is still shallow (a `.git/shallow`
+    # file marks a shallow repo — version-independent, no extra subprocess).
+    if os.path.exists(os.path.join(repo, ".git", "shallow")):
+        try:
+            _configure_git_credentials()  # idempotent; network fetch needs auth
+            _run_git("fetch", "--unshallow", "origin", cwd=repo)
+        except Exception:
+            pass  # best-effort: fall through and use whatever history we have
     _skip_top = {"group_vars", "host_vars", ".git", ".github", ".gitlab"}
     try:
         r = _run_git(
@@ -20183,7 +20197,12 @@ def _ensure_inventory_repo(host_marker: str, trace_into: list | None = None) -> 
                          trace_into=trace_into)
             if r.returncode != 0:
                 return False, "", f"git remote set-url failed: {r.stderr.strip()}"
-            r = _run_git("fetch", "--depth", "1", "origin", INVENTORY_BRANCH,
+            # Plain fetch (no --depth): keeps whatever history is present. The
+            # initial clone is shallow for speed, but once the creation-date
+            # detector deepens the repo (`fetch --unshallow`) we must NOT
+            # re-impose `--depth 1` here or every sync would re-shallow it and
+            # the dates would collapse to the tip commit again.
+            r = _run_git("fetch", "origin", INVENTORY_BRANCH,
                          cwd=repo_path, trace_into=trace_into)
             if r.returncode != 0:
                 return False, "", f"git fetch failed: {r.stderr.strip()}"
