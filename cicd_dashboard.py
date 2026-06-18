@@ -10454,6 +10454,31 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     letter-spacing: .02em;
 }
 
+.hist-mode-chip {
+    font-family: var(--cc-mono);
+    font-size: .6rem; font-weight: 700; letter-spacing: .04em;
+    color: var(--cc-teal);
+    background: var(--cc-teal-bg);
+    border: 1px solid var(--cc-teal-lt);
+    padding: 1px 6px; border-radius: 5px;
+}
+
+/* Admin Elastic↔Postgres drift banner (above the tab strip) */
+.cc-pgdrift {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin: 0 0 10px 0;
+    padding: 10px 14px;
+    background: var(--cc-amber-bg);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 38%, var(--cc-border));
+    border-left: 4px solid var(--cc-amber);
+    border-radius: 11px;
+    font-size: .82rem;
+    line-height: 1.45;
+    color: var(--cc-text);
+}
+.cc-pgdrift-glyph { font-size: 1.1rem; color: var(--cc-amber); line-height: 1.3; }
+.cc-pgdrift-tx b { color: #92500c; }
+
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -10786,11 +10811,16 @@ def _pg_try_translate_search(index: str, body: dict, size: int) -> "dict | None"
         key = _es_index_to_key(index)
         if not key:
             return None
+        if key in HISTORY_SYNC_EXCLUDE:
+            return None  # intentionally not mirrored — always read from ES
         table = _history_table_name(key)
         if not _ldap_db_safe_ident(table):
             return None
-        # Reuse the 60s-cached count; empty/missing table → not migrated yet.
-        if _history_pg_count(table) == 0:
+        # Only serve from PG when the index is FULLY migrated (pg >= es). A
+        # partially-migrated table would silently return incomplete results;
+        # until it catches up we read from ES (and the admin banner flags the
+        # drift). Both counts are 60s-cached, so this gate is cheap.
+        if not _history_index_in_sync(key):
             return None
         # Aggregations are not translated (half-supporting composite
         # pagination risks silent data loss) — fall back to ES.
@@ -16914,9 +16944,10 @@ def _render_history_to_pg_tab() -> None:
 
     # ── Source-preference toggle ───────────────────────────────────────
     # Drives `_history_use_pg()` — admin-controlled flag. Hot-path
-    # fetchers can branch on this; the toggle defaults to ES.
+    # fetchers can branch on this; the toggle defaults to Postgres (reads
+    # fall back to ES per-index whenever an index isn't fully migrated).
     if "_history_use_pg_v1" not in st.session_state:
-        st.session_state["_history_use_pg_v1"] = False
+        st.session_state["_history_use_pg_v1"] = True
     _t1, _t2 = st.columns([5, 1])
     with _t1:
         st.markdown(
@@ -16924,12 +16955,12 @@ def _render_history_to_pg_tab() -> None:
             '  <span class="hist-source-glyph">🗄</span>'
             '  <span class="hist-source-title">Historic data source</span>'
             '  <span class="hist-source-sub">'
-            '    Toggle to route reads through the migrated Postgres tables. '
-            '    Row-fetch displays (Event Log + inventory/detail rows) read '
-            '    from PG for any index already migrated; aggregation panels '
-            '    transparently stay on Elasticsearch. Anything not migrated '
-            '    or unsupported falls back to ES automatically — never an '
-            '    error, never partial data. Defaults to Elasticsearch.'
+            '    Postgres is the primary read source (default ON). Row-fetch '
+            '    displays read from PG for any index that is FULLY migrated '
+            '    (pg ≥ es); aggregations, unsupported shapes, and any index '
+            '    still behind ES fall back to Elasticsearch automatically — '
+            '    never an error, never partial data. Keep PG current with the '
+            '    per-index ⟳ Sync new (delta) action below.'
             '  </span>'
             '</div>',
             unsafe_allow_html=True,
@@ -17010,7 +17041,7 @@ def _render_history_to_pg_tab() -> None:
     )
 
     # ── Bulk action bar ────────────────────────────────────────────────
-    _ba_c1, _ba_c2, _ba_c3, _ba_c4 = st.columns([1, 1, 1, 5])
+    _ba_c1, _ba_c2, _ba_c3, _ba_cd, _ba_c4 = st.columns([1, 1, 1, 1.2, 4.8])
     with _ba_c1:
         if st.button("☑ Select all",
                      key="_hist_select_all_btn",
@@ -17036,6 +17067,18 @@ def _render_history_to_pg_tab() -> None:
                 _total = _history_es_count(_es_index)
                 _sort = _history_pick_sort_field(_k)
                 _history_job_upsert(_k, _es_index, _sort, _total)
+            st.rerun(scope="app")
+    with _ba_cd:
+        if st.button("⟳ Sync new",
+                     key="_hist_delta_sel_btn",
+                     use_container_width=True,
+                     help="Delta-sync the selected indices — fetch only docs "
+                          "newer than what's migrated and upsert them.",
+                     disabled=not st.session_state["_hist_selected_v1"]):
+            for _k in list(st.session_state["_hist_selected_v1"]):
+                if _k in HISTORY_SYNC_EXCLUDE:
+                    continue
+                _history_job_start_delta(_k)
             st.rerun(scope="app")
     with _ba_c4:
         _sel_n = len(st.session_state["_hist_selected_v1"])
@@ -17111,7 +17154,9 @@ def _render_history_to_pg_tab() -> None:
                 f'  </div>'
                 + (
                     f'  <div class="hist-card-meta">'
-                    f'    table <code>{html.escape(_table)}</code> · '
+                    + ('    <span class="hist-mode-chip">⟳ DELTA</span> · '
+                       if (_job.get("mode") == "delta") else "")
+                    + f'    table <code>{html.escape(_table)}</code> · '
                     f'    sort by <code>{html.escape(_job.get("sort_field") or "_id")}</code> · '
                     f'    started {html.escape(_started) or "—"} · '
                     f'    updated {html.escape(_updated) or "—"}'
@@ -17145,6 +17190,13 @@ def _render_history_to_pg_tab() -> None:
                     "⏸ Pause", f"_hist_pause_{_k}", "pause",
                     "Stop processing new chunks (last checkpoint is "
                     "kept so resume picks up where it left off)",
+                ))
+            if _status in ("done", "error", "paused") and _pg_n > 0:
+                _btns.append((
+                    "⟳ Sync new", f"_hist_delta_{_k}", "delta",
+                    "Delta sync — fetch only docs newer than what's already "
+                    "migrated (by date field) and upsert them. Keeps Postgres "
+                    "current without re-reading the whole index.",
                 ))
             if _status in ("done", "error", "paused"):
                 _btns.append((
@@ -17191,7 +17243,7 @@ def _render_history_to_pg_tab() -> None:
                             # they must reach the late-render gate that swaps
                             # the live ↔ idle auto-progress fragment → app
                             # scope. select is pure in-tab state → fragment.
-                            _is_state_transition = _act in ("start", "pause", "rerun")
+                            _is_state_transition = _act in ("start", "pause", "rerun", "delta")
                             if _act == "select":
                                 _sel_set = st.session_state["_hist_selected_v1"]
                                 if _k in _sel_set:
@@ -17212,6 +17264,8 @@ def _render_history_to_pg_tab() -> None:
                                 _total = _history_es_count(_es_index)
                                 _sort = _history_pick_sort_field(_k)
                                 _history_job_upsert(_k, _es_index, _sort, _total)
+                            elif _act == "delta":
+                                _history_job_start_delta(_k)
                             st.rerun(scope="app" if _is_state_transition else "fragment")
 
 
@@ -23347,6 +23401,17 @@ HISTORY_JOBS_TABLE = "history_es_migration_jobs"
 HISTORY_CHUNK_SIZE = 500           # docs per ES → PG batch
 HISTORY_SAMPLE_LIMIT = 3           # rows shown in the sample popover
 
+# Index keys that must NOT be mirrored to Postgres. ``approval`` is the legacy
+# queue — it's still read live from ES but is explicitly excluded from the
+# ES→PG sync (and therefore from the mismatch check + PG read-routing).
+HISTORY_SYNC_EXCLUDE: set[str] = {"approval"}
+
+
+def _history_sync_keys() -> list[str]:
+    """Index keys eligible for ES→Postgres sync (everything in IDX except the
+    explicitly-excluded ones)."""
+    return [_k for _k in IDX if _k not in HISTORY_SYNC_EXCLUDE]
+
 # Sort-field preference per index family. ES rejects search_after when
 # the underlying field isn't indexed, so we fall back to `_id` (always
 # present and always sortable) when no date field works.
@@ -23405,6 +23470,16 @@ def _history_db_ensure_jobs_table(conn) -> None:
         pass
     try:
         cur.execute(f"ALTER TABLE {HISTORY_JOBS_TABLE} ADD COLUMN IF NOT EXISTS pit_keep_alive TEXT DEFAULT '1m'")
+    except Exception:
+        pass
+    # Delta-sync support: mode = 'full' | 'delta'; delta_floor = the date-field
+    # value to fetch newer-than (only used when mode = 'delta').
+    try:
+        cur.execute(f"ALTER TABLE {HISTORY_JOBS_TABLE} ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'full'")
+    except Exception:
+        pass
+    try:
+        cur.execute(f"ALTER TABLE {HISTORY_JOBS_TABLE} ADD COLUMN IF NOT EXISTS delta_floor TEXT")
     except Exception:
         pass
     cur.close()
@@ -23482,7 +23557,11 @@ def _history_db_ensure_index_table(conn, index_key: str) -> str:
     return tbl
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _history_pg_count(table_name: str) -> int:
+    # Cached (60s) because it's hit on the hot read-routing path once Postgres
+    # is the default source — an uncached COUNT(*) per es_search would be a DB
+    # round-trip on every query.
     if not _POSTGRES_AVAILABLE or not _ldap_db_safe_ident(table_name):
         return 0
     conn = None
@@ -23542,16 +23621,139 @@ def _history_pg_sample(table_name: str, limit: int = HISTORY_SAMPLE_LIMIT
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _history_es_count(es_index: str) -> int:
-    """Cached ES doc count. 60s TTL is enough for the live counter on
-    the migration cards without overloading the cluster."""
+    """Cached **Elasticsearch** doc count. Uses ``cached_search`` directly, NOT
+    ``es_search`` — this is the source-of-truth count and must never route to
+    Postgres (it also feeds the in-sync gate, so routing here would recurse).
+    60s TTL keeps the live counters cheap."""
     try:
-        body = {"query": {"match_all": {}}}
-        res = es_search(es_index, body, size=0)
+        res = cached_search(es_index, json.dumps(
+            {"query": {"match_all": {}}, "track_total_hits": True},
+            default=str, sort_keys=True), 0)
         if res.get("_error"):
             return 0
         return int((res.get("hits") or {}).get("total", {}).get("value") or 0)
     except Exception:
         return 0
+
+
+def _history_es_count_gte(es_index: str, date_field: str, floor) -> int:
+    """ES doc count for ``date_field >= floor`` — the size of a delta sync.
+    Reads ES directly (bypasses the PG read-router) so it counts the source,
+    not the partially-synced mirror."""
+    if not date_field or floor in (None, ""):
+        return _history_es_count(es_index)
+    try:
+        body = {"query": {"range": {date_field: {"gte": floor}}}}
+        res = cached_search(es_index, json.dumps(
+            {**body, "track_total_hits": True}, default=str, sort_keys=True), 0)
+        if res.get("_error"):
+            return 0
+        return int((res.get("hits") or {}).get("total", {}).get("value") or 0)
+    except Exception:
+        return 0
+
+
+def _history_delta_floor(index_key: str, job: dict) -> str:
+    """The date-field value to sync newer-than for a delta run.
+
+    Prefers the first element of the last-completed cursor (``last_sort_value``
+    is ``[date_value, _shard_doc]`` for date-sorted indices, ascending, so its
+    date element is the max already migrated). Falls back to ``MAX(doc->>field)``
+    over the migrated table. Returns "" when the index has no date field (delta
+    then degrades to a full idempotent re-scan)."""
+    _field = (job.get("sort_field") or "").strip()
+    if not _field or _field == "_id":
+        return ""
+    _cur = (job.get("last_sort_value") or "").strip()
+    if _cur:
+        try:
+            _parsed = json.loads(_cur)
+            if isinstance(_parsed, list) and _parsed and _parsed[0] not in (None, ""):
+                return str(_parsed[0])
+        except Exception:
+            pass
+    # Fallback: max date currently stored in the migrated table.
+    _tbl = _history_table_name(index_key)
+    if not _ldap_db_safe_ident(_tbl):
+        return ""
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(f"SELECT MAX(doc->>%s) FROM {_tbl}", (_field,))
+        row = cur.fetchone()
+        cur.close()
+        return str(row[0]) if row and row[0] is not None else ""
+    except Exception:
+        return ""
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _history_job_start_delta(index_key: str) -> None:
+    """Queue a DELTA sync: fetch only docs newer than what's already migrated
+    (``date_field >= delta_floor``) and upsert them — keeps PG current without
+    re-reading the whole index. Existing rows are NOT dropped. For indices with
+    no date field the run degrades to a full idempotent re-scan (they're small
+    snapshots). The same chunked, resumable job machinery processes it."""
+    if not _POSTGRES_AVAILABLE or index_key in HISTORY_SYNC_EXCLUDE:
+        return
+    es_index = IDX.get(index_key)
+    if not es_index:
+        return
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        _history_db_ensure_jobs_table(conn)
+        _history_db_ensure_index_table(conn, index_key)
+        conn.close(); conn = None
+    except Exception:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+        conn = None
+    _job = _history_job_load(index_key)
+    _sort = (_job.get("sort_field") or "") or _history_pick_sort_field(index_key)
+    _floor = _history_delta_floor(index_key, {**_job, "sort_field": _sort})
+    _total = (_history_es_count_gte(es_index, _sort, _floor)
+              if _floor else _history_es_count(es_index))
+    conn = None
+    try:
+        conn = _pg_connect_rw()
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            INSERT INTO {HISTORY_JOBS_TABLE}
+              (index_key, es_index, table_name, sort_field, total_docs,
+               migrated_docs, status, mode, delta_floor, started_at, updated_at,
+               last_sort_value, pit_id)
+            VALUES (%s, %s, %s, %s, %s, 0, 'running', 'delta', %s, NOW(), NOW(),
+                    NULL, NULL)
+            ON CONFLICT (index_key) DO UPDATE SET
+              sort_field      = EXCLUDED.sort_field,
+              total_docs      = EXCLUDED.total_docs,
+              migrated_docs   = 0,
+              status          = 'running',
+              mode            = 'delta',
+              delta_floor     = EXCLUDED.delta_floor,
+              last_sort_value = NULL,
+              pit_id          = NULL,
+              error_msg       = NULL,
+              updated_at      = NOW()
+            """,
+            (index_key, es_index, _history_table_name(index_key), _sort,
+             _total, _floor or None),
+        )
+        cur.close()
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 
 def _history_es_sample(es_index: str, limit: int = HISTORY_SAMPLE_LIMIT
@@ -23584,7 +23786,7 @@ def _history_job_load(index_key: str) -> dict:
             f"SELECT index_key, es_index, table_name, sort_field, "
             f"total_docs, migrated_docs, last_sort_value, last_sort_id, "
             f"status, started_at, updated_at, completed_at, error_msg, "
-            f"pit_id "
+            f"pit_id, mode, delta_floor "
             f"FROM {HISTORY_JOBS_TABLE} WHERE index_key = %s",
             (index_key,),
         )
@@ -23607,6 +23809,8 @@ def _history_job_load(index_key: str) -> dict:
             "completed_at":    r[11].isoformat() if r[11] else "",
             "error_msg":       r[12] or "",
             "pit_id":          r[13] or "",
+            "mode":            r[14] or "full",
+            "delta_floor":     r[15] or "",
         }
     except Exception:
         return {}
@@ -23630,14 +23834,16 @@ def _history_job_upsert(index_key: str, es_index: str, sort_field: str,
             f"""
             INSERT INTO {HISTORY_JOBS_TABLE}
               (index_key, es_index, table_name, sort_field, total_docs,
-               migrated_docs, status, started_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, 0, 'running', NOW(), NOW())
+               migrated_docs, status, mode, delta_floor, started_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, 0, 'running', 'full', NULL, NOW(), NOW())
             ON CONFLICT (index_key) DO UPDATE SET
               es_index    = EXCLUDED.es_index,
               table_name  = EXCLUDED.table_name,
               sort_field  = EXCLUDED.sort_field,
               total_docs  = EXCLUDED.total_docs,
               status      = 'running',
+              mode        = 'full',
+              delta_floor = NULL,
               error_msg   = NULL,
               started_at  = COALESCE({HISTORY_JOBS_TABLE}.started_at, NOW()),
               updated_at  = NOW()
@@ -23807,11 +24013,20 @@ def _history_migrate_chunk(index_key: str) -> dict:
     if index_key not in IDX:
         out["error"] = f"unknown index key: {index_key!r}"
         return out
+    if index_key in HISTORY_SYNC_EXCLUDE:
+        # Excluded from sync — mark done so it never lingers as 'running'.
+        _history_job_set_status(index_key, "done")
+        out["ok"] = True
+        out["completed"] = True
+        return out
     es_index = IDX[index_key]
     job = _history_job_load(index_key)
     sort_field = (job.get("sort_field") if job else "") or _history_pick_sort_field(index_key)
+    _mode = (job or {}).get("mode") or "full"
+    _delta_floor = (job or {}).get("delta_floor") or ""
     total = int(job.get("total_docs") or 0)
-    if not total:
+    if not total and _mode != "delta":
+        # Full mode only — a delta with total 0 simply has no new docs.
         total = _history_es_count(es_index)
         _history_job_upsert(index_key, es_index, sort_field, total)
         job = _history_job_load(index_key)
@@ -23845,10 +24060,18 @@ def _history_migrate_chunk(index_key: str) -> dict:
         sort.append({sort_field: {"order": "asc", "unmapped_type": "long"}})
     sort.append({"_shard_doc": "asc"})
 
+    # Delta mode with a date field → only fetch docs newer than the floor.
+    # Idempotent upsert handles the gte boundary overlap. Without a date field
+    # (or floor) delta degrades to a full idempotent re-scan (match_all).
+    if _mode == "delta" and sort_field and sort_field != "_id" and _delta_floor:
+        _query: dict = {"range": {sort_field: {"gte": _delta_floor}}}
+    else:
+        _query = {"match_all": {}}
+
     def _do_search(_pit: str, _after):
         _body: dict = {
             "pit": {"id": _pit, "keep_alive": _HISTORY_PIT_KEEP_ALIVE},
-            "query": {"match_all": {}},
+            "query": _query,
             "sort": sort,
         }
         if _after:
@@ -23948,9 +24171,11 @@ def _history_migrate_chunk(index_key: str) -> dict:
 
 def _history_status_for_all() -> list[dict]:
     """Snapshot per index — ES count + PG count + job state, used by
-    the History tab to render every card without per-row DB chatter."""
+    the History tab to render every card without per-row DB chatter.
+    Excludes indices opted out of the sync (``HISTORY_SYNC_EXCLUDE``)."""
     out: list[dict] = []
-    for _key, _es_index in IDX.items():
+    for _key in _history_sync_keys():
+        _es_index = IDX[_key]
         _job = _history_job_load(_key)
         _tbl = _history_table_name(_key)
         _es_n = _history_es_count(_es_index)
@@ -23966,14 +24191,59 @@ def _history_status_for_all() -> list[dict]:
     return out
 
 
+def _history_index_in_sync(index_key: str) -> bool:
+    """True when the migrated PG table holds at least as many docs as ES for
+    *index_key* — i.e. Postgres is complete and safe to read from. Excluded
+    indices are never 'in sync' (they're intentionally not mirrored)."""
+    if not _POSTGRES_AVAILABLE or index_key in HISTORY_SYNC_EXCLUDE:
+        return False
+    _es_index = IDX.get(index_key)
+    if not _es_index:
+        return False
+    _es_n = _history_es_count(_es_index)
+    if _es_n <= 0:
+        return False
+    _pg_n = _history_pg_count(_history_table_name(index_key))
+    return _pg_n >= _es_n
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _history_sync_mismatch() -> dict:
+    """Summary of ES↔PG drift across all synced indices, for the admin banner.
+
+    Returns ``{"behind": [{"key","es","pg","gap"}…], "es_total", "pg_total",
+    "any_migrated"}``. ``behind`` lists indices where PG trails ES (the ones a
+    re-sync would fix). Cached briefly so the page-level banner is cheap. Uses
+    the same cached counts as the read-router, so the banner and the routing
+    agree on what 'in sync' means."""
+    out = {"behind": [], "es_total": 0, "pg_total": 0, "any_migrated": False}
+    if not _POSTGRES_AVAILABLE:
+        return out
+    for _key in _history_sync_keys():
+        _es_index = IDX[_key]
+        _es_n = _history_es_count(_es_index)
+        _pg_n = _history_pg_count(_history_table_name(_key))
+        out["es_total"] += _es_n
+        out["pg_total"] += _pg_n
+        if _pg_n > 0:
+            out["any_migrated"] = True
+        if _es_n > 0 and _pg_n < _es_n:
+            out["behind"].append({
+                "key": _key, "es": _es_n, "pg": _pg_n, "gap": _es_n - _pg_n,
+            })
+    out["behind"].sort(key=lambda d: -d["gap"])
+    return out
+
+
 def _history_use_pg() -> bool:
-    """Returns True when the operator has flipped the history-source
-    toggle to "Postgres" AND Postgres is reachable. Hot-path fetchers
-    can branch on this to read from the migrated tables instead of ES.
-    The toggle is admin-only and defaults to False (ES)."""
+    """Returns True when reads should be served from the migrated Postgres
+    tables (when in sync) AND Postgres is reachable. Hot-path fetchers branch
+    on this. Defaults to **True** — Postgres is the primary read source; any
+    index that isn't fully migrated falls back to ES inside the read-router, so
+    this is always safe. Admins can still flip it off in the History tab."""
     if not _POSTGRES_AVAILABLE:
         return False
-    return bool(st.session_state.get("_history_use_pg_v1", False))
+    return bool(st.session_state.get("_history_use_pg_v1", True))
 
 
 @st.cache_resource(show_spinner=False)
@@ -30613,6 +30883,35 @@ if _show_inv and _inventory_slot is not None:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         if _hist_show:
             _tab_labels.append("📚  HISTORY → PGSQL")
+
+        # ── Admin: Elastic ↔ Postgres drift banner ──────────────────────────
+        # Postgres is the primary read source; when an index's PG mirror trails
+        # ES, reads silently fall back to ES for that index. Surface that drift
+        # so an admin knows to top it up via the HISTORY → PGSQL tab (delta
+        # sync). Cached (120s) + admin-only, so it's cheap.
+        if _hist_show:
+            _mm = _history_sync_mismatch()
+            _behind = _mm.get("behind") or []
+            if _behind:
+                _gap_total = sum(int(_b["gap"]) for _b in _behind)
+                _names = ", ".join(
+                    f'{html.escape(_b["key"])} (−{int(_b["gap"]):,})'
+                    for _b in _behind[:6]
+                ) + (f' +{len(_behind) - 6} more' if len(_behind) > 6 else "")
+                st.markdown(
+                    '<div class="cc-pgdrift">'
+                    '<span class="cc-pgdrift-glyph">⚠</span>'
+                    '<span class="cc-pgdrift-tx">'
+                    f'<b>Postgres is behind Elasticsearch</b> — {len(_behind)} '
+                    f'index{"es" if len(_behind) != 1 else ""} trailing by '
+                    f'{_gap_total:,} doc{"s" if _gap_total != 1 else ""} total '
+                    f'({_names}). Those reads fall back to ES until you '
+                    f'top them up. Open the <b>📚 HISTORY → PGSQL</b> tab and '
+                    f'click <b>⟳ Sync new</b> to bring Postgres current.'
+                    '</span></div>',
+                    unsafe_allow_html=True,
+                )
+
         with st.container(key="cc_surface_tabs"):
             _tabs = st.tabs(_tab_labels)
             _idx = 0
