@@ -485,30 +485,46 @@ def render_docchat_panel() -> None:
                 st.session_state["_dc_open"] = False
                 st.rerun(scope="fragment")
 
-        # ── Context picker (PROJECT-based, inline pills — no dropdown) ──────
-        # Projects render as inline toggle pills (st.pills) instead of a
-        # dropdown: a dropdown's option layer portals to <body> and rendered
-        # behind this fixed panel (invisible). Pills live in the panel's own
-        # flow, always visible, with the app count on each. Selecting projects
-        # auto-resolves the DocMDs folder for each app's repository_name.
+        # ── Context picker (PROJECT-based, inline checkboxes — no dropdown) ─
+        # Deliberately NOT a dropdown / multiselect / pills: every dropdown-style
+        # widget renders its option layer in a portal that lands behind this
+        # fixed, high-z-index panel (invisible until you blind-type), and pills
+        # need Streamlit ≥1.40. Plain st.checkbox rows render fully in-flow on
+        # every version — no portal, no z-index, always visible. An optional
+        # search box (also in-flow) filters when there are many projects.
         _folders = _docmds_folders()
         _scope_proj = _scope_projects()
         _n_docsets = len(st.session_state["_dc_selected_apps"])
-        st.markdown(
-            '<div class="dc-ctx-label"><span>📎 Context</span>'
-            + (f'<span class="dc-ctx-n">{_n_docsets} doc set'
-               f'{"s" if _n_docsets != 1 else ""} attached</span>'
-               if _n_docsets else
-               '<span class="dc-ctx-n is-empty">none attached</span>')
-            + "</div>",
-            unsafe_allow_html=True,
-        )
+        _sel_set = set(st.session_state.get("_dc_selected_projects") or [])
+        _hdr_l, _hdr_r = st.columns([3, 1], vertical_alignment="center")
+        with _hdr_l:
+            st.markdown(
+                '<div class="dc-ctx-label"><span>📎 Context</span>'
+                + (f'<span class="dc-ctx-n">{_n_docsets} doc set'
+                   f'{"s" if _n_docsets != 1 else ""}</span>'
+                   if _n_docsets else
+                   '<span class="dc-ctx-n is-empty">none</span>')
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        with _hdr_r:
+            if st.button("Clear", key="_dc_proj_clear",
+                         use_container_width=True, disabled=not _sel_set,
+                         help="Deselect all projects"):
+                for _p in list(_sel_set):
+                    st.session_state.pop(f"_dc_pj_{_p}", None)
+                st.session_state["_dc_selected_projects"] = []
+                st.rerun(scope="fragment")
+
         if not _folders:
             st.markdown(
                 '<div class="dc-ctx-hint">DocMDs repository not cloned yet — it '
                 "syncs with the other platform repos (Sync Check tab).</div>",
                 unsafe_allow_html=True,
             )
+            _sel_proj: list = []
+            st.session_state["_dc_selected_projects"] = []
+            st.session_state["_dc_selected_apps"] = []
         elif not _scope_proj:
             st.markdown(
                 '<div class="dc-ctx-hint">No projects in scope yet — open the '
@@ -516,26 +532,39 @@ def render_docchat_panel() -> None:
                 "to attach its applications' docs.</div>",
                 unsafe_allow_html=True,
             )
+            _sel_proj = []
+            st.session_state["_dc_selected_projects"] = []
+            st.session_state["_dc_selected_apps"] = []
         else:
             _proj_opts = sorted(_scope_proj.keys(), key=str.lower)
+            # Search filter only when the list is long enough to warrant it.
+            _q = ""
+            if len(_proj_opts) > 8:
+                _q = (st.text_input(
+                    "Filter projects", key="_dc_proj_q",
+                    placeholder="🔎 filter projects…",
+                    label_visibility="collapsed",
+                ) or "").strip().lower()
+            _shown = [p for p in _proj_opts if _q in p.lower()] if _q else _proj_opts
 
-            def _fmt_project(_p: str) -> str:
-                _n = len(_scope_proj.get(_p, []))
-                return f"{_p} · {_n}"
-
+            # Render a checkbox per (filtered) project inside a scroll box.
+            # Selection is the union of every checked box across ALL projects
+            # (so a selected project filtered out of view stays selected).
             with st.container(key="cc_docchat_projbox"):
-                if hasattr(st, "pills"):
-                    _sel_proj = st.pills(
-                        "Projects", options=_proj_opts,
-                        selection_mode="multi", format_func=_fmt_project,
-                        key="_dc_proj_pills", label_visibility="collapsed",
-                    ) or []
-                else:  # pragma: no cover — older Streamlit fallback
-                    _sel_proj = st.multiselect(
-                        "Projects", options=_proj_opts, format_func=_fmt_project,
-                        key="_dc_proj_pills", label_visibility="collapsed",
-                        placeholder="Select project(s)…",
-                    ) or []
+                if not _shown:
+                    st.caption("No project matches the filter.")
+                for _p in _shown:
+                    _n = len(_scope_proj.get(_p, []))
+                    _checked = st.checkbox(
+                        f"{_p}  ·  {_n} app{'s' if _n != 1 else ''}",
+                        value=(_p in _sel_set),
+                        key=f"_dc_pj_{_p}",
+                    )
+                    if _checked:
+                        _sel_set.add(_p)
+                    else:
+                        _sel_set.discard(_p)
+            _sel_proj = sorted(_sel_set, key=str.lower)
             st.session_state["_dc_selected_projects"] = _sel_proj
 
             # Resolve DocMDs folders for the chosen projects' apps.

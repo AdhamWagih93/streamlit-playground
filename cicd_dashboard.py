@@ -10297,20 +10297,37 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     border-radius: 10px;
     padding: 9px 11px;
 }
-/* Project pills — capped, scrollable so a big fleet never floods the panel */
+/* Project checkbox list — capped + scrollable so a big fleet never floods the
+   panel. Plain in-flow checkboxes: no portal, no z-index issues, any version. */
 .st-key-cc_docchat_projbox {
-    max-height: 108px;
+    max-height: 150px;
     overflow-y: auto;
     background: var(--cc-surface2);
     border: 1px solid var(--cc-border);
     border-radius: 11px;
-    padding: 7px 8px !important;
+    padding: 4px 10px !important;
+    margin-top: 2px;
 }
-.st-key-cc_docchat_projbox [data-testid="stButtonGroup"] { gap: 5px !important; }
-.st-key-cc_docchat_projbox button {
-    font-size: .72rem !important;
-    padding: 2px 10px !important;
-    border-radius: 999px !important;
+.st-key-cc_docchat_projbox::-webkit-scrollbar { width: 8px; }
+.st-key-cc_docchat_projbox::-webkit-scrollbar-thumb {
+    background: var(--cc-border-hi); border-radius: 8px;
+}
+.st-key-cc_docchat_projbox [data-testid="stCheckbox"] { margin: 1px 0 !important; }
+.st-key-cc_docchat_projbox [data-testid="stCheckbox"] label {
+    font-size: .76rem !important;
+    gap: 6px !important;
+    padding: 1px 0 !important;
+}
+.st-key-cc_docchat_projbox [data-testid="stCheckbox"] label p { font-size: .76rem !important; }
+/* Tighten the search box above the list */
+.st-key-cc_docchat_panel .st-key-_dc_proj_q input { font-size: .78rem !important; }
+/* Quiet "Clear" button in the context header */
+.st-key-cc_docchat_panel .st-key-_dc_proj_clear button {
+    font-size: .68rem !important;
+    min-height: 28px !important;
+    padding: 0 8px !important;
+    border-radius: 8px !important;
+    color: var(--cc-text-dim) !important;
 }
 .dc-ctx-cap {
     font-family: var(--cc-mono);
