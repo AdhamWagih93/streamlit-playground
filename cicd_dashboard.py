@@ -4577,6 +4577,20 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     background: var(--cc-surface2);
     white-space: nowrap;
 }
+.tmx-chip.is-none { color: var(--cc-text-mute); font-style: italic; border-style: dashed; }
+/* Grouped breakdown: the name chips (teams/users sharing a count) read as
+   solid accent pills; the small grey count sits at the end of the group. */
+.tmx-bd-grpnames { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.tmx-chip.is-name {
+    color: var(--cc-accent);
+    background: var(--cc-accent-lt);
+    border-color: #dfe3ff;
+    font-weight: 700;
+}
+.tmx-grp-n {
+    font-family: var(--cc-mono); font-size: .58rem; font-weight: 700;
+    color: var(--cc-text-mute); margin-left: 2px; white-space: nowrap;
+}
 @media (max-width: 760px) {
     .tmx-metrics { grid-template-columns: 1fr 1fr; }
     .tmx-bar-row { grid-template-columns: 42% 1fr auto; }
@@ -14116,6 +14130,40 @@ def _compute_team_role_map(inv_rows: list[dict]) -> dict[str, set[str]]:
     return {display[_ck]: _roles for _ck, _roles in out.items()}
 
 
+def _tmx_grouped_breakdown(mapping: dict, label_fn, noun: str) -> str:
+    """Build grouped table-body HTML for a {key: projects} breakdown.
+
+    Rows are GROUPED by project-count: every team/user that spans the same
+    number of projects collapses into ONE row (count · the names sharing it ·
+    the combined project set), so the breakdown shows far more entities without
+    one row each. ``noun`` is the plural label ("teams" / "users")."""
+    _groups: dict[int, list[tuple[str, list[str]]]] = {}
+    for _k, _projs in mapping.items():
+        _pl = sorted({str(_p) for _p in (_projs or []) if str(_p).strip()},
+                     key=str.lower)
+        _groups.setdefault(len(_pl), []).append((str(label_fn(_k)), _pl))
+    _rows: list[str] = []
+    for _cnt in sorted(_groups, reverse=True):
+        _members = sorted(_groups[_cnt], key=lambda _t: _t[0].lower())
+        _names = "".join(
+            f'<span class="tmx-chip is-name">{html.escape(_n)}</span>'
+            for _n, _ in _members)
+        _union = sorted({_p for _, _pl in _members for _p in _pl}, key=str.lower)
+        _projchips = "".join(
+            f'<span class="tmx-chip">{html.escape(_p)}</span>' for _p in _union
+        ) or '<span class="tmx-chip is-none">—</span>'
+        _noun = noun if len(_members) != 1 else noun.rstrip("s")
+        _rows.append(
+            f'<tr>'
+            f'<td class="tmx-bd-num">{_cnt}</td>'
+            f'<td class="tmx-bd-grpnames">{_names}'
+            f'<span class="tmx-grp-n">{len(_members)} {_noun}</span></td>'
+            f'<td class="tmx-bd-chips">{_projchips}</td>'
+            f'</tr>'
+        )
+    return "".join(_rows)
+
+
 @st.fragment
 def _render_teams_and_members_view() -> None:
     """Admin-only tab — directory + per-team + per-user breakdown with
@@ -15086,21 +15134,13 @@ def _render_teams_and_members_view() -> None:
             )
             with st.popover("⊞ Full teams → projects breakdown",
                             use_container_width=True):
-                _rows = "".join(
-                    f'<tr><td class="tmx-bd-name">{html.escape(_t)}</td>'
-                    f'<td class="tmx-bd-num">{len(_team_projects[_t])}</td>'
-                    f'<td class="tmx-bd-chips">'
-                    + "".join(f'<span class="tmx-chip">{html.escape(_p)}</span>'
-                              for _p in sorted(_team_projects[_t], key=str.lower))
-                    + '</td></tr>'
-                    for _t, _ in sorted(
-                        ((t, len(p)) for t, p in _team_projects.items()),
-                        key=lambda kv: (-kv[1], kv[0].lower()))
-                )
+                _rows = _tmx_grouped_breakdown(
+                    _team_projects, lambda _t: _t, "teams")
                 st.markdown(
                     '<div class="tmx-bd-wrap"><table class="tmx-bd-table">'
-                    '<thead><tr><th>Team</th><th class="tmx-th-num">#</th>'
-                    '<th>Projects</th></tr></thead>'
+                    '<thead><tr><th class="tmx-th-num">#</th>'
+                    '<th>Teams (same project count grouped)</th>'
+                    '<th>Projects (combined)</th></tr></thead>'
                     f'<tbody>{_rows}</tbody></table></div>',
                     unsafe_allow_html=True,
                 )
@@ -15137,23 +15177,14 @@ def _render_teams_and_members_view() -> None:
             )
             with st.popover("⊞ Full users → projects breakdown",
                             use_container_width=True):
-                _rows = "".join(
-                    f'<tr><td class="tmx-bd-name">'
-                    f'{html.escape(_user_label_by_lc.get(_u_lc, _u_lc))}</td>'
-                    f'<td class="tmx-bd-num">{len(_projs)}</td>'
-                    f'<td class="tmx-bd-chips">'
-                    + "".join(f'<span class="tmx-chip">{html.escape(_p)}</span>'
-                              for _p in sorted(_projs, key=str.lower))
-                    + '</td></tr>'
-                    for _u_lc, _projs in sorted(
-                        _user_projects.items(),
-                        key=lambda kv: (-len(kv[1]),
-                                        _user_label_by_lc.get(kv[0], kv[0]).lower()))
-                )
+                _rows = _tmx_grouped_breakdown(
+                    _user_projects,
+                    lambda _u: _user_label_by_lc.get(_u, _u), "users")
                 st.markdown(
                     '<div class="tmx-bd-wrap"><table class="tmx-bd-table">'
-                    '<thead><tr><th>User</th><th class="tmx-th-num">#</th>'
-                    '<th>Projects</th></tr></thead>'
+                    '<thead><tr><th class="tmx-th-num">#</th>'
+                    '<th>Users (same project count grouped)</th>'
+                    '<th>Projects (combined)</th></tr></thead>'
                     f'<tbody>{_rows}</tbody></table></div>',
                     unsafe_allow_html=True,
                 )
