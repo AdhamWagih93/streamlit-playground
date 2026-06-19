@@ -6452,6 +6452,69 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     gap: 3px;
 }
 .iv-proj-flag-row { display: flex; }
+/* Project name + 🪲 jira chip share the first line of the cell */
+.iv-proj-nameline { display: inline-flex; align-items: center; gap: 6px; }
+.iv-jira-chip {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-family: var(--cc-mono);
+    font-size: .6rem; font-weight: 700; letter-spacing: .02em;
+    color: var(--cc-amber);
+    background: var(--cc-amber-bg);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 34%, transparent);
+    border-radius: 999px;
+    padding: 1px 7px;
+    cursor: pointer;
+    transition: background .12s ease, color .12s ease, transform .12s ease;
+}
+.iv-jira-chip:hover { background: var(--cc-amber); color: #fff; transform: translateY(-1px); }
+
+/* Jira popover — reuses the el-app-pop skeleton with an amber accent */
+.el-app-pop.is-jira .ap-head { background: var(--cc-amber-bg); }
+.el-app-pop.is-jira .ap-kicker { color: var(--cc-amber); }
+.el-app-pop.is-jira { width: min(560px, 94vw); }
+.jira-list {
+    grid-column: 1 / -1;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.jira-row {
+    border: 1px solid var(--cc-border);
+    border-left: 3px solid var(--cc-border-hi);
+    border-radius: 9px;
+    padding: 8px 10px;
+    background: var(--cc-surface);
+}
+.jira-row-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.jira-prio {
+    font-family: var(--cc-mono);
+    font-size: .58rem; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: 1px 7px; border-radius: 5px;
+    border: 1px solid transparent;
+}
+.jira-prio.is-crit { color: var(--cc-red);   background: var(--cc-red-lt); }
+.jira-prio.is-high { color: var(--cc-amber); background: var(--cc-amber-lt); }
+.jira-prio.is-med  { color: var(--cc-blue);  background: var(--cc-blue-lt); }
+.jira-prio.is-low  { color: var(--cc-text-dim); background: var(--cc-surface2); }
+.jira-prio.is-none { color: var(--cc-text-mute); background: var(--cc-surface2); }
+.jira-key {
+    font-family: var(--cc-mono); font-size: .74rem; font-weight: 700;
+    color: var(--cc-accent); text-decoration: none;
+}
+.jira-key:hover { text-decoration: underline; }
+.jira-status {
+    font-size: .62rem; font-weight: 600; color: var(--cc-text-mute);
+    margin-left: auto;
+    background: var(--cc-surface2); border: 1px solid var(--cc-border);
+    padding: 1px 7px; border-radius: 999px;
+}
+.jira-summary {
+    font-size: .82rem; color: var(--cc-text); line-height: 1.4;
+    margin: 4px 0 3px;
+}
+.jira-meta {
+    font-family: var(--cc-mono); font-size: .62rem; color: var(--cc-text-mute);
+    letter-spacing: .02em;
+}
 .iv-devops-flag {
     display: inline-flex;
     align-items: center;
@@ -25736,6 +25799,118 @@ def _fetch_jira_open(projects_json: str) -> dict:
     return _empty
 
 
+# Jira priority → rank (lower = more urgent) and a colour tier for badges.
+# Covers the common Jira priority vocabularies (default + Severity-style).
+_JIRA_PRIORITY_RANK: dict[str, int] = {
+    "blocker": 0, "highest": 1, "critical": 2, "p1": 1, "sev1": 1,
+    "high": 3, "major": 3, "p2": 3, "sev2": 3,
+    "medium": 4, "normal": 4, "p3": 4, "sev3": 4,
+    "low": 5, "minor": 5, "p4": 5, "sev4": 5,
+    "lowest": 6, "trivial": 6, "p5": 6,
+}
+
+
+def _jira_prio_rank(p: str) -> int:
+    return _JIRA_PRIORITY_RANK.get((p or "").strip().lower(), 50)
+
+
+def _jira_prio_tier(p: str) -> str:
+    _r = _jira_prio_rank(p)
+    if _r <= 2:
+        return "crit"
+    if _r == 3:
+        return "high"
+    if _r == 4:
+        return "med"
+    if _r <= 6:
+        return "low"
+    return "none"
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_jira_by_project(projects_json: str) -> dict:
+    """Open Jira issues per inventory project, with the highest-priority tickets.
+
+    ONE ES query: two ``terms`` aggregations (on ``project`` and ``projectkey``,
+    the two linkage fields) each carrying a ``top_hits`` sub-agg, so we get both
+    the open count AND a sample of tickets per project in a single round-trip.
+    Tickets are re-ranked client-side by priority (ES can't sort the free-text
+    priority field in severity order), newest-first within a tier, capped to 8.
+
+    Returns ``{inv_project: {"count": int, "tickets": [{key,url,summary,
+    priority,status,type,assignee,created}]}}``. Open = status ∉ CLOSED_JIRA."""
+    _projects = json.loads(projects_json)
+    out: dict = {}
+    if not _projects:
+        return out
+    _src = ["issuekey", "issueurl", "summary", "priority", "status",
+            "issuetype", "assignee", "created"]
+    _top = {"top_hits": {"size": 25, "_source": _src,
+                         "sort": [{"created": {"order": "desc"}}]}}
+    try:
+        resp = es_search(
+            IDX["jira"],
+            {
+                "query": {"bool": {
+                    "filter": [{"bool": {"should": [
+                        {"terms": {"project":    _projects}},
+                        {"terms": {"projectkey": _projects}},
+                    ], "minimum_should_match": 1}}],
+                    "must_not": [{"terms": {"status": CLOSED_JIRA}}],
+                }},
+                "aggs": {
+                    "by_project": {"terms": {"field": "project", "size": 2000},
+                                   "aggs": {"top": _top}},
+                    "by_key":     {"terms": {"field": "projectkey", "size": 2000},
+                                   "aggs": {"top": _top}},
+                },
+                "track_total_hits": True,
+            },
+            size=0,
+        )
+    except Exception:
+        return out
+    if not resp or resp.get("_error"):
+        return out
+    _agg = resp.get("aggregations") or {}
+    _want = {str(_p) for _p in _projects}
+
+    def _ingest(_agg_name: str) -> None:
+        for _b in (_agg.get(_agg_name) or {}).get("buckets", []):
+            _key = str(_b.get("key", ""))
+            if _key not in _want:
+                continue
+            _slot = out.setdefault(_key, {"count": 0, "tickets": [],
+                                          "_seen": set()})
+            _slot["count"] += int(_b.get("doc_count") or 0)
+            for _h in (((_b.get("top") or {}).get("hits") or {})
+                       .get("hits", [])):
+                _s = _h.get("_source") or {}
+                _ik = _s.get("issuekey") or _h.get("_id") or ""
+                if not _ik or _ik in _slot["_seen"]:
+                    continue
+                _slot["_seen"].add(_ik)
+                _slot["tickets"].append({
+                    "key": _ik, "url": _s.get("issueurl") or "",
+                    "summary": _s.get("summary") or "",
+                    "priority": _s.get("priority") or "",
+                    "status": _s.get("status") or "",
+                    "type": _s.get("issuetype") or "",
+                    "assignee": _s.get("assignee") or "",
+                    "created": _s.get("created") or "",
+                })
+
+    _ingest("by_project")
+    _ingest("by_key")
+    for _slot in out.values():
+        # ES already returned each bucket newest-first; a stable sort by
+        # priority rank keeps recency order within the same priority.
+        _slot["tickets"].sort(key=lambda _t: _jira_prio_rank(_t["priority"]))
+        _slot["tickets"] = _slot["tickets"][:8]
+        _slot.pop("_seen", None)
+    return out
+
+
 def _svg_stacked_spark(success: list[int], failure: list[int]) -> str:
     """Daily stacked bars — success (green) on bottom, failure (red) on top."""
     if not success and not failure:
@@ -28671,6 +28846,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_pop_projects = sorted({r["project"] for r in _inv_rows_all if r.get("project")})
     _iv_proj_map = _fetch_project_details(tuple(_iv_pop_projects)) if _iv_pop_projects else {}
 
+    # Open Jira issues per project (count + highest-priority tickets) — one
+    # cached query, drives the 🪲 chip + popover next to each project name.
+    _iv_jira_by_proj = (
+        _fetch_jira_by_project(json.dumps(_iv_pop_projects))
+        if (_user_shows_jira and _iv_pop_projects) else {}
+    )
+
     # Git-derived creation dates: when each project dir / app inventory file
     # first appeared in the inventories repo history. One cached git pass; keyed
     # on HEAD so a pull refreshes it. Empty dict when reading from ES (no clone).
@@ -28692,6 +28874,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     def _iv_proj_pop_id(proj: str) -> str:
         return _iv_slug(proj, "iv-proj-pop-")
+
+    def _iv_jira_pop_id(proj: str) -> str:
+        return _iv_slug(proj, "iv-jira-pop-")
 
     def _iv_ver_pop_id(app: str, stage: str, ver: str) -> str:
         """One popover per (app, stage, version). Stage is part of the id
@@ -29316,11 +29501,24 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'<span class="iv-devops-flag" '
                     f'title="{html.escape(_tip, quote=True)}">⚠ DEVOPS</span>'
                 )
+            _jira_info = _iv_jira_by_proj.get(proj) or {}
+            _jira_n = int(_jira_info.get("count") or 0)
+            _jira_chip = (
+                f'<button type="button" class="iv-jira-chip" '
+                f'popovertarget="{_iv_jira_pop_id(proj)}" '
+                f'title="{_jira_n} open Jira issue'
+                f'{"s" if _jira_n != 1 else ""} — highest priority first">'
+                f'🪲 {_jira_n}</button>'
+                if _jira_n > 0 else ""
+            )
             return (
                 f'<span class="iv-proj-cell-wrap">'
+                f'<span class="iv-proj-nameline">'
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_iv_proj_pop_id(proj)}" '
                 f'title="Click for teams & applications">{proj}</button>'
+                f'{_jira_chip}'
+                f'</span>'
                 + (f'<span class="iv-proj-flag-row">{_flag_html}</span>'
                    if _flag_html else "")
                 + _iv_created_line(_iv_proj_created(proj), "Project inventory")
@@ -30401,6 +30599,65 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · click an app for full details</div>'
             f'</div>'
         )
+
+        # ── Sibling popover: open Jira issues for this project ───────────────
+        _ji = _iv_jira_by_proj.get(_proj) or {}
+        _ji_n = int(_ji.get("count") or 0)
+        if _ji_n > 0:
+            _ji_rows: list[str] = []
+            for _t in _ji.get("tickets", []):
+                _tier = _jira_prio_tier(_t.get("priority", ""))
+                _key = html.escape(_t.get("key") or "—")
+                _url = (_t.get("url") or "").strip()
+                _keyhtml = (
+                    f'<a class="jira-key" href="{html.escape(_url, quote=True)}" '
+                    f'target="_blank" rel="noopener noreferrer">{_key}</a>'
+                    if _url else f'<span class="jira-key">{_key}</span>'
+                )
+                _created = fmt_dt(_t.get("created"), "%Y-%m-%d") or ""
+                _meta_bits = [b for b in (
+                    html.escape(_t.get("type") or ""),
+                    html.escape(_t.get("assignee") or "unassigned"),
+                    html.escape(_created),
+                ) if b]
+                _ji_rows.append(
+                    f'<div class="jira-row">'
+                    f'  <div class="jira-row-top">'
+                    f'    <span class="jira-prio is-{_tier}">'
+                    f'{html.escape(_t.get("priority") or "—")}</span>'
+                    f'    {_keyhtml}'
+                    f'    <span class="jira-status">'
+                    f'{html.escape(_t.get("status") or "")}</span>'
+                    f'  </div>'
+                    f'  <div class="jira-summary">'
+                    f'{html.escape(_t.get("summary") or "(no summary)")}</div>'
+                    f'  <div class="jira-meta">{" · ".join(_meta_bits)}</div>'
+                    f'</div>'
+                )
+            _jid = _iv_jira_pop_id(_proj)
+            _shown_n = len(_ji.get("tickets", []))
+            _iv_popovers.append(
+                f'<div id="{_jid}" popover="auto" class="el-app-pop is-jira">'
+                f'  <div class="ap-head">'
+                f'    <div class="ap-icon">🪲</div>'
+                f'    <div class="ap-title-wrap">'
+                f'      <div class="ap-kicker">Open Jira · {html.escape(_proj)}</div>'
+                f'      <div class="ap-title">{_ji_n} open issue'
+                f'{"s" if _ji_n != 1 else ""}</div>'
+                f'    </div>'
+                f'    <button class="ap-close" popovertarget="{_jid}" '
+                f'popovertargetaction="hide" aria-label="Close">×</button>'
+                f'  </div>'
+                f'  <div class="ap-body">'
+                f'    <div class="ap-section">Highest priority'
+                f'      <span class="ap-section-note">top {_shown_n} of {_ji_n}'
+                f'</span></div>'
+                f'    <div class="jira-list">' + "".join(_ji_rows) + '</div>'
+                f'  </div>'
+                f'  <div class="ap-foot">Source: ef-bs-jira-issues · open = '
+                f'status ∉ closed · ranked by priority</div>'
+                f'</div>'
+            )
 
     # ── Finalize popover cache ──────────────────────────────────────────────
     if _build_popovers_flag:
