@@ -26597,25 +26597,25 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # filter, the People Insights panel, AND the event log's per-user
     # popovers. Cache hit on repeat renders.
     #
-    # Window: ALWAYS use the all-time floor for the aggregator. The
-    # Teams & Members tab + Filter Console Users facet are admin views
-    # that benefit from the user's full activity history regardless of
-    # the global window picker. Narrowing the aggregator by time was
-    # the root cause behind admins seeing "0 active" in the stat box
-    # despite the event log clearly showing entries — drop that
-    # narrowing entirely.
-    _agg_start_dt = _EL_ALLTIME_FLOOR
+    # Window: the Teams & Members tab + Users facet now FOLLOW the Filter
+    # Console time window (default 90d / 3 months) so admins can scope activity
+    # to a period; "All-time" lifts the floor entirely. Both ends are quantised
+    # to the cache-TTL boundary so reruns within a window share one cache key
+    # (raw microsecond `end_dt` would churn the @st.cache_data key every rerun,
+    # making the ~8s aggregator never hit cache).
     _users_sf_json = json.dumps(list(scope_filters()), sort_keys=True, default=str)
     _users_cs_json = json.dumps(list(commit_scope_filters()), sort_keys=True, default=str)
-    _users_start_iso = _agg_start_dt.astimezone(timezone.utc).isoformat()
-    # `end_dt` is datetime.now() at microsecond precision — passing it raw made
-    # the aggregator's @st.cache_data key change EVERY rerun, so the ~8s call
-    # never hit cache. Quantise the end to the cache-TTL boundary so reruns
-    # within the window share one key (the aggregator is all-time, so the exact
-    # end is immaterial to the result).
     _agg_end_bucket = int(end_dt.timestamp() // CACHE_TTL) * CACHE_TTL
-    _users_end_iso = datetime.fromtimestamp(
-        _agg_end_bucket, tz=timezone.utc).isoformat()
+    _agg_end_dt = datetime.fromtimestamp(_agg_end_bucket, tz=timezone.utc)
+    _agg_preset = st.session_state.get("time_preset") or "90d"
+    if _agg_preset == "All-time":
+        _agg_start_dt = _EL_ALLTIME_FLOOR
+    elif _agg_preset == "Custom":
+        _agg_start_dt = _agg_end_dt - PRESETS["90d"]
+    else:
+        _agg_start_dt = _agg_end_dt - (PRESETS.get(_agg_preset) or PRESETS["90d"])
+    _users_start_iso = _agg_start_dt.astimezone(timezone.utc).isoformat()
+    _users_end_iso = _agg_end_dt.isoformat()
     # DEFER the ES activity aggregator (~8s cold, fans out composite aggs over
     # commits/jira/builds/deploys/releases/requests). NOTHING on the default
     # Inventory paint shows per-user activity — it's only used by the Teams
@@ -31448,7 +31448,10 @@ if _show_inv and _inventory_slot is not None:
                         '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
                         'People + teams + roles — directory view derived '
                         'from inventory team fields, LDAP team rosters, and '
-                        'cross-index activity. Admin only.'
+                        'cross-index activity. Activity counts follow the '
+                        '<b>Filter Console time window</b> '
+                        f'(<b>{html.escape(st.session_state.get("time_preset") or "90d")}</b>). '
+                        'Admin only.'
                         '</div>',
                         unsafe_allow_html=True,
                     )
