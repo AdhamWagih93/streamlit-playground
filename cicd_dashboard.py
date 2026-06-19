@@ -10628,6 +10628,15 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
 }
 .ap-deploy-row:last-child { border-bottom: none; }
 .ap-deploy-when { font-family: var(--cc-mono); font-size: .7rem; color: var(--cc-text-dim); white-space: nowrap; }
+.ap-deploy-ver {
+    font-family: var(--cc-mono); font-size: .68rem; font-weight: 700;
+    color: var(--cc-text); background: var(--cc-surface2);
+    border: 1px solid var(--cc-border); padding: 1px 7px; border-radius: 5px;
+    white-space: nowrap;
+}
+.ap-deploy-ver.is-this {
+    color: var(--cc-accent); background: var(--cc-accent-lt); border-color: #dfe3ff;
+}
 .ap-deploy-reason {
     font-size: .62rem; font-weight: 700; letter-spacing: .02em;
     padding: 1px 7px; border-radius: 999px;
@@ -12087,11 +12096,11 @@ def _deploy_reason_tier(reason: str) -> str:
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _fetch_recent_deploys(apps_json: str) -> dict:
-    """Last few deployments per (application, environment, codeversion), newest
-    first — used by the version popover to show recent deploy history WITH the
-    ``Reason`` field (Upgrade / Redeployment / UpgradeWithConfigChange /
-    ConfigChange). One query for all visible apps; grouped client-side, capped
-    to 5 per (app, env, version). Key = ``"app||env_lc||version"``."""
+    """Last 5 deployments per (application, environment), newest first — the
+    recent deploy history for an environment REGARDLESS of version, used by the
+    version popover. Each record carries its ``version`` plus the ``Reason``
+    field (Upgrade / Redeployment / UpgradeWithConfigChange / ConfigChange).
+    One query for all visible apps; grouped client-side. Key = ``"app||env_lc"``."""
     _apps = json.loads(apps_json)
     out: dict = {}
     if not _apps:
@@ -12114,18 +12123,18 @@ def _fetch_recent_deploys(apps_json: str) -> dict:
         _s = _h.get("_source", {}) or {}
         _app = _s.get("application") or ""
         _env = (_s.get("environment") or "").strip().lower()
-        _ver = _s.get("codeversion") or ""
-        if not _app or not _ver or not _env:
+        if not _app or not _env:
             continue
-        _k = f"{_app}||{_env}||{_ver}"
+        _k = f"{_app}||{_env}"
         _lst = out.setdefault(_k, [])
         if len(_lst) >= 5:
             continue
         _lst.append({
-            "when":   fmt_dt(_hit_date(_h, "deploy"), "%Y-%m-%d %H:%M") or "",
-            "status": _s.get("status") or "",
-            "reason": (_s.get("Reason") or _s.get("reason") or "").strip(),
-            "who":    _s.get("requester") or _s.get("triggeredby") or "",
+            "when":    fmt_dt(_hit_date(_h, "deploy"), "%Y-%m-%d %H:%M") or "",
+            "version": _s.get("codeversion") or "",
+            "status":  _s.get("status") or "",
+            "reason":  (_s.get("Reason") or _s.get("reason") or "").strip(),
+            "who":     _s.get("requester") or _s.get("triggeredby") or "",
         })
     return out
 
@@ -30726,15 +30735,18 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _jenkins_section_v = ""
             _prisma_link_v = _iv_prisma_link_html(_app, _ver)
 
-            # Recent deployments of THIS version on THIS environment, with the
-            # Reason field. Build/release stages carry no env so they match
-            # nothing here (block stays empty).
+            # Recent deployments on THIS environment — newest 5 regardless of
+            # version (each row shows which version it was) + the Reason field.
+            # Build/release stages carry no env so they match nothing here.
             _deploys_block = ""
-            _recent_dep = _iv_recent_deploys.get(f"{_app}||{_stage}||{_ver}") or []
+            _recent_dep = _iv_recent_deploys.get(f"{_app}||{_stage}") or []
             if _recent_dep:
                 _drows = "".join(
                     f'<div class="ap-deploy-row">'
                     f'<span class="ap-deploy-when">{html.escape(_d["when"] or "—")}</span>'
+                    f'<span class="ap-deploy-ver'
+                    f'{" is-this" if _d.get("version") == _ver else ""}" '
+                    f'title="deployed version">{html.escape(_d.get("version") or "—")}</span>'
                     f'<span class="ap-deploy-reason is-{_deploy_reason_tier(_d["reason"])}">'
                     f'{html.escape(_d["reason"] or "—")}</span>'
                     f'<span class="ap-deploy-status">{html.escape(_d["status"] or "")}</span>'
@@ -30746,7 +30758,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 _deploys_block = (
                     f'    <div class="ap-section">Recent deployments · {_stage_lbl}'
                     f'<span class="ap-section-note">last {len(_recent_dep)} · '
-                    f'reason</span></div>'
+                    f'any version</span></div>'
                     f'    <div class="ap-deploy-list">{_drows}</div>'
                 )
             _iv_popovers.append(
