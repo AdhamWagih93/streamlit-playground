@@ -10558,6 +10558,30 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     padding: 1px 6px; border-radius: 5px;
 }
 
+/* Version popover — recent deployments list (with Reason) */
+.el-app-pop .ap-deploy-list {
+    grid-column: 1 / -1;
+    display: flex; flex-direction: column; gap: 4px;
+}
+.ap-deploy-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: .76rem; padding: 3px 0;
+    border-bottom: 1px dashed var(--cc-border);
+}
+.ap-deploy-row:last-child { border-bottom: none; }
+.ap-deploy-when { font-family: var(--cc-mono); font-size: .7rem; color: var(--cc-text-dim); white-space: nowrap; }
+.ap-deploy-reason {
+    font-size: .62rem; font-weight: 700; letter-spacing: .02em;
+    padding: 1px 7px; border-radius: 999px;
+    border: 1px solid transparent;
+}
+.ap-deploy-reason.is-ok   { color: var(--cc-green); background: var(--cc-green-lt); }
+.ap-deploy-reason.is-info { color: var(--cc-blue);  background: var(--cc-blue-lt); }
+.ap-deploy-reason.is-warn { color: var(--cc-amber); background: var(--cc-amber-lt); }
+.ap-deploy-reason.is-none { color: var(--cc-text-mute); background: var(--cc-surface2); }
+.ap-deploy-status { font-size: .68rem; color: var(--cc-text-mute); }
+.ap-deploy-who { font-size: .68rem; color: var(--cc-text-dim); margin-left: auto; }
+
 .el-refresh-badge {
     font-size: .65rem; color: var(--cc-text-mute);
     letter-spacing: .04em; text-transform: uppercase; font-weight: 600;
@@ -11991,6 +12015,63 @@ _STAGE_LABEL = {
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _deploy_reason_tier(reason: str) -> str:
+    """Colour tier for a deployment Reason chip."""
+    _r = (reason or "").strip().lower().replace(" ", "")
+    if _r == "upgrade":
+        return "ok"
+    if _r == "redeployment":
+        return "info"
+    if _r in ("configchange", "upgradewithconfigchange"):
+        return "warn"
+    return "none"
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_recent_deploys(apps_json: str) -> dict:
+    """Last few deployments per (application, environment, codeversion), newest
+    first — used by the version popover to show recent deploy history WITH the
+    ``Reason`` field (Upgrade / Redeployment / UpgradeWithConfigChange /
+    ConfigChange). One query for all visible apps; grouped client-side, capped
+    to 5 per (app, env, version). Key = ``"app||env_lc||version"``."""
+    _apps = json.loads(apps_json)
+    out: dict = {}
+    if not _apps:
+        return out
+    try:
+        resp = es_search(
+            IDX["deployments"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": _apps}}]}},
+                "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
+                "_source": ["application", "environment", "codeversion", "status",
+                            "startdate", "StartDate", "Reason", "reason",
+                            "requester", "triggeredby"],
+            },
+            size=2000,
+        )
+    except Exception:
+        return out
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        _app = _s.get("application") or ""
+        _env = (_s.get("environment") or "").strip().lower()
+        _ver = _s.get("codeversion") or ""
+        if not _app or not _ver or not _env:
+            continue
+        _k = f"{_app}||{_env}||{_ver}"
+        _lst = out.setdefault(_k, [])
+        if len(_lst) >= 5:
+            continue
+        _lst.append({
+            "when":   fmt_dt(_hit_date(_h, "deploy"), "%Y-%m-%d %H:%M") or "",
+            "status": _s.get("status") or "",
+            "reason": (_s.get("Reason") or _s.get("reason") or "").strip(),
+            "who":    _s.get("requester") or _s.get("triggeredby") or "",
+        })
+    return out
+
+
 def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
     """For each application, fetch the latest *successful* record at each stage.
 
@@ -18562,6 +18643,13 @@ def _render_event_log() -> None:
             # Falls back to the generic `deploy` type when the row
             # has no environment value (rare; legacy docs).
             _dep_type = f"deploy-{_env_lc}" if _env_lc else "deploy"
+            # `Reason` (Upgrade / Redeployment / UpgradeWithConfigChange /
+            # ConfigChange) — surface it first in the description for every
+            # deployment, then the technology.
+            _dep_reason = (_s.get("Reason") or _s.get("reason") or "").strip()
+            _dep_detail = " · ".join(
+                _x for _x in (_dep_reason, _s.get("technology", "")) if _x
+            )
             events.append({
                 "_ts":         parse_dt(_dv),
                 "type":        _dep_type,
@@ -18570,7 +18658,7 @@ def _render_event_log() -> None:
                 "Project":     _s.get("project", ""),
                 "Environment": _env_lc,
                 "Version":     _s.get("codeversion", ""),
-                "Detail":      _s.get("technology", ""),
+                "Detail":      _dep_detail,
                 "Status":      _s.get("status", ""),
                 "Requester":   _d_req,
                 "Approver":    _d_app,
@@ -30152,6 +30240,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             tiles.append(_iv_sev_tile(_lvl, _lbl, _n, _delta, baseline_label))
         return "".join(tiles), _total
 
+    # Recent deployment history (with Reason) per (app, env, version) for the
+    # visible page apps — one query, consumed by the version popover below.
+    _iv_recent_deploys = (
+        _fetch_recent_deploys(json.dumps(sorted(_visible_page_apps)))
+        if _build_popovers_flag and _visible_page_apps else {}
+    )
+
     for _app, _stages in (_iv_stages_map.items() if _build_popovers_flag else []):
         # Version popovers are triggered ONLY by version chips in the
         # paginated rows — apps reached purely via project popovers don't
@@ -30468,6 +30563,30 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # without leaving the inventory tab.
             _jenkins_section_v = ""
             _prisma_link_v = _iv_prisma_link_html(_app, _ver)
+
+            # Recent deployments of THIS version on THIS environment, with the
+            # Reason field. Build/release stages carry no env so they match
+            # nothing here (block stays empty).
+            _deploys_block = ""
+            _recent_dep = _iv_recent_deploys.get(f"{_app}||{_stage}||{_ver}") or []
+            if _recent_dep:
+                _drows = "".join(
+                    f'<div class="ap-deploy-row">'
+                    f'<span class="ap-deploy-when">{html.escape(_d["when"] or "—")}</span>'
+                    f'<span class="ap-deploy-reason is-{_deploy_reason_tier(_d["reason"])}">'
+                    f'{html.escape(_d["reason"] or "—")}</span>'
+                    f'<span class="ap-deploy-status">{html.escape(_d["status"] or "")}</span>'
+                    + (f'<span class="ap-deploy-who">{html.escape(_d["who"])}</span>'
+                       if _d["who"] else "")
+                    + '</div>'
+                    for _d in _recent_dep
+                )
+                _deploys_block = (
+                    f'    <div class="ap-section">Recent deployments · {_stage_lbl}'
+                    f'<span class="ap-section-note">last {len(_recent_dep)} · '
+                    f'reason</span></div>'
+                    f'    <div class="ap-deploy-list">{_drows}</div>'
+                )
             _iv_popovers.append(
                 f'<div id="{_vid}" popover="auto" class="el-app-pop is-version">'
                 f'  <div class="ap-head">'
@@ -30481,6 +30600,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'  <div class="ap-body">'
                 f'    {_banner}'
                 f'    {_stage_block}'
+                f'    {_deploys_block}'
                 f'    {_jenkins_section_v}'
                 f'    {_prisma_block}'
                 f'    {_prisma_link_v}'
