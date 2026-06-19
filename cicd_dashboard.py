@@ -10557,6 +10557,15 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     border: 1px solid var(--cc-teal-lt);
     padding: 1px 6px; border-radius: 5px;
 }
+/* LOG vs LOOKUP kind chip on each sync card */
+.hist-kind-chip {
+    font-family: var(--cc-mono);
+    font-size: .56rem; font-weight: 800; letter-spacing: .06em;
+    padding: 1px 6px; border-radius: 4px; margin-left: 6px;
+    border: 1px solid transparent;
+}
+.hist-kind-chip.is-lookup { color: var(--cc-blue); background: var(--cc-blue-lt); }
+.hist-kind-chip.is-log { color: var(--cc-text-mute); background: var(--cc-surface2); border-color: var(--cc-border); }
 
 /* Version popover — recent deployments list (with Reason) */
 .el-app-pop .ap-deploy-list {
@@ -17326,7 +17335,14 @@ def _render_history_to_pg_tab() -> None:
                 f'       {"checked" if _k in st.session_state["_hist_selected_v1"] else ""}>'
                 f'    <span class="hist-card-key">{html.escape(_k)}</span>'
                 f'    <span class="hist-card-idx">{html.escape(_es_index)}</span>'
-                f'    <span class="hist-card-state">'
+                + ('    <span class="hist-kind-chip is-lookup" title="Lookup '
+                   'snapshot (not an append-only log) — Sync new re-creates the '
+                   'table to avoid duplication">LOOKUP</span>'
+                   if _k in HISTORY_LOOKUP_KEYS else
+                   '    <span class="hist-kind-chip is-log" title="Append-only '
+                   'log — Sync new appends only docs newer than what is '
+                   'migrated">LOG</span>')
+                + f'    <span class="hist-card-state">'
                 f'      <span class="hist-card-glyph">{_state_glyph}</span>'
                 f'      {html.escape(_status.upper())}'
                 f'    </span>'
@@ -17389,12 +17405,20 @@ def _render_history_to_pg_tab() -> None:
                     "kept so resume picks up where it left off)",
                 ))
             if _status in ("done", "error", "paused") and _pg_n > 0:
-                _btns.append((
-                    "⟳ Sync new", f"_hist_delta_{_k}", "delta",
-                    "Delta sync — fetch only docs newer than what's already "
-                    "migrated (by date field) and upsert them. Keeps Postgres "
-                    "current without re-reading the whole index.",
-                ))
+                if _k in HISTORY_LOOKUP_KEYS:
+                    _btns.append((
+                        "⟳ Sync new", f"_hist_delta_{_k}", "delta",
+                        "Lookup snapshot — Sync new RE-CREATES the table "
+                        "(truncate + full reload) so refreshed lookup data never "
+                        "duplicates. (Delta-append is unsafe for lookups.)",
+                    ))
+                else:
+                    _btns.append((
+                        "⟳ Sync new", f"_hist_delta_{_k}", "delta",
+                        "Delta sync — fetch only docs newer than what's already "
+                        "migrated (by date field) and upsert them. Keeps Postgres "
+                        "current without re-reading the whole index.",
+                    ))
             if _status in ("done", "error", "paused"):
                 _btns.append((
                     "↻ Re-sync", f"_hist_rerun_{_k}", "rerun",
@@ -18988,7 +19012,7 @@ def _render_event_log() -> None:
         f'  <div class="el-tf-left">'
         f'    <div class="el-tf-total">{_total_events_unfiltered}</div>'
         f'    <div class="el-tf-total-label">'
-        f'event{"s" if _total_events_unfiltered != 1 else ""} · {_el_tw_label.lower()}'
+        f'event{"s" if _total_events_unfiltered != 1 else ""} · {html.escape(_preset.lower())}'
         f'</div>'
         f'  </div>'
         f'  <div class="el-tf-mid">'
@@ -23613,6 +23637,12 @@ HISTORY_SAMPLE_LIMIT = 3           # rows shown in the sample popover
 # ES→PG sync (and therefore from the mismatch check + PG read-routing).
 HISTORY_SYNC_EXCLUDE: set[str] = {"approval"}
 
+# Lookup (snapshot) indices — NOT append-only logs. Their ES `_id`s can be
+# regenerated between syncs, so an upsert-append would leave stale rows and
+# duplicate the data. For these, "Sync new" RE-CREATES the table (truncate +
+# full reload) instead of doing a delta append.
+HISTORY_LOOKUP_KEYS: set[str] = {"inventory", "devops_projects"}
+
 
 def _history_sync_keys() -> list[str]:
     """Index keys eligible for ES→Postgres sync (everything in IDX except the
@@ -23909,6 +23939,15 @@ def _history_job_start_delta(index_key: str) -> None:
         return
     es_index = IDX.get(index_key)
     if not es_index:
+        return
+    # Lookup/snapshot indices: "Sync new" RE-CREATES (truncate + full reload)
+    # rather than appending — their _ids can change between syncs, so an append
+    # would duplicate. This is just a full re-sync.
+    if index_key in HISTORY_LOOKUP_KEYS:
+        _history_job_reset(index_key)  # truncate rows + zero progress
+        _total = _history_es_count(es_index)
+        _sort = _history_pick_sort_field(index_key)
+        _history_job_upsert(index_key, es_index, _sort, _total)  # mode='full'
         return
     conn = None
     try:
