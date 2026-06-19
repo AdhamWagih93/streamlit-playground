@@ -358,6 +358,41 @@ def _team_match_set(items) -> set:
     return {_team_match_key(x) for x in (items or []) if str(x or "").strip()}
 
 
+def _normalize_session_teams(raw: Any) -> list[str]:
+    """Coerce ``st.session_state['teams']`` into a clean list of team-name
+    strings, whatever shape the parent multipage app set it to.
+
+    This guards a nasty class of "non-admin sees 0 projects" bugs: if the auth
+    layer stores teams as a bare STRING (e.g. ``"TeamA"``), the old
+    ``list(raw)`` split it into single characters → no team matched → the whole
+    scope collapsed to MATCH_NONE. Handles:
+      • list / tuple / set of strings  → cleaned list
+      • a single string                → ``[string]`` (NOT char-split); a
+        delimited string ("A, B; C")   → split on , ; | and newlines
+      • dict                           → its keys (team-name → membership map)
+      • anything else / empty          → ``[]``
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        _items = list(raw.keys())
+    elif isinstance(raw, (list, tuple, set)):
+        _items = list(raw)
+    elif isinstance(raw, str):
+        _s = raw.strip()
+        _items = re.split(r"[,;|\n]+", _s) if re.search(r"[,;|\n]", _s) else [_s]
+    else:
+        _items = [raw]
+    _out: list[str] = []
+    _seen: set[str] = set()
+    for _it in _items:
+        _v = str(_it or "").strip()
+        if _v and _v.lower() not in _seen:
+            _seen.add(_v.lower())
+            _out.append(_v)
+    return _out
+
+
 # All cloned ADO repos live under one tidy base directory so the
 # streamlit host doesn't litter /tmp with project-specific dirs.
 CICD_REPO_BASE = os.environ.get("CICD_REPO_BASE", "/tmp/cicd-dashboard").rstrip("/")
@@ -12574,7 +12609,7 @@ _ALL = "— All —"
 # dict keyed by role name (agent.py / agentUI.py both gate admin on
 # ``"admin" in user_roles``). ``session_state.roles`` is not used by the auth
 # layer here, so we don't read it.
-_session_teams: list[str] = st.session_state.get("teams") or []
+_session_teams: list[str] = _normalize_session_teams(st.session_state.get("teams"))
 _session_user_roles = st.session_state.get("user_roles") or {}
 _user_role_keys: list[str] = (
     list(_session_user_roles.keys())
@@ -17602,7 +17637,7 @@ def _render_actions_tab() -> None:
 
     # ── Search + per-row context ─────────────────────────────────────
     _detected_roles = st.session_state.get("_detected_roles_v1") or []
-    _session_teams = list(st.session_state.get("teams") or [])
+    _session_teams = _normalize_session_teams(st.session_state.get("teams"))
     _role_pick = st.session_state.get("_role_pick_v1") or ""
 
     _q = st.text_input(
@@ -27040,9 +27075,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # Team filter: hidden when the user has 0 or 1 session teams; when >1
     # the Teams tile renders with options restricted to those session teams.
     _iv_session_company: str = (st.session_state.get("company") or "").strip()
-    _iv_session_teams: list[str] = [
-        str(_t).strip() for _t in (st.session_state.get("teams") or []) if _t
-    ]
+    _iv_session_teams: list[str] = _normalize_session_teams(
+        st.session_state.get("teams"))
 
     _iv_filter_keys = {
         "company": "iv_f_company_v1",
@@ -28644,6 +28678,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _sd_proj_n = len(_scoped_projects)
         if _inv_total == 0 or not (_sd_apps_n or _sd_proj_n):
             _sd_reasons = []
+            # Surface the RAW session value + its type so a malformed shape
+            # (e.g. a bare string the auth layer set) is immediately visible.
+            _sd_raw = st.session_state.get("teams")
+            _sd_reasons.append(
+                "raw <code>session_state.teams</code> = "
+                f"<code>{html.escape(repr(_sd_raw)[:160])}</code> "
+                f"(type {html.escape(type(_sd_raw).__name__)}) → normalised to "
+                f"<code>{html.escape(str(_sd_teams)[:160])}</code>")
             if not _sd_teams:
                 _sd_reasons.append("your session carries <b>no teams</b>")
             if not _user_team_fields:
