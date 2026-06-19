@@ -20678,6 +20678,39 @@ def _ocp_templates_for(project: str, app: str) -> list[str]:
     return _ocp_templates_index().get(f"{_ci_key(project)}/{_ci_key(app)}", [])
 
 
+@st.cache_data(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
+def _engine_team_collections() -> dict:
+    """Map team → ADO ``collection_name`` from the Engine repo's
+    ``vars/Teams/<team>.yml`` files (each carrying ``collection_name: <value>``).
+
+    Keyed by the separator/case-tolerant team key so it matches a row's
+    ``dev_team`` value. Used to build the correct source-code repository URL
+    (the collection_name is the ADO org/collection segment — NOT the company
+    name). Empty when the Engine clone or PyYAML isn't available."""
+    out: dict = {}
+    base = os.path.join(_mirror_repo_path("Engine"), "vars", "Teams")
+    if not os.path.isdir(base) or not _YAML_AVAILABLE or _yaml is None:
+        return out
+    try:
+        for _fn in sorted(os.listdir(base)):
+            if not _fn.lower().endswith((".yml", ".yaml")):
+                continue
+            _team = _fn.rsplit(".", 1)[0]
+            try:
+                with open(os.path.join(base, _fn), "r", encoding="utf-8",
+                          errors="replace") as _fh:
+                    _data = _yaml.safe_load(_fh.read()) or {}
+            except Exception:
+                continue
+            if isinstance(_data, dict):
+                _coll = str(_data.get("collection_name") or "").strip()
+                if _coll:
+                    out[_team_match_key(_team)] = _coll
+    except OSError:
+        pass
+    return out
+
+
 def _mirror_repo_url(host: str, repo: str) -> str:
     """Build the canonical clone URL for *repo* on the same ADO host /
     project the inventories repo lives on. Returns ``""`` when the host
@@ -29092,6 +29125,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if (_user_shows_jira and _iv_pop_projects) else {}
     )
 
+    # dev_team → ADO collection_name (Engine vars/Teams/<team>.yml) for the
+    # source-code repo URL in app popovers.
+    _iv_team_collections = _engine_team_collections()
+
     # Git-derived creation dates: when each project dir / app inventory file
     # first appeared in the inventories repo history. One cached git pass; keyed
     # on HEAD so a pull refreshes it. Empty dict when reading from ES (no clone).
@@ -29148,13 +29185,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # can render an inert state instead of a broken link.
     def _iv_repo_url(r: dict) -> str:
         _rn = (r.get("repository_name") or "").strip()
-        _co = (r.get("company") or "").strip()
         _pj = (r.get("project") or "").strip()
-        if not (_iv_ado_host and _rn and _co and _pj):
+        if not (_iv_ado_host and _rn and _pj):
+            return ""
+        # The ADO org/collection segment is the dev_team's collection_name
+        # (Engine vars/Teams/<team>.yml) — that's the correct source-code URL.
+        # Fall back to the company name only when no team→collection mapping is
+        # found (so existing links don't break).
+        _org = ""
+        for _dt in _row_teams_for_field(r, "dev_team"):
+            _c = _iv_team_collections.get(_team_match_key(_dt))
+            if _c:
+                _org = _c
+                break
+        if not _org:
+            _org = (r.get("company") or "").strip()
+        if not _org:
             return ""
         return (
             f"http://{_iv_ado_host}/"
-            f"{urllib.parse.quote(_co, safe='')}/"
+            f"{urllib.parse.quote(_org, safe='')}/"
             f"{urllib.parse.quote(_pj, safe='')}/_git/"
             f"{urllib.parse.quote(_rn, safe='')}"
         )
