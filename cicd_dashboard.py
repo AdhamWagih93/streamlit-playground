@@ -10255,9 +10255,9 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     position: fixed !important;
     bottom: 24px !important;
     right: 24px !important;
-    width: 472px !important;
+    width: 504px !important;
     max-width: calc(100vw - 36px) !important;
-    max-height: min(86vh, 900px) !important;
+    max-height: min(88vh, 940px) !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
     z-index: 2147483000 !important;
@@ -10412,6 +10412,21 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     white-space: nowrap;
 }
 .dc-doc-chip b { color: var(--cc-teal); font-family: var(--cc-mono); margin-left: 2px; }
+.dc-doc-chip.is-more { color: var(--cc-text-mute); background: var(--cc-surface2); border-color: var(--cc-border); }
+/* Context "Edit/Done" toggle — quiet pill */
+.st-key-cc_docchat_panel .st-key-_dc_ctx_toggle button {
+    font-size: .72rem !important;
+    min-height: 30px !important;
+    border-radius: 9px !important;
+    border: 1px solid var(--cc-border-hi) !important;
+    background: #fff !important;
+    color: var(--cc-accent) !important;
+    font-weight: 600 !important;
+}
+.st-key-cc_docchat_panel .st-key-_dc_ctx_toggle button:hover {
+    background: var(--cc-accent-lt) !important;
+    border-color: var(--cc-accent) !important;
+}
 /* Apps with no DocMDs match */
 .dc-doc-miss {
     display: flex; flex-wrap: wrap; align-items: center; gap: 4px;

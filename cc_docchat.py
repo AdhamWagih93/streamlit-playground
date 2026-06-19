@@ -411,6 +411,8 @@ def build_system_prompt(context_text: str) -> str:
 # =============================================================================
 def _init_state() -> None:
     st.session_state.setdefault("_dc_open", False)
+    st.session_state.setdefault("_dc_ctx_open", False)   # context editor expanded?
+    st.session_state.setdefault("_dc_pending", False)    # a reply is streaming?
     st.session_state.setdefault("_dc_messages", [])
     st.session_state.setdefault("_dc_selected_projects", [])
     st.session_state.setdefault("_dc_selected_apps", [])  # resolved folders
@@ -485,168 +487,118 @@ def render_docchat_panel() -> None:
                 st.session_state["_dc_open"] = False
                 st.rerun(scope="fragment")
 
-        # ── Context picker (PROJECT-based, inline checkboxes — no dropdown) ─
-        # Deliberately NOT a dropdown / multiselect / pills: every dropdown-style
-        # widget renders its option layer in a portal that lands behind this
-        # fixed, high-z-index panel (invisible until you blind-type), and pills
-        # need Streamlit ≥1.40. Plain st.checkbox rows render fully in-flow on
-        # every version — no portal, no z-index, always visible. An optional
-        # search box (also in-flow) filters when there are many projects.
+        # ── Context (collapsible) ───────────────────────────────────────────
+        # Collapsed by default → the conversation gets the room. "⚙ Edit"
+        # expands an inline project picker built from plain st.checkbox rows
+        # (NEVER a dropdown/multiselect/pills — those portal their option layer
+        # behind this fixed panel, which is what kept breaking).
         _folders = _docmds_folders()
         _scope_proj = _scope_projects()
-        _n_docsets = len(st.session_state["_dc_selected_apps"])
         _sel_set = set(st.session_state.get("_dc_selected_projects") or [])
-        _hdr_l, _hdr_r = st.columns([3, 1], vertical_alignment="center")
-        with _hdr_l:
+        _ctx_open = bool(st.session_state.get("_dc_ctx_open"))
+
+        # Keep the resolved context current every render (also when collapsed).
+        _matched_folders, _detail = _resolve_project_folders(sorted(_sel_set))
+        st.session_state["_dc_selected_apps"] = _matched_folders
+        _n_docsets = len(_matched_folders)
+
+        _cl, _cr = st.columns([3, 1.2], vertical_alignment="center")
+        with _cl:
             st.markdown(
                 '<div class="dc-ctx-label"><span>📎 Context</span>'
                 + (f'<span class="dc-ctx-n">{_n_docsets} doc set'
                    f'{"s" if _n_docsets != 1 else ""}</span>'
                    if _n_docsets else
-                   '<span class="dc-ctx-n is-empty">none</span>')
+                   '<span class="dc-ctx-n is-empty">none attached</span>')
                 + "</div>",
                 unsafe_allow_html=True,
             )
-        with _hdr_r:
-            if st.button("Clear", key="_dc_proj_clear",
-                         use_container_width=True, disabled=not _sel_set,
-                         help="Deselect all projects"):
-                for _p in list(_sel_set):
-                    st.session_state.pop(f"_dc_pj_{_p}", None)
-                st.session_state["_dc_selected_projects"] = []
+        with _cr:
+            if st.button(("✓ Done" if _ctx_open else "⚙ Edit"),
+                         key="_dc_ctx_toggle", use_container_width=True,
+                         help="Pick the projects whose docs ground the answers"):
+                st.session_state["_dc_ctx_open"] = not _ctx_open
                 st.rerun(scope="fragment")
 
-        if not _folders:
-            st.markdown(
-                '<div class="dc-ctx-hint">DocMDs repository not cloned yet — it '
-                "syncs with the other platform repos (Sync Check tab).</div>",
-                unsafe_allow_html=True,
-            )
-            _sel_proj: list = []
-            st.session_state["_dc_selected_projects"] = []
-            st.session_state["_dc_selected_apps"] = []
-        elif not _scope_proj:
-            st.markdown(
-                '<div class="dc-ctx-hint">No projects in scope yet — open the '
-                "Pipelines Inventory so your projects load, then pick one here "
-                "to attach its applications' docs.</div>",
-                unsafe_allow_html=True,
-            )
-            _sel_proj = []
-            st.session_state["_dc_selected_projects"] = []
-            st.session_state["_dc_selected_apps"] = []
-        else:
-            _proj_opts = sorted(_scope_proj.keys(), key=str.lower)
-            # Search filter only when the list is long enough to warrant it.
-            _q = ""
-            if len(_proj_opts) > 8:
-                _q = (st.text_input(
-                    "Filter projects", key="_dc_proj_q",
-                    placeholder="🔎 filter projects…",
-                    label_visibility="collapsed",
-                ) or "").strip().lower()
-            _shown = [p for p in _proj_opts if _q in p.lower()] if _q else _proj_opts
-
-            # Render a checkbox per (filtered) project inside a scroll box.
-            # Selection is the union of every checked box across ALL projects
-            # (so a selected project filtered out of view stays selected).
-            with st.container(key="cc_docchat_projbox"):
-                if not _shown:
-                    st.caption("No project matches the filter.")
-                for _p in _shown:
-                    _n = len(_scope_proj.get(_p, []))
-                    _checked = st.checkbox(
-                        f"{_p}  ·  {_n} app{'s' if _n != 1 else ''}",
-                        value=(_p in _sel_set),
-                        key=f"_dc_pj_{_p}",
-                    )
-                    if _checked:
-                        _sel_set.add(_p)
-                    else:
-                        _sel_set.discard(_p)
-            _sel_proj = sorted(_sel_set, key=str.lower)
-            st.session_state["_dc_selected_projects"] = _sel_proj
-
-            # Resolve DocMDs folders for the chosen projects' apps.
-            _matched_folders, _detail = _resolve_project_folders(_sel_proj)
-            st.session_state["_dc_selected_apps"] = _matched_folders  # → context
-
-            if _sel_proj:
-                _n_apps = len(_detail)
-                _n_hit = sum(1 for _d in _detail if _d["folder"])
-                _tot_files = sum(len(_folders.get(_f, []))
-                                 for _f in _matched_folders)
-                _chips = "".join(
-                    f'<span class="dc-doc-chip" title="'
-                    f'{len(_folders.get(_f, []))} markdown file'
-                    f'{"s" if len(_folders.get(_f, [])) != 1 else ""}">'
-                    f'📁 {html.escape(_f)} '
-                    f'<b>{len(_folders.get(_f, []))}</b></span>'
-                    for _f in _matched_folders
-                )
-                _missing = sorted({_d["application"] for _d in _detail
-                                   if not _d["folder"] and _d["application"]},
-                                  key=str.lower)
+        if _ctx_open:
+            if not _folders:
                 st.markdown(
-                    f'<div class="dc-ctx-cap">{_n_hit}/{_n_apps} app'
-                    f'{"s" if _n_apps != 1 else ""} matched · '
-                    f'{_tot_files} doc{"s" if _tot_files != 1 else ""} in context'
-                    f'</div>'
-                    + (f'<div class="dc-doc-chips">{_chips}</div>'
-                       if _chips else "")
-                    + ('<div class="dc-doc-miss"><span class="dc-doc-miss-h">'
-                       f'{len(_missing)} without docs</span>'
-                       + "".join(
-                           f'<span class="dc-doc-miss-i">{html.escape(_a)}</span>'
-                           for _a in _missing[:12])
-                       + (f'<span class="dc-doc-miss-i">+{len(_missing) - 12}'
-                          f'</span>' if len(_missing) > 12 else "")
-                       + '</div>' if _missing else ""),
-                    unsafe_allow_html=True,
-                )
+                    '<div class="dc-ctx-hint">DocMDs repository not cloned yet — '
+                    "it syncs with the other platform repos (Sync Check tab)."
+                    "</div>", unsafe_allow_html=True)
+            elif not _scope_proj:
+                st.markdown(
+                    '<div class="dc-ctx-hint">No projects in scope yet — open '
+                    "the Pipelines Inventory so your projects load.</div>",
+                    unsafe_allow_html=True)
+            else:
+                _proj_opts = sorted(_scope_proj.keys(), key=str.lower)
+                _q = ""
+                if len(_proj_opts) > 8:
+                    _q = (st.text_input(
+                        "Filter projects", key="_dc_proj_q",
+                        placeholder="🔎 filter projects…",
+                        label_visibility="collapsed") or "").strip().lower()
+                _shown = ([p for p in _proj_opts if _q in p.lower()]
+                          if _q else _proj_opts)
+                with st.container(key="cc_docchat_projbox"):
+                    if not _shown:
+                        st.caption("No project matches the filter.")
+                    for _p in _shown:
+                        _n = len(_scope_proj.get(_p, []))
+                        if st.checkbox(
+                            f"{_p}  ·  {_n} app{'s' if _n != 1 else ''}",
+                            value=(_p in _sel_set), key=f"_dc_pj_{_p}",
+                        ):
+                            _sel_set.add(_p)
+                        else:
+                            _sel_set.discard(_p)
+                # Persist + re-resolve from the (possibly changed) selection.
+                st.session_state["_dc_selected_projects"] = sorted(_sel_set)
+                _matched_folders, _detail = _resolve_project_folders(sorted(_sel_set))
+                st.session_state["_dc_selected_apps"] = _matched_folders
+                if _sel_set:
+                    _n_apps = len(_detail)
+                    _n_hit = sum(1 for _d in _detail if _d["folder"])
+                    _missing = sorted({_d["application"] for _d in _detail
+                                       if not _d["folder"] and _d["application"]},
+                                      key=str.lower)
+                    st.markdown(
+                        f'<div class="dc-ctx-cap">{_n_hit}/{_n_apps} app'
+                        f'{"s" if _n_apps != 1 else ""} matched a DocMDs folder'
+                        f'</div>'
+                        + ('<div class="dc-doc-miss"><span class="dc-doc-miss-h">'
+                           f'{len(_missing)} without docs</span>'
+                           + "".join(
+                               f'<span class="dc-doc-miss-i">{html.escape(_a)}'
+                               f'</span>' for _a in _missing[:10])
+                           + (f'<span class="dc-doc-miss-i">+{len(_missing)-10}'
+                              f'</span>' if len(_missing) > 10 else "")
+                           + '</div>' if _missing else ""),
+                        unsafe_allow_html=True)
+        elif _matched_folders:
+            # Collapsed but docs attached → compact chip summary.
+            _chips = "".join(
+                f'<span class="dc-doc-chip">📁 {html.escape(_f)} '
+                f'<b>{len(_folders.get(_f, []))}</b></span>'
+                for _f in _matched_folders[:8]
+            ) + (f'<span class="dc-doc-chip is-more">+{len(_matched_folders)-8}'
+                 f'</span>' if len(_matched_folders) > 8 else "")
+            st.markdown(f'<div class="dc-doc-chips">{_chips}</div>',
+                        unsafe_allow_html=True)
 
-        # ── Conversation (single scroll container — slot reserved here) ─────
-        # Reserve the messages slot now and fill it AFTER the input is declared,
-        # so the input docks below the conversation. Everything (history +
-        # live stream) renders in this ONE container — no second container, so
-        # messages never stack/overlap.
-        _msgs_box = st.container(height=380, key="cc_docchat_msgs")
-
-        # ── Input + footer (declared after the messages slot → appear below) ─
-        _prompt = st.chat_input("Ask about your docs…", key="_dc_input")
-        _f1, _f2 = st.columns([1, 1.3], vertical_alignment="center")
-        with _f1:
-            if st.button("🗑 Clear chat", key="_dc_clear_btn",
-                         use_container_width=True,
-                         disabled=not st.session_state["_dc_messages"]):
-                st.session_state["_dc_messages"] = []
-                st.session_state["_dc_session_id"] = uuid.uuid4().hex
-                st.rerun(scope="fragment")
-        with _f2:
-            _nmsg = len(st.session_state["_dc_messages"])
-            st.markdown(
-                f'<div class="dc-foot">✓ logged · {_nmsg} message'
-                f'{"s" if _nmsg != 1 else ""}</div>',
-                unsafe_allow_html=True,
-            )
-
-        # ── Render the conversation into the reserved slot ──────────────────
-        if _prompt:
-            _sid = st.session_state["_dc_session_id"]
-            _uname = st.session_state.get("username", "")
-            _ctx_text, _doc_ids = _build_context(
-                st.session_state["_dc_selected_apps"])
-            _user_msg = {
-                "role": "user", "content": _prompt,
-                "timestamp": datetime.now().strftime("%H:%M"),
-                "tokens": _estimate_tokens(_prompt),
-            }
-            st.session_state["_dc_messages"].append(_user_msg)
-            db_save_message(_user_msg, _sid, _uname, _doc_ids)
-
-        with _msgs_box:
-            _render_messages()  # all committed messages (incl. the new prompt)
-            if _prompt:
+        # ── Conversation (single container, natural order) ──────────────────
+        # Rendered BEFORE the input so the input docks beneath it. History +
+        # the live stream both render in this ONE container; a "pending" flag
+        # (not an out-of-order container fill) drives streaming, so messages
+        # never stack or overlap.
+        with st.container(height=420, key="cc_docchat_msgs"):
+            _render_messages()
+            if st.session_state.get("_dc_pending"):
+                _sid = st.session_state["_dc_session_id"]
+                _uname = st.session_state.get("username", "")
+                _ctx_text, _doc_ids = _build_context(
+                    st.session_state["_dc_selected_apps"])
                 _api = [{"role": "system",
                          "content": build_system_prompt(_ctx_text)}]
                 _api += [{"role": _m["role"], "content": _m["content"]}
@@ -676,6 +628,41 @@ def render_docchat_panel() -> None:
                     "tokens": _estimate_tokens(_full),
                 }
                 st.session_state["_dc_messages"].append(_asst)
-                db_save_message(_asst, _sid, _uname, _doc_ids,
-                                has_error=_is_err)
+                db_save_message(_asst, _sid, _uname, _doc_ids, has_error=_is_err)
+                st.session_state["_dc_pending"] = False
                 st.rerun(scope="fragment")
+
+        # ── Input (docks below the conversation) ────────────────────────────
+        _prompt = st.chat_input("Ask about your docs…", key="_dc_input",
+                                disabled=bool(st.session_state.get("_dc_pending")))
+        if _prompt and not st.session_state.get("_dc_pending"):
+            _sid = st.session_state["_dc_session_id"]
+            _uname = st.session_state.get("username", "")
+            _doc_ids = _build_context(st.session_state["_dc_selected_apps"])[1]
+            _user_msg = {
+                "role": "user", "content": _prompt,
+                "timestamp": datetime.now().strftime("%H:%M"),
+                "tokens": _estimate_tokens(_prompt),
+            }
+            st.session_state["_dc_messages"].append(_user_msg)
+            db_save_message(_user_msg, _sid, _uname, _doc_ids)
+            st.session_state["_dc_pending"] = True
+            st.rerun(scope="fragment")
+
+        # ── Footer ──────────────────────────────────────────────────────────
+        _f1, _f2 = st.columns([1, 1.3], vertical_alignment="center")
+        with _f1:
+            if st.button("🗑 Clear chat", key="_dc_clear_btn",
+                         use_container_width=True,
+                         disabled=not st.session_state["_dc_messages"]):
+                st.session_state["_dc_messages"] = []
+                st.session_state["_dc_session_id"] = uuid.uuid4().hex
+                st.session_state["_dc_pending"] = False
+                st.rerun(scope="fragment")
+        with _f2:
+            _nmsg = len(st.session_state["_dc_messages"])
+            st.markdown(
+                f'<div class="dc-foot">✓ logged · {_nmsg} message'
+                f'{"s" if _nmsg != 1 else ""}</div>',
+                unsafe_allow_html=True,
+            )
