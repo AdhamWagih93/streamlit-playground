@@ -10558,6 +10558,25 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
     padding: 1px 6px; border-radius: 5px;
 }
 
+.el-refresh-badge {
+    font-size: .65rem; color: var(--cc-text-mute);
+    letter-spacing: .04em; text-transform: uppercase; font-weight: 600;
+    white-space: nowrap; margin: 2px 0 6px;
+}
+.el-refresh-badge b { color: var(--cc-accent); }
+/* Event-log TEST run marker (admin-only; non-admins never see test rows) */
+.el-test-badge {
+    display: inline-block;
+    margin-left: 5px;
+    font-family: var(--cc-mono);
+    font-size: .56rem; font-weight: 800; letter-spacing: .05em;
+    color: var(--cc-amber);
+    background: var(--cc-amber-lt);
+    border: 1px solid color-mix(in srgb, var(--cc-amber) 40%, transparent);
+    padding: 1px 5px; border-radius: 4px;
+    vertical-align: middle;
+}
+
 /* Admin Elastic↔Postgres drift banner (above the tab strip) */
 .cc-pgdrift {
     display: flex; align-items: flex-start; gap: 10px;
@@ -12537,8 +12556,10 @@ else:
     )
 
 # Time-window presets — resolved before the rail so selectbox order is stable.
+# Default window is 90d (~3 months): the Event Log and Teams & Members both read
+# this single Filter Console window, and 3 months is the useful default span.
 _TW_LABELS = list(PRESETS.keys())
-_preset_default_idx = _TW_LABELS.index("7d")
+_preset_default_idx = _TW_LABELS.index("90d")
 
 # ── Role-scoped visibility flags — relied on by scope filters + sections ───
 # CLevel mirrors Admin in every flag below — same view, different label.
@@ -18371,49 +18392,38 @@ def _render_event_log() -> None:
     Without ``run_every`` the decoupling concern goes away — only the
     interaction-isolation benefit remains.
     """
-    # Role-allowed environments for the Env selector — UNION across every
-    # detected role (Developer + Operations user → ["dev", "uat", "prd"]).
+    # Role-allowed environments (UNION across detected roles). The Env selector
+    # was REMOVED — the per-stage type pills (Deploy · DEV/QC/UAT/PRD) already
+    # let the operator drill into one environment, so a separate Env dropdown
+    # was redundant. Deployments are still scoped to the role's allowed envs.
     _allowed_envs = list(_user_envs)
-    _env_options = ["(all)"] + _allowed_envs
+    el_env = "(all)"
 
     # ── Shared controls (Project / Search / Per-project) live above the
-    # combined panel; only the view-specific Env + Time window are rendered
-    # locally alongside the live-refresh badge.
+    # combined panel.
     el_project_filter = _shared_project_filter()
     el_search = _shared_search_query()
     el_per_project = _shared_per_project()
 
-    _el_r1 = st.columns([1.0, 1.3, 1.0])
-    with _el_r1[0]:
-        if len(_env_options) == 2:
-            el_env = _env_options[1]
-            st.markdown(
-                f'<div style="padding-top:6px;font-size:.68rem;text-transform:uppercase;'
-                f'letter-spacing:.10em;color:var(--cc-text-mute);font-weight:600">Env</div>'
-                f'<div style="font-size:.90rem;font-weight:600;color:var(--cc-text);'
-                f'text-transform:uppercase">{el_env}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            el_env = st.selectbox("Env", _env_options, key="el_env_v3")
-    with _el_r1[1]:
-        _el_tw_label = st.selectbox(
-            "Time window", list(_EL_TIME_WINDOWS.keys()), index=3, key="el_time_v3",
-            help="How far back to pull events for the log (independent of the page-wide window)",
-        )
-        _el_delta = _EL_TIME_WINDOWS[_el_tw_label]
-    with _el_r1[2]:
-        st.markdown(
-            f'<div style="font-size:.65rem;color:var(--cc-text-mute);letter-spacing:.06em;'
-            f'text-transform:uppercase;font-weight:600;margin-top:26px;white-space:nowrap">'
-            f'↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} {DISPLAY_TZ_LABEL} · auto 60s</div>',
-            unsafe_allow_html=True,
-        )
-
-    # ── Compute the event-log's own time window (independent of global) ─────
+    # Time window comes from the Filter Console (page-wide) — the event log no
+    # longer has its OWN time selector, so there's a single source of truth.
     _now_utc = datetime.now(timezone.utc)
-    _el_start = _EL_ALLTIME_FLOOR if _el_delta is None else (_now_utc - _el_delta)
-    _el_end   = _now_utc
+    _preset = st.session_state.get("time_preset") or "90d"
+    if _preset == "All-time":
+        _el_start = _EL_ALLTIME_FLOOR
+    elif _preset == "Custom":
+        _el_start = _now_utc - PRESETS["90d"]
+    else:
+        _el_start = _now_utc - (PRESETS.get(_preset) or PRESETS["90d"])
+    _el_end = _now_utc
+
+    # Subtle live-refresh badge (the only thing left on this row).
+    st.markdown(
+        f'<div class="el-refresh-badge">↻ {datetime.now(DISPLAY_TZ).strftime("%H:%M:%S")} '
+        f'{DISPLAY_TZ_LABEL} · window follows Filter Console '
+        f'(<b>{html.escape(_preset)}</b>) · auto 60s</div>',
+        unsafe_allow_html=True,
+    )
     _size     = _EL_SIZE_CAP
 
     # Inventory-driven scope override — when the event log is rendered inside
@@ -18466,6 +18476,10 @@ def _render_event_log() -> None:
     # reflect reality even when some types are filtered out of the view.
     if _builds_allowed_subtypes:
         _bld_f = _el_scope([range_filter("startdate", _el_start, _el_end)] + list(scope_filters()))
+        # Test-run handling: non-admins NEVER see test runs (testflag must be
+        # "Normal"); admins see everything and the rows get a TEST mark below.
+        if not _is_admin:
+            _bld_f.append({"term": {"testflag": "Normal"}})
         _bld_r = es_search(
             IDX["builds"],
             {"query": {"bool": {"filter": _bld_f}},
@@ -18477,6 +18491,7 @@ def _render_event_log() -> None:
             _sub = _build_subtype(_s.get("branch", ""))
             if _sub not in _builds_allowed_subtypes:
                 continue
+            _is_test_run = (_s.get("testflag") or "Normal").strip().lower() != "normal"
             _dv = _hit_date(_h, "build")
             # ef-cicd-builds has NO requester/approver — identity comes
             # from the commit-author triple (authorname / authormail /
@@ -18503,6 +18518,7 @@ def _render_event_log() -> None:
                 "Requester":   _b_person,
                 "Approver":    "",
                 "Extra":       "",
+                "is_test":     _is_test_run,
             })
 
     # ── deployments (role-filtered env) ─────────────────────────────────────
@@ -18512,6 +18528,9 @@ def _render_event_log() -> None:
             _dep_f.append({"term": {"environment": el_env}})
         else:
             _dep_f.append({"terms": {"environment": _allowed_envs}})
+        # Non-admins never see test deployments; admins see + mark them.
+        if not _is_admin:
+            _dep_f.append({"term": {"testflag": "Normal"}})
         _dep_r = es_search(
             IDX["deployments"],
             {"query": {"bool": {"filter": _dep_f}},
@@ -18556,6 +18575,7 @@ def _render_event_log() -> None:
                 "Requester":   _d_req,
                 "Approver":    _d_app,
                 "Extra":       _s.get("triggeredby", ""),
+                "is_test":     (_s.get("testflag") or "Normal").strip().lower() != "normal",
             })
 
     # ── releases ────────────────────────────────────────────────────────────
@@ -19294,7 +19314,11 @@ def _render_event_log() -> None:
         return (
             f"<tr>"
             f'<td style="white-space:nowrap;padding:5px 4px;vertical-align:top">{_when_cell(ev)}</td>'
-            f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}</td>'
+            f'<td style="padding:5px 6px">{_TYPE_BADGE.get(ev["type"], "")}'
+            + ('<span class="el-test-badge" title="Test run — testflag ≠ '
+               'Normal (admin-only; hidden for other roles)">🧪 TEST</span>'
+               if ev.get("is_test") else "")
+            + '</td>'
             f'{_proj_html}'
             f'<td style="padding:5px 4px">{_app_cell(ev)}</td>'
             f'<td style="padding:5px 6px">{_env_cell(ev)}</td>'
