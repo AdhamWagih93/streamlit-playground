@@ -3381,7 +3381,9 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_warn_pop [data-testid="stPopover"] button,
 .st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button,
 .st-key-cc_iv_dupname_pop [data-testid="stPopover"] button,
-.st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button {
+.st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button,
+.st-key-cc_iv_nswarn_pop [data-testid="stPopover"] button,
+.st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button {
     border: 1px solid color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)) !important;
     background: color-mix(in srgb, var(--cc-amber) 10%, transparent) !important;
     color: var(--cc-amber) !important;
@@ -3397,11 +3399,24 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_warn_pop [data-testid="stPopover"] button:hover,
 .st-key-cc_iv_warn_pop [data-testid="stPopoverButton"] button:hover,
 .st-key-cc_iv_dupname_pop [data-testid="stPopover"] button:hover,
-.st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button:hover {
+.st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button:hover,
+.st-key-cc_iv_nswarn_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button:hover {
     background: color-mix(in srgb, var(--cc-amber) 18%, transparent) !important;
     box-shadow: 0 3px 12px color-mix(in srgb, var(--cc-amber) 28%, transparent) !important;
 }
-.st-key-cc_iv_dupname_pop { margin: 0 0 6px 0; }
+.st-key-cc_iv_dupname_pop, .st-key-cc_iv_nswarn_pop { margin: 0 0 6px 0; }
+.iv-ns-env {
+    font-family: var(--cc-mono); font-size: .58rem; font-weight: 800;
+    color: var(--cc-blue); background: var(--cc-blue-lt);
+    border-radius: 4px; padding: 0 5px; margin-right: 4px; letter-spacing: .03em;
+}
+.iv-ns-bad {
+    font-family: var(--cc-mono); font-size: .66rem; font-weight: 700;
+    color: var(--cc-red); background: var(--cc-red-lt);
+    border: 1px solid color-mix(in srgb, var(--cc-red) 30%, transparent);
+    border-radius: 5px; padding: 0 6px; margin-left: 4px;
+}
 .iv-dup-intro {
     font-size: 0.78rem;
     color: var(--cc-text-mute);
@@ -22292,6 +22307,21 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
                         return v
                 return _resolve_field(app_merged, field)
 
+            # Per-env namespace (OCP/K8s deploy target). Recorded for every env
+            # the app TARGETS — i.e. has a team assigned for that env — so an
+            # env that's targeted but has no namespace surfaces as "" (→ flagged
+            # unassigned downstream). Env-specific value wins, else the app/
+            # project-level `namespace`.
+            namespaces: dict[str, str] = {}
+            for env in _INV_ENVIRONMENTS:
+                _ns = _resolve_field(env_vars.get(env, {}) or {}, "namespace")
+                if not _ns:
+                    _ns = _resolve_field(app_merged, "namespace")
+                _ns = str(_ns or "").strip()
+                _targeted = bool(teams.get(f"{env}_team")) or bool(_ns)
+                if _targeted:
+                    namespaces[env] = _ns
+
             row = {
                 "application":       app,
                 "project":           project,
@@ -22306,6 +22336,7 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
                 "deploy_image_tag":  _pick_env_field("deploy_image_tag"),
                 "repository_name":   _resolve_field(app_merged, "repository_name"),
                 "teams":             teams,
+                "namespaces":        namespaces,
             }
             rows.append(row)
 
@@ -28886,6 +28917,50 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 _iv_dup_companies[_ck] = _sm
     _iv_dup_total = len(_iv_dup_apps) + len(_iv_dup_projects) + len(_iv_dup_companies)
 
+    # ── Namespace hygiene detector (admin-only) ───────────────────────────
+    # Two data-quality hazards on the per-env OCP/K8s namespace:
+    #   1. SHARED — one (environment, namespace) used by 2+ distinct projects
+    #      (cross-project namespace collision → deploys clobber each other).
+    #   2. UNASSIGNED — an env the app targets has an empty namespace or the
+    #      placeholder "test-ns" (never wired to a real namespace).
+    # Namespace matching is case-insensitive; "test-ns" is the sentinel.
+    _NS_PLACEHOLDER = "test-ns"
+    # {env: {ns_lower: {"display": str, "projects": set}}}
+    _ns_by_env: dict[str, dict[str, dict]] = {}
+    # [{project, application, env, value}] for unassigned
+    _iv_ns_unassigned: list[dict] = []
+    if _is_admin:
+        for _r_n in _inv_rows_filtered:
+            _proj_n = (_r_n.get("project") or "").strip()
+            _app_n = (_r_n.get("application") or "").strip()
+            for _env_n, _ns_v in (_r_n.get("namespaces") or {}).items():
+                _ns_s = str(_ns_v or "").strip()
+                if not _ns_s or _ns_s.lower() == _NS_PLACEHOLDER:
+                    _iv_ns_unassigned.append({
+                        "project": _proj_n, "application": _app_n,
+                        "env": _env_n, "value": _ns_s,
+                    })
+                    continue
+                _slot = _ns_by_env.setdefault(_env_n, {}).setdefault(
+                    _ns_s.lower(), {"display": _ns_s, "projects": set()})
+                if _proj_n:
+                    _slot["projects"].add(_proj_n)
+    # Shared = a namespace whose project set has 2+ entries, per env.
+    _iv_ns_shared: list[dict] = []
+    for _env_n, _by_ns in _ns_by_env.items():
+        for _ns_lc, _info in _by_ns.items():
+            if len(_info["projects"]) >= 2:
+                _iv_ns_shared.append({
+                    "env": _env_n, "namespace": _info["display"],
+                    "projects": sorted(_info["projects"], key=str.lower),
+                })
+    _env_order = {e: i for i, e in enumerate(_INV_ENVIRONMENTS)}
+    _iv_ns_shared.sort(key=lambda d: (_env_order.get(d["env"], 9),
+                                      d["namespace"].lower()))
+    _iv_ns_unassigned.sort(key=lambda d: (
+        d["project"].lower(), _env_order.get(d["env"], 9), d["application"].lower()))
+    _iv_ns_total = len(_iv_ns_shared) + len(_iv_ns_unassigned)
+
     # ── Action toolbar — Prisma report viewer only ─────────────────────────
     # Build / Deploy / Release triggers were moved into the dedicated
     # ACTIONS tab so the Pipelines Inventory stays read-only. The
@@ -28931,6 +29006,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             '</div>',
                             unsafe_allow_html=True,
                         )
+
+        # ── Data-quality warnings row (duplicates + namespaces, side by side) ─
+        if _iv_dup_total or _iv_ns_total:
+            _warn_cols = st.columns([1.4, 1.4, 5])
+        else:
+            _warn_cols = None
 
         # ── Duplicate-name warning (admin-only, subtle popover) ─────────
         if _iv_dup_total:
@@ -28986,7 +29067,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f'<table class="iv-dup-table"><tbody>{"".join(_rows)}</tbody></table>'
                 )
 
-            with st.container(key="cc_iv_dupname_pop"):
+            with (_warn_cols[0] if _warn_cols else st.container()), \
+                    st.container(key="cc_iv_dupname_pop"):
                 with st.popover(
                     f"⚠ {_iv_dup_total} naming duplicate"
                     f"{'s' if _iv_dup_total != 1 else ''}",
@@ -29003,6 +29085,65 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         + _dup_apps_section(_iv_dup_apps)
                         + _dup_section("Projects", "📁", _iv_dup_projects)
                         + _dup_section("Companies", "🏢", _iv_dup_companies),
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Namespace hygiene warning (admin-only, sibling popover) ─────
+        if _iv_ns_total:
+            with (_warn_cols[1] if _warn_cols else st.container()), \
+                    st.container(key="cc_iv_nswarn_pop"):
+                with st.popover(
+                    f"⚠ {_iv_ns_total} namespace issue"
+                    f"{'s' if _iv_ns_total != 1 else ''}",
+                    use_container_width=False,
+                    help="Cross-project namespace collisions and unassigned / "
+                         "placeholder (test-ns) namespaces in the current "
+                         "scope. Admin-only.",
+                ):
+                    _shared_html = ""
+                    if _iv_ns_shared:
+                        _sh_rows = "".join(
+                            f'<tr><td class="iv-dup-key">'
+                            f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}</span> '
+                            f'{html.escape(_x["namespace"])}</td>'
+                            f'<td><div class="iv-dup-projs">shared by: '
+                            + "".join(
+                                f'<span class="iv-dup-proj">{html.escape(_p)}</span>'
+                                for _p in _x["projects"])
+                            + '</div></td></tr>'
+                            for _x in _iv_ns_shared
+                        )
+                        _shared_html = (
+                            f'<div class="iv-dup-sec-head">🔗 Shared across '
+                            f'projects <b>{len(_iv_ns_shared)}</b></div>'
+                            f'<table class="iv-dup-table"><tbody>{_sh_rows}'
+                            f'</tbody></table>'
+                        )
+                    _unass_html = ""
+                    if _iv_ns_unassigned:
+                        _un_rows = "".join(
+                            f'<tr><td class="iv-dup-key">'
+                            f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}</span> '
+                            f'{html.escape(_x["project"] or "—")}</td>'
+                            f'<td>{html.escape(_x["application"] or "—")} '
+                            f'<span class="iv-ns-bad">'
+                            f'{html.escape(_x["value"] or "(empty)")}</span></td></tr>'
+                            for _x in _iv_ns_unassigned
+                        )
+                        _unass_html = (
+                            f'<div class="iv-dup-sec-head">⌀ Unassigned / '
+                            f'placeholder <b>{len(_iv_ns_unassigned)}</b></div>'
+                            f'<table class="iv-dup-table"><tbody>{_un_rows}'
+                            f'</tbody></table>'
+                        )
+                    st.markdown(
+                        '<div class="iv-dup-intro">Per-environment OCP/K8s '
+                        'namespaces. <b>Shared</b> = one namespace used by more '
+                        'than one project in the same environment (deploys can '
+                        'collide). <b>Unassigned</b> = a targeted environment '
+                        f'whose namespace is empty or the <code>{_NS_PLACEHOLDER}'
+                        '</code> placeholder.</div>'
+                        + _shared_html + _unass_html,
                         unsafe_allow_html=True,
                     )
 
