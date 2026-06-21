@@ -10684,6 +10684,9 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
 .ap-nextver-val.is-missing {
     color: var(--cc-red); font-weight: 600; font-style: italic;
 }
+.ap-nextver-val.is-na {
+    color: var(--cc-text-mute); font-weight: 600;
+}
 .ap-deploy-reason {
     font-size: .62rem; font-weight: 700; letter-spacing: .02em;
     padding: 1px 7px; border-radius: 999px;
@@ -29103,21 +29106,32 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _seen_nv.add(_app_v)
             _proj_v = (_r_v.get("project") or "").strip()
             _nv = _next_versions_for(_app_v, _proj_v, _iv_next_versions)
+            _prd_info = _iv_prd_map.get(_app_v) or {}
+            _ever_prd = bool(_prd_info)            # any PRD deploy on record
+            _prd_live = bool(_prd_info.get("live"))
+            _prd_v = (_prd_info.get("version") or "").strip()
             _issues: list[str] = []
             if not _nv:
                 _issues.append("no record in ef-cicd-versions-lookup")
             else:
-                _miss = [f"next_{_b}" for _b in _NEXT_VERSION_BRANCHES
+                # next_develop + next_release are always required.
+                # next_stress is optional (never flagged).
+                _miss = [f"next_{_b}" for _b in ("develop", "release")
                          if not _nv.get(_b)]
                 if _miss:
                     _issues.append("missing: " + ", ".join(_miss))
-                # next_hotfix must be prefixed by the current PRD version.
-                _prd_v = ((_iv_prd_map.get(_app_v) or {}).get("version") or "").strip()
+                # next_hotfix is expected ONLY for apps deployed to PRD at some
+                # point. Missing is an issue solely in that case; otherwise it's
+                # legitimately absent.
                 _hot = (_nv.get("hotfix") or "").strip()
-                if _prd_v and _hot and not _hot.startswith(_prd_v):
+                if _ever_prd and not _hot:
+                    _issues.append("missing: next_hotfix (app has PRD history)")
+                # When live on PRD, next_hotfix must begin with the live PRD
+                # version (1.3.1 → 1.3.1…) so a hotfix extends what's running.
+                elif _prd_live and _prd_v and _hot and not _hot.startswith(_prd_v):
                     _issues.append(
                         f"next_hotfix <b>{html.escape(_hot)}</b> doesn't extend "
-                        f"PRD <b>{html.escape(_prd_v)}</b>")
+                        f"live PRD <b>{html.escape(_prd_v)}</b>")
             if _issues:
                 _iv_nv_issues.append({
                     "app": _app_v, "project": _proj_v, "issues": _issues,
@@ -31084,12 +31098,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if _stage == "build":
                 _nv = _next_versions_for(
                     _app, _iv_app_project.get(_app, ""), _iv_next_versions)
+                # develop/release are always expected; stress is optional;
+                # hotfix only expected once the app has PRD history → only mark
+                # those expected-but-missing in red.
+                _nv_prd = _iv_prd_map.get(_app) or {}
+                _nv_required = {"develop", "release"}
+                if _nv_prd:
+                    _nv_required.add("hotfix")
                 _nv_rows_h = "".join(
                     f'<div class="ap-nextver-row">'
                     f'<span class="ap-nextver-br">{html.escape(_br)}</span>'
                     f'<span class="ap-nextver-val'
-                    f'{"" if _nv.get(_br) else " is-missing"}">'
-                    f'{html.escape(_nv.get(_br) or "— not set —")}</span>'
+                    f'{"" if _nv.get(_br) else (" is-missing" if _br in _nv_required else " is-na")}">'
+                    f'{html.escape(_nv.get(_br) or ("— not set —" if _br in _nv_required else "—"))}</span>'
                     f'</div>'
                     for _br in _NEXT_VERSION_BRANCHES
                 )
