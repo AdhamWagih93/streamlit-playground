@@ -22159,6 +22159,17 @@ def _vault_pw_fingerprint() -> str:
     return hashlib.sha256(_pw.encode("utf-8")).hexdigest()[:12]
 
 
+def _norm_deploy_platform(val) -> str:
+    """Normalise a deploy_platform value to ``"ocp"`` / ``"k8s"`` / ``""``.
+    Used to gate the namespace-hygiene checks to containerised apps only."""
+    p = str(val or "").strip().lower()
+    if p in ("ocp", "openshift"):
+        return "ocp"
+    if p in ("k8s", "kubernetes"):
+        return "k8s"
+    return ""
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[dict], list[str]]:
     """Walk the cloned inventories repo and produce inventory rows in the
@@ -22232,6 +22243,25 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
         else:
             gvars_dir = None
             gvars_origin = "absent"
+
+        # ── Per-(env, platform) namespace from host_vars ────────────────
+        # OCP/K8s deploy namespaces live at
+        #   {project}/host_vars/{env}_ocp/vars.yml   (or {env}_k8s/vars.yml)
+        # under the nested field ``ocp_namespace.name``. Read once per project;
+        # value is "" when the host_vars dir/file is absent or the field unset
+        # (→ surfaced as an unassigned namespace for OCP/K8s apps downstream).
+        _proj_host_vars = project_dir / "host_vars"
+        proj_ns: dict[tuple[str, str], str] = {}
+        if _proj_host_vars.is_dir():
+            for _env_h in _INV_ENVIRONMENTS:
+                for _plat_h in ("ocp", "k8s"):
+                    _hv = _load_yaml_dir(
+                        _proj_host_vars / f"{_env_h}_{_plat_h}", warnings)
+                    _ns_obj = (_hv or {}).get("ocp_namespace")
+                    _ns_name = ""
+                    if isinstance(_ns_obj, dict):
+                        _ns_name = str(_ns_obj.get("name") or "").strip()
+                    proj_ns[(_env_h, _plat_h)] = _ns_name
 
         # ── Discover apps in this project ───────────────────────────────
         # Apps are defined EXCLUSIVELY by an ``{app}.yml`` (or .yaml)
@@ -22307,20 +22337,17 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
                         return v
                 return _resolve_field(app_merged, field)
 
-            # Per-env namespace (OCP/K8s deploy target). Recorded for every env
-            # the app TARGETS — i.e. has a team assigned for that env — so an
-            # env that's targeted but has no namespace surfaces as "" (→ flagged
-            # unassigned downstream). Env-specific value wins, else the app/
-            # project-level `namespace`.
+            # Per-env namespace — ONLY for OCP/K8s apps (namespace is a
+            # container concept). Read from the project's host_vars map for the
+            # app's platform, for every env the app TARGETS (has a team for), so
+            # a targeted env with no namespace surfaces as "" → unassigned.
+            _deploy_platform = _resolve_field(app_merged, "deploy_platform")
+            _plat_norm = _norm_deploy_platform(_deploy_platform)
             namespaces: dict[str, str] = {}
-            for env in _INV_ENVIRONMENTS:
-                _ns = _resolve_field(env_vars.get(env, {}) or {}, "namespace")
-                if not _ns:
-                    _ns = _resolve_field(app_merged, "namespace")
-                _ns = str(_ns or "").strip()
-                _targeted = bool(teams.get(f"{env}_team")) or bool(_ns)
-                if _targeted:
-                    namespaces[env] = _ns
+            if _plat_norm in ("ocp", "k8s"):
+                for env in _INV_ENVIRONMENTS:
+                    if teams.get(f"{env}_team"):
+                        namespaces[env] = proj_ns.get((env, _plat_norm), "")
 
             row = {
                 "application":       app,
@@ -22329,7 +22356,7 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
                 "app_type":          _resolve_field(app_merged, "app_type").strip(),
                 "build_technology":  _resolve_field(app_merged, "build_technology"),
                 "deploy_technology": _resolve_field(app_merged, "deploy_technology"),
-                "deploy_platform":   _resolve_field(app_merged, "deploy_platform"),
+                "deploy_platform":   _deploy_platform,
                 "build_image_name":  _pick_env_field("build_image_name"),
                 "build_image_tag":   _pick_env_field("build_image_tag"),
                 "deploy_image_name": _pick_env_field("deploy_image_name"),
@@ -28925,12 +28952,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     #      placeholder "test-ns" (never wired to a real namespace).
     # Namespace matching is case-insensitive; "test-ns" is the sentinel.
     _NS_PLACEHOLDER = "test-ns"
-    # {env: {ns_lower: {"display": str, "projects": set}}}
-    _ns_by_env: dict[str, dict[str, dict]] = {}
-    # [{project, application, env, value}] for unassigned
+    # {(env, platform): {ns_lower: {"display": str, "projects": set}}}
+    _ns_by_envplat: dict[tuple[str, str], dict[str, dict]] = {}
+    # [{project, application, env, platform, value}] for unassigned
     _iv_ns_unassigned: list[dict] = []
     if _is_admin:
         for _r_n in _inv_rows_filtered:
+            # Only containerised (OCP/K8s) apps have namespaces.
+            _plat_n = _norm_deploy_platform(_r_n.get("deploy_platform"))
+            if _plat_n not in ("ocp", "k8s"):
+                continue
             _proj_n = (_r_n.get("project") or "").strip()
             _app_n = (_r_n.get("application") or "").strip()
             for _env_n, _ns_v in (_r_n.get("namespaces") or {}).items():
@@ -28938,25 +28969,27 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 if not _ns_s or _ns_s.lower() == _NS_PLACEHOLDER:
                     _iv_ns_unassigned.append({
                         "project": _proj_n, "application": _app_n,
-                        "env": _env_n, "value": _ns_s,
+                        "env": _env_n, "platform": _plat_n, "value": _ns_s,
                     })
                     continue
-                _slot = _ns_by_env.setdefault(_env_n, {}).setdefault(
+                _slot = _ns_by_envplat.setdefault(
+                    (_env_n, _plat_n), {}).setdefault(
                     _ns_s.lower(), {"display": _ns_s, "projects": set()})
                 if _proj_n:
                     _slot["projects"].add(_proj_n)
-    # Shared = a namespace whose project set has 2+ entries, per env.
+    # Shared = a namespace whose project set has 2+ entries, per (env, platform).
     _iv_ns_shared: list[dict] = []
-    for _env_n, _by_ns in _ns_by_env.items():
+    for (_env_n, _plat_n), _by_ns in _ns_by_envplat.items():
         for _ns_lc, _info in _by_ns.items():
             if len(_info["projects"]) >= 2:
                 _iv_ns_shared.append({
-                    "env": _env_n, "namespace": _info["display"],
+                    "env": _env_n, "platform": _plat_n,
+                    "namespace": _info["display"],
                     "projects": sorted(_info["projects"], key=str.lower),
                 })
     _env_order = {e: i for i, e in enumerate(_INV_ENVIRONMENTS)}
     _iv_ns_shared.sort(key=lambda d: (_env_order.get(d["env"], 9),
-                                      d["namespace"].lower()))
+                                      d["platform"], d["namespace"].lower()))
     _iv_ns_unassigned.sort(key=lambda d: (
         d["project"].lower(), _env_order.get(d["env"], 9), d["application"].lower()))
     _iv_ns_total = len(_iv_ns_shared) + len(_iv_ns_unassigned)
@@ -29104,7 +29137,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     if _iv_ns_shared:
                         _sh_rows = "".join(
                             f'<tr><td class="iv-dup-key">'
-                            f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}</span> '
+                            f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}'
+                            f' · {html.escape(_x["platform"].upper())}</span> '
                             f'{html.escape(_x["namespace"])}</td>'
                             f'<td><div class="iv-dup-projs">shared by: '
                             + "".join(
@@ -29123,7 +29157,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     if _iv_ns_unassigned:
                         _un_rows = "".join(
                             f'<tr><td class="iv-dup-key">'
-                            f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}</span> '
+                            f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}'
+                            f' · {html.escape(_x["platform"].upper())}</span> '
                             f'{html.escape(_x["project"] or "—")}</td>'
                             f'<td>{html.escape(_x["application"] or "—")} '
                             f'<span class="iv-ns-bad">'
