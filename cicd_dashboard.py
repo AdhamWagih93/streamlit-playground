@@ -12191,47 +12191,50 @@ _NEXT_VERSION_BRANCHES = ("develop", "release", "stress", "hotfix")
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_next_versions(apps_json: str) -> dict:
-    """Per-app next-version-per-branch from ef-cicd-versions-lookup.
+def _fetch_next_versions_all() -> dict:
+    """Next-version-per-branch records from ef-cicd-versions-lookup.
 
-    Fields ``next_develop`` / ``next_release`` / ``next_stress`` /
-    ``next_hotfix`` give the next version to stamp on a build for each branch.
-    One query: terms agg on application + a 1-doc top_hits. Returns
-    ``{app: {"develop","release","stress","hotfix"}}`` (missing → "")."""
-    _apps = json.loads(apps_json)
-    out: dict = {}
-    if not _apps:
-        return out
+    Returns ``{"by_app": {app_lc: rec}, "by_project": {project_lc: rec}}`` where
+    each ``rec`` is ``{"develop","release","stress","hotfix"}``. We pull the
+    whole (small) lookup with a plain match_all and group client-side, indexing
+    by BOTH application and project under several candidate field names — robust
+    whether the index is keyed per-app or per-project, and regardless of whether
+    ``application`` is aggregatable (the terms-agg approach silently returned
+    nothing when it wasn't)."""
+    out: dict = {"by_app": {}, "by_project": {}}
     try:
-        resp = es_search(
+        resp = cached_search(
             IDX["versions"],
-            {
-                "query": {"bool": {"filter": [{"terms": {"application": _apps}}]}},
-                "aggs": {"by_app": {
-                    "terms": {"field": "application", "size": len(_apps)},
-                    "aggs": {"latest": {"top_hits": {
-                        "size": 1,
-                        "_source": ["application", "project",
-                                    "next_develop", "next_release",
-                                    "next_stress", "next_hotfix"],
-                    }}},
-                }},
-            },
-            size=0,
+            json.dumps({"query": {"match_all": {}}, "track_total_hits": True},
+                       sort_keys=True, default=str),
+            5000,
         )
     except Exception:
         return out
-    for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
-        _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
-        if not _hits:
+    if not resp or resp.get("_error"):
+        return out
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        _rec = {_br: str(_s.get(f"next_{_br}") or "").strip()
+                for _br in _NEXT_VERSION_BRANCHES}
+        if not any(_rec.values()):
             continue
-        _s = _hits[0].get("_source", {}) or {}
-        _app = _s.get("application") or _b.get("key")
-        out[_app] = {
-            _br: str(_s.get(f"next_{_br}") or "").strip()
-            for _br in _NEXT_VERSION_BRANCHES
-        }
+        _app = str(_s.get("application") or _s.get("applicationname")
+                   or _s.get("app") or "").strip()
+        _proj = str(_s.get("project") or _s.get("projectname") or "").strip()
+        if _app:
+            out["by_app"].setdefault(_app.lower(), _rec)
+        if _proj:
+            out["by_project"].setdefault(_proj.lower(), _rec)
     return out
+
+
+def _next_versions_for(app: str, project: str, maps: dict) -> dict:
+    """Resolve an app's next-version record — by application first, then a
+    project-level record as fallback. ``{}`` when neither is present."""
+    return (maps.get("by_app", {}).get((app or "").strip().lower())
+            or maps.get("by_project", {}).get((project or "").strip().lower())
+            or {})
 
 
 def _fetch_latest_stages(apps: tuple[str, ...]) -> dict[str, dict[str, dict]]:
@@ -22337,7 +22340,8 @@ def _load_inventory_from_git(head_sha: str, vault_fp: str = "") -> tuple[list[di
                 for _plat_h in ("ocp", "k8s"):
                     _hv = _load_yaml_dir(
                         _proj_host_vars / f"{_env_h}_{_plat_h}", warnings)
-                    _ns_obj = (_hv or {}).get("ocp_namespace")
+                    # OCP uses ocp_namespace.name; K8s uses k8s_namespace.name.
+                    _ns_obj = (_hv or {}).get(f"{_plat_h}_namespace")
                     _ns_name = ""
                     if isinstance(_ns_obj, dict):
                         _ns_name = str(_ns_obj.get("name") or "").strip()
@@ -29076,16 +29080,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
 
     # ── Next-version lookup + hygiene detector ────────────────────────────
     # Per-app next versions per branch (develop/release/stress/hotfix) from
-    # ef-cicd-versions-lookup. Fetched for ALL filtered apps (so the build-stage
-    # popover can show them AND the admin warning can validate every app).
-    _iv_filtered_apps = sorted({
-        (r.get("application") or "").strip()
-        for r in _inv_rows_filtered if (r.get("application") or "").strip()
-    })
-    _iv_next_versions = (
-        _fetch_next_versions(json.dumps(_iv_filtered_apps))
-        if _iv_filtered_apps else {}
-    )
+    # ef-cicd-versions-lookup. Fetched once (whole lookup) and resolved per row
+    # by app then project — drives the build-stage popover AND the admin warning.
+    _iv_next_versions = _fetch_next_versions_all()
+    # app → project (first seen) so the build-stage popover can resolve a
+    # project-level record when the lookup is keyed by project, not app.
+    _iv_app_project: dict[str, str] = {}
+    for _r_p in _inv_rows_filtered:
+        _ap = (_r_p.get("application") or "").strip()
+        if _ap and _ap not in _iv_app_project:
+            _iv_app_project[_ap] = (_r_p.get("project") or "").strip()
     # Validation (admin warning): every app must have all four next_* set, and
     # next_hotfix must start with the current PRD version (1.3.1 → 1.3.1…).
     # [{app, project, issues:[str]}]
@@ -29097,7 +29101,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             if not _app_v or _app_v in _seen_nv:
                 continue
             _seen_nv.add(_app_v)
-            _nv = _iv_next_versions.get(_app_v)
+            _proj_v = (_r_v.get("project") or "").strip()
+            _nv = _next_versions_for(_app_v, _proj_v, _iv_next_versions)
             _issues: list[str] = []
             if not _nv:
                 _issues.append("no record in ef-cicd-versions-lookup")
@@ -29115,8 +29120,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         f"PRD <b>{html.escape(_prd_v)}</b>")
             if _issues:
                 _iv_nv_issues.append({
-                    "app": _app_v, "project": (_r_v.get("project") or "").strip(),
-                    "issues": _issues,
+                    "app": _app_v, "project": _proj_v, "issues": _issues,
                 })
         _iv_nv_issues.sort(key=lambda d: (d["project"].lower(), d["app"].lower()))
     _iv_nv_total = len(_iv_nv_issues)
@@ -31078,7 +31082,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # Next versions per branch — shown on the build stage ("Last Build").
             _nextver_block = ""
             if _stage == "build":
-                _nv = _iv_next_versions.get(_app) or {}
+                _nv = _next_versions_for(
+                    _app, _iv_app_project.get(_app, ""), _iv_next_versions)
                 _nv_rows_h = "".join(
                     f'<div class="ap-nextver-row">'
                     f'<span class="ap-nextver-br">{html.escape(_br)}</span>'
