@@ -12879,9 +12879,21 @@ def _union_role_list(table: dict[str, list], default_for_admin: list) -> list:
     return seen if seen else list(default_for_admin)
 
 
+# Inventory VISIBILITY for non-admins is team-based across EVERY ownership
+# field — not just the detected role's field. Rationale: role-string detection
+# is fragile (an unmapped role label silently defaults to Developer → dev_team
+# only), which repeatedly collapsed a QC/Ops user's whole scope to zero even
+# though their team plainly owns apps under qc_team / prd_team. A non-admin
+# should SEE every app/project their team touches in any capacity; the ROLE
+# still gates ACTIONS (deploy / promote / requests) downstream. So we resolve
+# scope against all standard *_team fields, independent of role detection.
+_ALL_TEAM_FIELDS: list[str] = [
+    "dev_team.keyword", "qc_team.keyword", "uat_team.keyword",
+    "prd_team.keyword", "ops_team.keyword", "preprod_team.keyword",
+]
 _user_team_fields = (
     [] if _is_admin
-    else _union_role_list(ROLE_TEAM_FIELDS, [])
+    else list(_ALL_TEAM_FIELDS)
 )
 _user_event_types     = _union_role_list(_ROLE_EVENT_TYPES,     _ROLE_EVENT_TYPES["Admin"])
 _user_envs            = _union_role_list(_ROLE_ENVS,            _ROLE_ENVS["Admin"])
