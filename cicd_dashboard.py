@@ -3383,7 +3383,9 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_dupname_pop [data-testid="stPopover"] button,
 .st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button,
 .st-key-cc_iv_nswarn_pop [data-testid="stPopover"] button,
-.st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button {
+.st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button,
+.st-key-cc_iv_nvwarn_pop [data-testid="stPopover"] button,
+.st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button {
     border: 1px solid color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)) !important;
     background: color-mix(in srgb, var(--cc-amber) 10%, transparent) !important;
     color: var(--cc-amber) !important;
@@ -3401,11 +3403,18 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_dupname_pop [data-testid="stPopover"] button:hover,
 .st-key-cc_iv_dupname_pop [data-testid="stPopoverButton"] button:hover,
 .st-key-cc_iv_nswarn_pop [data-testid="stPopover"] button:hover,
-.st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button:hover {
+.st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button:hover,
+.st-key-cc_iv_nvwarn_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button:hover {
     background: color-mix(in srgb, var(--cc-amber) 18%, transparent) !important;
     box-shadow: 0 3px 12px color-mix(in srgb, var(--cc-amber) 28%, transparent) !important;
 }
-.st-key-cc_iv_dupname_pop, .st-key-cc_iv_nswarn_pop { margin: 0 0 6px 0; }
+.st-key-cc_iv_dupname_pop, .st-key-cc_iv_nswarn_pop,
+.st-key-cc_iv_nvwarn_pop { margin: 0 0 6px 0; }
+.iv-nv-issue {
+    font-size: .72rem; color: var(--cc-text-dim); line-height: 1.5;
+}
+.iv-nv-issue b { color: var(--cc-red); font-family: var(--cc-mono); }
 .iv-ns-env {
     font-family: var(--cc-mono); font-size: .58rem; font-weight: 800;
     color: var(--cc-blue); background: var(--cc-blue-lt);
@@ -10652,6 +10661,29 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
 .ap-deploy-ver.is-this {
     color: var(--cc-accent); background: var(--cc-accent-lt); border-color: #dfe3ff;
 }
+/* Version popover — next versions per branch (build stage) */
+.el-app-pop .ap-nextver-list {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 5px;
+}
+.ap-nextver-row {
+    display: flex; align-items: center; gap: 7px;
+    border: 1px solid var(--cc-border); border-radius: 8px;
+    padding: 4px 9px; background: var(--cc-surface2);
+}
+.ap-nextver-br {
+    font-family: var(--cc-mono); font-size: .58rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .04em;
+    color: var(--cc-blue); background: var(--cc-blue-lt);
+    border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+}
+.ap-nextver-val {
+    font-family: var(--cc-mono); font-size: .74rem; font-weight: 700;
+    color: var(--cc-text);
+}
+.ap-nextver-val.is-missing {
+    color: var(--cc-red); font-weight: 600; font-style: italic;
+}
 .ap-deploy-reason {
     font-size: .62rem; font-weight: 700; letter-spacing: .02em;
     padding: 1px 7px; border-radius: 999px;
@@ -12151,6 +12183,54 @@ def _fetch_recent_deploys(apps_json: str) -> dict:
             "reason":  (_s.get("Reason") or _s.get("reason") or "").strip(),
             "who":     _s.get("requester") or _s.get("triggeredby") or "",
         })
+    return out
+
+
+# The four "next version" branches stamped by the auto-versioning lookup.
+_NEXT_VERSION_BRANCHES = ("develop", "release", "stress", "hotfix")
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_next_versions(apps_json: str) -> dict:
+    """Per-app next-version-per-branch from ef-cicd-versions-lookup.
+
+    Fields ``next_develop`` / ``next_release`` / ``next_stress`` /
+    ``next_hotfix`` give the next version to stamp on a build for each branch.
+    One query: terms agg on application + a 1-doc top_hits. Returns
+    ``{app: {"develop","release","stress","hotfix"}}`` (missing → "")."""
+    _apps = json.loads(apps_json)
+    out: dict = {}
+    if not _apps:
+        return out
+    try:
+        resp = es_search(
+            IDX["versions"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": _apps}}]}},
+                "aggs": {"by_app": {
+                    "terms": {"field": "application", "size": len(_apps)},
+                    "aggs": {"latest": {"top_hits": {
+                        "size": 1,
+                        "_source": ["application", "project",
+                                    "next_develop", "next_release",
+                                    "next_stress", "next_hotfix"],
+                    }}},
+                }},
+            },
+            size=0,
+        )
+    except Exception:
+        return out
+    for _b in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _hits = _b.get("latest", {}).get("hits", {}).get("hits", [])
+        if not _hits:
+            continue
+        _s = _hits[0].get("_source", {}) or {}
+        _app = _s.get("application") or _b.get("key")
+        out[_app] = {
+            _br: str(_s.get(f"next_{_br}") or "").strip()
+            for _br in _NEXT_VERSION_BRANCHES
+        }
     return out
 
 
@@ -28994,6 +29074,53 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         d["project"].lower(), _env_order.get(d["env"], 9), d["application"].lower()))
     _iv_ns_total = len(_iv_ns_shared) + len(_iv_ns_unassigned)
 
+    # ── Next-version lookup + hygiene detector ────────────────────────────
+    # Per-app next versions per branch (develop/release/stress/hotfix) from
+    # ef-cicd-versions-lookup. Fetched for ALL filtered apps (so the build-stage
+    # popover can show them AND the admin warning can validate every app).
+    _iv_filtered_apps = sorted({
+        (r.get("application") or "").strip()
+        for r in _inv_rows_filtered if (r.get("application") or "").strip()
+    })
+    _iv_next_versions = (
+        _fetch_next_versions(json.dumps(_iv_filtered_apps))
+        if _iv_filtered_apps else {}
+    )
+    # Validation (admin warning): every app must have all four next_* set, and
+    # next_hotfix must start with the current PRD version (1.3.1 → 1.3.1…).
+    # [{app, project, issues:[str]}]
+    _iv_nv_issues: list[dict] = []
+    if _is_admin:
+        _seen_nv: set[str] = set()
+        for _r_v in _inv_rows_filtered:
+            _app_v = (_r_v.get("application") or "").strip()
+            if not _app_v or _app_v in _seen_nv:
+                continue
+            _seen_nv.add(_app_v)
+            _nv = _iv_next_versions.get(_app_v)
+            _issues: list[str] = []
+            if not _nv:
+                _issues.append("no record in ef-cicd-versions-lookup")
+            else:
+                _miss = [f"next_{_b}" for _b in _NEXT_VERSION_BRANCHES
+                         if not _nv.get(_b)]
+                if _miss:
+                    _issues.append("missing: " + ", ".join(_miss))
+                # next_hotfix must be prefixed by the current PRD version.
+                _prd_v = ((_iv_prd_map.get(_app_v) or {}).get("version") or "").strip()
+                _hot = (_nv.get("hotfix") or "").strip()
+                if _prd_v and _hot and not _hot.startswith(_prd_v):
+                    _issues.append(
+                        f"next_hotfix <b>{html.escape(_hot)}</b> doesn't extend "
+                        f"PRD <b>{html.escape(_prd_v)}</b>")
+            if _issues:
+                _iv_nv_issues.append({
+                    "app": _app_v, "project": (_r_v.get("project") or "").strip(),
+                    "issues": _issues,
+                })
+        _iv_nv_issues.sort(key=lambda d: (d["project"].lower(), d["app"].lower()))
+    _iv_nv_total = len(_iv_nv_issues)
+
     # ── Action toolbar — Prisma report viewer only ─────────────────────────
     # Build / Deploy / Release triggers were moved into the dedicated
     # ACTIONS tab so the Pipelines Inventory stays read-only. The
@@ -29040,9 +29167,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             unsafe_allow_html=True,
                         )
 
-        # ── Data-quality warnings row (duplicates + namespaces, side by side) ─
-        if _iv_dup_total or _iv_ns_total:
-            _warn_cols = st.columns([1.4, 1.4, 5])
+        # ── Data-quality warnings row (duplicates + namespaces + versions) ──
+        if _iv_dup_total or _iv_ns_total or _iv_nv_total:
+            _warn_cols = st.columns([1.4, 1.4, 1.4, 4])
         else:
             _warn_cols = None
 
@@ -29179,6 +29306,43 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         f'whose namespace is empty or the <code>{_NS_PLACEHOLDER}'
                         '</code> placeholder.</div>'
                         + _shared_html + _unass_html,
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Next-version hygiene warning (admin-only, sibling popover) ──
+        if _iv_nv_total:
+            with (_warn_cols[2] if _warn_cols else st.container()), \
+                    st.container(key="cc_iv_nvwarn_pop"):
+                with st.popover(
+                    f"⚠ {_iv_nv_total} version issue"
+                    f"{'s' if _iv_nv_total != 1 else ''}",
+                    use_container_width=False,
+                    help="Apps with missing next-version fields in "
+                         "ef-cicd-versions-lookup, or a next_hotfix that doesn't "
+                         "extend the current PRD version. Admin-only.",
+                ):
+                    _nv_rows = "".join(
+                        f'<tr><td class="iv-dup-key">{html.escape(_x["app"])}'
+                        + (f'<div class="iv-dup-projs">in: '
+                           f'<span class="iv-dup-proj">{html.escape(_x["project"])}'
+                           f'</span></div>' if _x["project"] else "")
+                        + '</td><td>'
+                        + "".join(f'<div class="iv-nv-issue">{_i}</div>'
+                                  for _i in _x["issues"])
+                        + '</td></tr>'
+                        for _x in _iv_nv_issues
+                    )
+                    st.markdown(
+                        '<div class="iv-dup-intro">Per-branch next versions from '
+                        '<code>ef-cicd-versions-lookup</code>. Every app must set '
+                        '<code>next_develop</code>, <code>next_release</code>, '
+                        '<code>next_stress</code> and <code>next_hotfix</code>, '
+                        'and <code>next_hotfix</code> must begin with the current '
+                        'PRD version (e.g. PRD 1.3.1 → 1.3.1…).</div>'
+                        f'<div class="iv-dup-sec-head">▢ Apps with issues '
+                        f'<b>{_iv_nv_total}</b></div>'
+                        f'<table class="iv-dup-table"><tbody>{_nv_rows}'
+                        f'</tbody></table>',
                         unsafe_allow_html=True,
                     )
 
@@ -30911,6 +31075,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _jenkins_section_v = ""
             _prisma_link_v = _iv_prisma_link_html(_app, _ver)
 
+            # Next versions per branch — shown on the build stage ("Last Build").
+            _nextver_block = ""
+            if _stage == "build":
+                _nv = _iv_next_versions.get(_app) or {}
+                _nv_rows_h = "".join(
+                    f'<div class="ap-nextver-row">'
+                    f'<span class="ap-nextver-br">{html.escape(_br)}</span>'
+                    f'<span class="ap-nextver-val'
+                    f'{"" if _nv.get(_br) else " is-missing"}">'
+                    f'{html.escape(_nv.get(_br) or "— not set —")}</span>'
+                    f'</div>'
+                    for _br in _NEXT_VERSION_BRANCHES
+                )
+                _nextver_block = (
+                    f'    <div class="ap-section">Next versions'
+                    f'<span class="ap-section-note">ef-cicd-versions-lookup'
+                    f'</span></div>'
+                    f'    <div class="ap-nextver-list">{_nv_rows_h}</div>'
+                )
+
             # Recent deployments on THIS environment — newest 5 regardless of
             # version (each row shows which version it was) + the Reason field.
             # Build/release stages carry no env so they match nothing here.
@@ -30950,12 +31134,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'  <div class="ap-body">'
                 f'    {_banner}'
                 f'    {_stage_block}'
+                f'    {_nextver_block}'
                 f'    {_deploys_block}'
                 f'    {_jenkins_section_v}'
                 f'    {_prisma_block}'
                 f'    {_prisma_link_v}'
                 f'  </div>'
-                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap · jenkins</div>'
+                f'  <div class="ap-foot">Sources: ef-cicd-builds · ef-cicd-releases · ef-cicd-deployments · ef-cicd-versions-lookup · ef-cicd-prismacloud · ef-cicd-invicti · ef-cicd-zap · jenkins</div>'
                 f'</div>'
             )
 
