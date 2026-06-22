@@ -7611,6 +7611,20 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     background: color-mix(in srgb, #2684ff 12%, transparent);
     border: 1px solid color-mix(in srgb, #2684ff 28%, transparent);
 }
+.iv-jira-closed {
+    display: inline-block;
+    margin-left: 2px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-family: var(--cc-data);
+    font-size: .56rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--cc-green);
+    background: color-mix(in srgb, var(--cc-green) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-green) 28%, transparent);
+}
 
 /* Security tile — per-scanner attribution chip strip below the V* bar */
 /* Per-stage rows inside the security-posture tile (admin / CLevel only).
@@ -26262,42 +26276,53 @@ def _fetch_jira_open(projects_json: str) -> dict:
     empty projects list (typically: admin with no team / project
     scope active).
 
-    Open = ``status`` not in ``CLOSED_JIRA``. Returns
-    ``{"total": int, "priority": {label: count}, "type": {label: count},
-    "scope": "projects" | "fleet" | ""}``.
+    Open = ``status`` not in ``CLOSED_JIRA``; closed = ``status`` in it. The
+    query no longer pre-filters to open issues — instead two ``filter`` sub-aggs
+    split the in-scope issues into open vs closed, so a single round-trip yields
+    both counts (and the open priority/type breakdown). Returns
+    ``{"total": int (open), "closed": int, "priority": {label: count},
+    "type": {label: count}, "scope": "projects" | "fleet" | ""}``.
     """
     _projects: list[str] = json.loads(projects_json)
-    _empty = {"total": 0, "priority": {}, "type": {}, "scope": ""}
+    _empty = {"total": 0, "closed": 0, "priority": {}, "type": {}, "scope": ""}
 
+    # Filter aggs split in-scope issues into open vs closed in one pass. The
+    # priority/type breakdowns stay scoped to OPEN issues (the tile's bars show
+    # what's still actionable), nested under the `open` filter.
     _aggs = {
-        "by_priority": {"terms": {
-            "field": "priority", "size": 20, "missing": "—",
-        }},
-        "by_type": {"terms": {
-            "field": "issuetype", "size": 20, "missing": "—",
-        }},
+        "open": {
+            "filter": {"bool": {"must_not": [{"terms": {"status": CLOSED_JIRA}}]}},
+            "aggs": {
+                "by_priority": {"terms": {
+                    "field": "priority", "size": 20, "missing": "—",
+                }},
+                "by_type": {"terms": {
+                    "field": "issuetype", "size": 20, "missing": "—",
+                }},
+            },
+        },
+        "closed": {
+            "filter": {"terms": {"status": CLOSED_JIRA}},
+        },
     }
-    _must_not_closed = [{"terms": {"status": CLOSED_JIRA}}]
 
-    def _extract(resp: dict | None) -> tuple[int, dict[str, int], dict[str, int]]:
+    def _extract(resp: dict | None) -> tuple[int, int, dict[str, int], dict[str, int]]:
         if not resp:
-            return 0, {}, {}
-        _hits = resp.get("hits") or {}
-        _t = _hits.get("total")
-        _total = (
-            int(_t.get("value", 0)) if isinstance(_t, dict)
-            else int(_t or 0)
-        )
+            return 0, 0, {}, {}
         _agg = resp.get("aggregations") or {}
+        _open = _agg.get("open") or {}
+        _closed = _agg.get("closed") or {}
+        _open_total = int(_open.get("doc_count") or 0)
+        _closed_total = int(_closed.get("doc_count") or 0)
         _by_p = {
             str(_b.get("key", "")): int(_b.get("doc_count") or 0)
-            for _b in (_agg.get("by_priority") or {}).get("buckets", [])
+            for _b in (_open.get("by_priority") or {}).get("buckets", [])
         }
         _by_t = {
             str(_b.get("key", "")): int(_b.get("doc_count") or 0)
-            for _b in (_agg.get("by_type") or {}).get("buckets", [])
+            for _b in (_open.get("by_type") or {}).get("buckets", [])
         }
-        return _total, _by_p, _by_t
+        return _open_total, _closed_total, _by_p, _by_t
 
     # ── Project-scoped pass — the canonical path for any non-empty
     # projects list. Returns whatever the filter actually matches,
@@ -26316,7 +26341,6 @@ def _fetch_jira_open(projects_json: str) -> dict:
                             ],
                             "minimum_should_match": 1,
                         }}],
-                        "must_not": _must_not_closed,
                     }},
                     "aggs": _aggs,
                     "track_total_hits": True,
@@ -26325,9 +26349,10 @@ def _fetch_jira_open(projects_json: str) -> dict:
             )
         except Exception:
             return _empty
-        _total, _by_p, _by_t = _extract(resp)
+        _total, _closed, _by_p, _by_t = _extract(resp)
         return {
             "total": _total,
+            "closed": _closed,
             "priority": _by_p,
             "type": _by_t,
             "scope": "projects",
@@ -26339,7 +26364,7 @@ def _fetch_jira_open(projects_json: str) -> dict:
         resp = es_search(
             IDX["jira"],
             {
-                "query": {"bool": {"must_not": _must_not_closed}},
+                "query": {"match_all": {}},
                 "aggs": _aggs,
                 "track_total_hits": True,
             },
@@ -26347,10 +26372,11 @@ def _fetch_jira_open(projects_json: str) -> dict:
         )
     except Exception:
         return _empty
-    _total, _by_p, _by_t = _extract(resp)
-    if _total > 0 or _by_p or _by_t:
+    _total, _closed, _by_p, _by_t = _extract(resp)
+    if _total > 0 or _closed > 0 or _by_p or _by_t:
         return {
             "total": _total,
+            "closed": _closed,
             "priority": _by_p,
             "type": _by_t,
             "scope": "fleet",
@@ -28446,8 +28472,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _jira_show:
             _jira = _fetch_jira_open(json.dumps(sorted(_post_projects)))
         else:
-            _jira = {"total": 0, "priority": {}, "type": {}, "scope": ""}
+            _jira = {"total": 0, "closed": 0, "priority": {}, "type": {}, "scope": ""}
         _jira_total: int = int(_jira.get("total") or 0)
+        _jira_closed: int = int(_jira.get("closed") or 0)
         _jira_pri: dict[str, int] = dict(_jira.get("priority") or {})
         _jira_type: dict[str, int] = dict(_jira.get("type") or {})
         _jira_scope: str = str(_jira.get("scope") or "")
@@ -28471,7 +28498,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _jira_unmapped:
             _jira_tag, _jira_tag_lbl = "warn", "field mismatch"
         elif _jira_total == 0 and _jira_show:
-            _jira_tag, _jira_tag_lbl = "ok", "clean"
+            _jira_tag, _jira_tag_lbl = "ok", (
+                f"clean · {_jira_closed} closed" if _jira_closed else "clean")
         elif _highest > 0:
             _jira_tag, _jira_tag_lbl = "crit", f"{_highest} blocker"
         elif _high > 0:
@@ -28799,17 +28827,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f' · <span class="iv-jira-scope">{_jira_scope_lbl}</span>'
                 if _jira_scope_lbl else ''
             )
+            _closed_pill = (
+                f' · <span class="iv-jira-closed">{_jira_closed} closed</span>'
+                if _jira_closed else ''
+            )
             _jira_value_html = f'<div class="iv-pulse-value">{_jira_total}</div>'
             _jira_sub_html = (
                 '<div class="iv-pulse-sub">priority breakdown · '
                 f'<b>{len(_jira_type)}</b> issue type'
                 f'{"s" if len(_jira_type) != 1 else ""}'
+                f'{_closed_pill}'
                 f'{_scope_pill}'
                 '</div>'
             )
         else:
             _jira_value_html = '<div class="iv-pulse-value">0</div>'
-            _jira_sub_html = '<div class="iv-pulse-sub">no open issues</div>'
+            _closed_txt = (
+                f'no open issues · <span class="iv-jira-closed">{_jira_closed} '
+                f'closed</span>' if _jira_closed else 'no open issues'
+            )
+            _jira_sub_html = f'<div class="iv-pulse-sub">{_closed_txt}</div>'
 
         # Build twin-stat block (Builds % | Deploys %) — replaces the old
         # single big number so build success and PRD-deploy success appear
@@ -28868,7 +28905,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + '<div class="iv-pulse-tile iv-pulse-tile--jira" style="--iv-pulse-accent:'
               'linear-gradient(90deg,#2684ff,#7048e8)">'
             '<div class="iv-pulse-label">'
-            '<span>Jira · open issues</span>'
+            '<span>Jira · open / closed</span>'
             + (f'<span class="iv-pulse-tag {_jira_tag}">{_jira_tag_lbl}</span>'
                if _jira_tag_lbl else '')
             + '</div>'
@@ -29259,15 +29296,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_dup_total = len(_iv_dup_apps) + len(_iv_dup_projects) + len(_iv_dup_companies)
 
     # ── Namespace hygiene detector (admin-only) ───────────────────────────
-    # Two data-quality hazards on the per-env OCP/K8s namespace:
+    # Three data-quality hazards on the per-env OCP/K8s namespace:
     #   1. SHARED — one (environment, namespace) used by 2+ distinct projects
     #      (cross-project namespace collision → deploys clobber each other).
     #   2. UNASSIGNED — an env the app targets has an empty namespace or the
     #      placeholder "test-ns" (never wired to a real namespace).
+    #   3. CROSS-ENV — the same namespace value reused across 2+ DIFFERENT
+    #      environments (same project or different ones) → a non-prod env can
+    #      collide with prod, or two stages share one namespace.
     # Namespace matching is case-insensitive; "test-ns" is the sentinel.
     _NS_PLACEHOLDER = "test-ns"
     # {(env, platform): {ns_lower: {"display": str, "projects": set}}}
     _ns_by_envplat: dict[tuple[str, str], dict[str, dict]] = {}
+    # {ns_lower: {"display": str, "occ": set[(env, platform, project)]}} — for
+    # cross-environment reuse detection (keyed by namespace value alone).
+    _ns_global: dict[str, dict] = {}
     # [{project, application, env, platform, value}] for unassigned
     _iv_ns_unassigned: list[dict] = []
     if _is_admin:
@@ -29291,6 +29334,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     _ns_s.lower(), {"display": _ns_s, "projects": set()})
                 if _proj_n:
                     _slot["projects"].add(_proj_n)
+                _g = _ns_global.setdefault(
+                    _ns_s.lower(), {"display": _ns_s, "occ": set()})
+                _g["occ"].add((_env_n, _plat_n, _proj_n))
+    _env_order = {e: i for i, e in enumerate(_INV_ENVIRONMENTS)}
     # Shared = a namespace whose project set has 2+ entries, per (env, platform).
     _iv_ns_shared: list[dict] = []
     for (_env_n, _plat_n), _by_ns in _ns_by_envplat.items():
@@ -29301,12 +29348,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     "namespace": _info["display"],
                     "projects": sorted(_info["projects"], key=str.lower),
                 })
-    _env_order = {e: i for i, e in enumerate(_INV_ENVIRONMENTS)}
+    # Cross-env = a namespace value appearing in 2+ DISTINCT environments.
+    _iv_ns_crossenv: list[dict] = []
+    for _ns_lc, _g in _ns_global.items():
+        _envs = {_e for (_e, _p, _pj) in _g["occ"]}
+        if len(_envs) >= 2:
+            # per-env → sorted projects that use this namespace in that env
+            _by_env: dict[str, list[str]] = {}
+            for (_e, _p, _pj) in _g["occ"]:
+                if _pj:
+                    _by_env.setdefault(_e, [])
+                    if _pj not in _by_env[_e]:
+                        _by_env[_e].append(_pj)
+                else:
+                    _by_env.setdefault(_e, [])
+            for _e in _by_env:
+                _by_env[_e].sort(key=str.lower)
+            _iv_ns_crossenv.append({
+                "namespace": _g["display"],
+                "envs": sorted(_envs, key=lambda e: _env_order.get(e, 9)),
+                "by_env": _by_env,
+            })
     _iv_ns_shared.sort(key=lambda d: (_env_order.get(d["env"], 9),
                                       d["platform"], d["namespace"].lower()))
     _iv_ns_unassigned.sort(key=lambda d: (
         d["project"].lower(), _env_order.get(d["env"], 9), d["application"].lower()))
-    _iv_ns_total = len(_iv_ns_shared) + len(_iv_ns_unassigned)
+    _iv_ns_crossenv.sort(key=lambda d: d["namespace"].lower())
+    _iv_ns_total = (
+        len(_iv_ns_shared) + len(_iv_ns_unassigned) + len(_iv_ns_crossenv))
 
     # ── Next-version lookup + hygiene detector ────────────────────────────
     # Per-app next versions per branch (develop/release/stress/hotfix) from
@@ -29501,7 +29570,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f"⚠ {_iv_ns_total} namespace issue"
                     f"{'s' if _iv_ns_total != 1 else ''}",
                     use_container_width=False,
-                    help="Cross-project namespace collisions and unassigned / "
+                    help="Cross-project namespace collisions, namespaces reused "
+                         "across multiple environments, and unassigned / "
                          "placeholder (test-ns) namespaces in the current "
                          "scope. Admin-only.",
                 ):
@@ -29543,14 +29613,44 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             f'<table class="iv-dup-table"><tbody>{_un_rows}'
                             f'</tbody></table>'
                         )
+                    _crossenv_html = ""
+                    if _iv_ns_crossenv:
+                        _ce_rows = ""
+                        for _x in _iv_ns_crossenv:
+                            _env_cells = "".join(
+                                f'<div class="iv-dup-projs">'
+                                f'<span class="iv-ns-env">{html.escape(_e.upper())}</span> '
+                                + ("".join(
+                                    f'<span class="iv-dup-proj">{html.escape(_p)}</span>'
+                                    for _p in _x["by_env"].get(_e, []))
+                                   or '<span class="iv-dup-proj is-none">— no project —</span>')
+                                + '</div>'
+                                for _e in _x["envs"]
+                            )
+                            _ce_rows += (
+                                f'<tr><td class="iv-dup-key">'
+                                f'{html.escape(_x["namespace"])}'
+                                f'<div class="iv-dup-projs">across '
+                                f'<b>{len(_x["envs"])}</b> envs</div></td>'
+                                f'<td>{_env_cells}</td></tr>'
+                            )
+                        _crossenv_html = (
+                            f'<div class="iv-dup-sec-head">⇄ Reused across '
+                            f'environments <b>{len(_iv_ns_crossenv)}</b></div>'
+                            f'<table class="iv-dup-table"><tbody>{_ce_rows}'
+                            f'</tbody></table>'
+                        )
                     st.markdown(
                         '<div class="iv-dup-intro">Per-environment OCP/K8s '
                         'namespaces. <b>Shared</b> = one namespace used by more '
                         'than one project in the same environment (deploys can '
                         'collide). <b>Unassigned</b> = a targeted environment '
                         f'whose namespace is empty or the <code>{_NS_PLACEHOLDER}'
-                        '</code> placeholder.</div>'
-                        + _shared_html + _unass_html,
+                        '</code> placeholder. <b>Reused across environments</b> = '
+                        'the same namespace value appears in 2+ different '
+                        'environments (same or different project) — a non-prod '
+                        'env can then collide with prod.</div>'
+                        + _shared_html + _crossenv_html + _unass_html,
                         unsafe_allow_html=True,
                     )
 
