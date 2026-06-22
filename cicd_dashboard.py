@@ -11649,7 +11649,7 @@ def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
     #    `teams` blob, so we can reuse the exact git-path matcher and stay robust
     #    to drift even when the git clone is unreachable in the deployment.
     try:
-        _es_rows = _fetch_full_inventory("[]")
+        _es_rows = _fetch_full_inventory("[]", direct_es=True)
     except Exception:
         _es_rows = []
     if _es_rows:
@@ -11708,7 +11708,9 @@ def _resolve_inventory_scope_for_teams(teams) -> dict:
         _rows = _git_rows
     else:
         try:
-            _rows = _fetch_full_inventory("[]")
+            # direct_es: bypass the PG read-router so resolution sees the same
+            # authoritative ES inventory the admin scope-check tool sees.
+            _rows = _fetch_full_inventory("[]", direct_es=True)
         except Exception:
             _rows = []
 
@@ -22732,8 +22734,10 @@ def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
     pref = _inv_source_pref()
 
     # ``es`` — admin asked to ignore git outright. No-op clone, no diff.
+    # direct_es: the inventory is the authoritative config display — never serve
+    # it from a possibly-stale Postgres mirror.
     if pref == "es":
-        rows = _fetch_full_inventory(scope_json)
+        rows = _fetch_full_inventory(scope_json, direct_es=True)
         return rows, "es", "ES (admin chose)", []
 
     # ``git`` or ``auto`` — attempt the git path first.
@@ -22748,8 +22752,9 @@ def _inventory_load(scope_json: str) -> tuple[list[dict], str, str, list[str]]:
         # exactly what failed.
         return [], "git-forced-failed", status_msg or "git unavailable", warnings
 
-    # Auto mode — fall through to the legacy ES projection.
-    rows = _fetch_full_inventory(scope_json)
+    # Auto mode — fall through to the ES projection (authoritative, bypasses
+    # the PG read-router so a stale mirror can't empty a non-admin's inventory).
+    rows = _fetch_full_inventory(scope_json, direct_es=True)
     return rows, "es", "ES fallback", warnings
 
 
@@ -25394,15 +25399,29 @@ def _fetch_prisma_scan_html(bucket: str, key: str) -> tuple[str, int, str]:
 # =============================================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _fetch_full_inventory(scope_json: str) -> list[dict]:
-    """Return all inventory records matching *scope_json* with every field."""
+def _fetch_full_inventory(scope_json: str, direct_es: bool = False) -> list[dict]:
+    """Return all inventory records matching *scope_json* with every field.
+
+    ``direct_es=True`` BYPASSES the ES→Postgres read-router (``cached_search``
+    instead of ``es_search``) so the rows reflect the AUTHORITATIVE Elasticsearch
+    inventory, not a possibly-stale/incomplete Postgres mirror. Non-admin SCOPE
+    RESOLUTION must use this: the raw inventory row-fetch is a router-translatable
+    shape, so it can be served from PG, whereas the admin scope-check tool uses a
+    composite aggregation that always falls back to ES — that mismatch made the
+    admin tool resolve a non-admin's apps while the non-admin's own session
+    resolved zero. Same principle as the count-query bypass."""
     _sf = json.loads(scope_json)
+    _body = {"query": {"bool": {"filter": _sf}}, "_source": True}
     try:
-        resp = es_search(
-            IDX["inventory"],
-            {"query": {"bool": {"filter": _sf}}, "_source": True},
-            size=2000,
-        )
+        if direct_es:
+            resp = cached_search(
+                IDX["inventory"],
+                json.dumps({**_body, "track_total_hits": True},
+                           default=str, sort_keys=True),
+                size=2000,
+            )
+        else:
+            resp = es_search(IDX["inventory"], _body, size=2000)
     except Exception:
         return []
     rows: list[dict] = []
@@ -29039,9 +29058,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f"inventory source = <code>{html.escape(str(_sd_src))}</code>"
                 + (f" ({html.escape(str(_sd_src_status))})" if _sd_src_status else ""))
             try:
-                _sd_all_rows = _fetch_full_inventory("[]")
+                _sd_all_rows = _fetch_full_inventory("[]", direct_es=True)
             except Exception:
                 _sd_all_rows = []
+            _sd_reasons.append(
+                "PG read-router = <code>"
+                + html.escape(str(_history_use_pg()))
+                + "</code> (resolution now bypasses it via direct ES)")
             _sd_inv_team_keys: set[str] = set()
             _sd_inv_team_raw: set[str] = set()
             for _sdr in _sd_all_rows:
