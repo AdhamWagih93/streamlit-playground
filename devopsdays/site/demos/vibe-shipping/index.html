@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ST-05 · Vibe Shipping</title>
+<link rel="stylesheet" href="../../assets/css/system.css" />
+</head>
+<body>
+<script src="../../assets/js/common.js"></script>
+<script>mountTopbar({ code: 'ST-05 · VIBE ENGINEERING', backHref: '../../' });</script>
+
+<div class="wrap" style="padding-top:34px; padding-bottom:70px;">
+
+  <div class="eyebrow">Station 05 · 15:00</div>
+  <h1 style="margin:12px 0 8px;">Vibe Shipping</h1>
+  <p class="dim" style="max-width:720px; font-size:16px;">
+    It's mid-afternoon. Maya needs a feature shipped. She doesn't open an editor — she
+    <b style="color:var(--ink)">describes what she wants in plain English</b> and lets the AI run the whole
+    dev cycle: plan, code, test, scan, open a PR. The catch nobody tells beginners:
+    <b style="color:var(--violet)">the AI compresses the cycle, but the human still steers it.</b>
+  </p>
+
+  <div class="explainer" style="margin:18px 0 24px;">
+    <span class="ic">i</span>
+    <div><b>What "vibe engineering" really is:</b> not "AI writes code while you nap." You say the
+    <b>intent</b>; the machine accelerates everything from idea to pull request. But you still answer its
+    questions, name the tradeoffs, review the diff, and own the merge. <b>Speed without judgement is just
+    faster bugs.</b></div>
+  </div>
+
+  <!-- STAT TILES -->
+  <div class="grid cols-4" style="margin-bottom:26px;">
+    <div class="stat ticked">
+      <div class="k">Lead time for changes</div>
+      <div class="v"><span id="sLead">4.2</span><small> min</small></div>
+      <div class="sub">idea → production</div>
+    </div>
+    <div class="stat">
+      <div class="k">PRs opened by intent today</div>
+      <div class="v" id="sPrs">23</div>
+      <div class="sub">across the fleet</div>
+    </div>
+    <div class="stat">
+      <div class="k">Merged without rework</div>
+      <div class="v"><span id="sRework">71</span><small>%</small></div>
+      <div class="sub" style="color:var(--warn)">not 100% — the AI is fast, not perfect</div>
+    </div>
+    <div class="stat">
+      <div class="k">Human review still required</div>
+      <div class="v" style="color:var(--cyan)"><span id="sReview">100</span><small>%</small></div>
+      <div class="sub">no auto-merge. ever.</div>
+    </div>
+  </div>
+
+  <div class="grid cols-2" style="align-items:start;">
+
+    <!-- LEFT: intent + pipeline -->
+    <div class="grid" style="gap:18px;">
+
+      <!-- FEATURE INTENT -->
+      <div class="panel ticked">
+        <div class="panel-h">
+          <span class="badge cy"><span class="led"></span>FEATURE INTENT</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">Describe it. Don't type it.</h3>
+        </div>
+        <div class="panel-b">
+          <div class="tag" style="margin-bottom:8px;">Tell the agent what you want, in plain language</div>
+          <textarea id="intent" class="intentbox" rows="3">Add a dark-mode toggle to the billing dashboard and remember the user's choice.</textarea>
+
+          <div class="tag" style="margin:14px 0 8px;">Or pick an example</div>
+          <div class="btn-row" id="examples">
+            <button class="btn ghost ex" data-t="Add a dark-mode toggle to the billing dashboard and remember the user's choice.">🌙 Dark-mode toggle</button>
+            <button class="btn ghost ex" data-t="Add rate limiting to the public API so one client can't take the service down.">🛡 API rate limiting</button>
+            <button class="btn ghost ex" data-t="Let users export their invoices as a CSV file from the account page.">📄 Invoice CSV export</button>
+          </div>
+
+          <hr class="sep" />
+          <div class="btn-row">
+            <button class="btn primary" id="bVibe">▸ Vibe it</button>
+            <button class="btn ghost" id="bReset" style="display:none;">↺ Try another intent</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PIPELINE -->
+      <div class="panel">
+        <div class="panel-h">
+          <span class="badge ai"><span class="led"></span>PIPELINE</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">Idea → Pull Request</h3>
+          <span class="id" id="elapsed">+0.0s</span>
+        </div>
+        <div class="panel-b">
+          <div id="stages" class="grid" style="gap:9px;">
+            <!-- stage rows injected -->
+          </div>
+
+          <!-- clarifying-question gate -->
+          <div id="clarify" class="panel" style="display:none; background:var(--bg-2); border-color:rgba(157,123,255,.35); padding:15px; margin-top:14px;">
+            <div class="row" style="gap:10px; align-items:flex-start;">
+              <span class="badge ai" style="flex:none;"><span class="led"></span>ARIA asks</span>
+            </div>
+            <p id="clarifyQ" class="dim" style="font-size:14.5px; margin:11px 0 13px;"></p>
+            <div class="btn-row" id="clarifyBtns"></div>
+            <p class="faint" style="font-size:12px; margin:11px 0 0;">↑ The pipeline is <b style="color:var(--cyan)">paused</b> on you. The machine won't guess a product decision — that's the human's call.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: stream + generated code -->
+    <div class="grid" style="gap:18px;">
+      <div class="panel">
+        <div class="panel-h">
+          <span class="badge"><span class="led"></span>LIVE STREAM</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">What the agent is doing</h3>
+        </div>
+        <div class="panel-b">
+          <div class="term" id="log" style="max-height:240px;"></div>
+        </div>
+      </div>
+
+      <div class="panel" id="codeCard" style="display:none;">
+        <div class="panel-h">
+          <span class="badge cy"><span class="led"></span>GENERATED</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">billing/ThemeToggle.tsx</h3>
+          <span class="id" id="codeSummary">—</span>
+        </div>
+        <div class="panel-b">
+          <pre class="code" id="codeBlock"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CYCLE TIME + HUMAN GATE -->
+  <div class="panel pad ticked" id="cycleCard" style="margin-top:26px; display:none; border-color:var(--cyan-d);">
+    <div class="eyebrow" style="color:var(--cyan)">Cycle time</div>
+    <h2 style="margin:10px 0 18px;">The bottleneck moved — it didn't disappear.</h2>
+
+    <div class="grid cols-2" style="gap:22px;">
+      <div>
+        <div class="row between" style="margin-bottom:6px;">
+          <span class="tag">The old way · idea → PR</span>
+          <span class="mono" style="color:var(--warn)">≈ 2 days</span>
+        </div>
+        <div class="meter warn"><i id="meterOld" style="width:0%"></i></div>
+        <p class="faint" style="font-size:12px; margin:8px 0 0;">Ticket grooming, context-switching, typing it all out by hand, waiting on CI.</p>
+      </div>
+      <div>
+        <div class="row between" style="margin-bottom:6px;">
+          <span class="tag">Vibe · idea → PR</span>
+          <span class="mono" style="color:var(--cyan)">≈ 4 minutes</span>
+        </div>
+        <div class="meter ok"><i id="meterNew" style="width:0%"></i></div>
+        <p class="faint" style="font-size:12px; margin:8px 0 0;">You described intent, answered one question, and reviewed the result. The rest was the machine.</p>
+      </div>
+    </div>
+
+    <!-- HUMAN GATE -->
+    <div class="panel" id="gate" style="margin-top:22px; background:var(--bg-2); border-color:rgba(255,182,39,.4); padding:18px;">
+      <div class="row between wrap-g">
+        <div class="row" style="gap:11px;">
+          <span class="badge warn" style="flex:none;"><span class="led"></span>HUMAN REVIEW REQUIRED</span>
+          <div>
+            <div style="font-weight:600; color:var(--ink);">PR #4812 · dark-mode toggle for billing</div>
+            <div class="faint mono" style="font-size:11.5px;">12 files changed · 8 tests added · all green · waiting on you</div>
+          </div>
+        </div>
+        <div class="btn-row" id="gateBtns">
+          <button class="btn cyan" id="bMerge">✓ Review &amp; merge</button>
+          <button class="btn" id="bChanges">↻ Request changes</button>
+        </div>
+      </div>
+      <p class="faint" style="font-size:12.5px; margin:13px 0 0;">⚠ Notice what the machine did <b style="color:var(--ink)">not</b> do: merge on its own. The fast part stops at the gate. The merge is a human decision — because someone has to own what ships.</p>
+      <div id="gateResult" style="display:none; margin-top:13px; font-size:13.5px;"></div>
+    </div>
+  </div>
+
+  <!-- takeaway -->
+  <div class="panel pad reveal" id="takeaway" style="margin-top:26px; display:none; border-color:var(--violet);">
+    <div class="eyebrow" style="color:var(--violet)">The takeaway</div>
+    <h2 style="margin:10px 0;">Vibe engineering moves the bottleneck from <span style="color:var(--ink-faint); text-decoration:line-through;">typing</span> to <span style="color:var(--violet)">thinking</span>.</h2>
+    <p class="dim" style="font-size:15px; max-width:820px;">
+      The scarce skill is no longer writing code fast. It's <b style="color:var(--ink)">describing the right thing precisely</b>,
+      spotting when the fast output is subtly wrong, naming the tradeoffs out loud, and <b style="color:var(--ink)">owning the merge</b>.
+      The human went from author to <b style="color:var(--cyan)">editor-in-chief</b>. Faster cycles only help if judgement keeps pace —
+      otherwise you've just built a machine for shipping bugs at scale.
+    </p>
+  </div>
+
+  <div class="row between" style="margin-top:30px;">
+    <a class="backlink" href="../psych-safety/">◂ No Blame, Just Signal</a>
+    <a class="backlink" href="../new-roles/" style="border-color:var(--cyan-d); color:var(--cyan)">Next station · The New Org Chart ▸</a>
+  </div>
+</div>
+
+<style>
+  .intentbox {
+    width:100%; resize:vertical;
+    font-family:var(--mono); font-size:14px; line-height:1.55; color:var(--ink);
+    background:#060a0f; border:1px solid var(--line); border-radius:var(--r-sm);
+    padding:12px 14px; outline:none; transition:.16s;
+  }
+  .intentbox:focus { border-color:var(--cyan-d); box-shadow:var(--glow-cyan); }
+  .ex { font-size:12px; padding:8px 12px; }
+
+  .stage {
+    display:flex; align-items:center; gap:12px;
+    padding:11px 13px; border:1px solid var(--line-soft); border-radius:var(--r-sm);
+    background:var(--bg-2); transition:.25s;
+  }
+  .stage .ico { width:22px; flex:none; display:grid; place-items:center; }
+  .stage .lbl { flex:1; font-size:13.5px; color:var(--ink-dim); }
+  .stage .lbl small { display:block; font-family:var(--mono); font-size:11px; color:var(--ink-faint); margin-top:2px; }
+  .stage .time { font-family:var(--mono); font-size:11px; color:var(--ink-faint); flex:none; }
+  .stage[data-st="running"] { border-color:rgba(157,123,255,.45); background:rgba(157,123,255,.06); }
+  .stage[data-st="done"] .lbl { color:var(--ink); }
+  .stage[data-st="done"] { border-color:rgba(62,230,160,.22); }
+  .stage .dot-pending { width:9px; height:9px; border-radius:50%; border:1.5px solid var(--ink-faint); }
+  .stage .check { color:var(--ok); font-weight:700; }
+
+  pre.code {
+    font-family:var(--mono); font-size:12px; line-height:1.65; margin:0;
+    background:#060a0f; border:1px solid var(--line); border-radius:var(--r-sm);
+    padding:14px 16px; overflow-x:auto; color:var(--ink-dim);
+    white-space:pre;
+  }
+  pre.code .kw { color:var(--violet); }
+  pre.code .fn { color:var(--cyan); }
+  pre.code .str { color:var(--amber); }
+  pre.code .cm { color:var(--ink-faint); font-style:italic; }
+  .codeline { opacity:0; animation:lnIn .3s forwards; }
+</style>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log');
+
+// initial stat tile animation
+window.addEventListener('load', () => {
+  countTo($('sLead'),   4.2, { dec:1 });
+  countTo($('sPrs'),    23);
+  countTo($('sRework'), 71);
+  countTo($('sReview'), 100);
+});
+
+logLine(log, '15:00', 'sys', 'Vibe session ready · describe a feature to begin', '15:00:00');
+
+// example pickers
+document.querySelectorAll('.ex').forEach(b => {
+  b.addEventListener('click', () => { $('intent').value = b.dataset.t; });
+});
+
+// ---- pipeline definition ----
+const STAGES = [
+  { key:'intent', label:'Understand intent · ask a clarifying question',
+    sub:'parsing natural language → requirements', dur:750,
+    stream:['Read intent: <b>"' , '"</b>', 'Mapped to billing module · 1 ambiguity found'] },
+  { key:'plan', label:'Draft implementation plan',
+    sub:'components, state, persistence, tests', dur:800,
+    stream:['Plan: add <b>ThemeToggle</b> → persist to <b>localStorage</b> → respect system default','3 files to touch · 1 new component'] },
+  { key:'code', label:'Generate code + tests',
+    sub:'writing component, hook, and unit tests', dur:900,
+    stream:['Wrote <b>ThemeToggle.tsx</b>, <b>useTheme.ts</b>','Added 8 unit tests covering toggle + persistence'] },
+  { key:'test', label:'Run tests in sandbox',
+    sub:'isolated ephemeral environment', dur:850,
+    stream:['Spun ephemeral sandbox · node 20','<b>8 passed</b>, 0 failed, 0 skipped · 1.4s'] },
+  { key:'scan', label:'Self-review · lint · security scan',
+    sub:'the AI critiques its own output', dur:800,
+    stream:['Lint clean · no a11y violations','Security scan: no secrets, no unsafe storage of PII'] },
+  { key:'pr', label:'Open pull request',
+    sub:'PR #4812 · awaiting human review', dur:700,
+    stream:['Opened <b>PR #4812</b> · tagged reviewer @maya','<b>12 files changed · 8 tests added · all green</b>'] },
+];
+
+let t0 = 0, clarified = false;
+
+function tickElapsed() {
+  $('elapsed').textContent = '+' + ((performance.now() - t0)/1000).toFixed(1) + 's';
+}
+
+function buildStageRows() {
+  $('stages').innerHTML = STAGES.map(s => `
+    <div class="stage" id="stg-${s.key}" data-st="pending">
+      <span class="ico"><span class="dot-pending"></span></span>
+      <span class="lbl">${s.label}<small>${s.sub}</small></span>
+      <span class="time" id="time-${s.key}">—</span>
+    </div>`).join('');
+}
+
+function setStage(key, state, timeTxt) {
+  const el = $('stg-' + key);
+  el.dataset.st = state;
+  const ico = el.querySelector('.ico');
+  if (state === 'running') ico.innerHTML = '<span class="working"><i></i><i></i><i></i></span>';
+  if (state === 'done')    ico.innerHTML = '<span class="check">✓</span>';
+  if (timeTxt) $('time-' + key).textContent = timeTxt;
+}
+
+const CODE = [
+  ['cm','// useTheme.ts — generated from intent, reviewed by you'],
+  ['kw','export function ','fn','useTheme','plain','() {'],
+  ['plain','  const ','kw','[theme, setTheme]','plain',' = useState(() =>'],
+  ['str','    localStorage.getItem("billing.theme")',' ?? "system");'],
+  ['plain','  useEffect(() => {'],
+  ['plain','    localStorage.','fn','setItem','str','("billing.theme"','plain',', theme);'],
+  ['plain','  }, [theme]);'],
+  ['plain','  return { theme, ','fn','toggle','plain',': () => setTheme(t =>'],
+  ['plain','    t === ','str','"dark"',' ? ','str','"light"',' : ','str','"dark"','plain',') };'],
+  ['plain','}'],
+];
+
+function renderCode() {
+  $('codeBlock').innerHTML = '';
+  CODE.forEach((parts, i) => {
+    const line = document.createElement('div');
+    line.className = 'codeline';
+    line.style.animationDelay = (i * 70) + 'ms';
+    let html = '';
+    for (let j = 0; j < parts.length; j += 2) {
+      const cls = parts[j], txt = parts[j+1];
+      html += cls === 'plain' ? txt : `<span class="${cls}">${txt}</span>`;
+    }
+    line.innerHTML = html || '&nbsp;';
+    $('codeBlock').appendChild(line);
+  });
+}
+
+async function runStage(s, intentText) {
+  setStage(s.key, 'running');
+  logLine(log, nowStamp(), 'ai', `<b>${s.label.split(' · ')[0]}</b> …`);
+  const start = performance.now();
+
+  // human-in-the-loop gate on the first stage
+  if (s.key === 'intent') {
+    // stream the first detail with the actual intent woven in
+    await wait(s.dur * 0.6);
+    logLine(log, nowStamp(), 'ai', `Read intent: <b>"${intentText.slice(0, 64)}${intentText.length>64?'…':''}"</b>`);
+    logLine(log, nowStamp(), 'ai', 'Mapped to <b>billing</b> module · 1 product decision needs a human');
+    await askClarifying();
+  } else {
+    for (const line of s.stream) {
+      await wait(s.dur / (s.stream.length + 0.5));
+      logLine(log, nowStamp(), 'ai', line);
+    }
+    if (s.key === 'code') { $('codeCard').style.display = 'block'; renderCode(); $('codeSummary').textContent = '+86 −0'; }
+  }
+
+  const took = ((performance.now() - start)/1000).toFixed(1) + 's';
+  setStage(s.key, 'done', took);
+}
+
+function askClarifying() {
+  return new Promise(resolve => {
+    logLine(log, nowStamp(), 'ai', '<b>Question:</b> should the dark-mode preference sync across devices, or stay on this browser?');
+    $('clarifyQ').innerHTML = 'Should the preference <b>sync across devices</b> (store it on the user\'s account), or <b>stay on this browser</b> (local only)? This changes the data model — I won\'t guess.';
+    const btns = $('clarifyBtns');
+    btns.innerHTML = '';
+    const opts = [
+      { t:'☁ Sync across devices', who:'sync to account', cyan:true },
+      { t:'💻 Stay on this browser', who:'local only', cyan:false },
+    ];
+    opts.forEach(o => {
+      const b = document.createElement('button');
+      b.className = 'btn ' + (o.cyan ? 'cyan' : '');
+      b.textContent = o.t;
+      b.addEventListener('click', () => {
+        clarified = true;
+        $('clarify').style.display = 'none';
+        logLine(log, nowStamp(), 'human', `<b>Maya decided:</b> ${o.who}`);
+        logLine(log, nowStamp(), 'ai', `Got it — implementing <b>${o.who}</b>. Continuing.`);
+        resolve();
+      });
+      btns.appendChild(b);
+    });
+    $('clarify').style.display = 'block';
+    $('clarify').scrollIntoView({ behavior:'smooth', block:'nearest' });
+  });
+}
+
+let elapsedTimer = null;
+
+$('bVibe').addEventListener('click', async () => {
+  const intentText = $('intent').value.trim() || 'Add a feature.';
+  $('bVibe').disabled = true;
+  $('bVibe').textContent = '▸ Vibing…';
+  $('intent').disabled = true;
+  document.querySelectorAll('.ex').forEach(b => b.disabled = true);
+  clarified = false;
+  buildStageRows();
+  $('codeCard').style.display = 'none';
+  $('cycleCard').style.display = 'none';
+  $('takeaway').style.display = 'none';
+
+  t0 = performance.now();
+  elapsedTimer = setInterval(tickElapsed, 100);
+  logLine(log, nowStamp(), 'sys', '── Vibe pipeline started ──');
+
+  for (const s of STAGES) {
+    await runStage(s, intentText);
+  }
+
+  clearInterval(elapsedTimer);
+  tickElapsed();
+  logLine(log, nowStamp(), 'sys', 'Pipeline complete · PR open · <b>human review pending</b>');
+
+  // cycle time reveal
+  $('cycleCard').style.display = 'block';
+  await wait(120);
+  $('meterOld').style.width = '100%';
+  $('meterNew').style.width = '14%';
+  $('cycleCard').scrollIntoView({ behavior:'smooth', block:'center' });
+
+  $('bReset').style.display = 'inline-flex';
+});
+
+// HUMAN GATE decisions
+$('bMerge').addEventListener('click', () => resolveGate(true));
+$('bChanges').addEventListener('click', () => resolveGate(false));
+
+function resolveGate(merged) {
+  $('gateBtns').style.display = 'none';
+  const r = $('gateResult');
+  r.style.display = 'block';
+  if (merged) {
+    r.innerHTML = '<span class="badge ok"><span class="led"></span>MERGED BY MAYA</span> ' +
+      '<span class="dim">You read the diff, agreed with the tradeoff, and pressed merge. The machine wrote it — <b style="color:var(--ink)">you own it.</b> That ownership is the whole point.</span>';
+    logLine(log, nowStamp(), 'human', '<b>Maya reviewed and merged PR #4812</b> → shipping to prod');
+  } else {
+    r.innerHTML = '<span class="badge warn"><span class="led"></span>CHANGES REQUESTED</span> ' +
+      '<span class="dim">You caught something the fast output missed. <b style="color:var(--ink)">This is the job.</b> The AI is a brilliant junior — quick, tireless, and occasionally confidently wrong. The senior judgement is yours.</span>';
+    logLine(log, nowStamp(), 'human', '<b>Maya requested changes on PR #4812</b> → back to the agent');
+  }
+  $('takeaway').style.display = 'block';
+  $('takeaway').scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+$('bReset').addEventListener('click', () => {
+  $('bVibe').disabled = false;
+  $('bVibe').textContent = '▸ Vibe it';
+  $('intent').disabled = false;
+  document.querySelectorAll('.ex').forEach(b => b.disabled = false);
+  $('bReset').style.display = 'none';
+  $('stages').innerHTML = '';
+  $('codeCard').style.display = 'none';
+  $('cycleCard').style.display = 'none';
+  $('takeaway').style.display = 'none';
+  $('gateBtns').style.display = 'flex';
+  $('gateResult').style.display = 'none';
+  $('elapsed').textContent = '+0.0s';
+  $('intent').scrollIntoView({ behavior:'smooth', block:'center' });
+});
+</script>
+</body>
+</html>

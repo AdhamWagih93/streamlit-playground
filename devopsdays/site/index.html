@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Day of a DevOps Engineer · 2026 — Mission Control</title>
+<link rel="stylesheet" href="assets/css/system.css" />
+</head>
+<body>
+<script src="assets/js/common.js"></script>
+<script>mountTopbar({ code: 'MISSION CONTROL · v2026.6', backHref: null });</script>
+
+<div class="wrap" style="padding-top:46px; padding-bottom:80px;">
+
+  <!-- HERO -->
+  <header style="text-align:center; max-width:880px; margin:0 auto 18px;">
+    <div class="eyebrow" style="justify-content:center;">DevOpsDays · keynote demo</div>
+    <h1 style="margin:16px 0 10px; font-weight:700;">A Day in the Life of a<br/>
+      <span style="color:var(--amber);">DevOps Engineer</span>,
+      <span style="color:var(--cyan);">2026</span>
+    </h1>
+    <p class="dim" style="font-size:17px; max-width:620px; margin:0 auto;">
+      Follow <b style="color:var(--ink)">Maya</b>, an SRE, through one ordinary Monday —
+      where the hardest problems are no longer technical. They're about
+      <b style="color:var(--ink)">trust, sustainability, and working alongside machines that act on their own.</b>
+    </p>
+    <div class="btn-row" style="justify-content:center; margin-top:22px;">
+      <a class="btn primary" href="#timeline">▸ START THE DAY</a>
+      <a class="btn ghost" href="recap/">◂ Previously, in 2025</a>
+    </div>
+  </header>
+
+  <!-- live status strip -->
+  <div class="grid cols-4" style="margin:34px 0 14px;">
+    <div class="stat ticked panel">
+      <div class="k">Humans on call</div>
+      <div class="v" id="s1">3</div>
+      <div class="sub" style="color:var(--ok)">▲ all within healthy load</div>
+    </div>
+    <div class="stat ticked panel">
+      <div class="k">Autonomous agents</div>
+      <div class="v" id="s2" style="color:var(--violet)">11</div>
+      <div class="sub">9 supervised · 2 sandboxed</div>
+    </div>
+    <div class="stat ticked panel">
+      <div class="k">Deploys today</div>
+      <div class="v" id="s3" style="color:var(--cyan)">47</div>
+      <div class="sub">41 agent-initiated</div>
+    </div>
+    <div class="stat ticked panel">
+      <div class="k">Human override rate</div>
+      <div class="v" id="s4" style="color:var(--amber)">6<small>%</small></div>
+      <div class="sub">trust, but verify</div>
+    </div>
+  </div>
+
+  <div class="explainer" style="margin-bottom:40px;">
+    <span class="ic">i</span>
+    <div><b>New here?</b> Each card below is a live, clickable demo — one stop in Maya's day.
+    You don't need to be an expert: every screen explains itself in plain language.
+    Click them in order, or jump to whatever looks interesting.</div>
+  </div>
+
+  <!-- TIMELINE OF STATIONS -->
+  <div id="timeline" class="row between" style="margin-bottom:18px;">
+    <h2>The day, hour by hour</h2>
+    <span class="tag">7 stations · ~20 min</span>
+  </div>
+
+  <div class="grid cols-2" id="stations"></div>
+
+  <!-- footer -->
+  <footer style="margin-top:60px; text-align:center;" class="faint mono">
+    <hr class="sep" />
+    <div style="font-size:12px; letter-spacing:.1em;">
+      DEVOPSDAYS 2026 · BUILT WITH HAND-WRITTEN HTML/CSS/JS · SERVED FROM ONE NGINX CONTAINER ·
+      <span style="color:var(--cyan)">NO STREAMLIT THIS YEAR ;)</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+const STATIONS = [
+  { t:'09:15', code:'ST-01', tag:'ai', href:'demos/agentic-coworker/',
+    title:'Standup with a Machine',
+    blurb:'Maya\'s first meeting includes a teammate that never sleeps and assigns itself work. How do you run a standup when one of you is an agent?',
+    theme:'Working with an agentic AI coworker', accent:'var(--violet)' },
+
+  { t:'09:40', code:'ST-02', tag:'cy', href:'demos/autonomous-gov/',
+    title:'The Guardrail Room',
+    blurb:'A deploy wants to ship itself at 09:40. Should it be allowed? Watch policy, ethics and a trust score decide — with a human holding the override key.',
+    theme:'Autonomous governance, ethics & trust', accent:'var(--cyan)' },
+
+  { t:'11:00', code:'ST-03', tag:'ok', href:'demos/pulse/',
+    title:'The Pulse',
+    blurb:'The system notices a human is overloaded before the human does — and quietly reshapes the on-call rota to protect them. Automation pointed at people, not servers.',
+    theme:'Anti-burnout & human sustainability', accent:'var(--ok)' },
+
+  { t:'13:30', code:'ST-04', tag:'warn', href:'demos/psych-safety/',
+    title:'No Blame, Just Signal',
+    blurb:'Something broke in production. The incident review hunts for the weak system, never the guilty person. Why safe teams ship faster.',
+    theme:'Cultural & psychological safety', accent:'var(--warn)' },
+
+  { t:'15:00', code:'ST-05', tag:'ai', href:'demos/vibe-shipping/',
+    title:'Vibe Shipping',
+    blurb:'Maya describes a feature in plain English. Minutes later it\'s a reviewed pull request. See how the development cycle compresses — and where the human still steers.',
+    theme:'Vibe engineering & faster cycles', accent:'var(--amber)' },
+
+  { t:'16:20', code:'ST-06', tag:'cy', href:'demos/new-roles/',
+    title:'The New Org Chart',
+    blurb:'Half the job titles on this team didn\'t exist in 2024. Reliability Ethicist, Agent Wrangler, Platform Gardener — and what each of them actually does.',
+    theme:'Skill shift & emerging roles', accent:'var(--blue)' },
+
+  { t:'17:10', code:'ST-07', tag:'crit', href:'demos/privacy-membrane/',
+    title:'The Privacy Membrane',
+    blurb:'Before any data reaches an AI model, it passes through a membrane that decides what may leave the building — and what must never. Privacy & security in the AI era.',
+    theme:'AI privacy & security', accent:'var(--crit)' },
+];
+
+const wrapEl = document.getElementById('stations');
+STATIONS.forEach((s, i) => {
+  const a = document.createElement('a');
+  a.href = s.href;
+  a.className = 'panel ticked station';
+  a.style.cssText = 'padding:0; overflow:hidden; display:block; color:inherit;';
+  a.innerHTML = `
+    <div class="panel-h">
+      <span class="badge ${s.tag}"><span class="led"></span>${s.code}</span>
+      <h3 style="text-transform:none; letter-spacing:0; color:var(--ink); font-size:16px;">${s.title}</h3>
+      <span class="id">${s.t}</span>
+    </div>
+    <div class="panel-b">
+      <p class="dim" style="margin:0 0 14px; font-size:14px;">${s.blurb}</p>
+      <div class="row between">
+        <span class="tag" style="color:${s.accent}">${s.theme}</span>
+        <span class="mono" style="font-size:12px; color:var(--ink-faint)">enter ▸</span>
+      </div>
+    </div>`;
+  wrapEl.appendChild(a);
+});
+
+// hover glow
+document.querySelectorAll('.station').forEach(el=>{
+  el.addEventListener('mouseenter', ()=> el.style.borderColor = 'var(--cyan-d)');
+  el.addEventListener('mouseleave', ()=> el.style.borderColor = 'var(--line)');
+});
+
+// animate the top stats on load
+addEventListener('load', () => {
+  stagger('.station', 70);
+  countTo(document.getElementById('s3'), 47, { dur: 1100 });
+});
+</script>
+</body>
+</html>

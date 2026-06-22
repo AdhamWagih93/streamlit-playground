@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Previously, in 2025 · Day of a DevOps Engineer</title>
+<link rel="stylesheet" href="../assets/css/system.css" />
+</head>
+<body>
+<script src="../assets/js/common.js"></script>
+<script>mountTopbar({ code: 'ARCHIVE · 2025 RECAP', backHref: '../' });</script>
+
+<div class="wrap" style="padding-top:40px; padding-bottom:80px;">
+
+  <!-- HERO -->
+  <header style="max-width:880px;">
+    <div class="eyebrow">Archive · DevOpsDays 2025</div>
+    <h1 style="margin:14px 0 12px; font-weight:700;">
+      Previously, in <span style="color:var(--amber);">2025</span>
+    </h1>
+    <p class="dim" style="font-size:17px; max-width:680px;">
+      We don't start from zero. Here's the foundation last year built —
+      <b style="color:var(--ink)">and how each piece grew into this year's story.</b>
+    </p>
+  </header>
+
+  <!-- explainer -->
+  <div class="explainer" style="margin:22px 0 30px;">
+    <span class="ic">i</span>
+    <div><b>What is this page?</b> A 60-second recap of the five things we covered on this stage
+    last year. Each card has a plain-language reminder, plus a glowing
+    <span style="color:var(--cyan)">→ 2026</span> line showing what that idea grew into.
+    New here? You've missed nothing — read the cards, then step into the 2026 day.</div>
+  </div>
+
+  <!-- REPLAY CONTROLS -->
+  <div class="panel ticked" style="margin-bottom:30px;">
+    <div class="panel-h">
+      <span class="badge cy"><span class="led"></span>FAST-FORWARD</span>
+      <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">2025 &rarr; 2026 · the montage</h3>
+      <span class="id" id="rpId">idle</span>
+    </div>
+    <div class="panel-b">
+      <p class="dim" style="margin:0 0 12px; font-size:14px;">
+        Hit replay to stream the five bridges, one by one — a fast-forward from last year's
+        foundations to where they each landed this year.
+      </p>
+      <div class="btn-row" style="margin-bottom:14px;">
+        <button class="btn primary" id="bReplay">▸ Replay 2025 → 2026</button>
+        <button class="btn ghost" id="bFlip">⇆ Flip all cards to "2026 became"</button>
+      </div>
+      <div class="term" id="log" style="max-height:240px;"></div>
+    </div>
+  </div>
+
+  <!-- TIMELINE / CARD GRID -->
+  <div class="row between" style="margin-bottom:16px;">
+    <h2>The five foundations</h2>
+    <span class="tag">2025 talk · 5 topics</span>
+  </div>
+
+  <div class="grid cols-2" id="cards"></div>
+
+  <!-- CLOSING -->
+  <div class="panel pad ticked" style="margin-top:34px; text-align:center; border-color:var(--amber);">
+    <div class="eyebrow" style="justify-content:center; color:var(--amber);">Foundation laid</div>
+    <h2 style="margin:12px 0 8px;">Last year we built the ground.<br/>
+      <span style="color:var(--cyan);">This year, things start walking on it.</span></h2>
+    <p class="dim" style="max-width:620px; margin:0 auto 20px; font-size:15px;">
+      Platforms, on-prem models, AI-built tools, MCP, and agentic workflows —
+      every one of them shows up again today, grown up.
+    </p>
+    <a class="btn primary" href="../">Begin the 2026 day ▸</a>
+  </div>
+
+  <!-- footer -->
+  <footer style="margin-top:50px; text-align:center;" class="faint mono">
+    <hr class="sep" />
+    <div style="font-size:12px; letter-spacing:.1em;">
+      DEVOPSDAYS · 2025 ARCHIVE · KEPT SO 2026 MAKES SENSE ·
+      <span style="color:var(--cyan)">THE STORY CONTINUES ▸</span>
+    </div>
+  </footer>
+</div>
+
+<style>
+  /* era badge — number medallion */
+  .era {
+    width:42px; height:42px; border-radius:11px; flex:none;
+    display:grid; place-items:center;
+    font-family:var(--display); font-weight:700; font-size:18px; color:#08121a;
+  }
+  /* flip-card mechanics */
+  .flipcard { perspective: 1400px; }
+  .flipcard .inner {
+    position:relative; transition: transform .7s cubic-bezier(.2,.8,.2,1);
+    transform-style: preserve-3d; height:100%;
+  }
+  .flipcard.flipped .inner { transform: rotateY(180deg); }
+  .flipcard .face {
+    position:relative; backface-visibility:hidden; -webkit-backface-visibility:hidden;
+    height:100%;
+  }
+  .flipcard .back {
+    position:absolute; inset:0; transform: rotateY(180deg);
+  }
+  /* the glowing 2026 bridge line */
+  .bridge {
+    display:flex; gap:9px; align-items:flex-start;
+    font-size:13.5px; margin-top:14px; padding:11px 13px;
+    border-radius:var(--r-sm);
+    border:1px solid rgba(56,225,198,.35);
+    background:rgba(56,225,198,.06);
+    box-shadow:0 0 22px -10px rgba(56,225,198,.6);
+    animation: bridgeGlow 3.2s ease-in-out infinite;
+  }
+  .bridge .ar { color:var(--cyan); font-family:var(--mono); font-weight:600; flex:none; }
+  .bridge a { font-weight:600; }
+  @keyframes bridgeGlow {
+    0%,100% { box-shadow:0 0 22px -12px rgba(56,225,198,.45); }
+    50%     { box-shadow:0 0 26px -6px rgba(56,225,198,.7); }
+  }
+  .cardphase { font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; }
+  /* keep both faces same min height so flip doesn't jump */
+  .recapcard { min-height: 290px; }
+</style>
+
+<script>
+// ── the five 2025 foundations ───────────────────────────────────
+const TOPICS = [
+  {
+    n:'01', accent:'var(--amber)', tagClass:'warn', era:'2025 · I',
+    title:'Platform Engineering',
+    recap:"We built an internal developer platform — \"golden paths\" so engineers could self-serve infrastructure, pipelines and environments instead of filing tickets and waiting.",
+    became:"The platform stopped being just for humans. It's now the shared workspace where <b>agents and people both operate</b> — the substrate every autonomous workflow runs on.",
+    bridgeText:"the platform became the place agents and humans both work — the ground autonomy stands on.",
+    href:'../demos/autonomous-gov/', linkLabel:'The Guardrail Room'
+  },
+  {
+    n:'02', accent:'var(--cyan)', tagClass:'cy', era:'2025 · II',
+    title:'On-Prem Model Hosting · Ollama',
+    recap:"We ran open LLMs locally with Ollama instead of only calling cloud APIs — keeping control, cutting cost, and keeping sensitive data inside the building.",
+    became:"That local model is exactly what powers 2026's <b>privacy membrane</b>: sensitive data gets routed to an on-prem model so it never has to leave.",
+    bridgeText:"on-prem models are what make the 2026 privacy membrane possible — route the secret stuff to a local model.",
+    href:'../demos/privacy-membrane/', linkLabel:'The Privacy Membrane'
+  },
+  {
+    n:'03', accent:'var(--violet)', tagClass:'ai', era:'2025 · III',
+    title:'AI-Generated UIs · Streamlit & Python',
+    recap:"We spun up internal tools and dashboards fast by pairing AI with Streamlit and Python — describe the tool, get a working app in minutes.",
+    became:"Those rapid AI-built tools were the on-ramp to <b>vibe engineering</b>. <span class='faint'>(Cheeky note: this year's demos dropped Streamlit for hand-built containers — the tooling grew up.)</span>",
+    bridgeText:"rapid AI-built tools were the on-ramp to vibe engineering (and yes — we dropped Streamlit this year).",
+    href:'../demos/vibe-shipping/', linkLabel:'Vibe Shipping'
+  },
+  {
+    n:'04', accent:'var(--blue)', tagClass:'cy', era:'2025 · IV',
+    title:'MCP · Model Context Protocol',
+    recap:"We looked at MCP, then an emerging standard — a common way to give AI models tools and context, so any model could safely reach into your systems.",
+    became:"MCP became the <b>plumbing</b>. It's how 2026's agent coworkers actually <i>do</i> things — calling governed, well-defined tools instead of guessing.",
+    bridgeText:"MCP became the plumbing that lets agent coworkers safely DO things with governed tools.",
+    href:'../demos/agentic-coworker/', linkLabel:'Standup with a Machine'
+  },
+  {
+    n:'05', accent:'var(--ok)', tagClass:'ok', era:'2025 · V',
+    title:'Agentic Workflows · n8n',
+    recap:"We built automation and early agent workflows visually with n8n — wiring triggers, tools and steps together without a heavy codebase.",
+    became:"Those early flows grew up. They became the <b>autonomous, governed agents</b> that now sit in your standup and propose their own work.",
+    bridgeText:"early n8n workflows grew into the autonomous, governed agents now sitting in your standup.",
+    href:'../demos/agentic-coworker/', linkLabel:'Standup with a Machine'
+  },
+];
+
+// ── render cards (flip: front=2025 recap, back=2026 became) ──────
+const wrap = document.getElementById('cards');
+TOPICS.forEach(tp => {
+  const el = document.createElement('div');
+  el.className = 'flipcard recapcard';
+  el.innerHTML = `
+    <div class="inner">
+      <!-- FRONT · 2025 -->
+      <div class="face panel ticked" style="height:100%; display:flex; flex-direction:column;">
+        <div class="panel-h">
+          <span class="era" style="background:${tp.accent}">${tp.n}</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:16px;">${tp.title}</h3>
+          <span class="id">${tp.era}</span>
+        </div>
+        <div class="panel-b" style="flex:1; display:flex; flex-direction:column;">
+          <div class="cardphase" style="color:${tp.accent}; margin-bottom:8px;">What we covered</div>
+          <p class="dim" style="margin:0 0 4px; font-size:14px; flex:1;">${tp.recap}</p>
+          <div class="bridge">
+            <span class="ar">→ 2026</span>
+            <div class="dim">${tp.bridgeText} <a href="${tp.href}">${tp.linkLabel} ▸</a></div>
+          </div>
+        </div>
+      </div>
+      <!-- BACK · 2026 became -->
+      <div class="face back panel ticked" style="border-color:var(--cyan-d); height:100%; display:flex; flex-direction:column;">
+        <div class="panel-h" style="border-color:rgba(56,225,198,.25);">
+          <span class="era" style="background:linear-gradient(135deg,var(--cyan),${tp.accent})">${tp.n}</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--cyan);font-size:16px;">${tp.title}</h3>
+          <span class="id" style="color:var(--cyan)">2026 · became</span>
+        </div>
+        <div class="panel-b" style="flex:1; display:flex; flex-direction:column;">
+          <div class="cardphase" style="color:var(--cyan); margin-bottom:8px;">What it grew into</div>
+          <p class="dim" style="margin:0 0 14px; font-size:14.5px; flex:1; color:var(--ink-dim);">${tp.became}</p>
+          <a class="btn cyan" href="${tp.href}" style="align-self:flex-start;">Enter ${tp.linkLabel} ▸</a>
+        </div>
+      </div>
+    </div>`;
+  wrap.appendChild(el);
+});
+
+// ── flip toggle ─────────────────────────────────────────────────
+let flipped = false;
+const bFlip = document.getElementById('bFlip');
+bFlip.addEventListener('click', () => {
+  flipped = !flipped;
+  document.querySelectorAll('.flipcard').forEach((c, i) => {
+    setTimeout(() => c.classList.toggle('flipped', flipped), i * 90);
+  });
+  bFlip.textContent = flipped ? '⇆ Flip back to "2025 recap"' : '⇆ Flip all cards to "2026 became"';
+});
+
+// ── replay montage into the log ─────────────────────────────────
+const log = document.getElementById('log');
+const bReplay = document.getElementById('bReplay');
+logLine(log, nowStamp(), 'sys', 'Archive loaded · 5 foundations from the 2025 talk on file.');
+
+let replaying = false;
+bReplay.addEventListener('click', async () => {
+  if (replaying) return;
+  replaying = true;
+  bReplay.disabled = true;
+  document.getElementById('rpId').textContent = 'rewinding…';
+  log.innerHTML = '';
+  logLine(log, nowStamp(), 'sys', '⏪ Rewinding to DevOpsDays 2025…');
+  await wait(550);
+  logLine(log, nowStamp(), 'sys', '⏩ Fast-forwarding 2025 → 2026…');
+  await wait(500);
+  for (let i = 0; i < TOPICS.length; i++) {
+    const tp = TOPICS[i];
+    document.getElementById('rpId').textContent = `${i+1}/5`;
+    logLine(log, nowStamp(), 'sys', `<b>${tp.n} · ${tp.title}</b>`);
+    await wait(260);
+    logLine(log, nowStamp(), 'sys', `&nbsp;&nbsp;<span style="color:var(--cyan)">→ 2026:</span> ${tp.bridgeText}`);
+    await wait(620);
+  }
+  logLine(log, nowStamp(), 'sys', '✓ Caught up to now. The 2026 day is ready when you are. ▸');
+  document.getElementById('rpId').textContent = 'done';
+  bReplay.disabled = false;
+  bReplay.textContent = '↻ Replay again';
+  replaying = false;
+});
+
+// reveal cards on load
+addEventListener('load', () => stagger('.flipcard', 80));
+</script>
+</body>
+</html>

@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ST-01 · Standup with a Machine</title>
+<link rel="stylesheet" href="../../assets/css/system.css" />
+</head>
+<body>
+<script src="../../assets/js/common.js"></script>
+<script>mountTopbar({ code: 'ST-01 · AGENTIC COWORKER', backHref: '../../' });</script>
+
+<div class="wrap" style="padding-top:34px; padding-bottom:70px;">
+
+  <div class="eyebrow">Station 01 · 09:15</div>
+  <h1 style="margin:12px 0 8px;">Standup with a Machine</h1>
+  <p class="dim" style="max-width:680px; font-size:16px;">
+    Maya's day starts with the team standup. One of the "people" giving an update is
+    <b style="color:var(--violet)">ARIA</b> — an autonomous agent that picks up tickets,
+    writes code, and ships it. Your job isn't to do the work. It's to <b style="color:var(--ink)">decide what the agent is allowed to do</b>.
+  </p>
+
+  <div class="explainer" style="margin:18px 0 26px;">
+    <span class="ic">i</span>
+    <div><b>What you're looking at:</b> a standup board. Humans on the left, the AI agent on the right.
+    The agent proposes tasks for itself; you <b>approve</b>, <b>send it back</b>, or <b>do it yourself</b>.
+    Watch what happens to team trust as you go.</div>
+  </div>
+
+  <div class="grid cols-3" style="align-items:start;">
+
+    <!-- LEFT: human teammates -->
+    <div class="grid" style="gap:14px;">
+      <div class="panel"><div class="panel-h"><h3>Human crew</h3><span class="id">3 online</span></div>
+        <div class="panel-b grid" style="gap:12px;">
+          <div class="row"><div class="ava" style="background:var(--cyan)">M</div>
+            <div><div style="font-weight:600">Maya · SRE</div><div class="faint mono" style="font-size:11px">you · holds the override key</div></div></div>
+          <div class="row"><div class="ava" style="background:var(--amber)">J</div>
+            <div><div style="font-weight:600">Jonah · Platform</div><div class="faint mono" style="font-size:11px">reviewing agent PRs</div></div></div>
+          <div class="row"><div class="ava" style="background:var(--blue)">P</div>
+            <div><div style="font-weight:600">Priya · Security</div><div class="faint mono" style="font-size:11px">watching the membrane</div></div></div>
+        </div>
+      </div>
+
+      <div class="panel pad">
+        <div class="tag" style="margin-bottom:8px;">Team trust in ARIA</div>
+        <div class="row between"><span class="mono" id="trustPct" style="font-size:26px; color:var(--violet); font-family:var(--display)">72%</span>
+          <span class="badge ai" id="trustState"><span class="led"></span>SUPERVISED</span></div>
+        <div class="meter" style="margin-top:10px;"><i id="trustBar" style="width:72%; background:linear-gradient(90deg,var(--violet),var(--cyan))"></i></div>
+        <p class="faint" style="font-size:12px; margin:10px 0 0;">Trust rises when you approve good calls and the agent delivers. It falls when you keep having to step in.</p>
+      </div>
+    </div>
+
+    <!-- MIDDLE: ARIA card + proposal -->
+    <div class="panel ticked" style="grid-column: span 2;">
+      <div class="panel-h">
+        <span class="badge ai"><span class="led"></span>AGENT · ARIA-7</span>
+        <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">Autonomous teammate · update</h3>
+        <span class="id" id="ticketId">—</span>
+      </div>
+      <div class="panel-b">
+
+        <div id="ariaSay" class="panel" style="background:var(--bg-2); padding:16px; margin-bottom:16px; border-color:rgba(157,123,255,.25);">
+          <div class="row" style="gap:10px; align-items:flex-start;">
+            <div class="ava" style="background:linear-gradient(135deg,var(--violet),var(--cyan)); flex:none;">A</div>
+            <div>
+              <div class="working" id="thinking" style="display:none; margin-bottom:6px;"><i></i><i></i><i></i>
+                <span class="faint mono" style="font-size:11px; margin-left:6px;">ARIA is thinking…</span></div>
+              <div id="ariaText" class="dim" style="font-size:14.5px;">Good morning. I reviewed the overnight backlog and I'd like to take three items. Press <span class="kbd">▸ Next proposal</span> to hear them one at a time.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- proposal detail -->
+        <div id="proposal" class="grid" style="gap:12px; display:none;">
+          <div class="grid cols-3" style="gap:10px;">
+            <div class="stat"><div class="k">Confidence</div><div class="v" id="pConf" style="font-size:22px;">—</div></div>
+            <div class="stat"><div class="k">Blast radius</div><div class="v" id="pBlast" style="font-size:22px;">—</div></div>
+            <div class="stat"><div class="k">Reversible?</div><div class="v" id="pRev" style="font-size:22px;">—</div></div>
+          </div>
+          <div class="explainer" id="pWhy"><span class="ic">?</span><div></div></div>
+          <div class="btn-row">
+            <button class="btn cyan" id="bApprove">✓ Approve — let ARIA do it</button>
+            <button class="btn" id="bBack">↻ Send back — needs a plan first</button>
+            <button class="btn ghost" id="bSelf">✋ I'll take this one</button>
+          </div>
+        </div>
+
+        <button class="btn primary" id="bNext" style="margin-top:4px;">▸ Next proposal</button>
+
+        <hr class="sep" />
+        <div class="tag" style="margin-bottom:8px;">Standup transcript</div>
+        <div class="term" id="log" style="max-height:230px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- takeaway -->
+  <div class="panel pad reveal" id="takeaway" style="margin-top:26px; display:none; border-color:var(--violet);">
+    <div class="eyebrow" style="color:var(--violet)">The takeaway</div>
+    <h2 style="margin:10px 0;">An agent is a teammate you <span style="color:var(--violet)">delegate to</span>, not a tool you operate.</h2>
+    <p class="dim" id="takeawayText" style="font-size:15px; max-width:760px;"></p>
+  </div>
+
+  <div class="row between" style="margin-top:30px;">
+    <a class="backlink" href="../../">◂ Mission Control</a>
+    <a class="backlink" href="../autonomous-gov/" style="border-color:var(--cyan-d); color:var(--cyan)">Next station · The Guardrail Room ▸</a>
+  </div>
+</div>
+
+<style>
+  .ava { width:36px; height:36px; border-radius:10px; display:grid; place-items:center; font-family:var(--display); font-weight:700; color:#08121a; flex:none; }
+</style>
+
+<script>
+const log = document.getElementById('log');
+logLine(log, '09:15', 'sys', 'Standup started · 3 humans, 1 agent present', '09:15:00');
+logLine(log, '09:15', 'ai', '<b>ARIA-7</b> joined · operating under SUPERVISED policy', '09:15:01');
+
+const PROPOSALS = [
+  { id:'OPS-4471', conf:'94%', blast:'Low', rev:'Yes',
+    say:"I'd like to take <b>OPS-4471</b> — bump the logging library to patch a memory leak. It's a one-line dependency change with full test coverage. I can open the PR, run CI, and merge if green.",
+    why:"Low risk, easily reversible, high confidence. This is exactly the kind of toil an agent should own so humans don't have to.",
+    good:'approve',
+    onApprove:"Sensible call. ARIA owns the boring, safe work — Maya's attention is freed for the hard stuff.",
+    onBack:"Reasonable, but asking for a plan on a one-line dependency bump is the kind of friction that makes agents useless. Trust dipped.",
+    onSelf:"You just did a robot's job. Fine once — but do this all day and you've hired an expensive autocomplete." },
+
+  { id:'OPS-4472', conf:'61%', blast:'High', rev:'No',
+    say:"Next, <b>OPS-4472</b> — migrate the primary database to a new schema. I'm fairly sure it's safe. I'd run it now during the quiet window.",
+    why:"61% confidence on an IRREVERSIBLE, high-blast change. The agent is being honestly uncertain — and this is precisely where a human must step in.",
+    good:'back',
+    onApprove:"Yikes. You approved a 61%-confidence, irreversible database migration. It worked this time… but trust is built on judgement, and that was a coin flip.",
+    onBack:"Exactly right. You didn't say no — you said 'show me the plan and a rollback first.' The agent learns the bar. Trust climbs.",
+    onSelf:"Defensible — but the better move is to make ARIA produce a reversible plan, not to hoard the work." },
+
+  { id:'OPS-4473', conf:'88%', blast:'Medium', rev:'Yes',
+    say:"Finally <b>OPS-4473</b> — a customer reported our error messages leak internal hostnames. I'd redact them across all services. Reversible, well-tested.",
+    why:"A security-flavoured fix. High confidence and reversible — but it touches every service, so a human glance is worth it before it goes wide.",
+    good:'approve',
+    onApprove:"Good. You let the agent move fast on a reversible, well-scoped fix — and Priya from Security is auto-tagged as a reviewer. Speed AND a safety net.",
+    onBack:"Cautious, and not wrong — but you can get the same safety by approving with a required reviewer instead of blocking.",
+    onSelf:"You can, but this is a great delegation: reversible, tested, and security gets looped in automatically." },
+];
+
+let idx = -1, decisions = [];
+let trust = 72;
+
+const $ = id => document.getElementById(id);
+
+$('bNext').addEventListener('click', async () => {
+  idx++;
+  if (idx >= PROPOSALS.length) return finish();
+  const p = PROPOSALS[idx];
+  $('bNext').style.display = 'none';
+  $('thinking').style.display = 'flex';
+  $('ariaText').style.display = 'none';
+  await wait(750);
+  $('thinking').style.display = 'none';
+  $('ariaText').style.display = 'block';
+  $('ariaText').innerHTML = p.say;
+  $('ticketId').textContent = p.id;
+  $('pConf').textContent = p.conf;
+  $('pBlast').textContent = p.blast;
+  $('pBlast').style.color = p.blast==='High'?'var(--crit)':p.blast==='Medium'?'var(--warn)':'var(--ok)';
+  $('pRev').textContent = p.rev;
+  $('pRev').style.color = p.rev==='No'?'var(--crit)':'var(--ok)';
+  $('pWhy').querySelector('div').innerHTML = '<b>Why this matters:</b> ' + p.why;
+  $('proposal').style.display = 'grid';
+  logLine(log, nowStamp(), 'ai', `<b>ARIA</b> proposes <b>${p.id}</b> · conf ${p.conf} · blast ${p.blast} · reversible ${p.rev}`);
+});
+
+function decide(kind) {
+  const p = PROPOSALS[idx];
+  const correct = (kind === p.good);
+  decisions.push({ kind, correct });
+
+  let delta = 0, msg = '', whoTxt = '';
+  if (kind === 'approve') { whoTxt = 'Maya APPROVED'; msg = p.onApprove; delta = correct ? +8 : -12; }
+  if (kind === 'back')    { whoTxt = 'Maya sent it BACK for a plan'; msg = p.onBack; delta = correct ? +9 : -3; }
+  if (kind === 'self')    { whoTxt = 'Maya took it herself'; msg = p.onSelf; delta = correct ? -1 : -6; }
+
+  logLine(log, nowStamp(), 'human', `<b>${whoTxt}</b> on ${p.id}`);
+  $('ariaText').innerHTML = `<span style="color:${correct?'var(--ok)':'var(--warn)'}">${correct?'◆ Good judgement.':'◆ Worth reconsidering.'}</span> ${msg}`;
+  setTrust(trust + delta);
+  $('proposal').style.display = 'none';
+  $('bNext').style.display = 'inline-flex';
+  $('bNext').textContent = idx >= PROPOSALS.length-1 ? '▸ Wrap up standup' : '▸ Next proposal';
+}
+
+$('bApprove').addEventListener('click', ()=>decide('approve'));
+$('bBack').addEventListener('click', ()=>decide('back'));
+$('bSelf').addEventListener('click', ()=>decide('self'));
+
+function setTrust(v) {
+  trust = Math.max(20, Math.min(100, Math.round(v)));
+  $('trustBar').style.width = trust + '%';
+  $('trustPct').textContent = trust + '%';
+  const st = $('trustState');
+  if (trust >= 85)      { st.className='badge ok';   st.innerHTML='<span class="led"></span>AUTONOMOUS'; }
+  else if (trust >= 55) { st.className='badge ai';   st.innerHTML='<span class="led"></span>SUPERVISED'; }
+  else                  { st.className='badge crit'; st.innerHTML='<span class="led"></span>RESTRICTED'; }
+}
+
+function finish() {
+  const good = decisions.filter(d=>d.correct).length;
+  $('bNext').style.display = 'none';
+  $('proposal').style.display = 'none';
+  $('ariaText').innerHTML = "Standup complete. Thanks, Maya — I'll get to work and tag you on anything above my pay grade.";
+  logLine(log, nowStamp(), 'sys', `Standup ended · ${good}/3 high-quality calls · ARIA trust now ${trust}%`);
+  const tk = $('takeaway'); tk.style.display='block';
+  let verdict;
+  if (trust >= 85) verdict = `You earned the agent real autonomy (${trust}% trust) by delegating the safe, boring work and stepping in only where judgement was needed. That's the skill of 2026: not doing the work, but <b>calibrating how much rope to give the machine</b>.`;
+  else if (trust >= 55) verdict = `You kept ARIA on a supervised leash (${trust}% trust). Safe — but if you never let a reliable agent run, you become the bottleneck. The goal is to <b>graduate routine work to autonomy</b> and reserve your attention for the irreversible calls.`;
+  else verdict = `Trust fell to ${trust}%. Either you rubber-stamped a risky irreversible change, or you smothered the agent on safe work. Both fail the same way: the human's job is <b>judgement, applied where it counts</b> — not everywhere, and not nowhere.`;
+  $('takeawayText').innerHTML = verdict;
+  tk.scrollIntoView({ behavior:'smooth', block:'center' });
+}
+</script>
+</body>
+</html>

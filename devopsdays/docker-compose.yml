@@ -1,0 +1,59 @@
+# ============================================================
+# Day of a DevOps Engineer · 2026 — demo suite
+#
+# DEFAULT (stage-safe): one container serves the whole site.
+#   docker compose up --build         ->  http://localhost:8080
+#
+# OPTIONAL (show real containerization on stage): bring up the
+# "hero" demos as their OWN containers too, using profiles:
+#   docker compose --profile split up --build
+#     hub                ->  http://localhost:8080
+#     standup (ST-01)    ->  http://localhost:8081
+#     guardrails (ST-02) ->  http://localhost:8082
+#     pulse (ST-03)      ->  http://localhost:8083
+#     vibe (ST-05)       ->  http://localhost:8085
+# (The split services reuse the same image; they just mount one
+#  sub-folder each, proving every demo is independently shippable.)
+# ============================================================
+
+services:
+  mission-control:
+    build: .
+    image: devops2026/mission-control:latest
+    container_name: devops2026
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+  # ---- optional per-demo containers (profile: split) ----
+  standup:
+    image: devops2026/mission-control:latest
+    profiles: ["split"]
+    command: >
+      sh -c "echo 'server{listen 80;root /usr/share/nginx/html;location / {try_files \$$uri \$$uri/ /demos/agentic-coworker/index.html;}}' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    ports: ["8081:80"]
+    depends_on: [mission-control]
+
+  guardrails:
+    image: devops2026/mission-control:latest
+    profiles: ["split"]
+    command: >
+      sh -c "echo 'server{listen 80;root /usr/share/nginx/html;location / {try_files \$$uri \$$uri/ /demos/autonomous-gov/index.html;}}' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    ports: ["8082:80"]
+    depends_on: [mission-control]
+
+  pulse:
+    image: devops2026/mission-control:latest
+    profiles: ["split"]
+    command: >
+      sh -c "echo 'server{listen 80;root /usr/share/nginx/html;location / {try_files \$$uri \$$uri/ /demos/pulse/index.html;}}' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    ports: ["8083:80"]
+    depends_on: [mission-control]
+
+  vibe:
+    image: devops2026/mission-control:latest
+    profiles: ["split"]
+    command: >
+      sh -c "echo 'server{listen 80;root /usr/share/nginx/html;location / {try_files \$$uri \$$uri/ /demos/vibe-shipping/index.html;}}' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    ports: ["8085:80"]
+    depends_on: [mission-control]
