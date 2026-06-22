@@ -11577,12 +11577,25 @@ def _resolve_inventory_by_teams_git(_bare_fields, _teams_ci, _bare_agg,
     # Caller passes separator-tolerant keys; canonicalise row teams the same
     # way so "My Team" (session) matches "my_team" / "My-Team" (inventory).
     _want = {_team_match_key(t) for t in _teams_ci if str(t or "").strip()}
+    # When `_bare_fields` is empty or contains the "*" sentinel, match the team
+    # against ANY `*_team` field present on the row — NOT a fixed list. Orgs name
+    # their ownership/env team fields freely (dev_team, develop_team, qc_team,
+    # release_team, …); a hardcoded list silently missed the non-standard ones
+    # and collapsed a non-admin's whole scope to zero even though the team
+    # plainly exists in the inventory. This is the recurring "0 apps" cause.
+    _scan_all = (not _bare_fields) or ("*" in _bare_fields)
     _out: set[str] = set()
     for _r in _rows or []:
         _blob = _r.get("teams") or {}
         _row_teams: set[str] = set()
-        for _bf in _bare_fields:
-            _v = _blob.get(_bf)
+        if _scan_all:
+            _items = [
+                (_k, _v) for _k, _v in _blob.items()
+                if isinstance(_k, str) and _k.endswith("_team")
+            ]
+        else:
+            _items = [(_bf, _blob.get(_bf)) for _bf in _bare_fields]
+        for _k, _v in _items:
             if isinstance(_v, (list, tuple, set)):
                 _row_teams.update(_team_match_key(_x) for _x in _v if _x)
             elif _v:
@@ -12918,6 +12931,16 @@ _user_team_fields = (
     [] if _is_admin
     else list(_ALL_TEAM_FIELDS)
 )
+# For VISIBILITY *resolution* we match the user's team against ANY `*_team`
+# field present on a row — not just the 6 canonical ones above. Orgs name their
+# env/branch team fields freely (e.g. `develop_team`, `release_team`), so the
+# fixed list silently missed them and collapsed the scope to zero even when the
+# team plainly exists in the inventory (confirmed via the scope diagnostic:
+# team "DEVJAVA" overlapped inventory yet resolved 0 apps). "*" tells
+# `_resolve_inventory_by_teams_git` to scan every `*_team` field. The canonical
+# list above is still used for display labels and action gating.
+_user_scope_fields: list[str] = [] if _is_admin else ["*"]
+_user_scope_fields_json = json.dumps(_user_scope_fields)
 _user_event_types     = _union_role_list(_ROLE_EVENT_TYPES,     _ROLE_EVENT_TYPES["Admin"])
 _user_envs            = _union_role_list(_ROLE_ENVS,            _ROLE_ENVS["Admin"])
 _user_approval_stages = _union_role_list(_ROLE_APPROVAL_STAGES, [])
@@ -12974,13 +12997,14 @@ if team_filter:
             _admin_team_apps.update(_load_team_applications(_r, team_filter))
         _team_apps = sorted(_admin_team_apps)
     else:
-        # Non-admin: union across every detected role's team field
-        # (e.g. Developer+QC user → dev_team OR qc_team match).
-        _team_apps = _load_apps_for_user_teams(team_filter, _user_fields_json)
+        # Non-admin: match the team against ANY `*_team` field on the row
+        # (wildcard scope fields) so non-standard env/branch team fields are
+        # not silently missed.
+        _team_apps = _load_apps_for_user_teams(team_filter, _user_scope_fields_json)
 elif (not _is_admin) and _active_teams:
     _union: set[str] = set()
     for _t in _active_teams:
-        _union.update(_load_apps_for_user_teams(_t, _user_fields_json))
+        _union.update(_load_apps_for_user_teams(_t, _user_scope_fields_json))
     _team_apps = sorted(_union)
 else:
     _team_apps = []
@@ -13019,11 +13043,9 @@ if _is_admin:
 elif _active_teams:
     _proj_scoped = _load_projects_for_user_teams(
         json.dumps(sorted(_active_teams)),
-        _user_fields_json,
+        _user_scope_fields_json,
     )
-    _scope_field_lbls = ", ".join(
-        _f.replace(".keyword", "") for _f in _user_team_fields
-    ) or "team"
+    _scope_field_lbls = "any *_team field"
     _proj_help = (
         f"{len(_proj_scoped)} project(s) where {_scope_field_lbls} ∈ "
         f"{', '.join(_active_teams)}"
@@ -27272,19 +27294,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         return ""
 
     # ── Team extraction helper (inventory rows may carry multiple *_team fields) ─
-    # For admins we surface every *_team field so the Teams tile reflects the
-    # full ownership graph. For scoped roles we restrict the "teams" of a row
-    # to just the values in that role's own team field (dev_team for
-    # Developer, qc_team for QC, ops_team for Operations) — otherwise a
-    # co-assigned team on a shared project would leak into the Team tile and
-    # let the user pick teams they don't actually belong to.
-    # Role-scoped row team fields. Walks the UNION across every detected
-    # role (multi-role users see every team field they own, no leakage).
+    # A row's "teams" are read from EVERY `*_team` field present (empty
+    # `_iv_row_team_fields` → `_iv_row_teams` scans all). We deliberately do NOT
+    # restrict non-admins to a fixed list of ownership fields here: orgs name
+    # env/branch team fields freely (dev_team, develop_team, release_team, …),
+    # and restricting to a hardcoded list silently dropped a non-admin's team
+    # value when it lived under a non-standard field — the recurring "0 apps"
+    # bug. Picker leakage is prevented downstream by clamping the team OPTIONS
+    # to the viewer's session teams (`_iv_teams_opts` filter), so matching
+    # broadly here is safe and is what makes the user's apps visible.
     _iv_row_team_fields: list[str] = []
-    if not _is_admin:
-        _iv_row_team_fields = [
-            _f.replace(".keyword", "") for _f in _user_team_fields
-        ]
 
     # `_iv_row_teams` runs in HOT loops — once per row × 8 leave-one-out
     # aggregations + the post-filter aggregate + the table renderer's haystack
