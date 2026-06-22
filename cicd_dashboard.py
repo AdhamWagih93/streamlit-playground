@@ -27352,9 +27352,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     elif not _is_admin and len(_iv_session_teams) > 1:
         # Clamp any previously-persisted team selection to session_teams so
         # a leaked co-team value from a shared project can't widen the view.
-        _legal_teams = _ci_set(_iv_session_teams)
+        _legal_teams = _team_match_set(_iv_session_teams)
         _prev_team_sel = list(st.session_state.get(_iv_filter_keys["team"]) or [])
-        _clean_team_sel = [t for t in _prev_team_sel if _ci_key(t) in _legal_teams]
+        _clean_team_sel = [t for t in _prev_team_sel if _team_match_key(t) in _legal_teams]
         if _clean_team_sel != _prev_team_sel:
             st.session_state[_iv_filter_keys["team"]] = _clean_team_sel
     elif not _is_admin and len(_iv_session_teams) == 0:
@@ -27423,18 +27423,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _s = set(_sel_company)
             out = [r for r in out if (r.get("company") or "") in _s]
         if exclude != "team" and _sel_team:
-            # Case-insensitive: a selected team matches a row team regardless
-            # of casing (My-Team == my-team), so a non-admin's auto-selected
-            # session team still matches the inventory's casing.
-            _s = _ci_set(_sel_team)
-            out = [r for r in out if _ci_set(_iv_row_teams(r)) & _s]
+            # Separator- AND case-tolerant: a selected team matches a row team
+            # regardless of casing OR separator style ("My Team" == "my_team"
+            # == "My-Team"), so a non-admin's auto-selected session team still
+            # matches the inventory's stored value even when the auth layer and
+            # the YAML disagree on spaces/underscores/hyphens — the recurring
+            # "non-admins see 0 apps" drift. (`_ci_set` was case-only.)
+            _s = _team_match_set(_sel_team)
+            out = [r for r in out if _team_match_set(_iv_row_teams(r)) & _s]
         # Users → inventory link is indirect (via their teams). When users
         # are selected, narrow rows to projects owned by ANY of those
         # users' teams. Users without an inferred team don't narrow the
         # inventory at all (they only affect the event log filter).
         if exclude != "user" and _sel_user and _sel_user_teams:
-            _sut = _ci_set(_sel_user_teams)
-            out = [r for r in out if _ci_set(_iv_row_teams(r)) & _sut]
+            _sut = _team_match_set(_sel_user_teams)
+            out = [r for r in out if _team_match_set(_iv_row_teams(r)) & _sut]
         if exclude != "project" and _sel_project:
             _s = set(_sel_project)
             out = [r for r in out if (r.get("project") or "") in _s]
@@ -27481,8 +27484,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # teams — even if a shared project surfaces co-assigned teams in its
     # inventory document. Strip the options dict down to the legal set.
     if not _is_admin and _iv_session_teams:
-        _legal = _ci_set(_iv_session_teams)
-        _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if _ci_key(t) in _legal}
+        _legal = _team_match_set(_iv_session_teams)
+        _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if _team_match_key(t) in _legal}
     # ── Users option dict — leave-one-out by user-filter exclusion ────────
     # Each user has a key (canonical email/name) + display label. We surface
     # the activity total in the count so users sort by impact in the
@@ -28896,35 +28899,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     if iv_sort == "Application · Z → A":
         _inv_rows.reverse()
 
-    if not _inv_rows:
-        with _body_container:
-            inline_note("No applications match the current filters.", "info")
-        # Publish an empty scope so the sibling Event log tab shows
-        # "no events" in the same scope — consistent with the filter-
-        # inheritance contract.
-        if _show_el:
-            st.session_state["_el_inv_scope_apps"] = []
-            st.session_state["_iv_total_v1"] = 0
-        return
-
-    # ── Pagination ─────────────────────────────────────────────────────────
-    # Keep the un-sliced filtered set for anything that summarizes the whole
-    # result (project ribbon, event-log scope publication, app_type map).
-    # Only the table row HTML consumes the page slice, which is where the
-    # render-time cost is concentrated.
-    _inv_rows_filtered = _inv_rows
-    _inv_total = len(_inv_rows_filtered)
-    # Everything below this point renders inside the inventory tab (body_slot).
-    _body_container.__enter__()
-
-    # ── Non-admin scope self-diagnostic ───────────────────────────────────
+    # ── Non-admin scope self-diagnostic (defined here so it can render on the
+    # EMPTY-rows path too — previously it lived AFTER the `if not _inv_rows:`
+    # early return, so the very users hitting 0 apps never saw it, which is
+    # exactly why "non-admins see 0" kept coming back undiagnosed). ──────────
     # When a non-admin's inventory is empty, show THEM (and, via screenshot,
     # the admin) exactly what their session resolved — the only way to see
     # the live session's role/team/field values. Reveals the real cause:
     # an unrecognised role string, no session teams, a team-name mismatch,
     # or a role whose ownership field (qc/uat/prd_team) doesn't hold the
     # team that owns the apps under dev_team.
-    if not _is_admin:
+    def _render_nonadmin_scope_diag(_inv_total: int) -> None:
+        if _is_admin:
+            return
         _sd_teams = list(_session_teams)
         _sd_fields = [_f.replace(".keyword", "") for _f in _user_team_fields]
         _sd_apps_n = len(_team_apps)
@@ -29020,6 +29007,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 + '</div>',
                 unsafe_allow_html=True,
             )
+
+    if not _inv_rows:
+        with _body_container:
+            inline_note("No applications match the current filters.", "info")
+            # Render the scope diagnostic on the EMPTY path — this is the
+            # actual 0-apps case the user keeps hitting.
+            _render_nonadmin_scope_diag(0)
+        # Publish an empty scope so the sibling Event log tab shows
+        # "no events" in the same scope — consistent with the filter-
+        # inheritance contract.
+        if _show_el:
+            st.session_state["_el_inv_scope_apps"] = []
+            st.session_state["_iv_total_v1"] = 0
+        return
+
+    # ── Pagination ─────────────────────────────────────────────────────────
+    # Keep the un-sliced filtered set for anything that summarizes the whole
+    # result (project ribbon, event-log scope publication, app_type map).
+    # Only the table row HTML consumes the page slice, which is where the
+    # render-time cost is concentrated.
+    _inv_rows_filtered = _inv_rows
+    _inv_total = len(_inv_rows_filtered)
+    # Everything below this point renders inside the inventory tab (body_slot).
+    _body_container.__enter__()
+
+    # Non-admin scope self-diagnostic (defined above the early return). Renders
+    # only when this non-admin's scope is suspiciously small/empty.
+    _render_nonadmin_scope_diag(_inv_total)
 
     # URL-based query-param handlers (prisma_open / jenkins_trigger) were
     # removed — they caused visible browser navigations every time the
