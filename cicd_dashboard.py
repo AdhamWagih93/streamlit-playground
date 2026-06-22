@@ -11679,6 +11679,69 @@ def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
     return []
 
 
+def _resolve_inventory_scope_for_teams(teams) -> dict:
+    """Resolve a non-admin's apps AND projects in ONE matched-row pass over the
+    best-available inventory rows (git → ES full projection). Matching is field-
+    agnostic (any ``*_team`` field) and separator/case-tolerant.
+
+    Returning both from the SAME pass guarantees they're consistent: a row that
+    matches the team contributes its app AND its project together, so apps can't
+    resolve while projects come back empty (the two old independent passes could
+    diverge when a row carried an app but an empty project, or vice-versa).
+
+    Returns ``{"apps": [...], "projects": [...], "sample": [(app, project,
+    matched_field), ...]}`` — the sample (first few matches) is for the scope
+    diagnostic so a real data issue is visible without guessing."""
+    _teams = [t for t in (teams or []) if str(t or "").strip()]
+    if not _teams:
+        return {"apps": [], "projects": [], "sample": []}
+    _want = _team_match_set(_teams)
+
+    # Best-available rows: git first (authoritative), then the ES full
+    # projection. Both carry a `teams` blob keyed by `*_team` field.
+    _rows = None
+    try:
+        _git_rows, _src, _status, _warn = _load_inventory_from_git_scoped("[]")
+    except Exception:
+        _git_rows = None
+    if _git_rows:
+        _rows = _git_rows
+    else:
+        try:
+            _rows = _fetch_full_inventory("[]")
+        except Exception:
+            _rows = []
+
+    _apps: set[str] = set()
+    _projects: set[str] = set()
+    _sample: list[tuple] = []
+    for _r in _rows or []:
+        _blob = _r.get("teams") or {}
+        _matched_field = ""
+        for _k, _v in _blob.items():
+            if not (isinstance(_k, str) and _k.endswith("_team")):
+                continue
+            _vals = _v if isinstance(_v, (list, tuple, set)) else [_v]
+            if any(_team_match_key(_x) in _want for _x in _vals if _x):
+                _matched_field = _k
+                break
+        if not _matched_field:
+            continue
+        _app = (_r.get("application") or "").strip()
+        _proj = (_r.get("project") or "").strip()
+        if _app:
+            _apps.add(_app)
+        if _proj:
+            _projects.add(_proj)
+        if len(_sample) < 8:
+            _sample.append((_app, _proj, _matched_field))
+    return {
+        "apps": sorted(_apps),
+        "projects": sorted(_projects),
+        "sample": _sample,
+    }
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _load_team_applications(role: str, team: str) -> list[str]:
     """Return list of application names assigned to this team for this role."""
@@ -12987,6 +13050,12 @@ else:
     _team_display = "— no team —"
 
 _user_fields_json = json.dumps(_user_team_fields)
+# Non-admin scope is resolved ONCE here (apps + projects together, field-
+# agnostic) and reused for both `_team_apps` and `_scoped_projects` below, so
+# the two can't diverge. `_nonadmin_scope` is also surfaced in the diagnostic.
+_nonadmin_scope: dict = {"apps": [], "projects": [], "sample": []}
+if (not _is_admin) and _active_teams:
+    _nonadmin_scope = _resolve_inventory_scope_for_teams(_active_teams)
 if team_filter:
     if _is_admin:
         # Admin / CLevel: union the team's apps across every team-field —
@@ -12997,15 +13066,10 @@ if team_filter:
             _admin_team_apps.update(_load_team_applications(_r, team_filter))
         _team_apps = sorted(_admin_team_apps)
     else:
-        # Non-admin: match the team against ANY `*_team` field on the row
-        # (wildcard scope fields) so non-standard env/branch team fields are
-        # not silently missed.
-        _team_apps = _load_apps_for_user_teams(team_filter, _user_scope_fields_json)
+        # Non-admin: matched against ANY `*_team` field on the row.
+        _team_apps = list(_nonadmin_scope["apps"])
 elif (not _is_admin) and _active_teams:
-    _union: set[str] = set()
-    for _t in _active_teams:
-        _union.update(_load_apps_for_user_teams(_t, _user_scope_fields_json))
-    _team_apps = sorted(_union)
+    _team_apps = list(_nonadmin_scope["apps"])
 else:
     _team_apps = []
 
@@ -13041,10 +13105,10 @@ if _is_admin:
             _proj_scoped = _all_projects
             _proj_help = f"{len(_all_projects)} projects (no team)"
 elif _active_teams:
-    _proj_scoped = _load_projects_for_user_teams(
-        json.dumps(sorted(_active_teams)),
-        _user_scope_fields_json,
-    )
+    # Reuse the single combined non-admin resolution (apps + projects from the
+    # SAME matched-row pass) so projects can never come back empty while apps
+    # resolve.
+    _proj_scoped = list(_nonadmin_scope["projects"])
     _scope_field_lbls = "any *_team field"
     _proj_help = (
         f"{len(_proj_scoped)} project(s) where {_scope_field_lbls} ∈ "
@@ -28935,7 +28999,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _sd_fields = [_f.replace(".keyword", "") for _f in _user_team_fields]
         _sd_apps_n = len(_team_apps)
         _sd_proj_n = len(_scoped_projects)
-        if _inv_total == 0 or not (_sd_apps_n or _sd_proj_n):
+        # Fire when the table is empty OR when EITHER apps or projects resolved
+        # to zero — so a "apps work but 0 projects" (or vice-versa) split is
+        # visible rather than silently hidden once one side is non-empty.
+        if _inv_total == 0 or not _sd_apps_n or not _sd_proj_n:
             _sd_reasons = []
             # Surface the RAW session value + its type so a malformed shape
             # (e.g. a bare string the auth layer set) is immediately visible.
@@ -28989,13 +29056,31 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         _sd_inv_team_keys.add(_team_match_key(_vals))
             _sd_my_keys = _team_match_set(_sd_teams)
             _sd_overlap = _sd_my_keys & _sd_inv_team_keys
+            # Surface the combined-resolution matched-row sample (app → project →
+            # which team field matched). This is the conclusive evidence: it
+            # shows whether matched rows carry a project at all.
+            _sd_scope = _nonadmin_scope if not _is_admin else {}
+            _sd_smp = (_sd_scope or {}).get("sample") or []
+            if _sd_smp:
+                _sd_smp_txt = "; ".join(
+                    f"{html.escape(str(_a) or '∅app')} → "
+                    f"{html.escape(str(_p) or '∅PROJECT')} "
+                    f"[{html.escape(str(_f))}]"
+                    for (_a, _p, _f) in _sd_smp
+                )
+                _sd_reasons.append(
+                    "matched rows (app → project [field]): "
+                    f"<code>{_sd_smp_txt}</code> — resolved "
+                    f"{len((_sd_scope or {}).get('apps') or [])} apps · "
+                    f"{len((_sd_scope or {}).get('projects') or [])} projects")
             if _sd_all_rows and _sd_teams:
                 if _sd_overlap:
                     _sd_reasons.append(
                         "your normalised team key(s) <b>DO</b> overlap inventory "
                         f"(<code>{html.escape(', '.join(sorted(_sd_overlap))[:160])}</code>)"
-                        " — if you still see 0 apps the scope filter is the "
-                        "culprit, not name drift; send this to the admin")
+                        " — if you still see 0 the scope filter or an empty "
+                        "project field is the culprit, not name drift; send this "
+                        "to the admin")
                 else:
                     _sd_sample = ", ".join(sorted(_sd_inv_team_raw)[:25])
                     _sd_reasons.append(
