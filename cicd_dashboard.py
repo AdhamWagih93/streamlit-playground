@@ -11627,7 +11627,30 @@ def _resolve_inventory_by_teams(fields, teams, agg_field: str) -> list[str]:
             _rows=_git_rows,
         )
 
-    # 2) Git unavailable — fall back to the ES projection (exact tokens only).
+    # 2) Git unavailable — fall back to the ES projection, but do the SAME
+    #    separator/case-tolerant matching in Python (NOT via ES term queries).
+    #    ES `term` can only match exact tokens, so a separator drift between the
+    #    auth layer's team names ("My Team") and the index's stored values
+    #    ("my_team") collapses a non-admin's whole scope to zero — the recurring
+    #    "non-admins see 0 apps" bug. `_fetch_full_inventory` returns rows with a
+    #    `teams` blob, so we can reuse the exact git-path matcher and stay robust
+    #    to drift even when the git clone is unreachable in the deployment.
+    try:
+        _es_rows = _fetch_full_inventory("[]")
+    except Exception:
+        _es_rows = []
+    if _es_rows:
+        _matched = _resolve_inventory_by_teams_git(
+            [f.replace(".keyword", "") for f in _fields],
+            _team_match_set(_teams),
+            agg_field.replace(".keyword", ""),
+            _rows=_es_rows,
+        )
+        if _matched:
+            return _matched
+
+    # 3) Last resort — ES exact-token term match (only reached when even the
+    #    full projection came back empty; preserves the legacy behaviour).
     for _ci in (True, False):
         _should = [
             {"term": {f: ({"value": t, "case_insensitive": True} if _ci else t)}}
@@ -28930,6 +28953,56 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     "(e.g. they sit under <code>dev_team</code> but your role "
                     "resolves <code>qc_team</code>/<code>prd_team</code>), or "
                     "the team name doesn't match the inventory")
+            # Surface the inventory SOURCE + the actual team values present in
+            # the (unscoped) inventory so a genuine name mismatch is obvious by
+            # eye. `_fetch_full_inventory` is @st.cache_data-cached, so this is
+            # cheap; it only runs on the empty-scope path. We separator-normalise
+            # both sides and show whether ANY normalised key overlaps — the
+            # definitive answer to "is this a name-drift bug or do I really own
+            # nothing?".
+            _sd_src = st.session_state.get("_iv_source_v1") or "?"
+            _sd_src_status = st.session_state.get("_iv_source_status_v1") or ""
+            _sd_reasons.append(
+                f"inventory source = <code>{html.escape(str(_sd_src))}</code>"
+                + (f" ({html.escape(str(_sd_src_status))})" if _sd_src_status else ""))
+            try:
+                _sd_all_rows = _fetch_full_inventory("[]")
+            except Exception:
+                _sd_all_rows = []
+            _sd_inv_team_keys: set[str] = set()
+            _sd_inv_team_raw: set[str] = set()
+            for _sdr in _sd_all_rows:
+                for _vals in (_sdr.get("teams") or {}).values():
+                    if isinstance(_vals, (list, tuple, set)):
+                        for _x in _vals:
+                            if _x:
+                                _sd_inv_team_raw.add(str(_x).strip())
+                                _sd_inv_team_keys.add(_team_match_key(_x))
+                    elif _vals:
+                        _sd_inv_team_raw.add(str(_vals).strip())
+                        _sd_inv_team_keys.add(_team_match_key(_vals))
+            _sd_my_keys = _team_match_set(_sd_teams)
+            _sd_overlap = _sd_my_keys & _sd_inv_team_keys
+            if _sd_all_rows and _sd_teams:
+                if _sd_overlap:
+                    _sd_reasons.append(
+                        "your normalised team key(s) <b>DO</b> overlap inventory "
+                        f"(<code>{html.escape(', '.join(sorted(_sd_overlap))[:160])}</code>)"
+                        " — if you still see 0 apps the scope filter is the "
+                        "culprit, not name drift; send this to the admin")
+                else:
+                    _sd_sample = ", ".join(sorted(_sd_inv_team_raw)[:25])
+                    _sd_reasons.append(
+                        "your normalised team key(s) <b>do NOT</b> match any "
+                        f"inventory team. Yours: <code>{html.escape(', '.join(sorted(_sd_my_keys)) or '—')}</code>. "
+                        f"Inventory has ({len(_sd_inv_team_raw)}): "
+                        f"<code>{html.escape(_sd_sample)}</code>"
+                        + (" …" if len(_sd_inv_team_raw) > 25 else ""))
+            elif not _sd_all_rows:
+                _sd_reasons.append(
+                    "the inventory loaded <b>0 rows</b> from the source above — "
+                    "this is a git/ES connectivity or parse failure, not a team "
+                    "issue (have an admin open 🔍 Diagnose git)")
             st.markdown(
                 '<div class="iv-scope-diag">'
                 '<div class="iv-scope-diag-head">⚠ No apps in your scope — '
