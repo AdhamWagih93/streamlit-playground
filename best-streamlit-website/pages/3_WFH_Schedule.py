@@ -15,11 +15,16 @@ import streamlit as st
 TEAM_MEMBERS: List[str] = [
     "Adham",
     "Karam",
-    "Abdelkhalek",
-    "Hesham",
     "Salma",
+    "Zanaty",
 ]
 YEAR = 2026
+
+# New joiner who works fully from the office (every office day) while onboarding,
+# then joins the normal 50/50 rotation the day after this date (inclusive cutover).
+# Sundays remain work-from-home for everyone, including the new joiner.
+NEW_JOINER = "Zanaty"
+NEW_JOINER_FULL_OFFICE_UNTIL = date(2026, 8, 14)
 WORKDAYS = {6, 0, 1, 2, 3}  # Sunday (6) through Thursday (3) in datetime.weekday()
 # Sunday is a work-from-home day for everyone; the office rotation only runs
 # on the four office days, Monday (0) through Thursday (3).
@@ -35,9 +40,8 @@ PUBLIC_HOLIDAYS_FILE = Path("data") / f"public_holidays_{YEAR}.json"
 ROLE_BY_MEMBER: Dict[str, str] = {
     "Adham": "mgmt-support",
     "Karam": "mgmt-support",
-    "Abdelkhalek": "mgmt-support",
-    "Hesham": "engineering",
     "Salma": "engineering",
+    "Zanaty": "engineering",
 }
 
 # Personal, soft attendance preferences (validated as warnings only).
@@ -48,9 +52,7 @@ PREFERS_WFO_DAYS: Dict[str, Set[int]] = {
 }
 
 DISLIKES_WFO_DAYS: Dict[str, Set[int]] = {
-    # New constraints: dislike being in-office on specific weekdays.
-    "Hesham": {0, 3},
-    "Abdelkhalek": {6, 3},  # Sunday (6), Thursday (3)
+    # Dislike being in-office on specific weekdays.
     "Salma": {3},           # Thursday (3)
 }
 
@@ -97,62 +99,73 @@ def is_office_day(d: date) -> bool:
     return is_workday(d) and d.weekday() in OFFICE_WEEKDAYS
 
 
-def generate_two_week_pattern() -> List[Set[str]]:
-    """Generate a 10-workday (Sun-Thu x2) pattern satisfying hard rules.
+def in_full_office_period(d: date) -> bool:
+    """True on/before the new joiner's full-office cutover date.
 
-    Sunday is always a work-from-home day for everyone, so the office
-    rotation runs only across the four office days (Mon-Thu). Hard rules:
+    During this period the new joiner is in the office on every office day
+    (and is exempt from the 50/50 weekly/fortnightly caps and the
+    no-3-consecutive-days rule). After it, they join the normal rotation.
+    """
+    return d <= NEW_JOINER_FULL_OFFICE_UNTIL
 
-    - Sunday: nobody is in the office (always WFH).
-    - Each member is WFO on exactly ``WEEKLY_WFO`` (2) of the four office
-      days each week -> a clean 50/50 split across Mon-Thu.
-    - Over the two-week window each member has exactly
-      ``WFO_PER_MEMBER_FORTNIGHT`` (4) office days.
-    - Each office day has 2 or 3 people WFO.
-    - At least one mgmt-support member is in the office on every office day.
-    - No member is WFO 3 days in a row.
-    - Karam is WFO on every Monday and Tuesday.
 
-    Pairwise "meet in the office at least once" is treated as a soft
-    preference (a validation warning), not a hard generator constraint:
-    the smaller four-day office week makes full pairwise coverage
-    infeasible for some 2-week windows.
+def generate_two_week_pattern(rotating=None, forced_office=None) -> List[Set[str]]:
+    """Generate a 10-workday (Sun-Thu x2) office pattern.
+
+    ``rotating``      members who follow the 50/50 rule (default: the whole
+                      team). Each is WFO on exactly ``WEEKLY_WFO`` (2) of the
+                      four office days per week, ``WFO_PER_MEMBER_FORTNIGHT``
+                      (4) per fortnight.
+    ``forced_office`` members who are in the office on *every* office day and
+                      are exempt from the 50/50 caps and the no-3-consecutive
+                      rule (used for a new joiner during full-office onboarding).
+
+    Hard rules (Sunday is always WFH for everyone):
+    - Each office day (Mon-Thu) has 2-3 people total (forced + chosen).
+    - At least one mgmt-support member is in the office every office day.
+    - Karam (when rotating) is WFO every Monday and Tuesday.
+    - No *rotating* member is WFO 3 days in a row.
+
+    Pairwise "meet in the office at least once" is a soft preference
+    (a validation warning), not a hard generator constraint.
     """
 
-    n = len(TEAM_MEMBERS)
-    people = list(range(n))
-    idx = {name: i for i, name in enumerate(TEAM_MEMBERS)}
-    karam = idx["Karam"]
+    rotating = list(rotating) if rotating is not None else list(TEAM_MEMBERS)
+    forced_office = list(forced_office) if forced_office is not None else []
 
-    # 10 working days: Sun,Mon,Tue,Wed,Thu,Sun,Mon,Tue,Wed,Thu
+    idx = {name: i for i, name in enumerate(TEAM_MEMBERS)}
+    n_team = len(TEAM_MEMBERS)
+    r_idx = [idx[m] for m in rotating]          # indices of rotating members
+    forced_idx = {idx[m] for m in forced_office}
+    mgmt_indices = {idx[m] for m in TEAM_MEMBERS if ROLE_BY_MEMBER.get(m) == "mgmt-support"}
+    karam_rotating = "Karam" in rotating
+    karam = idx.get("Karam")
+
     weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu"] * 2
 
-    # Indices of mgmt-support members for role-based daily coverage
-    mgmt_indices = {
-        i for i, name in enumerate(TEAM_MEMBERS) if ROLE_BY_MEMBER.get(name) == "mgmt-support"
-    }
+    # The "chosen" rotating set plus the always-in forced set must total 2-3.
+    min_choose = max(0, DAILY_OFFICE_MIN - len(forced_office))
+    max_choose = max(0, DAILY_OFFICE_MAX - len(forced_office))
 
-    # All office subsets with 2 or 3 members
     all_subsets: List[Sequence[int]] = []
-    for r in range(DAILY_OFFICE_MIN, DAILY_OFFICE_MAX + 1):
-        all_subsets.extend(list(combinations(people, r)))
-    # Add randomness to daily options to avoid always picking the same pattern
+    for rsz in range(min_choose, max_choose + 1):
+        all_subsets.extend(list(combinations(r_idx, rsz)))
     random.shuffle(all_subsets)
 
-    # Candidate office sets per day:
-    #   - Sunday: nobody in the office (always WFH).
-    #   - Mon/Tue: Karam must be present (hardened preference).
-    #   - Wed/Thu: any valid 2-3 person set.
+    # Candidate chosen-sets per day. Sunday: nobody in the office.
     options_per_day: List[List[Sequence[int]]] = []
     for day in range(10):
         wd = weekdays[day]
         if wd == "Sun":
-            options_per_day.append([tuple()])  # everyone WFH on Sunday
+            options_per_day.append([tuple()])
             continue
         day_opts: List[Sequence[int]] = []
         for subset in all_subsets:
             s = set(subset)
-            if wd in {"Mon", "Tue"} and karam not in s:
+            if karam_rotating and wd in {"Mon", "Tue"} and karam not in s:
+                continue
+            # mgmt-support present via a forced or chosen member
+            if not (mgmt_indices & (forced_idx | s)):
                 continue
             day_opts.append(subset)
         options_per_day.append(day_opts)
@@ -172,8 +185,7 @@ def generate_two_week_pattern() -> List[Set[str]]:
             return
 
         if day == 10:
-            # Every member must land exactly on the fortnightly target.
-            if any(c != WFO_PER_MEMBER_FORTNIGHT for c in counts):
+            if any(counts[p] != WFO_PER_MEMBER_FORTNIGHT for p in r_idx):
                 return
             best_schedule = [set(s) for s in schedule]
             found = True
@@ -181,18 +193,14 @@ def generate_two_week_pattern() -> List[Set[str]]:
 
         wd = weekdays[day]
         week_idx = 0 if day < 5 else 1
-        # Office days still to come (this day included) used to prune
-        # branches where a member can no longer reach the fortnightly target.
         remaining_office_days = sum(1 for k in range(day, 10) if weekdays[k] != "Sun")
 
-        # Copy and shuffle candidates for some randomness while respecting rules
         candidates = list(options_per_day[day])
         random.shuffle(candidates)
 
         for subset in candidates:
             s = set(subset)
 
-            # Per-member weekly and fortnightly WFO caps
             new_counts = counts[:]
             new_week = [wk[:] for wk in week_counts]
             feasible = True
@@ -205,22 +213,17 @@ def generate_two_week_pattern() -> List[Set[str]]:
             if not feasible:
                 continue
 
-            # At least one mgmt-support present on every office day
-            if wd != "Sun" and not (mgmt_indices & s):
-                continue
-
-            # Can each member still reach the fortnightly target?
             after_office_days = remaining_office_days - 1
-            for p in range(n):
+            for p in r_idx:
                 if new_counts[p] + after_office_days < WFO_PER_MEMBER_FORTNIGHT:
                     feasible = False
                     break
             if not feasible:
                 continue
 
-            # No 3 consecutive WFO days (Sunday WFH naturally resets streaks)
+            # No 3 consecutive WFO for rotating members (forced are exempt)
             new_streaks = streaks[:]
-            for p in range(n):
+            for p in r_idx:
                 if p in s:
                     new_streaks[p] = streaks[p] + 1
                     if new_streaks[p] >= 3:
@@ -237,19 +240,18 @@ def generate_two_week_pattern() -> List[Set[str]]:
             if found:
                 return
 
-    initial_counts = [0] * n
-    initial_week = [[0] * n, [0] * n]
-    initial_streaks = [0] * n
-
-    backtrack(0, [], initial_counts, initial_week, initial_streaks)
+    backtrack(0, [], [0] * n_team, [[0] * n_team, [0] * n_team], [0] * n_team)
 
     if not found or best_schedule is None:
         raise RuntimeError("Unable to find a valid 2-week WFH/WFO pattern with given rules.")
 
-    # Convert to member-name sets in weekday order
+    # Build name sets: Sunday empty; office days = forced ∪ chosen rotating.
     name_pattern: List[Set[str]] = []
-    for s in best_schedule:
-        name_pattern.append({TEAM_MEMBERS[i] for i in s})
+    for day, s in enumerate(best_schedule):
+        if weekdays[day] == "Sun":
+            name_pattern.append(set())
+        else:
+            name_pattern.append(set(forced_office) | {TEAM_MEMBERS[i] for i in s})
     return name_pattern
 
 
@@ -266,8 +268,16 @@ def get_anchor_sunday() -> date:
     return first_of_year - timedelta(days=offset)
 
 
-def build_base_schedule(pattern: List[Set[str]]) -> Dict[str, Dict[str, str]]:
-    """Build the default schedule for all workdays in YEAR using the pattern.
+def build_base_schedule(
+    intro_pattern: List[Set[str]],
+    normal_pattern: List[Set[str]],
+) -> Dict[str, Dict[str, str]]:
+    """Build the default schedule for all workdays in YEAR.
+
+    Office days on/before the new joiner's cutover use ``intro_pattern``
+    (new joiner full-office, the rest on 50/50); office days after it use
+    ``normal_pattern`` (everyone on 50/50). Both patterns are 10-slot
+    Sun-Thu x2 rotations tiled by workday index.
 
     Returns a mapping: iso-date -> {member: "WFO" or "WFH"}.
     """
@@ -275,14 +285,14 @@ def build_base_schedule(pattern: List[Set[str]]) -> Dict[str, Dict[str, str]]:
     anchor = get_anchor_sunday()
     end = date(YEAR, 12, 31)
 
-    pattern_len = len(pattern)  # should be 10
     workday_index = 0
     d = anchor
     schedule: Dict[str, Dict[str, str]] = {}
 
     while d <= end:
         if d.weekday() in WORKDAYS:
-            members_wfo = pattern[workday_index % pattern_len]
+            pattern = intro_pattern if in_full_office_period(d) else normal_pattern
+            members_wfo = pattern[workday_index % len(pattern)]
             if d.year == YEAR:
                 schedule[d.isoformat()] = {
                     member: ("WFO" if member in members_wfo else "WFH")
@@ -811,6 +821,16 @@ def validate_schedule(
                 )
             )
 
+        # New joiner is in the office every office day during onboarding.
+        if in_full_office_period(d) and NEW_JOINER in TEAM_MEMBERS and NEW_JOINER not in wfo:
+            errors.append(
+                (
+                    d,
+                    f"{d:%a %d %b %Y}: {NEW_JOINER} should be in the office every day "
+                    f"until {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y} (onboarding).",
+                )
+            )
+
     # --- Global 3+ consecutive WFO days (soft warning) ---
     for member in TEAM_MEMBERS:
         streak = 0
@@ -818,7 +838,8 @@ def validate_schedule(
             status = year_sched.get(d.isoformat(), {}).get(member, "WFH")
             if status == "WFO":
                 streak += 1
-                if streak >= 3:
+                onboarding = member == NEW_JOINER and in_full_office_period(d)
+                if streak >= 3 and not onboarding:
                     warnings.append(
                         (
                             d,
@@ -850,7 +871,14 @@ def validate_schedule(
         for week_idx, wdays in enumerate([week1_days, week2_days], start=1):
             if not wdays:
                 continue
+            week_is_intro = any(
+                is_office_day(d) and in_full_office_period(d) for d in wdays
+            )
             for member in TEAM_MEMBERS:
+                # The new joiner is full-office while onboarding (not on 50/50);
+                # the daily full-office check enforces their attendance instead.
+                if member == NEW_JOINER and week_is_intro:
+                    continue
                 wfo_count = sum(
                     1
                     for d in wdays
@@ -866,7 +894,14 @@ def validate_schedule(
                     )
 
         # Per-member 2-week total exactly WFO_PER_MEMBER_FORTNIGHT – hard
+        window_has_intro = any(
+            is_office_day(d) and in_full_office_period(d) for d in window_days
+        )
         for member in TEAM_MEMBERS:
+            # New joiner is exempt from the fortnight cap while any part of the
+            # window falls in the full-office onboarding period.
+            if member == NEW_JOINER and window_has_intro:
+                continue
             total_wfo = sum(
                 1
                 for d in window_days
@@ -967,9 +1002,17 @@ def build_error_free_base_schedule(
 
     last_errors: List[tuple[date | None, str]] = []
 
+    rotating_after = list(TEAM_MEMBERS)
+    rotating_intro = [m for m in TEAM_MEMBERS if m != NEW_JOINER]
+
     for _ in range(max_attempts):
-        pattern = generate_two_week_pattern()
-        base_schedule = build_base_schedule(pattern)
+        # Onboarding regime: new joiner full-office, the rest on 50/50.
+        intro_pattern = generate_two_week_pattern(
+            rotating=rotating_intro, forced_office=[NEW_JOINER]
+        )
+        # Steady-state regime: everyone (incl. new joiner) on 50/50.
+        normal_pattern = generate_two_week_pattern(rotating=rotating_after)
+        base_schedule = build_base_schedule(intro_pattern, normal_pattern)
 
         # Validate the pure rule-based schedule (without manual overrides
         # from persisted week files) to ensure the generator and validator
@@ -979,7 +1022,7 @@ def build_error_free_base_schedule(
         }
         errors, _ = validate_schedule(tmp_year_sched)
         if not errors:
-            return pattern, base_schedule
+            return (intro_pattern, normal_pattern), base_schedule
 
         last_errors = errors
 
@@ -2070,7 +2113,9 @@ def main() -> None:
         "Auto-generated two-week rotation respecting attendance rules and preferences, "
         "with per-week overrides and a full-year visualization. "
         "Sundays are always work-from-home; the office rotation runs Mon–Thu "
-        "with each person in the office 2 of those 4 days (a 50/50 split)."
+        "with each person in the office 2 of those 4 days (a 50/50 split). "
+        f"{NEW_JOINER} works fully from the office through "
+        f"{NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y} while onboarding, then joins the rotation."
     )
 
     # Core schedule generation (pattern + base year schedule).
