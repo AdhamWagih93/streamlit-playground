@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests are not needed in the runtime image
+tests/
+
+# Local environment & secrets
+.env
+.env.*
+!.env.example
+
+# Local data / databases
+*.db
+*.sqlite3
+data/
+attachments/
+
+# Tooling / VCS noise
+.git/
+.gitignore
+*.md
+.DS_Store
