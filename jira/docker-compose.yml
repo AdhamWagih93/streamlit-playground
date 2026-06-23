@@ -19,14 +19,28 @@ services:
 
   backend:
     build: ./backend
-    env_file: .env
+    # .env is OPTIONAL: the defaults below let `docker compose up` work on a
+    # fresh clone with no setup. Copy .env.example to .env to customize/override.
+    env_file:
+      - path: .env
+        required: false
     environment:
-      # Reach the db service over the compose network (overrides the
-      # localhost default that .env carries for bare-metal dev).
+      # Reach the db service over the compose network (always "db" here).
       POSTGRES_HOST: db
-      # DATABASE_URL would take precedence if set; leave it unset so the
-      # discrete POSTGRES_* values (with POSTGRES_HOST=db) are used.
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-trackly}
+      POSTGRES_USER: ${POSTGRES_USER:-trackly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trackly}
+      SECRET_KEY: ${SECRET_KEY:-local-dev-secret-change-me-0123456789abcdef}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
       ATTACHMENTS_DIR: /data/attachments
+      MAX_ATTACHMENT_MB: ${MAX_ATTACHMENT_MB:-25}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@trackly.local}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin}
     depends_on:
       db:
         condition: service_healthy
@@ -52,9 +66,15 @@ services:
   #   docker compose run --rm migrator run --projects ENG
   migrator:
     build: ./backend
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       POSTGRES_HOST: db
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-trackly}
+      POSTGRES_USER: ${POSTGRES_USER:-trackly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trackly}
       # JIRA_* values are passed through from .env via env_file; listed here
       # so the connection is explicit even if .env is sparse.
       JIRA_BASE_URL: ${JIRA_BASE_URL:-}
