@@ -4,31 +4,36 @@
     "2026-08-23": {
       "Adham": "WFH",
       "Karam": "WFH",
+      "Hesham": "WFH",
       "Salma": "WFH",
       "Zanaty": "WFH"
     },
     "2026-08-24": {
       "Adham": "WFH",
       "Karam": "WFO",
-      "Salma": "WFO",
+      "Hesham": "WFO",
+      "Salma": "WFH",
       "Zanaty": "WFH"
     },
     "2026-08-25": {
       "Adham": "WFH",
       "Karam": "WFO",
+      "Hesham": "WFO",
       "Salma": "WFO",
       "Zanaty": "WFH"
     },
     "2026-08-26": {
       "Adham": "WFO",
       "Karam": "WFH",
+      "Hesham": "WFH",
       "Salma": "WFH",
       "Zanaty": "WFO"
     },
     "2026-08-27": {
       "Adham": "WFO",
       "Karam": "WFH",
-      "Salma": "WFH",
+      "Hesham": "WFH",
+      "Salma": "WFO",
       "Zanaty": "WFO"
     }
   }

@@ -15,6 +15,7 @@ import streamlit as st
 TEAM_MEMBERS: List[str] = [
     "Adham",
     "Karam",
+    "Hesham",
     "Salma",
     "Zanaty",
 ]
@@ -40,6 +41,7 @@ PUBLIC_HOLIDAYS_FILE = Path("data") / f"public_holidays_{YEAR}.json"
 ROLE_BY_MEMBER: Dict[str, str] = {
     "Adham": "mgmt-support",
     "Karam": "mgmt-support",
+    "Hesham": "engineering",
     "Salma": "engineering",
     "Zanaty": "engineering",
 }
@@ -53,6 +55,7 @@ PREFERS_WFO_DAYS: Dict[str, Set[int]] = {
 
 DISLIKES_WFO_DAYS: Dict[str, Set[int]] = {
     # Dislike being in-office on specific weekdays.
+    "Hesham": {0, 3},       # Monday (0), Thursday (3)
     "Salma": {3},           # Thursday (3)
 }
 
