@@ -2,38 +2,38 @@
   "week_start": "2026-05-31",
   "days": {
     "2026-05-31": {
-      "Adham": "WFO",
+      "Adham": "WFH",
       "Karam": "WFH",
-      "Abdelkhalek": "WFO",
+      "Abdelkhalek": "WFH",
       "Hesham": "WFH",
       "Salma": "WFH"
     },
     "2026-06-01": {
-      "Adham": "WFO",
+      "Adham": "WFH",
       "Karam": "WFO",
-      "Abdelkhalek": "WFH",
+      "Abdelkhalek": "WFO",
       "Hesham": "WFH",
-      "Salma": "WFO"
+      "Salma": "WFH"
     },
     "2026-06-02": {
       "Adham": "WFH",
       "Karam": "WFO",
+      "Abdelkhalek": "WFO",
+      "Hesham": "WFH",
+      "Salma": "WFO"
+    },
+    "2026-06-03": {
+      "Adham": "WFO",
+      "Karam": "WFH",
       "Abdelkhalek": "WFH",
       "Hesham": "WFO",
       "Salma": "WFO"
     },
-    "2026-06-03": {
-      "Adham": "WFH",
-      "Karam": "WFH",
-      "Abdelkhalek": "WFO",
-      "Hesham": "WFO",
-      "Salma": "WFH"
-    },
     "2026-06-04": {
       "Adham": "WFO",
-      "Karam": "WFO",
-      "Abdelkhalek": "WFO",
-      "Hesham": "WFH",
+      "Karam": "WFH",
+      "Abdelkhalek": "WFH",
+      "Hesham": "WFO",
       "Salma": "WFH"
     }
   }

@@ -21,6 +21,12 @@ TEAM_MEMBERS: List[str] = [
 ]
 YEAR = 2026
 WORKDAYS = {6, 0, 1, 2, 3}  # Sunday (6) through Thursday (3) in datetime.weekday()
+# Sunday is a work-from-home day for everyone; the office rotation only runs
+# on the four office days, Monday (0) through Thursday (3).
+OFFICE_WEEKDAYS = {0, 1, 2, 3}  # Mon-Thu
+DAILY_OFFICE_MIN, DAILY_OFFICE_MAX = 2, 3  # people in the office on each office day
+WEEKLY_WFO = 2                  # office days per member per week (50% of the 4 office days)
+WFO_PER_MEMBER_FORTNIGHT = 4    # exactly half of the 8 office days in a 2-week window
 WEEK_STORAGE_DIR = Path("data") / "wfh_schedules" / str(YEAR)
 HOLIDAYS_FILE = Path("data") / f"holidays_{YEAR}.json"
 PUBLIC_HOLIDAYS_FILE = Path("data") / f"public_holidays_{YEAR}.json"
@@ -83,23 +89,34 @@ def is_workday(d: date) -> bool:
     return d.year == YEAR and d.weekday() in WORKDAYS
 
 
+def is_office_day(d: date) -> bool:
+    """An office day is a workday on which the office rotation runs (Mon-Thu).
+
+    Sundays are workdays but are always WFH, so they are never office days.
+    """
+    return is_workday(d) and d.weekday() in OFFICE_WEEKDAYS
+
+
 def generate_two_week_pattern() -> List[Set[str]]:
     """Generate a 10-workday (Sun-Thu x2) pattern satisfying hard rules.
 
-        Hard rules encoded:
-        - Exactly 5 WFO days per member over 10 working days.
-        - Each day has 2 or 3 people WFO.
-        - No member is WFO 3 days in a row.
-        - Each pair of members meets at least once in the office.
-        - Karam WFO on every Monday and Tuesday within the 2-week window.
-        - No member works more than one Sunday and one Thursday in-office
-            within the 2-week window (avoids recurring Sun/Thu duties for
-            everyone).
+    Sunday is always a work-from-home day for everyone, so the office
+    rotation runs only across the four office days (Mon-Thu). Hard rules:
 
-        Preferences (soft):
-        - Avoiding additional consecutive WFO days is not enforced (it
-            often conflicts with Karam's Mon/Tue preference), but tends to be
-            reasonable in typical solutions.
+    - Sunday: nobody is in the office (always WFH).
+    - Each member is WFO on exactly ``WEEKLY_WFO`` (2) of the four office
+      days each week -> a clean 50/50 split across Mon-Thu.
+    - Over the two-week window each member has exactly
+      ``WFO_PER_MEMBER_FORTNIGHT`` (4) office days.
+    - Each office day has 2 or 3 people WFO.
+    - At least one mgmt-support member is in the office on every office day.
+    - No member is WFO 3 days in a row.
+    - Karam is WFO on every Monday and Tuesday.
+
+    Pairwise "meet in the office at least once" is treated as a soft
+    preference (a validation warning), not a hard generator constraint:
+    the smaller four-day office week makes full pairwise coverage
+    infeasible for some 2-week windows.
     """
 
     n = len(TEAM_MEMBERS)
@@ -110,33 +127,35 @@ def generate_two_week_pattern() -> List[Set[str]]:
     # 10 working days: Sun,Mon,Tue,Wed,Thu,Sun,Mon,Tue,Wed,Thu
     weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu"] * 2
 
-    # All subsets with 2 or 3 members
-    all_subsets: List[Sequence[int]] = []
-    for r in (2, 3):
-        all_subsets.extend(list(combinations(people, r)))
-    # Add randomness to daily options to avoid always picking the same pattern
-    random.shuffle(all_subsets)
-
-    # Pre-filtered options per day for hard constraints about Karam on Mon/Tue
-    options_per_day: List[List[Sequence[int]]] = []
-    for day in range(10):
-        wd = weekdays[day]
-        day_opts: List[Sequence[int]] = []
-        for subset in all_subsets:
-            s = set(subset)
-            # Karam should be WFO on Mondays and Tuesdays (hardened preference)
-            if wd in {"Mon", "Tue"} and karam not in s:
-                continue
-            day_opts.append(subset)
-        options_per_day.append(day_opts)
-
-    # Pairs for "meet at least once in two weeks" rule
-    pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
-
     # Indices of mgmt-support members for role-based daily coverage
     mgmt_indices = {
         i for i, name in enumerate(TEAM_MEMBERS) if ROLE_BY_MEMBER.get(name) == "mgmt-support"
     }
+
+    # All office subsets with 2 or 3 members
+    all_subsets: List[Sequence[int]] = []
+    for r in range(DAILY_OFFICE_MIN, DAILY_OFFICE_MAX + 1):
+        all_subsets.extend(list(combinations(people, r)))
+    # Add randomness to daily options to avoid always picking the same pattern
+    random.shuffle(all_subsets)
+
+    # Candidate office sets per day:
+    #   - Sunday: nobody in the office (always WFH).
+    #   - Mon/Tue: Karam must be present (hardened preference).
+    #   - Wed/Thu: any valid 2-3 person set.
+    options_per_day: List[List[Sequence[int]]] = []
+    for day in range(10):
+        wd = weekdays[day]
+        if wd == "Sun":
+            options_per_day.append([tuple()])  # everyone WFH on Sunday
+            continue
+        day_opts: List[Sequence[int]] = []
+        for subset in all_subsets:
+            s = set(subset)
+            if wd in {"Mon", "Tue"} and karam not in s:
+                continue
+            day_opts.append(subset)
+        options_per_day.append(day_opts)
 
     best_schedule: List[Set[int]] | None = None
     found = False
@@ -145,60 +164,61 @@ def generate_two_week_pattern() -> List[Set[str]]:
         day: int,
         schedule: List[Set[int]],
         counts: List[int],
+        week_counts: List[List[int]],
         streaks: List[int],
-        pair_seen: List[List[bool]],
-        sun_counts: List[int],
-        thu_counts: List[int],
     ) -> None:
         nonlocal best_schedule, found
         if found:
             return
 
         if day == 10:
-            # Verify hard constraints at the end
-            if any(c != 5 for c in counts):
-                return
-            if not all(pair_seen[i][j] for i, j in pairs):
+            # Every member must land exactly on the fortnightly target.
+            if any(c != WFO_PER_MEMBER_FORTNIGHT for c in counts):
                 return
             best_schedule = [set(s) for s in schedule]
             found = True
             return
 
         wd = weekdays[day]
+        week_idx = 0 if day < 5 else 1
+        # Office days still to come (this day included) used to prune
+        # branches where a member can no longer reach the fortnightly target.
+        remaining_office_days = sum(1 for k in range(day, 10) if weekdays[k] != "Sun")
+
         # Copy and shuffle candidates for some randomness while respecting rules
         candidates = list(options_per_day[day])
         random.shuffle(candidates)
 
-        remaining_days = 10 - day - 1
-
         for subset in candidates:
             s = set(subset)
 
-            # Interim per-member WFO caps
+            # Per-member weekly and fortnightly WFO caps
             new_counts = counts[:]
+            new_week = [wk[:] for wk in week_counts]
             feasible = True
             for p in s:
                 new_counts[p] += 1
-                if new_counts[p] > 5:
+                new_week[week_idx][p] += 1
+                if new_counts[p] > WFO_PER_MEMBER_FORTNIGHT or new_week[week_idx][p] > WEEKLY_WFO:
                     feasible = False
                     break
             if not feasible:
                 continue
 
-            # At least one mgmt-support present in the office each day
-            if not (mgmt_indices & s):
+            # At least one mgmt-support present on every office day
+            if wd != "Sun" and not (mgmt_indices & s):
                 continue
 
-            # Can each member still potentially reach 5?
+            # Can each member still reach the fortnightly target?
+            after_office_days = remaining_office_days - 1
             for p in range(n):
-                max_possible = new_counts[p] + remaining_days
-                if max_possible < 5:
+                if new_counts[p] + after_office_days < WFO_PER_MEMBER_FORTNIGHT:
                     feasible = False
                     break
             if not feasible:
                 continue
 
-            # No 3 consecutive WFO days
+            # No 3 consecutive WFO days (Sunday WFH naturally resets streaks)
             new_streaks = streaks[:]
             for p in range(n):
                 if p in s:
@@ -211,51 +231,17 @@ def generate_two_week_pattern() -> List[Set[str]]:
             if not feasible:
                 continue
 
-            # Limit recurring Sundays/Thursdays: at most one Sunday and
-            # one Thursday WFO per member per 2-week window.
-            new_sun = sun_counts[:]
-            new_thu = thu_counts[:]
-            if wd == "Sun":
-                for p in s:
-                    new_sun[p] += 1
-                    if new_sun[p] > 1:
-                        feasible = False
-                        break
-            elif wd == "Thu":
-                for p in s:
-                    new_thu[p] += 1
-                    if new_thu[p] > 1:
-                        feasible = False
-                        break
-            if not feasible:
-                continue
-
-            # Update pair coverage
-            new_pair_seen = [row[:] for row in pair_seen]
-            for i in s:
-                for j in s:
-                    if i < j:
-                        new_pair_seen[i][j] = True
-
             schedule.append(s)
-            backtrack(
-                day + 1,
-                schedule,
-                new_counts,
-                new_streaks,
-                new_pair_seen,
-                new_sun,
-                new_thu,
-            )
+            backtrack(day + 1, schedule, new_counts, new_week, new_streaks)
             schedule.pop()
+            if found:
+                return
 
     initial_counts = [0] * n
+    initial_week = [[0] * n, [0] * n]
     initial_streaks = [0] * n
-    initial_pairs = [[False] * n for _ in range(n)]
-    initial_sun = [0] * n
-    initial_thu = [0] * n
 
-    backtrack(0, [], initial_counts, initial_streaks, initial_pairs, initial_sun, initial_thu)
+    backtrack(0, [], initial_counts, initial_week, initial_streaks)
 
     if not found or best_schedule is None:
         raise RuntimeError("Unable to find a valid 2-week WFH/WFO pattern with given rules.")
@@ -788,17 +774,30 @@ def validate_schedule(
     if not all_dates:
         return errors, warnings
 
-    # --- Daily hard rule: 2-3 people in the office ---
+    # --- Daily hard rule: office days have 2-3 people; Sunday is WFH ---
     for d in all_dates:
         assign = year_sched.get(d.isoformat(), {})
         wfo = [m for m, v in assign.items() if v == "WFO"]
-        if len(wfo) < 2 or len(wfo) > 3:
+
+        # Sunday (and any non-office workday) must be fully work-from-home.
+        if d.weekday() not in OFFICE_WEEKDAYS:
+            if wfo:
+                errors.append(
+                    (d, f"{d:%a %d %b %Y}: {len(wfo)} in office but {d:%A} is always WFH.")
+                )
+            continue
+
+        if len(wfo) < DAILY_OFFICE_MIN or len(wfo) > DAILY_OFFICE_MAX:
             errors.append(
-                (d, f"{d:%a %d %b %Y}: {len(wfo)} people in office (expected 2–3).")
+                (
+                    d,
+                    f"{d:%a %d %b %Y}: {len(wfo)} people in office "
+                    f"(expected {DAILY_OFFICE_MIN}–{DAILY_OFFICE_MAX}).",
+                )
             )
 
         # Role-based hard rule: at least one mgmt-support member must be
-        # present in the office on every working day.
+        # present in the office on every office day.
         mgmt_present = [
             m
             for m in wfo
@@ -846,7 +845,8 @@ def validate_schedule(
         if len(window_days) < 10:
             continue
 
-        # Per-member weekly 50% rule (2–3 WFO per Sun–Thu week) – hard
+        # Per-member weekly 50% rule: exactly WEEKLY_WFO office days across
+        # the four Mon-Thu office days (Sunday is always WFH) – hard
         for week_idx, wdays in enumerate([week1_days, week2_days], start=1):
             if not wdays:
                 continue
@@ -856,28 +856,28 @@ def validate_schedule(
                     for d in wdays
                     if year_sched.get(d.isoformat(), {}).get(member) == "WFO"
                 )
-                if wfo_count < 2 or wfo_count > 3:
+                if wfo_count != WEEKLY_WFO:
                     errors.append(
                         (
                             ws,
                             f"Week {week_idx} starting {ws:%Y-%m-%d}: {member} has "
-                            f"{wfo_count} WFO days (expected 2–3).",
+                            f"{wfo_count} office days (expected {WEEKLY_WFO}).",
                         )
                     )
 
-        # Per-member 2-week total exactly 5 WFO – hard
+        # Per-member 2-week total exactly WFO_PER_MEMBER_FORTNIGHT – hard
         for member in TEAM_MEMBERS:
             total_wfo = sum(
                 1
                 for d in window_days
                 if year_sched.get(d.isoformat(), {}).get(member) == "WFO"
             )
-            if total_wfo != 5:
+            if total_wfo != WFO_PER_MEMBER_FORTNIGHT:
                 errors.append(
                     (
                         ws,
                         f"2-week window starting {ws:%Y-%m-%d}: {member} has "
-                        f"{total_wfo} WFO days (expected exactly 5).",
+                        f"{total_wfo} office days (expected exactly {WFO_PER_MEMBER_FORTNIGHT}).",
                     )
                 )
 
@@ -2068,7 +2068,9 @@ def main() -> None:
     st.markdown("<h1 class='section-title'>WFH vs WFO Schedule - 2026</h1>", unsafe_allow_html=True)
     st.caption(
         "Auto-generated two-week rotation respecting attendance rules and preferences, "
-        "with per-week overrides and a full-year visualization."
+        "with per-week overrides and a full-year visualization. "
+        "Sundays are always work-from-home; the office rotation runs Mon–Thu "
+        "with each person in the office 2 of those 4 days (a 50/50 split)."
     )
 
     # Core schedule generation (pattern + base year schedule).

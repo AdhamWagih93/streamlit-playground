@@ -5,36 +5,36 @@
       "Adham": "WFH",
       "Karam": "WFH",
       "Abdelkhalek": "WFH",
-      "Hesham": "WFO",
-      "Salma": "WFO"
+      "Hesham": "WFH",
+      "Salma": "WFH"
     },
     "2026-08-17": {
       "Adham": "WFH",
       "Karam": "WFO",
-      "Abdelkhalek": "WFO",
-      "Hesham": "WFH",
-      "Salma": "WFH"
-    },
-    "2026-08-18": {
-      "Adham": "WFO",
-      "Karam": "WFO",
       "Abdelkhalek": "WFH",
       "Hesham": "WFO",
-      "Salma": "WFH"
+      "Salma": "WFO"
+    },
+    "2026-08-18": {
+      "Adham": "WFH",
+      "Karam": "WFO",
+      "Abdelkhalek": "WFO",
+      "Hesham": "WFH",
+      "Salma": "WFO"
     },
     "2026-08-19": {
       "Adham": "WFO",
       "Karam": "WFH",
-      "Abdelkhalek": "WFO",
-      "Hesham": "WFH",
-      "Salma": "WFO"
-    },
-    "2026-08-20": {
-      "Adham": "WFH",
-      "Karam": "WFH",
       "Abdelkhalek": "WFH",
       "Hesham": "WFO",
-      "Salma": "WFO"
+      "Salma": "WFH"
+    },
+    "2026-08-20": {
+      "Adham": "WFO",
+      "Karam": "WFH",
+      "Abdelkhalek": "WFO",
+      "Hesham": "WFH",
+      "Salma": "WFH"
     }
   }
 }
