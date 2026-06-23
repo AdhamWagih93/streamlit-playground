@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ST-03 · The Pulse</title>
+<link rel="stylesheet" href="../../assets/css/system.css" />
+</head>
+<body>
+<script src="../../assets/js/common.js"></script>
+<script>mountTopbar({ code: 'ST-03 · HUMAN SUSTAINABILITY', backHref: '../../' });</script>
+
+<div class="wrap" style="padding-top:34px; padding-bottom:70px;">
+
+  <div class="eyebrow">Station 03 · 11:00</div>
+  <h1 style="margin:12px 0 8px;">The Pulse</h1>
+  <p class="dim" style="max-width:720px; font-size:16px;">
+    By late morning the dashboards are green — servers healthy, latency low. But there's a second
+    set of dials Maya watches now, and they don't measure machines. In 2026 we point our monitoring
+    at the <b style="color:var(--cyan)">humans</b>. The system notices when a person is being ground down
+    <b style="color:var(--ink)">before</b> they burn out — and quietly protects them.
+  </p>
+
+  <div class="explainer" style="margin:18px 0 26px;">
+    <span class="ic">i</span>
+    <div><b>What you're looking at:</b> a team wellbeing board. Each engineer has a few plain-language
+    signals — on-call hours, after-hours pages, deploys owned, protected focus time — that roll up into a
+    <b>Sustainability score</b>. Green is healthy, amber is strained, red means at risk. One teammate is in
+    the red. Your move isn't to call them out — it's to let the system <b>care for the human</b>.</div>
+  </div>
+
+  <!-- TOP STAT TILES -->
+  <div class="grid cols-4" style="margin-bottom:26px;">
+    <div class="stat ticked" style="position:relative;">
+      <div class="k">Team sustainability index</div>
+      <div class="v"><span id="sIndex">61</span><small>%</small></div>
+      <div class="sub" id="sIndexSub" style="color:var(--warn)">strained · one member at risk</div>
+    </div>
+    <div class="stat">
+      <div class="k">After-hours pages ▼ vs last qtr</div>
+      <div class="v" style="color:var(--ok)"><span id="sPages">0</span><small>%</small></div>
+      <div class="sub">fewer 2am wake-ups</div>
+    </div>
+    <div class="stat">
+      <div class="k">Toil auto-absorbed by agents</div>
+      <div class="v" style="color:var(--violet)"><span id="sToil">0</span><small>%</small></div>
+      <div class="sub">tickets humans never touch</div>
+    </div>
+    <div class="stat">
+      <div class="k">Voluntary attrition</div>
+      <div class="v" style="color:var(--ok)"><span id="sAttr">0</span><small>%</small></div>
+      <div class="sub">▼ people stay longer</div>
+    </div>
+  </div>
+
+  <div class="grid cols-2" style="align-items:start;">
+
+    <!-- LEFT: wellbeing board -->
+    <div class="panel">
+      <div class="panel-h">
+        <span class="badge cy"><span class="led"></span>TEAM WELLBEING</span>
+        <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">Human telemetry · rolling 14 days</h3>
+        <span class="id">4 crew</span>
+      </div>
+      <div class="panel-b grid" id="board" style="gap:13px;"></div>
+    </div>
+
+    <!-- RIGHT: alert + remediation -->
+    <div class="grid" style="gap:18px;">
+
+      <!-- ALERT -->
+      <div class="panel ticked" id="alertCard" style="border-color:rgba(255,84,112,.45); box-shadow:0 0 22px -8px rgba(255,84,112,.5);">
+        <div class="panel-b">
+          <div class="row between">
+            <span class="badge crit"><span class="led"></span>WELLBEING ALERT</span>
+            <span class="tag">auto-detected · 11:02</span>
+          </div>
+          <h2 style="margin:12px 0 6px; font-size:22px;">⚠ Burnout risk detected: <span style="color:var(--crit)">Sam</span></h2>
+          <p class="dim" style="font-size:13.5px; margin:0 0 12px;">
+            On-call <b style="color:var(--ink)">3 weeks running</b>, after-hours pages spiking, sustainability at
+            <b style="color:var(--crit)">38%</b>. Trend says this person hits the wall in ~9 days.
+          </p>
+          <div class="explainer" style="border-color:rgba(255,182,39,.4); background:rgba(255,182,39,.05);">
+            <span class="ic" style="color:var(--amber)">!</span>
+            <div>This is <b>not</b> a performance flag, and nobody gets shamed or fired. It's the same instinct
+            we already trust for servers — <b>notice the strain early, then automatically shed the load</b>.
+            Here the thing we're protecting is a person.</div>
+          </div>
+          <div class="btn-row" style="margin-top:14px;">
+            <button class="btn cyan" id="bRebalance">▸ Let the system rebalance</button>
+            <button class="btn ghost" id="bReset" style="display:none;">↻ Replay</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- REMEDIATION LOG -->
+      <div class="panel">
+        <div class="panel-h">
+          <span class="badge ai"><span class="led"></span>AUTO-REMEDIATION</span>
+          <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:15px;">Load-shedding for a human</h3>
+          <span class="id" id="remState">standby</span>
+        </div>
+        <div class="panel-b">
+          <div class="term" id="log" style="max-height:300px;"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- BEFORE / AFTER (revealed after rebalance) -->
+  <div class="panel pad reveal" id="ba" style="margin-top:18px; display:none; border-color:var(--cyan-d);">
+    <div class="row between wrap-g">
+      <div class="tag" style="color:var(--cyan)">Sam · before / after rebalance</div>
+      <span class="badge ok"><span class="led"></span>RECOVERY SCHEDULED</span>
+    </div>
+    <div class="grid cols-4" style="margin-top:14px;">
+      <div class="stat"><div class="k">On-call next shift</div><div class="v" style="font-size:18px;"><span class="dim" style="text-decoration:line-through; font-size:14px;">Sam</span> → <span style="color:var(--ok)">Jonah</span></div></div>
+      <div class="stat"><div class="k">Low-priority meetings</div><div class="v" style="font-size:18px; color:var(--ok)">−3 declined</div></div>
+      <div class="stat"><div class="k">Toil tickets</div><div class="v" style="font-size:18px;">2 → <span style="color:var(--violet)">AI agent</span></div></div>
+      <div class="stat"><div class="k">Tomorrow AM</div><div class="v" style="font-size:18px; color:var(--cyan)">protected</div></div>
+    </div>
+  </div>
+
+  <!-- TAKEAWAY -->
+  <div class="panel pad reveal" id="takeaway" style="margin-top:18px; display:none; border-color:var(--cyan-d);">
+    <div class="eyebrow" style="color:var(--cyan)">The takeaway</div>
+    <h2 style="margin:10px 0;">The most advanced automation in 2026 isn't pointed at infrastructure — it's pointed at <span style="color:var(--cyan)">people</span>.</h2>
+    <p class="dim" style="font-size:15px; max-width:820px;">
+      Sustainable pace is an engineering metric now — measured, alerted on, and remediated like latency or uptime.
+      Burnout stops being a personal weakness someone has to confess to, and becomes what it always was:
+      a <b style="color:var(--ink)">system failure we can detect and fix</b>. The on-call rotation rebalances itself,
+      toil flows to agents, and a tired human gets a quiet morning back — automatically, before the crash.
+      A team you don't grind into the ground ships more, for longer.
+    </p>
+  </div>
+
+  <div class="row between" style="margin-top:30px;">
+    <a class="backlink" href="../autonomous-gov/">◂ The Guardrail Room</a>
+    <a class="backlink" href="../psych-safety/" style="border-color:var(--cyan-d); color:var(--cyan)">Next station · No Blame, Just Signal ▸</a>
+  </div>
+</div>
+
+<style>
+  .ava { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-family:var(--display); font-weight:700; color:#08121a; flex:none; }
+  .person { border:1px solid var(--line); border-radius:var(--r-sm); background:var(--bg-2); padding:13px 14px; transition:border-color .3s, box-shadow .3s; }
+  .person.risk { border-color:rgba(255,84,112,.5); box-shadow:0 0 18px -9px rgba(255,84,112,.6); }
+  .person.healed { border-color:rgba(62,230,160,.45); box-shadow:0 0 18px -10px rgba(62,230,160,.5); }
+  .sig { display:grid; grid-template-columns:1fr auto; gap:2px 10px; font-family:var(--mono); font-size:11px; margin:9px 0 11px; }
+  .sig .lab { color:var(--ink-faint); }
+  .sig .val { color:var(--ink-dim); text-align:right; }
+  .sig .val.bad { color:var(--crit); }
+  .sig .val.good { color:var(--ok); }
+  .scoreRow { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .scoreRow .pct { font-family:var(--display); font-weight:600; font-size:16px; }
+</style>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log');
+
+// --- crew model ---
+const CREW = [
+  { id:'maya', name:'Maya', role:'SRE', color:'var(--cyan)', oncall:'4d', pages:1, deploys:6, focus:'82%',
+    score:81, focusBad:false, pagesBad:false },
+  { id:'jonah', name:'Jonah', role:'Platform', color:'var(--amber)', oncall:'6d', pages:3, deploys:9, focus:'58%',
+    score:64, focusBad:false, pagesBad:false },
+  { id:'priya', name:'Priya', role:'Security', color:'var(--blue)', oncall:'2d', pages:0, deploys:4, focus:'90%',
+    score:88, focusBad:false, pagesBad:false },
+  { id:'sam', name:'Sam', role:'Backend', color:'var(--crit)', oncall:'12d', pages:11, deploys:14, focus:'19%',
+    score:38, focusBad:true, pagesBad:true, risk:true },
+];
+
+function meterClass(s){ return s>=75 ? 'ok' : s>=55 ? 'warn' : 'crit'; }
+function scoreColor(s){ return s>=75 ? 'var(--ok)' : s>=55 ? 'var(--warn)' : 'var(--crit)'; }
+function scoreLabel(s){ return s>=75 ? 'HEALTHY' : s>=55 ? 'STRAINED' : 'AT RISK'; }
+
+function cardHTML(p){
+  return `
+  <div class="person ${p.risk?'risk':''}" id="card-${p.id}">
+    <div class="row between">
+      <div class="row" style="gap:11px;">
+        <div class="ava" style="background:${p.color}">${p.name[0]}</div>
+        <div>
+          <div style="font-weight:600">${p.name} · <span class="faint mono" style="font-size:11px;font-weight:400">${p.role}</span></div>
+          <span class="badge ${meterClass(p.score)}" id="badge-${p.id}" style="margin-top:3px;"><span class="led"></span><span class="bl">${scoreLabel(p.score)}</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="sig">
+      <span class="lab">Hours on call (rolling 14d)</span><span class="val ${p.id==='sam'?'bad':''}" id="oc-${p.id}">${p.oncall}</span>
+      <span class="lab">After-hours pages this week</span><span class="val ${p.pagesBad?'bad':''}" id="pg-${p.id}">${p.pages}</span>
+      <span class="lab">Deploys owned</span><span class="val" id="dp-${p.id}">${p.deploys}</span>
+      <span class="lab">Focus time protected</span><span class="val ${p.focusBad?'bad':''}" id="fc-${p.id}">${p.focus}</span>
+    </div>
+    <div class="scoreRow">
+      <span class="tag">Sustainability score</span>
+      <span class="pct" id="pct-${p.id}" style="color:${scoreColor(p.score)}">${p.score}%</span>
+    </div>
+    <div class="meter ${meterClass(p.score)}" id="meter-${p.id}"><i style="width:${p.score}%"></i></div>
+  </div>`;
+}
+
+$('board').innerHTML = CREW.map(cardHTML).join('');
+stagger('.person', 90);
+
+// --- intro log ---
+logLine(log, '11:00', 'sys', 'Human telemetry stream online · 4 engineers monitored', '11:00:12');
+logLine(log, '11:02', 'sys', 'Threshold breach · <b>sam</b> sustainability 38% (crit) · 3 wks on-call', '11:02:40');
+logLine(log, '11:02', 'sys', 'Awaiting authorization to <b>rebalance load</b> →', '11:02:41');
+
+// --- live score update helper ---
+function setScore(p, v){
+  v = Math.max(10, Math.min(100, Math.round(v)));
+  p.score = v;
+  const cls = meterClass(v);
+  $('meter-'+p.id).className = 'meter ' + cls;
+  $('meter-'+p.id).querySelector('i').style.width = v + '%';
+  $('pct-'+p.id).textContent = v + '%';
+  $('pct-'+p.id).style.color = scoreColor(v);
+  const b = $('badge-'+p.id);
+  b.className = 'badge ' + cls;
+  b.querySelector('.bl').textContent = scoreLabel(v);
+}
+
+// animate a person's score from current -> target over dur
+async function climb(p, target, dur=1600){
+  const start = p.score, t0 = performance.now();
+  return new Promise(res => {
+    function frame(now){
+      const k = Math.min(1, (now-t0)/dur);
+      const e = 1 - Math.pow(1-k, 3);
+      setScore(p, start + (target-start)*e);
+      if (k < 1) requestAnimationFrame(frame); else res();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+const byId = id => CREW.find(c=>c.id===id);
+
+let ran = false;
+$('bRebalance').addEventListener('click', async () => {
+  if (ran) return; ran = true;
+  $('bRebalance').disabled = true;
+  $('bRebalance').innerHTML = '<span class="working"><i></i><i></i><i></i></span> rebalancing…';
+  $('remState').textContent = 'running';
+  const sam = byId('sam'), jonah = byId('jonah'), priya = byId('priya'), maya = byId('maya');
+
+  logLine(log, nowStamp(), 'human', '<b>Maya authorized</b> automatic rebalance for Sam');
+  await wait(700);
+
+  // 1. reassign on-call
+  logLine(log, nowStamp(), 'sys', 'Step 1/5 · Reassigning Sam’s next on-call shift → <b>Jonah</b> (healthy, opted-in)');
+  $('oc-sam').textContent = '4d'; $('oc-sam').classList.remove('bad');
+  await climb(sam, 50, 900);
+  await climb(jonah, 60, 600); // jonah dips slightly (takes the shift)
+  await wait(550);
+
+  // 2. decline meetings
+  logLine(log, nowStamp(), 'sys', 'Step 2/5 · Auto-declining <b>3 low-priority meetings</b> on Sam’s calendar tomorrow');
+  await climb(sam, 56, 700);
+  await wait(500);
+
+  // 3. toil to AI agent
+  logLine(log, nowStamp(), 'ai', 'Step 3/5 · <b>AGENT</b> absorbing 2 of Sam’s toil tickets (cert rotation, log cleanup)');
+  $('dp-sam').textContent = '12';
+  await climb(sam, 64, 800);
+  await wait(500);
+
+  // 4. protected focus block
+  logLine(log, nowStamp(), 'sys', 'Step 4/5 · Blocking <b>tomorrow 09:00–12:00</b> as protected focus / recovery time');
+  $('fc-sam').textContent = '64%'; $('fc-sam').classList.remove('bad');
+  $('pg-sam').textContent = '11'; // pages already happened this wk, but no new ones routed
+  await climb(sam, 71, 800);
+  await wait(500);
+
+  // 5. notify manager (wellbeing, not performance)
+  logLine(log, nowStamp(), 'sys', 'Step 5/5 · Notifying Sam’s manager with a <b>wellbeing note</b> — not a performance flag');
+  await climb(sam, 74, 700);
+
+  // small healthy shifts for others (load redistributed gently)
+  await Promise.all([ climb(priya, 86, 600), climb(maya, 80, 600) ]);
+
+  // sam card flips to healed
+  $('card-sam').classList.remove('risk');
+  $('card-sam').classList.add('healed');
+
+  logLine(log, nowStamp(), 'sys', '<b>Done.</b> Sam’s sustainability 38% → <b>74%</b> · load shed, recovery booked');
+  $('remState').textContent = 'complete';
+  $('remState').style.color = 'var(--ok)';
+
+  // alert card softens
+  $('alertCard').style.borderColor = 'rgba(62,230,160,.4)';
+  $('alertCard').style.boxShadow = '0 0 22px -8px rgba(62,230,160,.45)';
+
+  // climb the top index + roll the headline stats
+  $('sIndex').dataset.from = '61';
+  countTo($('sIndex'), 78, { dur: 1100 });
+  $('sIndexSub').textContent = 'sustainable · no member at risk';
+  $('sIndexSub').style.color = 'var(--ok)';
+  countTo($('sPages'), -52, { dur: 1100, prefix:'' });
+  countTo($('sToil'), 61, { dur: 1100 });
+  $('sAttr').dataset.from = '0'; countTo($('sAttr'), 2, { dur: 1100 });
+
+  await wait(400);
+  $('ba').style.display = 'block';
+  await wait(300);
+  $('takeaway').style.display = 'block';
+  $('bReset').style.display = 'inline-flex';
+  $('bRebalance').innerHTML = '✓ Rebalanced';
+  $('takeaway').scrollIntoView({ behavior:'smooth', block:'center' });
+});
+
+$('bReset').addEventListener('click', () => location.reload());
+</script>
+</body>
+</html>

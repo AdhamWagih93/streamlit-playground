@@ -9,6 +9,8 @@ services:
       - "80:80"
     environment:
       PHP_MEMORY_LIMIT: 2G
+    volumes:
+      - ./env.php.resolved:/var/www/html/app/etc/env.php:ro,Z
     depends_on:
       mysql:
         condition: service_healthy
