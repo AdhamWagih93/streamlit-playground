@@ -28001,6 +28001,37 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _iv_row_teams_cache[_rid] = _frozen
         return _frozen
 
+    # Role → the inventory *_team fields that confer that role (bare, for git
+    # row-blob lookups). Operations folds every ops ownership lane into one
+    # filter (uat / prd / preprod / ops). Drives the three role-scoped team
+    # filters in the Filter Console (Development / Quality / Operations Team).
+    _IV_ROLE_TEAM_FIELDS: dict[str, list[str]] = {
+        "dev_team": ["dev_team"],
+        "qc_team":  ["qc_team"],
+        "ops_team": ["uat_team", "prd_team", "preprod_team", "ops_team"],
+    }
+    _iv_role_team_cache: dict[tuple[int, str], frozenset[str]] = {}
+
+    def _iv_row_teams_for(_r: dict, _role_key: str) -> frozenset[str]:
+        """Team values on a row for ONE role's ownership field(s)."""
+        _ck = (id(_r), _role_key)
+        _hit = _iv_role_team_cache.get(_ck)
+        if _hit is not None:
+            return _hit
+        _out: set[str] = set()
+        _blob = _r.get("teams") or {}
+        for _f in _IV_ROLE_TEAM_FIELDS.get(_role_key, ()):
+            _tv = _blob.get(_f)
+            if isinstance(_tv, (list, tuple, set)):
+                for _x in _tv:
+                    if _x:
+                        _out.add(str(_x))
+            elif _tv:
+                _out.add(str(_tv))
+        _frozen = frozenset(_out)
+        _iv_role_team_cache[_ck] = _frozen
+        return _frozen
+
     # ── Filter keys + non-admin lock rules ─────────────────────────────────
     # Non-admins: company auto-scopes to st.session_state.company. The
     # Companies tile is NOT shown in the stat row (the scope is implicit).
@@ -28013,6 +28044,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_filter_keys = {
         "company": "iv_f_company_v1",
         "team":    "iv_f_team_v1",
+        "dev_team": "iv_f_devteam_v1",
+        "qc_team":  "iv_f_qcteam_v1",
+        "ops_team": "iv_f_opsteam_v1",
         "user":    "iv_f_user_v1",
         "project": "iv_f_project_v1",
         "app":     "iv_f_app_v1",
@@ -28042,6 +28076,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # ── Read current selections (before applying any filter) ──────────────
     _sel_company  = list(st.session_state.get(_iv_filter_keys["company"]) or [])
     _sel_team     = list(st.session_state.get(_iv_filter_keys["team"])    or [])
+    _sel_dev_team = list(st.session_state.get(_iv_filter_keys["dev_team"]) or [])
+    _sel_qc_team  = list(st.session_state.get(_iv_filter_keys["qc_team"])  or [])
+    _sel_ops_team = list(st.session_state.get(_iv_filter_keys["ops_team"]) or [])
     _sel_user     = list(st.session_state.get(_iv_filter_keys["user"])    or [])
     _sel_project  = list(st.session_state.get(_iv_filter_keys["project"]) or [])
     _sel_app      = list(st.session_state.get(_iv_filter_keys["app"])     or [])
@@ -28110,6 +28147,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             # "non-admins see 0 apps" drift. (`_ci_set` was case-only.)
             _s = _team_match_set(_sel_team)
             out = [r for r in out if _team_match_set(_iv_row_teams(r)) & _s]
+        # Role-scoped team filters (Development / Quality / Operations Team).
+        # Each matches the row's teams in ONLY that role's ownership field(s).
+        if exclude != "dev_team" and _sel_dev_team:
+            _s = _team_match_set(_sel_dev_team)
+            out = [r for r in out
+                   if _team_match_set(_iv_row_teams_for(r, "dev_team")) & _s]
+        if exclude != "qc_team" and _sel_qc_team:
+            _s = _team_match_set(_sel_qc_team)
+            out = [r for r in out
+                   if _team_match_set(_iv_row_teams_for(r, "qc_team")) & _s]
+        if exclude != "ops_team" and _sel_ops_team:
+            _s = _team_match_set(_sel_ops_team)
+            out = [r for r in out
+                   if _team_match_set(_iv_row_teams_for(r, "ops_team")) & _s]
         # Users → inventory link is indirect (via their teams). When users
         # are selected, narrow rows to projects owned by ANY of those
         # users' teams. Users without an inferred team don't narrow the
@@ -28149,6 +28200,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 out[t] = out.get(t, 0) + 1
         return out
 
+    def _count_role_teams(rows: list[dict], role_key: str) -> dict[str, int]:
+        """Distinct teams (with row counts) appearing in ONE role's ownership
+        field(s) — so each role filter only offers teams that actually hold
+        that role."""
+        out: dict[str, int] = {}
+        for r in rows:
+            for t in _iv_row_teams_for(r, role_key):
+                out[t] = out.get(t, 0) + 1
+        return out
+
     def _count_combos(rows: list[dict]) -> dict[str, int]:
         out: dict[str, int] = {}
         for r in rows:
@@ -28165,6 +28226,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     if not _is_admin and _iv_session_teams:
         _legal = _team_match_set(_iv_session_teams)
         _iv_teams_opts = {t: c for t, c in _iv_teams_opts.items() if _team_match_key(t) in _legal}
+    # Role-scoped team option dicts (admin Filter Console) — each leave-one-out.
+    _iv_dev_teams_opts = _count_role_teams(
+        _apply_iv_filters(_inv_rows, exclude="dev_team"), "dev_team")
+    _iv_qc_teams_opts = _count_role_teams(
+        _apply_iv_filters(_inv_rows, exclude="qc_team"), "qc_team")
+    _iv_ops_teams_opts = _count_role_teams(
+        _apply_iv_filters(_inv_rows, exclude="ops_team"), "ops_team")
     # ── Users option dict — leave-one-out by user-filter exclusion ────────
     # Each user has a key (canonical email/name) + display label. We surface
     # the activity total in the count so users sort by impact in the
@@ -28465,19 +28533,37 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                             f'</div>', unsafe_allow_html=True)
 
                     _team_admin_visible = (
-                        _is_admin and (_iv_teams_opts or _sel_team)
+                        _is_admin and (
+                            _iv_dev_teams_opts or _iv_qc_teams_opts
+                            or _iv_ops_teams_opts or _sel_dev_team
+                            or _sel_qc_team or _sel_ops_team)
                     )
                     _team_user_visible = (
                         (not _is_admin) and len(_iv_session_teams) > 1
                     )
                     if _team_admin_visible:
-                        st.markdown(
-                            '<div class="iv-fc-section">'
-                            '<span class="iv-fc-section-glyph" '
-                            'style="color:var(--cc-teal)">👥</span>'
-                            '<span class="iv-fc-section-label">Teams</span>'
-                            '</div>', unsafe_allow_html=True)
-                        _render_tile_ms("team", _iv_teams_opts, "Select teams")
+                        # Three role-scoped team filters — each lists only the
+                        # teams that hold that role (dev_team / qc_team / the
+                        # ops lanes uat+prd+preprod+ops).
+                        for (_rk, _ropts, _rlabel, _rph) in (
+                            ("dev_team", _iv_dev_teams_opts,
+                             "Development Team", "Select dev teams"),
+                            ("qc_team", _iv_qc_teams_opts,
+                             "Quality Team", "Select QC teams"),
+                            ("ops_team", _iv_ops_teams_opts,
+                             "Operations Team", "Select ops teams"),
+                        ):
+                            if not (_ropts or st.session_state.get(
+                                    _iv_filter_keys[_rk])):
+                                continue
+                            st.markdown(
+                                '<div class="iv-fc-section">'
+                                '<span class="iv-fc-section-glyph" '
+                                'style="color:var(--cc-teal)">👥</span>'
+                                '<span class="iv-fc-section-label">'
+                                f'{_rlabel}</span>'
+                                '</div>', unsafe_allow_html=True)
+                            _render_tile_ms(_rk, _ropts, _rph)
                     elif _team_user_visible:
                         st.markdown(
                             '<div class="iv-fc-section">'
@@ -28749,6 +28835,13 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if not _team_locked:
             for _v in _iv_active_sel["team"]:
                 _chip_specs.append((f"👥 {_v}", "user"))
+        if _is_admin:
+            for _v in _iv_active_sel["dev_team"]:
+                _chip_specs.append((f"👥 dev: {_v}", "user"))
+            for _v in _iv_active_sel["qc_team"]:
+                _chip_specs.append((f"👥 qc: {_v}", "user"))
+            for _v in _iv_active_sel["ops_team"]:
+                _chip_specs.append((f"👥 ops: {_v}", "user"))
         for _v in _iv_active_sel["project"]:
             _chip_specs.append((f"📁 {_v}", "user"))
         for _v in _iv_active_sel["app"]:
@@ -28799,6 +28892,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 if _is_admin:
                     _clear_keys.append(_iv_filter_keys["company"])
                     _clear_keys.append(_iv_filter_keys["team"])
+                    _clear_keys.append(_iv_filter_keys["dev_team"])
+                    _clear_keys.append(_iv_filter_keys["qc_team"])
+                    _clear_keys.append(_iv_filter_keys["ops_team"])
                 elif len(_iv_session_teams) > 1:
                     _clear_keys.append(_iv_filter_keys["team"])
                 for _k in _clear_keys:
