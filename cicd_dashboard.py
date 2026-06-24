@@ -3385,7 +3385,9 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_nswarn_pop [data-testid="stPopover"] button,
 .st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button,
 .st-key-cc_iv_nvwarn_pop [data-testid="stPopover"] button,
-.st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button {
+.st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button,
+.st-key-cc_iv_repowarn_pop [data-testid="stPopover"] button,
+.st-key-cc_iv_repowarn_pop [data-testid="stPopoverButton"] button {
     border: 1px solid color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)) !important;
     background: color-mix(in srgb, var(--cc-amber) 10%, transparent) !important;
     color: var(--cc-amber) !important;
@@ -3405,16 +3407,28 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_nswarn_pop [data-testid="stPopover"] button:hover,
 .st-key-cc_iv_nswarn_pop [data-testid="stPopoverButton"] button:hover,
 .st-key-cc_iv_nvwarn_pop [data-testid="stPopover"] button:hover,
-.st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button:hover {
+.st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button:hover,
+.st-key-cc_iv_repowarn_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_iv_repowarn_pop [data-testid="stPopoverButton"] button:hover {
     background: color-mix(in srgb, var(--cc-amber) 18%, transparent) !important;
     box-shadow: 0 3px 12px color-mix(in srgb, var(--cc-amber) 28%, transparent) !important;
 }
 .st-key-cc_iv_dupname_pop, .st-key-cc_iv_nswarn_pop,
-.st-key-cc_iv_nvwarn_pop { margin: 0 0 6px 0; }
+.st-key-cc_iv_nvwarn_pop, .st-key-cc_iv_repowarn_pop { margin: 0 0 6px 0; }
 .iv-nv-issue {
     font-size: .72rem; color: var(--cc-text-dim); line-height: 1.5;
 }
 .iv-nv-issue b { color: var(--cc-red); font-family: var(--cc-mono); }
+.iv-repo-url {
+    font-family: var(--cc-mono); font-size: .68rem; color: var(--cc-accent);
+    word-break: break-all; text-decoration: none;
+}
+.iv-repo-url:hover { text-decoration: underline; }
+.iv-repo-url.is-none { color: var(--cc-text-mute); }
+.iv-repo-status {
+    font-size: .7rem; font-weight: 700; color: var(--cc-red);
+    font-family: var(--cc-mono); margin-top: 2px;
+}
 .iv-ns-env {
     font-family: var(--cc-mono); font-size: .58rem; font-weight: 800;
     color: var(--cc-blue); background: var(--cc-blue-lt);
@@ -20819,6 +20833,7 @@ def _run_git(
     cwd: str | None = None,
     trace_into: list | None = None,
     inject_auth: bool = True,  # kept for API stability; no-op under helper auth
+    timeout: int = 120,
 ) -> subprocess.CompletedProcess:
     """Run a git subcommand quietly and capture both streams.
 
@@ -20848,7 +20863,7 @@ def _run_git(
         cwd=cwd,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=timeout,
     )
     # Scrub the password from anything git might surface — typically not
     # present in stderr (the helper handles auth opaquely) but a defensive
@@ -21311,6 +21326,83 @@ def _mirror_repo_status_all() -> list[dict]:
             "last_when": _log["last_when"],
             "commits":   _log["commits"],
         })
+    return out
+
+
+def _build_app_repo_url(r: dict, ado_host: str, team_collections: dict) -> str:
+    """Build the source-code ADO repo URL for an inventory row from its
+    ``repository_name`` + project + dev_team collection (falling back to the
+    company). ``""`` when any required piece is missing. Module-level twin of
+    the inventory render's per-row ``_iv_repo_url`` so the repo-reachability
+    warning can resolve URLs before that closure is defined."""
+    _rn = (r.get("repository_name") or "").strip()
+    _pj = (r.get("project") or "").strip()
+    if not (ado_host and _rn and _pj):
+        return ""
+    _org = ""
+    for _dt in _row_teams_for_field(r, "dev_team"):
+        _c = team_collections.get(_team_match_key(_dt))
+        if _c:
+            _org = _c
+            break
+    if not _org:
+        _org = (r.get("company") or "").strip()
+    if not _org:
+        return ""
+    return (
+        f"http://{ado_host}/"
+        f"{urllib.parse.quote(_org, safe='')}/"
+        f"{urllib.parse.quote(_pj, safe='')}/_git/"
+        f"{urllib.parse.quote(_rn, safe='')}"
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _check_repos_reachable(urls_json: str) -> dict:
+    """Probe each ADO source-code repo URL with ``git ls-remote`` (auth via the
+    installed credential helper). Returns ``{url: {"ok": bool, "status": str}}``.
+
+    Cached for 10 minutes and run with bounded concurrency + a short per-probe
+    timeout so this always-on hygiene check never hammers the server or stalls
+    the page. ``status`` is one of: ok / not found / auth failed / unreachable /
+    timeout / error."""
+    try:
+        urls: list[str] = json.loads(urls_json)
+    except Exception:
+        return {}
+    if not urls:
+        return {}
+
+    def _classify(stderr: str) -> str:
+        e = (stderr or "").lower()
+        if ("not found" in e or "does not exist" in e
+                or "repository not found" in e or "404" in e):
+            return "not found"
+        if ("authentication failed" in e or "403" in e or "denied" in e
+                or "could not read username" in e or "invalid credentials" in e):
+            return "auth failed"
+        if ("could not resolve" in e or "couldn't resolve" in e
+                or "could not connect" in e or "failed to connect" in e
+                or "timed out" in e or "connection refused" in e):
+            return "unreachable"
+        return "error"
+
+    def _probe(u: str):
+        try:
+            proc = _run_git("ls-remote", "--heads", u,
+                            inject_auth=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            return u, {"ok": False, "status": "timeout"}
+        except Exception as exc:
+            return u, {"ok": False, "status": type(exc).__name__}
+        if proc.returncode == 0:
+            return u, {"ok": True, "status": "ok"}
+        return u, {"ok": False, "status": _classify(proc.stderr or "")}
+
+    out: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="repo-check") as _ex:
+        for _u, _res in _ex.map(_probe, urls):
+            out[_u] = _res
     return out
 
 
@@ -29631,6 +29723,66 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _iv_ns_total = (
         len(_iv_ns_shared) + len(_iv_ns_unassigned) + len(_iv_ns_crossenv))
 
+    # ── Repository reachability detector (admin-only) ─────────────────────
+    # Build the source-code ADO URL for every in-scope app that carries a
+    # `repository_name`, dedupe, and probe each with `git ls-remote` (cached
+    # 10 min, bounded concurrency). Any repo that is unreachable / not found /
+    # auth-blocked surfaces in a warning popover next to the others. Apps whose
+    # URL can't even be resolved (missing org/collection) are flagged too — only
+    # when the ADO host IS resolved, so a globally-unset vault host doesn't make
+    # every app look broken.
+    _iv_repo_issues: list[dict] = []
+    _iv_repo_capped = 0
+    # Only probe per-repo reachability when the platform git is actually
+    # reachable — i.e. the inventory itself loaded from git. If git is down
+    # globally (inventory served from the ES projection), every ls-remote would
+    # fail and flag ALL repos, which is noise, not signal.
+    _rc_git_ok = st.session_state.get("_iv_source_v1") == "git"
+    if _is_admin and _rc_git_ok:
+        _rc_host = (_git_creds().get("hostname") or "").strip()
+        _rc_collections = _engine_team_collections() if _rc_host else {}
+        if _rc_host:
+            _rc_by_url: dict[str, list[dict]] = {}
+            _rc_unresolved: list[dict] = []
+            _rc_seen_app: set[tuple[str, str]] = set()
+            for _r_rc in _inv_rows_filtered:
+                _rc_rn = (_r_rc.get("repository_name") or "").strip()
+                if not _rc_rn:
+                    continue
+                _rc_app = (_r_rc.get("application") or "").strip()
+                _rc_proj = (_r_rc.get("project") or "").strip()
+                _rc_dedup = (_rc_app.lower(), _rc_rn.lower())
+                if _rc_dedup in _rc_seen_app:
+                    continue
+                _rc_seen_app.add(_rc_dedup)
+                _rc_url = _build_app_repo_url(_r_rc, _rc_host, _rc_collections)
+                _rec = {"app": _rc_app, "project": _rc_proj, "repo": _rc_rn}
+                if not _rc_url:
+                    _rc_unresolved.append(_rec)
+                else:
+                    _rc_by_url.setdefault(_rc_url, []).append(_rec)
+            # Probe unique URLs (cap to keep the always-on check bounded).
+            _RC_CAP = 300
+            _rc_urls = sorted(_rc_by_url.keys())
+            _iv_repo_capped = max(0, len(_rc_urls) - _RC_CAP)
+            _rc_results = (
+                _check_repos_reachable(json.dumps(_rc_urls[:_RC_CAP]))
+                if _rc_urls else {})
+            for _u in _rc_urls[:_RC_CAP]:
+                _res = _rc_results.get(_u) or {}
+                if not _res.get("ok"):
+                    for _rec in _rc_by_url[_u]:
+                        _iv_repo_issues.append({
+                            **_rec, "url": _u,
+                            "status": _res.get("status") or "unreachable",
+                        })
+            for _rec in _rc_unresolved:
+                _iv_repo_issues.append({
+                    **_rec, "url": "",
+                    "status": "URL unresolved (no org/collection)",
+                })
+    _iv_repo_total = len(_iv_repo_issues)
+
     # ── Next-version lookup + hygiene detector ────────────────────────────
     # Per-app next versions per branch (develop/release/stress/hotfix) from
     # ef-cicd-versions-lookup. Fetched once (whole lookup) and resolved per row
@@ -29736,8 +29888,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         )
 
         # ── Data-quality warnings row (duplicates + namespaces + versions) ──
-        if _iv_dup_total or _iv_ns_total or _iv_nv_total:
-            _warn_cols = st.columns([1.4, 1.4, 1.4, 4])
+        if _iv_dup_total or _iv_ns_total or _iv_nv_total or _iv_repo_total:
+            _warn_cols = st.columns([1.4, 1.4, 1.4, 1.4, 2.4])
         else:
             _warn_cols = None
 
@@ -29945,6 +30097,65 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         unsafe_allow_html=True,
                     )
 
+        # ── Repository reachability warning (admin-only, sibling popover) ──
+        if _iv_repo_total:
+            _RC_STATUS_GLYPH = {
+                "not found":  "🚫",
+                "auth failed": "🔒",
+                "unreachable": "📡",
+                "timeout":    "⌛",
+            }
+            with (_warn_cols[3] if _warn_cols else st.container()), \
+                    st.container(key="cc_iv_repowarn_pop"):
+                with st.popover(
+                    f"⚠ {_iv_repo_total} repo issue"
+                    f"{'s' if _iv_repo_total != 1 else ''}",
+                    use_container_width=False,
+                    help="App source-code repositories (built from "
+                         "repository_name + dev_team collection) that git "
+                         "ls-remote could not reach: not found, auth-blocked, "
+                         "or unreachable. Cached 10 min. Admin-only.",
+                ):
+                    _rc_rows = "".join(
+                        '<tr><td class="iv-dup-key">'
+                        f'{html.escape(_x["repo"] or "—")}'
+                        + (f'<div class="iv-dup-projs">'
+                           f'<span class="iv-dup-proj">{html.escape(_x["app"])}</span>'
+                           + (f' · {html.escape(_x["project"])}' if _x["project"] else "")
+                           + '</div>')
+                        + '</td><td>'
+                        + (f'<a class="iv-repo-url" href="{html.escape(_x["url"], quote=True)}" '
+                           f'target="_blank" rel="noopener">'
+                           f'{html.escape(_x["url"])}</a>' if _x["url"]
+                           else '<span class="iv-repo-url is-none">— no URL —</span>')
+                        + f'<div class="iv-repo-status">'
+                        + f'{_RC_STATUS_GLYPH.get(_x["status"], "⚠")} '
+                        + f'{html.escape(_x["status"])}</div>'
+                        + '</td></tr>'
+                        for _x in sorted(
+                            _iv_repo_issues,
+                            key=lambda d: (d["status"], (d["repo"] or "").lower()))
+                    )
+                    _rc_cap_note = (
+                        f'<div class="iv-dup-projs" style="margin-top:6px">'
+                        f'Note: probing capped at 300 unique repos · '
+                        f'{_iv_repo_capped} not checked.</div>'
+                        if _iv_repo_capped else ""
+                    )
+                    st.markdown(
+                        '<div class="iv-dup-intro">Source-code repositories that '
+                        'could not be reached via <code>git ls-remote</code> '
+                        '(not found, auth-blocked, or unreachable). URL is built '
+                        'from the app\'s <code>repository_name</code>, its '
+                        'project, and the dev_team\'s ADO collection.</div>'
+                        f'<div class="iv-dup-sec-head">⎇ Unreachable repositories '
+                        f'<b>{_iv_repo_total}</b></div>'
+                        f'<table class="iv-dup-table"><tbody>{_rc_rows}'
+                        f'</tbody></table>'
+                        + _rc_cap_note,
+                        unsafe_allow_html=True,
+                    )
+
         # ── Non-admin scope diagnostic (admin-only) ─────────────────────
         # Lets an admin reproduce exactly what a non-admin with a given
         # role + team resolves for their app/project scope, and shows
@@ -30132,30 +30343,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # config toolbar). Returns "" when either piece is missing so callers
     # can render an inert state instead of a broken link.
     def _iv_repo_url(r: dict) -> str:
-        _rn = (r.get("repository_name") or "").strip()
-        _pj = (r.get("project") or "").strip()
-        if not (_iv_ado_host and _rn and _pj):
-            return ""
         # The ADO org/collection segment is the dev_team's collection_name
         # (Engine vars/Teams/<team>.yml) — that's the correct source-code URL.
         # Fall back to the company name only when no team→collection mapping is
-        # found (so existing links don't break).
-        _org = ""
-        for _dt in _row_teams_for_field(r, "dev_team"):
-            _c = _iv_team_collections.get(_team_match_key(_dt))
-            if _c:
-                _org = _c
-                break
-        if not _org:
-            _org = (r.get("company") or "").strip()
-        if not _org:
-            return ""
-        return (
-            f"http://{_iv_ado_host}/"
-            f"{urllib.parse.quote(_org, safe='')}/"
-            f"{urllib.parse.quote(_pj, safe='')}/_git/"
-            f"{urllib.parse.quote(_rn, safe='')}"
-        )
+        # found. Delegates to the module-level builder so the repo-reachability
+        # warning resolves identical URLs.
+        return _build_app_repo_url(r, _iv_ado_host, _iv_team_collections)
 
     # ── Jenkins per-app section ───────────────────────────────────────
     # Lives inside each app popover as a small action grid. Each tile
