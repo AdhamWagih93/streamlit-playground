@@ -6813,6 +6813,31 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border-bottom: 1px solid var(--cc-border);
 }
 .iv-devops-list tbody tr:last-child td { border-bottom: none; }
+.iv-devops-team {
+    display: inline-block;
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: var(--cc-teal);
+    background: color-mix(in srgb, var(--cc-teal) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-teal) 28%, transparent);
+    border-radius: 4px;
+    padding: 0 6px;
+    margin: 1px 2px 1px 0;
+}
+.iv-devops-none {
+    font-family: var(--cc-mono);
+    font-size: 0.66rem;
+    color: var(--cc-red);
+    font-weight: 700;
+}
+.iv-devops-list-note {
+    margin-top: 8px;
+    font-size: 0.68rem;
+    color: var(--cc-text-dim);
+    line-height: 1.45;
+}
+.iv-devops-list-note code { font-family: var(--cc-mono); font-size: 0.64rem; }
 
 /* Project popover banner */
 .el-app-pop .ap-devops-banner {
@@ -29864,9 +29889,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         "qc_team", "uat_team", "prd_team", "preprod_team",
     )
     _iv_devops_misassigned_projects: dict[str, list[str]] = {}
+    # Parallel display map for the warning list: per flagged project, the
+    # actual dev team(s) and the qc team(s) (excluding DEVOPS itself), so the
+    # admin sees who SHOULD own dev and who owns qc at a glance.
+    _iv_devops_misassign_teams: dict[str, dict] = {}
     if _is_admin:
         # Aggregate every team value seen per project across the
-        # filtered inventory rows, bucketed by ownership field.
+        # filtered inventory rows, bucketed by ownership field. Values keep
+        # their ORIGINAL casing (for display); the DEVOPS check is case-folded.
         _devops_per_proj: dict[str, dict[str, set]] = {}
         for _r_chk in _inv_rows_filtered:
             _pj_chk = (_r_chk.get("project") or "").strip()
@@ -29881,19 +29911,30 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 else:
                     _iter = [_vals_chk] if _vals_chk else []
                 _bucket.setdefault(_f_chk, set()).update(
-                    str(_v).strip().upper() for _v in _iter if _v
+                    str(_v).strip() for _v in _iter if str(_v).strip()
                 )
         for _pj_chk, _bucket in _devops_per_proj.items():
+            _dev_set = _bucket.get("dev_team", set())
             # Skip if DEVOPS already owns dev_team — it's a real dev
             # team in that project so the ops/qc assignment is fine.
-            if _DEVOPS_FLAG_TOKEN in _bucket.get("dev_team", set()):
+            if any(_t.upper() == _DEVOPS_FLAG_TOKEN for _t in _dev_set):
                 continue
             _hits = [
                 _f for _f in _DEVOPS_OPS_FIELDS_FOR_FLAG
-                if _DEVOPS_FLAG_TOKEN in _bucket.get(_f, set())
+                if any(_t.upper() == _DEVOPS_FLAG_TOKEN
+                       for _t in _bucket.get(_f, set()))
             ]
             if _hits:
                 _iv_devops_misassigned_projects[_pj_chk] = _hits
+                _qc_set = _bucket.get("qc_team", set())
+                _iv_devops_misassign_teams[_pj_chk] = {
+                    "dev_teams": sorted(_dev_set, key=str.lower),
+                    # QC team only when it isn't DEVOPS itself.
+                    "qc_teams": sorted(
+                        (_t for _t in _qc_set
+                         if _t.upper() != _DEVOPS_FLAG_TOKEN),
+                        key=str.lower),
+                }
 
     # ── Duplicate-name detector (admin-only flag) ─────────────────────────
     # Now that all name matching is case-insensitive, a name spelled two
@@ -30242,19 +30283,36 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     )
                 with _b2:
                     with st.popover("View list", use_container_width=True):
+                        def _devops_team_cell(_vals: list[str]) -> str:
+                            if not _vals:
+                                return ('<span class="iv-devops-none">'
+                                        '— none —</span>')
+                            return " ".join(
+                                f'<span class="iv-devops-team">'
+                                f'{html.escape(_t)}</span>' for _t in _vals)
                         _rows_html = "".join(
                             f'<tr><td>{html.escape(_p)}</td>'
                             f'<td><code>{html.escape(" + ".join(_iv_devops_misassigned_projects[_p]))}'
-                            f'</code></td></tr>'
+                            f'</code></td>'
+                            f'<td>{_devops_team_cell((_iv_devops_misassign_teams.get(_p) or {}).get("dev_teams") or [])}</td>'
+                            f'<td>{_devops_team_cell((_iv_devops_misassign_teams.get(_p) or {}).get("qc_teams") or [])}</td>'
+                            f'</tr>'
                             for _p in sorted(_iv_devops_misassigned_projects)
                         )
                         st.markdown(
                             '<div class="iv-devops-list-wrap">'
                             '  <table class="iv-devops-list">'
                             '    <thead><tr><th>Project</th>'
-                            '      <th>DEVOPS owns</th></tr></thead>'
+                            '      <th>DEVOPS owns</th>'
+                            '      <th>Dev team</th>'
+                            '      <th>QC team</th></tr></thead>'
                             f'    <tbody>{_rows_html}</tbody>'
                             '  </table>'
+                            '</div>'
+                            '<div class="iv-devops-list-note">'
+                            '<b>Dev team</b> = who actually owns <code>dev_team</code> '
+                            '(— none — means the project has no dev owner at all). '
+                            '<b>QC team</b> shown only when it isn\'t DEVOPS.'
                             '</div>',
                             unsafe_allow_html=True,
                         )
