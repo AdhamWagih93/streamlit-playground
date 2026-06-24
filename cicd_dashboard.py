@@ -3434,6 +3434,61 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-size: .7rem; font-weight: 700; color: var(--cc-red);
     font-family: var(--cc-mono); margin-top: 2px;
 }
+/* ── Dev/QC URL reachability popover — side-by-side env layout ──────────── */
+.iv-url-cats {
+    display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 2px 0;
+}
+.iv-url-cat {
+    font-family: var(--cc-mono); font-size: .66rem; font-weight: 600;
+    color: var(--cc-red); line-height: 1.3;
+    background: color-mix(in srgb, var(--cc-red) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-red) 26%, transparent);
+    border-radius: 999px; padding: 1px 9px; white-space: nowrap;
+}
+.iv-url-cat b { color: var(--cc-red); margin-right: 2px; }
+.iv-url-tag {
+    font-family: var(--cc-mono); font-size: .58rem; font-weight: 700;
+    border-radius: 4px; padding: 0 6px; letter-spacing: .02em;
+}
+.iv-url-tag.is-both { color: var(--cc-red);
+    background: color-mix(in srgb, var(--cc-red) 12%, transparent); }
+.iv-url-tag.is-one  { color: var(--cc-amber);
+    background: color-mix(in srgb, var(--cc-amber) 14%, transparent); }
+.iv-url-table { table-layout: fixed; width: 100%; }
+.iv-url-table th {
+    text-align: left; font-size: .58rem; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--cc-text-mute); font-weight: 700;
+    padding: 2px 6px 4px 6px; border-bottom: 1px solid var(--cc-border);
+}
+.iv-url-app { font-weight: 700; color: var(--cc-text); font-size: .74rem;
+    vertical-align: top; }
+.iv-url-td { vertical-align: top; padding: 4px 6px; }
+.iv-url-cell {
+    display: inline-block; font-family: var(--cc-mono); font-size: .66rem;
+    font-weight: 700; border-radius: 4px; padding: 0 6px; white-space: nowrap;
+}
+.iv-url-cell.is-ok   { color: var(--cc-green);
+    background: color-mix(in srgb, var(--cc-green) 12%, transparent); }
+.iv-url-cell.is-bad  { color: var(--cc-red);
+    background: color-mix(in srgb, var(--cc-red) 12%, transparent); }
+.iv-url-cell.is-na   { color: var(--cc-text-mute); }
+.iv-url-cell.is-skip { color: var(--cc-text-mute); font-style: italic; }
+.iv-url-link {
+    display: block; font-family: var(--cc-mono); font-size: .6rem;
+    color: var(--cc-accent); text-decoration: none; margin-top: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.iv-url-link:hover { text-decoration: underline; }
+.iv-url-verdict {
+    font-family: var(--cc-mono); font-size: .62rem; font-weight: 700;
+    border-radius: 4px; padding: 1px 6px; display: inline-block; line-height: 1.35;
+}
+.iv-url-verdict.is-both      { color: #fff; background: var(--cc-red); }
+.iv-url-verdict.is-both-diff { color: var(--cc-red);
+    background: color-mix(in srgb, var(--cc-red) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-red) 40%, transparent); }
+.iv-url-verdict.is-one       { color: var(--cc-amber);
+    background: color-mix(in srgb, var(--cc-amber) 16%, transparent); }
 .iv-ns-env {
     font-family: var(--cc-mono); font-size: .58rem; font-weight: 800;
     color: var(--cc-blue); background: var(--cc-blue-lt);
@@ -29933,15 +29988,21 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 })
     _iv_repo_total = len(_iv_repo_issues)
 
-    # ── Dev/QC application URL reachability detector (admin-only) ──────────
-    # ef-devops-projects carries qcRouteUrl / qcServiceUrl; the dev variants are
-    # derived by swapping the literal "qc" → "dev" (same convention the version
-    # popover uses). Probe every distinct URL over HTTP (any answer = reachable;
-    # only connection failures / 404 / 5xx are flagged). Cached 10 min.
-    _iv_url_issues: list[dict] = []
+    # ── Dev/QC application ROUTE URL reachability detector (admin-only) ────
+    # ef-devops-projects carries qcRouteUrl; the dev variant is derived by
+    # swapping the literal "qc" → "dev" (same convention the version popover
+    # uses). Service URLs are internal K8s addresses and are NOT checked. We
+    # record BOTH envs' status per app (including the passing one) so the
+    # popover can show dev/qc side by side, flag single-vs-both-env failures,
+    # and tell whether the failure mode is the same in both. Probe = any HTTP
+    # answer (incl. 401/403) is reachable; only conn failures / 404 / 5xx flag.
+    _iv_url_issues: list[dict] = []     # per-app records with ≥1 failing env
+    _iv_url_cats: dict[str, int] = {}   # status → failing (app,env) occurrences
     _iv_url_capped = 0
+    _iv_url_total = 0                    # total failing (app,env) instances
     if _is_admin:
-        _url_by_url: dict[str, list[dict]] = {}
+        _url_app_map: dict[str, dict] = {}   # app → {project, qc:{}|None, dev:{}|None}
+        _url_by_url: dict[str, list[tuple]] = {}  # url → [(app, env)]
         _seen_app_u: set[str] = set()
         for _r_u in _inv_rows_filtered:
             _app_u = (_r_u.get("application") or "").strip()
@@ -29951,18 +30012,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _proj_u = (_r_u.get("project") or "").strip()
             _dp_u = _iv_devproj_map.get(_app_u) or {}
             _qc_route = (_dp_u.get("qcRouteUrl") or "").strip()
-            # Only ROUTE URLs are externally reachable from the dashboard. The
-            # qc/dev SERVICE URLs are internal K8s service addresses that never
-            # resolve from here, so probing them would always false-flag.
-            for (_env_u, _kind_u, _url_u) in (
-                ("qc", "route",   _qc_route),
-                ("dev", "route",   _qc_route.replace("qc", "dev") if _qc_route else ""),
+            _envs: dict[str, dict] = {}
+            for (_env_u, _url_u) in (
+                ("qc", _qc_route),
+                ("dev", _qc_route.replace("qc", "dev") if _qc_route else ""),
             ):
                 if _url_u.lower().startswith("http"):
-                    _url_by_url.setdefault(_url_u, []).append({
-                        "app": _app_u, "project": _proj_u,
-                        "env": _env_u, "kind": _kind_u,
-                    })
+                    _envs[_env_u] = {"url": _url_u, "ok": None, "status": ""}
+                    _url_by_url.setdefault(_url_u, []).append((_app_u, _env_u))
+            if _envs:
+                _url_app_map[_app_u] = {
+                    "project": _proj_u,
+                    "qc": _envs.get("qc"), "dev": _envs.get("dev"),
+                }
         if _url_by_url:
             _URL_CAP = 400
             _urls_sorted = sorted(_url_by_url.keys())
@@ -29971,13 +30033,31 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 json.dumps(_urls_sorted[:_URL_CAP]))
             for _u in _urls_sorted[:_URL_CAP]:
                 _res = _url_results.get(_u) or {}
-                if not _res.get("ok"):
-                    for _rec in _url_by_url[_u]:
-                        _iv_url_issues.append({
-                            **_rec, "url": _u,
-                            "status": _res.get("status") or "unreachable",
-                        })
-    _iv_url_total = len(_iv_url_issues)
+                _ok = bool(_res.get("ok"))
+                _stt = _res.get("status") or ("ok" if _ok else "unreachable")
+                for (_app_x, _env_x) in _url_by_url[_u]:
+                    _slot = (_url_app_map.get(_app_x) or {}).get(_env_x)
+                    if _slot is not None:
+                        _slot["ok"] = _ok
+                        _slot["status"] = _stt
+            # Derive per-app issue records + category counts. Only env slots
+            # actually probed (ok is True/False, not None) participate; URLs
+            # past the cap stay None and are silently skipped.
+            for _app_x, _rec_x in _url_app_map.items():
+                _fail_envs: list[str] = []
+                for _env_x in ("qc", "dev"):
+                    _slot = _rec_x.get(_env_x)
+                    if _slot and _slot.get("ok") is False:
+                        _fail_envs.append(_env_x)
+                        _iv_url_cats[_slot["status"]] = (
+                            _iv_url_cats.get(_slot["status"], 0) + 1)
+                        _iv_url_total += 1
+                if _fail_envs:
+                    _iv_url_issues.append({
+                        "app": _app_x, "project": _rec_x["project"],
+                        "qc": _rec_x.get("qc"), "dev": _rec_x.get("dev"),
+                        "fail_envs": _fail_envs,
+                    })
 
     # ── Next-version lookup + hygiene detector ────────────────────────────
     # Per-app next versions per branch (develop/release/stress/hotfix) from
@@ -30368,25 +30448,73 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                          "addresses and are NOT checked. Cached 10 min. "
                          "Admin-only.",
                 ):
+                    # Per-env cell: ✓ reachable / status badge on failure / — when
+                    # the env has no route URL at all.
+                    def _url_env_cell(_slot: dict | None) -> str:
+                        if not _slot:
+                            return '<span class="iv-url-cell is-na">— no URL —</span>'
+                        _u = _slot.get("url") or ""
+                        _ok = _slot.get("ok")
+                        _stt = _slot.get("status") or ""
+                        if _ok is True:
+                            _badge = '<span class="iv-url-cell is-ok">✓ reachable</span>'
+                        elif _ok is False:
+                            _badge = (f'<span class="iv-url-cell is-bad">✗ '
+                                      f'{html.escape(_stt)}</span>')
+                        else:
+                            _badge = '<span class="iv-url-cell is-skip">· not checked</span>'
+                        _link = (
+                            f'<a class="iv-url-link" href="{html.escape(_u, quote=True)}" '
+                            f'target="_blank" rel="noopener" title="{html.escape(_u, quote=True)}">'
+                            f'{html.escape(_u if len(_u) <= 46 else _u[:43] + "…")}</a>'
+                            if _u else ""
+                        )
+                        return _badge + _link
+
+                    def _url_verdict(_x: dict) -> str:
+                        _qc, _dev = _x.get("qc"), _x.get("dev")
+                        _qc_bad = bool(_qc and _qc.get("ok") is False)
+                        _dev_bad = bool(_dev and _dev.get("ok") is False)
+                        if _qc_bad and _dev_bad:
+                            _same = (_qc.get("status") == _dev.get("status"))
+                            if _same:
+                                return ('<span class="iv-url-verdict is-both">'
+                                        'both envs · same issue</span>')
+                            return ('<span class="iv-url-verdict is-both-diff">'
+                                    'both envs · different issues</span>')
+                        if _qc_bad:
+                            return ('<span class="iv-url-verdict is-one">'
+                                    'QC only</span>')
+                        return ('<span class="iv-url-verdict is-one">'
+                                'DEV only</span>')
+
+                    # Sort: both-env failures first, then by app.
+                    _url_sorted = sorted(
+                        _iv_url_issues,
+                        key=lambda d: (-len(d["fail_envs"]), (d["app"] or "").lower()))
                     _url_rows = "".join(
-                        '<tr><td class="iv-dup-key">'
-                        f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}'
-                        f' · {html.escape(_x["kind"])}</span> '
+                        '<tr><td class="iv-url-app">'
                         f'{html.escape(_x["app"] or "—")}'
-                        + (f'<div class="iv-dup-projs">'
-                           f'<span class="iv-dup-proj">{html.escape(_x["project"])}'
-                           f'</span></div>' if _x["project"] else "")
-                        + '</td><td>'
-                        + (f'<a class="iv-repo-url" href="{html.escape(_x["url"], quote=True)}" '
-                           f'target="_blank" rel="noopener">{html.escape(_x["url"])}</a>'
-                           if _x["url"] else '<span class="iv-repo-url is-none">—</span>')
-                        + f'<div class="iv-repo-status">📡 {html.escape(_x["status"])}</div>'
-                        + '</td></tr>'
-                        for _x in sorted(
-                            _iv_url_issues,
-                            key=lambda d: (d["status"], d["env"],
-                                           (d["app"] or "").lower()))
+                        + (f'<div class="iv-dup-projs"><span class="iv-dup-proj">'
+                           f'{html.escape(_x["project"])}</span></div>'
+                           if _x["project"] else "")
+                        + '</td>'
+                        f'<td class="iv-url-td">{_url_env_cell(_x.get("dev"))}</td>'
+                        f'<td class="iv-url-td">{_url_env_cell(_x.get("qc"))}</td>'
+                        f'<td class="iv-url-td">{_url_verdict(_x)}</td>'
+                        '</tr>'
+                        for _x in _url_sorted
                     )
+                    # Category summary — error type × occurrences, biggest first.
+                    _cat_chips = "".join(
+                        f'<span class="iv-url-cat"><b>{_n}</b> '
+                        f'{html.escape(_stt)}</span>'
+                        for _stt, _n in sorted(
+                            _iv_url_cats.items(), key=lambda kv: (-kv[1], kv[0]))
+                    )
+                    _both_n = sum(1 for _x in _iv_url_issues
+                                  if len(_x["fail_envs"]) == 2)
+                    _one_n = len(_iv_url_issues) - _both_n
                     _url_cap_note = (
                         f'<div class="iv-dup-projs" style="margin-top:6px">'
                         f'Note: probing capped at 400 unique URLs · '
@@ -30396,14 +30524,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     st.markdown(
                         '<div class="iv-dup-intro">Dev / QC application <b>route</b> '
                         'URLs that did not answer over HTTP. Any HTTP response '
-                        '(including 401/403) counts as reachable — only connection '
-                        'failures, 404, and 5xx are flagged. Dev URLs are derived '
-                        'from the QC URL by swapping <code>qc</code>→<code>dev</code>. '
-                        'Service URLs (internal K8s) are not checked.</div>'
-                        f'<div class="iv-dup-sec-head">📡 Unreachable URLs '
+                        '(incl. 401/403) counts as reachable — only connection '
+                        'failures, 404, and 5xx are flagged. Dev URL is derived '
+                        'from the QC URL (<code>qc</code>→<code>dev</code>); '
+                        'service URLs (internal K8s) are not checked.</div>'
+                        f'<div class="iv-dup-sec-head">📡 By error type '
                         f'<b>{_iv_url_total}</b></div>'
-                        f'<table class="iv-dup-table"><tbody>{_url_rows}'
-                        f'</tbody></table>'
+                        f'<div class="iv-url-cats">{_cat_chips}</div>'
+                        f'<div class="iv-dup-sec-head" style="margin-top:8px">'
+                        f'Affected apps <b>{len(_iv_url_issues)}</b> · '
+                        f'<span class="iv-url-tag is-both">{_both_n} both envs</span> '
+                        f'<span class="iv-url-tag is-one">{_one_n} one env</span></div>'
+                        '<table class="iv-dup-table iv-url-table"><thead><tr>'
+                        '<th>App</th><th>DEV</th><th>QC</th><th>Verdict</th>'
+                        f'</tr></thead><tbody>{_url_rows}</tbody></table>'
                         + _url_cap_note,
                         unsafe_allow_html=True,
                     )
