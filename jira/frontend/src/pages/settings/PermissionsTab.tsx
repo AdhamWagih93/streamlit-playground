@@ -1,54 +1,91 @@
-import { useEffect, useState } from 'react';
-import { PermissionScheme, Role, ProjectActor, Group, User } from '../../types';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ProjectOut,
+  PermissionScheme,
+  PermissionSchemeDetail,
+  PermissionCatalog,
+  Role,
+} from '../../types';
 import {
   listPermissionSchemes,
   setProjectScheme,
+  getPermissionScheme,
+  getPermissionCatalog,
   listRoles,
-  listProjectActors,
-  addProjectActor,
-  removeProjectActor,
-  listGroups,
 } from '../../api/rbac';
 import { SpinnerCenter } from '../../components/Spinner';
-import { UserPicker } from '../../components/UserPicker';
-import { Avatar } from '../../components/Avatar';
 import { apiErrorMessage } from '../../api/client';
 
 interface Props {
-  projectId: string;
-  currentSchemeId?: string | null;
+  project: ProjectOut;
+  canAdmin: boolean;
   setError: (s: string) => void;
+  onSchemeChanged: () => void;
 }
 
-export function PermissionsTab({ projectId, currentSchemeId, setError }: Props) {
+export function PermissionsTab({ project, canAdmin, setError, onSchemeChanged }: Props) {
+  const currentSchemeId = project.permission_scheme_id != null ? String(project.permission_scheme_id) : '';
+  const currentSchemeName = project.permission_scheme?.name || 'Default Permission Scheme';
+
   const [schemes, setSchemes] = useState<PermissionScheme[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [actors, setActors] = useState<ProjectActor[]>([]);
-  const [schemeId, setSchemeId] = useState<string>(currentSchemeId || '');
+  const [catalog, setCatalog] = useState<PermissionCatalog | null>(null);
+  const [detail, setDetail] = useState<PermissionSchemeDetail | null>(null);
+  const [schemeId, setSchemeId] = useState<string>(currentSchemeId);
   const [loading, setLoading] = useState(true);
   const [savingScheme, setSavingScheme] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
-  function loadActors() {
-    listProjectActors(projectId).then(setActors).catch((e) => setError(apiErrorMessage(e)));
-  }
-
+  // Load scheme list + catalog + roles once.
   useEffect(() => {
-    Promise.all([listPermissionSchemes(), listRoles(), listProjectActors(projectId), listGroups()])
-      .then(([s, r, a, g]) => {
+    Promise.all([listPermissionSchemes(), getPermissionCatalog(), listRoles()])
+      .then(([s, c, r]) => {
         setSchemes(s);
+        setCatalog(c);
         setRoles(r);
-        setActors(a);
-        setGroups(g);
       })
       .catch((e) => setError(apiErrorMessage(e)))
       .finally(() => setLoading(false));
-  }, [projectId]);
+  }, []);
+
+  // Load the capability detail for whichever scheme is currently chosen.
+  useEffect(() => {
+    if (!schemeId) {
+      setDetail(null);
+      return;
+    }
+    setLoadingDetail(true);
+    getPermissionScheme(schemeId)
+      .then(setDetail)
+      .catch((e) => setError(apiErrorMessage(e)))
+      .finally(() => setLoadingDetail(false));
+  }, [schemeId]);
+
+  const catalogMap = useMemo(() => {
+    const map = new Map<string, string>();
+    catalog?.project_permissions.forEach((p) => map.set(p.key, p.description));
+    return map;
+  }, [catalog]);
+
+  // Group role-held grants by role name -> friendly permission labels.
+  const byRole = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    if (!detail) return groups;
+    for (const g of detail.grants) {
+      if (g.holder_type !== 'role') continue;
+      const label = catalogMap.get(g.permission) || g.permission;
+      const arr = groups.get(g.holder_value) || [];
+      if (!arr.includes(label)) arr.push(label);
+      groups.set(g.holder_value, arr);
+    }
+    return groups;
+  }, [detail, catalogMap]);
 
   async function saveScheme() {
     setSavingScheme(true);
     try {
-      await setProjectScheme(projectId, schemeId || null);
+      await setProjectScheme(project.id, schemeId || null);
+      onSchemeChanged();
     } catch (e) {
       setError(apiErrorMessage(e, 'Could not assign scheme'));
     } finally {
@@ -58,120 +95,77 @@ export function PermissionsTab({ projectId, currentSchemeId, setError }: Props) 
 
   if (loading) return <SpinnerCenter />;
 
+  // Roles to show in the capability summary — prefer defined roles, fall back
+  // to whatever holder names appear in the grants.
+  const roleNames = roles.length > 0 ? roles.map((r) => r.name) : Array.from(byRole.keys());
+
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 760 }}>
+      <div className="section-head">
+        <h2 className="section-head-title">Permissions</h2>
+        <p className="section-head-sub">
+          Permissions define what each role can do. They come from this project's permission scheme,
+          which instance admins manage globally — here you choose which scheme applies.
+        </p>
+      </div>
+
       <div className="section-card">
         <h3>Permission scheme</h3>
-        <p className="muted text-sm mb-8">The scheme controls who can perform actions in this project.</p>
-        <div className="row gap-8 wrap" style={{ alignItems: 'flex-end' }}>
-          <select className="select" value={schemeId} onChange={(e) => setSchemeId(e.target.value)} style={{ minWidth: 240 }}>
-            <option value="">Default permissions</option>
-            {schemes.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}{s.is_default ? ' (default)' : ''}</option>
-            ))}
-          </select>
-          <button className="btn btn-primary" onClick={saveScheme} disabled={savingScheme}>
-            {savingScheme ? 'Saving…' : 'Apply scheme'}
-          </button>
-        </div>
-      </div>
-
-      <h3 style={{ fontSize: 16, margin: '16px 0 8px' }}>Project roles</h3>
-      <p className="muted text-sm mb-16">Assign users and groups to roles for this project.</p>
-
-      {roles.map((role) => (
-        <RoleRow
-          key={role.id}
-          projectId={projectId}
-          role={role}
-          actors={actors.filter((a) => a.role_id === role.id)}
-          groups={groups}
-          onChanged={loadActors}
-          setError={setError}
-        />
-      ))}
-    </div>
-  );
-}
-
-function RoleRow({
-  projectId,
-  role,
-  actors,
-  groups,
-  onChanged,
-  setError,
-}: {
-  projectId: string;
-  role: Role;
-  actors: ProjectActor[];
-  groups: Group[];
-  onChanged: () => void;
-  setError: (s: string) => void;
-}) {
-  const [mode, setMode] = useState<'user' | 'group'>('user');
-  const [user, setUser] = useState<User | null>(null);
-  const [groupId, setGroupId] = useState('');
-
-  async function add() {
-    try {
-      if (mode === 'user') {
-        if (!user) return;
-        await addProjectActor(projectId, { role_id: role.id, user_id: user.id });
-        setUser(null);
-      } else {
-        if (!groupId) return;
-        await addProjectActor(projectId, { role_id: role.id, group_id: groupId });
-        setGroupId('');
-      }
-      onChanged();
-    } catch (e) {
-      setError(apiErrorMessage(e, 'Could not add actor'));
-    }
-  }
-
-  async function remove(actor: ProjectActor) {
-    await removeProjectActor(projectId, actor.id).catch((e) => setError(apiErrorMessage(e)));
-    onChanged();
-  }
-
-  return (
-    <div className="section-card">
-      <div className="row-between">
-        <h3>{role.name}{role.is_default && <span className="badge badge-info" style={{ marginLeft: 8 }}>default</span>}</h3>
-      </div>
-      {role.description && <div className="muted text-xs mb-8">{role.description}</div>}
-
-      <div className="chip-row mb-8">
-        {actors.length === 0 && <span className="muted text-sm">No one assigned.</span>}
-        {actors.map((a) => (
-          <span className="token" key={a.id}>
-            {a.user ? (
-              <span className="row gap-8"><Avatar name={a.user.display_name} size={18} /> {a.user.display_name}</span>
-            ) : (
-              <span>👥 {a.group?.name}</span>
-            )}
-            <button onClick={() => remove(a)}>×</button>
-          </span>
-        ))}
-      </div>
-
-      <div className="row gap-8 wrap" style={{ alignItems: 'flex-end' }}>
-        <select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'user' | 'group')} style={{ width: 110 }}>
-          <option value="user">User</option>
-          <option value="group">Group</option>
-        </select>
-        {mode === 'user' ? (
-          <div className="flex-1" style={{ minWidth: 200 }}>
-            <UserPicker value={user} onChange={setUser} allowUnassigned={false} placeholder="Add a person…" />
+        <p className="muted text-sm mb-8">
+          Current scheme: <strong>{currentSchemeName}</strong>
+        </p>
+        {canAdmin ? (
+          <div className="row gap-8 wrap" style={{ alignItems: 'flex-end' }}>
+            <select className="select" value={schemeId} onChange={(e) => setSchemeId(e.target.value)} style={{ minWidth: 260 }}>
+              <option value="">Default Permission Scheme</option>
+              {schemes.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.is_default ? ' (default)' : ''}
+                </option>
+              ))}
+            </select>
+            <button className="btn btn-primary" onClick={saveScheme} disabled={savingScheme || schemeId === currentSchemeId}>
+              {savingScheme ? 'Saving…' : 'Apply scheme'}
+            </button>
           </div>
         ) : (
-          <select className="select flex-1" value={groupId} onChange={(e) => setGroupId(e.target.value)} style={{ minWidth: 180 }}>
-            <option value="">Select group…</option>
-            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-          </select>
+          <div className="callout callout-muted">Only project admins can change the permission scheme.</div>
         )}
-        <button className="btn btn-primary" onClick={add} disabled={mode === 'user' ? !user : !groupId}>Add</button>
+      </div>
+
+      <div className="section-card">
+        <h3>What each role can do</h3>
+        <p className="muted text-sm mb-8">
+          A read-only summary of the capabilities granted to each role by{' '}
+          <strong>{schemeId ? (schemes.find((s) => String(s.id) === schemeId)?.name ?? currentSchemeName) : 'the default scheme'}</strong>.
+          Assign people to these roles in the <strong>People</strong> tab.
+        </p>
+
+        {loadingDetail ? (
+          <SpinnerCenter />
+        ) : !schemeId || byRole.size === 0 ? (
+          <div className="callout callout-muted">
+            This scheme grants permissions by group/user rather than by role, or no role grants are defined.
+          </div>
+        ) : (
+          <div className="capability-grid">
+            {roleNames
+              .filter((name) => byRole.has(name))
+              .map((name) => (
+                <div className="capability-card" key={name}>
+                  <div className="row gap-8 mb-8">
+                    <span className="role-badge">{name}</span>
+                    <span className="muted text-xs">{byRole.get(name)?.length ?? 0} permissions</span>
+                  </div>
+                  <ul className="capability-list">
+                    {(byRole.get(name) || []).map((label) => (
+                      <li key={label}>{label}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+          </div>
+        )}
       </div>
     </div>
   );

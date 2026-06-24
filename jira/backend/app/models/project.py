@@ -32,6 +32,7 @@ class Project(Base, TimestampMixin):
     external_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
 
     lead = relationship("User", foreign_keys=[lead_id])
+    permission_scheme = relationship("PermissionScheme", foreign_keys=[permission_scheme_id])
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
     components = relationship("Component", back_populates="project", cascade="all, delete-orphan")
     versions = relationship("Version", back_populates="project", cascade="all, delete-orphan")

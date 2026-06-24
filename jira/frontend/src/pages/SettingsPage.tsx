@@ -2,18 +2,15 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ProjectOut,
-  ProjectMember,
   Component,
   Version,
   User,
+  Role,
 } from '../types';
 import {
   getProject,
   updateProject,
   deleteProject,
-  listMembers,
-  addMember,
-  removeMember,
   listComponents,
   createComponent,
   deleteComponent,
@@ -22,16 +19,19 @@ import {
   updateVersion,
   deleteVersion,
 } from '../api/projects';
+import { listRoles, listProjectActors } from '../api/rbac';
 import { UserPicker } from '../components/UserPicker';
-import { Avatar } from '../components/Avatar';
 import { SpinnerCenter } from '../components/Spinner';
 import { useAuth } from '../store/auth';
 import { formatDate } from '../lib/format';
 import { apiErrorMessage } from '../api/client';
+import { PeopleTab } from './settings/PeopleTab';
 import { PermissionsTab } from './settings/PermissionsTab';
 import { JiraSyncTab } from './settings/JiraSyncTab';
 
-type Tab = 'details' | 'members' | 'components' | 'versions' | 'permissions' | 'jira sync';
+type Tab = 'details' | 'people' | 'permissions' | 'components' | 'versions' | 'jira sync';
+
+const TABS: Tab[] = ['details', 'people', 'permissions', 'components', 'versions', 'jira sync'];
 
 export function SettingsPage() {
   const { projectKey } = useParams();
@@ -41,15 +41,42 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('details');
   const [error, setError] = useState('');
+  const [canAdmin, setCanAdmin] = useState(false);
+
+  function reload() {
+    if (!projectKey) return;
+    return getProject(projectKey)
+      .then(setProject)
+      .catch((e) => setError(apiErrorMessage(e)));
+  }
 
   useEffect(() => {
     if (!projectKey) return;
     setLoading(true);
     getProject(projectKey)
-      .then(setProject)
+      .then(async (p) => {
+        setProject(p);
+        // Compute project-admin capability.
+        let admin = !!me?.is_admin || p.lead?.id === me?.id;
+        if (!admin && me) {
+          try {
+            const [roles, actors]: [Role[], Awaited<ReturnType<typeof listProjectActors>>] = await Promise.all([
+              listRoles(),
+              listProjectActors(p.id),
+            ]);
+            const adminRole = roles.find((r) => /admin/i.test(r.name));
+            if (adminRole) {
+              admin = actors.some((a) => a.role_id === adminRole.id && a.user?.id === me.id);
+            }
+          } catch {
+            /* keep admin=false on failure */
+          }
+        }
+        setCanAdmin(admin);
+      })
       .catch((e) => setError(apiErrorMessage(e)))
       .finally(() => setLoading(false));
-  }, [projectKey]);
+  }, [projectKey, me]);
 
   if (loading) return <SpinnerCenter />;
   if (!project) return <div className="page"><div className="alert alert-error">{error || 'Project not found'}</div></div>;
@@ -58,24 +85,31 @@ export function SettingsPage() {
     <div className="page">
       <div className="breadcrumb">{project.key} / Settings</div>
       <div className="page-header">
-        <h1 className="page-title">{project.name} settings</h1>
+        <div>
+          <h1 className="page-title">{project.name} settings</h1>
+          <div className="page-subtitle">
+            {canAdmin
+              ? 'You can manage this project.'
+              : 'You can view these settings. Some actions require a project admin.'}
+          </div>
+        </div>
       </div>
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="tabs">
-        {(['details', 'members', 'components', 'versions', 'permissions', 'jira sync'] as Tab[]).map((t) => (
+        {TABS.map((t) => (
           <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)} style={{ textTransform: 'capitalize' }}>
             {t}
           </button>
         ))}
       </div>
 
-      {tab === 'details' && <DetailsTab project={project} onSaved={setProject} isAdmin={!!me?.is_admin} onDeleted={() => navigate('/projects')} setError={setError} />}
-      {tab === 'members' && <MembersTab projectId={project.id} setError={setError} />}
-      {tab === 'components' && <ComponentsTab projectId={project.id} setError={setError} />}
-      {tab === 'versions' && <VersionsTab projectId={project.id} setError={setError} />}
-      {tab === 'permissions' && <PermissionsTab projectId={project.id} setError={setError} />}
-      {tab === 'jira sync' && <JiraSyncTab projectId={project.id} isAdmin={!!me?.is_admin} setError={setError} />}
+      {tab === 'details' && <DetailsTab project={project} onSaved={setProject} canAdmin={canAdmin} onDeleted={() => navigate('/projects')} setError={setError} />}
+      {tab === 'people' && <PeopleTab projectId={project.id} canAdmin={canAdmin} setError={setError} onGoToPermissions={() => setTab('permissions')} />}
+      {tab === 'permissions' && <PermissionsTab project={project} canAdmin={canAdmin} setError={setError} onSchemeChanged={() => reload()} />}
+      {tab === 'components' && <ComponentsTab projectId={project.id} canAdmin={canAdmin} setError={setError} />}
+      {tab === 'versions' && <VersionsTab projectId={project.id} canAdmin={canAdmin} setError={setError} />}
+      {tab === 'jira sync' && <JiraSyncTab projectId={project.id} isAdmin={canAdmin} setError={setError} />}
     </div>
   );
 }
@@ -83,13 +117,13 @@ export function SettingsPage() {
 function DetailsTab({
   project,
   onSaved,
-  isAdmin,
+  canAdmin,
   onDeleted,
   setError,
 }: {
   project: ProjectOut;
   onSaved: (p: ProjectOut) => void;
-  isAdmin: boolean;
+  canAdmin: boolean;
   onDeleted: () => void;
   setError: (s: string) => void;
 }) {
@@ -114,7 +148,7 @@ function DetailsTab({
     <div style={{ maxWidth: 560 }}>
       <div className="field">
         <label>Name</label>
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} disabled={!canAdmin} />
       </div>
       <div className="field">
         <label>Key</label>
@@ -122,17 +156,19 @@ function DetailsTab({
       </div>
       <div className="field">
         <label>Description</label>
-        <textarea className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} />
+        <textarea className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} disabled={!canAdmin} />
       </div>
       <div className="field">
         <label>Project lead</label>
-        <UserPicker value={lead} onChange={setLead} allowUnassigned={false} />
+        <UserPicker value={lead} onChange={setLead} allowUnassigned={false} disabled={!canAdmin} />
       </div>
-      <button className="btn btn-primary" onClick={save} disabled={busy}>
-        {busy ? 'Saving…' : 'Save changes'}
-      </button>
+      {canAdmin && (
+        <button className="btn btn-primary" onClick={save} disabled={busy}>
+          {busy ? 'Saving…' : 'Save changes'}
+        </button>
+      )}
 
-      {isAdmin && (
+      {canAdmin && (
         <div className="mt-24" style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <h4 style={{ color: 'var(--red-500)' }}>Danger zone</h4>
           <button
@@ -156,81 +192,7 @@ function DetailsTab({
   );
 }
 
-function MembersTab({ projectId, setError }: { projectId: string; setError: (s: string) => void }) {
-  const [members, setMembers] = useState<ProjectMember[]>([]);
-  const [picked, setPicked] = useState<User | null>(null);
-  const [role, setRole] = useState('member');
-
-  function load() {
-    listMembers(projectId).then(setMembers).catch((e) => setError(apiErrorMessage(e)));
-  }
-  useEffect(load, [projectId]);
-
-  async function add() {
-    if (!picked) return;
-    try {
-      await addMember(projectId, picked.id, role);
-      setPicked(null);
-      load();
-    } catch (e) {
-      setError(apiErrorMessage(e, 'Could not add member'));
-    }
-  }
-
-  return (
-    <div style={{ maxWidth: 640 }}>
-      <div className="row gap-8 mb-16 wrap" style={{ alignItems: 'flex-end' }}>
-        <div className="flex-1" style={{ minWidth: 200 }}>
-          <UserPicker value={picked} onChange={setPicked} allowUnassigned={false} placeholder="Add a person…" />
-        </div>
-        <select className="select" style={{ width: 140 }} value={role} onChange={(e) => setRole(e.target.value)}>
-          <option value="member">Member</option>
-          <option value="admin">Admin</option>
-          <option value="viewer">Viewer</option>
-        </select>
-        <button className="btn btn-primary" onClick={add} disabled={!picked}>
-          Add
-        </button>
-      </div>
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Member</th>
-            <th style={{ width: 120 }}>Role</th>
-            <th style={{ width: 80 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {members.map((m) => (
-            <tr key={m.user.id}>
-              <td>
-                <span className="row gap-8">
-                  <Avatar user={m.user} size={26} /> {m.user.display_name}
-                  <span className="text-xs muted">{m.user.email}</span>
-                </span>
-              </td>
-              <td style={{ textTransform: 'capitalize' }}>{m.role}</td>
-              <td>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    await removeMember(projectId, m.user.id).catch(() => {});
-                    load();
-                  }}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ComponentsTab({ projectId, setError }: { projectId: string; setError: (s: string) => void }) {
+function ComponentsTab({ projectId, canAdmin, setError }: { projectId: string; canAdmin: boolean; setError: (s: string) => void }) {
   const [items, setItems] = useState<Component[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -254,19 +216,21 @@ function ComponentsTab({ projectId, setError }: { projectId: string; setError: (
 
   return (
     <div style={{ maxWidth: 640 }}>
-      <div className="row gap-8 mb-16 wrap">
-        <input className="input flex-1" placeholder="Component name" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 160 }} />
-        <input className="input flex-1" placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} style={{ minWidth: 160 }} />
-        <button className="btn btn-primary" onClick={add} disabled={!name.trim()}>
-          Add
-        </button>
-      </div>
+      {canAdmin && (
+        <div className="row gap-8 mb-16 wrap">
+          <input className="input flex-1" placeholder="Component name" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 160 }} />
+          <input className="input flex-1" placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} style={{ minWidth: 160 }} />
+          <button className="btn btn-primary" onClick={add} disabled={!name.trim()}>
+            Add
+          </button>
+        </div>
+      )}
       <table className="data-table">
         <thead>
           <tr>
             <th>Name</th>
             <th>Description</th>
-            <th style={{ width: 80 }}></th>
+            {canAdmin && <th style={{ width: 60 }}></th>}
           </tr>
         </thead>
         <tbody>
@@ -274,17 +238,19 @@ function ComponentsTab({ projectId, setError }: { projectId: string; setError: (
             <tr key={c.id}>
               <td>{c.name}</td>
               <td className="muted">{c.description}</td>
-              <td>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={async () => {
-                    await deleteComponent(projectId, c.id).catch(() => {});
-                    load();
-                  }}
-                >
-                  ×
-                </button>
-              </td>
+              {canAdmin && (
+                <td>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={async () => {
+                      await deleteComponent(projectId, c.id).catch((e) => setError(apiErrorMessage(e)));
+                      load();
+                    }}
+                  >
+                    ×
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -294,7 +260,7 @@ function ComponentsTab({ projectId, setError }: { projectId: string; setError: (
   );
 }
 
-function VersionsTab({ projectId, setError }: { projectId: string; setError: (s: string) => void }) {
+function VersionsTab({ projectId, canAdmin, setError }: { projectId: string; canAdmin: boolean; setError: (s: string) => void }) {
   const [items, setItems] = useState<Version[]>([]);
   const [name, setName] = useState('');
   const [date, setDate] = useState('');
@@ -318,20 +284,22 @@ function VersionsTab({ projectId, setError }: { projectId: string; setError: (s:
 
   return (
     <div style={{ maxWidth: 640 }}>
-      <div className="row gap-8 mb-16 wrap">
-        <input className="input flex-1" placeholder="Version name e.g. 1.0.0" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 160 }} />
-        <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: 160 }} />
-        <button className="btn btn-primary" onClick={add} disabled={!name.trim()}>
-          Add
-        </button>
-      </div>
+      {canAdmin && (
+        <div className="row gap-8 mb-16 wrap">
+          <input className="input flex-1" placeholder="Version name e.g. 1.0.0" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 160 }} />
+          <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: 160 }} />
+          <button className="btn btn-primary" onClick={add} disabled={!name.trim()}>
+            Add
+          </button>
+        </div>
+      )}
       <table className="data-table">
         <thead>
           <tr>
             <th>Name</th>
             <th style={{ width: 130 }}>Release date</th>
             <th style={{ width: 120 }}>Status</th>
-            <th style={{ width: 80 }}></th>
+            {canAdmin && <th style={{ width: 60 }}></th>}
           </tr>
         </thead>
         <tbody>
@@ -341,27 +309,31 @@ function VersionsTab({ projectId, setError }: { projectId: string; setError: (s:
               <td className="muted">{formatDate(v.release_date)}</td>
               <td>
                 <button
-                  className={`status-badge status-${v.released ? 'done' : 'todo'} pointer`}
+                  className={`status-badge status-${v.released ? 'done' : 'todo'} ${canAdmin ? 'pointer' : ''}`}
                   style={{ border: 'none' }}
+                  disabled={!canAdmin}
                   onClick={async () => {
-                    await updateVersion(projectId, v.id, { released: !v.released }).catch(() => {});
+                    if (!canAdmin) return;
+                    await updateVersion(projectId, v.id, { released: !v.released }).catch((e) => setError(apiErrorMessage(e)));
                     load();
                   }}
                 >
                   {v.released ? 'Released' : 'Unreleased'}
                 </button>
               </td>
-              <td>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={async () => {
-                    await deleteVersion(projectId, v.id).catch(() => {});
-                    load();
-                  }}
-                >
-                  ×
-                </button>
-              </td>
+              {canAdmin && (
+                <td>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={async () => {
+                      await deleteVersion(projectId, v.id).catch((e) => setError(apiErrorMessage(e)));
+                      load();
+                    }}
+                  >
+                    ×
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

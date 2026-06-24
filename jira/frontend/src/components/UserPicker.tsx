@@ -9,9 +9,10 @@ interface Props {
   onChange: (user: User | null) => void;
   placeholder?: string;
   allowUnassigned?: boolean;
+  disabled?: boolean;
 }
 
-export function UserPicker({ value, onChange, placeholder = 'Search people…', allowUnassigned = true }: Props) {
+export function UserPicker({ value, onChange, placeholder = 'Search people…', allowUnassigned = true, disabled = false }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<User[]>([]);
@@ -42,7 +43,7 @@ export function UserPicker({ value, onChange, placeholder = 'Search people…', 
 
   return (
     <div className="autocomplete" ref={ref}>
-      <button type="button" className="btn btn-block" style={{ justifyContent: 'flex-start' }} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="btn btn-block" style={{ justifyContent: 'flex-start' }} disabled={disabled} onClick={() => setOpen((o) => !o)}>
         {value ? (
           <span className="row gap-8">
             <Avatar user={value} size={20} />

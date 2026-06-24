@@ -58,10 +58,17 @@ class ProjectBrief(ORMModel):
     avatar_color: str
 
 
+class PermissionSchemeRef(ORMModel):
+    id: int
+    name: str
+
+
 class ProjectOut(ProjectBrief):
     description: str | None = None
     lead: UserBrief | None = None
     is_archived: bool = False
+    permission_scheme_id: int | None = None
+    permission_scheme: PermissionSchemeRef | None = None
     components: list[ComponentOut] = []
     versions: list[VersionOut] = []
 

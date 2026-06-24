@@ -85,6 +85,8 @@ export interface ProjectOut extends ProjectBrief {
   lead?: User | null;
   components: Component[];
   versions: Version[];
+  permission_scheme_id?: number | string | null;
+  permission_scheme?: { id: number | string; name: string } | null;
 }
 
 export interface IssueRefType {
@@ -583,4 +585,64 @@ export interface AuthSettings {
   access_token_minutes: number | null;
   refresh_token_minutes: number | null;
   registration_allowed_domains: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Analytics / Insights
+// ---------------------------------------------------------------------------
+
+export interface CountItem {
+  label: string;
+  count: number;
+  category?: StatusCategory | null;
+  color?: string | null;
+}
+
+export interface ProjectStatRow {
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  avatar_color?: string | null;
+  total_issues: number;
+  open_issues: number;
+  closed_issues: number;
+  resolution_rate: number;
+  avg_velocity_points: number;
+}
+
+export interface OverviewStats {
+  scope: 'all' | 'mine';
+  total_projects: number;
+  total_issues: number;
+  open_issues: number;
+  closed_issues: number;
+  resolution_rate: number;
+  by_status: CountItem[];
+  by_type: CountItem[];
+  projects: ProjectStatRow[];
+}
+
+export interface VelocityPoint {
+  sprint_id: string;
+  sprint_name: string;
+  committed_points: number;
+  completed_points: number;
+  completed_issues: number;
+}
+
+export interface ProjectStats {
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  total_issues: number;
+  open_issues: number;
+  in_progress_issues: number;
+  closed_issues: number;
+  resolution_rate: number;
+  by_status: CountItem[];
+  by_type: CountItem[];
+  by_priority: CountItem[];
+  velocity: VelocityPoint[];
+  avg_velocity_points: number;
+  avg_velocity_issues: number;
 }

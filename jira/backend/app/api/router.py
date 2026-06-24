@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     admin,
     agile,
+    analytics,
     auth,
     groups,
     issues,
@@ -41,3 +42,4 @@ api_router.include_router(groups.router, prefix="/groups", tags=["groups"])
 api_router.include_router(roles.router, prefix="/roles", tags=["roles"])
 api_router.include_router(permschemes.router, prefix="/permission-schemes", tags=["permission-schemes"])
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
+api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])

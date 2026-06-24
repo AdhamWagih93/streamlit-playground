@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ProjectBrief, User } from '../types';
+import { ProjectBrief, User, OverviewStats } from '../types';
 import { listProjects, createProject } from '../api/projects';
+import { getMyOverview } from '../api/analytics';
 import { useAuth } from '../store/auth';
 import { Modal } from '../components/Modal';
 import { UserPicker } from '../components/UserPicker';
 import { SpinnerCenter } from '../components/Spinner';
 import { EmptyState } from '../components/EmptyState';
+import { StatCard } from '../components/charts/StatCard';
 import { apiErrorMessage } from '../api/client';
 
 const COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
@@ -22,6 +24,7 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectBrief[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [my, setMy] = useState<OverviewStats | null>(null);
 
   function load() {
     setLoading(true);
@@ -31,6 +34,13 @@ export function ProjectsPage() {
   }
 
   useEffect(load, []);
+  useEffect(() => {
+    getMyOverview().then(setMy).catch(() => setMy(null));
+  }, []);
+
+  const topProjects = my
+    ? [...my.projects].sort((a, b) => b.total_issues - a.total_issues).slice(0, 4)
+    : [];
 
   return (
     <div className="page">
@@ -45,6 +55,29 @@ export function ProjectsPage() {
           </button>
         )}
       </div>
+
+      {my && my.total_projects > 0 && (
+        <div className="my-insights">
+          <div className="insights-stats">
+            <StatCard label="Your projects" value={my.total_projects} accent="indigo" />
+            <StatCard label="Issues" value={my.total_issues} accent="slate" />
+            <StatCard label="Open" value={my.open_issues} accent="amber" />
+            <StatCard label="Resolution rate" value={`${Math.round((my.resolution_rate || 0) * 100)}%`} accent="green" />
+          </div>
+          {topProjects.length > 0 && (
+            <div className="my-insights-top">
+              <span className="my-insights-top-label">Most active:</span>
+              {topProjects.map((p) => (
+                <Link key={p.project_id} to={`/projects/${p.project_key}/insights`} className="my-insights-chip">
+                  <span className="color-dot" style={{ background: colorFor(p.project_key, p.avatar_color) }} />
+                  {p.project_key}
+                  <span className="muted">{p.total_issues}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <SpinnerCenter />

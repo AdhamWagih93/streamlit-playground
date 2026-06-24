@@ -15,6 +15,8 @@ from app.models import (
     User,
     Version,
 )
+from app.services import permission_keys as P
+from app.services.permissions import has_project_permission, is_site_admin
 from app.schemas.common import Message
 from app.schemas.project import (
     ComponentIn,
@@ -47,6 +49,16 @@ def _resolve_project(db: Session, key_or_id: str | int) -> Project:
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
     return project
+
+
+def _require_project_admin(db: Session, user: User, project: Project) -> None:
+    """Allow site admins or holders of ADMINISTER_PROJECTS on this project."""
+    if is_site_admin(db, user) or has_project_permission(db, user, project, P.ADMINISTER_PROJECTS):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Project administrator privileges required",
+    )
 
 
 # --- Projects --------------------------------------------------------------
@@ -119,13 +131,14 @@ def update_project(
     project_id: int,
     payload: ProjectUpdate,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Project:
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    _require_project_admin(db, user, project)
     data = payload.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(project, field, value)
@@ -179,13 +192,14 @@ def add_member(
     project_id: int,
     payload: MemberIn,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> ProjectMember:
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    _require_project_admin(db, user, project)
     if db.get(User, payload.user_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -214,8 +228,12 @@ def remove_member(
     project_id: int,
     user_id: int,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Message:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    _require_project_admin(db, user, project)
     member = db.scalars(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
@@ -257,13 +275,14 @@ def create_component(
     project_id: int,
     payload: ComponentIn,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Component:
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    _require_project_admin(db, user, project)
     component = Component(
         project_id=project_id,
         name=payload.name,
@@ -284,8 +303,9 @@ def update_component(
     cid: int,
     payload: ComponentIn,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Component:
+    _require_project_admin(db, user, _resolve_project(db, project_id))
     component = db.scalars(
         select(Component).where(
             Component.id == cid, Component.project_id == project_id
@@ -311,8 +331,9 @@ def delete_component(
     project_id: int,
     cid: int,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Message:
+    _require_project_admin(db, user, _resolve_project(db, project_id))
     component = db.scalars(
         select(Component).where(
             Component.id == cid, Component.project_id == project_id
@@ -353,13 +374,14 @@ def create_version(
     project_id: int,
     payload: VersionIn,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Version:
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    _require_project_admin(db, user, project)
     version = Version(
         project_id=project_id,
         name=payload.name,
@@ -380,8 +402,9 @@ def update_version(
     vid: int,
     payload: VersionIn,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Version:
+    _require_project_admin(db, user, _resolve_project(db, project_id))
     version = db.scalars(
         select(Version).where(
             Version.id == vid, Version.project_id == project_id
@@ -407,8 +430,9 @@ def delete_version(
     project_id: int,
     vid: int,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    user: User = Depends(get_current_user),
 ) -> Message:
+    _require_project_admin(db, user, _resolve_project(db, project_id))
     version = db.scalars(
         select(Version).where(
             Version.id == vid, Version.project_id == project_id

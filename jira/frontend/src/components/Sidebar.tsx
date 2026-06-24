@@ -42,6 +42,9 @@ export function Sidebar() {
               <span style={{ width: 26, textAlign: 'center' }}>📚</span> Backlog
             </NavLink>
           )}
+          <NavLink to={`/projects/${active.key}/insights`} className="nav-item">
+            <span style={{ width: 26, textAlign: 'center' }}>📊</span> Insights
+          </NavLink>
           <NavLink to={`/projects/${active.key}/settings`} className="nav-item">
             <span style={{ width: 26, textAlign: 'center' }}>⚙️</span> Settings
           </NavLink>

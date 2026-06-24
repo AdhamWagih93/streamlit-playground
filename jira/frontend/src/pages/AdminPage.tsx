@@ -1,5 +1,6 @@
 import { Navigate, NavLink, Routes, Route } from 'react-router-dom';
 import { useAuth } from '../store/auth';
+import { Insights } from './admin/Insights';
 import { MailSettings } from './admin/MailSettings';
 import { AuthSettings } from './admin/AuthSettings';
 import { JiraConnections } from './admin/JiraConnections';
@@ -9,10 +10,11 @@ import { GlobalPermissions } from './admin/GlobalPermissions';
 import { PermissionSchemes } from './admin/PermissionSchemes';
 
 const SECTIONS: { to: string; label: string }[] = [
-  { to: 'mail', label: 'General / Mail' },
+  { to: 'insights', label: 'Insights' },
   { to: 'auth', label: 'Authentication' },
-  { to: 'jira-connections', label: 'Jira Connections' },
+  { to: 'mail', label: 'Mail' },
   { to: 'identity-providers', label: 'Identity Providers' },
+  { to: 'jira-connections', label: 'Jira Connections' },
   { to: 'groups', label: 'Groups' },
   { to: 'global-permissions', label: 'Global Permissions' },
   { to: 'permission-schemes', label: 'Permission Schemes' },
@@ -26,11 +28,18 @@ export function AdminPage() {
     <div className="page">
       <div className="breadcrumb">Administration</div>
       <div className="page-header">
-        <h1 className="page-title">Site administration</h1>
+        <div>
+          <h1 className="page-title">Site administration</h1>
+          <div className="page-subtitle">Instance-wide settings — visible to site admins only.</div>
+        </div>
       </div>
 
       <div className="admin-layout">
         <nav className="admin-subnav">
+          <div className="admin-subnav-group">
+            <div className="admin-subnav-heading">GLOBAL CONFIGURATION</div>
+            <div className="admin-subnav-subtitle">Instance-wide settings — apply to every project.</div>
+          </div>
           {SECTIONS.map((s) => (
             <NavLink key={s.to} to={s.to} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
               {s.label}
@@ -40,7 +49,8 @@ export function AdminPage() {
 
         <div className="admin-main">
           <Routes>
-            <Route index element={<Navigate to="mail" replace />} />
+            <Route index element={<Navigate to="insights" replace />} />
+            <Route path="insights" element={<Insights />} />
             <Route path="mail" element={<MailSettings />} />
             <Route path="auth" element={<AuthSettings />} />
             <Route path="jira-connections" element={<JiraConnections />} />

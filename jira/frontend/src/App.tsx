@@ -9,6 +9,7 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { BoardPage } from './pages/BoardPage';
 import { BacklogPage } from './pages/BacklogPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { ProjectInsightsPage } from './pages/ProjectInsightsPage';
 import { SearchPage } from './pages/SearchPage';
 import { IssueDetailPage } from './pages/IssueDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/projects/:projectKey/board" element={<BoardPage />} />
         <Route path="/projects/:projectKey/backlog" element={<BacklogPage />} />
+        <Route path="/projects/:projectKey/insights" element={<ProjectInsightsPage />} />
         <Route path="/projects/:projectKey/settings" element={<SettingsPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/browse/:issueKey" element={<IssueDetailPage />} />

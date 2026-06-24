@@ -77,6 +77,11 @@ export function TopBar() {
                 Saved filters
               </button>
               {user?.is_admin && (
+                <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/admin/insights'); }}>
+                  Insights
+                </button>
+              )}
+              {user?.is_admin && (
                 <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/admin'); }}>
                   Administration
                 </button>
