@@ -26180,6 +26180,63 @@ def _fetch_users_aggregate(
                 )
                 return False
 
+        def _attempt_runtime(bare_field: str) -> bool:
+            """Aggregate on a ``text`` identity field that has NO keyword
+            subfield, by defining a runtime keyword field that reads the value
+            straight from ``_source``. This is the ES-native fix for
+            "Fielddata is disabled on [field]" — text fields can't be
+            aggregated via doc-values, but a runtime field can emit the source
+            string and the composite agg buckets on that. Identity-only (no
+            team source — team for these indices is also text and comes from
+            LDAP rosters anyway)."""
+            try:
+                _rt_script = (
+                    f"def v = params._source['{bare_field}']; "
+                    "if (v != null) { emit(v.toString()); }"
+                )
+                r = es_search(
+                    IDX[index_key],
+                    {
+                        "query": {"bool": {"filter": list(filters)
+                                           + [range_filter(time_field, start, end)]}},
+                        "size": 0,
+                        "runtime_mappings": {
+                            "_rt_ident": {"type": "keyword",
+                                          "script": {"source": _rt_script}},
+                        },
+                        "aggs": {"by_user": {"composite": {
+                            "size": _users_term_size(IDX[index_key], bare_field),
+                            "sources": [{"id": {"terms": {"field": "_rt_ident",
+                                                          "missing_bucket": True}}}],
+                        }}},
+                    },
+                )
+                if r.get("_error"):
+                    _failures.append(
+                        f"{bare_field}(runtime): ES error: {str(r['_error'])[:120]}")
+                    return False
+                _buckets = r.get("aggregations", {}).get("by_user", {}).get("buckets", [])
+                if not _buckets:
+                    return False
+                _local_any = False
+                for b in _buckets:
+                    ident_raw = ((b.get("key") or {}).get("id") or "").strip()
+                    if not ident_raw:
+                        continue
+                    ident = (ident_transform(ident_raw) if ident_transform
+                             else ident_raw)
+                    if not ident:
+                        continue
+                    email = name_to_email.get(ident.lower(), "")
+                    u = _ensure(email, ident)
+                    u[ctr_attr] += int(b.get("doc_count", 0))
+                    _local_any = True
+                return _local_any
+            except Exception as e:
+                _failures.append(
+                    f"{bare_field}(runtime): {type(e).__name__}: {str(e)[:80]}")
+                return False
+
         for ident_field in identity_fields:
             # First pass: with team attribution (only when caller supplied
             # a team_field; otherwise this matches the legacy no-team path).
@@ -26189,6 +26246,20 @@ def _fetch_users_aggregate(
             # (covers indices that lack a keyword team subfield).
             if _attempt(ident_field, attach_team=False):
                 _any_data = True
+        # Final fallback: every doc-value attempt failed (typically a text
+        # identity field with no keyword subfield → "Fielddata is disabled").
+        # Aggregate via a _source-backed runtime keyword field instead.
+        if not _any_data:
+            _bare_seen: set[str] = set()
+            for ident_field in identity_fields:
+                _bare = (ident_field[:-8] if ident_field.endswith(".keyword")
+                         else ident_field)
+                if _bare in _bare_seen:
+                    continue
+                _bare_seen.add(_bare)
+                if _attempt_runtime(_bare):
+                    _any_data = True
+                    break  # one working identity field is enough
         if not _any_data and _failures:
             errors[f"{index_key}_{ctr_attr}"] = (
                 f"all candidate fields failed: {' · '.join(_failures[:4])}"
