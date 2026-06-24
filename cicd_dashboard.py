@@ -5164,6 +5164,36 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-amber);
 }
 .tm-sync-drift b { color: inherit; }
+/* All-companies popover table */
+.tm-co-intro {
+    font-size: 0.74rem;
+    color: var(--cc-text-dim);
+    line-height: 1.45;
+    margin-bottom: 8px;
+}
+.tm-co-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+.tm-co-table th {
+    text-align: left;
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cc-text-mute);
+    font-weight: 700;
+    padding: 2px 8px 4px 8px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.tm-co-table td { padding: 3px 8px; border-bottom: 1px dashed var(--cc-border); }
+.tm-co-name { color: var(--cc-text); font-weight: 600; }
+.tm-co-n {
+    font-family: var(--cc-mono);
+    color: var(--cc-accent);
+    text-align: right;
+    white-space: nowrap;
+}
 .st-key-cc_inv_src_pref [role="radiogroup"] {
     gap: 14px !important;
 }
@@ -5764,6 +5794,60 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     line-height: 1.45;
     word-break: break-word;
 }
+/* Git provenance — last-commit line + latest-3 commit log inside the card */
+.ih-card-gitsync {
+    margin-top: 7px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--cc-border);
+    font-size: 0.7rem;
+    color: var(--cc-text-dim);
+}
+.ih-card-gitsync b { color: var(--cc-text); font-family: var(--cc-mono); }
+.ih-git-rel { color: var(--cc-text-mute); }
+.ih-git-branch {
+    font-family: var(--cc-mono);
+    font-size: 0.58rem;
+    color: var(--cc-accent);
+    background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+    border-radius: 3px;
+    padding: 0 5px;
+    margin-left: 4px;
+}
+.ih-card-commits {
+    margin-top: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ih-commit {
+    border-left: 2px solid var(--cc-border);
+    padding-left: 7px;
+}
+.ih-commit-msg {
+    font-size: 0.7rem;
+    color: var(--cc-text);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.ih-commit-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: baseline;
+    margin-top: 1px;
+    font-size: 0.6rem;
+    color: var(--cc-text-mute);
+}
+.ih-commit-sha {
+    font-family: var(--cc-mono);
+    color: var(--cc-accent);
+}
+.ih-commit-author { font-weight: 600; color: var(--cc-text-dim); }
+.ih-commit-when { font-family: var(--cc-mono); margin-left: auto; }
 
 /* ── JENKINS PANEL ─────────────────────────────────────────────────────────
    Gate (idle), connection header, pipeline cards, status pills, params.
@@ -13967,6 +14051,9 @@ def _integrations_health() -> list[dict]:
                         f"clone path: {_row['path']} · "
                         f"branch: {_row['branch']} · {_row['msg']}"
                     ),
+                    "git_last_when": _row.get("last_when", ""),
+                    "git_commits":   _row.get("commits", []),
+                    "git_branch":    _row.get("branch", ""),
                 })
             else:
                 out.append({
@@ -13974,6 +14061,9 @@ def _integrations_health() -> list[dict]:
                     "state": "down",
                     "detail": "sync failed",
                     "tip": _row["msg"] or f"{_name} sync failed.",
+                    "git_last_when": "",
+                    "git_commits":   [],
+                    "git_branch":    _row.get("branch", ""),
                 })
 
     # 3. Vault — single status across all known paths.
@@ -14274,6 +14364,43 @@ def _render_integrations_strip() -> None:
     # Expanded detail — one card per integration with the full tip.
     card_html: list[str] = []
     for h in health:
+        # Git repos carry last-sync + latest-3-commit provenance — render a
+        # compact log block beneath the tip so admins can see freshness and
+        # what changed without leaving the page.
+        _git_block = ""
+        _g_commits = h.get("git_commits") or []
+        _g_last = h.get("git_last_when") or ""
+        if _g_last or _g_commits:
+            _last_abs = fmt_dt(_g_last, "%Y-%m-%d %H:%M") or "—"
+            _last_rel = _relative_age(_g_last) if _g_last else ""
+            _br = h.get("git_branch") or ""
+            _sync_line = (
+                f'<div class="ih-card-gitsync">last commit · '
+                f'<b>{html.escape(_last_abs)}</b>'
+                + (f' <span class="ih-git-rel">({html.escape(_last_rel)})</span>'
+                   if _last_rel else '')
+                + (f' <span class="ih-git-branch">{html.escape(_br)}</span>'
+                   if _br else '')
+                + '</div>'
+            )
+            _rows_html = "".join(
+                '<div class="ih-commit">'
+                f'<div class="ih-commit-msg">{html.escape(_c.get("subject") or "—")}</div>'
+                '<div class="ih-commit-meta">'
+                f'<span class="ih-commit-sha">{html.escape(_c.get("sha") or "")}</span>'
+                f'<span class="ih-commit-author">{html.escape(_c.get("author") or "—")}</span>'
+                f'<span class="ih-commit-when">'
+                f'{html.escape(fmt_dt(_c.get("when"), "%Y-%m-%d %H:%M") or _c.get("when") or "")}'
+                '</span>'
+                '</div>'
+                '</div>'
+                for _c in _g_commits
+            )
+            _git_block = (
+                _sync_line
+                + (f'<div class="ih-card-commits">{_rows_html}</div>'
+                   if _rows_html else '')
+            )
         card_html.append(
             f'<div class="ih-card is-{h["state"]}">'
             f'  <div class="ih-card-head">'
@@ -14284,6 +14411,7 @@ def _render_integrations_strip() -> None:
             f'  </div>'
             f'  <div class="ih-card-detail">{html.escape(h["detail"])}</div>'
             f'  <div class="ih-card-tip">{html.escape(h["tip"])}</div>'
+            f'  {_git_block}'
             f'</div>'
         )
 
@@ -14663,11 +14791,18 @@ def _render_teams_and_members_view() -> None:
         for _u in _users_list
         if (_u.get("ldap_department") or "").strip()
     })
-    _companies = sorted({
-        (_u.get("ldap_company") or "").strip()
-        for _u in _users_list
-        if (_u.get("ldap_company") or "").strip()
-    })
+    # Companies merged CASE-INSENSITIVELY ("Acme" / "acme" / "ACME" are one
+    # company) — keep the first-seen casing for display and tally members per
+    # canonical company so the popover can show counts.
+    _company_map: dict[str, dict] = {}
+    for _u in _users_list:
+        _co = (_u.get("ldap_company") or "").strip()
+        if not _co:
+            continue
+        _slot = _company_map.setdefault(_co.lower(), {"display": _co, "count": 0})
+        _slot["count"] += 1
+    _companies = sorted(
+        (_d["display"] for _d in _company_map.values()), key=str.lower)
     _roles_seen = sorted({r for rs in _team_roles.values() for r in rs})
 
     st.markdown(
@@ -14721,6 +14856,27 @@ def _render_teams_and_members_view() -> None:
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    # ── All-companies view (case-insensitive) ──────────────────────────────
+    # A flat list of every distinct company (merged case-insensitively) with
+    # its member count — the "show all company names" view.
+    if _companies:
+        with st.popover(f"🏢 All companies · {len(_companies)}",
+                        use_container_width=False):
+            _co_rows = "".join(
+                f'<tr><td class="tm-co-name">{html.escape(_d["display"])}</td>'
+                f'<td class="tm-co-n">{_d["count"]:,}</td></tr>'
+                for _d in sorted(_company_map.values(),
+                                 key=lambda d: (-d["count"], d["display"].lower()))
+            )
+            st.markdown(
+                '<div class="tm-co-intro">Distinct LDAP companies across the '
+                'in-scope members, merged case-insensitively. Member count per '
+                'company.</div>'
+                f'<table class="tm-co-table"><thead><tr><th>Company</th>'
+                f'<th>Members</th></tr></thead><tbody>{_co_rows}</tbody></table>',
+                unsafe_allow_html=True,
+            )
 
     if not _ldap_users_db:
         st.markdown(
@@ -15805,7 +15961,7 @@ def _render_teams_and_members_view() -> None:
             '</div>',
             unsafe_allow_html=True,
         )
-        _f1, _f2, _f3, _f4 = st.columns([2, 2, 2, 4])
+        _f1, _f2, _f3, _f5, _f4 = st.columns([2, 2, 2, 2, 4])
         with _f1:
             _role_pick = st.selectbox(
                 "Role", options=["— any role —"] + _roles_seen,
@@ -15823,6 +15979,11 @@ def _render_teams_and_members_view() -> None:
             _dept_pick = st.selectbox(
                 "Department", options=["— any department —"] + _depts,
                 key="tm_dept_filter_v1", label_visibility="visible",
+            )
+        with _f5:
+            _company_pick = st.selectbox(
+                "Company", options=["— any company —"] + _companies,
+                key="tm_company_filter_v1", label_visibility="visible",
             )
         with _f4:
             _search = st.text_input(
@@ -15842,6 +16003,13 @@ def _render_teams_and_members_view() -> None:
             _filtered = [
                 u for u in _filtered
                 if (u.get("ldap_department") or "").strip() == _dept_pick
+            ]
+        if _company_pick and _company_pick != "— any company —":
+            # Case-insensitive match so "Acme" matches an "acme" LDAP value.
+            _co_key = _company_pick.strip().lower()
+            _filtered = [
+                u for u in _filtered
+                if (u.get("ldap_company") or "").strip().lower() == _co_key
             ]
         if _search:
             def _haystack(u: dict) -> str:
@@ -20704,6 +20872,50 @@ def _run_git(
     return proc
 
 
+def _git_recent_commits(repo_path: str, n: int = 3) -> dict:
+    """Read the last-commit timestamp + the latest *n* commits from a cloned
+    repo's local HEAD. Pure local reads (no network) so it's cheap to call on
+    every integrations render.
+
+    Returns ``{"last_when": iso-str, "commits": [{"sha", "subject", "author",
+    "when"}]}`` — empty when the repo isn't checked out or git fails.
+    The git log uses an ASCII unit-separator (\\x1f) between fields and a
+    record-separator (\\x1e) between commits so subjects with any punctuation
+    parse cleanly."""
+    empty = {"last_when": "", "commits": []}
+    if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
+        return empty
+    # %cI = committer date, strict ISO-8601; %an author name; %s subject.
+    _fmt = "%H\x1f%cI\x1f%an\x1f%s\x1e"
+    try:
+        proc = _run_git(
+            "log", f"-{max(1, n)}", f"--pretty=format:{_fmt}",
+            cwd=repo_path, inject_auth=False,
+        )
+    except Exception:
+        return empty
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return empty
+    commits: list[dict] = []
+    for _rec in proc.stdout.split("\x1e"):
+        _rec = _rec.strip("\n")
+        if not _rec.strip():
+            continue
+        _parts = _rec.split("\x1f")
+        if len(_parts) < 4:
+            continue
+        commits.append({
+            "sha":     _parts[0][:8],
+            "when":    _parts[1].strip(),
+            "author":  _parts[2].strip(),
+            "subject": _parts[3].strip(),
+        })
+    return {
+        "last_when": commits[0]["when"] if commits else "",
+        "commits": commits,
+    }
+
+
 def _git_set_author(repo_path: str, username: str, email: str) -> None:
     """Apply the current dashboard operator's identity to the local repo's
     git config so future write-back commits are authored as them, not the
@@ -21084,14 +21296,20 @@ def _mirror_repo_status_all() -> list[dict]:
             ok, head, msg = _ensure_inventory_repo(host)
         else:
             ok, head, msg = _ensure_mirror_repo(host, _name, _branch)
+        _path = _mirror_repo_path(_name)
+        # Last-sync + latest-3-commit provenance from the local clone (only
+        # meaningful once the clone succeeded; pure local reads).
+        _log = _git_recent_commits(_path, 3) if ok else {"last_when": "", "commits": []}
         out.append({
             "name":   _name,
             "branch": _branch,
-            "path":   _mirror_repo_path(_name),
+            "path":   _path,
             "ok":     ok,
             "head":   head,
             "msg":    msg,
             "url":    _mirror_repo_url(host, _name),
+            "last_when": _log["last_when"],
+            "commits":   _log["commits"],
         })
     return out
 
