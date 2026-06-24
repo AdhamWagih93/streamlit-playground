@@ -29,9 +29,15 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Migrate Jira projects/issues into Trackly's Postgres database.",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose (DEBUG) logging.")
+    parser.add_argument(
+        "--connection", default=None,
+        help="Name or id of a Jira connection configured in the admin UI. "
+             "If omitted, the default UI connection is used (env vars are a fallback).",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("test-connection", help="Verify credentials by calling /myself.")
+    sub.add_parser("list-connections", help="List Jira connections configured in the UI.")
     sub.add_parser("list-projects", help="List projects visible to the configured account.")
 
     run_p = sub.add_parser("run", help="Import projects and issues.")
@@ -46,10 +52,68 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_config() -> MigrationConfig:
-    config = MigrationConfig.from_env()
+def _resolve_connection_row(selector: str | None):
+    """Load a JiraConnection from the DB by id, name, or (None) the default."""
+    from sqlalchemy import select
+    from app.core.database import SessionLocal
+    from app.models.identity import JiraConnection
+
+    with SessionLocal() as db:
+        if selector is not None:
+            if selector.isdigit():
+                row = db.get(JiraConnection, int(selector))
+            else:
+                row = db.scalars(
+                    select(JiraConnection).where(JiraConnection.name == selector)
+                ).first()
+        else:
+            row = db.scalars(
+                select(JiraConnection)
+                .where(JiraConnection.enabled.is_(True))
+                .order_by(JiraConnection.is_default.desc(), JiraConnection.id.asc())
+            ).first()
+        if row is None:
+            return None
+        # Detach a plain config so the session can close.
+        return MigrationConfig.from_connection(row)
+
+
+def _load_config(selector: str | None) -> MigrationConfig:
+    """Prefer a UI-configured Jira connection; fall back to env vars."""
+    config = None
+    try:
+        config = _resolve_connection_row(selector)
+    except Exception as exc:  # DB not reachable, etc. — fall back to env.
+        logging.getLogger("trackly.migration").debug("DB connection lookup failed: %s", exc)
+    if config is None:
+        if selector is not None:
+            raise ValueError(
+                f"No Jira connection named/id '{selector}' found. Configure one in the admin UI."
+            )
+        config = MigrationConfig.from_env()
     config.validate()
     return config
+
+
+def cmd_list_connections() -> int:
+    from sqlalchemy import select
+    from app.core.database import SessionLocal
+    from app.models.identity import JiraConnection
+
+    with SessionLocal() as db:
+        rows = db.scalars(select(JiraConnection).order_by(JiraConnection.id.asc())).all()
+    if not rows:
+        print("No Jira connections configured. Add one in the admin UI (Administration -> Jira Connections).")
+        return 0
+    for r in rows:
+        flags = []
+        if r.is_default:
+            flags.append("default")
+        if not r.enabled:
+            flags.append("disabled")
+        suffix = f" [{', '.join(flags)}]" if flags else ""
+        print(f"  #{r.id}  {r.name}  ->  {r.base_url}  ({r.auth_mode}){suffix}")
+    return 0
 
 
 def cmd_test_connection(config: MigrationConfig) -> int:
@@ -119,8 +183,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _setup_logging(getattr(args, "verbose", False))
 
+    # list-connections doesn't need a resolved Jira config.
+    if args.command == "list-connections":
+        return cmd_list_connections()
+
     try:
-        config = _load_config()
+        config = _load_config(getattr(args, "connection", None))
     except ValueError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2

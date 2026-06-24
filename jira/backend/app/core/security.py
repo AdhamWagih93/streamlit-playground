@@ -36,12 +36,12 @@ def _create_token(subject: str | int, minutes: int, token_type: str, extra: dict
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 
-def create_access_token(subject: str | int, extra: dict | None = None) -> str:
-    return _create_token(subject, settings.access_token_expire_minutes, "access", extra)
+def create_access_token(subject: str | int, extra: dict | None = None, minutes: int | None = None) -> str:
+    return _create_token(subject, minutes or settings.access_token_expire_minutes, "access", extra)
 
 
-def create_refresh_token(subject: str | int) -> str:
-    return _create_token(subject, settings.refresh_token_expire_minutes, "refresh")
+def create_refresh_token(subject: str | int, minutes: int | None = None) -> str:
+    return _create_token(subject, minutes or settings.refresh_token_expire_minutes, "refresh")
 
 
 def decode_token(token: str) -> dict[str, Any]:

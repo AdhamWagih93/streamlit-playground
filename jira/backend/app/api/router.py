@@ -8,13 +8,19 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.routes import (
+    admin,
     agile,
     auth,
+    groups,
     issues,
     meta,
     notifications,
+    notify_prefs,
+    permschemes,
     projects,
+    roles,
     search,
+    sync,
     users,
 )
 
@@ -27,3 +33,11 @@ api_router.include_router(issues.router, prefix="/issues", tags=["issues"])
 api_router.include_router(agile.router, prefix="/agile", tags=["agile"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+api_router.include_router(
+    notify_prefs.router, prefix="/notification-preferences", tags=["notification-preferences"]
+)
+api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
+api_router.include_router(groups.router, prefix="/groups", tags=["groups"])
+api_router.include_router(roles.router, prefix="/roles", tags=["roles"])
+api_router.include_router(permschemes.router, prefix="/permission-schemes", tags=["permission-schemes"])
+api_router.include_router(sync.router, prefix="/sync", tags=["sync"])

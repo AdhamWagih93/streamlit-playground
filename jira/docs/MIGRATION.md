@@ -1,134 +1,137 @@
 # Jira → Trackly Migration
 
-This tool pulls projects, users, issues, comments and worklogs from a **Jira
-Cloud** (or **Server/Data Center**) instance via its REST API and imports them
-into Trackly's PostgreSQL database.
+Trackly imports projects, users, issues, comments and worklogs from a **Jira
+Cloud** (or **Server/Data Center**) instance via its REST API. There are two
+ways to run it, both driven by the **same UI-configured Jira connections**:
 
-It is **idempotent**: every imported row carries the originating Jira id in an
-`external_id` column (`User.external_id`, `Project.external_id`,
-`Issue.external_id`, `Comment.external_id`), so re-running the migration
-**updates existing rows instead of creating duplicates**. Jira issue keys are
-preserved verbatim (`ENG-123` stays `ENG-123`), which makes a phased cutover
-possible.
+1. **Live, per-project sync (recommended)** — managed entirely in the web UI by
+   project admins. Match a Trackly project to a Jira project by key, then
+   start/pause/resume a **resumable** sync. Also imports issue types, statuses,
+   project details and the **Jira permission scheme**.
+2. **Bulk migrator CLI** — `python -m app.migration.cli`, for an initial bulk
+   import or scripted top-ups across many projects at once.
+
+Both are **idempotent**: every imported row carries the originating Jira id in an
+`external_id` column, so re-running **updates existing rows instead of creating
+duplicates**. Jira issue keys are preserved verbatim (`ENG-123` stays `ENG-123`),
+which makes a phased cutover possible.
+
+---
+
+## 1. Configure a Jira connection (UI, instance admin)
+
+Jira credentials are **not** set via environment variables. An instance
+administrator adds them once, through the interface:
+
+**Administration → Jira Connections → Add connection**
+
+| Field | Notes |
+|-------|-------|
+| Name | A label, e.g. `Prod Jira`. |
+| Base URL | e.g. `https://your-org.atlassian.net` (no trailing slash). |
+| Auth mode | `cloud` (HTTP Basic: email + API token) or `server` (Bearer PAT). |
+| Email | Cloud only — your Atlassian account email. |
+| API token / PAT | Cloud: create at <https://id.atlassian.com/manage-profile/security/api-tokens>. Server/DC: a *Personal Access Token* from your profile. |
+| Verify SSL | Turn off only for self-signed Server/DC certificates. |
+| Default | Mark one connection as the default used when none is specified. |
+
+The token is **encrypted at rest** (via the app's `SECRET_KEY`-derived key) and
+is never returned to the browser. Use the **Test** button to verify
+connectivity, and **Browse projects** to see which Jira projects are visible and
+which already exist locally.
+
+> The same applies to **mail** (Administration → Mail) and **external auth**
+> (Administration → Identity Providers / Authentication) — all UI-managed, no
+> env vars. The only auth-related secret in the environment is `SECRET_KEY`,
+> which signs JWTs and encrypts every stored credential.
+
+---
+
+## 2. Live per-project sync (recommended)
+
+In a project's **Settings → Jira Sync** tab:
+
+1. **Pick a connection** and confirm the matched Jira key (defaults to the
+   Trackly project key) → **Link**.
+2. **Start** the sync. Progress (processed / total) is shown live; you can
+   **Pause** and **Resume** at any time.
+
+What the live sync does:
+
+- Imports issue types, statuses (category-mapped), priorities, project details,
+  components/versions, issues, comments and worklogs.
+- Optionally imports the Jira project's **permission scheme** → a Trackly
+  permission scheme + grants (groups, project roles and special holders are
+  mapped 1:1; the project is pointed at the imported scheme).
+- Is **resumable**: it tracks an `updated >= <watermark>` cursor and a page
+  position, commits every 25 issues, and re-reads its pause flag between
+  batches — so an interrupted or paused run continues where it stopped.
+- Is **idempotent**: issues are upserted by `external_id`, Jira keys/numbers are
+  preserved, and re-running pulls only what changed since the last watermark.
+
+Sync state and a run history are visible in the same tab. Access requires
+`ADMINISTER_PROJECTS` on the project (or site admin).
+
+---
+
+## 3. Bulk migrator CLI
+
+The CLI reads the **same UI-configured connections** from the database (no
+`JIRA_*` env vars). It runs `run_bootstrap()` first, so tables and default
+issue types / statuses / priorities / admin user are created if absent.
 
 The package lives at `backend/app/migration/`:
 
 | File | Responsibility |
 |------|----------------|
-| `config.py` | `MigrationConfig.from_env()` — reads all settings from env vars. |
-| `jira_client.py` | `JiraClient` — thin httpx REST client with pagination + retry/backoff. |
-| `mapper.py` | Pure JSON → model-kwargs transforms (ADF flattening, status/priority mapping). |
+| `config.py` | `MigrationConfig.from_connection()` (DB) / `.from_env()` (fallback). |
+| `jira_client.py` | `JiraClient` — httpx REST client with pagination + retry/backoff. |
+| `mapper.py` | JSON → model-kwargs transforms (ADF flattening, status/priority mapping). |
 | `importer.py` | `Importer` — orchestrates the idempotent upsert into Postgres. |
 | `cli.py` | `python -m app.migration.cli` entry point. |
 
----
+### 3a. Via Docker Compose (uses the UI-configured connection)
 
-## 1. Prerequisites
-
-1. **A Jira account** with read access to the projects you want to migrate.
-2. **An API token** (Jira Cloud) or **Personal Access Token** (Server/DC):
-   - **Cloud:** create one at
-     <https://id.atlassian.com/manage-profile/security/api-tokens>.
-     Auth is HTTP Basic using your **email** + the token.
-   - **Server / Data Center:** create a *Personal Access Token* from your
-     profile → *Personal Access Tokens*. Auth is a **Bearer** token; no email.
-3. **A reachable Trackly Postgres database.** The migration runs
-   `run_bootstrap()` first, so it will create tables and seed the default
-   issue types / statuses / priorities / admin user if they do not yet exist.
-
----
-
-## 2. Environment variables
-
-The migration reads **Jira** settings from the variables below, and the
-**database** connection from Trackly's normal settings
-(`DATABASE_URL`, or the discrete `POSTGRES_*` vars — see `app/core/config.py`).
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `JIRA_BASE_URL` | yes | — | e.g. `https://your-org.atlassian.net` |
-| `JIRA_API_TOKEN` | yes | — | API token (Cloud) or PAT (Server/DC) |
-| `JIRA_EMAIL` | cloud only | — | Atlassian account email (Basic auth) |
-| `JIRA_AUTH_MODE` | no | `cloud` | `cloud` (Basic) or `server` (Bearer PAT) |
-| `JIRA_PROJECT_KEYS` | no | *(all)* | Comma list, e.g. `ENG,OPS`. Empty ⇒ every visible project |
-| `JIRA_JQL` | no | — | Extra JQL AND-ed onto each project's filter |
-| `JIRA_VERIFY_SSL` | no | `true` | Set `false` for self-signed Server/DC certs |
-
-Example `.env` (placeholders — do **not** commit real tokens):
-
-```dotenv
-# --- Jira source ---
-JIRA_BASE_URL=https://your-org.atlassian.net
-JIRA_EMAIL=you@example.com
-JIRA_API_TOKEN=__your_api_token__
-JIRA_AUTH_MODE=cloud
-JIRA_PROJECT_KEYS=ENG,OPS
-JIRA_JQL=
-JIRA_VERIFY_SSL=true
-
-# --- Trackly target DB (same as the app) ---
-DATABASE_URL=postgresql+psycopg://trackly:trackly@db:5432/trackly
-```
-
-For **Server/Data Center** with a PAT:
-
-```dotenv
-JIRA_BASE_URL=https://jira.internal.example.com
-JIRA_AUTH_MODE=server
-JIRA_API_TOKEN=__your_personal_access_token__
-# JIRA_EMAIL is ignored in server mode
-JIRA_VERIFY_SSL=false
-```
-
----
-
-## 3. Running
-
-### 3a. Locally (inside the backend virtualenv)
+The `migrator` service is defined in `docker-compose.yml` behind the `migrate`
+profile, so it never starts with the normal stack. It shares the database (and
+`SECRET_KEY`, to decrypt the stored token):
 
 ```bash
-cd backend
-pip install -r requirements.txt          # provides httpx, sqlalchemy, psycopg…
+# List the Jira connections configured in the UI
+docker compose run --rm migrator list-connections
 
-# 1. Sanity-check credentials
-python -m app.migration.cli test-connection
-
-# 2. See which projects are visible
-python -m app.migration.cli list-projects
-
-# 3. Run the import (scope via flags or env)
-python -m app.migration.cli run --projects ENG
-python -m app.migration.cli run --projects ENG,OPS --jql 'labels = migrate'
-python -m app.migration.cli run --since 2024-01-01      # only recently-updated
-python -m app.migration.cli run                          # every visible project
-```
-
-Add `-v` / `--verbose` for DEBUG logging.
-
-### 3b. Via Docker Compose
-
-Define a one-off `migrator` service in `docker-compose.yml` that reuses the
-backend image and shares the app's env file, e.g.:
-
-```yaml
-  migrator:
-    build: ./backend
-    env_file: .env
-    depends_on:
-      - db
-    entrypoint: ["python", "-m", "app.migration.cli"]
-    profiles: ["tools"]   # don't start with the normal stack
-```
-
-Then run on demand:
-
-```bash
+# Verify the default connection's credentials
 docker compose run --rm migrator test-connection
-docker compose run --rm migrator list-projects
+
+# Verify a specific connection (by name or id)
+docker compose run --rm migrator --connection "Prod Jira" test-connection
+
+# Import (default connection)
 docker compose run --rm migrator run --projects ENG
+docker compose run --rm migrator run --projects ENG,OPS --jql 'labels = migrate'
+docker compose run --rm migrator run --since 2024-01-01      # recently-updated only
+docker compose run --rm migrator run                          # every visible project
+
+# Import using a named connection
+docker compose run --rm migrator --connection "Prod Jira" run --projects ENG
 ```
 
 `--rm` discards the container after each run; the database keeps the data.
+Add `-v` / `--verbose` for DEBUG logging.
+
+### 3b. Locally (inside the backend virtualenv)
+
+```bash
+cd backend
+pip install -r requirements.txt
+python -m app.migration.cli list-connections
+python -m app.migration.cli test-connection
+python -m app.migration.cli run --projects ENG
+```
+
+The CLI resolves the Jira connection in this order: `--connection <name|id>` if
+given, otherwise the **default** enabled connection. (Legacy `JIRA_*` env vars
+are honored only as a fallback when no DB connection exists.)
 
 ---
 
@@ -141,6 +144,7 @@ docker compose run --rm migrator run --projects ENG
 | Issue types | `issue_types` (global) | Upserted by name; `subtask` flag preserved. |
 | Priorities | `priorities` | Upserted by name; rank inferred from the name. |
 | Projects | `projects` | Upserted by `external_id`/key; a default **scrum board** is created if none exists. |
+| Permission scheme *(live sync only)* | `permission_schemes` + `permission_grants` | Holders mapped via the Jira → Trackly holder map; groups/roles auto-created; project pointed at the imported scheme. |
 | Issues | `issues` | Key + number preserved; ADF description flattened to text; labels, estimates, due date, resolution, story points imported. |
 | Parent / Epic links | `issues.parent_id` / `issues.epic_id` | Resolved in a **second pass** after all issues exist (parents may be paged later). |
 | Comments | `comments` | Upserted by `external_id`; body flattened from ADF; author mapped. |
@@ -160,8 +164,9 @@ docker compose run --rm migrator run --projects ENG
 
 - Re-running is safe and incremental — rows are matched by `external_id` (or by
   natural key / email as a fallback) and **updated in place**.
-- Use `--since YYYY-MM-DD` (or `JIRA_JQL`) to limit each pass to recently
-  changed issues for fast top-ups during a migration window.
+- The live sync stores an `updated` watermark per project and only re-pulls
+  issues changed since then. For the CLI, use `--since YYYY-MM-DD` (or `--jql`)
+  to limit each pass to recently changed issues.
 - `project.issue_counter` is advanced to the **highest imported issue number**,
   so issues created natively in Trackly after the migration won't collide with
   preserved Jira keys.
@@ -170,9 +175,8 @@ docker compose run --rm migrator run --projects ENG
 
 Because keys and ids are preserved and re-runs are idempotent, you can:
 
-1. Do an initial bulk import (`run`).
-2. Keep both systems live and re-run `--since <last run>` periodically to sync
-   deltas.
+1. Do an initial bulk import (CLI `run`) or link + start the live sync.
+2. Keep both systems live and re-sync periodically to pull deltas.
 3. Cut over to Trackly; existing `ENG-123` references (links, commits, docs)
    still resolve to the same issue key.
 
@@ -180,18 +184,33 @@ Because keys and ids are preserved and re-runs are idempotent, you can:
 
 ## 7. Limitations
 
-- **Attachments** are *not* downloaded by default. The `attachments` table is
-  left untouched; binaries stay in Jira. (Filenames/metadata are available in
-  the API if you choose to extend the importer.)
+- **Attachments** are *not* downloaded. The `attachments` table is left
+  untouched; binaries stay in Jira. (Filenames/metadata are available in the API
+  if you choose to extend the importer.)
 - **Sprint / board history** is not migrated. A single default scrum board is
   created per project; issues are not assigned to historical sprints, and
   `issue_history` (the change log) is **not** back-filled.
-- **Custom fields** are limited to **Story Points** (auto-detected by field
-  name, with common `customfield_*` id fallbacks) and the **Epic Link**. Other
-  custom fields are ignored.
-- **Issue links** (blocks / relates-to / duplicates) are not imported; only the
-  parent/sub-task and epic hierarchy is.
-- **Components / fix versions** on issues are not imported.
-- User-account state (active/inactive, groups, permissions) is not synced;
-  imported users are created active with a random password and must reset it (or
-  be wired to your SSO).
+- **Custom fields** are limited to **Story Points** (auto-detected by field name)
+  and the **Epic Link**. Other custom fields are ignored.
+- **Issue links**, **components/fix-versions on issues**, voters and watchers are
+  not imported by the CLI importer.
+- The **CLI importer** does not import permission schemes — use the **live
+  per-project sync** for permissions.
+- User-account state (active/inactive) is not synced; imported users are created
+  active with a random password and must reset it (or be wired to your SSO via
+  Administration → Identity Providers).
+
+---
+
+## Appendix: schema changes & data safety
+
+The app persists everything in the PostgreSQL `pgdata` Docker volume; it survives
+`restart` / `up` / `down`. Only `docker compose down -v` (which deletes volumes)
+erases it — avoid that flag unless you intend to wipe.
+
+On startup the app additively reconciles the schema
+(`app/core/schema_sync.py`): new tables are created and new columns are added to
+existing tables (as nullable), so version upgrades that add fields apply with **no
+data loss** and **no manual migration**. Genuinely destructive changes (drops,
+type changes, renames) still warrant an Alembic migration (scaffolding is in
+`backend/alembic/`).

@@ -76,6 +76,11 @@ export function TopBar() {
               <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/search'); }}>
                 Saved filters
               </button>
+              {user?.is_admin && (
+                <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/admin'); }}>
+                  Administration
+                </button>
+              )}
               <div className="menu-divider" />
               <button className="menu-item" onClick={doLogout}>
                 Sign out

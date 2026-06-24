@@ -12,6 +12,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { SearchPage } from './pages/SearchPage';
 import { IssueDetailPage } from './pages/IssueDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { AdminPage } from './pages/AdminPage';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const user = useAuth((s) => s.user);
@@ -37,6 +39,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
       <Route
         element={
@@ -52,6 +55,7 @@ export default function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/browse/:issueKey" element={<IssueDetailPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/admin/*" element={<AdminPage />} />
         <Route path="/" element={<Navigate to="/projects" replace />} />
       </Route>
 

@@ -47,6 +47,23 @@ class MigrationConfig:
             verify_ssl=_as_bool(os.environ.get("JIRA_VERIFY_SSL"), True),
         )
 
+    @classmethod
+    def from_connection(cls, connection) -> "MigrationConfig":
+        """Build config from a UI-managed JiraConnection row (token decrypted).
+
+        This is the primary path: Jira credentials are configured by instance
+        admins through the interface and stored encrypted in the database.
+        """
+        from app.core.crypto import decrypt
+
+        return cls(
+            base_url=(connection.base_url or "").strip().rstrip("/"),
+            email=(connection.email or "").strip(),
+            api_token=(decrypt(connection.api_token_enc) or "").strip(),
+            auth_mode=(connection.auth_mode or "cloud").strip().lower() or "cloud",
+            verify_ssl=bool(connection.verify_ssl),
+        )
+
     @property
     def is_server(self) -> bool:
         return self.auth_mode == "server"

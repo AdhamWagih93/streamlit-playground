@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { register } from '../api/auth';
+import { getAuthPolicy } from '../api/authProviders';
 import { useAuth } from '../store/auth';
 import { apiErrorMessage } from '../api/client';
 
@@ -10,6 +11,13 @@ export function RegisterPage() {
   const [form, setForm] = useState({ username: '', email: '', display_name: '', password: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [allowSelfRegistration, setAllowSelfRegistration] = useState(true);
+
+  useEffect(() => {
+    getAuthPolicy()
+      .then((p) => setAllowSelfRegistration(p.allow_self_registration))
+      .catch(() => setAllowSelfRegistration(true));
+  }, []);
 
   function set(k: keyof typeof form, v: string) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -52,6 +60,15 @@ export function RegisterPage() {
 
         {error && <div className="alert alert-error">{error}</div>}
 
+        {!allowSelfRegistration ? (
+          <>
+            <div className="alert alert-error">Self-registration is disabled by your administrator.</div>
+            <div className="auth-foot">
+              Already have an account? <Link to="/login">Sign in</Link>
+            </div>
+          </>
+        ) : (
+          <>
         <div className="field">
           <label>Display name</label>
           <input className="input" value={form.display_name} onChange={(e) => set('display_name', e.target.value)} placeholder="Jane Doe" />
@@ -74,6 +91,8 @@ export function RegisterPage() {
         <div className="auth-foot">
           Already have an account? <Link to="/login">Sign in</Link>
         </div>
+          </>
+        )}
       </form>
     </div>
   );

@@ -28,8 +28,10 @@ import { SpinnerCenter } from '../components/Spinner';
 import { useAuth } from '../store/auth';
 import { formatDate } from '../lib/format';
 import { apiErrorMessage } from '../api/client';
+import { PermissionsTab } from './settings/PermissionsTab';
+import { JiraSyncTab } from './settings/JiraSyncTab';
 
-type Tab = 'details' | 'members' | 'components' | 'versions';
+type Tab = 'details' | 'members' | 'components' | 'versions' | 'permissions' | 'jira sync';
 
 export function SettingsPage() {
   const { projectKey } = useParams();
@@ -61,7 +63,7 @@ export function SettingsPage() {
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="tabs">
-        {(['details', 'members', 'components', 'versions'] as Tab[]).map((t) => (
+        {(['details', 'members', 'components', 'versions', 'permissions', 'jira sync'] as Tab[]).map((t) => (
           <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)} style={{ textTransform: 'capitalize' }}>
             {t}
           </button>
@@ -72,6 +74,8 @@ export function SettingsPage() {
       {tab === 'members' && <MembersTab projectId={project.id} setError={setError} />}
       {tab === 'components' && <ComponentsTab projectId={project.id} setError={setError} />}
       {tab === 'versions' && <VersionsTab projectId={project.id} setError={setError} />}
+      {tab === 'permissions' && <PermissionsTab projectId={project.id} setError={setError} />}
+      {tab === 'jira sync' && <JiraSyncTab projectId={project.id} isAdmin={!!me?.is_admin} setError={setError} />}
     </div>
   );
 }

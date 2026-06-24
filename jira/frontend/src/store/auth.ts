@@ -11,6 +11,7 @@ interface AuthState {
   logout: () => void;
   loadMe: () => Promise<void>;
   setUser: (user: User) => void;
+  setTokens: (access: string, refresh: string) => Promise<void>;
 }
 
 export const useAuth = create<AuthState>((set) => ({
@@ -53,5 +54,18 @@ export const useAuth = create<AuthState>((set) => ({
 
   setUser(user) {
     set({ user });
+  },
+
+  async setTokens(access, refresh) {
+    tokenStore.set(access, refresh);
+    set({ loading: true });
+    try {
+      const user = await authApi.getMe();
+      set({ user, loading: false, initialized: true });
+    } catch (err) {
+      tokenStore.clear();
+      set({ user: null, loading: false, initialized: true });
+      throw err;
+    }
   },
 }));

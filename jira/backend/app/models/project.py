@@ -24,6 +24,11 @@ class Project(Base, TimestampMixin):
     # Counter for the next issue number in this project (atomic key allocation).
     issue_counter: Mapped[int] = mapped_column(default=0, nullable=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Permission scheme governing who can do what in this project. Null => the
+    # default scheme is applied (see services.permissions).
+    permission_scheme_id: Mapped[int | None] = mapped_column(
+        ForeignKey("permission_schemes.id", ondelete="SET NULL"), nullable=True
+    )
     external_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
 
     lead = relationship("User", foreign_keys=[lead_id])

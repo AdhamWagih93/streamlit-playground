@@ -17,7 +17,7 @@ from app.models import (
     User,
     Version,
 )
-from app.models.activity import IssueHistory, Notification
+from app.models.activity import IssueHistory
 from app.utils.ranking import rank_between
 from app.utils.timetracking import parse_duration
 
@@ -90,18 +90,16 @@ def record_history(db: Session, issue: Issue, author_id: int | None, field: str,
 
 
 def notify(db: Session, user_id: int | None, actor_id: int | None, issue: Issue, verb: str, message: str) -> None:
-    if not user_id or user_id == actor_id:
-        return
-    db.add(
-        Notification(
-            user_id=user_id,
-            actor_id=actor_id,
-            issue_id=issue.id,
-            verb=verb,
-            message=message,
-            created_at=_now(),
-        )
-    )
+    """Notify *user_id* about an event on *issue*.
+
+    Delegates to the canonical dispatcher (in-app + email per the recipient's
+    preferences). Imported lazily to avoid an import cycle. The dispatcher
+    preserves the original in-app behavior (writes a Notification row) and never
+    raises, so existing callers are unaffected.
+    """
+    from app.services.notifications import dispatch
+
+    dispatch(db, user_id, actor_id, issue, verb, message)
 
 
 # Fields that map 1:1 to a column and are tracked in history by scalar value.

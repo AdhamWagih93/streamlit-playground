@@ -94,6 +94,12 @@ def create_project(
             board_type="scrum",
         )
     )
+    db.flush()
+    # Apply the default permission scheme and make the creator a project admin
+    # so the RBAC engine grants them full control of the new project.
+    from app.services.permissions import setup_project_defaults
+
+    setup_project_defaults(db, project, admin)
     db.commit()
     db.refresh(project)
     return project

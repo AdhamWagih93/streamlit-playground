@@ -71,7 +71,14 @@ def seed_admin(db: Session) -> None:
 
 
 def run_bootstrap() -> None:
+    from app.core.bootstrap_rbac import run_rbac_bootstrap
+    from app.core.schema_sync import reconcile_schema
+
     create_all_tables()
+    # Additively add any new columns to pre-existing tables so schema changes
+    # never require dropping the database (see app.core.schema_sync).
+    reconcile_schema(engine)
     with SessionLocal() as db:
         seed_defaults(db)
         seed_admin(db)
+        run_rbac_bootstrap(db)

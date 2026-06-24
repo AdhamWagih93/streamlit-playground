@@ -61,9 +61,12 @@ services:
   # One-shot Jira -> Trackly migration runner. Lives behind the `migrate`
   # profile so it does NOT start with `docker compose up`.
   #
+  #   docker compose run --rm migrator list-connections
   #   docker compose run --rm migrator test-connection
-  #   docker compose run --rm migrator list-projects
-  #   docker compose run --rm migrator run --projects ENG
+  #   docker compose run --rm migrator run --connection "Prod Jira" --projects ENG
+  #
+  # Jira credentials are NOT set here — the migrator reads the connections that
+  # instance admins configure in the web UI (stored encrypted in the shared DB).
   migrator:
     build: ./backend
     env_file:
@@ -75,15 +78,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-trackly}
       POSTGRES_USER: ${POSTGRES_USER:-trackly}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trackly}
-      # JIRA_* values are passed through from .env via env_file; listed here
-      # so the connection is explicit even if .env is sparse.
-      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
-      JIRA_EMAIL: ${JIRA_EMAIL:-}
-      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
-      JIRA_AUTH_MODE: ${JIRA_AUTH_MODE:-cloud}
-      JIRA_PROJECT_KEYS: ${JIRA_PROJECT_KEYS:-}
-      JIRA_JQL: ${JIRA_JQL:-}
-      JIRA_VERIFY_SSL: ${JIRA_VERIFY_SSL:-true}
+      SECRET_KEY: ${SECRET_KEY:-local-dev-secret-change-me-0123456789abcdef}
     depends_on:
       db:
         condition: service_healthy

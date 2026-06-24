@@ -14,3 +14,7 @@ PyJWT==2.10.1
 python-multipart==0.0.20
 httpx==0.28.1
 python-dateutil==2.9.0.post0
+# Secret encryption at rest (mail/jira/ldap/entra credentials)
+cryptography==44.0.0
+# LDAP / Active Directory authentication
+ldap3==2.9.1

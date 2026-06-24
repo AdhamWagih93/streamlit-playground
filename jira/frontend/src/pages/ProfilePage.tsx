@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '../store/auth';
 import { updateMe } from '../api/auth';
 import { Avatar } from '../components/Avatar';
+import { NotificationPrefs } from '../components/NotificationPrefs';
 import { apiErrorMessage } from '../api/client';
 
 export function ProfilePage() {
@@ -62,6 +63,8 @@ export function ProfilePage() {
       <button className="btn btn-primary" onClick={save} disabled={busy}>
         {busy ? 'Saving…' : 'Save'}
       </button>
+
+      <NotificationPrefs />
     </div>
   );
 }

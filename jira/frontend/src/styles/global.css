@@ -661,3 +661,63 @@ input, textarea, select {
   padding: 8px 12px; cursor: pointer;
 }
 .autocomplete-item:hover, .autocomplete-item.active { background: var(--indigo-50); }
+
+/* Admin area ---------------------------------------------------------------*/
+.admin-layout { display: flex; gap: 28px; align-items: flex-start; }
+.admin-subnav {
+  width: 210px; flex-shrink: 0; position: sticky; top: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.admin-subnav .nav-item { padding: 8px 12px; }
+.admin-main { flex: 1; min-width: 0; }
+
+/* Generic helpers ---------------------------------------------------------*/
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600;
+  background: var(--slate-100); color: var(--slate-600);
+}
+.badge-ok { background: var(--green-100); color: #15803d; }
+.badge-err { background: var(--red-100); color: #b91c1c; }
+.badge-warn { background: var(--amber-100); color: #b45309; }
+.badge-info { background: var(--indigo-50); color: var(--indigo-700); }
+
+.section-card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); padding: 16px; margin-bottom: 16px;
+}
+.section-card h3 { margin: 0 0 4px; font-size: 16px; }
+
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--slate-100);
+}
+.toggle-row:last-child { border-bottom: none; }
+
+.checkbox-cell { text-align: center; }
+.checkbox-cell input { width: 16px; height: 16px; cursor: pointer; }
+
+.progress-bar {
+  height: 8px; border-radius: 4px; background: var(--slate-200);
+  overflow: hidden; width: 100%;
+}
+.progress-bar-fill { height: 100%; background: var(--indigo-600); transition: width 0.3s ease; }
+
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+@media (max-width: 560px) { .field-grid { grid-template-columns: 1fr; } }
+
+.toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 100;
+  max-width: 360px; padding: 12px 16px; border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); font-size: 13px;
+}
+.toast-ok { background: var(--green-100); color: #15803d; }
+.toast-err { background: var(--red-100); color: #b91c1c; }
+
+.list-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); margin-bottom: 8px;
+}
+.list-row .list-row-main { min-width: 0; }
+.list-row .list-row-title { font-weight: 600; }

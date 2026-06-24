@@ -287,3 +287,300 @@ export interface CreateProjectPayload {
   avatar_color?: string;
   lead_id?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Admin: mail, jira connections, identity providers, global permissions
+// ---------------------------------------------------------------------------
+
+export interface UserBrief {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string;
+  avatar_url?: string | null;
+}
+
+export interface MailSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  use_tls: boolean;
+  use_ssl: boolean;
+  from_address: string;
+  from_name: string;
+  password_set: boolean;
+}
+
+export interface MailSettingsUpdate {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  use_tls: boolean;
+  use_ssl: boolean;
+  from_address: string;
+  from_name: string;
+  password?: string;
+}
+
+export interface TestResult {
+  ok: boolean;
+  message: string;
+  account?: string;
+}
+
+export type JiraAuthMode = 'cloud' | 'server';
+
+export interface JiraConnection {
+  id: string;
+  name: string;
+  base_url: string;
+  auth_mode: JiraAuthMode;
+  email: string;
+  verify_ssl: boolean;
+  enabled: boolean;
+  is_default: boolean;
+  last_checked_at?: string | null;
+  last_check_ok?: boolean | null;
+  token_set: boolean;
+}
+
+export interface JiraConnectionPayload {
+  name: string;
+  base_url: string;
+  auth_mode: JiraAuthMode;
+  email: string;
+  api_token?: string;
+  verify_ssl: boolean;
+  enabled: boolean;
+  is_default: boolean;
+}
+
+export interface JiraRemoteProject {
+  key: string;
+  name: string;
+  id: string;
+  lead?: string | null;
+  exists_locally: boolean;
+}
+
+export type ProviderType = 'ldap' | 'entra';
+
+export interface IdentityProvider {
+  id: string;
+  name: string;
+  provider_type: ProviderType;
+  enabled: boolean;
+  auto_provision_users: boolean;
+  sync_groups: boolean;
+  order: number;
+  // LDAP
+  ldap_host?: string | null;
+  ldap_port?: number | null;
+  ldap_use_ssl?: boolean | null;
+  ldap_bind_dn?: string | null;
+  ldap_bind_password_set?: boolean;
+  ldap_user_base_dn?: string | null;
+  ldap_user_filter?: string | null;
+  ldap_attr_username?: string | null;
+  ldap_attr_email?: string | null;
+  ldap_attr_display_name?: string | null;
+  ldap_group_base_dn?: string | null;
+  ldap_group_filter?: string | null;
+  ldap_attr_group_name?: string | null;
+  // Entra
+  entra_tenant_id?: string | null;
+  entra_client_id?: string | null;
+  entra_redirect_uri?: string | null;
+  entra_scopes?: string | null;
+  entra_client_secret_set?: boolean;
+}
+
+export interface IdentityProviderPayload {
+  name: string;
+  provider_type: ProviderType;
+  enabled: boolean;
+  auto_provision_users: boolean;
+  sync_groups: boolean;
+  order: number;
+  ldap_host?: string;
+  ldap_port?: number;
+  ldap_use_ssl?: boolean;
+  ldap_bind_dn?: string;
+  ldap_bind_password?: string;
+  ldap_user_base_dn?: string;
+  ldap_user_filter?: string;
+  ldap_attr_username?: string;
+  ldap_attr_email?: string;
+  ldap_attr_display_name?: string;
+  ldap_group_base_dn?: string;
+  ldap_group_filter?: string;
+  ldap_attr_group_name?: string;
+  entra_tenant_id?: string;
+  entra_client_id?: string;
+  entra_client_secret?: string;
+  entra_redirect_uri?: string;
+  entra_scopes?: string;
+}
+
+export type HolderType = 'group' | 'user' | 'role' | 'special';
+
+export interface GlobalPermission {
+  id: string;
+  permission: string;
+  holder_type: HolderType;
+  holder_value: string;
+}
+
+// ---------------------------------------------------------------------------
+// Groups, roles, permission schemes
+// ---------------------------------------------------------------------------
+
+export interface Group {
+  id: string;
+  name: string;
+  description?: string | null;
+  directory_source?: string | null;
+  is_system: boolean;
+}
+
+export interface GroupDetail extends Group {
+  members: UserBrief[];
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  description?: string | null;
+  is_default: boolean;
+}
+
+export interface ProjectActor {
+  id: string;
+  role_id: string;
+  user?: UserBrief | null;
+  group?: { id: string; name: string } | null;
+}
+
+export interface CatalogEntry {
+  key: string;
+  description: string;
+}
+
+export interface PermissionCatalog {
+  global_permissions: CatalogEntry[];
+  project_permissions: CatalogEntry[];
+  holder_types: string[];
+  special_holders: string[];
+}
+
+export interface PermissionScheme {
+  id: string;
+  name: string;
+  description?: string | null;
+  is_default: boolean;
+}
+
+export interface PermissionGrant {
+  id: string;
+  permission: string;
+  holder_type: HolderType;
+  holder_value: string;
+}
+
+export interface PermissionSchemeDetail extends PermissionScheme {
+  grants: PermissionGrant[];
+}
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+export type SyncStatus = 'idle' | 'running' | 'paused' | 'error' | 'completed';
+
+export interface SyncRun {
+  id: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  status: string;
+  trigger: string;
+  processed: number;
+  created: number;
+  updated: number;
+  errors: number;
+  message?: string | null;
+}
+
+export interface SyncLink {
+  id: string;
+  project_id: string;
+  connection_id: string;
+  jira_project_key: string;
+  jira_project_id?: string | null;
+  enabled: boolean;
+  status: SyncStatus;
+  updated_watermark?: string | null;
+  cursor_start_at?: string | null;
+  total_issues: number;
+  processed_issues: number;
+  last_synced_at?: string | null;
+  last_error?: string | null;
+  sync_permissions: boolean;
+  recent_runs: SyncRun[];
+}
+
+export interface SyncDiscover {
+  found: boolean;
+  jira_project_key?: string | null;
+  name?: string | null;
+  jira_project_id?: string | null;
+  issue_count?: number | null;
+  message?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Notification preferences
+// ---------------------------------------------------------------------------
+
+export type NotifChannel = 'in_app' | 'email';
+
+export interface NotifPrefRow {
+  event: string;
+  label: string;
+  in_app: boolean;
+  email: boolean;
+}
+
+export interface NotifPreferences {
+  email_available: boolean;
+  rows: NotifPrefRow[];
+}
+
+// ---------------------------------------------------------------------------
+// External auth providers (public)
+// ---------------------------------------------------------------------------
+
+export interface AuthProvider {
+  id: string;
+  name: string;
+  type: ProviderType;
+  enabled: boolean;
+}
+
+export interface AuthPolicy {
+  allow_local_login: boolean;
+  allow_self_registration: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Admin: authentication settings
+// ---------------------------------------------------------------------------
+
+export interface AuthSettings {
+  allow_local_login: boolean;
+  allow_self_registration: boolean;
+  access_token_minutes: number | null;
+  refresh_token_minutes: number | null;
+  registration_allowed_domains: string | null;
+}
