@@ -29880,12 +29880,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _proj_u = (_r_u.get("project") or "").strip()
             _dp_u = _iv_devproj_map.get(_app_u) or {}
             _qc_route = (_dp_u.get("qcRouteUrl") or "").strip()
-            _qc_svc = (_dp_u.get("qcServiceUrl") or "").strip()
+            # Only ROUTE URLs are externally reachable from the dashboard. The
+            # qc/dev SERVICE URLs are internal K8s service addresses that never
+            # resolve from here, so probing them would always false-flag.
             for (_env_u, _kind_u, _url_u) in (
                 ("qc", "route",   _qc_route),
-                ("qc", "service", _qc_svc),
                 ("dev", "route",   _qc_route.replace("qc", "dev") if _qc_route else ""),
-                ("dev", "service", _qc_svc.replace("qc", "dev") if _qc_svc else ""),
             ):
                 if _url_u.lower().startswith("http"):
                     _url_by_url.setdefault(_url_u, []).append({
@@ -30290,11 +30290,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f"⚠ {_iv_url_total} URL issue"
                     f"{'s' if _iv_url_total != 1 else ''}",
                     use_container_width=False,
-                    help="Dev / QC application route & service URLs (from "
-                         "ef-devops-projects qcRouteUrl / qcServiceUrl, dev "
-                         "derived by qc→dev) that did not answer over HTTP: "
-                         "DNS / refused / timeout / TLS / 404 / 5xx. Cached "
-                         "10 min. Admin-only.",
+                    help="Dev / QC application route URLs (from "
+                         "ef-devops-projects qcRouteUrl, dev derived by qc→dev) "
+                         "that did not answer over HTTP: DNS / refused / timeout "
+                         "/ TLS / 404 / 5xx. Service URLs are internal K8s "
+                         "addresses and are NOT checked. Cached 10 min. "
+                         "Admin-only.",
                 ):
                     _url_rows = "".join(
                         '<tr><td class="iv-dup-key">'
@@ -30322,11 +30323,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         if _iv_url_capped else ""
                     )
                     st.markdown(
-                        '<div class="iv-dup-intro">Dev / QC application URLs that '
-                        'did not answer over HTTP. Any HTTP response (including '
-                        '401/403) counts as reachable — only connection failures, '
-                        '404, and 5xx are flagged. Dev URLs are derived from the '
-                        'QC URL by swapping <code>qc</code>→<code>dev</code>.</div>'
+                        '<div class="iv-dup-intro">Dev / QC application <b>route</b> '
+                        'URLs that did not answer over HTTP. Any HTTP response '
+                        '(including 401/403) counts as reachable — only connection '
+                        'failures, 404, and 5xx are flagged. Dev URLs are derived '
+                        'from the QC URL by swapping <code>qc</code>→<code>dev</code>. '
+                        'Service URLs (internal K8s) are not checked.</div>'
                         f'<div class="iv-dup-sec-head">📡 Unreachable URLs '
                         f'<b>{_iv_url_total}</b></div>'
                         f'<table class="iv-dup-table"><tbody>{_url_rows}'
