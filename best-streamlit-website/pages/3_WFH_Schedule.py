@@ -41,7 +41,7 @@ PUBLIC_HOLIDAYS_FILE = Path("data") / f"public_holidays_{YEAR}.json"
 ROLE_BY_MEMBER: Dict[str, str] = {
     "Adham": "mgmt-support",
     "Karam": "mgmt-support",
-    "Hesham": "engineering",
+    "Hesham": "mgmt-support",
     "Salma": "engineering",
     "Zanaty": "engineering",
 }
@@ -49,8 +49,7 @@ ROLE_BY_MEMBER: Dict[str, str] = {
 # Personal, soft attendance preferences (validated as warnings only).
 # Weekday indices follow datetime.weekday(): Monday=0, ..., Sunday=6.
 PREFERS_WFO_DAYS: Dict[str, Set[int]] = {
-    # Existing preference: Karam likes to be in-office on Mon & Tue.
-    "Karam": {0, 1},
+    # (No active "prefers to be in office on these days" preferences.)
 }
 
 DISLIKES_WFO_DAYS: Dict[str, Set[int]] = {
@@ -126,7 +125,6 @@ def generate_two_week_pattern(rotating=None, forced_office=None) -> List[Set[str
     Hard rules (Sunday is always WFH for everyone):
     - Each office day (Mon-Thu) has 2-3 people total (forced + chosen).
     - At least one mgmt-support member is in the office every office day.
-    - Karam (when rotating) is WFO every Monday and Tuesday.
     - No *rotating* member is WFO 3 days in a row.
 
     Pairwise "meet in the office at least once" is a soft preference
@@ -141,8 +139,6 @@ def generate_two_week_pattern(rotating=None, forced_office=None) -> List[Set[str
     r_idx = [idx[m] for m in rotating]          # indices of rotating members
     forced_idx = {idx[m] for m in forced_office}
     mgmt_indices = {idx[m] for m in TEAM_MEMBERS if ROLE_BY_MEMBER.get(m) == "mgmt-support"}
-    karam_rotating = "Karam" in rotating
-    karam = idx.get("Karam")
 
     weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu"] * 2
 
@@ -165,8 +161,6 @@ def generate_two_week_pattern(rotating=None, forced_office=None) -> List[Set[str
         day_opts: List[Sequence[int]] = []
         for subset in all_subsets:
             s = set(subset)
-            if karam_rotating and wd in {"Mon", "Tue"} and karam not in s:
-                continue
             # mgmt-support present via a forced or chosen member
             if not (mgmt_indices & (forced_idx | s)):
                 continue
@@ -2102,6 +2096,87 @@ def inject_css() -> None:
     )
 
 
+WEEKDAY_LABELS = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+
+
+def render_preferences_tab() -> None:
+    """Read-only view of each member's current attendance preferences and rules."""
+
+    st.markdown("<h3 class='section-title'>Member preferences</h3>", unsafe_allow_html=True)
+    st.caption(
+        "Current attendance rules and preferences per member. Hard rules are always "
+        "enforced; preferences are honoured when possible and otherwise only raise warnings."
+    )
+
+    dash = "<span style='color:#9ca3af'>—</span>"
+
+    def fmt_days(days: Set[int]) -> str:
+        if not days:
+            return dash
+        return ", ".join(WEEKDAY_LABELS[i] for i in sorted(days))
+
+    st.markdown(
+        "<div style='border:1px dashed #93c5fd; background:#eff6ff; border-radius:6px; "
+        "padding:0.5rem 0.75rem; font-size:0.86rem; color:#1e3a5f; margin:0.3rem 0 0.85rem;'>"
+        "<b>Team-wide:</b> Sundays are always work-from-home. The office rotation runs "
+        "Monday–Thursday, with everyone in the office 2 of those 4 days (a 50/50 split)."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    header = "".join(
+        f"<th class='header-cell'>{h}</th>"
+        for h in ["Member", "Role", "Prefers office", "Avoids office", "Special rule"]
+    )
+
+    rows: List[str] = []
+    for m in TEAM_MEMBERS:
+        role = ROLE_BY_MEMBER.get(m, "—")
+        prefers = fmt_days(PREFERS_WFO_DAYS.get(m, set()))
+        dislikes = fmt_days(DISLIKES_WFO_DAYS.get(m, set()))
+
+        special: List[str] = []
+        if m == NEW_JOINER:
+            special.append(
+                "Onboarding: <b>full office</b> every office day through "
+                f"{NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}, then joins the 50/50 rotation"
+            )
+        special_html = "<br>".join(special) if special else dash
+
+        if role == "mgmt-support":
+            role_badge = (
+                "<span style='padding:0.1rem 0.5rem; border-radius:999px; font-size:0.76rem; "
+                "font-weight:600; background:#e0e7ff; color:#3730a3;'>mgmt-support</span>"
+            )
+        else:
+            role_badge = (
+                "<span style='padding:0.1rem 0.5rem; border-radius:999px; font-size:0.76rem; "
+                "font-weight:600; background:#dcfce7; color:#166534;'>engineering</span>"
+            )
+
+        rows.append(
+            "<tr>"
+            f"<td class='day-cell'>{m}</td>"
+            f"<td>{role_badge}</td>"
+            f"<td>{prefers}</td>"
+            f"<td>{dislikes}</td>"
+            f"<td style='text-align:left'>{special_html}</td>"
+            "</tr>"
+        )
+
+    table_html = (
+        "<div class='week-table-wrapper'><table class='schedule-table'>"
+        f"<thead><tr>{header}</tr></thead><tbody>{''.join(rows)}</tbody>"
+        "</table></div>"
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
+    st.caption(
+        "“Prefers office” = soft wish to be in on those days · "
+        "“Avoids office” = soft wish to stay home on those days. "
+        "Preferences never block a schedule; they only surface as warnings in the Validations tab."
+    )
+
+
 def main() -> None:
     st.set_page_config(
         page_title="WFH/WFO Schedule 2026",
@@ -2170,7 +2245,7 @@ def main() -> None:
     # Who's in the office today / next working day
     render_today_and_next(year_sched, holidays, public_holidays)
 
-    tabs = st.tabs(["Grids", "Editing", "Statistics", val_tab_label, "Holidays"])
+    tabs = st.tabs(["Grids", "Editing", "Statistics", "Preferences", val_tab_label, "Holidays"])
 
     # --- Grids tab ---
     with tabs[0]:
@@ -2317,9 +2392,12 @@ def main() -> None:
                 st.metric(title, f"{count}", help=f"{pct:.1f}% of all scheduled working days")
 
     with tabs[3]:
-        render_validations(year_sched)
+        render_preferences_tab()
 
     with tabs[4]:
+        render_validations(year_sched)
+
+    with tabs[5]:
         render_holidays_tab(holidays, public_holidays)
 
 
