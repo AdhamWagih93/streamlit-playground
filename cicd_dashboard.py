@@ -11870,6 +11870,19 @@ def _fetch_prd_status(apps: tuple[str, ...]) -> dict[str, dict]:
 # to know which side of the version-string drift they're on.
 _LOOSE_VER_SENTINEL = object()
 
+# Strip a leading "v"/"V" version prefix (only when it precedes a digit, so a
+# real token like "vault" is untouched) plus surrounding whitespace, then
+# lowercase. Bridges the documented drift between ef-cicd-builds ("1.2.3") and
+# ef-cicd-prismacloud ("V1.2.3" / "1.2.3 ") that plain strip+lower could NOT —
+# "v1.2.3" != "1.2.3" — which silently dropped real scans from the popovers.
+_VER_PREFIX_RE = re.compile(r"^v(?=\d)", re.IGNORECASE)
+
+
+def _norm_ver_token(v: Any) -> Any:
+    if not isinstance(v, str):
+        return v
+    return _VER_PREFIX_RE.sub("", v.strip().lower())
+
 
 class _LooseVerDict(dict):
     """Dict keyed by ``(app, version)`` tuples that tolerates whitespace
@@ -11891,7 +11904,7 @@ class _LooseVerDict(dict):
         a, v = key
         return (
             a.strip().lower() if isinstance(a, str) else a,
-            v.strip().lower() if isinstance(v, str) else v,
+            _norm_ver_token(v),
         )
 
     def __init__(self, *args, **kwargs):
@@ -12023,8 +12036,12 @@ def _fetch_prismacloud_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tu
                 continue
             _s = _hits[0].get("_source", {}) or {}
             key = (_app, _ver)
-            if wanted_norm and _LooseVerDict._norm_key(key) not in wanted_norm:
-                continue
+            # Keep EVERY scanned version for the queried apps (the query already
+            # scopes to the in-scope apps via `terms application`). We no longer
+            # drop versions that aren't a current PRD/stage version — a real scan
+            # in the index for any version must survive so the loose-keyed lookup
+            # in the popovers can find it. `wanted_norm` is retained only as a
+            # hint set for callers that want to know which keys were requested.
             out[key] = {
                 "Vcritical": int(_s.get("Vcritical") or 0),
                 "Vhigh":     int(_s.get("Vhigh")     or 0),
@@ -12115,8 +12132,12 @@ def _fetch_invicti_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[
                 continue
             _s = _hits[0].get("_source", {}) or {}
             key = (_app, _ver)
-            if wanted_norm and _LooseVerDict._norm_key(key) not in wanted_norm:
-                continue
+            # Keep EVERY scanned version for the queried apps (the query already
+            # scopes to the in-scope apps via `terms application`). We no longer
+            # drop versions that aren't a current PRD/stage version — a real scan
+            # in the index for any version must survive so the loose-keyed lookup
+            # in the popovers can find it. `wanted_norm` is retained only as a
+            # hint set for callers that want to know which keys were requested.
             out[key] = {
                 "Vcritical":     int(_s.get("Vcritical") or 0),
                 "Vhigh":         int(_s.get("Vhigh")     or 0),
@@ -12208,8 +12229,12 @@ def _fetch_zap_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str,
                 continue
             _s = _hits[0].get("_source", {}) or {}
             key = (_app, _ver)
-            if wanted_norm and _LooseVerDict._norm_key(key) not in wanted_norm:
-                continue
+            # Keep EVERY scanned version for the queried apps (the query already
+            # scopes to the in-scope apps via `terms application`). We no longer
+            # drop versions that aren't a current PRD/stage version — a real scan
+            # in the index for any version must survive so the loose-keyed lookup
+            # in the popovers can find it. `wanted_norm` is retained only as a
+            # hint set for callers that want to know which keys were requested.
             out[key] = {
                 # ZAP has no critical bucket — we still expose the field as 0 so
                 # downstream code can sum across scanners with a uniform shape.
@@ -27309,6 +27334,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _iv_prd_map = _iv_stages_map = _iv_devproj_map = {}
 
     _iv_prisma_keys: set[tuple[str, str]] = set()
+    # Seed EVERY in-scope app (version "" is just a carrier so the app lands in
+    # the security fetch's `apps` set). The scanners aggregate all versions per
+    # app from the index, so an app with scans but NO pipeline/PRD activity
+    # still gets its scans fetched — previously it was skipped entirely because
+    # the keys came only from PRD/stage records.
+    for _a in _iv_apps:
+        if _a:
+            _iv_prisma_keys.add((_a, ""))
     for _a, _prd in _iv_prd_map.items():
         _pv = (_prd or {}).get("version") or ""
         if _pv:
@@ -27328,7 +27361,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         for r in _inv_rows_all
         if r.get("application")
     ]
-    st.session_state["_psv_prisma_keys"] = list(_iv_prisma_keys)
+    # Publish only real (app, version) pairs — drop the version-"" carriers
+    # seeded above so the Scan Viewer picker isn't polluted with empties.
+    st.session_state["_psv_prisma_keys"] = [
+        (_a, _v) for (_a, _v) in _iv_prisma_keys if _v]
     if _iv_prisma_keys:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="iv-stage3") as _ex:
             _f_pri = _ex.submit(_fetch_prismacloud,  _iv_prisma_keys_t)
