@@ -3387,7 +3387,9 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_nvwarn_pop [data-testid="stPopover"] button,
 .st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button,
 .st-key-cc_iv_repowarn_pop [data-testid="stPopover"] button,
-.st-key-cc_iv_repowarn_pop [data-testid="stPopoverButton"] button {
+.st-key-cc_iv_repowarn_pop [data-testid="stPopoverButton"] button,
+.st-key-cc_iv_urlwarn_pop [data-testid="stPopover"] button,
+.st-key-cc_iv_urlwarn_pop [data-testid="stPopoverButton"] button {
     border: 1px solid color-mix(in srgb, var(--cc-amber) 45%, var(--cc-border)) !important;
     background: color-mix(in srgb, var(--cc-amber) 10%, transparent) !important;
     color: var(--cc-amber) !important;
@@ -3409,12 +3411,15 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .st-key-cc_iv_nvwarn_pop [data-testid="stPopover"] button:hover,
 .st-key-cc_iv_nvwarn_pop [data-testid="stPopoverButton"] button:hover,
 .st-key-cc_iv_repowarn_pop [data-testid="stPopover"] button:hover,
-.st-key-cc_iv_repowarn_pop [data-testid="stPopoverButton"] button:hover {
+.st-key-cc_iv_repowarn_pop [data-testid="stPopoverButton"] button:hover,
+.st-key-cc_iv_urlwarn_pop [data-testid="stPopover"] button:hover,
+.st-key-cc_iv_urlwarn_pop [data-testid="stPopoverButton"] button:hover {
     background: color-mix(in srgb, var(--cc-amber) 18%, transparent) !important;
     box-shadow: 0 3px 12px color-mix(in srgb, var(--cc-amber) 28%, transparent) !important;
 }
 .st-key-cc_iv_dupname_pop, .st-key-cc_iv_nswarn_pop,
-.st-key-cc_iv_nvwarn_pop, .st-key-cc_iv_repowarn_pop { margin: 0 0 6px 0; }
+.st-key-cc_iv_nvwarn_pop, .st-key-cc_iv_repowarn_pop,
+.st-key-cc_iv_urlwarn_pop { margin: 0 0 6px 0; }
 .iv-nv-issue {
     font-size: .72rem; color: var(--cc-text-dim); line-height: 1.5;
 }
@@ -21406,6 +21411,80 @@ def _check_repos_reachable(urls_json: str) -> dict:
     return out
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _check_urls_reachable(urls_json: str) -> dict:
+    """Probe each application HTTP(S) URL (dev/qc route & service URLs) for
+    reachability. Returns ``{url: {"ok": bool, "status": str}}``.
+
+    "Reachable" means the host ANSWERED — any HTTP status (even 401/403, which
+    just means the app is up but auth-gated) counts as ok. Only a connection-
+    level failure (DNS / refused / timeout / TLS) or a 404 / 5xx is flagged.
+    Certificate validation is disabled: internal dev/qc hosts often use
+    self-signed certs and we only care about reachability, not trust. Cached
+    10 min, bounded concurrency, short per-probe timeout, HEAD with GET
+    fallback (some servers reject HEAD)."""
+    import ssl
+    try:
+        urls: list[str] = json.loads(urls_json)
+    except Exception:
+        return {}
+    if not urls:
+        return {}
+    _ctx = ssl.create_default_context()
+    _ctx.check_hostname = False
+    _ctx.verify_mode = ssl.CERT_NONE
+
+    def _classify_http(code: int) -> dict:
+        if code == 404:
+            return {"ok": False, "status": "not found (404)"}
+        if 500 <= code <= 599:
+            return {"ok": False, "status": f"server error ({code})"}
+        return {"ok": True, "status": f"ok ({code})"}
+
+    def _classify_conn(err: Exception) -> str:
+        s = str(getattr(err, "reason", err) or err).lower()
+        if "timed out" in s or "timeout" in s:
+            return "timeout"
+        if ("name or service not known" in s or "nodename nor servname" in s
+                or "getaddrinfo" in s or "name resolution" in s
+                or "no address associated" in s):
+            return "DNS failure"
+        if "refused" in s:
+            return "connection refused"
+        if "certificate" in s or "ssl" in s or "tls" in s:
+            return "TLS error"
+        if "no route to host" in s or "unreachable" in s:
+            return "no route to host"
+        return "unreachable"
+
+    def _probe(u: str):
+        _last = {"ok": False, "status": "unreachable"}
+        for _method in ("HEAD", "GET"):
+            try:
+                req = urllib.request.Request(
+                    u, method=_method,
+                    headers={"User-Agent": "cicd-dashboard-healthcheck/1.0"})
+                with urllib.request.urlopen(req, timeout=6, context=_ctx) as resp:
+                    _code = int(getattr(resp, "status", 0) or resp.getcode() or 0)
+                return u, _classify_http(_code)
+            except urllib.error.HTTPError as he:
+                # Server answered with an error status → host IS reachable.
+                return u, _classify_http(int(he.code or 0))
+            except urllib.error.URLError as ue:
+                _last = {"ok": False, "status": _classify_conn(ue)}
+                continue  # connection-level — retry once with GET
+            except Exception as exc:
+                _last = {"ok": False, "status": type(exc).__name__}
+                continue
+        return u, _last
+
+    out: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=12, thread_name_prefix="url-check") as _ex:
+        for _u, _res in _ex.map(_probe, urls):
+            out[_u] = _res
+    return out
+
+
 # =============================================================================
 # PER-TEAM CONFIGURATION REPOS — clone, scan, edit → commit → push
 # =============================================================================
@@ -29783,6 +29862,52 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 })
     _iv_repo_total = len(_iv_repo_issues)
 
+    # ── Dev/QC application URL reachability detector (admin-only) ──────────
+    # ef-devops-projects carries qcRouteUrl / qcServiceUrl; the dev variants are
+    # derived by swapping the literal "qc" → "dev" (same convention the version
+    # popover uses). Probe every distinct URL over HTTP (any answer = reachable;
+    # only connection failures / 404 / 5xx are flagged). Cached 10 min.
+    _iv_url_issues: list[dict] = []
+    _iv_url_capped = 0
+    if _is_admin:
+        _url_by_url: dict[str, list[dict]] = {}
+        _seen_app_u: set[str] = set()
+        for _r_u in _inv_rows_filtered:
+            _app_u = (_r_u.get("application") or "").strip()
+            if not _app_u or _app_u in _seen_app_u:
+                continue
+            _seen_app_u.add(_app_u)
+            _proj_u = (_r_u.get("project") or "").strip()
+            _dp_u = _iv_devproj_map.get(_app_u) or {}
+            _qc_route = (_dp_u.get("qcRouteUrl") or "").strip()
+            _qc_svc = (_dp_u.get("qcServiceUrl") or "").strip()
+            for (_env_u, _kind_u, _url_u) in (
+                ("qc", "route",   _qc_route),
+                ("qc", "service", _qc_svc),
+                ("dev", "route",   _qc_route.replace("qc", "dev") if _qc_route else ""),
+                ("dev", "service", _qc_svc.replace("qc", "dev") if _qc_svc else ""),
+            ):
+                if _url_u.lower().startswith("http"):
+                    _url_by_url.setdefault(_url_u, []).append({
+                        "app": _app_u, "project": _proj_u,
+                        "env": _env_u, "kind": _kind_u,
+                    })
+        if _url_by_url:
+            _URL_CAP = 400
+            _urls_sorted = sorted(_url_by_url.keys())
+            _iv_url_capped = max(0, len(_urls_sorted) - _URL_CAP)
+            _url_results = _check_urls_reachable(
+                json.dumps(_urls_sorted[:_URL_CAP]))
+            for _u in _urls_sorted[:_URL_CAP]:
+                _res = _url_results.get(_u) or {}
+                if not _res.get("ok"):
+                    for _rec in _url_by_url[_u]:
+                        _iv_url_issues.append({
+                            **_rec, "url": _u,
+                            "status": _res.get("status") or "unreachable",
+                        })
+    _iv_url_total = len(_iv_url_issues)
+
     # ── Next-version lookup + hygiene detector ────────────────────────────
     # Per-app next versions per branch (develop/release/stress/hotfix) from
     # ef-cicd-versions-lookup. Fetched once (whole lookup) and resolved per row
@@ -29888,8 +30013,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         )
 
         # ── Data-quality warnings row (duplicates + namespaces + versions) ──
-        if _iv_dup_total or _iv_ns_total or _iv_nv_total or _iv_repo_total:
-            _warn_cols = st.columns([1.4, 1.4, 1.4, 1.4, 2.4])
+        if (_iv_dup_total or _iv_ns_total or _iv_nv_total
+                or _iv_repo_total or _iv_url_total):
+            _warn_cols = st.columns([1.3, 1.3, 1.3, 1.3, 1.3, 1.5])
         else:
             _warn_cols = None
 
@@ -30153,6 +30279,59 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         f'<table class="iv-dup-table"><tbody>{_rc_rows}'
                         f'</tbody></table>'
                         + _rc_cap_note,
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Dev/QC URL reachability warning (admin-only, sibling popover) ──
+        if _iv_url_total:
+            with (_warn_cols[4] if _warn_cols else st.container()), \
+                    st.container(key="cc_iv_urlwarn_pop"):
+                with st.popover(
+                    f"⚠ {_iv_url_total} URL issue"
+                    f"{'s' if _iv_url_total != 1 else ''}",
+                    use_container_width=False,
+                    help="Dev / QC application route & service URLs (from "
+                         "ef-devops-projects qcRouteUrl / qcServiceUrl, dev "
+                         "derived by qc→dev) that did not answer over HTTP: "
+                         "DNS / refused / timeout / TLS / 404 / 5xx. Cached "
+                         "10 min. Admin-only.",
+                ):
+                    _url_rows = "".join(
+                        '<tr><td class="iv-dup-key">'
+                        f'<span class="iv-ns-env">{html.escape(_x["env"].upper())}'
+                        f' · {html.escape(_x["kind"])}</span> '
+                        f'{html.escape(_x["app"] or "—")}'
+                        + (f'<div class="iv-dup-projs">'
+                           f'<span class="iv-dup-proj">{html.escape(_x["project"])}'
+                           f'</span></div>' if _x["project"] else "")
+                        + '</td><td>'
+                        + (f'<a class="iv-repo-url" href="{html.escape(_x["url"], quote=True)}" '
+                           f'target="_blank" rel="noopener">{html.escape(_x["url"])}</a>'
+                           if _x["url"] else '<span class="iv-repo-url is-none">—</span>')
+                        + f'<div class="iv-repo-status">📡 {html.escape(_x["status"])}</div>'
+                        + '</td></tr>'
+                        for _x in sorted(
+                            _iv_url_issues,
+                            key=lambda d: (d["status"], d["env"],
+                                           (d["app"] or "").lower()))
+                    )
+                    _url_cap_note = (
+                        f'<div class="iv-dup-projs" style="margin-top:6px">'
+                        f'Note: probing capped at 400 unique URLs · '
+                        f'{_iv_url_capped} not checked.</div>'
+                        if _iv_url_capped else ""
+                    )
+                    st.markdown(
+                        '<div class="iv-dup-intro">Dev / QC application URLs that '
+                        'did not answer over HTTP. Any HTTP response (including '
+                        '401/403) counts as reachable — only connection failures, '
+                        '404, and 5xx are flagged. Dev URLs are derived from the '
+                        'QC URL by swapping <code>qc</code>→<code>dev</code>.</div>'
+                        f'<div class="iv-dup-sec-head">📡 Unreachable URLs '
+                        f'<b>{_iv_url_total}</b></div>'
+                        f'<table class="iv-dup-table"><tbody>{_url_rows}'
+                        f'</tbody></table>'
+                        + _url_cap_note,
                         unsafe_allow_html=True,
                     )
 
