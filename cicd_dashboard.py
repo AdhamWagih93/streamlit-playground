@@ -6004,6 +6004,61 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .adoc-allpl { font-family: var(--cc-mono); font-size: 0.68rem; font-weight: 700;
     color: var(--cc-green); }
 
+/* ── Environment architecture tab ──────────────────────────────────────── */
+.arch-summary {
+    font-size: 0.82rem; color: var(--cc-text-dim); margin: 2px 0 6px 0;
+}
+.arch-summary b { color: var(--cc-text); font-family: var(--cc-mono); }
+.arch-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 10px 0; }
+.arch-leg {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.68rem; color: var(--cc-text-dim); font-weight: 600;
+}
+.arch-leg-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.arch-err-row { font-family: var(--cc-mono); font-size: 0.7rem;
+    color: var(--cc-amber); padding: 1px 0; }
+.arch-env-head {
+    font-family: var(--cc-mono); font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.04em; color: var(--cc-text); margin: 4px 0 2px 0;
+}
+.arch-diff {
+    margin-top: 14px; padding: 14px 16px; border-radius: 12px;
+    background: var(--cc-surface); border: 1px solid var(--cc-border);
+}
+.arch-diff-head {
+    font-family: var(--cc-mono); font-size: 0.78rem; font-weight: 800;
+    color: var(--cc-text); margin-bottom: 10px;
+}
+.arch-diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.arch-diff-col-h {
+    font-size: 0.64rem; letter-spacing: 0.06em; text-transform: uppercase;
+    font-weight: 700; margin-bottom: 4px;
+}
+.arch-diff-col-h b { font-family: var(--cc-mono); margin-left: 4px; }
+.arch-diff-col-h.is-rm  { color: var(--cc-red); }
+.arch-diff-col-h.is-add { color: var(--cc-green); }
+.arch-diff-col-h.is-chg { color: var(--cc-amber); }
+.arch-diff-tbl { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+.arch-diff-tbl td, .arch-diff-tbl th {
+    padding: 3px 8px; border-bottom: 1px dashed var(--cc-border);
+    text-align: left; vertical-align: top;
+}
+.arch-diff-tbl th {
+    font-size: 0.58rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--cc-text-mute); font-weight: 700; border-bottom: 1px solid var(--cc-border);
+}
+.arch-diff-tbl td { color: var(--cc-text); font-weight: 600; }
+.arch-diff-proj {
+    font-family: var(--cc-mono); font-size: 0.6rem; font-weight: 600;
+    color: var(--cc-text-mute); margin-left: 6px;
+}
+.arch-diff-chg { margin-top: 4px; }
+.arch-conn {
+    display: inline-block; font-family: var(--cc-mono); font-size: 0.6rem;
+    font-weight: 600; color: var(--cc-text-dim); border: 1px solid var(--cc-border);
+    border-left-width: 3px; border-radius: 3px; padding: 0 5px; margin: 1px 3px 1px 0;
+}
+
 /* ── JENKINS PANEL ─────────────────────────────────────────────────────────
    Gate (idle), connection header, pipeline cards, status pills, params.
    ----------------------------------------------------------------------- */
@@ -14776,6 +14831,260 @@ def _render_ado_coverage() -> None:
 
 
 # =============================================================================
+# ENVIRONMENT ARCHITECTURE TAB — Graphviz topology per env + comparison
+# =============================================================================
+_ARCH_KIND_COLOR = {
+    "http": "#2563eb", "db": "#059669", "queue": "#d97706",
+    "socket": "#7c3aed", "ldap": "#0891b2", "file/mail": "#0ea5e9",
+    "other": "#94a3b8",
+}
+_ARCH_KIND_SHAPE = {
+    "db": "cylinder", "queue": "component", "ldap": "octagon",
+    "file/mail": "folder",
+}
+
+
+def _arch_dot_esc(s: str) -> str:
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _arch_node_id(prefix: str, *parts: str) -> str:
+    return prefix + "_" + re.sub(r"\W", "_", "__".join(parts))
+
+
+def _arch_build_dot(env: str, ed: dict, *, highlight: dict | None = None) -> str:
+    """Render one environment's topology to Graphviz DOT. ``highlight`` maps
+    (project, app) → 'added'/'removed'/'changed' for the comparison overlay."""
+    apps = ed.get("apps", {})
+    _hl = highlight or {}
+    by_proj: dict[str, list[dict]] = {}
+    for (_p, _a), _ad in apps.items():
+        by_proj.setdefault(_p, []).append(_ad)
+    L = [
+        "digraph A {",
+        'rankdir=LR; bgcolor="transparent"; pad=0.25;',
+        'nodesep=0.28; ranksep=0.55; splines=true; concentrate=true;',
+        'node [fontname="Helvetica" fontsize=10 shape=box '
+        'style="filled,rounded" fillcolor="#ffffff" color="#cbd5e1" '
+        'penwidth=1.1];',
+        'edge [fontname="Helvetica" fontsize=8 color="#94a3b8" '
+        'arrowsize=0.6 penwidth=0.9];',
+    ]
+    _ci = 0
+    for _p in sorted(by_proj):
+        L.append(f'subgraph cluster_{_ci} {{ label="{_arch_dot_esc(_p)}"; '
+                 'style="rounded,filled"; fillcolor="#f8fafc"; '
+                 'color="#e2e8f0"; fontname="Helvetica-Bold"; fontsize=10; '
+                 'labeljust="l";')
+        for _ad in sorted(by_proj[_p], key=lambda d: d["app"].lower()):
+            _nid = _arch_node_id("app", _p, _ad["app"])
+            _state = _hl.get((_p, _ad["app"]), "")
+            _fill = ("#dcfce7" if _state == "added"
+                     else "#fee2e2" if _state == "removed"
+                     else "#fef9c3" if _state == "changed" else "#ffffff")
+            _bord = ("#16a34a" if _state == "added"
+                     else "#dc2626" if _state == "removed"
+                     else "#ca8a04" if _state == "changed" else "#94a3b8")
+            _nconn = len(_ad.get("connections") or [])
+            _lbl = (f'{_arch_dot_esc(_ad["app"])}'
+                    + (f'\\n{_nconn} conn' if _nconn else ''))
+            L.append(f'  {_nid} [label="{_lbl}" fillcolor="{_fill}" '
+                     f'color="{_bord}"];')
+        L.append("}")
+        _ci += 1
+    # External endpoint nodes + edges.
+    _ext: dict[str, str] = {}
+    _edges: set = set()
+    _name_to_proj = {_a: _p for (_p, _a) in apps}
+    for (_p, _a), _ad in apps.items():
+        _src = _arch_node_id("app", _p, _a)
+        for _c in _ad.get("connections") or []:
+            _kind = _c.get("kind") or "other"
+            _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
+            _tgt_app = _c.get("target_app") or ""
+            if _tgt_app and _tgt_app in _name_to_proj:
+                _dst = _arch_node_id("app", _name_to_proj[_tgt_app], _tgt_app)
+            else:
+                _label = _c["host"] + (f':{_c["port"]}' if _c.get("port") else "")
+                _ext[_label] = _kind
+                _dst = _arch_node_id("ext", _label)
+            _edges.add((_src, _dst, _kind, _col))
+    for _label, _kind in _ext.items():
+        _eid = _arch_node_id("ext", _label)
+        _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
+        _shape = _ARCH_KIND_SHAPE.get(_kind, "box")
+        L.append(f'{_eid} [label="{_arch_dot_esc(_label)}" shape={_shape} '
+                 f'style="filled" fillcolor="#f1f5f9" color="{_col}" '
+                 f'fontsize=9 fontname="Helvetica"];')
+    for _src, _dst, _kind, _col in sorted(_edges):
+        L.append(f'{_src} -> {_dst} [color="{_col}"];')
+    L.append("}")
+    return "\n".join(L)
+
+
+def _arch_conn_set(ad: dict) -> set:
+    return {(c["kind"], c["host"], c["port"]) for c in ad.get("connections") or []}
+
+
+def _arch_diff(edA: dict, edB: dict) -> dict:
+    """Structured diff between two envs: apps only-in-A / only-in-B / changed
+    (same app, different connection set)."""
+    A, B = edA.get("apps", {}), edB.get("apps", {})
+    _ka, _kb = set(A), set(B)
+    only_a = sorted(_ka - _kb)
+    only_b = sorted(_kb - _ka)
+    changed = []
+    for _key in sorted(_ka & _kb):
+        _ca, _cb = _arch_conn_set(A[_key]), _arch_conn_set(B[_key])
+        _added = sorted(_cb - _ca)
+        _removed = sorted(_ca - _cb)
+        if _added or _removed:
+            changed.append({"key": _key, "added": _added, "removed": _removed})
+    return {"only_a": only_a, "only_b": only_b, "changed": changed}
+
+
+def _arch_env_sort_key(env: str):
+    _order = {e: i for i, e in enumerate(_INV_ENVIRONMENTS)}
+    return (_order.get(env.lower(), 99), env.lower())
+
+
+def _arch_legend_html() -> str:
+    _items = [("http", "HTTP / gRPC / WS"), ("db", "Database"),
+              ("queue", "Queue / broker"), ("socket", "Socket / host:port"),
+              ("ldap", "LDAP"), ("file/mail", "FTP / mail")]
+    _chips = "".join(
+        f'<span class="arch-leg"><span class="arch-leg-dot" '
+        f'style="background:{_ARCH_KIND_COLOR[_k]}"></span>{_lbl}</span>'
+        for _k, _lbl in _items)
+    return f'<div class="arch-legend">{_chips}</div>'
+
+
+def _render_architecture() -> None:
+    """Admin-only: per-environment service architecture parsed from the Control
+    config.yml files, with two-environment comparison. Deferred + cached."""
+    if not _is_admin:
+        st.info("Admin only.")
+        return
+    _host = (_git_creds().get("hostname") or "").strip()
+    _hc, _bc = st.columns([5, 1])
+    with _bc:
+        if st.button("↻ Refresh", key="_arch_refresh_v1",
+                     use_container_width=True,
+                     help="Re-clone + re-parse all Control config.yml files."):
+            _arch_build_model.clear()
+            st.rerun()
+    if not _host:
+        st.markdown('<div class="adoc-err">ADO host not resolved from vault — '
+                    'needed to clone the Control config repos.</div>',
+                    unsafe_allow_html=True)
+        return
+    _repos, _src = _config_list_team_repos(_host)
+    _teams = _config_viewable_teams(_repos)
+    with st.spinner("Cloning + parsing Control config.yml files…"):
+        _model = _arch_build_model(_host, json.dumps(sorted(_teams)))
+    _envs = _model.get("envs") or {}
+    if not _model.get("ok") or not _envs:
+        _errs = "; ".join(_model.get("errors") or []) or "no config.yml files found"
+        st.markdown(f'<div class="adoc-err">Could not build architecture — '
+                    f'{html.escape(_errs[:400])}</div>', unsafe_allow_html=True)
+        return
+    _env_names = sorted(_envs.keys(), key=_arch_env_sort_key)
+    _tot_apps = sum(len(e["apps"]) for e in _envs.values())
+    st.markdown(
+        '<div class="arch-summary">'
+        f'<b>{len(_env_names)}</b> environments · '
+        f'<b>{_model.get("n_configs", 0)}</b> config.yml parsed · '
+        f'<b>{_tot_apps}</b> app-configs · '
+        f'<b>{_model.get("n_teams", 0)}</b> teams scanned'
+        '</div>' + _arch_legend_html(),
+        unsafe_allow_html=True)
+    if _model.get("errors"):
+        with st.expander(f"⚠ {len(_model['errors'])} repo(s) could not be read"):
+            st.markdown("".join(
+                f'<div class="arch-err-row">{html.escape(_e)}</div>'
+                for _e in _model["errors"][:60]), unsafe_allow_html=True)
+
+    _cmp = st.toggle("Compare two environments", key="_arch_cmp_v1",
+                     value=len(_env_names) > 1)
+    if not _cmp:
+        _env = st.selectbox("Environment", _env_names, key="_arch_env_single_v1")
+        st.graphviz_chart(_arch_build_dot(_env, _envs[_env]),
+                          use_container_width=True)
+        return
+
+    _cA, _cB = st.columns(2)
+    with _cA:
+        _ea = st.selectbox("Environment A", _env_names, index=0,
+                           key="_arch_env_a_v1")
+    with _cB:
+        _eb = st.selectbox("Environment B", _env_names,
+                           index=min(1, len(_env_names) - 1),
+                           key="_arch_env_b_v1")
+    _diff = _arch_diff(_envs[_ea], _envs[_eb])
+    # Highlight maps: only-in-A flagged 'removed' on the A diagram; only-in-B
+    # 'added' on the B diagram; changed apps 'changed' on both.
+    _hl_a = {k: "removed" for k in _diff["only_a"]}
+    _hl_b = {k: "added" for k in _diff["only_b"]}
+    for _ch in _diff["changed"]:
+        _hl_a[_ch["key"]] = "changed"
+        _hl_b[_ch["key"]] = "changed"
+    _gA, _gB = st.columns(2)
+    with _gA:
+        st.markdown(f'<div class="arch-env-head">A · {html.escape(_ea)}</div>',
+                    unsafe_allow_html=True)
+        st.graphviz_chart(_arch_build_dot(_ea, _envs[_ea], highlight=_hl_a),
+                          use_container_width=True)
+    with _gB:
+        st.markdown(f'<div class="arch-env-head">B · {html.escape(_eb)}</div>',
+                    unsafe_allow_html=True)
+        st.graphviz_chart(_arch_build_dot(_eb, _envs[_eb], highlight=_hl_b),
+                          use_container_width=True)
+
+    # ── Structured diff ────────────────────────────────────────────────────
+    def _app_lbl(key) -> str:
+        return f'{key[1]} <span class="arch-diff-proj">{key[0]}</span>'
+
+    def _conn_chips(conns) -> str:
+        return "".join(
+            f'<span class="arch-conn" style="border-color:'
+            f'{_ARCH_KIND_COLOR.get(_k, "#94a3b8")}">'
+            f'{html.escape(_k)}·{html.escape(_h)}'
+            f'{":" + str(_p) if _p else ""}</span>'
+            for (_k, _h, _p) in conns)
+
+    _onlya = "".join(f'<tr><td>{_app_lbl(k)}</td></tr>' for k in _diff["only_a"])
+    _onlyb = "".join(f'<tr><td>{_app_lbl(k)}</td></tr>' for k in _diff["only_b"])
+    _chg = "".join(
+        f'<tr><td>{_app_lbl(c["key"])}</td>'
+        f'<td>{_conn_chips(c["removed"]) or "—"}</td>'
+        f'<td>{_conn_chips(c["added"]) or "—"}</td></tr>'
+        for c in _diff["changed"])
+    st.markdown(
+        '<div class="arch-diff">'
+        f'<div class="arch-diff-head">Δ Comparison · '
+        f'{html.escape(_ea)} → {html.escape(_eb)}</div>'
+        '<div class="arch-diff-grid">'
+        '<div class="arch-diff-col"><div class="arch-diff-col-h is-rm">'
+        f'Only in {html.escape(_ea)} <b>{len(_diff["only_a"])}</b></div>'
+        f'<table class="arch-diff-tbl"><tbody>{_onlya or "<tr><td>—</td></tr>"}'
+        '</tbody></table></div>'
+        '<div class="arch-diff-col"><div class="arch-diff-col-h is-add">'
+        f'Only in {html.escape(_eb)} <b>{len(_diff["only_b"])}</b></div>'
+        f'<table class="arch-diff-tbl"><tbody>{_onlyb or "<tr><td>—</td></tr>"}'
+        '</tbody></table></div>'
+        '</div>'
+        f'<div class="arch-diff-col-h is-chg" style="margin-top:10px">'
+        f'Changed connections <b>{len(_diff["changed"])}</b></div>'
+        '<table class="arch-diff-tbl arch-diff-chg"><thead><tr>'
+        f'<th>App</th><th>Removed (in {html.escape(_ea)})</th>'
+        f'<th>Added (in {html.escape(_eb)})</th></tr></thead>'
+        f'<tbody>{_chg or "<tr><td colspan=3>— no connection changes —</td></tr>"}'
+        '</tbody></table>'
+        '</div>',
+        unsafe_allow_html=True)
+
+
+# =============================================================================
 # PEOPLE INSIGHTS PANEL — per-user × per-team stats, smart-loaded
 # =============================================================================
 # Inline section at the bottom of the inventory tab. Aggregates per-user
@@ -22173,6 +22482,223 @@ def _config_scan_team(team: str, head_marker: str) -> dict:
         out["n_apps"] += len(_app_entries)
     out["n_projects"] = len(out["projects"])
     return out
+
+
+# =============================================================================
+# ENVIRONMENT ARCHITECTURE — parse Control config.yml → per-env topology
+# =============================================================================
+# Walks every team's Control config repo, reads each <project>/<env>_<app>/
+# config.yml, and extracts REMOTE CONNECTIONS heuristically (URLs of any scheme,
+# DB connection strings, host:port pairs, and `*_host`/`*_port`/`*_url`/`*_dsn`
+# style variables). Groups by environment and resolves connection targets to
+# sibling apps where possible, so each env becomes a project→app graph with
+# inter-service edges. Drives the Architecture tab (Graphviz visualisation).
+ARCH_MODEL_TTL = int(os.environ.get("ARCH_MODEL_TTL", "600"))
+_ARCH_TEAM_CAP = int(os.environ.get("ARCH_TEAM_CAP", "300"))
+
+# URL / connection-string scheme → host(:port). Covers http(s), websockets,
+# every common DB, message brokers, ldap, ftp, raw tcp/udp, jdbc:* wrappers.
+_ARCH_SCHEME_RE = re.compile(
+    r'\b('
+    r'jdbc:[a-z0-9]+|'
+    r'https?|wss?|grpc|ftp|sftp|smtps?|imaps?|'
+    r'postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|oracle|'
+    r'sqlserver|mssql|cassandra|clickhouse|elasticsearch|'
+    r'amqps?|kafka|mqtt|nats|stomp|'
+    r'tcp|udp|ldaps?'
+    r')://'
+    r'(?:[^@/\s:"\']+(?::[^@/\s"\']*)?@)?'      # optional user[:pass]@
+    r'([a-zA-Z0-9._\-]+)'                       # host
+    r'(?::(\d{1,5}))?',                         # optional :port
+    re.I)
+_ARCH_HOST_KEY_RE = re.compile(
+    r'(?:^|[_.])(host|hostname|server|servername|addr|address|fqdn|node|broker|endpoint)$', re.I)
+_ARCH_PORT_KEY_RE = re.compile(r'(?:^|[_.])port$', re.I)
+_ARCH_URLKEY_RE = re.compile(
+    r'(?:^|[_.])(url|uri|endpoint|dsn|connection_?string|conn_?str|datasource|data_source)$', re.I)
+# bare host:port inside any string (host must contain a letter — skips "1.2:80")
+_ARCH_HOSTPORT_RE = re.compile(
+    r'\b([a-zA-Z][a-zA-Z0-9._\-]*\.[a-zA-Z0-9._\-]+|[a-zA-Z][a-zA-Z0-9_\-]{2,}):(\d{2,5})\b')
+# key=value connection-string fragments: Host=..;Port=..;  Server=..;  Data Source=..
+_ARCH_KV_HOST_RE = re.compile(
+    r'(?:host|server|data\s*source|datasource)\s*=\s*([a-zA-Z0-9._\-]+)', re.I)
+_ARCH_KV_PORT_RE = re.compile(r'port\s*=\s*(\d{1,5})', re.I)
+
+_ARCH_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "::", ""}
+
+
+def _arch_kind(scheme: str) -> str:
+    """Map a URL scheme to a coarse connection kind (drives colour + shape)."""
+    s = scheme.lower()
+    if s.startswith("jdbc:"):
+        s = s[5:]
+    if s in ("http", "https", "ws", "wss", "grpc"):
+        return "http"
+    if s in ("postgres", "postgresql", "mysql", "mariadb", "mongodb",
+             "mongodb+srv", "redis", "rediss", "oracle", "sqlserver",
+             "mssql", "cassandra", "clickhouse", "elasticsearch"):
+        return "db"
+    if s in ("amqp", "amqps", "kafka", "mqtt", "nats", "stomp"):
+        return "queue"
+    if s in ("ldap", "ldaps"):
+        return "ldap"
+    if s in ("ftp", "sftp", "smtp", "smtps", "imap", "imaps"):
+        return "file/mail"
+    if s in ("tcp", "udp"):
+        return "socket"
+    return "other"
+
+
+def _arch_extract_connections(cfg: Any) -> list[dict]:
+    """Heuristically pull every remote connection out of a parsed config.yml.
+
+    Returns a deduped list of ``{"kind","host","port","scheme","via"}`` where
+    ``via`` is the dotted key path the connection was found under (for the
+    diff / tooltip). Local addresses (localhost / 0.0.0.0 / …) are dropped."""
+    conns: list[dict] = []
+    _host_cands: dict[str, str] = {}   # parent path → hostname (from *_host keys)
+    _port_cands: dict[str, str] = {}   # parent path → port    (from *_port keys)
+
+    def _add(kind: str, host: str, port: Any, scheme: str, via: str) -> None:
+        _h = (host or "").strip().strip("/").lower()
+        if _h in _ARCH_LOCAL_HOSTS or "{" in _h or "$" in _h:
+            return  # skip locals + un-rendered templated values
+        conns.append({
+            "kind": kind, "host": _h,
+            "port": int(port) if str(port or "").isdigit() else None,
+            "scheme": scheme, "via": via,
+        })
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for _k, _v in node.items():
+                _walk(_v, f"{path}.{_k}" if path else str(_k))
+        elif isinstance(node, (list, tuple)):
+            for _i, _v in enumerate(node):
+                _walk(_v, f"{path}[{_i}]")
+        elif node is not None and not isinstance(node, bool):
+            _sval = str(node)
+            _key = path.rsplit(".", 1)[-1].split("[", 1)[0]
+            _parent = path.rsplit(".", 1)[0] if "." in path else ""
+            _has_scheme = False
+            for _m in _ARCH_SCHEME_RE.finditer(_sval):
+                _has_scheme = True
+                _add(_arch_kind(_m.group(1)), _m.group(2), _m.group(3),
+                     _m.group(1).lower(), path)
+            # key=value connection-string (Host=..;Port=..)
+            _mh = _ARCH_KV_HOST_RE.search(_sval)
+            if _mh:
+                _mp = _ARCH_KV_PORT_RE.search(_sval)
+                _add("db", _mh.group(1), _mp.group(1) if _mp else None,
+                     "connstr", path)
+            # bare host:port (only when no scheme already matched the value)
+            if not _has_scheme:
+                for _m in _ARCH_HOSTPORT_RE.finditer(_sval):
+                    _add("socket", _m.group(1), _m.group(2), "host:port", path)
+            # *_host / *_port sibling candidates (paired post-walk by parent)
+            _bare = _sval.strip()
+            if (_ARCH_HOST_KEY_RE.search(_key) and "://" not in _bare
+                    and re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._\-]*$', _bare)):
+                _host_cands[_parent] = _bare
+            if _ARCH_PORT_KEY_RE.search(_key) and _bare.isdigit():
+                _port_cands[_parent] = _bare
+            # url/dsn/endpoint key whose value is a bare host (no scheme)
+            if _ARCH_URLKEY_RE.search(_key) and "://" not in _bare and _bare:
+                _m = _ARCH_HOSTPORT_RE.search(_bare)
+                if _m:
+                    _add("socket", _m.group(1), _m.group(2), "endpoint", path)
+                elif re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._\-]*$', _bare):
+                    _add("socket", _bare, None, "endpoint", path)
+
+    _walk(cfg, "")
+    # Pair *_host with a *_port found under the SAME parent object.
+    for _p, _h in _host_cands.items():
+        _add("socket", _h, _port_cands.get(_p), "host+port", _p or "(root)")
+    # Dedupe on (kind, host, port).
+    _seen: set = set()
+    _out: list[dict] = []
+    for _c in conns:
+        _k = (_c["kind"], _c["host"], _c["port"])
+        if _k in _seen:
+            continue
+        _seen.add(_k)
+        _out.append(_c)
+    return _out
+
+
+@st.cache_data(ttl=ARCH_MODEL_TTL, show_spinner=False)
+def _arch_build_model(host: str, teams_json: str) -> dict:
+    """Clone/scan every team's Control repo, parse each config.yml, and build a
+    per-environment topology. Cached; returns
+    ``{"ok","errors","envs": {env: {"apps": {(project,app): {...}}}}}``."""
+    _empty = {"ok": False, "errors": [], "envs": {}, "n_teams": 0,
+              "n_configs": 0}
+    if not host:
+        return {**_empty, "errors": ["ADO host not resolved from vault."]}
+    if not _YAML_AVAILABLE:
+        return {**_empty, "errors": ["PyYAML not installed."]}
+    try:
+        teams = json.loads(teams_json)
+    except Exception:
+        teams = []
+    teams = [t for t in teams if t][:_ARCH_TEAM_CAP]
+    if not teams:
+        return {**_empty, "errors": ["No Control config repositories discovered."]}
+    envs: dict[str, dict] = {}
+    errors: list[str] = []
+    _n_cfg = 0
+    for _team in teams:
+        try:
+            _ok, _head, _msg = _ensure_config_repo(host, _team)
+        except Exception as _e:
+            errors.append(f"{_team}: {type(_e).__name__}")
+            continue
+        if not _ok:
+            errors.append(f"{_team}: {_msg}")
+            continue
+        _scan = _config_scan_team(_team, _head)
+        for _proj in _scan.get("projects", []):
+            _pname = _proj["project"]
+            for _app in _proj.get("apps", []):
+                if not _app.get("has_config"):
+                    continue
+                _env, _appname = _app.get("env", ""), _app.get("app", "")
+                if not (_env and _appname):
+                    continue
+                _rel = f'{_app["rel"]}/{CONFIG_MANDATORY_FILE}'
+                _text, _is_bin, _err = _config_read_file(_team, _rel, _head)
+                if _is_bin or _err or not _text:
+                    continue
+                try:
+                    _cfg = _yaml.safe_load(_text)
+                except Exception:
+                    _cfg = None
+                _conns = (_arch_extract_connections(_cfg)
+                          if isinstance(_cfg, (dict, list)) else [])
+                _n_cfg += 1
+                envs.setdefault(_env, {"apps": {}})["apps"][(_pname, _appname)] = {
+                    "team": _team, "project": _pname, "app": _appname,
+                    "rel": _rel, "connections": _conns,
+                }
+    # Resolve each connection's target to a sibling app in the same env where
+    # the target host references that app's name (substring match on a >=3-char
+    # name token). Unresolved targets render as external endpoint nodes.
+    for _env, _ed in envs.items():
+        _names = sorted({_a for (_p, _a) in _ed["apps"]},
+                        key=len, reverse=True)
+        for (_p, _a), _ad in _ed["apps"].items():
+            for _c in _ad["connections"]:
+                _tgt = ""
+                _h = _c["host"]
+                for _nm in _names:
+                    _nml = _nm.lower()
+                    if (len(_nml) >= 3 and _nml != _a.lower()
+                            and _nml in _h):
+                        _tgt = _nm
+                        break
+                _c["target_app"] = _tgt
+    return {"ok": True, "errors": errors, "envs": envs,
+            "n_teams": len(teams), "n_configs": _n_cfg}
 
 
 def _config_abs_under_repo(team: str, relpath: str) -> str | None:
@@ -33546,6 +34072,9 @@ if _show_inv and _inventory_slot is not None:
         # ADO Coverage tab — admin-only; pipelined vs un-pipelined repos across
         # every ADO collection / project. Deferred until opened.
         _ado_show = _is_admin
+        # Architecture tab — admin-only; per-env service topology parsed from
+        # the Control config.yml files, with two-env comparison. Deferred.
+        _arch_show = _is_admin
         # NOTE: per-team configurations are no longer a standalone tab — they
         # now live as a ⚙ cog popover inside each environment cell of the
         # Pipelines Inventory table (see `_iv_cfg_*` in `_render_inventory_view`).
@@ -33563,6 +34092,8 @@ if _show_inv and _inventory_slot is not None:
             _tab_labels.append("📚  HISTORY → PGSQL")
         if _ado_show:
             _tab_labels.append("☁  ADO COVERAGE")
+        if _arch_show:
+            _tab_labels.append("🗺  ARCHITECTURE")
 
         # ── Admin: Elastic ↔ Postgres drift banner ──────────────────────────
         # Postgres is the primary read source; when an index's PG mirror trails
@@ -33611,6 +34142,9 @@ if _show_inv and _inventory_slot is not None:
             if _hist_show:
                 _idx += 1
             _tab_ado = _tabs[_idx] if _ado_show else None
+            if _ado_show:
+                _idx += 1
+            _tab_arch = _tabs[_idx] if _arch_show else None
             if _tab_teams is not None:
                 with _tab_teams:
                     st.markdown(
@@ -33710,6 +34244,23 @@ if _show_inv and _inventory_slot is not None:
                     _ado_slot = st.empty()
             else:
                 _ado_slot = None
+
+            if _tab_arch is not None:
+                with _tab_arch:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Per-environment service architecture parsed from the '
+                        'Control <code>config.yml</code> files. Nodes = apps '
+                        '(grouped by project); edges = detected remote '
+                        'connections (HTTP · DB · queue · socket · host:port · '
+                        'endpoints). Toggle compare to diff two environments '
+                        'side by side. Loads on open · cached 10 min. Admin only.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _arch_slot = st.empty()
+            else:
+                _arch_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes scope keys + user blobs the other tabs depend on.
@@ -33830,6 +34381,17 @@ if _show_inv and _inventory_slot is not None:
                     hint="Pipelined vs un-pipelined repositories across every "
                          "ADO collection / project. Walks ADO on open; cached "
                          "30 min.",
+                )
+
+        # Architecture — deferred; clones + parses Control config.yml on open.
+        if _arch_slot is not None:
+            with _arch_slot.container():
+                _lazy_tab_body(
+                    "_tab_open_arch_v1", "Architecture",
+                    _render_architecture,
+                    hint="Per-environment service topology from the Control "
+                         "config.yml files, with two-env comparison. Clones + "
+                         "parses on open; cached 10 min.",
                 )
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
