@@ -6897,6 +6897,27 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     color: var(--cc-accent); text-decoration: none;
 }
 .jira-key:hover { text-decoration: underline; }
+.jira-proj-link {
+    display: inline-block; margin-top: 8px; font-size: .74rem; font-weight: 700;
+    color: var(--cc-accent); text-decoration: none; font-family: var(--cc-mono);
+}
+.jira-proj-link:hover { text-decoration: underline; }
+/* Project popover external links (Azure DevOps project · Jira project) */
+.ap-projlinks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.ap-projlink {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: .72rem; font-weight: 700; font-family: var(--cc-mono);
+    color: var(--cc-accent); text-decoration: none;
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 32%, transparent);
+    background: color-mix(in srgb, var(--cc-accent) 9%, transparent);
+    border-radius: 6px; padding: 3px 10px;
+}
+.ap-projlink:hover { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); }
+.ap-projlink.is-jira {
+    color: #2684ff; border-color: color-mix(in srgb, #2684ff 32%, transparent);
+    background: color-mix(in srgb, #2684ff 9%, transparent);
+}
+.ap-projlink.is-jira:hover { background: color-mix(in srgb, #2684ff 16%, transparent); }
 .jira-status {
     font-size: .62rem; font-weight: 600; color: var(--cc-text-mute);
     margin-left: auto;
@@ -28122,6 +28143,20 @@ def _fetch_jira_by_project(projects_json: str) -> dict:
         # priority rank keeps recency order within the same priority.
         _slot["tickets"].sort(key=lambda _t: _jira_prio_rank(_t["priority"]))
         _slot["tickets"] = _slot["tickets"][:8]
+        # Derive the Jira PROJECT URL from any ticket: the issue browse base
+        # (everything up to "/browse/") + the project key (issuekey before the
+        # last "-"). Yields e.g. http://jira/browse/ENG — the project's issue
+        # navigator. "" when no ticket carried a usable URL.
+        _slot["project_url"] = ""
+        for _t in _slot["tickets"]:
+            _u = (_t.get("url") or "").strip()
+            _k = (_t.get("key") or "").strip()
+            if "/browse/" in _u and "-" in _k:
+                _base = _u.split("/browse/", 1)[0]
+                _pkey = _k.rsplit("-", 1)[0]
+                if _base and _pkey:
+                    _slot["project_url"] = f"{_base}/browse/{_pkey}"
+                    break
         _slot.pop("_seen", None)
     return out
 
@@ -33660,6 +33695,41 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'      </span>'
                 f'    </div>'
             )
+        # ── Project-level external links: Azure DevOps project + Jira project.
+        # ADO project URL = http://{host}/{org}/{project} (the project landing
+        # page, NOT a repo under it). org = the project's dev_team collection
+        # (company fallback). Jira project URL is derived in _fetch_jira_by_project.
+        _ji_pp = _iv_jira_by_proj.get(_proj) or {}
+        _jira_proj_url = (_ji_pp.get("project_url") or "").strip()
+        _ado_proj_url = ""
+        if _iv_ado_host and _proj:
+            _org_p = ""
+            for _dt in (_teams_p.get("dev_team") or []):
+                _c = _iv_team_collections.get(_team_match_key(_dt))
+                if _c:
+                    _org_p = _c
+                    break
+            if not _org_p:
+                _org_p = _co_p
+            if _org_p:
+                _ado_proj_url = (
+                    f"http://{_iv_ado_host}/"
+                    f"{urllib.parse.quote(_org_p, safe='')}/"
+                    f"{urllib.parse.quote(_proj, safe='')}")
+        _links_p: list[str] = []
+        if _ado_proj_url:
+            _links_p.append(
+                f'<a class="ap-projlink" href="{html.escape(_ado_proj_url, quote=True)}" '
+                f'target="_blank" rel="noopener noreferrer">↗ Azure DevOps project</a>')
+        if _jira_proj_url:
+            _links_p.append(
+                f'<a class="ap-projlink is-jira" href="{html.escape(_jira_proj_url, quote=True)}" '
+                f'target="_blank" rel="noopener noreferrer">↗ Jira project</a>')
+        _links_block_p = (
+            '    <div class="ap-section">Links</div>'
+            f'    <div class="ap-projlinks">{"".join(_links_p)}</div>'
+            if _links_p else "")
+
         # Git-derived project-inventory "Created" line.
         _proj_created_iso = _iv_proj_created(_proj)
         _proj_created_block_p = ""
@@ -33694,6 +33764,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + _remedy_block_p +
             f'    <div class="ap-section">Applications <span style="text-transform:none;font-weight:600;color:var(--cc-text-mute);letter-spacing:0;margin-left:4px">· {len(_apps_p)}</span></div>'
             f'    <div class="ap-applist">{_apps_block_p}</div>'
+            f'    {_links_block_p}'
             f'  </div>'
             f'  <div class="ap-foot">Sources: ef-devops-inventory · ef-devops-projects · click an app for full details</div>'
             f'</div>'
@@ -33752,7 +33823,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'      <span class="ap-section-note">top {_shown_n} of {_ji_n}'
                 f'</span></div>'
                 f'    <div class="jira-list">' + "".join(_ji_rows) + '</div>'
-                f'  </div>'
+                + (f'    <a class="jira-proj-link" '
+                   f'href="{html.escape((_ji.get("project_url") or ""), quote=True)}" '
+                   f'target="_blank" rel="noopener noreferrer">'
+                   f'↗ Open this project in Jira</a>'
+                   if _ji.get("project_url") else "")
+                + f'  </div>'
                 f'  <div class="ap-foot">Source: ef-bs-jira-issues · open = '
                 f'status ∉ closed · ranked by priority</div>'
                 f'</div>'
