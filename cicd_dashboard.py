@@ -4776,6 +4776,37 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-size: 0.7rem;
 }
 
+/* ── Teams matrix: companies (columns) × roles (rows) ──────────────────── */
+.tm-mx-co {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--cc-sans); font-weight: 800; font-size: 0.82rem;
+    color: var(--cc-text); padding: 6px 8px; margin: 0 0 4px 0;
+    border-radius: 8px; background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+    position: sticky; top: 0; z-index: 2;
+}
+.tm-mx-co-glyph { color: var(--cc-amber); }
+.tm-mx-co-n {
+    margin-left: auto; font-family: var(--cc-mono); font-size: 0.66rem;
+    font-weight: 700; color: var(--cc-text-mute);
+    background: var(--cc-surface); border: 1px solid var(--cc-border);
+    border-radius: 999px; padding: 0 7px;
+}
+.tm-mx-role {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.6rem; font-weight: 800; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--cc-text-mute);
+    margin: 9px 0 3px 0; padding: 2px 4px 3px 4px;
+    border-bottom: 1px solid var(--cc-border);
+}
+.tm-mx-role-n {
+    margin-left: auto; font-family: var(--cc-mono); font-weight: 700;
+    color: var(--cc-text-mute);
+}
+.tm-mx-role-developer  { color: var(--cc-blue);  border-color: color-mix(in srgb, var(--cc-blue) 30%, var(--cc-border)); }
+.tm-mx-role-qc         { color: var(--cc-teal);  border-color: color-mix(in srgb, var(--cc-teal) 30%, var(--cc-border)); }
+.tm-mx-role-operations { color: var(--cc-amber); border-color: color-mix(in srgb, var(--cc-amber) 30%, var(--cc-border)); }
+.tm-mx-role-unknown    { color: var(--cc-text-mute); }
 .tm-section-head {
     display: flex;
     align-items: center;
@@ -16504,10 +16535,7 @@ def _render_teams_and_members_view() -> None:
             unsafe_allow_html=True,
         )
 
-    _PER_ROW = 4
-    for _row_start in range(0, len(_filtered_teams), _PER_ROW):
-        _cols = st.columns(_PER_ROW)
-        for _col_idx, _t in enumerate(_filtered_teams[_row_start:_row_start + _PER_ROW]):
+    def _render_team_card(_t: str) -> None:
             _members = _team_members[_t]
             _roles = sorted(_team_roles.get(_t, set()))
             # Recently-new / recently-changed members drive the highlight.
@@ -16519,7 +16547,7 @@ def _render_teams_and_members_view() -> None:
             if _upd_ms:
                 _badge += f"  ·  ✎{len(_upd_ms)}"
             _btn_lbl = f"▦ {_t}  ·  {len(_members):,}{_badge}"
-            with _cols[_col_idx]:
+            if True:  # column context is supplied by the matrix caller
                 with st.popover(_btn_lbl, use_container_width=True):
                     _role_chips = "".join(
                         f'<span class="tm-role-chip tm-role-{html.escape(_r.lower())}">'
@@ -16574,7 +16602,7 @@ def _render_teams_and_members_view() -> None:
                             '</div>',
                             unsafe_allow_html=True,
                         )
-                        continue
+                        return
                     # Group members by Company — admins asked for this
                     # cut explicitly. Unknown/missing company members
                     # fall into a trailing "— no company —" bucket.
@@ -16664,6 +16692,90 @@ def _render_teams_and_members_view() -> None:
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+
+    # ── Company × role matrix ─────────────────────────────────────────────
+    # Columns = companies (side by side); within each column the teams are
+    # stacked by role going down: Development → Quality → Operations → any
+    # other roles → Unknown/unmapped. A team's company is the most common
+    # ldap_company across its members; its role bucket is its highest-priority
+    # role (dev > qc > ops), so each team lands in exactly one cell.
+    _TM_ROLE_BUCKETS = [("Developer", "Development"), ("QC", "Quality"),
+                        ("Operations", "Operations")]
+    _TM_CANON_ROLES = {c for c, _ in _TM_ROLE_BUCKETS}
+
+    def _tm_team_company(_t: str) -> str:
+        _counts: dict[str, list] = {}
+        for _m in _team_members.get(_t, []):
+            _co = (_m.get("ldap_company") or "").strip()
+            if not _co:
+                continue
+            _slot = _counts.setdefault(_co.lower(), [_co, 0])
+            _slot[1] += 1
+        if not _counts:
+            return "— no company —"
+        return max(_counts.values(), key=lambda v: v[1])[0]
+
+    def _tm_role_bucket(_t: str) -> str:
+        _r = _team_roles.get(_t, set())
+        for _canon, _ in _TM_ROLE_BUCKETS:
+            if _canon in _r:
+                return _canon
+        _others = sorted(_r)
+        return _others[0] if _others else "__unknown__"
+
+    _matrix: dict[str, dict[str, list[str]]] = {}
+    _co_count: dict[str, int] = {}
+    for _t in _filtered_teams:
+        _co = _tm_team_company(_t)
+        _bk = _tm_role_bucket(_t)
+        _matrix.setdefault(_co, {}).setdefault(_bk, []).append(_t)
+        _co_count[_co] = _co_count.get(_co, 0) + 1
+
+    def _co_order(_c: str):
+        return (_c == "— no company —", -_co_count[_c], _c.lower())
+
+    _companies = sorted(_matrix, key=_co_order)
+    _TM_MAX_COLS = 5
+    _co_over = max(0, len(_companies) - _TM_MAX_COLS)
+    _companies_shown = _companies[:_TM_MAX_COLS]
+
+    def _role_rows(_bkmap: dict) -> list[tuple]:
+        _rows = [(c, lbl) for c, lbl in _TM_ROLE_BUCKETS if c in _bkmap]
+        _rows += [(_o, _o) for _o in sorted(
+            b for b in _bkmap if b not in _TM_CANON_ROLES and b != "__unknown__")]
+        if "__unknown__" in _bkmap:
+            _rows.append(("__unknown__", "Unknown / unmapped"))
+        return _rows
+
+    if _companies_shown:
+        _mx_cols = st.columns(len(_companies_shown))
+        for _mc, _co in zip(_mx_cols, _companies_shown):
+            with _mc:
+                st.markdown(
+                    f'<div class="tm-mx-co"><span class="tm-mx-co-glyph">🏢</span>'
+                    f'{html.escape(_co)}'
+                    f'<span class="tm-mx-co-n">{_co_count[_co]}</span></div>',
+                    unsafe_allow_html=True)
+                _bkmap = _matrix[_co]
+                for _bk, _lbl in _role_rows(_bkmap):
+                    _teams_here = sorted(
+                        _bkmap[_bk],
+                        key=lambda k: (-len(_team_members[k]), k.lower()))
+                    _rcls = (_bk.lower() if _bk != "__unknown__" else "unknown")
+                    st.markdown(
+                        f'<div class="tm-mx-role tm-mx-role-{html.escape(_rcls)}">'
+                        f'{html.escape(_lbl)}'
+                        f'<span class="tm-mx-role-n">{len(_teams_here)}</span></div>',
+                        unsafe_allow_html=True)
+                    for _t in _teams_here:
+                        _render_team_card(_t)
+    if _co_over:
+        st.markdown(
+            f'<div class="tm-section-sub" style="margin:6px 0 0 0">'
+            f'+ <b>{_co_over}</b> more compan'
+            f'{"ies" if _co_over != 1 else "y"} hidden (top {_TM_MAX_COLS} by '
+            f'team count shown) · narrow with the search box above.</div>',
+            unsafe_allow_html=True)
 
     # ── Members directory (popover-gated) ────────────────────────────────
     # Filterable members table lives inside a popover so the tab stays
