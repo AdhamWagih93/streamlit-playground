@@ -5935,6 +5935,22 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .ih-commit-author { font-weight: 600; color: var(--cc-text-dim); }
 .ih-commit-when { font-family: var(--cc-mono); margin-left: auto; }
+/* Control config repos — expected vs cloned list */
+.ih-ctrl-list {
+    margin-top: 5px; display: flex; flex-direction: column; gap: 2px;
+    max-height: 220px; overflow-y: auto;
+}
+.ih-ctrl-row { display: flex; align-items: center; gap: 6px; font-size: 0.66rem; }
+.ih-ctrl-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.ih-ctrl-dot.is-cloned  { background: var(--cc-green); }
+.ih-ctrl-dot.is-missing { background: var(--cc-text-mute); opacity: 0.5; }
+.ih-ctrl-team { color: var(--cc-text); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ih-ctrl-when {
+    font-family: var(--cc-mono); color: var(--cc-text-mute);
+    margin-left: auto; white-space: nowrap;
+}
+.ih-ctrl-when.is-na { font-style: italic; opacity: 0.7; }
 
 /* ── ADO pipeline coverage tab ─────────────────────────────────────────── */
 .adoc-err {
@@ -14314,6 +14330,33 @@ def _integrations_health() -> list[dict]:
                     "git_branch":    _row.get("branch", ""),
                 })
 
+    # 2b. Control config repositories — discovered (expected) vs cloned on disk.
+    # Cloning happens on demand (config editor / Architecture tab), so this row
+    # tracks coverage without itself cloning anything.
+    if _git_host:
+        _ctrl = _control_repos_status()
+        _exp, _cl = _ctrl["expected"], _ctrl["cloned"]
+        if _exp == 0:
+            out.append({
+                "key": "control", "label": "Control configs", "glyph": "⚙",
+                "state": "skip", "detail": "none discovered",
+                "tip": ("No Control config repositories discovered (ADO REST "
+                        f"list returned nothing; source: {_ctrl['src']})."),
+                "control_repos": [], "control_expected": 0, "control_cloned": 0,
+            })
+        else:
+            _state = ("ok" if _cl == _exp else "warn" if _cl > 0 else "skip")
+            out.append({
+                "key": "control", "label": "Control configs", "glyph": "⚙",
+                "state": _state,
+                "detail": f"{_cl}/{_exp} cloned",
+                "tip": (f"{_exp} Control config repositories discovered; "
+                        f"{_cl} cloned under {CONFIGURATIONS_DIR}/. Repos are "
+                        "cloned on demand (config editor / Architecture tab)."),
+                "control_repos": _ctrl["repos"],
+                "control_expected": _exp, "control_cloned": _cl,
+            })
+
     # 3. Vault — single status across all known paths.
     if not _VAULT_AVAILABLE:
         out.append({
@@ -14649,6 +14692,31 @@ def _render_integrations_strip() -> None:
                 + (f'<div class="ih-card-commits">{_rows_html}</div>'
                    if _rows_html else '')
             )
+        # Control config repos — expected vs cloned + per-repo last-updated.
+        _ctrl_block = ""
+        if "control_repos" in h:
+            _c_exp = int(h.get("control_expected") or 0)
+            _c_cl = int(h.get("control_cloned") or 0)
+            _ctrl_rows = "".join(
+                '<div class="ih-ctrl-row">'
+                f'<span class="ih-ctrl-dot {"is-cloned" if _r["cloned"] else "is-missing"}"></span>'
+                f'<span class="ih-ctrl-team">{html.escape(_r["team"])}</span>'
+                + ('<span class="ih-ctrl-when">'
+                   + html.escape(fmt_dt(_r["last_when"], "%Y-%m-%d %H:%M")
+                                 or (_relative_age(_r["last_when"]) or "—"))
+                   + '</span>' if _r["cloned"]
+                   else '<span class="ih-ctrl-when is-na">not cloned</span>')
+                + '</div>'
+                for _r in sorted(h["control_repos"],
+                                 key=lambda d: (not d["cloned"], d["team"].lower()))
+            )
+            _ctrl_block = (
+                '<div class="ih-card-gitsync">'
+                f'<b>{_c_cl}</b> of <b>{_c_exp}</b> repos cloned · '
+                'cloned on demand</div>'
+                + (f'<div class="ih-ctrl-list">{_ctrl_rows}</div>'
+                   if _ctrl_rows else '')
+            )
         card_html.append(
             f'<div class="ih-card is-{h["state"]}">'
             f'  <div class="ih-card-head">'
@@ -14660,6 +14728,7 @@ def _render_integrations_strip() -> None:
             f'  <div class="ih-card-detail">{html.escape(h["detail"])}</div>'
             f'  <div class="ih-card-tip">{html.escape(h["tip"])}</div>'
             f'  {_git_block}'
+            f'  {_ctrl_block}'
             f'</div>'
         )
 
@@ -22743,6 +22812,33 @@ def _config_read_file(team: str, relpath: str, head_marker: str
         return raw.decode("utf-8", "replace"), False, ""
     except Exception as e:
         return "", False, f"{type(e).__name__}: {e}"
+
+
+def _control_repos_status() -> dict:
+    """Report on the Control config repositories WITHOUT cloning anything new
+    (the integrations strip must stay cheap). Compares the discovered/expected
+    team-repo set against what's already cloned on disk under Configurations/,
+    and reads each clone's last-commit date locally.
+
+    Returns ``{"host": bool, "expected": int, "cloned": int, "src": str,
+    "repos": [{"team","cloned","last_when"}]}``."""
+    host = (_git_creds().get("hostname") or "").strip()
+    expected, src = (_config_list_team_repos(host) if host else ([], "none"))
+    repos: list[dict] = []
+    cloned = 0
+    for _team in expected:
+        _path = _config_team_repo_path(_team)
+        _is_cloned = os.path.isdir(os.path.join(_path, ".git"))
+        _last = ""
+        if _is_cloned:
+            cloned += 1
+            try:
+                _last = _git_recent_commits(_path, 1).get("last_when", "")
+            except Exception:
+                _last = ""
+        repos.append({"team": _team, "cloned": _is_cloned, "last_when": _last})
+    return {"host": bool(host), "expected": len(expected), "cloned": cloned,
+            "src": src, "repos": repos}
 
 
 @st.cache_data(ttl=CONFIG_SCAN_TTL, show_spinner=False)
