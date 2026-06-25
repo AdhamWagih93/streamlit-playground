@@ -2916,6 +2916,19 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-family: var(--cc-mono); font-size: 0.74rem;
     color: var(--cc-green); padding: 5px 2px;
 }
+.cfg-lastupd {
+    font-size: 0.72rem; color: var(--cc-text-dim); line-height: 1.4;
+    padding: 5px 8px; margin: 2px 0 6px 0; border-radius: 6px;
+    background: var(--cc-surface2); border: 1px solid var(--cc-border);
+}
+.cfg-lastupd b { color: var(--cc-text); font-weight: 700; }
+.cfg-lastupd.is-none { color: var(--cc-text-mute); font-style: italic; }
+.cfg-lastupd-rel { color: var(--cc-text-mute); }
+.cfg-lastupd-sha {
+    font-family: var(--cc-mono); color: var(--cc-accent); font-size: 0.66rem;
+    background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+    border-radius: 3px; padding: 0 5px;
+}
 .iv-act-note {
     margin-top: 8px;
     padding: 6px 10px;
@@ -22732,6 +22745,44 @@ def _config_read_file(team: str, relpath: str, head_marker: str
         return "", False, f"{type(e).__name__}: {e}"
 
 
+@st.cache_data(ttl=CONFIG_SCAN_TTL, show_spinner=False)
+def _config_file_history(team: str, relpath: str, head_marker: str) -> dict:
+    """Last commit metadata + the diff of that commit for a SINGLE config file.
+
+    Returns ``{"author","when","message","sha","diff"}`` — all local ``git log``/
+    ``git show`` reads scoped to the one file, so it's cheap. ``head_marker``
+    keys the cache to HEAD so a re-sync invalidates it."""
+    out = {"author": "", "when": "", "message": "", "sha": "", "diff": ""}
+    repo_path = _config_team_repo_path(team)
+    if not (relpath and os.path.isdir(os.path.join(repo_path, ".git"))):
+        return out
+    _fmt = "%H\x1f%an\x1f%cI\x1f%s"
+    try:
+        r = _run_git("log", "-1", f"--pretty=format:{_fmt}", "--", relpath,
+                     cwd=repo_path, inject_auth=False)
+    except Exception:
+        return out
+    if r.returncode != 0 or not (r.stdout or "").strip():
+        return out
+    _parts = r.stdout.strip().split("\x1f")
+    if len(_parts) < 4:
+        return out
+    _full_sha = _parts[0].strip()
+    out.update(sha=_full_sha[:8], author=_parts[1].strip(),
+               when=_parts[2].strip(), message=_parts[3].strip())
+    # Patch introduced by that commit, limited to this file (current vs prior
+    # committed state). `git show` against a single path is a fast local op.
+    if _full_sha:
+        try:
+            rd = _run_git("show", _full_sha, "--format=", "--no-color", "--",
+                          relpath, cwd=repo_path, inject_auth=False)
+            if rd.returncode == 0:
+                out["diff"] = (rd.stdout or "")[:20000]
+        except Exception:
+            pass
+    return out
+
+
 def _config_yaml_error(text: str) -> str:
     """Return a YAML parse error string for *text*, or ``""`` when it parses
     (or PyYAML is unavailable, in which case we don't block the save)."""
@@ -23094,6 +23145,31 @@ def _render_configurations_tab() -> None:
             _is_yaml = _file.lower().endswith((".yml", ".yaml"))
             _lang = "yaml" if _is_yaml else (
                 "json" if _file.lower().endswith(".json") else None)
+            # ── Last-updated provenance + last-committed-change diff ──────────
+            _hist = _config_file_history(_team, _rel, _head)
+            if _hist.get("when") or _hist.get("author"):
+                _h_when = fmt_dt(_hist["when"], "%Y-%m-%d %H:%M") or _hist["when"]
+                _h_rel = _relative_age(_hist["when"])
+                st.markdown(
+                    '<div class="cfg-lastupd">⟲ Last updated '
+                    f'<b>{html.escape(_h_when)}</b>'
+                    + (f' <span class="cfg-lastupd-rel">({html.escape(_h_rel)})</span>'
+                       if _h_rel else '')
+                    + ' by <b>' + html.escape(_hist["author"] or "—") + '</b>'
+                    + (f' <span class="cfg-lastupd-sha">{html.escape(_hist["sha"])}</span>'
+                       if _hist["sha"] else '')
+                    + (f' · {html.escape(_hist["message"])}' if _hist["message"] else '')
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+                if _hist.get("diff"):
+                    with st.expander("▤ Last committed change (diff)",
+                                     expanded=False):
+                        st.code(_hist["diff"], language="diff")
+            else:
+                st.markdown(
+                    '<div class="cfg-lastupd is-none">⟲ No commit history for '
+                    'this file yet.</div>', unsafe_allow_html=True)
             if not _editable:
                 st.code(_text, language=_lang, line_numbers=True)
                 st.caption(
