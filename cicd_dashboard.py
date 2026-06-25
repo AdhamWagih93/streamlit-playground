@@ -5923,6 +5923,87 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .ih-commit-author { font-weight: 600; color: var(--cc-text-dim); }
 .ih-commit-when { font-family: var(--cc-mono); margin-left: auto; }
 
+/* ── ADO pipeline coverage tab ─────────────────────────────────────────── */
+.adoc-err {
+    margin: 8px 0; padding: 10px 14px; border-radius: 9px;
+    background: rgba(220,38,38,.06); border: 1px solid rgba(220,38,38,.30);
+    color: var(--cc-red); font-size: 0.82rem; line-height: 1.45;
+}
+.adoc-err code, .adoc-note code { font-family: var(--cc-mono); font-size: 0.74rem; }
+.adoc-note { margin: 6px 0 2px 0; font-size: 0.74rem; color: var(--cc-amber); }
+.adoc-head {
+    margin: 4px 0 14px 0; padding: 16px 18px; border-radius: 14px;
+    background: var(--cc-surface); border: 1px solid var(--cc-border);
+}
+.adoc-headline { display: flex; align-items: baseline; gap: 10px; }
+.adoc-pct {
+    font-size: 2.4rem; font-weight: 800; line-height: 1;
+    color: var(--cc-green); font-family: var(--cc-data, var(--cc-mono));
+}
+.adoc-pct-lbl { font-size: 0.86rem; color: var(--cc-text-dim); font-weight: 600; }
+.adoc-bar {
+    display: flex; height: 12px; border-radius: 999px; overflow: hidden;
+    margin: 10px 0 6px 0; background: var(--cc-surface2);
+    border: 1px solid var(--cc-border);
+}
+.adoc-bar.is-empty {
+    font-size: 0.66rem; color: var(--cc-text-mute); height: auto;
+    padding: 1px 8px; font-family: var(--cc-mono);
+}
+.adoc-bar-pl { background: var(--cc-green); }
+.adoc-bar-np { background: var(--cc-red); }
+.adoc-legend { display: flex; gap: 14px; margin-top: 4px; }
+.adoc-leg { font-size: 0.72rem; font-weight: 700; font-family: var(--cc-mono); }
+.adoc-leg.is-pl { color: var(--cc-green); }
+.adoc-leg.is-np { color: var(--cc-red); }
+.adoc-totals {
+    display: flex; gap: 18px; margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--cc-border);
+    font-size: 0.8rem; color: var(--cc-text-dim);
+}
+.adoc-totals b { color: var(--cc-text); font-family: var(--cc-mono); }
+.adoc-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 8px; }
+.adoc-table th {
+    text-align: left; font-size: 0.6rem; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--cc-text-mute); font-weight: 700;
+    padding: 4px 10px; border-bottom: 1px solid var(--cc-border);
+}
+.adoc-table td { padding: 7px 10px; border-bottom: 1px solid var(--cc-border);
+    vertical-align: top; }
+.adoc-proj { font-weight: 700; color: var(--cc-text); width: 34%; }
+.adoc-devteam {
+    display: inline-block; margin-left: 6px; font-family: var(--cc-mono);
+    font-size: 0.6rem; font-weight: 700; color: var(--cc-teal);
+    background: color-mix(in srgb, var(--cc-teal) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-teal) 28%, transparent);
+    border-radius: 4px; padding: 0 6px;
+}
+.adoc-devteam.is-none { color: var(--cc-amber);
+    background: color-mix(in srgb, var(--cc-amber) 12%, transparent);
+    border-color: color-mix(in srgb, var(--cc-amber) 28%, transparent); }
+.adoc-desc {
+    margin-top: 3px; font-size: 0.7rem; font-weight: 400;
+    color: var(--cc-text-dim); line-height: 1.35;
+}
+.adoc-cov { width: 24%; }
+.adoc-cov-pct { font-family: var(--cc-mono); font-size: 0.72rem; font-weight: 700;
+    margin-bottom: 3px; }
+.adoc-cov-pct.is-low { color: var(--cc-red); }
+.adoc-cov-pct.is-mid { color: var(--cc-amber); }
+.adoc-cov-pct.is-hi  { color: var(--cc-green); }
+.adoc-npcell { width: 42%; }
+.adoc-nplist { display: flex; flex-wrap: wrap; gap: 3px; }
+.adoc-nprepo {
+    font-family: var(--cc-mono); font-size: 0.64rem; color: var(--cc-red);
+    background: color-mix(in srgb, var(--cc-red) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cc-red) 22%, transparent);
+    border-radius: 4px; padding: 0 5px;
+}
+.adoc-nprepo.is-more { color: var(--cc-text-mute); background: transparent;
+    border-color: var(--cc-border); }
+.adoc-allpl { font-family: var(--cc-mono); font-size: 0.68rem; font-weight: 700;
+    color: var(--cc-green); }
+
 /* ── JENKINS PANEL ─────────────────────────────────────────────────────────
    Gate (idle), connection header, pipeline cards, status pills, params.
    ----------------------------------------------------------------------- */
@@ -14568,6 +14649,133 @@ def _render_sync_value(val: Any, side: str) -> str:
 
 
 # =============================================================================
+# ADO PIPELINE COVERAGE TAB — pipelined vs un-pipelined repositories
+# =============================================================================
+def _ado_cov_bar(_pl: int, _np: int) -> str:
+    """Compact pipelined/no-pipeline split bar (green = pipelined, red = none)."""
+    _tot = _pl + _np
+    if _tot <= 0:
+        return '<div class="adoc-bar is-empty">no repositories</div>'
+    _plw = _pl / _tot * 100
+    return (
+        '<div class="adoc-bar">'
+        f'<span class="adoc-bar-pl" style="width:{_plw:.2f}%"></span>'
+        f'<span class="adoc-bar-np" style="width:{100 - _plw:.2f}%"></span>'
+        '</div>'
+    )
+
+
+def _render_ado_coverage() -> None:
+    """Admin-only: visualise pipelined vs un-pipelined repositories across every
+    ADO collection / project. Deferred (runs only when the tab is opened);
+    cached 30 min with a manual refresh."""
+    if not _is_admin:
+        st.info("Admin only.")
+        return
+    _host = (_git_creds().get("hostname") or "").strip()
+    _hc, _bc = st.columns([5, 1])
+    with _bc:
+        if st.button("↻ Refresh", key="_ado_cov_refresh_v1",
+                     use_container_width=True,
+                     help="Re-walk ADO (clears the 30-min cache)."):
+            _ado_pipeline_coverage.clear()
+            st.rerun()
+    if not _host:
+        st.markdown(
+            '<div class="adoc-err">ADO host not resolved from vault — the '
+            'coverage walk needs the same <code>ado.hostname / username / '
+            'password</code> the inventory git loader uses.</div>',
+            unsafe_allow_html=True)
+        return
+    with st.spinner("Walking ADO collections → projects → repositories…"):
+        _cov = _ado_pipeline_coverage(_host)
+    if not _cov.get("ok"):
+        st.markdown(
+            f'<div class="adoc-err">Could not load ADO coverage — '
+            f'{html.escape(_cov.get("error") or "unknown error")}</div>',
+            unsafe_allow_html=True)
+        return
+    _t = _cov["totals"]
+    _repos = int(_t["repos"])
+    _pl = int(_t["pipelined"])
+    _np = int(_t["no_pipeline"])
+    _pct = (_pl / _repos * 100) if _repos else 0.0
+
+    # ── Headline ───────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="adoc-head">'
+        '<div class="adoc-headline">'
+        f'<span class="adoc-pct">{_pct:.1f}%</span>'
+        '<span class="adoc-pct-lbl">of repositories are pipelined</span>'
+        '</div>'
+        + _ado_cov_bar(_pl, _np)
+        + '<div class="adoc-legend">'
+        f'<span class="adoc-leg is-pl">▰ {_pl:,} pipelined</span>'
+        f'<span class="adoc-leg is-np">▰ {_np:,} no pipeline</span>'
+        '</div>'
+        '<div class="adoc-totals">'
+        f'<span><b>{_t["collections"]:,}</b> collections</span>'
+        f'<span><b>{_t["projects"]:,}</b> projects</span>'
+        f'<span><b>{_repos:,}</b> repositories</span>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True)
+    if _cov.get("capped"):
+        st.markdown(
+            f'<div class="adoc-note">Note: walk capped at {_ADO_PROJECT_CAP} '
+            f'projects · {_cov["capped"]} not scanned (raise '
+            f'<code>ADO_PROJECT_CAP</code>).</div>', unsafe_allow_html=True)
+
+    # ── Per-collection breakdown ───────────────────────────────────────────
+    for _c in _cov["collections"]:
+        _cr, _cpl = int(_c["repos_total"]), int(_c["repos_pipelined"])
+        _cnp = _cr - _cpl
+        _cpct = (_cpl / _cr * 100) if _cr else 0.0
+        with st.expander(
+                f"📁 {_c['name']}  —  {_cpl}/{_cr} pipelined ({_cpct:.0f}%)"
+                f"  ·  {len(_c['projects'])} projects",
+                expanded=False):
+            st.markdown(_ado_cov_bar(_cpl, _cnp), unsafe_allow_html=True)
+            _rows = []
+            for _p in _c["projects"]:
+                _pr, _ppl = int(_p["repos_total"]), int(_p["repos_pipelined"])
+                _pnp = _pr - _ppl
+                _ppct = (_ppl / _pr * 100) if _pr else 0.0
+                _dev_chip = (
+                    f'<span class="adoc-devteam">{html.escape(_p["dev_team"])}</span>'
+                    if _p["dev_team"]
+                    else '<span class="adoc-devteam is-none">no [dev_team]</span>')
+                _np_repos = [r["name"] for r in _p["repos"] if not r["pipelined"]]
+                _np_html = (
+                    '<div class="adoc-nplist">' + "".join(
+                        f'<span class="adoc-nprepo">{html.escape(_n)}</span>'
+                        for _n in _np_repos[:40])
+                    + (f' <span class="adoc-nprepo is-more">+{len(_np_repos) - 40}</span>'
+                       if len(_np_repos) > 40 else "")
+                    + '</div>'
+                    if _np_repos else
+                    '<span class="adoc-allpl">✓ all pipelined</span>')
+                _rows.append(
+                    '<tr>'
+                    f'<td class="adoc-proj">{html.escape(_p["name"])}{_dev_chip}'
+                    + (f'<div class="adoc-desc">{html.escape(_p["description"])}</div>'
+                       if _p["description"] else "")
+                    + '</td>'
+                    f'<td class="adoc-cov">'
+                    f'<div class="adoc-cov-pct {"is-low" if _ppct < 50 else "is-mid" if _ppct < 90 else "is-hi"}">'
+                    f'{_ppl}/{_pr} · {_ppct:.0f}%</div>'
+                    + _ado_cov_bar(_ppl, _pnp) + '</td>'
+                    f'<td class="adoc-npcell">{_np_html}</td>'
+                    '</tr>')
+            st.markdown(
+                '<table class="adoc-table"><thead><tr>'
+                '<th>Project · [dev_team] description</th>'
+                '<th>Coverage</th><th>Repos without a pipeline</th>'
+                f'</tr></thead><tbody>{"".join(_rows)}</tbody></table>',
+                unsafe_allow_html=True)
+
+
+# =============================================================================
 # PEOPLE INSIGHTS PANEL — per-user × per-team stats, smart-loaded
 # =============================================================================
 # Inline section at the bottom of the inventory tab. Aggregates per-user
@@ -21669,6 +21877,165 @@ def _config_list_team_repos(host_marker: str) -> tuple[list[str], str]:
             pass
     derived = _config_derive_team_fallback()
     return (derived, "fallback") if derived else ([], "none")
+
+
+# =============================================================================
+# ADO PIPELINE COVERAGE — collections / projects / repos + pipeline mapping
+# =============================================================================
+# Reuses the same vault-resolved ADO credentials as every other ADO call
+# (`_git_creds` — the on-prem ADO Server "prd" profile). Walks the server's
+# collections → projects → repositories and cross-references each repo against
+# the project's build definitions (classic + YAML pipelines) to compute what
+# fraction of repos are actually wired to a pipeline. Project descriptions
+# follow the convention ``[<dev_team>] <real description>``.
+ADO_API_VERSION = os.environ.get("ADO_API_VERSION", "6.0").strip()
+ADO_COVERAGE_TTL = int(os.environ.get("ADO_COVERAGE_TTL", "1800"))   # 30 min
+_ADO_PROJECT_CAP = int(os.environ.get("ADO_PROJECT_CAP", "600"))
+_ADO_DESC_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(.*)$", re.S)
+
+
+def _ado_get(url: str, auth: str, timeout: int = 20) -> "dict | None":
+    """GET a JSON ADO REST resource with a prebuilt Basic-auth header. Returns
+    the parsed body, or None on any failure (callers degrade gracefully)."""
+    try:
+        req = urllib.request.Request(
+            url, headers={"Authorization": auth, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
+def _ado_parse_description(desc: str) -> tuple[str, str]:
+    """Project descriptions start with ``[<dev_team>]`` then the real text.
+    Returns ``(dev_team, description)`` — dev_team is "" when the convention
+    isn't followed."""
+    m = _ADO_DESC_RE.match(desc or "")
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return "", (desc or "").strip()
+
+
+@st.cache_data(ttl=ADO_COVERAGE_TTL, show_spinner=False)
+def _ado_pipeline_coverage(host: str) -> dict:
+    """Walk the ADO Server: collections → projects (+description) → repos, and
+    cross-reference build definitions to mark each repo pipelined / not. Cached
+    (30 min) and threaded; returns a structured coverage report."""
+    _empty = {"ok": False, "error": "", "capped": 0, "collections": [],
+              "totals": {"collections": 0, "projects": 0, "repos": 0,
+                         "pipelined": 0, "no_pipeline": 0}}
+    creds = _git_creds()
+    user, pw = creds.get("username", ""), creds.get("password", "")
+    if not (host and user and pw):
+        return {**_empty, "error": "ADO host / credentials not resolved from vault."}
+    auth = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+    base = f"http://{host}"
+    ver = ADO_API_VERSION
+    _q = urllib.parse.quote
+
+    # 1. Collections (server-level API).
+    cj = _ado_get(f"{base}/_apis/projectCollections?$top=1000&api-version={ver}", auth)
+    if cj is None:
+        return {**_empty, "error": (
+            "Could not list project collections — REST API blocked, "
+            "api-version mismatch, or credentials lack read scope.")}
+    coll_names = sorted(
+        {str(c.get("name")).strip() for c in (cj.get("value") or []) if c.get("name")},
+        key=str.lower)
+    if not coll_names:
+        return {**_empty, "error": "ADO returned no collections."}
+
+    # 2. Projects per collection (threaded).
+    def _projects_for(coll: str) -> list[dict]:
+        pj = _ado_get(
+            f"{base}/{_q(coll)}/_apis/projects"
+            f"?stateFilter=wellFormed&$top=1000&api-version={ver}", auth)
+        out = []
+        for p in (pj or {}).get("value", []) or []:
+            _nm = str(p.get("name") or "").strip()
+            if _nm:
+                out.append({"collection": coll, "name": _nm,
+                            "description": str(p.get("description") or "")})
+        return out
+
+    proj_pairs: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="ado-proj") as _ex:
+        for _plist in _ex.map(_projects_for, coll_names):
+            proj_pairs.extend(_plist)
+    _capped = max(0, len(proj_pairs) - _ADO_PROJECT_CAP)
+    proj_pairs = proj_pairs[:_ADO_PROJECT_CAP]
+
+    # 3. Repos + build definitions per project (threaded). A repo is
+    #    "pipelined" when ANY build definition in its project targets it
+    #    (matched by repository id, with a name fallback).
+    def _project_cov(p: dict) -> dict:
+        _cu, _pu = _q(p["collection"]), _q(p["name"])
+        rj = _ado_get(
+            f"{base}/{_cu}/{_pu}/_apis/git/repositories?api-version={ver}", auth)
+        repos = [
+            {"id": str(r.get("id") or ""), "name": str(r.get("name") or "")}
+            for r in (rj or {}).get("value", []) or [] if r.get("name")
+        ]
+        dj = _ado_get(
+            f"{base}/{_cu}/{_pu}/_apis/build/definitions"
+            f"?includeAllProperties=true&$top=1000&api-version={ver}", auth)
+        _pl_ids: set[str] = set()
+        _pl_names: set[str] = set()
+        for d in (dj or {}).get("value", []) or []:
+            _rep = d.get("repository") or {}
+            if _rep.get("id"):
+                _pl_ids.add(str(_rep["id"]))
+            if _rep.get("name"):
+                _pl_names.add(str(_rep["name"]).lower())
+        _repo_out = []
+        for r in repos:
+            _pl = (r["id"] in _pl_ids) or (r["name"].lower() in _pl_names)
+            _repo_out.append({"name": r["name"], "pipelined": _pl})
+        _dev_team, _desc = _ado_parse_description(p["description"])
+        _np = sum(1 for r in _repo_out if not r["pipelined"])
+        return {
+            "collection": p["collection"], "name": p["name"],
+            "dev_team": _dev_team, "description": _desc,
+            "repos": sorted(_repo_out, key=lambda r: r["name"].lower()),
+            "repos_total": len(_repo_out),
+            "repos_pipelined": len(_repo_out) - _np,
+            "repos_no_pipeline": _np,
+            "defs_unreachable": dj is None,
+        }
+
+    proj_results: list[dict] = []
+    if proj_pairs:
+        with ThreadPoolExecutor(max_workers=10, thread_name_prefix="ado-cov") as _ex:
+            for _r in _ex.map(_project_cov, proj_pairs):
+                proj_results.append(_r)
+
+    # 4. Group by collection + totals.
+    _by_coll: dict[str, list[dict]] = {}
+    for pr in proj_results:
+        _by_coll.setdefault(pr["collection"], []).append(pr)
+    collections = []
+    _t_repos = _t_pl = 0
+    for _cn in sorted(_by_coll, key=str.lower):
+        _plist = sorted(_by_coll[_cn], key=lambda p: p["name"].lower())
+        _c_repos = sum(p["repos_total"] for p in _plist)
+        _c_pl = sum(p["repos_pipelined"] for p in _plist)
+        _t_repos += _c_repos
+        _t_pl += _c_pl
+        collections.append({
+            "name": _cn, "projects": _plist,
+            "repos_total": _c_repos, "repos_pipelined": _c_pl,
+            "repos_no_pipeline": _c_repos - _c_pl,
+        })
+    return {
+        "ok": True, "error": "", "capped": _capped,
+        "collections": collections,
+        "totals": {
+            "collections": len(collections),
+            "projects": len(proj_results),
+            "repos": _t_repos, "pipelined": _t_pl,
+            "no_pipeline": _t_repos - _t_pl,
+        },
+    }
 
 
 @st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)
@@ -33176,6 +33543,9 @@ if _show_inv and _inventory_slot is not None:
         # History → PGSQL tab — admin-only, only when Postgres is wired.
         # The actual reachability check happens inside the renderer.
         _hist_show = _is_admin and _POSTGRES_AVAILABLE
+        # ADO Coverage tab — admin-only; pipelined vs un-pipelined repos across
+        # every ADO collection / project. Deferred until opened.
+        _ado_show = _is_admin
         # NOTE: per-team configurations are no longer a standalone tab — they
         # now live as a ⚙ cog popover inside each environment cell of the
         # Pipelines Inventory table (see `_iv_cfg_*` in `_render_inventory_view`).
@@ -33191,6 +33561,8 @@ if _show_inv and _inventory_slot is not None:
             _tab_labels.append(f"🔀  SYNC CHECK{_sync_badge_txt}")
         if _hist_show:
             _tab_labels.append("📚  HISTORY → PGSQL")
+        if _ado_show:
+            _tab_labels.append("☁  ADO COVERAGE")
 
         # ── Admin: Elastic ↔ Postgres drift banner ──────────────────────────
         # Postgres is the primary read source; when an index's PG mirror trails
@@ -33236,6 +33608,9 @@ if _show_inv and _inventory_slot is not None:
             if _sync_show:
                 _idx += 1
             _tab_history = _tabs[_idx] if _hist_show else None
+            if _hist_show:
+                _idx += 1
+            _tab_ado = _tabs[_idx] if _ado_show else None
             if _tab_teams is not None:
                 with _tab_teams:
                     st.markdown(
@@ -33317,6 +33692,24 @@ if _show_inv and _inventory_slot is not None:
                     _history_slot = st.empty()
             else:
                 _history_slot = None
+
+            if _tab_ado is not None:
+                with _tab_ado:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Pipelined vs un-pipelined repositories across every '
+                        'ADO collection / project. Walks the on-prem ADO Server '
+                        '(collections → projects → repositories) and matches '
+                        'each repo against its build definitions. Project '
+                        'descriptions are parsed as '
+                        '<code>[dev_team] description</code>. Loads on open · '
+                        'cached 30 min. Admin only.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _ado_slot = st.empty()
+            else:
+                _ado_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes scope keys + user blobs the other tabs depend on.
@@ -33426,6 +33819,17 @@ if _show_inv and _inventory_slot is not None:
                     hint="Elasticsearch → Postgres migration console. "
                          "Loads on open; the 2s progress ticker runs only "
                          "while a job is migrating.",
+                )
+
+        # ADO Coverage — deferred; the REST walk only fires when opened.
+        if _ado_slot is not None:
+            with _ado_slot.container():
+                _lazy_tab_body(
+                    "_tab_open_ado_v1", "ADO Coverage",
+                    _render_ado_coverage,
+                    hint="Pipelined vs un-pipelined repositories across every "
+                         "ADO collection / project. Walks ADO on open; cached "
+                         "30 min.",
                 )
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,
