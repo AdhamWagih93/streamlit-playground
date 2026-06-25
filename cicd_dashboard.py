@@ -15067,11 +15067,15 @@ def _arch_diff(edA: dict, edB: dict) -> dict:
     _ka, _kb = set(A), set(B)
     only_a = sorted(_ka - _kb)
     only_b = sorted(_kb - _ka)
+    # Connection tuples are (kind, host, port) where port may be None — sort
+    # with a None-safe key so a missing port can't be compared against an int.
+    def _conn_sort_key(_c):
+        return (_c[0], _c[1], -1 if _c[2] is None else int(_c[2]))
     changed = []
     for _key in sorted(_ka & _kb):
         _ca, _cb = _arch_conn_set(A[_key]), _arch_conn_set(B[_key])
-        _added = sorted(_cb - _ca)
-        _removed = sorted(_ca - _cb)
+        _added = sorted(_cb - _ca, key=_conn_sort_key)
+        _removed = sorted(_ca - _cb, key=_conn_sort_key)
         if _added or _removed:
             changed.append({"key": _key, "added": _added, "removed": _removed})
     return {"only_a": only_a, "only_b": only_b, "changed": changed}
