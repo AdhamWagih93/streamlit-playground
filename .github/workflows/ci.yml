@@ -1,0 +1,40 @@
+name: dashboard-smoke
+
+# Renders the CI/CD dashboard end-to-end against the local fake seam (fake
+# Elasticsearch + fake vault + seeded local git) and fails on any exception.
+# No VPN, no Docker, no real services — runs entirely on the GitHub runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # The app + test harness deps. Pin streamlit to what you deploy with.
+          pip install streamlit pytest pyyaml pandas
+          # Optional libs the app imports behind try/except — install if present
+          # in your deploy image so those code paths are exercised too.
+          pip install "psycopg[binary]" || true
+
+      - name: Compile check (fast fail on syntax errors)
+        run: python -m py_compile cicd_dashboard.py cc_docchat.py
+
+      - name: Seed local git repositories
+        run: python localdev/seed_git.py
+
+      - name: Smoke test (render all admin tabs, fail on any exception)
+        run: pytest localdev/test_smoke.py -q
