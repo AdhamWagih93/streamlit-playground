@@ -417,6 +417,10 @@ def cmd_discord(args) -> int:
                 files.append(html)
         # Discord limits: <=10 files per message, <=8 MB each (non-boosted).
         files = [f for f in files if os.path.getsize(f) <= 8 * 1024 * 1024][:10]
+    if files:
+        print(f"Discord attachments ({len(files)}): " + ", ".join(os.path.basename(f) for f in files))
+    else:
+        print("Discord: no attachments found (no screenshots / report files).")
     return _post_discord(webhook, payload, files, args.dry_run)
 
 

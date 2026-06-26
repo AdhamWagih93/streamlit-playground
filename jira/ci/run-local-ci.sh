@@ -166,11 +166,15 @@ if [ "$SCREENSHOTS" -eq 1 ]; then
   fi
 fi
 
-# Optional Discord notification — posts an embed (+ report.md and any
-# screenshots/PNGs, else pytest.html) when DISCORD_WEBHOOK_URL is set. Never
-# fails the run.
+# Discord notification — only when screenshots were captured, so a report is
+# never posted WITHOUT them. Set DISCORD_WEBHOOK_URL (auto-loaded from
+# secrets.env). Run with --app-screenshots (the default in the pre-push hook).
 if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
-  python3 "$SCRIPT_DIR/report.py" discord --report-dir "$REPORT_DIR" --attach || true
+  if [ "$SCREENSHOTS" -eq 1 ]; then
+    python3 "$SCRIPT_DIR/report.py" discord --report-dir "$REPORT_DIR" --attach || true
+  else
+    echo "  (skipping Discord post — no screenshots; run with --app-screenshots to post)"
+  fi
 fi
 
 exit $RESULT
