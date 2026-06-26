@@ -27,6 +27,7 @@ import gzip
 import json
 import os
 import sys
+import time
 
 PASS = "✅"
 FAIL = "❌"
@@ -389,39 +390,42 @@ def cmd_discord(args) -> int:
         print(f"{WARN} No report.json in {args.report_dir}; nothing to post.")
         return 0
     payload = build_discord_payload(report)
-    files: list[str] = []
-    if args.attach:
-        md = os.path.join(args.report_dir, "report.md")
-        if os.path.exists(md):
-            files.append(md)
-        # Prefer image screenshots; fall back to the HTML test report. With many
-        # screenshots (Discord caps at 10 files), curate a representative set.
-        shots = sorted(glob.glob(os.path.join(args.report_dir, "screenshots", "*.png")))
-        if shots:
-            prefer = ["report", "-board", "project-insights", "admin-insights",
-                      "issue-detail", "-backlog", "-search", "settings-people",
-                      "-projects", "-login"]
-            picked: list[str] = []
-            for kw in prefer:
-                for s in shots:
-                    if kw in os.path.basename(s) and s not in picked:
-                        picked.append(s)
-                        break
-            for s in shots:  # fill any remaining slots
-                if s not in picked:
-                    picked.append(s)
-            files.extend(picked)
+    if not args.attach:
+        return _post_discord(webhook, payload, [], args.dry_run)
+
+    rd = args.report_dir
+    md = os.path.join(rd, "report.md")
+    # Discord allows <=10 files and <=8 MB each per message. We post the embed
+    # (+ report.md) first, then EVERY screenshot across as many follow-up
+    # messages as needed (batches of 10) so no page is left out.
+    shots = [s for s in sorted(glob.glob(os.path.join(rd, "screenshots", "*.png")))
+             if os.path.getsize(s) <= 8 * 1024 * 1024]
+
+    # Message 1: the report embed + the markdown report.
+    first = [md] if os.path.exists(md) else []
+    print(f"Discord msg 1: report embed + {len(first)} file(s)")
+    _post_discord(webhook, payload, first, args.dry_run)
+
+    if not shots:
+        html = os.path.join(rd, "pytest.html")
+        if os.path.exists(html) and os.path.getsize(html) <= 8 * 1024 * 1024:
+            _post_discord(webhook, {"username": "Trackly CI"}, [html], args.dry_run)
         else:
-            html = os.path.join(args.report_dir, "pytest.html")
-            if os.path.exists(html):
-                files.append(html)
-        # Discord limits: <=10 files per message, <=8 MB each (non-boosted).
-        files = [f for f in files if os.path.getsize(f) <= 8 * 1024 * 1024][:10]
-    if files:
-        print(f"Discord attachments ({len(files)}): " + ", ".join(os.path.basename(f) for f in files))
-    else:
-        print("Discord: no attachments found (no screenshots / report files).")
-    return _post_discord(webhook, payload, files, args.dry_run)
+            print("Discord: no screenshots to send.")
+        return 0
+
+    batch = 10
+    total = len(shots)
+    for i in range(0, total, batch):
+        group = shots[i:i + batch]
+        lo, hi = i + 1, min(i + batch, total)
+        content = {"username": "Trackly CI", "content": f"📸 Screenshots {lo}–{hi} of {total}"}
+        print(f"Discord screenshots {lo}-{hi}: " + ", ".join(os.path.basename(f) for f in group))
+        if not args.dry_run:
+            time.sleep(0.7)  # be gentle with the webhook rate limit
+        _post_discord(webhook, content, group, args.dry_run)
+    print(f"Sent {total} screenshot(s) across {(total + batch - 1) // batch} message(s).")
+    return 0
 
 
 def cmd_consolidate(args) -> int:
