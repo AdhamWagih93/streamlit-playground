@@ -1,8 +1,8 @@
-name: dashboard-smoke
+name: dashboard-ci
 
 # Renders the CI/CD dashboard end-to-end against the local fake seam (fake
-# Elasticsearch + fake vault + seeded local git) and fails on any exception.
-# No VPN, no Docker, no real services — runs entirely on the GitHub runner.
+# Elasticsearch with seeded fixtures + fake vault + seeded local git) and
+# captures a screenshot of every tab. No VPN, no Docker, no real services.
 
 on:
   push:
@@ -13,7 +13,7 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -24,17 +24,30 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # The app + test harness deps. Pin streamlit to what you deploy with.
-          pip install streamlit pytest pyyaml pandas
-          # Optional libs the app imports behind try/except — install if present
-          # in your deploy image so those code paths are exercised too.
+          pip install streamlit pytest pyyaml pandas playwright
           pip install "psycopg[binary]" || true
 
-      - name: Compile check (fast fail on syntax errors)
+      - name: Compile check
         run: python -m py_compile cicd_dashboard.py cc_docchat.py
 
-      - name: Seed local git repositories
-        run: python localdev/seed_git.py
+      - name: Seed local git + ES fixtures
+        run: |
+          python localdev/seed_git.py
+          python localdev/seed_es_fixtures.py
 
       - name: Smoke test (render all admin tabs, fail on any exception)
         run: pytest localdev/test_smoke.py -q
+
+      - name: Install Chromium for screenshots
+        run: python -m playwright install --with-deps chromium
+
+      - name: Capture screenshots of every tab
+        run: python localdev/screenshot.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-screenshots
+          path: localdev/screenshots/
+          if-no-files-found: warn

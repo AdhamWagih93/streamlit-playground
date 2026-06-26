@@ -15696,8 +15696,13 @@ def _render_teams_and_members_view() -> None:
             if not _shown:
                 st.caption("No matches." if _uq
                            else "No unresolved unknown members. 🎉")
-            for _um in _shown:
+            for _ui, _um in enumerate(_shown):
                 _uk = _um["key"]
+                # Widget keys carry the row index so two unknown identities that
+                # sanitise to the same token (e.g. "Alice Dev" / "alice.dev")
+                # can't collide into a duplicate Streamlit key. `_uk` itself
+                # stays raw — it's the identity persisted by the resolver.
+                _ukw = f"{_ui}_{_uk}"
                 _c1, _c2, _c3 = st.columns([3.2, 0.9, 1.3])
                 with _c1:
                     st.markdown(
@@ -15720,11 +15725,11 @@ def _render_teams_and_members_view() -> None:
                         st.caption(f"Resolve **{_um['label']}**")
                         _sel = st.selectbox(
                             "Map to existing member", _map_labels,
-                            key=_tm_uk_key("map", _uk),
+                            key=_tm_uk_key("map", _ukw),
                             label_visibility="collapsed",
                         )
                         if st.button("✓ Save as alias", use_container_width=True,
-                                     key=_tm_uk_key("alias", _uk),
+                                     key=_tm_uk_key("alias", _ukw),
                                      disabled=(_sel == _MAP_PH)):
                             _ok, _msg = _ldap_db_save_resolution(
                                 _uk, "alias",
@@ -15737,12 +15742,12 @@ def _render_teams_and_members_view() -> None:
                         _rt = st.selectbox(
                             "Resigned from team (optional)",
                             [_NO_TEAM] + _all_teams_sorted,
-                            key=_tm_uk_key("rteam", _uk),
+                            key=_tm_uk_key("rteam", _ukw),
                             label_visibility="collapsed",
                         )
                         if st.button("⊘ Mark as resigned",
                                      use_container_width=True,
-                                     key=_tm_uk_key("resign", _uk)):
+                                     key=_tm_uk_key("resign", _ukw)):
                             _ok, _msg = _ldap_db_save_resolution(
                                 _uk, "resigned",
                                 team_cn=("" if _rt == _NO_TEAM else _rt))
@@ -15762,8 +15767,9 @@ def _render_teams_and_members_view() -> None:
                     '</div>',
                     unsafe_allow_html=True,
                 )
-                for _rm in _resigned_list:
+                for _ri, _rm in enumerate(_resigned_list):
                     _rk = _rm["key"]
+                    _rkw = f"{_ri}_{_rk}"  # collision-proof widget key
                     _rc1, _rc2 = st.columns([4.5, 1])
                     with _rc1:
                         _rtag = (
@@ -15781,7 +15787,7 @@ def _render_teams_and_members_view() -> None:
                         )
                     with _rc2:
                         if st.button("↩ Undo", use_container_width=True,
-                                     key=_tm_uk_key("undo", _rk)):
+                                     key=_tm_uk_key("undo", _rkw)):
                             _ok, _msg = _ldap_db_delete_resolution(_rk)
                             if _ok:
                                 st.rerun(scope="fragment")

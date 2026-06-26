@@ -25,19 +25,30 @@ jira, builds aggregations) render but are mostly empty until you add fixtures.
 ## Quick start
 
 ```bash
-# 1. one-time: seed the local git repos (idempotent; re-run after editing seed_git.py)
+# 1. seed local git repos + ES fixtures (idempotent; re-run after editing seeds)
 python localdev/seed_git.py
+python localdev/seed_es_fixtures.py
 
-# 2a. run it interactively as admin
+# 2a. run it interactively as admin (with realistic fake data)
 streamlit run localdev/front_local.py
 
-# 2b. or run the automated smoke test (renders every admin tab, fails on any exception)
+# 2b. automated smoke test — renders every admin tab, fails on any exception
 pytest localdev/test_smoke.py -q
+
+# 2c. screenshot every tab with a real browser (Playwright)
+pip install playwright && playwright install chromium   # one-time
+python localdev/screenshot.py        # → localdev/screenshots/*.png
 ```
 
-Requires only: `pip install streamlit pytest pyyaml pandas` (+ whatever else
-your `cicd_dashboard.py` imports at module load). No `elasticsearch` package
-needed — the fake replaces it.
+Requires only: `pip install streamlit pytest pyyaml pandas playwright` (+
+whatever else your `cicd_dashboard.py` imports at module load). No
+`elasticsearch` package needed — the fake replaces it.
+
+`seed_es_fixtures.py` writes per-index JSON the **FakeES computes aggregations
+over** (terms / composite / filter / top_hits / metrics / date_histogram), so
+tiles, charts and tables populate with realistic data from one dataset — names
+match `seed_git.py`. Edit the entity table at the top of `seed_es_fixtures.py`
+and re-run to reshape the data.
 
 ## CI
 
