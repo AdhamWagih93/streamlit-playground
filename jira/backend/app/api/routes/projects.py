@@ -16,7 +16,12 @@ from app.models import (
     Version,
 )
 from app.services import permission_keys as P
-from app.services.permissions import has_project_permission, is_site_admin
+from app.services.permissions import (
+    assert_project_permission,
+    has_project_permission,
+    is_site_admin,
+    visible_project_ids,
+)
 from app.schemas.common import Message
 from app.schemas.project import (
     ComponentIn,
@@ -71,6 +76,9 @@ def list_projects(
     stmt = select(Project)
     if not include_archived:
         stmt = stmt.where(Project.is_archived.is_(False))
+    vis = visible_project_ids(db, user)
+    if vis is not None:
+        stmt = stmt.where(Project.id.in_(vis or {-1}))
     stmt = stmt.order_by(Project.key.asc())
     return list(db.scalars(stmt))
 
@@ -123,7 +131,9 @@ def get_project(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Project:
-    return _resolve_project(db, key_or_id)
+    project = _resolve_project(db, key_or_id)
+    assert_project_permission(db, user, project, P.BROWSE_PROJECTS)
+    return project
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)
@@ -176,6 +186,7 @@ def list_members(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    assert_project_permission(db, user, project, P.BROWSE_PROJECTS)
     return list(
         db.scalars(
             select(ProjectMember).where(ProjectMember.project_id == project_id)
@@ -261,6 +272,7 @@ def list_components(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    assert_project_permission(db, user, project, P.BROWSE_PROJECTS)
     return list(
         db.scalars(select(Component).where(Component.project_id == project_id))
     )
@@ -360,6 +372,7 @@ def list_versions(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    assert_project_permission(db, user, project, P.BROWSE_PROJECTS)
     return list(
         db.scalars(select(Version).where(Version.project_id == project_id))
     )

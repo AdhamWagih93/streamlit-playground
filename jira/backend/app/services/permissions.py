@@ -205,9 +205,36 @@ def require_global_permission(permission: str):
 def assert_project_permission(
     db: Session, user: User, project: Project, permission: str, issue: Issue | None = None
 ) -> None:
-    """Raise 403 unless *user* holds *permission* on *project*."""
+    """Raise 403 unless *user* holds *permission* on *project*. Default-deny."""
     if not has_project_permission(db, user, project, permission, issue):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Missing project permission: {permission}",
         )
+
+
+def assert_own_or_all(
+    db: Session,
+    user: User,
+    project: Project,
+    owner_id: int | None,
+    own_permission: str,
+    all_permission: str,
+    issue: Issue | None = None,
+) -> None:
+    """Allow when the user may act on *anyone's* item (all_permission) OR owns
+    the item and may act on their *own* (own_permission). Otherwise 403.
+
+    Used for comments / worklogs / attachments where Jira distinguishes
+    edit/delete-own from edit/delete-all.
+    """
+    if has_project_permission(db, user, project, all_permission, issue):
+        return
+    if owner_id is not None and owner_id == user.id and has_project_permission(
+        db, user, project, own_permission, issue
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Missing project permission: {all_permission} (or {own_permission} on your own item)",
+    )

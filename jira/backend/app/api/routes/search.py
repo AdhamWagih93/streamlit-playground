@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.models import Issue, SavedFilter, User
 from app.schemas.common import Message, Page
 from app.schemas.issue import IssueListItem
+from app.services.permissions import visible_project_ids
 from app.services.serializers import to_list_item
 from app.services.tql import TQLError, build_query
 
@@ -24,17 +25,21 @@ class SearchRequest(BaseModel):
     page_size: int = 50
 
 
-def _run_search(db: Session, tql: str, page: int, page_size: int, user_id: int) -> Page[IssueListItem]:
+def _run_search(db: Session, tql: str, page: int, page_size: int, user: User) -> Page[IssueListItem]:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 200)
     try:
-        where, order_by = build_query(db, tql, user_id)
+        where, order_by = build_query(db, tql, user.id)
     except TQLError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     stmt = select(Issue)
     if where is not None:
         stmt = stmt.where(where)
+
+    vis = visible_project_ids(db, user)
+    if vis is not None:
+        stmt = stmt.where(Issue.project_id.in_(vis or {-1}))
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     stmt = stmt.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)
@@ -50,7 +55,7 @@ def search_get(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Page[IssueListItem]:
-    return _run_search(db, tql, page, page_size, user.id)
+    return _run_search(db, tql, page, page_size, user)
 
 
 @router.post("", response_model=Page[IssueListItem])
@@ -59,7 +64,7 @@ def search_post(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Page[IssueListItem]:
-    return _run_search(db, payload.tql, payload.page, payload.page_size, user.id)
+    return _run_search(db, payload.tql, payload.page, payload.page_size, user)
 
 
 # --- Validation ------------------------------------------------------------

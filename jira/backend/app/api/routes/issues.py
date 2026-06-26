@@ -51,6 +51,12 @@ from app.services.issues import (
     record_history,
     resolve_labels,
 )
+from app.services import permission_keys as P
+from app.services.permissions import (
+    assert_own_or_all,
+    assert_project_permission,
+    visible_project_ids,
+)
 from app.services.serializers import issue_ref, to_detail, to_list_item
 from app.utils.ranking import rank_between
 from app.utils.timetracking import parse_duration
@@ -87,6 +93,7 @@ def create_issue(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+    assert_project_permission(db, user, project, P.CREATE_ISSUES)
 
     key, number = allocate_key(db, project)
     status_id = payload.status_id or default_status_id(db, project.id)
@@ -165,6 +172,10 @@ def list_issues(
     if sprint_id is not None:
         stmt = stmt.where(Issue.sprint_id == sprint_id)
 
+    vis = visible_project_ids(db, user)
+    if vis is not None:
+        stmt = stmt.where(Issue.project_id.in_(vis or {-1}))
+
     total = db.scalar(
         select(func.count()).select_from(stmt.subquery())
     ) or 0
@@ -179,7 +190,9 @@ def get_issue(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> IssueDetail:
-    return to_detail(_resolve_issue(db, key_or_id))
+    issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.BROWSE_PROJECTS, issue=issue)
+    return to_detail(issue)
 
 
 @router.patch("/{key_or_id}", response_model=IssueDetail)
@@ -190,7 +203,13 @@ def update_issue(
     user: User = Depends(get_current_user),
 ) -> IssueDetail:
     issue = _resolve_issue(db, key_or_id)
-    apply_update(db, issue, payload.model_dump(exclude_unset=True), user.id)
+    assert_project_permission(db, user, issue.project, P.EDIT_ISSUES, issue=issue)
+    data = payload.model_dump(exclude_unset=True)
+    if "status_id" in data:
+        assert_project_permission(db, user, issue.project, P.TRANSITION_ISSUES, issue=issue)
+    if "assignee_id" in data:
+        assert_project_permission(db, user, issue.project, P.ASSIGN_ISSUES, issue=issue)
+    apply_update(db, issue, data, user.id)
     db.commit()
     db.refresh(issue)
     return to_detail(issue)
@@ -203,11 +222,7 @@ def delete_issue(
     user: User = Depends(get_current_user),
 ) -> Message:
     issue = _resolve_issue(db, key_or_id)
-    if not (user.is_admin or issue.reporter_id == user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the reporter or an admin may delete this issue",
-        )
+    assert_project_permission(db, user, issue.project, P.DELETE_ISSUES, issue=issue)
     db.delete(issue)
     db.commit()
     return Message(detail="Issue deleted")
@@ -221,6 +236,7 @@ def list_comments(
     user: User = Depends(get_current_user),
 ) -> list[Comment]:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.BROWSE_PROJECTS, issue=issue)
     return list(issue.comments)
 
 
@@ -236,6 +252,7 @@ def create_comment(
     user: User = Depends(get_current_user),
 ) -> Comment:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.ADD_COMMENTS, issue=issue)
     comment = Comment(issue_id=issue.id, author_id=user.id, body=payload.body)
     db.add(comment)
     db.flush()
@@ -263,11 +280,10 @@ def update_comment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found"
         )
-    if not (user.is_admin or comment.author_id == user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the author or an admin may edit this comment",
-        )
+    assert_own_or_all(
+        db, user, issue.project, comment.author_id,
+        P.EDIT_OWN_COMMENTS, P.EDIT_ALL_COMMENTS, issue=issue,
+    )
     comment.body = payload.body
     db.commit()
     db.refresh(comment)
@@ -289,11 +305,10 @@ def delete_comment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found"
         )
-    if not (user.is_admin or comment.author_id == user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the author or an admin may delete this comment",
-        )
+    assert_own_or_all(
+        db, user, issue.project, comment.author_id,
+        P.DELETE_OWN_COMMENTS, P.DELETE_ALL_COMMENTS, issue=issue,
+    )
     db.delete(comment)
     db.commit()
     return Message(detail="Comment deleted")
@@ -307,6 +322,7 @@ def list_worklogs(
     user: User = Depends(get_current_user),
 ) -> list[Worklog]:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.BROWSE_PROJECTS, issue=issue)
     return list(issue.worklogs)
 
 
@@ -322,6 +338,7 @@ def create_worklog(
     user: User = Depends(get_current_user),
 ) -> Worklog:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.WORK_ON_ISSUES, issue=issue)
     seconds = payload.time_spent_seconds or parse_duration(payload.time_spent)
     if not seconds:
         raise HTTPException(
@@ -358,11 +375,10 @@ def delete_worklog(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Worklog not found"
         )
-    if not (user.is_admin or worklog.author_id == user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the author or an admin may delete this worklog",
-        )
+    assert_own_or_all(
+        db, user, issue.project, worklog.author_id,
+        P.DELETE_OWN_WORKLOGS, P.DELETE_ALL_WORKLOGS, issue=issue,
+    )
     db.delete(worklog)
     db.commit()
     return Message(detail="Worklog deleted")
@@ -376,6 +392,7 @@ def list_history(
     user: User = Depends(get_current_user),
 ) -> list[IssueHistory]:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.BROWSE_PROJECTS, issue=issue)
     return list(
         db.scalars(
             select(IssueHistory)
@@ -398,6 +415,7 @@ def create_link(
     user: User = Depends(get_current_user),
 ) -> IssueLinkOut:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.LINK_ISSUES, issue=issue)
     target = db.scalars(
         select(Issue).where(Issue.key == payload.target_key.upper())
     ).first()
@@ -435,6 +453,7 @@ def delete_link(
     user: User = Depends(get_current_user),
 ) -> Message:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.LINK_ISSUES, issue=issue)
     link = db.scalars(
         select(IssueLink).where(
             IssueLink.id == link_id,
@@ -463,6 +482,7 @@ async def upload_attachment(
     user: User = Depends(get_current_user),
 ) -> Attachment:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.CREATE_ATTACHMENTS, issue=issue)
     data = await file.read()
     max_bytes = settings.max_attachment_mb * 1024 * 1024
     if len(data) > max_bytes:
@@ -497,6 +517,7 @@ def list_attachments(
     user: User = Depends(get_current_user),
 ) -> list[Attachment]:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.BROWSE_PROJECTS, issue=issue)
     return list(issue.attachments)
 
 
@@ -511,6 +532,8 @@ def download_attachment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found"
         )
+    issue = _resolve_issue(db, attachment.issue_id)
+    assert_project_permission(db, user, issue.project, P.BROWSE_PROJECTS, issue=issue)
     path = os.path.join(settings.attachments_dir, attachment.storage_key)
     if not os.path.exists(path):
         raise HTTPException(
@@ -534,11 +557,11 @@ def delete_attachment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found"
         )
-    if not (user.is_admin or attachment.author_id == user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the author or an admin may delete this attachment",
-        )
+    issue = _resolve_issue(db, attachment.issue_id)
+    assert_own_or_all(
+        db, user, issue.project, attachment.author_id,
+        P.DELETE_OWN_ATTACHMENTS, P.DELETE_ALL_ATTACHMENTS, issue=issue,
+    )
     path = os.path.join(settings.attachments_dir, attachment.storage_key)
     try:
         if os.path.exists(path):
@@ -559,6 +582,9 @@ def rank_issue(
     user: User = Depends(get_current_user),
 ) -> IssueListItem:
     issue = _resolve_issue(db, key_or_id)
+    assert_project_permission(db, user, issue.project, P.EDIT_ISSUES, issue=issue)
+    if payload.sprint_id is not None:
+        assert_project_permission(db, user, issue.project, P.MANAGE_SPRINTS, issue=issue)
 
     low: str | None = None
     high: str | None = None

@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_admin, get_current_user
 from app.api.routes.projects import _resolve_project
 from app.core.database import get_db
-from app.models import Board, Issue, Sprint, Status, User
+from app.models import Board, Issue, Project, Sprint, Status, User
+from app.services import permission_keys as P
+from app.services.permissions import assert_project_permission
 from app.schemas.agile import (
     BacklogView,
     BoardColumn,
@@ -49,6 +51,15 @@ def _get_sprint(db: Session, sprint_id: int) -> Sprint:
     return sprint
 
 
+def _board_project(db: Session, board: Board) -> Project:
+    return db.get(Project, board.project_id)
+
+
+def _sprint_project(db: Session, sprint: Sprint) -> Project:
+    board = db.get(Board, sprint.board_id)
+    return db.get(Project, board.project_id) if board else None
+
+
 def _project_statuses(db: Session, project_id: int) -> list[Status]:
     """Global (project_id is null) + project-specific statuses, ordered."""
     return list(
@@ -70,6 +81,7 @@ def list_boards(
     user: User = Depends(get_current_user),
 ) -> list[Board]:
     project = _resolve_project(db, project_id)
+    assert_project_permission(db, user, project, P.BROWSE_PROJECTS)
     return list(
         db.scalars(select(Board).where(Board.project_id == project.id))
     )
@@ -82,6 +94,7 @@ def create_board(
     admin: User = Depends(get_current_admin),
 ) -> Board:
     project = _resolve_project(db, payload.project_id)
+    assert_project_permission(db, admin, project, P.ADMINISTER_PROJECTS)
     board = Board(
         project_id=project.id,
         name=payload.name,
@@ -99,7 +112,9 @@ def get_board(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Board:
-    return _get_board(db, board_id)
+    board = _get_board(db, board_id)
+    assert_project_permission(db, user, _board_project(db, board), P.BROWSE_PROJECTS)
+    return board
 
 
 @router.get("/boards/{board_id}/board", response_model=BoardView)
@@ -110,6 +125,7 @@ def board_view(
     user: User = Depends(get_current_user),
 ) -> BoardView:
     board = _get_board(db, board_id)
+    assert_project_permission(db, user, _board_project(db, board), P.BROWSE_PROJECTS)
     statuses = _project_statuses(db, board.project_id)
 
     active_sprint: Sprint | None = None
@@ -163,6 +179,7 @@ def backlog_view(
     user: User = Depends(get_current_user),
 ) -> BacklogView:
     board = _get_board(db, board_id)
+    assert_project_permission(db, user, _board_project(db, board), P.BROWSE_PROJECTS)
 
     # Future + active sprints for this board (non-closed).
     sprints = list(
@@ -223,6 +240,7 @@ def create_sprint(
     user: User = Depends(get_current_user),
 ) -> Sprint:
     board = _get_board(db, board_id)
+    assert_project_permission(db, user, _board_project(db, board), P.MANAGE_SPRINTS)
     sprint = Sprint(
         board_id=board.id,
         name=payload.name,
@@ -243,7 +261,9 @@ def get_sprint(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Sprint:
-    return _get_sprint(db, sprint_id)
+    sprint = _get_sprint(db, sprint_id)
+    assert_project_permission(db, user, _sprint_project(db, sprint), P.BROWSE_PROJECTS)
+    return sprint
 
 
 @router.patch("/sprints/{sprint_id}", response_model=SprintOut)
@@ -254,6 +274,7 @@ def update_sprint(
     user: User = Depends(get_current_user),
 ) -> Sprint:
     sprint = _get_sprint(db, sprint_id)
+    assert_project_permission(db, user, _sprint_project(db, sprint), P.MANAGE_SPRINTS)
     data = payload.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(sprint, field, value)
@@ -271,6 +292,7 @@ def start_sprint(
     user: User = Depends(get_current_user),
 ) -> Sprint:
     sprint = _get_sprint(db, sprint_id)
+    assert_project_permission(db, user, _sprint_project(db, sprint), P.MANAGE_SPRINTS)
     other_active = db.scalars(
         select(Sprint).where(
             Sprint.board_id == sprint.board_id,
@@ -301,6 +323,7 @@ def complete_sprint(
     user: User = Depends(get_current_user),
 ) -> Sprint:
     sprint = _get_sprint(db, sprint_id)
+    assert_project_permission(db, user, _sprint_project(db, sprint), P.MANAGE_SPRINTS)
     sprint.state = "closed"
     sprint.complete_date = _now()
 
@@ -331,6 +354,7 @@ def delete_sprint(
     user: User = Depends(get_current_user),
 ) -> Message:
     sprint = _get_sprint(db, sprint_id)
+    assert_project_permission(db, user, _sprint_project(db, sprint), P.MANAGE_SPRINTS)
     # Move its issues back to the backlog before deletion.
     issues = list(
         db.scalars(select(Issue).where(Issue.sprint_id == sprint.id))
