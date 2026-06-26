@@ -56,7 +56,16 @@ CREATE TABLE IF NOT EXISTS ldap_sync_log (
   id BIGSERIAL PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL,
   completed_at TIMESTAMPTZ, status TEXT NOT NULL, teams_count INT,
   users_count INT, delta_summary TEXT, error_msg TEXT);
+CREATE TABLE IF NOT EXISTS devops_projects (
+  company TEXT, project TEXT, dev_team TEXT, qc_team TEXT, ops_team TEXT);
 """
+
+# (company, project, dev_team, qc_team, ops_team) — for the inventory↔Postgres
+# compare panel in the Sync Check tab.
+DEVOPS_PROJECTS = [
+    ("ACME",   "payments", "DEVJAVA",   "QCJAVA", "OPS"),
+    ("GLOBEX", "billing",  "DEVDOTNET", "QCNET",  "OPS"),
+]
 
 
 def _connect():
@@ -90,7 +99,11 @@ def main() -> int:
         cur = conn.cursor()
         cur.execute(DDL)
         cur.execute("TRUNCATE ldap_users, ldap_team_members, "
-                    "ldap_member_resolutions")
+                    "ldap_member_resolutions, devops_projects")
+        for co, proj, dev, qc, ops in DEVOPS_PROJECTS:
+            cur.execute("INSERT INTO devops_projects "
+                        "(company,project,dev_team,qc_team,ops_team) "
+                        "VALUES (%s,%s,%s,%s,%s)", (co, proj, dev, qc, ops))
         for un, disp, email, co, title, teams in MEMBERS:
             cur.execute(
                 "INSERT INTO ldap_users (username,email,display_name,title,"
