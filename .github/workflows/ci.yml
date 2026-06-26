@@ -15,6 +15,27 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # A throwaway Postgres so the Teams + Architecture tabs show real data in
+    # the screenshots (ldap_users / ldap_team_members). The harness works
+    # without it too (those tabs just stay empty).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: devops
+          POSTGRES_PASSWORD: devops
+          POSTGRES_DB: devops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      LOCALDEV_PG_HOST: localhost
+      LOCALDEV_PG_PORT: "5432"
+      LOCALDEV_PG_DB: devops
+      LOCALDEV_PG_USER: devops
+      LOCALDEV_PG_PASSWORD: devops
     steps:
       - uses: actions/checkout@v4
 

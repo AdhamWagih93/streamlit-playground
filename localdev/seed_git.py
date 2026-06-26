@@ -23,7 +23,15 @@ import subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 GITSRV = os.path.join(HERE, "gitsrv")
 
-TEAMS = ["DEVJAVA", "DEVDOTNET"]
+# (project, app, company, dev_team, qc_team, ops_team, platform)
+INV_APPS = [
+    ("payments", "api",    "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "ocp"),
+    ("billing",  "worker", "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "k8s"),
+]
+# Every team that owns inventory rows also owns a Control config repo, so the
+# Architecture tab's repo discovery (which falls back to the inventory team set)
+# finds a repo for each one.
+TEAMS = ["DEVJAVA", "DEVDOTNET", "QCJAVA", "QCNET", "OPS"]
 MIRRORS = ["Engine", "ocp-templates", "Tools", "UI", "DocMDs"]
 
 
@@ -55,28 +63,37 @@ def _commit_all(path: str, msg: str) -> None:
 
 
 def _seed_inventories() -> None:
-    """Best-effort inventory tree. Adjust to match your real inventories repo
-    structure if rows don't parse — the page renders regardless (graceful)."""
+    """Inventory tree matching _load_inventory_from_git's layout:
+      {project}/{app}.yml                         ← defines the app
+      {project}/group_vars/all/vars.yml           ← project baseline (company)
+      {project}/group_vars/{app}/vars.yml         ← app vars (build/deploy/repo)
+      {project}/group_vars/{env}_{app}/vars.yml   ← per-env vars + {env}_team
+      {project}/host_vars/{env}_{ocp|k8s}/vars.yml← namespace
+    Team ownership is the dev_team/qc_team/uat_team/prd_team keys collected from
+    these levels."""
     repo = os.path.join(GITSRV, "DevOps", "Platform", "_git", "inventories")
     _init_repo(repo)
-    proj = "payments"
-    # Per-app file
-    _write(repo, f"{proj}/api.yml",
-           "company: ACME\n"
-           "app_type: service\n"
-           "repository_name: payments-api\n"
-           "build_technology: maven\n"
-           "deploy_technology: helm\n"
-           "deploy_platform: ocp\n")
-    # group_vars per env (team ownership lives here as <env>_team / dev_team)
-    for env, team in (("dev", "DEVJAVA"), ("qc", "DEVJAVA"), ("prd", "DEVOPS")):
-        _write(repo, f"{proj}/group_vars/{env}/vars.yml",
-               f"dev_team: DEVJAVA\nqc_team: DEVJAVA\n{env}_team: {team}\n")
-    # host_vars per project (namespace for OCP)
-    _write(repo, f"{proj}/host_vars/prd_ocp/vars.yml",
-           "ocp_namespace:\n  name: payments-prd\n")
-    _write(repo, f"{proj}/host_vars/dev_ocp/vars.yml",
-           "ocp_namespace:\n  name: payments-dev\n")
+    for proj, app, co, dev, qc, ops, plat in INV_APPS:
+        # app definition file (its presence defines the app)
+        _write(repo, f"{proj}/{app}.yml", f"# {proj}/{app} inventory\n")
+        # project baseline
+        _write(repo, f"{proj}/group_vars/all/vars.yml", f"company: {co}\n")
+        # app vars
+        _write(repo, f"{proj}/group_vars/{app}/vars.yml",
+               f"app_type: service\nrepository_name: {proj}-{app}\n"
+               f"build_technology: {'maven' if co == 'ACME' else 'dotnet'}\n"
+               f"deploy_technology: helm\ndeploy_platform: {plat}\n"
+               f"dev_team: {dev}\nqc_team: {qc}\n")
+        # per-env team ownership + image tags
+        for env, team in (("dev", dev), ("qc", qc), ("uat", ops), ("prd", ops)):
+            _write(repo, f"{proj}/group_vars/{env}_{app}/vars.yml",
+                   f"{env}_team: {team}\n"
+                   f"build_image_name: {app}-build\nbuild_image_tag: 1.5.0\n"
+                   f"deploy_image_name: {app}\ndeploy_image_tag: 1.4.2\n")
+        # namespaces (OCP or K8s)
+        for env in ("dev", "qc", "prd"):
+            _write(repo, f"{proj}/host_vars/{env}_{plat}/vars.yml",
+                   f"{plat}_namespace:\n  name: {proj}-{env}\n")
     _commit_all(repo, "seed inventory")
 
 
@@ -90,25 +107,38 @@ def _seed_mirrors() -> None:
 
 def _seed_control() -> None:
     """Per-team config repos: <project>/<env>_<app>/config.yml with connection
-    variables so the Architecture tab has nodes + edges to draw."""
+    variables so the Architecture tab has nodes + edges to draw. Connections
+    reference sibling app names (e.g. `api` → `worker`) so some edges resolve
+    to internal app→app links rather than external endpoints."""
+    # team → (project, app)
+    layout = {
+        "DEVJAVA":   ("payments", "api"),
+        "QCJAVA":    ("payments", "checkout"),
+        "DEVDOTNET": ("billing",  "worker"),
+        "QCNET":     ("billing",  "portal"),
+        "OPS":       ("platform", "gateway"),
+    }
     for team in TEAMS:
+        proj, app = layout.get(team, ("platform", team.lower()))
         repo = os.path.join(GITSRV, "DevOps", "Control", "_git", team)
         _init_repo(repo)
-        app = "api" if team == "DEVJAVA" else "worker"
-        proj = "payments" if team == "DEVJAVA" else "billing"
         for env in ("dev", "qc", "prd"):
             _write(repo, f"{proj}/{env}_{app}/config.yml",
                    f"# {proj}/{env}_{app}\n"
                    f"service:\n"
-                   f"  name: {proj}-{app}\n"
+                   f"  name: {app}\n"
                    f"  port: 8080\n"
                    f"database:\n"
                    f"  db_hostname: {proj}-db-{env}\n"
                    f"  db_port: 5432\n"
                    f"  url: postgresql://{proj}-db-{env}:5432/{proj}\n"
                    f"upstream:\n"
+                   f"  # resolves to the gateway app (internal edge)\n"
+                   f"  gateway_url: http://gateway:8080/route\n"
+                   f"  worker_endpoint: http://worker:9090\n"
                    f"  auth_url: https://auth-{env}.acme.local/oauth\n"
-                   f"  billing_api: http://billing-{app}:8080/v1\n"
+                   f"messaging:\n"
+                   f"  kafka_url: kafka://broker-{env}:9092\n"
                    f"cache:\n"
                    f"  redis_url: redis://cache-{env}:6379\n")
         _commit_all(repo, f"seed control config for {team}")

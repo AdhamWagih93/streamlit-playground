@@ -76,9 +76,17 @@ VPN. Extend `test_smoke.py` with assertions on specific tabs as you go.
 - **Git data:** edit `seed_git.py` (inventory tree, Control `config.yml`s,
   mirror repos) and re-run it. The inventory tree is best-effort — tweak it to
   match your real `inventories` repo layout if rows don't parse.
-- **Postgres:** run a local PG (`docker run -e POSTGRES_PASSWORD=devops -p
-  5432:5432 postgres:16`), fill in the `postgres` block of
-  `secrets.local.json`, and create the tables/rows the History/Teams tabs read.
+- **Postgres (Teams + Architecture data):** the Teams tab reads members from
+  `ldap_users`/`ldap_team_members`. Run a local PG and seed it:
+  ```bash
+  docker run -d -e POSTGRES_USER=devops -e POSTGRES_PASSWORD=devops \
+    -e POSTGRES_DB=devops -p 5432:5432 postgres:16
+  LOCALDEV_PG_HOST=localhost python localdev/seed_pg.py
+  LOCALDEV_PG_HOST=localhost streamlit run localdev/front_local.py
+  ```
+  The vault shim picks up `LOCALDEV_PG_HOST/PORT/DB/USER/PASSWORD` (unset → the
+  tab stays empty, no error). CI runs a throwaway `postgres:16` service and
+  seeds it automatically, so the Teams + Architecture screenshots show data.
 
 ## How the seam is injected
 

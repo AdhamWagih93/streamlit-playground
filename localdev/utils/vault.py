@@ -36,7 +36,20 @@ class VaultClient:
         self._data = _load()
 
     def read_all_nested_secrets(self, path: str, sub: str = "") -> dict:
-        node = self._data.get(path) or {}
+        node = dict(self._data.get(path) or {})
+        # Postgres creds are env-overridable so CI (or a local `docker run
+        # postgres`) can point the dashboard at a real DB without editing the
+        # committed secrets file. Unset env → keeps the JSON value (host "" =
+        # unconfigured = graceful degradation).
+        if path == "postgres":
+            for key, env in (("host", "LOCALDEV_PG_HOST"),
+                             ("port", "LOCALDEV_PG_PORT"),
+                             ("database", "LOCALDEV_PG_DB"),
+                             ("username", "LOCALDEV_PG_USER"),
+                             ("password", "LOCALDEV_PG_PASSWORD")):
+                val = os.environ.get(env)
+                if val:
+                    node[key] = val
         if sub:
             node = (node or {}).get(sub) or {}
         return dict(node) if isinstance(node, dict) else {}
