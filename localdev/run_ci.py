@@ -33,6 +33,8 @@ PY = sys.executable
 
 PASS, FAIL, WARN, SKIP = "✅", "❌", "⚠️", "⏭️"
 GREEN, RED = 0x2ECC71, 0xE74C3C
+# Discord 403-Forbids the default Python-urllib User-Agent — send a real one.
+UA = "DashboardCI/1.0 (+https://github.com/AdhamWagih93/streamlit-playground)"
 
 
 def _run(title: str, cmd: list, required: bool) -> dict:
@@ -131,11 +133,12 @@ def post_discord(webhook: str, payload: dict, files: list, dry_run: bool) -> Non
             parts.append(f"--{b}--\r\n".encode())
             req = urllib.request.Request(
                 webhook, data=b"".join(parts),
-                headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+                headers={"Content-Type": f"multipart/form-data; boundary={b}",
+                         "User-Agent": UA})
         else:
             req = urllib.request.Request(
                 webhook, data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json"})
+                headers={"Content-Type": "application/json", "User-Agent": UA})
         with urllib.request.urlopen(req, timeout=20) as r:
             r.read()
         print("Posted CI report to Discord.")
