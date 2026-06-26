@@ -19,14 +19,23 @@ JIRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPORT_DIR="$JIRA_DIR/ci-report"
 ART_DIR="$REPORT_DIR/artifacts"
 
+# Load local CI secrets (e.g. DISCORD_WEBHOOK_URL) if present — gitignored,
+# never committed. See jira/ci/secrets.env.
+# shellcheck disable=SC1091
+[ -f "$SCRIPT_DIR/secrets.env" ] && . "$SCRIPT_DIR/secrets.env"
+
 SKIP_FRONTEND=0
 SKIP_DOCKER=0
 QUIET=0
+SCREENSHOTS=${CI_SCREENSHOTS:-0}
+APP_SHOTS=${CI_APP_SCREENSHOTS:-0}
 for arg in "$@"; do
   case "$arg" in
-    --skip-frontend) SKIP_FRONTEND=1 ;;
-    --skip-docker)   SKIP_DOCKER=1 ;;
-    --quiet)         QUIET=1 ;;
+    --skip-frontend)   SKIP_FRONTEND=1 ;;
+    --skip-docker)     SKIP_DOCKER=1 ;;
+    --quiet)           QUIET=1 ;;
+    --screenshots)     SCREENSHOTS=1 ;;
+    --app-screenshots) SCREENSHOTS=1; APP_SHOTS=1 ;;
   esac
 done
 
@@ -138,8 +147,21 @@ if command -v notify-send >/dev/null 2>&1; then
   notify-send "Trackly local CI: $STATUS" "See $REPORT_DIR/report.md" 2>/dev/null || true
 fi
 
-# Optional Discord notification — posts an embed (+ report.md/pytest.html) when
-# DISCORD_WEBHOOK_URL is set in the environment. Never fails the run.
+# Optional screenshots (headless Chromium via Playwright container). Opt-in so
+# normal pushes stay fast: --screenshots (report PNG) / --app-screenshots (+app).
+if [ "$SCREENSHOTS" -eq 1 ]; then
+  bold "▶ screenshots"
+  if [ "$APP_SHOTS" -eq 1 ]; then
+    # Isolated, seeded stack — never touches the real database.
+    bash "$SCRIPT_DIR/capture-screenshots.sh" --ephemeral || true
+  else
+    bash "$SCRIPT_DIR/capture-screenshots.sh" || true
+  fi
+fi
+
+# Optional Discord notification — posts an embed (+ report.md and any
+# screenshots/PNGs, else pytest.html) when DISCORD_WEBHOOK_URL is set. Never
+# fails the run.
 if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
   python3 "$SCRIPT_DIR/report.py" discord --report-dir "$REPORT_DIR" --attach || true
 fi

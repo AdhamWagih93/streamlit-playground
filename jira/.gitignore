@@ -38,3 +38,7 @@ backend/reports/
 frontend/reports/
 docker-reports/
 ci-report/
+
+# Local CI secrets (webhook URLs, tokens) — never commit
+ci/secrets.env
+ci/*.secret

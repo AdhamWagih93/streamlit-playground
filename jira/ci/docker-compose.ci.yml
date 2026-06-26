@@ -1,0 +1,52 @@
+# Isolated, throwaway Trackly stack for CI screenshots.
+#
+# Fully separate from the real `trackly` stack: distinct project name
+# (trackly-ci), a different host port (8099), and a RAM-backed (tmpfs) database
+# so NOTHING is persisted and your real pgdata volume is never touched. Brought
+# up + seeded + screenshotted + torn down by jira/ci/capture-screenshots.sh.
+name: trackly-ci
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trackly
+      POSTGRES_USER: trackly
+      POSTGRES_PASSWORD: trackly
+    tmpfs:
+      - /var/lib/postgresql/data   # ephemeral — gone on teardown
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackly"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: trackly
+      POSTGRES_USER: trackly
+      POSTGRES_PASSWORD: trackly
+      SECRET_KEY: ci-screenshots-secret-0123456789abcdef
+      APP_ENV: development
+      DEBUG: "false"
+      ATTACHMENTS_DIR: /data/attachments
+      BOOTSTRAP_ADMIN_EMAIL: admin@trackly.local
+      BOOTSTRAP_ADMIN_USERNAME: admin
+      BOOTSTRAP_ADMIN_PASSWORD: admin
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ../frontend
+    ports:
+      - "8099:80"
+    depends_on:
+      - backend
