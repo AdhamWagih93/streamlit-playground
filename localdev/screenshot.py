@@ -108,6 +108,7 @@ def main() -> int:
                     if tab.count() == 0:
                         print(f"  (skip {fname}: tab '{needle}' not present)")
                         continue
+                    tab.scroll_into_view_if_needed()
                     tab.click()
                     _settle(page, 1200)
                     # Lazy tabs render a "Load <tab>" button first.
@@ -117,7 +118,28 @@ def main() -> int:
                         load.first.click()
                         _settle(page, 2500)
                     out = os.path.join(SHOTS, f"{fname}.png")
-                    page.screenshot(path=out, full_page=True)
+                    # Capture the TABS WIDGET (tab bar + the active tab's
+                    # content) rather than the whole page — the dashboard has a
+                    # tall filter rail / stat tiles above the tabs, so a
+                    # full-page shot buries the tab content and every tab looks
+                    # the same up top. Shooting the tabs container isolates what
+                    # actually changes per tab. Falls back to full_page.
+                    shot_el = None
+                    for sel in ('.st-key-cc_surface_tabs',
+                                '[data-testid="stTabs"]'):
+                        el = page.locator(sel).first
+                        if el.count() > 0:
+                            shot_el = el
+                            break
+                    if shot_el is not None:
+                        try:
+                            shot_el.scroll_into_view_if_needed()
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(300)
+                        shot_el.screenshot(path=out)
+                    else:
+                        page.screenshot(path=out, full_page=True)
                     captured += 1
                     print(f"  captured {fname}.png")
                 except Exception as e:  # best effort per tab

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import html as _html
 import json
 import os
 import subprocess
@@ -90,6 +91,115 @@ def write_report(report: dict) -> None:
     lines += ["", f"Screenshots captured: **{n_shots}**"]
     with open(os.path.join(OUT, "report.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
+
+
+def changelog(n: int = 8) -> list:
+    """Recent commits for the report's change log."""
+    fmt = "%h\x1f%ad\x1f%an\x1f%s"
+    out = subprocess.run(
+        ["git", "log", f"-{n}", f"--pretty=format:{fmt}", "--date=short"],
+        cwd=ROOT, capture_output=True, text=True).stdout
+    rows = []
+    for line in out.splitlines():
+        p = line.split("\x1f")
+        if len(p) == 4:
+            rows.append({"sha": p[0], "date": p[1], "author": p[2], "subject": p[3]})
+    return rows
+
+
+def write_html_report(report: dict, log: list) -> str:
+    """Render a professional, self-contained HTML CI report card."""
+    passed = report["overall_status"] == "passed"
+    n_pass = sum(1 for j in report["jobs"] if j["status"] == "passed")
+    n_tot = len(report["jobs"])
+    n_shots = len(glob.glob(os.path.join(SHOTS, "*.png")))
+    job_rows = "".join(
+        f'<div class="row {"ok" if j["status"] == "passed" else "bad"}">'
+        f'<span class="ic">{"✓" if j["status"] == "passed" else "✗"}</span>'
+        f'<span class="nm">{_html.escape(j["title"])}'
+        + ('' if j["required"] else '<span class="opt">best-effort</span>')
+        + f'</span>'
+        f'<span class="hl">{_html.escape(j["headline"])}</span>'
+        f'</div>'
+        for j in report["jobs"])
+    log_rows = "".join(
+        f'<div class="cl"><span class="sha">{_html.escape(c["sha"])}</span>'
+        f'<span class="cdate">{_html.escape(c["date"])}</span>'
+        f'<span class="csub">{_html.escape(c["subject"])}</span>'
+        f'<span class="cauth">{_html.escape(c["author"])}</span></div>'
+        for c in log)
+    accent = "#22c55e" if passed else "#ef4444"
+    html_doc = f"""<!doctype html><html><head><meta charset="utf-8"><style>
+*{{margin:0;box-sizing:border-box;font-family:'Segoe UI',system-ui,sans-serif}}
+body{{background:#0b1220;padding:28px;width:960px}}
+.card{{background:linear-gradient(180deg,#111a2e,#0d1526);border:1px solid #1e2b45;
+  border-radius:18px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.5)}}
+.hdr{{display:flex;align-items:center;gap:18px;padding:22px 26px;
+  border-bottom:1px solid #1e2b45;background:
+  radial-gradient(900px 120px at 0% 0%,{accent}22,transparent)}}
+.badge{{font-size:1.05rem;font-weight:800;letter-spacing:.04em;color:#fff;
+  background:{accent};border-radius:999px;padding:7px 16px;white-space:nowrap}}
+.htxt h1{{font-size:1.25rem;color:#e8eefc;font-weight:800}}
+.htxt .sub{{font-size:.82rem;color:#8aa0c6;font-family:ui-monospace,monospace;margin-top:3px}}
+.stats{{margin-left:auto;display:flex;gap:22px;text-align:right}}
+.stat b{{display:block;font-size:1.5rem;color:#e8eefc;font-family:ui-monospace,monospace}}
+.stat span{{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:#7e93b8}}
+.sec{{padding:16px 26px}}
+.sec h2{{font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;color:#7e93b8;
+  margin-bottom:10px;font-weight:800}}
+.row{{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;
+  margin-bottom:6px;background:#0e1830;border:1px solid #1a2742}}
+.row .ic{{font-weight:900;width:18px;text-align:center}}
+.row.ok .ic{{color:#22c55e}} .row.bad .ic{{color:#ef4444}}
+.row.bad{{background:#241019;border-color:#5b1d24}}
+.row .nm{{font-weight:700;color:#dce6fb;min-width:280px}}
+.row .opt{{font-size:.6rem;color:#7e93b8;margin-left:8px;font-weight:600;
+  border:1px solid #2a3a5c;border-radius:4px;padding:1px 6px}}
+.row .hl{{margin-left:auto;font-family:ui-monospace,monospace;font-size:.78rem;
+  color:#9fb3d6;text-align:right}}
+.cl{{display:grid;grid-template-columns:64px 86px 1fr auto;gap:12px;align-items:baseline;
+  padding:6px 12px;border-bottom:1px dashed #182542;font-size:.8rem}}
+.cl .sha{{font-family:ui-monospace,monospace;color:{accent}}}
+.cl .cdate{{font-family:ui-monospace,monospace;color:#7e93b8;font-size:.72rem}}
+.cl .csub{{color:#cdd9f2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.cl .cauth{{color:#7e93b8;font-size:.72rem}}
+.ft{{padding:12px 26px;border-top:1px solid #1e2b45;color:#6f86ad;font-size:.72rem;
+  font-family:ui-monospace,monospace;display:flex;justify-content:space-between}}
+</style></head><body><div class="card">
+<div class="hdr"><div class="badge">{'PASSED' if passed else 'FAILED'}</div>
+<div class="htxt"><h1>CI/CD Dashboard — CI report</h1>
+<div class="sub">commit {report['commit']} · {report['branch']} · {report['generated_at']}</div></div>
+<div class="stats">
+<div class="stat"><b>{n_pass}/{n_tot}</b><span>steps</span></div>
+<div class="stat"><b>{n_shots}</b><span>screens</span></div></div></div>
+<div class="sec"><h2>Test results</h2>{job_rows}</div>
+<div class="sec"><h2>Change log</h2>{log_rows or '<div class="cl"><span class="csub">no commits</span></div>'}</div>
+<div class="ft"><span>localdev fake seam · no VPN / Docker / live services</span>
+<span>Dashboard CI</span></div>
+</div></body></html>"""
+    path = os.path.join(OUT, "report.html")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html_doc)
+    return path
+
+
+def render_png(html_path: str, png_path: str) -> bool:
+    """HTML → PNG via Playwright/Chromium. Best-effort: returns False if no
+    browser is available (e.g. a bare sandbox)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(args=["--no-sandbox"])
+            page = browser.new_page(viewport={"width": 960, "height": 700},
+                                    device_scale_factor=2)
+            page.goto("file://" + os.path.abspath(html_path),
+                      wait_until="networkidle")
+            page.locator(".card").screenshot(path=png_path)
+            browser.close()
+        return True
+    except Exception as exc:
+        print(f"{WARN} report PNG render skipped: {type(exc).__name__}: {exc}")
+        return False
 
 
 def discord_payload(report: dict) -> dict:
@@ -167,7 +277,14 @@ def main() -> int:
 
     report = build_report(jobs)
     write_report(report)
-    files = [os.path.join(OUT, "report.md")] + sorted(glob.glob(os.path.join(SHOTS, "*.png")))
+    # Visual report card (test results + change log) → PNG, attached first.
+    html_path = write_html_report(report, changelog())
+    png = os.path.join(OUT, "report.png")
+    files: list = []
+    if render_png(html_path, png):
+        files.append(png)
+    files += [os.path.join(OUT, "report.md")]
+    files += sorted(glob.glob(os.path.join(SHOTS, "*.png")))
     post_discord(args.webhook, discord_payload(report), files, args.dry_run)
 
     print(f"\nOverall: {report['overall_status'].upper()}  "
