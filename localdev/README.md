@@ -38,7 +38,18 @@ pytest localdev/test_smoke.py -q
 # 2c. screenshot every tab with a real browser (Playwright)
 pip install playwright && playwright install chromium   # one-time
 python localdev/screenshot.py        # → localdev/screenshots/*.png
+
+# 2d. run the WHOLE CI and report to Discord (like jira/ci)
+DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/…" python localdev/run_ci.py
+python localdev/run_ci.py --dry-run   # prints the Discord payload, doesn't send
+python localdev/run_ci.py --no-screens # skip the browser step
 ```
+
+`run_ci.py` runs compile → seed → smoke → screenshots, writes
+`localdev/ci_report/report.{json,md}`, and posts a pass/fail embed (+ report.md
+and the tab screenshots) to Discord when `DISCORD_WEBHOOK_URL` is set — the same
+env var / convention the `jira/ci` pipeline uses. GitHub Actions passes it from
+the `DISCORD_WEBHOOK_URL` repo secret.
 
 Requires only: `pip install streamlit pytest pyyaml pandas playwright` (+
 whatever else your `cicd_dashboard.py` imports at module load). No

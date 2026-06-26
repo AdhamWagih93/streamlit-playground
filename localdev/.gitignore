@@ -5,3 +5,4 @@ fixtures/
 screenshots/
 __pycache__/
 *.pyc
+ci_report/

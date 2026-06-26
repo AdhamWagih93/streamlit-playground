@@ -1,8 +1,9 @@
 name: dashboard-ci
 
-# Renders the CI/CD dashboard end-to-end against the local fake seam (fake
-# Elasticsearch with seeded fixtures + fake vault + seeded local git) and
-# captures a screenshot of every tab. No VPN, no Docker, no real services.
+# Renders the CI/CD dashboard end-to-end against the local fake seam (fake ES +
+# seeded fixtures + fake vault + seeded local git), screenshots every tab, and
+# reports the result to Discord (set the DISCORD_WEBHOOK_URL repo secret — the
+# same env var the jira/ci pipeline uses). No VPN / Docker / real services.
 
 on:
   push:
@@ -11,7 +12,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  smoke:
+  ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,27 +28,20 @@ jobs:
           pip install streamlit pytest pyyaml pandas playwright
           pip install "psycopg[binary]" || true
 
-      - name: Compile check
-        run: python -m py_compile cicd_dashboard.py cc_docchat.py
-
-      - name: Seed local git + ES fixtures
-        run: |
-          python localdev/seed_git.py
-          python localdev/seed_es_fixtures.py
-
-      - name: Smoke test (render all admin tabs, fail on any exception)
-        run: pytest localdev/test_smoke.py -q
-
-      - name: Install Chromium for screenshots
+      - name: Install Chromium (for screenshots)
         run: python -m playwright install --with-deps chromium
 
-      - name: Capture screenshots of every tab
-        run: python localdev/screenshot.py
+      - name: Run dashboard CI (compile · seed · smoke · screenshots · Discord)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python localdev/run_ci.py
 
-      - name: Upload screenshots
+      - name: Upload screenshots + report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dashboard-screenshots
-          path: localdev/screenshots/
+          name: dashboard-ci-report
+          path: |
+            localdev/screenshots/
+            localdev/ci_report/
           if-no-files-found: warn
