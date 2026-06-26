@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# Trackly pre-push hook — runs local CI before anything is pushed to GitHub.
+# Installed by jira/ci/install-hooks.sh. Only runs when the push actually
+# contains changes under jira/, so pushes for other parts of the repo are not
+# slowed down. Blocks the push if local CI fails; bypass with `git push
+# --no-verify` in a pinch.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+RUNNER="$ROOT/jira/ci/run-local-ci.sh"
+ZERO="0000000000000000000000000000000000000000"
+
+# Collect every file changed by the commits being pushed, across all refs.
+changed_files() {
+  while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ "$local_sha" = "$ZERO" ] && continue          # branch deletion
+    if [ "$remote_sha" = "$ZERO" ]; then
+      # New ref on the remote: consider commits not yet on any remote.
+      git rev-list "$local_sha" --not --remotes 2>/dev/null \
+        | git diff-tree --stdin --name-only -r 2>/dev/null
+    else
+      git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null
+    fi
+  done
+}
+
+TOUCHED_JIRA="$(changed_files | grep -m1 '^jira/' || true)"
+
+if [ -z "$TOUCHED_JIRA" ]; then
+  exit 0   # nothing under jira/ in this push — skip Trackly CI
+fi
+
+echo "▶ Trackly changes detected in this push — running local CI…"
+echo
+
+if [ ! -x "$RUNNER" ]; then
+  echo "✗ $RUNNER is missing or not executable. Run jira/ci/install-hooks.sh." >&2
+  exit 1
+fi
+
+if "$RUNNER"; then
+  echo
+  echo "✓ Local CI passed — proceeding with push."
+  exit 0
+else
+  echo
+  echo "✗ Local CI FAILED — push blocked."
+  echo "  Review the report:  $ROOT/jira/ci-report/report.md"
+  echo "  Open in browser:    $ROOT/jira/ci-report/pytest.html"
+  echo "  To push anyway:     git push --no-verify"
+  exit 1
+fi

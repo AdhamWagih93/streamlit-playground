@@ -39,9 +39,12 @@ def rank_between(low: str | None, high: str | None) -> str:
             continue
         mid = (lo + hi) // 2
         if mid == lo:
-            # Neighbours are adjacent; descend a level to gain resolution.
+            # Adjacent digits (hi == lo + 1): take low's digit and descend for
+            # more precision. Having chosen a digit strictly below high's digit
+            # here, every deeper digit keeps the result < high, so the upper
+            # bound no longer constrains us. Keep `low` intact and advance the
+            # index — slicing it would desync the position used by _char_at.
             rank += ALPHABET[lo]
-            low = low[i + 1:] if len(low) > i + 1 else ""
             high = ""
             i += 1
             continue
