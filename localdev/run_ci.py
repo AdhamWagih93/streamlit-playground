@@ -48,7 +48,12 @@ def _run(title: str, cmd: list, required: bool) -> dict:
         ok = p.returncode == 0
     except Exception as exc:
         out, tail, ok = str(exc), str(exc), False
-    headline = (tail.splitlines()[-1] if tail else "") or ("ok" if ok else "failed")
+    # Headline = last meaningful line (skip Streamlit's bare-mode warnings etc.).
+    _noise = ("ScriptRunContext", "missing ScriptRun", "can be ignored",
+              "Warning:", "DeprecationWarning")
+    _lines = [ln for ln in tail.splitlines()
+              if ln.strip() and not any(n in ln for n in _noise)]
+    headline = (_lines[-1] if _lines else "") or ("ok" if ok else "failed")
     return {"title": title, "required": required,
             "status": "passed" if ok else "failed",
             "headline": headline[:300], "output": out[-4000:]}
