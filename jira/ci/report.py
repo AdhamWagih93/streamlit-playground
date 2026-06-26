@@ -4,7 +4,7 @@
 Turns raw CI outputs (pytest JSON/coverage, the frontend bundle, docker job
 status) into two artifacts per the project's reporting goals:
 
-* ``report.json`` — machine-readable, stable schema (for tooling / agents).
+* ``report.json`` — machine-readable, stable schema (for tooling / automation).
 * ``report.md``   — a polished, human-readable visual report.
 
 When ``$GITHUB_STEP_SUMMARY`` is set (GitHub Actions / act), the markdown is also
