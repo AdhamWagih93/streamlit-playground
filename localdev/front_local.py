@@ -47,6 +47,19 @@ st.session_state.setdefault("username", "localdev")
 st.session_state.setdefault("email", "localdev@example.com")
 st.session_state.setdefault("admin_view_all", True)
 
+# For screenshot runs (LOCALDEV_EAGER_TABS=1), pre-open every lazy tab so there
+# is no "▶ Load …" button. Clicking a Load button triggers st.rerun(), which
+# resets st.tabs back to the first tab — so a screenshot taken after it would
+# capture the Inventory tab instead of the one we switched to. Eagerly opening
+# them means tab switches are pure client-side (no rerun), so each capture shows
+# the right tab. Interactive runs stay lazy (flag unset) for speed.
+if os.environ.get("LOCALDEV_EAGER_TABS"):
+    for _flag in ("_tab_open_teams_v1", "_tab_open_eventlog_v1",
+                  "_tab_open_actions_v1", "_tab_open_sync_v1",
+                  "_tab_open_history_v1", "_tab_open_ado_v1",
+                  "_tab_open_arch_v1"):
+        st.session_state.setdefault(_flag, True)
+
 # Run the real dashboard (repo-root file) as the script. It calls
 # st.set_page_config first, which is allowed because we've only touched
 # session_state so far (not an st render command).

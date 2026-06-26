@@ -81,6 +81,9 @@ def main() -> int:
 
     port = _free_port()
     env = dict(os.environ)
+    # Pre-open every lazy tab so switching tabs never triggers a Load-button
+    # rerun (which would reset st.tabs to the first tab and ruin the capture).
+    env["LOCALDEV_EAGER_TABS"] = "1"
     proc = subprocess.Popen(
         [sys.executable, "-m", "streamlit", "run", APP,
          "--server.headless", "true", "--server.port", str(port),
@@ -110,13 +113,9 @@ def main() -> int:
                         continue
                     tab.scroll_into_view_if_needed()
                     tab.click()
-                    _settle(page, 1200)
-                    # Lazy tabs render a "Load <tab>" button first.
-                    load = page.get_by_role("button",
-                                            name=re.compile(r"Load ", re.I))
-                    if load.count() > 0 and load.first.is_visible():
-                        load.first.click()
-                        _settle(page, 2500)
+                    _settle(page, 1500)
+                    # Tabs are pre-opened (LOCALDEV_EAGER_TABS) so no "Load …"
+                    # button / rerun — the switch is pure client-side and sticks.
                     out = os.path.join(SHOTS, f"{fname}.png")
                     # Capture the TABS WIDGET (tab bar + the active tab's
                     # content) rather than the whole page — the dashboard has a
