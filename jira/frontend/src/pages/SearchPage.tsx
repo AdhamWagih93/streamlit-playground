@@ -20,7 +20,7 @@ const EXAMPLES = [
 
 export function SearchPage() {
   const [searchParams] = useSearchParams();
-  const initial = searchParams.get('q') || '';
+  const initial = searchParams.get('tql') || searchParams.get('q') || '';
   const [tql, setTql] = useState(initial);
   const [results, setResults] = useState<Page<IssueListItem> | null>(null);
   const [loading, setLoading] = useState(false);

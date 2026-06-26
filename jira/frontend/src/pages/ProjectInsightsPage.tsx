@@ -10,6 +10,7 @@ import { StatCard } from '../components/charts/StatCard';
 import { BarChart } from '../components/charts/BarChart';
 import { DonutChart } from '../components/charts/DonutChart';
 import { VelocityChart } from '../components/charts/VelocityChart';
+import { AttentionCard, SprintHealthCard } from '../components/Attention';
 
 function pct(rate: number): string {
   return `${Math.round((rate || 0) * 100)}%`;
@@ -63,6 +64,10 @@ export function ProjectInsightsPage() {
     { label: 'Closed', count: stats.closed_issues, color: '#22c55e' },
   ];
 
+  const sprint = stats.sprint_health;
+  const attention = stats.attention || [];
+  const allClear = attention.length === 0 && !(sprint && sprint.at_risk);
+
   return (
     <div className="page">
       <div className="breadcrumb">{stats.project_key} / Insights</div>
@@ -75,6 +80,32 @@ export function ProjectInsightsPage() {
         </div>
       </div>
 
+      {/* ---- Action-first: what needs attention now ---- */}
+      <section className="attn-section">
+        <h2 className="attn-section-title">Needs attention</h2>
+
+        {sprint && <SprintHealthCard health={sprint} />}
+
+        {allClear ? (
+          <div className="all-clear">
+            <span className="all-clear-icon">✓</span>
+            <div>
+              <div className="all-clear-title">Nothing needs attention right now</div>
+              <div className="all-clear-sub">No overdue, blocked, or high-priority issues, and the sprint is on track.</div>
+            </div>
+          </div>
+        ) : (
+          attention.length > 0 && (
+            <div className="attn-grid">
+              {attention.map((item) => (
+                <AttentionCard key={item.key} item={item} />
+              ))}
+            </div>
+          )
+        )}
+      </section>
+
+      {/* ---- Descriptive charts (unchanged) ---- */}
       <div className="insights-stats">
         <StatCard label="Total issues" value={stats.total_issues} accent="slate" />
         <StatCard label="Open" value={stats.open_issues} accent="amber" />

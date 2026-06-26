@@ -64,6 +64,26 @@ export function ProjectsPage() {
             <StatCard label="Open" value={my.open_issues} accent="amber" />
             <StatCard label="Resolution rate" value={`${Math.round((my.resolution_rate || 0) * 100)}%`} accent="green" />
           </div>
+          {(my.total_overdue > 0 || my.total_high_priority_open > 0 || my.projects_needing_attention > 0) && (
+            <div className="my-attn-line">
+              {my.total_overdue > 0 && <span className="my-attn-part sev-high">{my.total_overdue} overdue</span>}
+              {my.total_high_priority_open > 0 && (
+                <span className="my-attn-part sev-medium">{my.total_high_priority_open} high-priority</span>
+              )}
+              {my.projects_needing_attention > 0 && (
+                <span className="my-attn-part">
+                  {my.projects_needing_attention} project{my.projects_needing_attention === 1 ? '' : 's'} need attention
+                </span>
+              )}
+              <span className="muted">across your projects</span>
+              {my.top_attention.slice(0, 3).map((i) => (
+                <Link key={i.key} to={`/browse/${i.key}`} className="my-attn-chip" title={i.summary}>
+                  {i.key}
+                </Link>
+              ))}
+            </div>
+          )}
+
           {topProjects.length > 0 && (
             <div className="my-insights-top">
               <span className="my-insights-top-label">Most active:</span>

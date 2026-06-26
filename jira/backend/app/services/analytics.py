@@ -1,19 +1,36 @@
-"""Analytics/insights computations over issues, statuses, types and sprints."""
+"""Analytics/insights computations over issues, statuses, types and sprints.
+
+Beyond descriptive stats (counts, breakdowns, velocity) this module computes
+"needs attention" signals — overdue, high-priority, blocked, unassigned and
+stale work, plus active-sprint risk — so the UI can lead with what to act on now.
+"""
 from __future__ import annotations
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from datetime import datetime, timedelta, timezone
 
-from app.models import Board, Issue, IssueType, Priority, Project, Sprint, Status
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload
+
+from app.models import Board, Issue, IssueLink, IssueType, Priority, Project, Sprint, Status
 from app.schemas.analytics import (
+    AttentionIssue,
+    AttentionItem,
     CountItem,
     OverviewStats,
     ProjectStats,
     ProjectSummary,
+    SprintHealth,
     VelocityPoint,
 )
 
 _VELOCITY_SPRINTS = 8
+_STALE_DAYS = 14        # open & untouched this long
+_STALE_WIP_DAYS = 7     # in-progress & untouched this long
+_HIGH_PRIORITY_RANK = 2  # Highest(1) / High(2)
+
+# Weights for the per-project attention score (drives global ranking).
+_W = {"overdue": 4, "blocked": 3, "high_priority": 3, "open_bugs": 2,
+      "unassigned": 1, "stale": 1, "stale_wip": 2, "at_risk_sprint": 6}
 
 
 def _category_counts(db: Session, project_ids: list[int] | None) -> dict[str, int]:
@@ -102,6 +119,164 @@ def _velocity(db: Session, project_id: int) -> list[VelocityPoint]:
     return points
 
 
+# --- "Needs attention" engine ---------------------------------------------
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _open_issues(db: Session, project_id: int) -> list[Issue]:
+    return list(
+        db.scalars(
+            select(Issue)
+            .join(Status, Status.id == Issue.status_id)
+            .where(Issue.project_id == project_id, Status.category != "done")
+            .options(
+                joinedload(Issue.priority), joinedload(Issue.assignee),
+                joinedload(Issue.status), joinedload(Issue.type),
+            )
+        )
+    )
+
+
+def _attn_issue(i: Issue, now: datetime) -> AttentionIssue:
+    days_overdue = None
+    if i.due_date:
+        d = (now.date() - i.due_date).days
+        days_overdue = d if d > 0 else None
+    return AttentionIssue(
+        key=i.key, summary=i.summary,
+        priority=i.priority.name if i.priority else None,
+        priority_color=i.priority.color if i.priority else None,
+        assignee=i.assignee.display_name if i.assignee else None,
+        status=i.status.name if i.status else None,
+        due_date=i.due_date, days_overdue=days_overdue, updated_at=i.updated_at,
+    )
+
+
+def _sprint_health(db: Session, project_id: int, now: datetime) -> SprintHealth | None:
+    sprint = db.scalars(
+        select(Sprint).join(Board, Board.id == Sprint.board_id)
+        .where(Board.project_id == project_id, Sprint.state == "active")
+        .order_by(Sprint.id.desc()).limit(1)
+    ).first()
+    if not sprint:
+        return None
+    total_pts = db.scalar(
+        select(func.coalesce(func.sum(Issue.story_points), 0.0)).where(Issue.sprint_id == sprint.id)
+    ) or 0.0
+    done_pts, done_cnt = db.execute(
+        select(func.coalesce(func.sum(Issue.story_points), 0.0), func.count(Issue.id))
+        .join(Status, Status.id == Issue.status_id)
+        .where(Issue.sprint_id == sprint.id, Status.category == "done")
+    ).one()
+    total_cnt = db.scalar(select(func.count(Issue.id)).where(Issue.sprint_id == sprint.id)) or 0
+    done_pts = float(done_pts or 0.0)
+    done_cnt = int(done_cnt or 0)
+    incomplete = int(total_cnt) - done_cnt
+    pct = (done_pts / total_pts) if total_pts > 0 else ((done_cnt / total_cnt) if total_cnt else 0.0)
+    days_remaining = (sprint.end_date.date() - now.date()).days if sprint.end_date else None
+    at_risk, reason = False, None
+    if days_remaining is not None and incomplete > 0:
+        if days_remaining < 0:
+            at_risk, reason = True, f"Ended {abs(days_remaining)}d ago with {incomplete} unfinished"
+        elif days_remaining <= 3 and pct < 0.7:
+            at_risk, reason = True, f"{days_remaining}d left · {round(pct * 100)}% done · {incomplete} unfinished"
+    return SprintHealth(
+        sprint_id=sprint.id, name=sprint.name, goal=sprint.goal, end_date=sprint.end_date,
+        days_remaining=days_remaining, total_points=float(total_pts), completed_points=done_pts,
+        percent_complete=round(pct, 3), incomplete_issues=incomplete, at_risk=at_risk, risk_reason=reason,
+    )
+
+
+def compute_attention(db: Session, project: Project, with_samples: bool = True) -> dict:
+    """Compute the per-project attention signals, score and active-sprint risk."""
+    now = _now()
+    today = now.date()
+    opens = _open_issues(db, project.id)
+    open_ids = [i.id for i in opens]
+    blocked_ids: set[int] = set()
+    if open_ids:
+        blocked_ids = set(
+            db.scalars(
+                select(IssueLink.target_id).where(
+                    IssueLink.link_type == "blocks", IssueLink.target_id.in_(open_ids)
+                )
+            )
+        )
+    stale_cut = now - timedelta(days=_STALE_DAYS)
+    wip_cut = now - timedelta(days=_STALE_WIP_DAYS)
+
+    groups: dict[str, list[Issue]] = {
+        "overdue": [i for i in opens if i.due_date and i.due_date < today],
+        "high_priority": [i for i in opens if i.priority and i.priority.rank <= _HIGH_PRIORITY_RANK],
+        "blocked": [i for i in opens if i.id in blocked_ids],
+        "open_bugs": [i for i in opens if i.type and i.type.name.lower() == "bug"],
+        "unassigned": [i for i in opens if i.assignee_id is None],
+        "stale": [i for i in opens if i.updated_at and i.updated_at < stale_cut],
+        "stale_wip": [
+            i for i in opens
+            if i.status and i.status.category == "in_progress" and i.updated_at and i.updated_at < wip_cut
+        ],
+    }
+    sprint = _sprint_health(db, project.id, now)
+    score = sum(_W[k] * len(v) for k, v in groups.items())
+    if sprint and sprint.at_risk:
+        score += _W["at_risk_sprint"]
+
+    k = project.key
+    meta = {
+        "overdue": ("Overdue", "Past their due date and not done", "high",
+                    f"project = {k} AND due < 0d AND statusCategory != done ORDER BY due ASC"),
+        "high_priority": ("High priority open", "Highest/High priority, still open", "high",
+                    f"project = {k} AND priority IN (Highest, High) AND statusCategory != done"),
+        "blocked": ("Blocked", "Open issues blocked by another issue", "high", None),
+        "unassigned": ("Unassigned", "Open work with no owner", "medium",
+                    f"project = {k} AND assignee = empty AND statusCategory != done"),
+        "stale_wip": ("Stuck in progress", f"In progress, untouched {_STALE_WIP_DAYS}+ days", "medium",
+                    f"project = {k} AND statusCategory = in_progress AND updated < -{_STALE_WIP_DAYS}d"),
+        "open_bugs": ("Open bugs", "Bugs not yet resolved", "medium",
+                    f"project = {k} AND type = Bug AND statusCategory != done"),
+        "stale": ("Stale", f"Open, untouched {_STALE_DAYS}+ days", "low",
+                    f"project = {k} AND updated < -{_STALE_DAYS}d AND statusCategory != done ORDER BY updated ASC"),
+    }
+
+    def _samples(key: str, items: list[Issue]) -> list[AttentionIssue]:
+        if not with_samples:
+            return []
+        if key == "overdue":
+            items = sorted(items, key=lambda i: (i.due_date or today))
+        elif key == "high_priority":
+            items = sorted(items, key=lambda i: (i.priority.rank if i.priority else 99, i.due_date or today))
+        else:
+            items = sorted(items, key=lambda i: (i.updated_at or now))
+        return [_attn_issue(i, now) for i in items[:5]]
+
+    order = ["overdue", "high_priority", "blocked", "unassigned", "stale_wip", "open_bugs", "stale"]
+    items: list[AttentionItem] = []
+    for key in order:
+        grp = groups[key]
+        if not grp:
+            continue
+        label, desc, sev, tql = meta[key]
+        items.append(AttentionItem(key=key, label=label, description=desc, count=len(grp),
+                                   severity=sev, tql=tql, samples=_samples(key, grp)))
+
+    reasons: list[str] = []
+    if groups["overdue"]:
+        reasons.append(f"{len(groups['overdue'])} overdue")
+    if groups["high_priority"]:
+        reasons.append(f"{len(groups['high_priority'])} high-priority")
+    if groups["blocked"]:
+        reasons.append(f"{len(groups['blocked'])} blocked")
+    if sprint and sprint.at_risk:
+        reasons.append("sprint at risk")
+    if groups["unassigned"] and len(reasons) < 3:
+        reasons.append(f"{len(groups['unassigned'])} unassigned")
+
+    return {"items": items, "score": score, "sprint": sprint, "groups": groups,
+            "reasons": reasons[:3], "now": now}
+
+
 def project_stats(db: Session, project: Project) -> ProjectStats:
     pid = [project.id]
     cats = _category_counts(db, pid)
@@ -111,6 +286,7 @@ def project_stats(db: Session, project: Project) -> ProjectStats:
     n = len(velocity) or 1
     avg_pts = sum(v.completed_points for v in velocity) / n if velocity else 0.0
     avg_iss = sum(v.completed_issues for v in velocity) / n if velocity else 0.0
+    att = compute_attention(db, project, with_samples=True)
     return ProjectStats(
         project_id=project.id,
         project_key=project.key,
@@ -120,6 +296,9 @@ def project_stats(db: Session, project: Project) -> ProjectStats:
         in_progress_issues=cats.get("in_progress", 0),
         closed_issues=closed,
         resolution_rate=(closed / total) if total else 0.0,
+        attention=att["items"],
+        attention_score=att["score"],
+        sprint_health=att["sprint"],
         by_status=_by_status(db, pid),
         by_type=_by_type(db, pid),
         by_priority=_by_priority(db, pid),
@@ -129,12 +308,14 @@ def project_stats(db: Session, project: Project) -> ProjectStats:
     )
 
 
-def _project_summary(db: Session, project: Project) -> ProjectSummary:
+def _project_summary(db: Session, project: Project, att: dict) -> ProjectSummary:
     cats = _category_counts(db, [project.id])
     total = sum(cats.values())
     closed = cats.get("done", 0)
     velocity = _velocity(db, project.id)
     avg_pts = (sum(v.completed_points for v in velocity) / len(velocity)) if velocity else 0.0
+    g = att["groups"]
+    sprint = att["sprint"]
     return ProjectSummary(
         project_id=project.id,
         project_key=project.key,
@@ -145,6 +326,14 @@ def _project_summary(db: Session, project: Project) -> ProjectSummary:
         closed_issues=closed,
         resolution_rate=(closed / total) if total else 0.0,
         avg_velocity_points=round(avg_pts, 2),
+        attention_score=att["score"],
+        overdue=len(g["overdue"]),
+        high_priority_open=len(g["high_priority"]),
+        unassigned_open=len(g["unassigned"]),
+        blocked=len(g["blocked"]),
+        at_risk_sprint=bool(sprint and sprint.at_risk),
+        needs_attention=att["score"] > 0,
+        top_reasons=att["reasons"],
     )
 
 
@@ -160,6 +349,34 @@ def overview_stats(db: Session, project_ids: list[int] | None, scope: str) -> Ov
     cats = _category_counts(db, ids if ids else [-1])
     total = sum(cats.values())
     closed = cats.get("done", 0)
+
+    summaries: list[ProjectSummary] = []
+    top_pool: list[tuple[int, float, AttentionIssue]] = []  # (bucket, sortkey, issue)
+    tot_overdue = tot_unassigned = tot_high = tot_blocked = at_risk = needs = 0
+    for p in projects:
+        att = compute_attention(db, p, with_samples=True)
+        summaries.append(_project_summary(db, p, att))
+        g = att["groups"]
+        now = att["now"]
+        tot_overdue += len(g["overdue"])
+        tot_unassigned += len(g["unassigned"])
+        tot_high += len(g["high_priority"])
+        tot_blocked += len(g["blocked"])
+        if att["sprint"] and att["sprint"].at_risk:
+            at_risk += 1
+        if att["score"] > 0:
+            needs += 1
+        # Cross-project most-urgent issues: overdue (by days overdue), then high-priority.
+        for i in g["overdue"]:
+            d = (now.date() - i.due_date).days if i.due_date else 0
+            top_pool.append((0, -d, _attn_issue(i, now)))
+        for i in g["high_priority"]:
+            top_pool.append((1, (i.priority.rank if i.priority else 99), _attn_issue(i, now)))
+
+    top_pool.sort(key=lambda t: (t[0], t[1]))
+    top_attention = [t[2] for t in top_pool[:8]]
+
+    summaries.sort(key=lambda s: (s.attention_score, s.total_issues), reverse=True)
     return OverviewStats(
         scope=scope,
         total_projects=len(projects),
@@ -167,11 +384,14 @@ def overview_stats(db: Session, project_ids: list[int] | None, scope: str) -> Ov
         open_issues=cats.get("todo", 0) + cats.get("in_progress", 0),
         closed_issues=closed,
         resolution_rate=(closed / total) if total else 0.0,
+        total_overdue=tot_overdue,
+        total_unassigned_open=tot_unassigned,
+        total_high_priority_open=tot_high,
+        total_blocked=tot_blocked,
+        projects_at_risk=at_risk,
+        projects_needing_attention=needs,
+        top_attention=top_attention,
         by_status=_by_status(db, ids if ids else [-1]),
         by_type=_by_type(db, ids if ids else [-1]),
-        projects=sorted(
-            (_project_summary(db, p) for p in projects),
-            key=lambda s: s.total_issues,
-            reverse=True,
-        ),
+        projects=summaries,
     )

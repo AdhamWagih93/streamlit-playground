@@ -598,6 +598,47 @@ export interface CountItem {
   color?: string | null;
 }
 
+export type AttentionSeverity = 'high' | 'medium' | 'low';
+
+// A single issue surfaced inside an attention bucket / rollup.
+export interface AttentionIssue {
+  key: string;
+  summary: string;
+  priority?: string | null;
+  priority_color?: string | null;
+  assignee?: string | null;
+  status?: string | null;
+  due_date?: string | null;
+  days_overdue?: number | null;
+  updated_at?: string | null;
+}
+
+// A bucket of issues that need attention (overdue, unassigned, blocked, …).
+export interface AttentionItem {
+  key: string;
+  label: string;
+  description: string;
+  count: number;
+  severity: AttentionSeverity;
+  tql?: string | null;
+  samples: AttentionIssue[];
+}
+
+// Active-sprint health summary for a project.
+export interface SprintHealth {
+  sprint_id: number;
+  name: string;
+  goal?: string | null;
+  end_date?: string | null;
+  days_remaining?: number | null;
+  total_points: number;
+  completed_points: number;
+  percent_complete: number; // 0..1
+  incomplete_issues: number;
+  at_risk: boolean;
+  risk_reason?: string | null;
+}
+
 export interface ProjectStatRow {
   project_id: string;
   project_key: string;
@@ -608,6 +649,15 @@ export interface ProjectStatRow {
   closed_issues: number;
   resolution_rate: number;
   avg_velocity_points: number;
+  // Attention signals (rows already sorted most-urgent first).
+  attention_score: number;
+  overdue: number;
+  high_priority_open: number;
+  unassigned_open: number;
+  blocked: number;
+  at_risk_sprint: boolean;
+  needs_attention: boolean;
+  top_reasons: string[];
 }
 
 export interface OverviewStats {
@@ -620,6 +670,14 @@ export interface OverviewStats {
   by_status: CountItem[];
   by_type: CountItem[];
   projects: ProjectStatRow[];
+  // Cross-project attention rollup.
+  total_overdue: number;
+  total_unassigned_open: number;
+  total_high_priority_open: number;
+  total_blocked: number;
+  projects_at_risk: number;
+  projects_needing_attention: number;
+  top_attention: AttentionIssue[];
 }
 
 export interface VelocityPoint {
@@ -645,4 +703,8 @@ export interface ProjectStats {
   velocity: VelocityPoint[];
   avg_velocity_points: number;
   avg_velocity_issues: number;
+  // Action-first attention data.
+  attention: AttentionItem[];
+  attention_score: number;
+  sprint_health: SprintHealth | null;
 }

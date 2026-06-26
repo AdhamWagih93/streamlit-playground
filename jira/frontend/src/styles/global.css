@@ -880,3 +880,162 @@ input, textarea, select {
   color: var(--slate-700);
 }
 .my-insights-chip:hover { border-color: var(--indigo-200); text-decoration: none; background: var(--indigo-50); }
+
+/* ---------- Attention (action-first insights) ---------- */
+:root {
+  --sev-high: #dc2626;
+  --sev-medium: #d97706;
+  --sev-low: #64748b;
+}
+
+.attn-section { margin-bottom: 28px; }
+.attn-section-title {
+  font-size: 15px; font-weight: 800; margin: 0 0 12px; color: var(--slate-900);
+  display: flex; align-items: center; gap: 8px;
+}
+
+.attn-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+
+/* Severity-striped attention card */
+.attn-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px 14px 18px;
+  box-shadow: var(--shadow-sm); border-left: 4px solid var(--slate-300);
+}
+.attn-card.sev-high { border-left-color: var(--sev-high); }
+.attn-card.sev-medium { border-left-color: var(--sev-medium); }
+.attn-card.sev-low { border-left-color: var(--sev-low); }
+
+.attn-card-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.attn-count { font-size: 30px; font-weight: 800; line-height: 1; color: var(--slate-900); }
+.attn-card.sev-high .attn-count { color: var(--sev-high); }
+.attn-card.sev-medium .attn-count { color: var(--sev-medium); }
+.attn-card-titles { min-width: 0; }
+.attn-label { font-size: 14px; font-weight: 700; color: var(--slate-800); }
+.attn-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+.attn-samples { display: flex; flex-direction: column; }
+.attn-issue {
+  display: flex; align-items: center; gap: 8px; padding: 7px 6px;
+  border-top: 1px solid var(--slate-100); font-size: 13px; color: var(--slate-700);
+  text-decoration: none; border-radius: 4px;
+}
+.attn-issue:hover { background: var(--slate-50); text-decoration: none; }
+.attn-issue-proj {
+  font-size: 11px; font-weight: 700; color: var(--indigo-700);
+  background: var(--indigo-50); border-radius: 4px; padding: 1px 5px; flex-shrink: 0;
+}
+.attn-issue-key { font-weight: 700; color: var(--slate-900); flex-shrink: 0; }
+.attn-issue-summary {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--slate-600);
+}
+.attn-issue-assignee { font-size: 12px; color: var(--slate-500); flex-shrink: 0; }
+.attn-issue-assignee.is-unassigned { color: var(--amber-500); font-style: italic; }
+
+.prio-chip {
+  font-size: 11px; font-weight: 700; border: 1px solid; border-radius: 4px;
+  padding: 0 5px; background: var(--surface); flex-shrink: 0; text-transform: capitalize;
+}
+.overdue-badge {
+  font-size: 11px; font-weight: 700; color: #b91c1c; background: var(--red-100);
+  border-radius: 4px; padding: 1px 6px; flex-shrink: 0; white-space: nowrap;
+}
+.due-badge {
+  font-size: 11px; font-weight: 600; color: var(--slate-500); background: var(--slate-100);
+  border-radius: 4px; padding: 1px 6px; flex-shrink: 0; white-space: nowrap;
+}
+
+.attn-viewall {
+  display: inline-block; margin-top: 10px; font-size: 12px; font-weight: 700;
+  color: var(--primary);
+}
+
+/* Severity badge / mini chips */
+.sev-badge {
+  display: inline-flex; align-items: center; font-size: 11px; font-weight: 700;
+  border-radius: 5px; padding: 1px 7px;
+}
+.sev-badge.sev-high { background: var(--red-100); color: var(--sev-high); }
+.sev-badge.sev-medium { background: var(--amber-100); color: var(--sev-medium); }
+.sev-badge.sev-low { background: var(--slate-100); color: var(--sev-low); }
+
+/* All-clear panel */
+.all-clear {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--green-100); border: 1px solid #bbf7d0;
+  border-radius: var(--radius); padding: 14px 18px;
+}
+.all-clear-icon {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--green-500); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 800; flex-shrink: 0;
+}
+.all-clear-title { font-weight: 700; color: #15803d; }
+.all-clear-sub { font-size: 12px; color: #166534; opacity: 0.85; }
+
+/* Sprint health banner */
+.sprint-health {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--indigo-500); border-radius: var(--radius);
+  padding: 14px 16px; box-shadow: var(--shadow-sm); margin-bottom: 14px;
+}
+.sprint-health.at-risk {
+  border-color: #fecaca; border-left-color: var(--sev-high); background: #fef2f2;
+}
+.sprint-health-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 8px;
+}
+.sprint-health-name { font-size: 14px; font-weight: 700; color: var(--slate-900); }
+.sprint-health-meta { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.sprint-health-goal { font-size: 12px; color: var(--slate-500); margin-bottom: 8px; }
+.sprint-risk-flag { color: var(--sev-high); font-weight: 800; }
+.sprint-risk-reason { font-size: 12px; color: #b91c1c; margin-bottom: 8px; font-weight: 600; }
+
+/* Admin: projects-needing-attention list */
+.insights-grid-2 { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+.attn-proj-list { display: flex; flex-direction: column; gap: 4px; }
+.attn-proj-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 8px;
+  border-radius: 6px; text-decoration: none; color: inherit;
+  border-bottom: 1px solid var(--slate-100);
+}
+.attn-proj-row:last-child { border-bottom: none; }
+.attn-proj-row:hover { background: var(--slate-50); text-decoration: none; }
+.attn-proj-main { flex: 1; min-width: 0; }
+.attn-proj-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.attn-proj-key { font-weight: 700; color: var(--slate-900); }
+.attn-proj-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.attn-reasons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.attn-reason-chip {
+  font-size: 11px; color: var(--slate-600); background: var(--slate-100);
+  border-radius: 4px; padding: 1px 7px;
+}
+.attn-proj-counts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.attn-mini {
+  font-size: 11px; font-weight: 700; border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+}
+.attn-mini.sev-high { background: var(--red-100); color: var(--sev-high); }
+.attn-mini.sev-medium { background: var(--amber-100); color: var(--sev-medium); }
+.attn-score {
+  font-size: 13px; font-weight: 800; color: var(--slate-700);
+  min-width: 26px; text-align: right;
+}
+
+/* My-projects strip: compact attention line */
+.my-attn-line {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 8px; margin-bottom: 6px; font-size: 12px;
+}
+.my-attn-part { font-weight: 700; color: var(--slate-700); }
+.my-attn-part.sev-high { color: var(--sev-high); }
+.my-attn-part.sev-medium { color: var(--sev-medium); }
+.my-attn-chip {
+  display: inline-flex; align-items: center; font-size: 11px; font-weight: 700;
+  background: var(--red-100); color: #b91c1c; border-radius: 5px; padding: 1px 7px;
+  text-decoration: none;
+}
+.my-attn-chip:hover { text-decoration: none; filter: brightness(0.97); }

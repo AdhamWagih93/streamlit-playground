@@ -1,6 +1,18 @@
 import { api } from './client';
 import { OverviewStats, ProjectStats } from '../types';
 
+// Re-export attention/insight types so callers can import them alongside the
+// analytics API surface.
+export type {
+  OverviewStats,
+  ProjectStats,
+  ProjectStatRow,
+  AttentionIssue,
+  AttentionItem,
+  AttentionSeverity,
+  SprintHealth,
+} from '../types';
+
 // Site-admin only — stats across every project.
 export async function getOverview(): Promise<OverviewStats> {
   const res = await api.get<OverviewStats>('/analytics/overview');
