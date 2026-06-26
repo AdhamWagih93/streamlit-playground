@@ -89,6 +89,11 @@ def write_report(report: dict) -> None:
         lines.append(f"- {icon} **{j['title']}**{req} — {j['headline']}")
     n_shots = len(glob.glob(os.path.join(SHOTS, "*.png")))
     lines += ["", f"Screenshots captured: **{n_shots}**"]
+    perf = _read_perf()
+    if perf.get("ok"):
+        lines += ["", f"Performance: cold render **{perf.get('cold_render_ms', 0):.0f}ms** · "
+                  f"warm rerun **{perf.get('warm_rerun_ms', 0):.0f}ms** · "
+                  f"{_count_fragments()} fragments"]
     with open(os.path.join(OUT, "report.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
@@ -107,12 +112,30 @@ def changelog(n: int = 8) -> list:
     return rows
 
 
+def _read_perf() -> dict:
+    try:
+        with open(os.path.join(OUT, "perf.json"), "r", encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except Exception:
+        return {}
+
+
+def _count_fragments() -> int:
+    try:
+        with open(os.path.join(ROOT, "cicd_dashboard.py"), "r",
+                  encoding="utf-8") as fh:
+            return fh.read().count("@st.fragment")
+    except Exception:
+        return 0
+
+
 def write_html_report(report: dict, log: list) -> str:
     """Render a professional, self-contained HTML CI report card."""
     passed = report["overall_status"] == "passed"
     n_pass = sum(1 for j in report["jobs"] if j["status"] == "passed")
     n_tot = len(report["jobs"])
     n_shots = len(glob.glob(os.path.join(SHOTS, "*.png")))
+    perf = _read_perf()
     job_rows = "".join(
         f'<div class="row {"ok" if j["status"] == "passed" else "bad"}">'
         f'<span class="ic">{"✓" if j["status"] == "passed" else "✗"}</span>'
@@ -128,6 +151,28 @@ def write_html_report(report: dict, log: list) -> str:
         f'<span class="csub">{_html.escape(c["subject"])}</span>'
         f'<span class="cauth">{_html.escape(c["author"])}</span></div>'
         for c in log)
+    # Performance section (cold/warm render + the slowest phases).
+    perf_section = ""
+    if perf.get("ok"):
+        _tp = perf.get("top_phases") or []
+        _pmax = max((p["ms"] for p in _tp), default=1.0) or 1.0
+        _bars = "".join(
+            f'<div class="pf"><span class="pfl">{_html.escape(p["label"])}</span>'
+            f'<span class="pfb"><span class="pff" '
+            f'style="width:{max(3, p["ms"] / _pmax * 100):.0f}%"></span></span>'
+            f'<span class="pfm">{p["ms"]:.0f}<small>ms</small></span></div>'
+            for p in _tp)
+        perf_section = (
+            '<div class="sec"><h2>Performance '
+            f'<span class="frag">{_count_fragments()} fragments</span></h2>'
+            '<div class="pstat">'
+            f'<div><b>{perf.get("cold_render_ms", 0):.0f}</b>'
+            '<span>ms cold render</span></div>'
+            f'<div><b>{perf.get("warm_rerun_ms", 0):.0f}</b>'
+            '<span>ms warm rerun</span></div>'
+            f'<div><b>{perf.get("elements", 0)}</b><span>elements</span></div>'
+            '</div>'
+            f'<div class="phead">Slowest render phases</div>{_bars}</div>')
     accent = "#22c55e" if passed else "#ef4444"
     html_doc = f"""<!doctype html><html><head><meta charset="utf-8"><style>
 *{{margin:0;box-sizing:border-box;font-family:'Segoe UI',system-ui,sans-serif}}
@@ -165,6 +210,20 @@ body{{background:#0b1220;padding:28px;width:960px}}
 .cl .cauth{{color:#7e93b8;font-size:.72rem}}
 .ft{{padding:12px 26px;border-top:1px solid #1e2b45;color:#6f86ad;font-size:.72rem;
   font-family:ui-monospace,monospace;display:flex;justify-content:space-between}}
+.frag{{font-size:.6rem;color:#7e93b8;font-weight:600;margin-left:10px;
+  border:1px solid #2a3a5c;border-radius:5px;padding:1px 8px}}
+.pstat{{display:flex;gap:26px;margin-bottom:12px}}
+.pstat b{{font-size:1.4rem;color:#e8eefc;font-family:ui-monospace,monospace}}
+.pstat span{{font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;
+  color:#7e93b8;margin-left:6px}}
+.phead{{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:#7e93b8;
+  margin-bottom:6px;font-weight:700}}
+.pf{{display:grid;grid-template-columns:260px 1fr 60px;gap:12px;align-items:center;
+  padding:3px 12px;font-size:.76rem}}
+.pf .pfl{{color:#cdd9f2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.pf .pfb{{height:7px;background:#0e1830;border-radius:999px;overflow:hidden}}
+.pf .pff{{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#0ea5e9)}}
+.pf .pfm{{font-family:ui-monospace,monospace;color:#9fb3d6;text-align:right}}
 </style></head><body><div class="card">
 <div class="hdr"><div class="badge">{'PASSED' if passed else 'FAILED'}</div>
 <div class="htxt"><h1>CI/CD Dashboard — CI report</h1>
@@ -173,6 +232,7 @@ body{{background:#0b1220;padding:28px;width:960px}}
 <div class="stat"><b>{n_pass}/{n_tot}</b><span>steps</span></div>
 <div class="stat"><b>{n_shots}</b><span>screens</span></div></div></div>
 <div class="sec"><h2>Test results</h2>{job_rows}</div>
+{perf_section}
 <div class="sec"><h2>Change log</h2>{log_rows or '<div class="cl"><span class="csub">no commits</span></div>'}</div>
 <div class="ft"><span>localdev fake seam · no VPN / Docker / live services</span>
 <span>Dashboard CI</span></div>
@@ -207,6 +267,14 @@ def discord_payload(report: dict) -> dict:
                "value": f"{PASS if j['status'] == 'passed' else FAIL} {j['headline']}"[:1024],
                "inline": False}
               for j in report["jobs"]]
+    perf = _read_perf()
+    if perf.get("ok"):
+        fields.append({
+            "name": "⏱ Performance",
+            "value": (f"cold render **{perf.get('cold_render_ms', 0):.0f}ms** · "
+                      f"warm rerun **{perf.get('warm_rerun_ms', 0):.0f}ms** · "
+                      f"{_count_fragments()} fragments"),
+            "inline": False})
     embed = {
         "title": f"CI/CD Dashboard CI — "
                  f"{'✅ Passed' if report['overall_status'] == 'passed' else '❌ Failed'}",
@@ -273,6 +341,7 @@ def main() -> int:
         _run("Smoke test (all tabs render)",
              [PY, "-m", "pytest", "localdev/test_smoke.py", "-q",
               f"--junitxml={os.path.join(OUT, 'junit.xml')}"], True),
+        _run("Performance (render timings)", [PY, "localdev/perf.py"], False),
     ]
     if not args.no_screens:
         jobs.append(_run("Screenshots (every tab)", [PY, "localdev/screenshot.py"], False))

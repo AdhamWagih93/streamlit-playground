@@ -14854,6 +14854,7 @@ def _ado_cov_bar(_pl: int, _np: int) -> str:
     )
 
 
+@st.fragment
 def _render_ado_coverage() -> None:
     """Admin-only: visualise pipelined vs un-pipelined repositories across every
     ADO collection / project. Deferred (runs only when the tab is opened);
@@ -15097,6 +15098,7 @@ def _arch_legend_html() -> str:
     return f'<div class="arch-legend">{_chips}</div>'
 
 
+@st.fragment
 def _render_architecture() -> None:
     """Admin-only: per-environment service architecture parsed from the Control
     config.yml files, with two-environment comparison. Deferred + cached."""
@@ -17142,6 +17144,7 @@ def _render_people_insights_panel(start_dt, end_dt) -> None:
         )
 
 
+@st.fragment
 def _render_sync_check_panel(scope_json: str) -> None:
     """Admin-only sync-check panel. See section header for the UX contract."""
     # ── Auto-run gate ──────────────────────────────────────────────────────
@@ -17415,6 +17418,7 @@ def _render_pg_team_value(val: Any, side: str) -> str:
     return _render_sync_value(val, side)
 
 
+@st.fragment
 def _render_postgres_compare_panel(scope_json: str) -> None:
     """Admin-only inventory ↔ Postgres comparison. Same smart-load pattern
     as the git-vs-ES panel — gated behind ▶ Run."""
@@ -17827,6 +17831,7 @@ def _ldap_sync_collect_full_team_set() -> set[str]:
     return _full_team_set
 
 
+@st.fragment
 def _render_ldap_sync_panel() -> None:
     """Admin-only LDAP → Postgres sync panel inside the SYNC CHECK tab.
     Auto-runs once per session when the last sync is older than 24h."""
@@ -34912,6 +34917,23 @@ if auto_refresh:
 # Done dead last so every phase mark above is captured. Admin-only (the slot
 # is None for non-admins, so this is a cheap no-op for them).
 _perf_mark("tabs (actions / sync / history) + glossary + tail")
+# Local/CI perf capture (env-gated; no-op in production): dump this run's phase
+# timeline to the file named by LOCALDEV_PERF_DUMP so the harness can report it.
+_perf_dump_path = os.environ.get("LOCALDEV_PERF_DUMP")
+if _perf_dump_path:
+    try:
+        _pm_dump = list(_PERF_MARKS)
+        _pm_segs = [(_pm_dump[_i][0],
+                     (_pm_dump[_i][1] - _pm_dump[_i - 1][1]) * 1000.0)
+                    for _i in range(1, len(_pm_dump))]
+        _pm_total = ((_pm_dump[-1][1] - _pm_dump[0][1]) * 1000.0
+                     if len(_pm_dump) >= 2 else 0.0)
+        with open(_perf_dump_path, "w", encoding="utf-8") as _pm_fh:
+            json.dump({"total_ms": round(_pm_total, 1),
+                       "phases": [{"label": _l, "ms": round(_d, 1)}
+                                  for _l, _d in _pm_segs]}, _pm_fh)
+    except Exception:
+        pass
 if _perf_slot is not None:
     try:
         _perf_render_into(_perf_slot)
