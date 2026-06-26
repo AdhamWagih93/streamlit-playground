@@ -91,16 +91,47 @@ def build_backend(pytest_path: str, coverage_path: str | None) -> dict:
         if pct is not None:
             metrics["coverage_pct"] = round(pct, 1)
 
-    # Failing tests table (or a compact pass note).
-    rows = []
+    # Per-test details, grouped by module, plus a failures table and a full list.
+    _ICON = {"passed": PASS, "failed": FAIL, "error": FAIL, "skipped": SKIP,
+             "xfailed": SKIP, "xpassed": PASS}
+    modules: dict[str, dict] = {}
+    detail_rows: list[list] = []
+    fail_rows: list[list] = []
     for t in data.get("tests", []):
-        if t.get("outcome") not in ("passed",):
-            rows.append([t.get("nodeid", "?"), t.get("outcome", "?"),
-                         f"{t.get('call', {}).get('duration', t.get('duration', 0)):.2f}s"])
-    tables = []
-    if rows:
-        tables.append({"title": "Failing / non-passing tests",
-                       "headers": ["Test", "Outcome", "Time"], "rows": rows})
+        nodeid = t.get("nodeid", "?")
+        mod, _, name = nodeid.partition("::")
+        mod = mod.rsplit("/", 1)[-1].replace(".py", "")
+        name = name or nodeid
+        outcome = t.get("outcome", "?")
+        dur = (t.get("call") or {}).get("duration") or t.get("duration") or 0.0
+        m = modules.setdefault(mod, {"passed": 0, "failed": 0, "skipped": 0, "time": 0.0})
+        if outcome in ("failed", "error"):
+            m["failed"] += 1
+            fail_rows.append([nodeid, outcome, f"{dur:.2f}s"])
+        elif outcome == "skipped":
+            m["skipped"] += 1
+        else:
+            m["passed"] += 1
+        m["time"] += dur
+        detail_rows.append([_ICON.get(outcome, "•"), mod, name, f"{dur:.2f}s"])
+
+    tables: list[dict] = []
+    if modules:
+        mod_rows = []
+        for mod in sorted(modules, key=lambda k: (-modules[k]["failed"], k)):
+            d = modules[mod]
+            mod_rows.append([mod, d["passed"], d["failed"], d["skipped"], f"{d['time']:.2f}s"])
+        tables.append({"title": "Tests by module",
+                       "headers": ["Module", "✅", "❌", "⏭", "Time"], "rows": mod_rows})
+    if fail_rows:
+        tables.append({"title": "Failing tests",
+                       "headers": ["Test", "Outcome", "Time"], "rows": fail_rows})
+    if detail_rows:
+        # Full per-test list — kept out of the report image (it can be long) but
+        # included in the markdown report so every test + status is visible.
+        tables.append({"title": f"All tests ({len(detail_rows)})",
+                       "headers": ["", "Module", "Test", "Time"], "rows": detail_rows,
+                       "md_only": True})
 
     cov_txt = f" · coverage {metrics['coverage_pct']}%" if "coverage_pct" in metrics else ""
     headline = f"{passed}/{total} passed in {metrics['duration_s']}s{cov_txt}"
@@ -211,6 +242,8 @@ def render_report_html(report: dict) -> str:
     for job in report["jobs"]:
         tbls = ""
         for tbl in job.get("tables", []):
+            if tbl.get("md_only"):
+                continue  # full per-test list lives in report.md, not the image
             head = "".join(f'<th style="text-align:left;padding:6px 10px;color:#9ca3af;'
                            f'font-weight:600;border-bottom:1px solid #1f2937">{h}</th>' for h in tbl["headers"])
             body = ""
