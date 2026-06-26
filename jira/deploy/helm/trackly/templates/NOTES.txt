@@ -1,0 +1,37 @@
+Trackly has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  • backend  ({{ include "trackly.backend.image" . }})
+  • frontend ({{ include "trackly.frontend.image" . }})
+  {{- if .Values.postgresql.enabled }}
+  • postgresql (bundled, in-cluster)  ⚠ convenience only — use an external/managed DB for production
+  {{- else }}
+  • database: external at {{ .Values.externalDatabase.host }}:{{ include "trackly.databasePort" . }}
+  {{- end }}
+
+Reach the app:
+{{- if .Values.ingress.enabled }}
+  {{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+  {{- end }}
+{{- else }}
+  No ingress is enabled. Port-forward the frontend:
+
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "trackly.frontend.fullname" . }} 8080:{{ .Values.frontend.service.port }}
+
+  then open http://localhost:8080
+{{- end }}
+
+First-run admin:
+  email:    {{ .Values.app.bootstrapAdmin.email }}
+  username: {{ .Values.app.bootstrapAdmin.username }}
+  password: (from secret {{ include "trackly.secretName" . }}, key BOOTSTRAP_ADMIN_PASSWORD)
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "trackly.secretName" . }} -o jsonpath='{.data.BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; echo
+
+⚠ Before exposing this to anyone:
+  - set a strong secrets.secretKey (signs JWTs + encrypts stored credentials),
+  - change the bootstrap admin password,
+  - point at a managed PostgreSQL (postgresql.enabled=false + externalDatabase.*),
+  - enable ingress + TLS.
+See values-example.yaml for a production-oriented configuration.

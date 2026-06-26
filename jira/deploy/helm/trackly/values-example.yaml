@@ -1,0 +1,93 @@
+# Example production-oriented values for the Trackly Helm chart.
+#
+#   helm install trackly ./deploy/helm/trackly -n trackly --create-namespace \
+#     -f deploy/helm/trackly/values-example.yaml
+#
+# Adjust image references, the domain, the storage classes and secrets to match
+# your cluster. Everything not shown here keeps the chart defaults (values.yaml).
+
+image:
+  registry: ghcr.io/your-org      # your registry; push trackly-backend / trackly-frontend there
+  backend:
+    repository: trackly-backend
+    tag: "1.0.0"
+  frontend:
+    repository: trackly-frontend
+    tag: "1.0.0"
+  pullPolicy: IfNotPresent
+# imagePullSecrets:
+#   - name: ghcr-creds
+
+app:
+  env: production
+  debug: false
+  # When served behind the ingress on a single origin, CORS can stay empty
+  # (the SPA calls /api on the same host). Set if you call the API cross-origin.
+  corsOrigins: "https://trackly.example.com"
+  maxAttachmentMb: 25
+  accessTokenExpireMinutes: 1440
+  bootstrapAdmin:
+    email: admin@example.com
+    username: admin
+
+secrets:
+  # RECOMMENDED: create the secret out-of-band (sealed-secrets / external-secrets)
+  # and reference it, so secrets never live in values files or git:
+  #   create: false
+  #   existingSecret: trackly-secrets       # must contain SECRET_KEY,
+  #                                          # POSTGRES_PASSWORD, BOOTSTRAP_ADMIN_PASSWORD
+  #
+  # Or let the chart manage it (set a strong key + password here, kept out of git):
+  create: true
+  secretKey: "REPLACE-with-output-of: openssl rand -hex 32"
+  bootstrapAdminPassword: "REPLACE-me"
+
+# Use a managed/external PostgreSQL in production (the bundled one is for demos).
+postgresql:
+  enabled: false
+externalDatabase:
+  host: trackly-db.postgres.database.azure.com
+  port: 5432
+  database: trackly
+  username: trackly
+  # password supplied via the Secret key POSTGRES_PASSWORD (secrets.* or existingSecret)
+
+backend:
+  replicaCount: 2
+  resources:
+    requests: {cpu: 250m, memory: 384Mi}
+    limits: {cpu: "1", memory: 768Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""              # set to an RWO/RWX class as appropriate
+    # For multi-replica backends sharing attachments, use a ReadWriteMany class:
+    # accessMode: ReadWriteMany
+
+frontend:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "30m"
+  hosts:
+    - host: trackly.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: trackly-tls
+      hosts:
+        - trackly.example.com

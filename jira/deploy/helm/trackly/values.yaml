@@ -1,0 +1,149 @@
+# Default values for the Trackly Helm chart.
+# These defaults bring up a working single-replica instance with a bundled
+# in-cluster PostgreSQL. For production, see values-example.yaml and override at
+# least: image repositories/tags, secrets.secretKey, the admin password, an
+# external database (recommended), persistence and ingress.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # Optional registry prefix, e.g. "ghcr.io/your-org". Leave empty to use the
+  # repository as-is (handy with a local registry / kind / minikube load).
+  registry: ""
+  backend:
+    repository: trackly-backend
+    tag: ""          # empty => Chart.appVersion
+  frontend:
+    repository: trackly-frontend
+    tag: ""          # empty => Chart.appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# --- Application configuration (non-secret) ---------------------------------
+app:
+  env: production           # development | production | test
+  debug: false
+  # Comma-separated allowed browser origins. Empty is fine when the SPA and API
+  # share an origin via the frontend's nginx proxy (the normal setup).
+  corsOrigins: ""
+  attachmentsDir: /data/attachments
+  maxAttachmentMb: 25
+  accessTokenExpireMinutes: 1440
+  bootstrapAdmin:
+    email: admin@trackly.local
+    username: admin
+    # password comes from the Secret (secrets.bootstrapAdminPassword)
+
+# --- Secrets ----------------------------------------------------------------
+# Keys expected (when using an existing secret): SECRET_KEY, POSTGRES_PASSWORD,
+# BOOTSTRAP_ADMIN_PASSWORD.
+secrets:
+  create: true
+  existingSecret: ""        # set to reuse a pre-created Secret (create then ignored)
+  # SECRET_KEY signs JWTs and derives the key encrypting stored credentials.
+  # Leave empty to auto-generate a stable random key on first install (preserved
+  # across upgrades via lookup). STRONGLY recommend setting your own in prod.
+  secretKey: ""
+  bootstrapAdminPassword: "admin"
+
+# --- Backend (FastAPI) ------------------------------------------------------
+backend:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 75
+  # Persistent storage for uploaded attachments.
+  persistence:
+    enabled: true
+    existingClaim: ""
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    storageClass: ""
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# --- Frontend (nginx serving the SPA + proxying /api) -----------------------
+frontend:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 80
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# --- Bundled PostgreSQL (convenience; disable for an external DB) -----------
+postgresql:
+  enabled: true
+  image: postgres:16-alpine
+  auth:
+    database: trackly
+    username: trackly
+    password: trackly        # also written into the Secret as POSTGRES_PASSWORD
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+# --- External database (used when postgresql.enabled=false) -----------------
+externalDatabase:
+  host: ""
+  port: 5432
+  database: trackly
+  username: trackly
+  # Password is read from the Secret key POSTGRES_PASSWORD. Either set it via
+  # secrets.* (create=true) or provide it in an existingSecret.
+
+# --- Ingress (routes to the frontend, which proxies /api to the backend) ----
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: trackly.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: trackly-tls
+  #    hosts: [trackly.example.com]
+
+# --- Misc -------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]

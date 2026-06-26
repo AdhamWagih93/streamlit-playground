@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "trackly.frontend.fullname" . }}-nginx
+  labels:
+    {{- include "trackly.labels" . | nindent 4 }}
+data:
+  # Overrides the image's /etc/nginx/conf.d/default.conf so the SPA proxies
+  # /api and /health to the backend Service of THIS release.
+  default.conf: |
+    server {
+      listen 80;
+      server_name _;
+      root /usr/share/nginx/html;
+      index index.html;
+      client_max_body_size {{ .Values.app.maxAttachmentMb }}m;
+
+      location /api/ {
+        proxy_pass http://{{ include "trackly.backend.fullname" . }}:{{ .Values.backend.service.port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass_request_headers on;
+      }
+
+      location = /health {
+        proxy_pass http://{{ include "trackly.backend.fullname" . }}:{{ .Values.backend.service.port }}/health;
+      }
+
+      location / {
+        try_files $uri $uri/ /index.html;
+      }
+    }

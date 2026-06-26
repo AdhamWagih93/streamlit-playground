@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "trackly.fullname" . }}-env
+  labels:
+    {{- include "trackly.labels" . | nindent 4 }}
+data:
+  APP_ENV: {{ .Values.app.env | quote }}
+  DEBUG: {{ .Values.app.debug | quote }}
+  CORS_ORIGINS: {{ .Values.app.corsOrigins | quote }}
+  ATTACHMENTS_DIR: {{ .Values.app.attachmentsDir | quote }}
+  MAX_ATTACHMENT_MB: {{ .Values.app.maxAttachmentMb | quote }}
+  ACCESS_TOKEN_EXPIRE_MINUTES: {{ .Values.app.accessTokenExpireMinutes | quote }}
+  POSTGRES_HOST: {{ include "trackly.databaseHost" . | quote }}
+  POSTGRES_PORT: {{ include "trackly.databasePort" . | quote }}
+  POSTGRES_DB: {{ include "trackly.databaseName" . | quote }}
+  POSTGRES_USER: {{ include "trackly.databaseUser" . | quote }}
+  BOOTSTRAP_ADMIN_EMAIL: {{ .Values.app.bootstrapAdmin.email | quote }}
+  BOOTSTRAP_ADMIN_USERNAME: {{ .Values.app.bootstrapAdmin.username | quote }}
