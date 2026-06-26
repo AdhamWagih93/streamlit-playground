@@ -56,6 +56,9 @@ if [ "$MODE" = "ephemeral" ]; then
   teardown() { echo "▶ tearing down isolated stack"; $COMPOSE down -v >/dev/null 2>&1 || true; }
   trap teardown EXIT
 
+  # Clear any stale stack left by a previously interrupted run (which would
+  # otherwise hold port 8099 and make app capture silently fail).
+  $COMPOSE down -v >/dev/null 2>&1 || true
   echo "▶ starting isolated Trackly stack (port 8099, ephemeral DB)…"
   $COMPOSE up -d --build || { echo "stack build/up failed"; exit 1; }
 
