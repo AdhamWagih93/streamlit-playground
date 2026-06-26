@@ -39,7 +39,15 @@ if [ ! -x "$RUNNER" ]; then
   exit 1
 fi
 
-if "$RUNNER"; then
+# Capture app screenshots so the CI report (incl. the Discord post) is complete.
+# Skip the slower screenshot step with: TRACKLY_FAST_PUSH=1 git push
+RUN_FLAGS="--app-screenshots"
+if [ -n "${TRACKLY_FAST_PUSH:-}" ]; then
+  RUN_FLAGS=""
+  echo "  (TRACKLY_FAST_PUSH set — skipping screenshots)"
+fi
+
+if "$RUNNER" $RUN_FLAGS; then
   echo
   echo "✓ Local CI passed — proceeding with push."
   exit 0

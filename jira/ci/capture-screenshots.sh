@@ -28,8 +28,11 @@ MODE="report"
 [ "${1:-}" = "--ephemeral" ] && MODE="ephemeral"
 
 if ! docker info >/dev/null 2>&1; then echo "✗ Docker required for screenshots." >&2; exit 2; fi
-# Start clean so stale shots from a previous run don't linger.
-rm -rf "$SHOTS"; mkdir -p "$SHOTS"
+# Start clean so stale shots don't linger. PNGs are written by a root-running
+# container, so clean via a root container to avoid "Permission denied".
+docker run --rm -v "$JIRA_DIR":/w busybox rm -rf /w/ci-report/screenshots >/dev/null 2>&1 || true
+rm -rf "$SHOTS" 2>/dev/null || true
+mkdir -p "$SHOTS"
 
 # --- 1. Always: render the CI report HTML -> PNG (no app needed) ------------
 if [ -f "$REPORT_DIR/report.html" ]; then

@@ -47,7 +47,14 @@ if ! docker info >/dev/null 2>&1; then
   exit 2
 fi
 
-rm -rf "$REPORT_DIR"
+# Some report files are written by containers running as root, so a plain `rm`
+# by the host user can hit "Permission denied". Clean via a throwaway root
+# container so every run starts from a truly clean slate.
+clean_paths() {
+  docker run --rm -v "$JIRA_DIR":/w busybox rm -rf "$@" >/dev/null 2>&1 || true
+}
+clean_paths /w/ci-report /w/backend/reports /w/frontend/reports
+rm -rf "$REPORT_DIR" 2>/dev/null || true
 mkdir -p "$ART_DIR/backend" "$ART_DIR/frontend" "$ART_DIR/docker"
 
 UID_TAG="$$"
@@ -74,7 +81,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-rm -rf "$JIRA_DIR/backend/reports"; mkdir -p "$JIRA_DIR/backend/reports"
+clean_paths /w/backend/reports; mkdir -p "$JIRA_DIR/backend/reports"
 docker run --rm --network "$NET" \
   -v "$JIRA_DIR/backend":/app -w /app \
   -v trackly-ci-pip:/root/.cache/pip \
@@ -104,7 +111,7 @@ cp "$JIRA_DIR/backend/reports/pytest.html" "$REPORT_DIR/pytest.html" 2>/dev/null
 # --- 2. Frontend: typecheck + build ----------------------------------------
 if [ "$SKIP_FRONTEND" -eq 0 ]; then
   bold "▶ frontend · build"
-  rm -rf "$JIRA_DIR/frontend/reports"; mkdir -p "$JIRA_DIR/frontend/reports"
+  clean_paths /w/frontend/reports; mkdir -p "$JIRA_DIR/frontend/reports"
   docker run --rm \
     -v "$JIRA_DIR/frontend":/app -w /app \
     -v trackly-ci-npm:/root/.npm \
