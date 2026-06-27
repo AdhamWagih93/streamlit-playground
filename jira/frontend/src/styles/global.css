@@ -772,6 +772,26 @@ input, textarea, select {
 .stat-red { border-left-color: var(--red-500); }
 .stat-slate { border-left-color: var(--slate-400); }
 
+/* ---------- Time filter (segmented control) ---------- */
+.time-filter {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 3px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--slate-100);
+  flex-wrap: wrap;
+}
+.time-filter-opt {
+  padding: 5px 11px; border: 1px solid transparent; border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent; color: var(--text-muted);
+  font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.time-filter-opt:hover { color: var(--text); }
+.time-filter-opt.is-active {
+  background: var(--surface); color: var(--slate-900);
+  box-shadow: var(--shadow-sm); border-color: var(--border);
+}
+.window-note { font-size: 12px; color: var(--text-muted); margin: -6px 0 14px; }
+
 /* ---------- Insights grid + chart cards ---------- */
 .insights-grid {
   display: grid; gap: 16px;

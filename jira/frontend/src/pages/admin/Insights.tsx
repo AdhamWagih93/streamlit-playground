@@ -8,6 +8,7 @@ import { StatCard } from '../../components/charts/StatCard';
 import { BarChart } from '../../components/charts/BarChart';
 import { DonutChart } from '../../components/charts/DonutChart';
 import { AttentionIssueRow } from '../../components/Attention';
+import { TimeFilter } from '../../components/TimeFilter';
 
 const COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 function colorFor(key: string, fallback?: string | null): string {
@@ -21,17 +22,24 @@ function pct(rate: number): string {
   return `${Math.round((rate || 0) * 100)}%`;
 }
 
+function windowLabel(start: string | null, end: string | null): string | null {
+  if (!start && !end) return null;
+  return `${start ?? '…'} → ${end ?? 'now'}`;
+}
+
 export function Insights() {
   const [stats, setStats] = useState<OverviewStats | null>(null);
+  const [period, setPeriod] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getOverview()
+    setLoading(true);
+    getOverview({ period })
       .then(setStats)
       .catch((e) => setError(apiErrorMessage(e, 'Could not load insights')))
       .finally(() => setLoading(false));
-  }, []);
+  }, [period]);
 
   if (loading) return <SpinnerCenter />;
   if (error) return <div className="alert alert-error">{error}</div>;
@@ -42,12 +50,16 @@ export function Insights() {
 
   return (
     <div>
-      <div className="section-head">
-        <h2 className="section-head-title">Insights</h2>
-        <p className="section-head-sub">Activity across every project in this instance.</p>
+      <div className="section-head row gap-16" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h2 className="section-head-title">Insights</h2>
+          <p className="section-head-sub">Activity across every project in this instance.</p>
+        </div>
+        <TimeFilter value={period} onChange={setPeriod} />
       </div>
 
-      {/* ---- Action-first: attention rollup ---- */}
+      {/* ---- Action-first: attention rollup (current state) ---- */}
+      <p className="window-note">Reflects current state — not affected by the time filter.</p>
       <div className="insights-stats">
         <StatCard
           label="Projects needing attention"
@@ -133,7 +145,10 @@ export function Insights() {
         </div>
       </div>
 
-      {/* ---- Descriptive overview (unchanged) ---- */}
+      {/* ---- Descriptive overview (scoped to the selected time window) ---- */}
+      {period !== 'all' && windowLabel(stats.window.start, stats.window.end) && (
+        <p className="window-note mt-16">Showing activity in {windowLabel(stats.window.start, stats.window.end)}</p>
+      )}
       <div className="insights-stats mt-16">
         <StatCard label="Projects" value={stats.total_projects} accent="indigo" />
         <StatCard label="Total issues" value={stats.total_issues} accent="slate" />

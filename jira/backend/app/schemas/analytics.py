@@ -6,6 +6,19 @@ from datetime import date, datetime
 from pydantic import BaseModel
 
 
+class Window(BaseModel):
+    """The time window applied to the (descriptive) insights, by issue creation.
+
+    ``period`` is the requested shortcut ("all", "30d", "custom", ...); start/end
+    are the resolved bounds (end exclusive). "Needs attention" signals are always
+    current-state and ignore this window.
+    """
+
+    period: str = "all"
+    start: datetime | None = None
+    end: datetime | None = None
+
+
 class CountItem(BaseModel):
     label: str
     count: int
@@ -62,6 +75,7 @@ class ProjectStats(BaseModel):
     project_id: int
     project_key: str
     project_name: str
+    window: Window = Window()
     total_issues: int
     open_issues: int
     in_progress_issues: int
@@ -102,6 +116,7 @@ class ProjectSummary(BaseModel):
 
 class OverviewStats(BaseModel):
     scope: str  # "all" (instance admin) | "mine" (accessible projects)
+    window: Window = Window()
     total_projects: int
     total_issues: int
     open_issues: int

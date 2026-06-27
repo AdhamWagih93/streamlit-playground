@@ -21,6 +21,7 @@ from app.schemas.analytics import (
     ProjectSummary,
     SprintHealth,
     VelocityPoint,
+    Window,
 )
 
 _VELOCITY_SPRINTS = 8
@@ -33,7 +34,19 @@ _W = {"overdue": 4, "blocked": 3, "high_priority": 3, "open_bugs": 2,
       "unassigned": 1, "stale": 1, "stale_wip": 2, "at_risk_sprint": 6}
 
 
-def _category_counts(db: Session, project_ids: list[int] | None) -> dict[str, int]:
+def _apply_window(q, start: datetime | None, end: datetime | None):
+    """Scope a query to issues created within [start, end) (either may be None)."""
+    if start is not None:
+        q = q.where(Issue.created_at >= start)
+    if end is not None:
+        q = q.where(Issue.created_at < end)
+    return q
+
+
+def _category_counts(
+    db: Session, project_ids: list[int] | None,
+    start: datetime | None = None, end: datetime | None = None,
+) -> dict[str, int]:
     q = (
         select(Status.category, func.count(Issue.id))
         .join(Status, Status.id == Issue.status_id)
@@ -41,6 +54,7 @@ def _category_counts(db: Session, project_ids: list[int] | None) -> dict[str, in
     )
     if project_ids is not None:
         q = q.where(Issue.project_id.in_(project_ids or [-1]))
+    q = _apply_window(q, start, end)
     rows = db.execute(q).all()
     out = {"todo": 0, "in_progress": 0, "done": 0}
     for category, count in rows:
@@ -48,7 +62,10 @@ def _category_counts(db: Session, project_ids: list[int] | None) -> dict[str, in
     return out
 
 
-def _by_status(db: Session, project_ids: list[int] | None) -> list[CountItem]:
+def _by_status(
+    db: Session, project_ids: list[int] | None,
+    start: datetime | None = None, end: datetime | None = None,
+) -> list[CountItem]:
     q = (
         select(Status.name, Status.category, Status.order, func.count(Issue.id))
         .join(Issue, Issue.status_id == Status.id)
@@ -57,10 +74,14 @@ def _by_status(db: Session, project_ids: list[int] | None) -> list[CountItem]:
     )
     if project_ids is not None:
         q = q.where(Issue.project_id.in_(project_ids or [-1]))
+    q = _apply_window(q, start, end)
     return [CountItem(label=n, category=c, count=cnt) for n, c, _o, cnt in db.execute(q).all()]
 
 
-def _by_type(db: Session, project_ids: list[int] | None) -> list[CountItem]:
+def _by_type(
+    db: Session, project_ids: list[int] | None,
+    start: datetime | None = None, end: datetime | None = None,
+) -> list[CountItem]:
     q = (
         select(IssueType.name, IssueType.color, func.count(Issue.id))
         .join(Issue, Issue.type_id == IssueType.id)
@@ -69,10 +90,14 @@ def _by_type(db: Session, project_ids: list[int] | None) -> list[CountItem]:
     )
     if project_ids is not None:
         q = q.where(Issue.project_id.in_(project_ids or [-1]))
+    q = _apply_window(q, start, end)
     return [CountItem(label=n, color=c, count=cnt) for n, c, cnt in db.execute(q).all()]
 
 
-def _by_priority(db: Session, project_ids: list[int] | None) -> list[CountItem]:
+def _by_priority(
+    db: Session, project_ids: list[int] | None,
+    start: datetime | None = None, end: datetime | None = None,
+) -> list[CountItem]:
     q = (
         select(Priority.name, Priority.color, Priority.rank, func.count(Issue.id))
         .join(Issue, Issue.priority_id == Priority.id)
@@ -81,18 +106,28 @@ def _by_priority(db: Session, project_ids: list[int] | None) -> list[CountItem]:
     )
     if project_ids is not None:
         q = q.where(Issue.project_id.in_(project_ids or [-1]))
+    q = _apply_window(q, start, end)
     return [CountItem(label=n, color=c, count=cnt) for n, c, _r, cnt in db.execute(q).all()]
 
 
-def _velocity(db: Session, project_id: int) -> list[VelocityPoint]:
+def _velocity(
+    db: Session, project_id: int,
+    start: datetime | None = None, end: datetime | None = None,
+) -> list[VelocityPoint]:
     # Closed sprints on this project's boards, most-recent first, then reversed
-    # to chronological order for charting.
-    sprints = db.scalars(
+    # to chronological order for charting. When a window is set, only sprints
+    # completed within it are included.
+    q = (
         select(Sprint)
         .join(Board, Board.id == Sprint.board_id)
         .where(Board.project_id == project_id, Sprint.state == "closed")
-        .order_by(Sprint.complete_date.desc().nullslast(), Sprint.id.desc())
-        .limit(_VELOCITY_SPRINTS)
+    )
+    if start is not None:
+        q = q.where(Sprint.complete_date >= start)
+    if end is not None:
+        q = q.where(Sprint.complete_date < end)
+    sprints = db.scalars(
+        q.order_by(Sprint.complete_date.desc().nullslast(), Sprint.id.desc()).limit(_VELOCITY_SPRINTS)
     ).all()
     points: list[VelocityPoint] = []
     for sprint in reversed(sprints):
@@ -277,20 +312,25 @@ def compute_attention(db: Session, project: Project, with_samples: bool = True) 
             "reasons": reasons[:3], "now": now}
 
 
-def project_stats(db: Session, project: Project) -> ProjectStats:
+def project_stats(
+    db: Session, project: Project,
+    start: datetime | None = None, end: datetime | None = None, window: Window | None = None,
+) -> ProjectStats:
     pid = [project.id]
-    cats = _category_counts(db, pid)
+    cats = _category_counts(db, pid, start, end)
     total = sum(cats.values())
     closed = cats.get("done", 0)
-    velocity = _velocity(db, project.id)
+    velocity = _velocity(db, project.id, start, end)
     n = len(velocity) or 1
     avg_pts = sum(v.completed_points for v in velocity) / n if velocity else 0.0
     avg_iss = sum(v.completed_issues for v in velocity) / n if velocity else 0.0
+    # Attention is always current-state — it ignores the descriptive time window.
     att = compute_attention(db, project, with_samples=True)
     return ProjectStats(
         project_id=project.id,
         project_key=project.key,
         project_name=project.name,
+        window=window or Window(),
         total_issues=total,
         open_issues=cats.get("todo", 0),
         in_progress_issues=cats.get("in_progress", 0),
@@ -299,20 +339,23 @@ def project_stats(db: Session, project: Project) -> ProjectStats:
         attention=att["items"],
         attention_score=att["score"],
         sprint_health=att["sprint"],
-        by_status=_by_status(db, pid),
-        by_type=_by_type(db, pid),
-        by_priority=_by_priority(db, pid),
+        by_status=_by_status(db, pid, start, end),
+        by_type=_by_type(db, pid, start, end),
+        by_priority=_by_priority(db, pid, start, end),
         velocity=velocity,
         avg_velocity_points=round(avg_pts, 2),
         avg_velocity_issues=round(avg_iss, 2),
     )
 
 
-def _project_summary(db: Session, project: Project, att: dict) -> ProjectSummary:
-    cats = _category_counts(db, [project.id])
+def _project_summary(
+    db: Session, project: Project, att: dict,
+    start: datetime | None = None, end: datetime | None = None,
+) -> ProjectSummary:
+    cats = _category_counts(db, [project.id], start, end)
     total = sum(cats.values())
     closed = cats.get("done", 0)
-    velocity = _velocity(db, project.id)
+    velocity = _velocity(db, project.id, start, end)
     avg_pts = (sum(v.completed_points for v in velocity) / len(velocity)) if velocity else 0.0
     g = att["groups"]
     sprint = att["sprint"]
@@ -337,7 +380,10 @@ def _project_summary(db: Session, project: Project, att: dict) -> ProjectSummary
     )
 
 
-def overview_stats(db: Session, project_ids: list[int] | None, scope: str) -> OverviewStats:
+def overview_stats(
+    db: Session, project_ids: list[int] | None, scope: str,
+    start: datetime | None = None, end: datetime | None = None, window: Window | None = None,
+) -> OverviewStats:
     """Aggregate across the given projects (None => every project)."""
     if project_ids is None:
         projects = list(db.scalars(select(Project).where(Project.is_archived.is_(False))))
@@ -346,7 +392,7 @@ def overview_stats(db: Session, project_ids: list[int] | None, scope: str) -> Ov
             db.scalars(select(Project).where(Project.id.in_(project_ids or [-1]), Project.is_archived.is_(False)))
         )
     ids = [p.id for p in projects]
-    cats = _category_counts(db, ids if ids else [-1])
+    cats = _category_counts(db, ids if ids else [-1], start, end)
     total = sum(cats.values())
     closed = cats.get("done", 0)
 
@@ -355,7 +401,7 @@ def overview_stats(db: Session, project_ids: list[int] | None, scope: str) -> Ov
     tot_overdue = tot_unassigned = tot_high = tot_blocked = at_risk = needs = 0
     for p in projects:
         att = compute_attention(db, p, with_samples=True)
-        summaries.append(_project_summary(db, p, att))
+        summaries.append(_project_summary(db, p, att, start, end))
         g = att["groups"]
         now = att["now"]
         tot_overdue += len(g["overdue"])
@@ -379,6 +425,7 @@ def overview_stats(db: Session, project_ids: list[int] | None, scope: str) -> Ov
     summaries.sort(key=lambda s: (s.attention_score, s.total_issues), reverse=True)
     return OverviewStats(
         scope=scope,
+        window=window or Window(),
         total_projects=len(projects),
         total_issues=total,
         open_issues=cats.get("todo", 0) + cats.get("in_progress", 0),

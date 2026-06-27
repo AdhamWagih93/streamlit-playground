@@ -11,14 +11,21 @@ import { BarChart } from '../components/charts/BarChart';
 import { DonutChart } from '../components/charts/DonutChart';
 import { VelocityChart } from '../components/charts/VelocityChart';
 import { AttentionCard, SprintHealthCard } from '../components/Attention';
+import { TimeFilter } from '../components/TimeFilter';
 
 function pct(rate: number): string {
   return `${Math.round((rate || 0) * 100)}%`;
 }
 
+function windowLabel(start: string | null, end: string | null): string | null {
+  if (!start && !end) return null;
+  return `${start ?? '…'} → ${end ?? 'now'}`;
+}
+
 export function ProjectInsightsPage() {
   const { projectKey } = useParams();
   const [stats, setStats] = useState<ProjectStats | null>(null);
+  const [period, setPeriod] = useState('all');
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState('');
@@ -28,7 +35,7 @@ export function ProjectInsightsPage() {
     setLoading(true);
     setForbidden(false);
     setError('');
-    getProjectStats(projectKey)
+    getProjectStats(projectKey, { period })
       .then(setStats)
       .catch((e) => {
         if (axios.isAxiosError(e) && e.response?.status === 403) {
@@ -38,7 +45,7 @@ export function ProjectInsightsPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, [projectKey]);
+  }, [projectKey, period]);
 
   if (loading) return <SpinnerCenter />;
 
@@ -78,11 +85,13 @@ export function ProjectInsightsPage() {
             Avg velocity {stats.avg_velocity_points.toFixed(1)} pts · {stats.avg_velocity_issues.toFixed(1)} issues per sprint
           </div>
         </div>
+        <TimeFilter value={period} onChange={setPeriod} />
       </div>
 
       {/* ---- Action-first: what needs attention now ---- */}
       <section className="attn-section">
         <h2 className="attn-section-title">Needs attention</h2>
+        <p className="window-note">Reflects current state — not affected by the time filter.</p>
 
         {sprint && <SprintHealthCard health={sprint} />}
 
@@ -105,7 +114,10 @@ export function ProjectInsightsPage() {
         )}
       </section>
 
-      {/* ---- Descriptive charts (unchanged) ---- */}
+      {/* ---- Descriptive charts (scoped to the selected time window) ---- */}
+      {period !== 'all' && windowLabel(stats.window.start, stats.window.end) && (
+        <p className="window-note">Showing activity in {windowLabel(stats.window.start, stats.window.end)}</p>
+      )}
       <div className="insights-stats">
         <StatCard label="Total issues" value={stats.total_issues} accent="slate" />
         <StatCard label="Open" value={stats.open_issues} accent="amber" />

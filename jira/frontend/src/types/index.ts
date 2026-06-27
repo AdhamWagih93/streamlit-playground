@@ -598,6 +598,13 @@ export interface CountItem {
   color?: string | null;
 }
 
+// Resolved time window that scopes the descriptive analytics stats.
+export interface Window {
+  period: string;
+  start: string | null;
+  end: string | null;
+}
+
 export type AttentionSeverity = 'high' | 'medium' | 'low';
 
 // A single issue surfaced inside an attention bucket / rollup.
@@ -678,6 +685,8 @@ export interface OverviewStats {
   projects_at_risk: number;
   projects_needing_attention: number;
   top_attention: AttentionIssue[];
+  // Resolved time window scoping the descriptive stats above.
+  window: Window;
 }
 
 export interface VelocityPoint {
@@ -707,4 +716,6 @@ export interface ProjectStats {
   attention: AttentionItem[];
   attention_score: number;
   sprint_health: SprintHealth | null;
+  // Resolved time window scoping the descriptive stats above.
+  window: Window;
 }
