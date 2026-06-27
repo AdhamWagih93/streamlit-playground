@@ -14968,6 +14968,11 @@ def _render_ado_coverage() -> None:
 # =============================================================================
 # ENVIRONMENT ARCHITECTURE TAB — Graphviz topology per env + comparison
 # =============================================================================
+# Hard cap on nodes drawn in one diagram. A Graphviz SVG with 1000+ nodes
+# freezes the browser, so the tab scopes to selected project(s) and refuses to
+# draw beyond this many nodes (apps + external endpoints) — showing a summary
+# instead. Overridable for power users on beefy machines.
+ARCH_MAX_NODES = int(os.environ.get("ARCH_MAX_NODES", "60"))
 _ARCH_KIND_COLOR = {
     "http": "#2563eb", "db": "#059669", "queue": "#d97706",
     "socket": "#7c3aed", "ldap": "#0891b2", "file/mail": "#0ea5e9",
@@ -14987,11 +14992,57 @@ def _arch_node_id(prefix: str, *parts: str) -> str:
     return prefix + "_" + re.sub(r"\W", "_", "__".join(parts))
 
 
-def _arch_build_dot(env: str, ed: dict, *, highlight: dict | None = None) -> str:
-    """Render one environment's topology to Graphviz DOT. ``highlight`` maps
-    (project, app) → 'added'/'removed'/'changed' for the comparison overlay."""
-    apps = ed.get("apps", {})
+def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
+                    highlight: dict | None = None,
+                    max_nodes: int = ARCH_MAX_NODES) -> tuple[str, int, bool]:
+    """Render one environment's topology to Graphviz DOT, restricted to the apps
+    in ``scope_keys`` (default: all). Returns ``(dot, node_count, truncated)``.
+
+    A Graphviz diagram with 1000+ nodes freezes the browser when Streamlit
+    renders its SVG, so when the in-scope node count (apps + distinct external
+    endpoints) would exceed ``max_nodes`` we DON'T build the graph — we return
+    ``("", count, True)`` and the caller shows a lightweight summary + a prompt
+    to narrow the scope instead. ``highlight`` maps (project, app) →
+    'added'/'removed'/'changed' for the comparison overlay."""
+    _all = ed.get("apps", {})
+    _keys = set(scope_keys) if scope_keys is not None else set(_all)
+    apps = {k: _all[k] for k in _keys if k in _all}
     _hl = highlight or {}
+    _name_to_key = {_a: (_p, _a) for (_p, _a) in apps}
+    # Resolve a connection target to a SCOPED sibling app (host contains the
+    # app's name, ≥3 chars, not itself) — only against the in-scope names, so
+    # it's cheap even on a huge fleet. Memoised per (host, self) for this build.
+    _scoped_names_lc = sorted(
+        ((_a, _a.lower()) for (_p, _a) in apps),
+        key=lambda t: len(t[1]), reverse=True)
+    _resolve_cache: dict = {}
+
+    def _resolve_tgt(host: str, self_app: str) -> str:
+        _ck = (host, self_app)
+        _hit = _resolve_cache.get(_ck)
+        if _hit is not None:
+            return _hit
+        _sl = self_app.lower()
+        _r = ""
+        for _nm, _nlc in _scoped_names_lc:
+            if len(_nlc) >= 3 and _nlc != _sl and _nlc in host:
+                _r = _nm
+                break
+        _resolve_cache[_ck] = _r
+        return _r
+
+    # Pre-count nodes (apps + distinct external endpoints among in-scope apps)
+    # WITHOUT building the (potentially huge) DOT string first.
+    _ext_pre: set = set()
+    for (_p, _a), _ad in apps.items():
+        for _c in _ad.get("connections") or []:
+            _tgt = _resolve_tgt(_c["host"], _a)
+            if not (_tgt and _tgt in _name_to_key):
+                _ext_pre.add(_c["host"] + (f':{_c["port"]}' if _c.get("port") else ""))
+    _node_count = len(apps) + len(_ext_pre)
+    if _node_count > max_nodes:
+        return "", _node_count, True
+
     by_proj: dict[str, list[dict]] = {}
     for (_p, _a), _ad in apps.items():
         by_proj.setdefault(_p, []).append(_ad)
@@ -15036,7 +15087,7 @@ def _arch_build_dot(env: str, ed: dict, *, highlight: dict | None = None) -> str
         for _c in _ad.get("connections") or []:
             _kind = _c.get("kind") or "other"
             _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
-            _tgt_app = _c.get("target_app") or ""
+            _tgt_app = _resolve_tgt(_c["host"], _a)
             if _tgt_app and _tgt_app in _name_to_proj:
                 _dst = _arch_node_id("app", _name_to_proj[_tgt_app], _tgt_app)
             else:
@@ -15054,7 +15105,7 @@ def _arch_build_dot(env: str, ed: dict, *, highlight: dict | None = None) -> str
     for _src, _dst, _kind, _col in sorted(_edges):
         L.append(f'{_src} -> {_dst} [color="{_col}"];')
     L.append("}")
-    return "\n".join(L)
+    return "\n".join(L), _node_count, False
 
 
 def _arch_conn_set(ad: dict) -> set:
@@ -15130,11 +15181,19 @@ def _render_architecture() -> None:
         return
     _env_names = sorted(_envs.keys(), key=_arch_env_sort_key)
     _tot_apps = sum(len(e["apps"]) for e in _envs.values())
+    # Projects across all envs, with app counts — drives the scope picker.
+    _proj_apps: dict[str, int] = {}
+    for _e in _envs.values():
+        for (_p, _a) in _e["apps"]:
+            _proj_apps[_p] = _proj_apps.get(_p, 0) + 1
+    _projects = sorted(_proj_apps, key=lambda p: (-_proj_apps[p], p.lower()))
+
     st.markdown(
         '<div class="arch-summary">'
         f'<b>{len(_env_names)}</b> environments · '
         f'<b>{_model.get("n_configs", 0)}</b> config.yml parsed · '
         f'<b>{_tot_apps}</b> app-configs · '
+        f'<b>{len(_projects)}</b> projects · '
         f'<b>{_model.get("n_teams", 0)}</b> teams scanned'
         '</div>' + _arch_legend_html(),
         unsafe_allow_html=True)
@@ -15144,12 +15203,51 @@ def _render_architecture() -> None:
                 f'<div class="arch-err-row">{html.escape(_e)}</div>'
                 for _e in _model["errors"][:60]), unsafe_allow_html=True)
 
+    # ── Scope ──────────────────────────────────────────────────────────────
+    # Drawing every app at once builds a Graphviz SVG huge enough to freeze the
+    # browser on big fleets (1000+ apps). Scope to project(s); each diagram is
+    # capped at ARCH_MAX_NODES and shows a summary instead when exceeded.
+    st.markdown(
+        '<div class="arch-summary">Scope to project(s) — diagrams draw up to '
+        f'<b>{ARCH_MAX_NODES}</b> nodes (apps + endpoints); beyond that a '
+        'summary is shown so the browser stays responsive.</div>',
+        unsafe_allow_html=True)
+    _sel_projects = st.multiselect(
+        "Projects in scope", _projects, default=_projects[:1],
+        format_func=lambda p: f"{p} · {_proj_apps.get(p, 0)} apps",
+        key="_arch_scope_projects_v1")
+    if not _sel_projects:
+        st.info("Select at least one project to draw its architecture.")
+        return
+    _scope_set = set(_sel_projects)
+    _scope_n = sum(_proj_apps.get(p, 0) for p in _sel_projects)
+
+    def _scope_keys(ed: dict) -> set:
+        return {(p, a) for (p, a) in ed["apps"] if p in _scope_set}
+
+    def _too_big_html(n: int) -> str:
+        return (f'<div class="adoc-err">⚠ This scope resolves to <b>{n}</b> '
+                f'graph nodes — over the <b>{ARCH_MAX_NODES}</b>-node cap that '
+                'keeps the browser responsive. Narrow the project selection '
+                'above (or set a higher <code>ARCH_MAX_NODES</code>).</div>')
+
+    def _draw(env: str, ed: dict, highlight: dict | None = None) -> None:
+        _keys = _scope_keys(ed)
+        if not _keys:
+            st.info(f"No apps in the selected project(s) for {env}.")
+            return
+        _dot, _n, _trunc = _arch_build_dot(env, ed, scope_keys=_keys,
+                                           highlight=highlight)
+        if _trunc:
+            st.markdown(_too_big_html(_n), unsafe_allow_html=True)
+        else:
+            st.graphviz_chart(_dot, use_container_width=True)
+
     _cmp = st.toggle("Compare two environments", key="_arch_cmp_v1",
                      value=len(_env_names) > 1)
     if not _cmp:
         _env = st.selectbox("Environment", _env_names, key="_arch_env_single_v1")
-        st.graphviz_chart(_arch_build_dot(_env, _envs[_env]),
-                          use_container_width=True)
+        _draw(_env, _envs[_env])
         return
 
     _cA, _cB = st.columns(2)
@@ -15160,9 +15258,13 @@ def _render_architecture() -> None:
         _eb = st.selectbox("Environment B", _env_names,
                            index=min(1, len(_env_names) - 1),
                            key="_arch_env_b_v1")
-    _diff = _arch_diff(_envs[_ea], _envs[_eb])
-    # Highlight maps: only-in-A flagged 'removed' on the A diagram; only-in-B
-    # 'added' on the B diagram; changed apps 'changed' on both.
+    _diff_full = _arch_diff(_envs[_ea], _envs[_eb])
+    # Scope the diff to the selected projects so it stays bounded too.
+    _diff = {
+        "only_a": [k for k in _diff_full["only_a"] if k[0] in _scope_set],
+        "only_b": [k for k in _diff_full["only_b"] if k[0] in _scope_set],
+        "changed": [c for c in _diff_full["changed"] if c["key"][0] in _scope_set],
+    }
     _hl_a = {k: "removed" for k in _diff["only_a"]}
     _hl_b = {k: "added" for k in _diff["only_b"]}
     for _ch in _diff["changed"]:
@@ -15172,15 +15274,15 @@ def _render_architecture() -> None:
     with _gA:
         st.markdown(f'<div class="arch-env-head">A · {html.escape(_ea)}</div>',
                     unsafe_allow_html=True)
-        st.graphviz_chart(_arch_build_dot(_ea, _envs[_ea], highlight=_hl_a),
-                          use_container_width=True)
+        _draw(_ea, _envs[_ea], _hl_a)
     with _gB:
         st.markdown(f'<div class="arch-env-head">B · {html.escape(_eb)}</div>',
                     unsafe_allow_html=True)
-        st.graphviz_chart(_arch_build_dot(_eb, _envs[_eb], highlight=_hl_b),
-                          use_container_width=True)
+        _draw(_eb, _envs[_eb], _hl_b)
 
-    # ── Structured diff ────────────────────────────────────────────────────
+    # ── Structured diff (row-capped) ───────────────────────────────────────
+    _DIFF_ROW_CAP = 150
+
     def _app_lbl(key) -> str:
         return f'{key[1]} <span class="arch-diff-proj">{key[0]}</span>'
 
@@ -15192,13 +15294,19 @@ def _render_architecture() -> None:
             f'{":" + str(_p) if _p else ""}</span>'
             for (_k, _h, _p) in conns)
 
-    _onlya = "".join(f'<tr><td>{_app_lbl(k)}</td></tr>' for k in _diff["only_a"])
-    _onlyb = "".join(f'<tr><td>{_app_lbl(k)}</td></tr>' for k in _diff["only_b"])
+    def _more(_items) -> str:
+        _extra = len(_items) - _DIFF_ROW_CAP
+        return (f'<tr><td colspan=3 class="arch-diff-proj">+{_extra} more…</td></tr>'
+                if _extra > 0 else "")
+    _onlya = "".join(f'<tr><td>{_app_lbl(k)}</td></tr>'
+                     for k in _diff["only_a"][:_DIFF_ROW_CAP]) + _more(_diff["only_a"])
+    _onlyb = "".join(f'<tr><td>{_app_lbl(k)}</td></tr>'
+                     for k in _diff["only_b"][:_DIFF_ROW_CAP]) + _more(_diff["only_b"])
     _chg = "".join(
         f'<tr><td>{_app_lbl(c["key"])}</td>'
         f'<td>{_conn_chips(c["removed"]) or "—"}</td>'
         f'<td>{_conn_chips(c["added"]) or "—"}</td></tr>'
-        for c in _diff["changed"])
+        for c in _diff["changed"][:_DIFF_ROW_CAP]) + _more(_diff["changed"])
     st.markdown(
         '<div class="arch-diff">'
         f'<div class="arch-diff-head">Δ Comparison · '
@@ -22911,22 +23019,11 @@ def _arch_build_model(host: str, teams_json: str) -> dict:
                     "rel": _rel, "connections": _conns,
                 }
     # Resolve each connection's target to a sibling app in the same env where
-    # the target host references that app's name (substring match on a >=3-char
-    # name token). Unresolved targets render as external endpoint nodes.
-    for _env, _ed in envs.items():
-        _names = sorted({_a for (_p, _a) in _ed["apps"]},
-                        key=len, reverse=True)
-        for (_p, _a), _ad in _ed["apps"].items():
-            for _c in _ad["connections"]:
-                _tgt = ""
-                _h = _c["host"]
-                for _nm in _names:
-                    _nml = _nm.lower()
-                    if (len(_nml) >= 3 and _nml != _a.lower()
-                            and _nml in _h):
-                        _tgt = _nm
-                        break
-                _c["target_app"] = _tgt
+    # NOTE: target-app resolution (which connection hosts reference a sibling
+    # app) is deliberately NOT done here — on a 1000-app fleet that's an
+    # O(apps × connections × apps) blow-up over data the user mostly won't
+    # draw. It's done lazily in `_arch_build_dot` against the SCOPED app set
+    # instead, so it only ever runs for the handful of apps actually rendered.
     return {"ok": True, "errors": errors, "envs": envs,
             "n_teams": len(teams), "n_configs": _n_cfg}
 
