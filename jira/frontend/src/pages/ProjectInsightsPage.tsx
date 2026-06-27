@@ -12,6 +12,8 @@ import { DonutChart } from '../components/charts/DonutChart';
 import { VelocityChart } from '../components/charts/VelocityChart';
 import { AttentionCard, SprintHealthCard } from '../components/Attention';
 import { TimeFilter } from '../components/TimeFilter';
+import { ExportMenu } from '../components/ExportMenu';
+import { downloadExport } from '../api/download';
 
 function pct(rate: number): string {
   return `${Math.round((rate || 0) * 100)}%`;
@@ -29,6 +31,24 @@ export function ProjectInsightsPage() {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState('');
+  const [exporting, setExporting] = useState(false);
+
+  async function exportInsights(format: string) {
+    if (!projectKey) return;
+    setExporting(true);
+    setError('');
+    try {
+      await downloadExport(
+        `/analytics/projects/${projectKey}/export`,
+        { format, period },
+        `${projectKey}-insights.${format}`
+      );
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Export failed'));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     if (!projectKey) return;
@@ -62,7 +82,7 @@ export function ProjectInsightsPage() {
     );
   }
 
-  if (error) return <div className="page"><div className="alert alert-error">{error}</div></div>;
+  if (error && !stats) return <div className="page"><div className="alert alert-error">{error}</div></div>;
   if (!stats) return null;
 
   const openVsClosed = [
@@ -85,8 +105,21 @@ export function ProjectInsightsPage() {
             Avg velocity {stats.avg_velocity_points.toFixed(1)} pts · {stats.avg_velocity_issues.toFixed(1)} issues per sprint
           </div>
         </div>
-        <TimeFilter value={period} onChange={setPeriod} />
+        <div className="row gap-8" style={{ alignItems: 'center' }}>
+          <TimeFilter value={period} onChange={setPeriod} />
+          <ExportMenu
+            options={[
+              { label: 'JSON', format: 'json' },
+              { label: 'CSV', format: 'csv' },
+              { label: 'Markdown', format: 'md' },
+            ]}
+            onSelect={exportInsights}
+            busy={exporting}
+          />
+        </div>
       </div>
+
+      {error && <div className="alert alert-error mt-16">{error}</div>}
 
       {/* ---- Action-first: what needs attention now ---- */}
       <section className="attn-section">

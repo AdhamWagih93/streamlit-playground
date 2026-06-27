@@ -9,8 +9,10 @@ import { Avatar } from '../components/Avatar';
 import { Spinner } from '../components/Spinner';
 import { EmptyState } from '../components/EmptyState';
 import { IssueDetailModal } from '../components/IssueDetailModal';
+import { ExportMenu } from '../components/ExportMenu';
 import { timeAgo } from '../lib/format';
 import { apiErrorMessage } from '../api/client';
+import { downloadExport } from '../api/download';
 
 const EXAMPLES = [
   'project = ENG AND status = "In Progress"',
@@ -29,6 +31,7 @@ export function SearchPage() {
   const [filters, setFilters] = useState<SavedFilter[]>([]);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
 
   function loadFilters() {
     listFilters().then(setFilters).catch(() => {});
@@ -80,6 +83,18 @@ export function SearchPage() {
     }
   }
 
+  async function exportIssues(format: string) {
+    setExporting(true);
+    setError('');
+    try {
+      await downloadExport('/search/export', { tql, format }, `trackly-issues.${format}`);
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Export failed'));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const totalPages = results ? Math.max(1, Math.ceil(results.total / results.page_size)) : 1;
 
   return (
@@ -110,6 +125,15 @@ export function SearchPage() {
             <button className="btn" onClick={save} disabled={!tql.trim()}>
               Save filter
             </button>
+            <ExportMenu
+              options={[
+                { label: 'CSV', format: 'csv' },
+                { label: 'JSON', format: 'json' },
+                { label: 'Excel', format: 'xlsx' },
+              ]}
+              onSelect={exportIssues}
+              busy={exporting}
+            />
             {validation && (
               <span className={validation.valid ? 'text-sm' : 'text-sm'} style={{ color: validation.valid ? 'var(--green-500)' : 'var(--red-500)' }}>
                 {validation.valid ? '✓ valid' : `✗ ${validation.error || 'invalid'}`}

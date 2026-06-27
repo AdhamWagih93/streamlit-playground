@@ -479,6 +479,10 @@ input, textarea, select {
 .menu-item:hover { background: var(--slate-100); }
 .menu-divider { height: 1px; background: var(--border); margin: 6px 4px; }
 
+/* Export dropdown — anchors the shared .menu below the "Export ▾" button */
+.export-menu-wrap { position: relative; display: inline-flex; }
+.export-menu { top: calc(100% + 4px); left: 0; min-width: 160px; }
+
 /* ---------- Notifications ---------- */
 .bell-wrap { position: relative; }
 .bell-btn {

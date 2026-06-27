@@ -9,6 +9,8 @@ import { BarChart } from '../../components/charts/BarChart';
 import { DonutChart } from '../../components/charts/DonutChart';
 import { AttentionIssueRow } from '../../components/Attention';
 import { TimeFilter } from '../../components/TimeFilter';
+import { ExportMenu } from '../../components/ExportMenu';
+import { downloadExport } from '../../api/download';
 
 const COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 function colorFor(key: string, fallback?: string | null): string {
@@ -32,6 +34,23 @@ export function Insights() {
   const [period, setPeriod] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [exporting, setExporting] = useState(false);
+
+  async function exportInsights(format: string) {
+    setExporting(true);
+    setError('');
+    try {
+      await downloadExport(
+        '/analytics/overview/export',
+        { format, period },
+        `trackly-instance-insights.${format}`
+      );
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Export failed'));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -42,7 +61,7 @@ export function Insights() {
   }, [period]);
 
   if (loading) return <SpinnerCenter />;
-  if (error) return <div className="alert alert-error">{error}</div>;
+  if (error && !stats) return <div className="alert alert-error">{error}</div>;
   if (!stats) return null;
 
   const needing = stats.projects.filter((p) => p.needs_attention);
@@ -55,8 +74,21 @@ export function Insights() {
           <h2 className="section-head-title">Insights</h2>
           <p className="section-head-sub">Activity across every project in this instance.</p>
         </div>
-        <TimeFilter value={period} onChange={setPeriod} />
+        <div className="row gap-8" style={{ alignItems: 'center' }}>
+          <TimeFilter value={period} onChange={setPeriod} />
+          <ExportMenu
+            options={[
+              { label: 'JSON', format: 'json' },
+              { label: 'CSV', format: 'csv' },
+              { label: 'Markdown', format: 'md' },
+            ]}
+            onSelect={exportInsights}
+            busy={exporting}
+          />
+        </div>
       </div>
+
+      {error && <div className="alert alert-error mt-16">{error}</div>}
 
       {/* ---- Action-first: attention rollup (current state) ---- */}
       <p className="window-note">Reflects current state — not affected by the time filter.</p>

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from app.core.database import get_db
 from app.models import Project, User
 from app.schemas.analytics import OverviewStats, ProjectStats, Window
 from app.services import analytics
+from app.services import export as export_svc
 from app.services import permission_keys as P
 from app.services.permissions import (
     has_project_permission,
@@ -115,3 +116,69 @@ def project_insights(
         )
     start, end, window = win
     return analytics.project_stats(db, project, start=start, end=end, window=window)
+
+
+def _insights_file(data: bytes, fmt: str, name: str) -> Response:
+    return Response(
+        content=data,
+        media_type=export_svc.CONTENT_TYPE[fmt],
+        headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'},
+    )
+
+
+@router.get("/projects/{key_or_id}/export")
+def export_project_insights(
+    key_or_id: str,
+    format: str = Query("json", description="json | csv | md"),
+    win=Depends(_window),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Export one project's insights as JSON / CSV / Markdown."""
+    fmt = format.lower()
+    if fmt not in export_svc.PROJECT_INSIGHTS_EXPORTERS:
+        raise HTTPException(status_code=400, detail="format must be one of: json, csv, md")
+    project = _resolve_project(db, key_or_id)
+    if not (is_site_admin(db, user) or has_project_permission(db, user, project, P.BROWSE_PROJECTS)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this project's insights")
+    start, end, window = win
+    stats = analytics.project_stats(db, project, start=start, end=end, window=window)
+    data = export_svc.PROJECT_INSIGHTS_EXPORTERS[fmt](stats)
+    return _insights_file(data, fmt, f"{project.key}-insights")
+
+
+@router.get("/overview/export")
+def export_overview(
+    format: str = Query("json"),
+    win=Depends(_window),
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_site_admin),
+) -> Response:
+    """Export the instance-wide insights (site admin only) as JSON / CSV / Markdown."""
+    fmt = format.lower()
+    if fmt not in export_svc.OVERVIEW_EXPORTERS:
+        raise HTTPException(status_code=400, detail="format must be one of: json, csv, md")
+    start, end, window = win
+    stats = analytics.overview_stats(db, None, scope="all", start=start, end=end, window=window)
+    data = export_svc.OVERVIEW_EXPORTERS[fmt](stats)
+    return _insights_file(data, fmt, "trackly-instance-insights")
+
+
+@router.get("/my/export")
+def export_my(
+    format: str = Query("json"),
+    win=Depends(_window),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Export insights across the caller's accessible projects as JSON / CSV / Markdown."""
+    fmt = format.lower()
+    if fmt not in export_svc.OVERVIEW_EXPORTERS:
+        raise HTTPException(status_code=400, detail="format must be one of: json, csv, md")
+    start, end, window = win
+    ids = visible_project_ids(db, user)
+    stats = analytics.overview_stats(
+        db, None if ids is None else list(ids), scope="mine", start=start, end=end, window=window
+    )
+    data = export_svc.OVERVIEW_EXPORTERS[fmt](stats)
+    return _insights_file(data, fmt, "my-insights")
