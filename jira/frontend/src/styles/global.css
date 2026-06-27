@@ -666,6 +666,118 @@ input, textarea, select {
 }
 .autocomplete-item:hover, .autocomplete-item.active { background: var(--indigo-50); }
 
+/* ---------- TQL input: autocomplete + help ---------- */
+.tql-input-wrap { position: relative; }
+.tql-input-box {
+  display: flex; align-items: center;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.tql-input-box:focus-within {
+  border-color: var(--indigo-400);
+  box-shadow: 0 0 0 3px var(--indigo-100);
+}
+.tql-input-box.valid { border-color: var(--green-500); }
+.tql-input-box.invalid { border-color: var(--red-500); }
+.tql-input {
+  flex: 1; width: 100%;
+  padding: 10px 12px; border: none; outline: none;
+  background: transparent; color: var(--text);
+  font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13.5px;
+}
+.tql-plain { font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace; }
+
+.tql-suggest {
+  position: absolute; top: calc(100% + 4px); left: 0;
+  min-width: 320px; max-width: 520px; max-height: 300px; overflow-y: auto;
+  list-style: none; margin: 0; padding: 6px; z-index: 60;
+}
+.tql-suggest-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.tql-suggest-item.active { background: var(--indigo-50); }
+.tql-suggest-text {
+  font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px; font-weight: 600; color: var(--slate-800);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tql-suggest-item.active .tql-suggest-text { color: var(--indigo-700); }
+.tql-suggest-hint {
+  font-size: 12px; color: var(--text-muted); flex-shrink: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%;
+}
+
+.tql-validation { margin-top: 6px; font-size: 12px; font-weight: 600; }
+.tql-validation.ok { color: #15803d; }
+.tql-validation.err { color: var(--red-500); }
+
+.kbd {
+  display: inline-block; padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--border); border-bottom-width: 2px;
+  background: var(--slate-50); color: var(--slate-600);
+  font-size: 11px; font-family: inherit; line-height: 1.4;
+}
+
+/* Help / examples panel */
+.tql-help-wrap { position: relative; display: inline-flex; }
+.tql-help-panel {
+  position: absolute; top: calc(100% + 6px); left: 0;
+  width: 560px; max-width: 92vw; max-height: 70vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg); z-index: 70;
+}
+.tql-help-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--surface);
+}
+.tql-help-body { padding: 14px 16px; }
+.tql-help-section { margin-bottom: 18px; }
+.tql-help-section:last-child { margin-bottom: 4px; }
+.tql-help-section h5 {
+  margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;
+}
+.tql-example-list { display: flex; flex-direction: column; gap: 4px; }
+.tql-example-row {
+  display: flex; align-items: stretch; gap: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.tql-example-row:hover { border-color: var(--indigo-200); }
+.tql-example-main {
+  flex: 1; min-width: 0; text-align: left; border: none; background: transparent;
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 3px;
+}
+.tql-example-main:hover { background: var(--indigo-50); }
+.tql-example-label { font-size: 13px; font-weight: 600; color: var(--slate-800); }
+.tql-example-query {
+  font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; color: var(--indigo-700);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tql-field-table { width: 100%; border-collapse: collapse; }
+.tql-field-table td {
+  padding: 5px 8px; border-bottom: 1px solid var(--slate-100);
+  font-size: 12.5px; vertical-align: top;
+}
+.tql-field-table td code {
+  font-size: 12px; color: var(--slate-800); font-weight: 600;
+}
+.tql-field-ops {
+  font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px; color: var(--slate-500); white-space: nowrap;
+}
+.tql-help-tokens { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.tql-help-tokens li { font-size: 12.5px; color: var(--slate-600); }
+.tql-help-tokens code {
+  background: var(--slate-100); border-radius: 4px; padding: 1px 5px;
+  font-size: 11.5px; color: var(--slate-800);
+}
+
 /* Admin area ---------------------------------------------------------------*/
 .admin-layout { display: flex; gap: 28px; align-items: flex-start; }
 .admin-subnav {

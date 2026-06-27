@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { IssueListItem, Page, SavedFilter } from '../types';
-import { runSearch, validateTql, listFilters, createFilter, deleteFilter } from '../api/search';
+import { IssueListItem, Page, SavedFilter, TqlSchema } from '../types';
+import { runSearch, listFilters, createFilter, deleteFilter, getTqlSchema } from '../api/search';
 import { IssueTypeIcon } from '../components/IssueTypeIcon';
 import { PriorityIcon } from '../components/PriorityIcon';
 import { StatusBadge } from '../components/StatusBadge';
@@ -10,15 +10,11 @@ import { Spinner } from '../components/Spinner';
 import { EmptyState } from '../components/EmptyState';
 import { IssueDetailModal } from '../components/IssueDetailModal';
 import { ExportMenu } from '../components/ExportMenu';
+import { TqlInput } from '../components/TqlInput';
+import { TqlHelp } from '../components/TqlHelp';
 import { timeAgo } from '../lib/format';
 import { apiErrorMessage } from '../api/client';
 import { downloadExport } from '../api/download';
-
-const EXAMPLES = [
-  'project = ENG AND status = "In Progress"',
-  'assignee = currentUser() AND statusCategory != done ORDER BY updated DESC',
-  'type = Bug AND priority IN (High, Highest)',
-];
 
 export function SearchPage() {
   const [searchParams] = useSearchParams();
@@ -27,7 +23,7 @@ export function SearchPage() {
   const [results, setResults] = useState<Page<IssueListItem> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [validation, setValidation] = useState<{ valid: boolean; error?: string | null } | null>(null);
+  const [schema, setSchema] = useState<TqlSchema | null>(null);
   const [filters, setFilters] = useState<SavedFilter[]>([]);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -38,17 +34,10 @@ export function SearchPage() {
   }
   useEffect(loadFilters, []);
 
-  // Live validate (debounced).
+  // Fetch the TQL schema once to power autocomplete + the help panel.
   useEffect(() => {
-    if (!tql.trim()) {
-      setValidation(null);
-      return;
-    }
-    const t = setTimeout(() => {
-      validateTql(tql).then(setValidation).catch(() => setValidation(null));
-    }, 350);
-    return () => clearTimeout(t);
-  }, [tql]);
+    getTqlSchema().then(setSchema).catch(() => setSchema(null));
+  }, []);
 
   async function run(p = 1) {
     setLoading(true);
@@ -108,20 +97,25 @@ export function SearchPage() {
 
       <div className="row gap-16 wrap" style={{ alignItems: 'flex-start' }}>
         <div className="flex-1" style={{ minWidth: 320 }}>
-          <textarea
-            className="textarea"
-            style={{ fontFamily: 'monospace', minHeight: 70 }}
+          <TqlInput
             value={tql}
-            onChange={(e) => setTql(e.target.value)}
-            placeholder={EXAMPLES[0]}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') run(1);
-            }}
+            onChange={setTql}
+            onSubmit={() => run(1)}
+            schema={schema}
+            autoFocus
+            placeholder='e.g. assignee = currentUser() AND statusCategory != done ORDER BY updated DESC'
           />
           <div className="row gap-8 mt-8 wrap">
             <button className="btn btn-primary" onClick={() => run(1)} disabled={loading}>
-              {loading ? <Spinner /> : 'Run'} <span className="text-xs">⌘⏎</span>
+              {loading ? <Spinner /> : 'Run'} <span className="text-xs">⏎</span>
             </button>
+            <TqlHelp
+              schema={schema}
+              onPickExample={(q, runIt) => {
+                setTql(q);
+                if (runIt) run(1);
+              }}
+            />
             <button className="btn" onClick={save} disabled={!tql.trim()}>
               Save filter
             </button>
@@ -134,22 +128,11 @@ export function SearchPage() {
               onSelect={exportIssues}
               busy={exporting}
             />
-            {validation && (
-              <span className={validation.valid ? 'text-sm' : 'text-sm'} style={{ color: validation.valid ? 'var(--green-500)' : 'var(--red-500)' }}>
-                {validation.valid ? '✓ valid' : `✗ ${validation.error || 'invalid'}`}
-              </span>
-            )}
           </div>
           <div className="mt-8 text-xs muted">
-            Examples:{' '}
-            {EXAMPLES.map((ex, i) => (
-              <span key={ex}>
-                {i > 0 && ' · '}
-                <a className="pointer" onClick={() => setTql(ex)}>
-                  {ex}
-                </a>
-              </span>
-            ))}
+            Start typing to autocomplete fields, operators and values. Press{' '}
+            <kbd className="kbd">↑</kbd> <kbd className="kbd">↓</kbd> to navigate,{' '}
+            <kbd className="kbd">Tab</kbd> or <kbd className="kbd">Enter</kbd> to accept.
           </div>
         </div>
 

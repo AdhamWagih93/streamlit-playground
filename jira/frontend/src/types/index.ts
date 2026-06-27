@@ -241,6 +241,39 @@ export interface SavedFilter {
   owner?: User | null;
 }
 
+// ---------------------------------------------------------------------------
+// TQL (Trackly Query Language) autocomplete / help
+// ---------------------------------------------------------------------------
+
+export type TqlFieldType = 'option' | 'user' | 'text' | 'date' | 'number';
+
+export interface TqlField {
+  name: string;
+  type: TqlFieldType;
+  operators: string[];
+  values: boolean;
+  description: string;
+}
+
+export interface TqlExample {
+  label: string;
+  query: string;
+}
+
+export interface TqlSchema {
+  fields: TqlField[];
+  keywords: string[];
+  functions: string[];
+  specials: string[];
+  examples: TqlExample[];
+}
+
+export interface TqlValue {
+  value: string;
+  label?: string | null;
+  hint?: string | null;
+}
+
 export interface Notification {
   id: string;
   title?: string | null;

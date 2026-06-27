@@ -8,13 +8,23 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.models import Issue, SavedFilter, User
+from app.models import (
+    Issue,
+    IssueType,
+    Label,
+    Priority,
+    Project,
+    SavedFilter,
+    Sprint,
+    Status,
+    User,
+)
 from app.schemas.common import Message, Page
 from app.schemas.issue import IssueListItem
 from app.services import export as export_svc
 from app.services.permissions import visible_project_ids
 from app.services.serializers import to_list_item
-from app.services.tql import TQLError, build_query
+from app.services.tql import TQLError, build_query, tql_schema
 
 router = APIRouter()
 
@@ -110,6 +120,87 @@ def export_search(
         media_type=export_svc.CONTENT_TYPE[fmt],
         headers={"Content-Disposition": f'attachment; filename="trackly-issues.{fmt}"'},
     )
+
+
+# --- Autocomplete / help ---------------------------------------------------
+@router.get("/tql-schema")
+def get_tql_schema(_user: User = Depends(get_current_user)) -> dict:
+    """Fields, operators, keywords, functions and examples for TQL autocomplete."""
+    return tql_schema()
+
+
+class ValueSuggestion(BaseModel):
+    value: str
+    label: str | None = None
+    hint: str | None = None
+
+
+@router.get("/values", response_model=list[ValueSuggestion])
+def tql_values(
+    field: str = Query(..., description="The TQL field to suggest values for"),
+    q: str = Query("", description="Filter suggestions by this prefix/substring"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ValueSuggestion]:
+    """Suggest concrete values for a TQL field (RBAC-aware for projects)."""
+    field = field.lower()
+    like = f"%{q}%"
+    out: list[ValueSuggestion] = []
+
+    def add(value: str, label: str | None = None, hint: str | None = None):
+        out.append(ValueSuggestion(value=value, label=label, hint=hint))
+
+    if field == "project":
+        vis = visible_project_ids(db, user)
+        stmt = select(Project).order_by(Project.key.asc())
+        if vis is not None:
+            stmt = stmt.where(Project.id.in_(vis or {-1}))
+        if q:
+            stmt = stmt.where(or_(Project.key.ilike(like), Project.name.ilike(like)))
+        for p in db.scalars(stmt.limit(20)):
+            add(p.key, p.key, p.name)
+    elif field == "status":
+        for s in db.scalars(select(Status).where(Status.name.ilike(like)).order_by(Status.order.asc()).limit(20)):
+            add(f'"{s.name}"' if " " in s.name else s.name, s.name, s.category)
+    elif field in ("statuscategory", "category"):
+        for c in ("todo", "in_progress", "done"):
+            if q.lower() in c:
+                add(c)
+    elif field in ("type", "issuetype"):
+        for t in db.scalars(select(IssueType).where(IssueType.name.ilike(like)).limit(20)):
+            add(f'"{t.name}"' if " " in t.name else t.name, t.name)
+    elif field == "priority":
+        for p in db.scalars(select(Priority).where(Priority.name.ilike(like)).order_by(Priority.rank.asc())):
+            add(p.name, p.name)
+    elif field in ("assignee", "reporter"):
+        if not q or "currentuser".startswith(q.lower()):
+            add("currentUser()", "currentUser()", "the signed-in user")
+        if not q or "empty".startswith(q.lower()):
+            add("empty", "empty", "no one assigned")
+        stmt = select(User).where(User.is_active.is_(True))
+        if q:
+            stmt = stmt.where(or_(User.username.ilike(like), User.display_name.ilike(like), User.email.ilike(like)))
+        for u in db.scalars(stmt.order_by(User.display_name.asc()).limit(15)):
+            add(u.username, u.display_name, u.email)
+    elif field == "sprint":
+        if not q or "active".startswith(q.lower()):
+            add("active", "active", "the active sprint")
+        for s in db.scalars(select(Sprint).where(Sprint.name.ilike(like)).order_by(Sprint.id.desc()).limit(15)):
+            add(f'"{s.name}"' if " " in s.name else s.name, s.name, s.state)
+    elif field in ("labels", "label"):
+        for lab in db.scalars(select(Label).where(Label.name.ilike(like)).order_by(Label.name.asc()).limit(20)):
+            add(lab.name, lab.name)
+    elif field == "resolution":
+        if not q or "empty".startswith(q.lower()):
+            add("empty", "empty", "unresolved")
+        seen = set()
+        for (res,) in db.execute(
+            select(Issue.resolution).where(Issue.resolution.isnot(None), Issue.resolution.ilike(like)).distinct().limit(20)
+        ):
+            if res and res not in seen:
+                seen.add(res)
+                add(f'"{res}"' if " " in res else res, res)
+    return out
 
 
 # --- Validation ------------------------------------------------------------

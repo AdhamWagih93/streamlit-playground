@@ -19,7 +19,7 @@ export function TopBar() {
   function onSearch(e: React.FormEvent) {
     e.preventDefault();
     const q = search.trim();
-    navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
+    navigate(q ? `/search?tql=${encodeURIComponent(q)}` : '/search');
   }
 
   function doLogout() {
@@ -48,7 +48,7 @@ export function TopBar() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search issues — try a TQL query"
+          placeholder='Search TQL — e.g. assignee = currentUser() AND statusCategory != done'
         />
       </form>
 

@@ -137,17 +137,16 @@ def test_tql_assignee_by_username(client, admin_headers, seeded, admin_me):
     assert _keys(res) == {seeded["i1"]["key"], seeded["i3"]["key"]}
 
 
-def test_tql_current_user_function_is_unsupported(client, admin_headers, seeded):
-    # KNOWN LIMITATION / BUG: the tokenizer splits ``currentUser()`` into the
-    # word ``currentUser`` plus ``(`` ``)``, so the parser rejects it as a
-    # trailing token. The ``currentuser()`` branch in TQLCompiler._user_ids is
-    # therefore unreachable via the API. Documented here as current behavior.
-    resp = client.post(
-        "/api/search", headers=admin_headers,
-        json={"tql": f"project = {seeded['key']} AND assignee = currentUser()",
-              "page": 1, "page_size": 10},
-    )
-    assert resp.status_code == 400
+def test_tql_current_user_function(client, admin_headers, seeded):
+    # currentUser() resolves to the requesting user; i1 and i3 are assigned to
+    # the admin, i2 is unassigned.
+    res = _search(client, admin_headers, f"project = {seeded['key']} AND assignee = currentUser()")
+    assert _keys(res) == {seeded["i1"]["key"], seeded["i3"]["key"]}
+
+
+def test_tql_current_user_without_parens(client, admin_headers, seeded):
+    res = _search(client, admin_headers, f"project = {seeded['key']} AND assignee = currentUser")
+    assert _keys(res) == {seeded["i1"]["key"], seeded["i3"]["key"]}
 
 
 def test_tql_assignee_empty(client, admin_headers, seeded):

@@ -48,7 +48,8 @@ class TQLError(ValueError):
 _TOKEN_RE = re.compile(
     r"""
     \s*(?:
-        (?P<lparen>\()
+        (?P<func>[A-Za-z_][A-Za-z_0-9]*\(\))
+      | (?P<lparen>\()
       | (?P<rparen>\))
       | (?P<comma>,)
       | (?P<op>!=|>=|<=|=|~|>|<)
@@ -83,6 +84,9 @@ def tokenize(text: str) -> list[Tok]:
         val = m.group(kind)
         if kind == "string":
             toks.append(Tok("string", val[1:-1]))
+        elif kind == "func":
+            # Function tokens like currentUser() are treated as a single value word.
+            toks.append(Tok("word", val))
         elif kind == "word":
             upper = val.upper()
             if upper in _KEYWORDS:
@@ -234,10 +238,17 @@ _SORT_COLUMNS = {
     "due": Issue.due_date,
     "rank": Issue.rank,
     "storypoints": Issue.story_points,
+    "points": Issue.story_points,
     "priority": Issue.priority_id,
+    "status": Issue.status_id,
+    "type": Issue.type_id,
+    "assignee": Issue.assignee_id,
+    "reporter": Issue.reporter_id,
 }
 
 _EMPTY = {"empty", "null", "none"}
+# currentUser() with or without parens resolves to the requesting user.
+_CURRENT_USER = {"currentuser()", "currentuser"}
 
 
 class TQLCompiler:
@@ -261,7 +272,7 @@ class TQLCompiler:
         return list(self.db.scalars(select(Priority.id).where(Priority.name.ilike(value))))
 
     def _user_ids(self, value: str) -> list[int]:
-        if value.lower() == "currentuser()":
+        if value.lower() in _CURRENT_USER:
             return []  # resolved by caller via bound param; treated as empty here
         q = select(User.id).where(
             or_(User.username.ilike(value), User.email.ilike(value), User.display_name.ilike(value))
@@ -307,7 +318,7 @@ class TQLCompiler:
                 return col.is_(None) if op in ("=", "IN") else col.isnot(None)
             ids: list[int] = []
             for v in values:
-                if v.lower() == "currentuser()" and current_user_id:
+                if v.lower() in _CURRENT_USER and current_user_id:
                     ids.append(current_user_id)
                 else:
                     ids.extend(self._user_ids(v))
@@ -415,3 +426,56 @@ def build_query(db: Session, tql: str, current_user_id: int | None = None):
     if not order_by:
         order_by = [desc(Issue.updated_at)]
     return where, order_by
+
+
+# --- Schema/help catalog (drives UI autocomplete + examples) ---------------
+_EQ = ["=", "!=", "IN", "NOT IN"]
+_DATE_OPS = [">", ">=", "<", "<=", "=", "!="]
+
+TQL_FIELDS = [
+    {"name": "project", "type": "option", "operators": _EQ, "values": True, "description": "Project key or name"},
+    {"name": "status", "type": "option", "operators": _EQ, "values": True, "description": "Workflow status, e.g. \"In Progress\""},
+    {"name": "statusCategory", "type": "option", "operators": _EQ, "values": True, "description": "todo | in_progress | done"},
+    {"name": "type", "type": "option", "operators": _EQ, "values": True, "description": "Issue type, e.g. Bug, Story"},
+    {"name": "priority", "type": "option", "operators": _EQ, "values": True, "description": "Highest, High, Medium, Low, Lowest"},
+    {"name": "assignee", "type": "user", "operators": _EQ, "values": True, "description": "User; use currentUser() or empty"},
+    {"name": "reporter", "type": "user", "operators": _EQ, "values": True, "description": "User; use currentUser() or empty"},
+    {"name": "sprint", "type": "option", "operators": _EQ, "values": True, "description": "Sprint name, or active"},
+    {"name": "labels", "type": "option", "operators": ["=", "!=", "~", "IN"], "values": True, "description": "A label"},
+    {"name": "resolution", "type": "option", "operators": ["=", "!="], "values": True, "description": "Resolution, or empty (unresolved)"},
+    {"name": "epic", "type": "text", "operators": ["="], "values": False, "description": "Epic issue key"},
+    {"name": "parent", "type": "text", "operators": ["="], "values": False, "description": "Parent issue key"},
+    {"name": "summary", "type": "text", "operators": ["~", "="], "values": False, "description": "Text in the summary"},
+    {"name": "text", "type": "text", "operators": ["~"], "values": False, "description": "Text in summary or description"},
+    {"name": "key", "type": "text", "operators": ["=", "~"], "values": False, "description": "Issue key, e.g. ENG-12"},
+    {"name": "created", "type": "date", "operators": _DATE_OPS, "values": False, "description": "Created date: -7d, -2w, or YYYY-MM-DD"},
+    {"name": "updated", "type": "date", "operators": _DATE_OPS, "values": False, "description": "Last updated: -7d, or YYYY-MM-DD"},
+    {"name": "due", "type": "date", "operators": _DATE_OPS, "values": False, "description": "Due date: 0d (today), -7d, YYYY-MM-DD"},
+    {"name": "storyPoints", "type": "number", "operators": _DATE_OPS, "values": False, "description": "Story points, e.g. >= 5"},
+]
+
+TQL_KEYWORDS = ["AND", "OR", "ORDER BY", "ASC", "DESC", "IN", "NOT IN"]
+TQL_FUNCTIONS = ["currentUser()"]
+TQL_SPECIALS = ["empty"]
+
+TQL_EXAMPLES = [
+    {"label": "My open work", "query": "assignee = currentUser() AND statusCategory != done ORDER BY updated DESC"},
+    {"label": "Open bugs by priority", "query": "type = Bug AND statusCategory != done ORDER BY priority ASC"},
+    {"label": "High priority in a project", "query": "project = ENG AND priority IN (High, Highest)"},
+    {"label": "Updated in the last week", "query": "updated >= -7d ORDER BY updated DESC"},
+    {"label": "Unassigned, in progress", "query": "assignee = empty AND statusCategory = in_progress"},
+    {"label": "Overdue and not done", "query": "due < 0d AND statusCategory != done ORDER BY due ASC"},
+    {"label": "By label", "query": "labels = backend AND status = \"In Progress\""},
+]
+
+
+def tql_schema() -> dict:
+    """Static catalog of fields, operators, keywords, functions and examples,
+    used by the UI to power autocomplete and the help/examples panel."""
+    return {
+        "fields": TQL_FIELDS,
+        "keywords": TQL_KEYWORDS,
+        "functions": TQL_FUNCTIONS,
+        "specials": TQL_SPECIALS,
+        "examples": TQL_EXAMPLES,
+    }
