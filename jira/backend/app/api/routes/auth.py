@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, oauth2_scheme
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import (
@@ -173,9 +173,36 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> Token:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise _CRED_EXC
+    # Preserve an active impersonation session across refresh.
+    extra = {"act": data["act"], "imp": True} if data.get("act") is not None else None
     return Token(
-        access_token=create_access_token(user.id, minutes=auth_settings_service.access_token_minutes(db)),
-        refresh_token=create_refresh_token(user.id, minutes=auth_settings_service.refresh_token_minutes(db)),
+        access_token=create_access_token(user.id, extra=extra, minutes=auth_settings_service.access_token_minutes(db)),
+        refresh_token=create_refresh_token(user.id, extra=extra, minutes=auth_settings_service.refresh_token_minutes(db)),
+    )
+
+
+@router.post("/stop-impersonation", response_model=Token)
+def stop_impersonation(
+    token: str | None = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> Token:
+    """End an impersonation session and return to the real (admin) account,
+    using the ``act`` claim recorded in the current token."""
+    if not token:
+        raise _CRED_EXC
+    try:
+        data = decode_token(token)
+        actor_id = data.get("act")
+        if actor_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not an impersonation session")
+        admin = db.get(User, int(actor_id))
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise _CRED_EXC
+    if admin is None or not admin.is_active:
+        raise _CRED_EXC
+    return Token(
+        access_token=create_access_token(admin.id, minutes=auth_settings_service.access_token_minutes(db)),
+        refresh_token=create_refresh_token(admin.id, minutes=auth_settings_service.refresh_token_minutes(db)),
     )
 
 

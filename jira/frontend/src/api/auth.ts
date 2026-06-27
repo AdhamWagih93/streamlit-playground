@@ -35,3 +35,12 @@ export async function updateMe(payload: Partial<User>): Promise<User> {
   const res = await api.patch<User>('/auth/me', payload);
   return res.data;
 }
+
+// Stop impersonation — must be called WITH the active impersonation token.
+// Returns fresh tokens for the real admin.
+export async function stopImpersonation(): Promise<{ access_token: string; refresh_token: string }> {
+  const res = await api.post<{ access_token: string; refresh_token: string }>(
+    '/auth/stop-impersonation'
+  );
+  return res.data;
+}

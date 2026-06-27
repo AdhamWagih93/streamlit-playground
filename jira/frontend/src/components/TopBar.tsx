@@ -4,6 +4,7 @@ import { useAuth } from '../store/auth';
 import { useUI } from '../store/ui';
 import { Avatar } from './Avatar';
 import { NotificationsBell } from './NotificationsBell';
+import { ImpersonateModal } from './ImpersonateModal';
 import { useOnClickOutside } from '../hooks/useOnClickOutside';
 
 export function TopBar() {
@@ -13,6 +14,7 @@ export function TopBar() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [impersonateOpen, setImpersonateOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useOnClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
 
@@ -86,6 +88,11 @@ export function TopBar() {
                   Administration
                 </button>
               )}
+              {user?.is_admin && (
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setImpersonateOpen(true); }}>
+                  View as user…
+                </button>
+              )}
               <div className="menu-divider" />
               <button className="menu-item" onClick={doLogout}>
                 Sign out
@@ -94,6 +101,8 @@ export function TopBar() {
           )}
         </div>
       </div>
+
+      <ImpersonateModal open={impersonateOpen} onClose={() => setImpersonateOpen(false)} />
     </header>
   );
 }

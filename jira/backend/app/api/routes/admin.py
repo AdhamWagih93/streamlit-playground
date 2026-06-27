@@ -12,8 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import logging
+
 from app.core.crypto import encrypt, decrypt
 from app.core.database import get_db
+from app.core.security import create_access_token, create_refresh_token
+from app.schemas.auth import Token
 from app.models import (
     GlobalPermissionGrant,
     IdentityProvider,
@@ -71,6 +75,37 @@ def update_auth_settings(
     db.commit()
     db.refresh(row)
     return AuthSettingsOut.model_validate(row)
+
+
+# --- Impersonation ("view as user") ----------------------------------------
+_imp_log = logging.getLogger("trackly.impersonation")
+
+
+@router.post("/impersonate/{user_id}", response_model=Token)
+def impersonate(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_site_admin),
+) -> Token:
+    """Issue tokens that let a site admin browse as an existing user — adopting
+    that user's view and permissions. The tokens carry an ``act`` (actor) claim
+    recording the real admin, so the session can be ended via
+    ``/auth/stop-impersonation``.
+    """
+    target = db.get(User, user_id)
+    if target is None or not target.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found or inactive")
+    if target.id == admin.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You are already this user")
+    _imp_log.info(
+        "Impersonation start: admin id=%s (%s) -> user id=%s (%s)",
+        admin.id, admin.email, target.id, target.email,
+    )
+    extra = {"act": admin.id, "imp": True}
+    return Token(
+        access_token=create_access_token(target.id, extra=extra),
+        refresh_token=create_refresh_token(target.id, extra=extra),
+    )
 
 
 # --- helpers ---------------------------------------------------------------

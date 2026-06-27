@@ -40,8 +40,8 @@ def create_access_token(subject: str | int, extra: dict | None = None, minutes: 
     return _create_token(subject, minutes or settings.access_token_expire_minutes, "access", extra)
 
 
-def create_refresh_token(subject: str | int, minutes: int | None = None) -> str:
-    return _create_token(subject, minutes or settings.refresh_token_expire_minutes, "refresh")
+def create_refresh_token(subject: str | int, minutes: int | None = None, extra: dict | None = None) -> str:
+    return _create_token(subject, minutes or settings.refresh_token_expire_minutes, "refresh", extra)
 
 
 def decode_token(token: str) -> dict[str, Any]:

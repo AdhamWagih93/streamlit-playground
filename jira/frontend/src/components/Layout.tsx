@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { CreateIssueModal } from './CreateIssueModal';
+import { ImpersonationBanner } from './ImpersonationBanner';
 import { useUI } from '../store/ui';
 
 export function Layout() {
@@ -9,6 +10,7 @@ export function Layout() {
 
   return (
     <div className="app-shell">
+      <ImpersonationBanner />
       <TopBar />
       <div className="app-body">
         <Sidebar />

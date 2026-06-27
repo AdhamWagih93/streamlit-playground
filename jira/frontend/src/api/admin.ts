@@ -13,6 +13,18 @@ import {
   AuthSettings,
 } from '../types';
 
+// Impersonation ---------------------------------------------------------------
+// Site-admin only. Returns tokens for the TARGET user (their JWT carries
+// `imp: true` and `act: <adminUserId>`).
+export async function impersonateUser(
+  userId: number
+): Promise<{ access_token: string; refresh_token: string }> {
+  const res = await api.post<{ access_token: string; refresh_token: string }>(
+    `/admin/impersonate/${userId}`
+  );
+  return res.data;
+}
+
 // Mail -----------------------------------------------------------------------
 export async function getMailSettings(): Promise<MailSettings> {
   const res = await api.get<MailSettings>('/admin/mail');

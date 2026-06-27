@@ -1175,3 +1175,81 @@ input, textarea, select {
   text-decoration: none;
 }
 .my-attn-chip:hover { text-decoration: none; filter: brightness(0.97); }
+
+/* -------------------------------------------------------------------------- */
+/* Impersonation ("View as user") — banner + picker modal                      */
+/* -------------------------------------------------------------------------- */
+.impersonation-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: linear-gradient(90deg, var(--amber-500), var(--indigo-600));
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
+  z-index: 60;
+}
+.impersonation-eye { font-size: 16px; line-height: 1; }
+.impersonation-text { flex: 1; min-width: 0; }
+.impersonation-text strong { font-weight: 700; }
+.impersonation-email { opacity: 0.9; }
+.impersonation-error {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.22);
+  font-weight: 600;
+}
+.impersonation-return {
+  flex: none;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  transition: background 0.12s ease;
+}
+.impersonation-return:hover:not(:disabled) { background: rgba(255, 255, 255, 0.3); }
+.impersonation-return:disabled { opacity: 0.7; cursor: default; }
+
+.impersonate-list {
+  margin-top: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.impersonate-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.impersonate-item:last-child { border-bottom: none; }
+.impersonate-item:hover:not(:disabled) { background: var(--indigo-50); }
+.impersonate-item:disabled { cursor: default; opacity: 0.6; }
+.impersonate-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.impersonate-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--indigo-700);
+  background: var(--indigo-100);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.impersonate-cta { flex: none; font-weight: 700; color: var(--primary); }
