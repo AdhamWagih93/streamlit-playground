@@ -554,16 +554,22 @@ def render_week_table(
             is_public = public_holidays is not None and public_holidays.get(iso)
             is_member_holiday = holidays is not None and member in holidays.get(iso, [])
             status = assignments.get(member, "WFH")
-            if is_public or is_member_holiday:
+            if is_member_holiday:
+                # Personal holiday: this member is off regardless of rotation.
                 css_class = "holiday-cell"
-                label = "Public holiday" if is_public else "Holiday"
+                label = "Holiday"
+            elif status == "WFO":
+                # Still show who should be at the office, even on a public holiday.
+                is_skippable = (iso, member) in skippable_cells
+                css_class = "wfo-cell wfo-skippable-cell" if is_skippable else "wfo-cell"
+                label = "Office"
+            elif is_public:
+                # Short tag (saves space vs. "Public holiday").
+                css_class = "holiday-cell"
+                label = "Public"
             else:
-                if status == "WFO":
-                    is_skippable = (iso, member) in skippable_cells
-                    css_class = "wfo-cell wfo-skippable-cell" if is_skippable else "wfo-cell"
-                else:
-                    css_class = "wfh-cell"
-                label = "Office" if status == "WFO" else "Home"
+                css_class = "wfh-cell"
+                label = "Home"
             row_cells.append(f"<td class='{css_class}'>{label}</td>")
         body_rows.append(f"<tr class='{row_extra_cls}'>" + "".join(row_cells) + "</tr>")
 
@@ -1243,31 +1249,35 @@ def render_today_and_next(
     today_public_name = public_holidays.get(today_iso) if public_holidays else None
 
     if today_iso in year_sched and is_workday(today):
+        today_assign = year_sched[today_iso]
+        today_wfo = [m for m, v in today_assign.items() if v == "WFO" and m not in todays_holidays]
+        today_holiday_members = [m for m in todays_holidays if m in TEAM_MEMBERS]
+
+        # Public holidays no longer hide the rotation; we still surface who is
+        # scheduled to be at the office, with a note that it's a public holiday.
+        public_note = ""
         if today_public_name:
-            today_body = (
-                "<span class='office-empty'>Public holiday: "
-                f"{today_public_name}</span>"
+            public_note = (
+                "<div class='office-public-note'>Public holiday: "
+                f"{today_public_name}</div>"
             )
-        else:
-            today_assign = year_sched[today_iso]
-            today_wfo = [m for m, v in today_assign.items() if v == "WFO" and m not in todays_holidays]
-            today_holiday_members = [m for m in todays_holidays if m in TEAM_MEMBERS]
-            if today_wfo:
-                today_html = "".join(
-                    f"<span class='office-pill'>{m}</span>" for m in today_wfo
+
+        if today_wfo:
+            today_html = "".join(
+                f"<span class='office-pill'>{m}</span>" for m in today_wfo
+            )
+            extra = ""
+            if today_holiday_members:
+                hol_html = "".join(
+                    f"<span class='holiday-pill'>{m}</span>" for m in today_holiday_members
                 )
-                extra = ""
-                if today_holiday_members:
-                    hol_html = "".join(
-                        f"<span class='holiday-pill'>{m}</span>" for m in today_holiday_members
-                    )
-                    extra = (
-                        "<div class='office-holiday-label'>On holiday: "
-                        f"{hol_html}</div>"
-                    )
-                today_body = today_html + extra
-            else:
-                today_body = "<span class='office-empty'>No one scheduled in office.</span>"
+                extra = (
+                    "<div class='office-holiday-label'>On holiday: "
+                    f"{hol_html}</div>"
+                )
+            today_body = public_note + today_html + extra
+        else:
+            today_body = public_note + "<span class='office-empty'>No one scheduled in office.</span>"
     else:
         today_body = (
             "<span class='office-empty'>No scheduled office day "
@@ -1959,6 +1969,12 @@ def inject_css() -> None:
             margin-top: 0.25rem;
             font-size: 0.8rem;
             color: #92400e;
+        }
+        .office-public-note {
+            margin-bottom: 0.4rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #b91c1c;
         }
         .public-holiday-tag {
             display: inline-block;
