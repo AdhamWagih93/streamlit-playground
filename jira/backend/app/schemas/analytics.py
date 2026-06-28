@@ -88,6 +88,7 @@ class ProjectStats(BaseModel):
     by_status: list[CountItem]
     by_type: list[CountItem]
     by_priority: list[CountItem]
+    by_component: list[CountItem] = []
     velocity: list[VelocityPoint]
     avg_velocity_points: float
     avg_velocity_issues: float

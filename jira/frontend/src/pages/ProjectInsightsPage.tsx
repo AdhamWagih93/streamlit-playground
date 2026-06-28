@@ -176,6 +176,12 @@ export function ProjectInsightsPage() {
           <h3 className="chart-title">Issues by priority</h3>
           <BarChart items={stats.by_priority} />
         </div>
+        {stats.by_component.length > 0 && (
+          <div className="chart-card">
+            <h3 className="chart-title">Issues by component</h3>
+            <BarChart items={stats.by_component} />
+          </div>
+        )}
       </div>
 
       <div className="chart-card mt-16">

@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Board, Issue, IssueLink, IssueType, Priority, Project, Sprint, Status
+from app.models import Board, Component, Issue, IssueLink, IssueType, Priority, Project, Sprint, Status
+from app.models.issue import issue_components
 from app.schemas.analytics import (
     AttentionIssue,
     AttentionItem,
@@ -28,10 +29,14 @@ _VELOCITY_SPRINTS = 8
 _STALE_DAYS = 14        # open & untouched this long
 _STALE_WIP_DAYS = 7     # in-progress & untouched this long
 _HIGH_PRIORITY_RANK = 2  # Highest(1) / High(2)
+_LOW_PRIORITY_RANK = 4   # Low(4) / Lowest(5)
 
 # Weights for the per-project attention score (drives global ranking).
+# Low-priority backlog is guidance, not urgency -> weight 0 (it never inflates
+# the score); low-priority work that's actively in progress is mild waste -> 1.
 _W = {"overdue": 4, "blocked": 3, "high_priority": 3, "open_bugs": 2,
-      "unassigned": 1, "stale": 1, "stale_wip": 2, "at_risk_sprint": 6}
+      "unassigned": 1, "stale": 1, "stale_wip": 2, "at_risk_sprint": 6,
+      "low_priority": 0, "low_priority_wip": 1}
 
 
 def _apply_window(q, start: datetime | None, end: datetime | None):
@@ -108,6 +113,38 @@ def _by_priority(
         q = q.where(Issue.project_id.in_(project_ids or [-1]))
     q = _apply_window(q, start, end)
     return [CountItem(label=n, color=c, count=cnt) for n, c, _r, cnt in db.execute(q).all()]
+
+
+def _by_component(
+    db: Session, project_ids: list[int] | None,
+    start: datetime | None = None, end: datetime | None = None,
+) -> list[CountItem]:
+    """Issue counts per component, plus a synthetic "No component" bucket so
+    uncategorised work is visible and triageable."""
+    q = (
+        select(Component.name, func.count(Issue.id))
+        .join(issue_components, issue_components.c.component_id == Component.id)
+        .join(Issue, Issue.id == issue_components.c.issue_id)
+        .group_by(Component.name)
+        .order_by(func.count(Issue.id).desc())
+    )
+    if project_ids is not None:
+        q = q.where(Issue.project_id.in_(project_ids or [-1]))
+    q = _apply_window(q, start, end)
+    items = [CountItem(label=n, count=cnt) for n, cnt in db.execute(q).all()]
+
+    # Issues with no component at all (an issue may carry several components, so
+    # this is counted directly rather than derived from the totals above).
+    nq = select(func.count(Issue.id)).where(
+        ~Issue.id.in_(select(issue_components.c.issue_id))
+    )
+    if project_ids is not None:
+        nq = nq.where(Issue.project_id.in_(project_ids or [-1]))
+    nq = _apply_window(nq, start, end)
+    no_component = db.scalar(nq) or 0
+    if no_component:
+        items.append(CountItem(label="No component", count=int(no_component)))
+    return items
 
 
 def _velocity(
@@ -252,7 +289,14 @@ def compute_attention(db: Session, project: Project, with_samples: bool = True) 
             i for i in opens
             if i.status and i.status.category == "in_progress" and i.updated_at and i.updated_at < wip_cut
         ],
+        "low_priority": [i for i in opens if i.priority and i.priority.rank >= _LOW_PRIORITY_RANK],
     }
+    # Low-priority work that's actively in progress — effort going to low-value
+    # work while higher-priority items wait.
+    groups["low_priority_wip"] = [
+        i for i in groups["low_priority"]
+        if i.status and i.status.category == "in_progress"
+    ]
     sprint = _sprint_health(db, project.id, now)
     score = sum(_W[k] * len(v) for k, v in groups.items())
     if sprint and sprint.at_risk:
@@ -273,6 +317,12 @@ def compute_attention(db: Session, project: Project, with_samples: bool = True) 
                     f"project = {k} AND type = Bug AND statusCategory != done"),
         "stale": ("Stale", f"Open, untouched {_STALE_DAYS}+ days", "low",
                     f"project = {k} AND updated < -{_STALE_DAYS}d AND statusCategory != done ORDER BY updated ASC"),
+        "low_priority_wip": ("Low priority, in progress",
+                    "Low-priority work taking active effort — re-prioritise or pause for higher-value work", "medium",
+                    f"project = {k} AND priority IN (Low, Lowest) AND statusCategory = in_progress"),
+        "low_priority": ("Low priority backlog",
+                    "Defer, batch or close these to keep focus on higher-priority work", "low",
+                    f"project = {k} AND priority IN (Low, Lowest) AND statusCategory != done ORDER BY updated ASC"),
     }
 
     def _samples(key: str, items: list[Issue]) -> list[AttentionIssue]:
@@ -286,7 +336,8 @@ def compute_attention(db: Session, project: Project, with_samples: bool = True) 
             items = sorted(items, key=lambda i: (i.updated_at or now))
         return [_attn_issue(i, now) for i in items[:5]]
 
-    order = ["overdue", "high_priority", "blocked", "unassigned", "stale_wip", "open_bugs", "stale"]
+    order = ["overdue", "high_priority", "blocked", "unassigned", "stale_wip",
+             "open_bugs", "low_priority_wip", "stale", "low_priority"]
     items: list[AttentionItem] = []
     for key in order:
         grp = groups[key]
@@ -342,6 +393,7 @@ def project_stats(
         by_status=_by_status(db, pid, start, end),
         by_type=_by_type(db, pid, start, end),
         by_priority=_by_priority(db, pid, start, end),
+        by_component=_by_component(db, pid, start, end),
         velocity=velocity,
         avg_velocity_points=round(avg_pts, 2),
         avg_velocity_issues=round(avg_iss, 2),

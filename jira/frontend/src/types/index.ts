@@ -742,6 +742,7 @@ export interface ProjectStats {
   by_status: CountItem[];
   by_type: CountItem[];
   by_priority: CountItem[];
+  by_component: CountItem[];
   velocity: VelocityPoint[];
   avg_velocity_points: number;
   avg_velocity_issues: number;

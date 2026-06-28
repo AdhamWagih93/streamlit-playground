@@ -160,6 +160,73 @@ def test_project_attention_signals(client, admin_headers, meta):
 
 
 # ===========================================================================
+# 1b. Low-priority guidance: backlog + actively-worked-but-low signals
+# ===========================================================================
+def test_low_priority_guidance(client, admin_headers, meta):
+    project = create_project(client, admin_headers)
+    pid, key = project["id"], project["key"]
+    admin_id = meta["admin_id"]
+
+    # Two low-priority, open, assigned issues (so they don't also count as
+    # unassigned/overdue and muddy the score).
+    create_issue(client, admin_headers, meta, pid, "Low prio backlog",
+                 priority_name="Low", assignee_id=admin_id)
+    working = create_issue(client, admin_headers, meta, pid, "Lowest, being worked",
+                           priority_name="Lowest", assignee_id=admin_id)
+    in_progress = next(s for s in meta["statuses"] if s["category"] == "in_progress")
+    moved = client.patch(f"/api/issues/{working['key']}", headers=admin_headers,
+                         json={"status_id": in_progress["id"]})
+    assert moved.status_code == 200, moved.text
+
+    body = client.get(f"/api/analytics/projects/{key}", headers=admin_headers).json()
+    by_key = _attn(body["attention"])
+
+    # Low-priority backlog is surfaced with action-oriented, low-severity guidance.
+    assert "low_priority" in by_key
+    assert by_key["low_priority"]["count"] == 2
+    assert by_key["low_priority"]["severity"] == "low"
+    assert "defer" in by_key["low_priority"]["description"].lower()
+
+    # The one that's in progress is flagged as mild waste (medium severity).
+    assert by_key["low_priority_wip"]["count"] == 1
+    assert by_key["low_priority_wip"]["severity"] == "medium"
+
+    # Backlog volume alone must NOT inflate the urgency score: only the single
+    # in-progress low item contributes (weight 1); the backlog bucket is weight 0.
+    assert body["attention_score"] == 1
+
+    # Items remain ordered highest-severity first.
+    ranks = [SEVERITY_RANK[it["severity"]] for it in body["attention"]]
+    assert ranks == sorted(ranks)
+
+
+# ===========================================================================
+# 1c. Per-component breakdown (incl. a "No component" bucket)
+# ===========================================================================
+def test_by_component_breakdown(client, admin_headers, meta):
+    project = create_project(client, admin_headers)
+    pid, key = project["id"], project["key"]
+
+    backend = client.post(f"/api/projects/{pid}/components", headers=admin_headers,
+                          json={"name": "Backend"})
+    assert backend.status_code == 201, backend.text
+    cid = backend.json()["id"]
+    # An empty component must not appear in the breakdown.
+    client.post(f"/api/projects/{pid}/components", headers=admin_headers, json={"name": "Frontend"})
+
+    client.post("/api/issues", headers=admin_headers, json={
+        "project_id": pid, "type_id": meta["types"]["Story"]["id"],
+        "summary": "Has a component", "component_ids": [cid]})
+    create_issue(client, admin_headers, meta, pid, "No component on this one")
+
+    stats = client.get(f"/api/analytics/projects/{key}", headers=admin_headers).json()
+    bc = {c["label"]: c["count"] for c in stats["by_component"]}
+    assert bc.get("Backend") == 1
+    assert bc.get("No component") == 1
+    assert "Frontend" not in bc  # zero-issue components are omitted
+
+
+# ===========================================================================
 # 2. Active sprint health
 # ===========================================================================
 def test_sprint_health(client, admin_headers, meta):

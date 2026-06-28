@@ -112,6 +112,7 @@ def project_insights_csv(s: ProjectStats) -> bytes:
     _w(w, *[[c.label, c.count, c.category] for c in s.by_status])
     _w(w, [], ["By type", "Count"], *[[c.label, c.count] for c in s.by_type])
     _w(w, [], ["By priority", "Count"], *[[c.label, c.count] for c in s.by_priority])
+    _w(w, [], ["By component", "Count"], *[[c.label, c.count] for c in s.by_component])
     _w(w, [], ["Velocity sprint", "Committed", "Completed", "Completed issues"],
        *[[v.sprint_name, v.committed_points, v.completed_points, v.completed_issues] for v in s.velocity])
     _w(w, [], ["Needs attention (current)", "Count", "Severity"],
@@ -144,6 +145,9 @@ def project_insights_md(s: ProjectStats) -> bytes:
     lines += [f"| {c.label} | {c.count} |" for c in s.by_status]
     lines += ["", "## By type", "| Type | Count |", "|---|---|"]
     lines += [f"| {c.label} | {c.count} |" for c in s.by_type]
+    if s.by_component:
+        lines += ["", "## By component", "| Component | Count |", "|---|---|"]
+        lines += [f"| {c.label} | {c.count} |" for c in s.by_component]
     if s.velocity:
         lines += ["", "## Velocity", "| Sprint | Committed | Completed |", "|---|---|---|"]
         lines += [f"| {v.sprint_name} | {v.committed_points} | {v.completed_points} |" for v in s.velocity]

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
 import { UserPicker } from './UserPicker';
 import { LabelInput } from './LabelInput';
+import { ComponentInput } from './ComponentInput';
 import { ProjectBrief, IssueType, Priority, User, IssueDetail } from '../types';
 import { listProjects } from '../api/projects';
 import { getIssueTypes, getPriorities } from '../api/meta';
@@ -39,6 +40,7 @@ export function CreateIssueModal({
   const [assignee, setAssignee] = useState<User | null>(null);
   const [storyPoints, setStoryPoints] = useState('');
   const [labels, setLabels] = useState<string[]>([]);
+  const [componentIds, setComponentIds] = useState<string[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -57,11 +59,14 @@ export function CreateIssueModal({
       setAssignee(null);
       setStoryPoints('');
       setLabels([]);
+      setComponentIds([]);
       setError('');
     }
   }, [open, defaultProjectId]);
 
   useEffect(() => {
+    // Components are project-scoped — clear any selection when the project changes.
+    setComponentIds([]);
     if (!projectId) {
       setTypes([]);
       return;
@@ -93,6 +98,7 @@ export function CreateIssueModal({
         parent_id: defaultParentId || undefined,
         story_points: storyPoints ? Number(storyPoints) : undefined,
         label_names: labels,
+        component_ids: componentIds.length ? componentIds : undefined,
       });
       onCreated?.(issue);
       onClose();
@@ -181,6 +187,11 @@ export function CreateIssueModal({
       <div className="field">
         <label>Labels</label>
         <LabelInput value={labels} onChange={setLabels} />
+      </div>
+
+      <div className="field">
+        <label>Components</label>
+        <ComponentInput projectId={projectId} value={componentIds} onChange={setComponentIds} />
       </div>
     </Modal>
   );

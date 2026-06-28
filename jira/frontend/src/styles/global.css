@@ -665,6 +665,9 @@ input, textarea, select {
   padding: 8px 12px; cursor: pointer;
 }
 .autocomplete-item:hover, .autocomplete-item.active { background: var(--indigo-50); }
+.autocomplete-item.create { color: var(--indigo-600, #4f46e5); font-weight: 500; }
+.field .hint, .hint { font-size: 12px; color: var(--text-muted, #64748b); }
+.field-error { font-size: 12px; color: var(--red-600, #dc2626); margin-top: 4px; }
 
 /* ---------- TQL input: autocomplete + help ---------- */
 .tql-input-wrap { position: relative; }
