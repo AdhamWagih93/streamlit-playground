@@ -543,15 +543,21 @@ def render_week_table(
 
         public_name = public_holidays.get(iso) if public_holidays else None
         if public_name:
+            # Subtle "Day off for <holiday>" note in the Day column; the member
+            # cells still show the normal rotation so it's clear who should be in.
+            tag_text = (
+                public_name
+                if public_name.lower().startswith("day off")
+                else f"Day off for {public_name}"
+            )
             day_label = (
                 f"{day_label} "
-                f"<span class='public-holiday-tag'>{public_name}</span>"
+                f"<span class='public-holiday-tag'>{tag_text}</span>"
             )
 
         row_cells = [f"<td class='day-cell{day_extra_cls}'>{day_label}</td>"]
         assignments = days[iso]
         for member in TEAM_MEMBERS:
-            is_public = public_holidays is not None and public_holidays.get(iso)
             is_member_holiday = holidays is not None and member in holidays.get(iso, [])
             status = assignments.get(member, "WFH")
             if is_member_holiday:
@@ -559,14 +565,10 @@ def render_week_table(
                 css_class = "holiday-cell"
                 label = "Holiday"
             elif status == "WFO":
-                # Still show who should be at the office, even on a public holiday.
+                # Show who should be at the office, even on a public holiday.
                 is_skippable = (iso, member) in skippable_cells
                 css_class = "wfo-cell wfo-skippable-cell" if is_skippable else "wfo-cell"
                 label = "Office"
-            elif is_public:
-                # Short tag (saves space vs. "Public holiday").
-                css_class = "holiday-cell"
-                label = "Public"
             else:
                 css_class = "wfh-cell"
                 label = "Home"
@@ -1981,9 +1983,9 @@ def inject_css() -> None:
             margin-left: 0.35rem;
             padding: 0.06rem 0.45rem;
             border-radius: 999px;
-            background: #fee2e2;
-            color: #b91c1c;
-            font-size: 0.7rem;
+            background: #f3f4f6;
+            color: #9ca3af;
+            font-size: 0.68rem;
             font-weight: 500;
         }
         .holiday-card-grid {
