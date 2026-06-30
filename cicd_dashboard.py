@@ -12744,7 +12744,10 @@ def _fetch_next_versions_all() -> dict:
     whether the index is keyed per-app or per-project, and regardless of whether
     ``application`` is aggregatable (the terms-agg approach silently returned
     nothing when it wasn't)."""
-    out: dict = {"by_app": {}, "by_project": {}}
+    # ``docs`` carries every doc's identity (for orphan / duplicate detection),
+    # ``app_counts`` / ``proj_counts`` count how many docs share each key.
+    out: dict = {"by_app": {}, "by_project": {}, "docs": [],
+                 "app_counts": {}, "proj_counts": {}}
     try:
         resp = cached_search(
             IDX["versions"],
@@ -12760,15 +12763,24 @@ def _fetch_next_versions_all() -> dict:
         _s = _h.get("_source", {}) or {}
         _rec = {_br: str(_s.get(f"next_{_br}") or "").strip()
                 for _br in _NEXT_VERSION_BRANCHES}
-        if not any(_rec.values()):
-            continue
         _app = str(_s.get("application") or _s.get("applicationname")
                    or _s.get("app") or "").strip()
         _proj = str(_s.get("project") or _s.get("projectname") or "").strip()
+        _app_lc, _proj_lc = _app.lower(), _proj.lower()
+        # Record EVERY doc's identity + per-key counts (even value-less docs —
+        # an empty doc can still be an orphan or a duplicate).
+        out["docs"].append({"app": _app, "app_lc": _app_lc,
+                            "project": _proj, "proj_lc": _proj_lc})
+        if _app_lc:
+            out["app_counts"][_app_lc] = out["app_counts"].get(_app_lc, 0) + 1
+        if _proj_lc:
+            out["proj_counts"][_proj_lc] = out["proj_counts"].get(_proj_lc, 0) + 1
+        if not any(_rec.values()):
+            continue
         if _app:
-            out["by_app"].setdefault(_app.lower(), _rec)
+            out["by_app"].setdefault(_app_lc, _rec)
         if _proj:
-            out["by_project"].setdefault(_proj.lower(), _rec)
+            out["by_project"].setdefault(_proj_lc, _rec)
     return out
 
 
@@ -31576,7 +31588,40 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     "app": _app_v, "project": _proj_v, "issues": _issues,
                 })
         _iv_nv_issues.sort(key=lambda d: (d["project"].lower(), d["app"].lower()))
-    _iv_nv_total = len(_iv_nv_issues)
+    # ── Orphan + duplicate version-lookup documents (index hygiene) ────────
+    # Orphan = a doc whose application/project matches NO inventory app or
+    # project (matched against the FULL fleet, not the filtered view, so a
+    # project filter doesn't make everything look orphaned). Duplicate = the
+    # same application/project key appears in more than one doc.
+    _iv_nv_orphans: list[dict] = []
+    _iv_nv_dups: list[dict] = []
+    if _is_admin:
+        _inv_app_lc = {(_r.get("application") or "").strip().lower()
+                       for _r in _inv_rows_all if _r.get("application")}
+        _inv_proj_lc = {(_r.get("project") or "").strip().lower()
+                        for _r in _inv_rows_all if _r.get("project")}
+        _seen_orphan: set = set()
+        for _d in _iv_next_versions.get("docs", []):
+            _al, _pl = _d["app_lc"], _d["proj_lc"]
+            if not (_al or _pl):
+                continue  # doc carries no identity at all — skip
+            if (_al and _al in _inv_app_lc) or (_pl and _pl in _inv_proj_lc):
+                continue  # matches an app or a project → not orphan
+            _okey = (_al, _pl)
+            if _okey in _seen_orphan:
+                continue
+            _seen_orphan.add(_okey)
+            _iv_nv_orphans.append({"app": _d["app"] or "—",
+                                   "project": _d["project"] or "—"})
+        for _al, _cnt in (_iv_next_versions.get("app_counts") or {}).items():
+            if _cnt > 1:
+                _iv_nv_dups.append({"kind": "application", "key": _al, "count": _cnt})
+        for _pl, _cnt in (_iv_next_versions.get("proj_counts") or {}).items():
+            if _cnt > 1:
+                _iv_nv_dups.append({"kind": "project", "key": _pl, "count": _cnt})
+        _iv_nv_orphans.sort(key=lambda d: (d["project"].lower(), d["app"].lower()))
+        _iv_nv_dups.sort(key=lambda d: (-d["count"], d["key"]))
+    _iv_nv_total = len(_iv_nv_issues) + len(_iv_nv_orphans) + len(_iv_nv_dups)
 
     # ── Action toolbar — Prisma report viewer only ─────────────────────────
     # Build / Deploy / Release triggers were moved into the dedicated
@@ -31823,9 +31868,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     f"⚠ {_iv_nv_total} version issue"
                     f"{'s' if _iv_nv_total != 1 else ''}",
                     use_container_width=False,
-                    help="Apps with missing next-version fields in "
-                         "ef-cicd-versions-lookup, or a next_hotfix that doesn't "
-                         "extend the current PRD version. Admin-only.",
+                    help="Apps missing / mis-set next-version fields in "
+                         "ef-cicd-versions-lookup, plus index hygiene: documents "
+                         "that match no app/project (orphans) and duplicated "
+                         "documents. Admin-only.",
                 ):
                     _nv_rows = "".join(
                         f'<tr><td class="iv-dup-key">{html.escape(_x["app"])}'
@@ -31838,17 +31884,44 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         + '</td></tr>'
                         for _x in _iv_nv_issues
                     )
+                    _apps_sec = (
+                        f'<div class="iv-dup-sec-head">▢ Apps with issues '
+                        f'<b>{len(_iv_nv_issues)}</b></div>'
+                        f'<table class="iv-dup-table"><tbody>{_nv_rows}'
+                        f'</tbody></table>' if _iv_nv_issues else "")
+                    # Orphan documents — match no inventory app/project.
+                    _orphan_rows = "".join(
+                        f'<tr><td class="iv-dup-key">{html.escape(_o["app"])}</td>'
+                        f'<td><span class="iv-dup-proj">'
+                        f'{html.escape(_o["project"])}</span></td></tr>'
+                        for _o in _iv_nv_orphans)
+                    _orphan_sec = (
+                        f'<div class="iv-dup-sec-head">⊘ Orphan documents '
+                        f'<b>{len(_iv_nv_orphans)}</b></div>'
+                        '<table class="iv-dup-table"><thead><tr>'
+                        '<th>application</th><th>project</th></tr></thead>'
+                        f'<tbody>{_orphan_rows}</tbody></table>'
+                        if _iv_nv_orphans else "")
+                    # Duplicate documents — same key in >1 doc.
+                    _dup_rows = "".join(
+                        f'<tr><td class="iv-dup-key">{html.escape(_du["key"])}</td>'
+                        f'<td><span class="iv-dup-proj">{html.escape(_du["kind"])}'
+                        f'</span> · <b>{_du["count"]}</b> docs</td></tr>'
+                        for _du in _iv_nv_dups)
+                    _dup_sec = (
+                        f'<div class="iv-dup-sec-head">⧉ Duplicated documents '
+                        f'<b>{len(_iv_nv_dups)}</b></div>'
+                        f'<table class="iv-dup-table"><tbody>{_dup_rows}'
+                        f'</tbody></table>' if _iv_nv_dups else "")
                     st.markdown(
                         '<div class="iv-dup-intro">Per-branch next versions from '
-                        '<code>ef-cicd-versions-lookup</code>. Every app must set '
-                        '<code>next_develop</code>, <code>next_release</code>, '
-                        '<code>next_stress</code> and <code>next_hotfix</code>, '
-                        'and <code>next_hotfix</code> must begin with the current '
-                        'PRD version (e.g. PRD 1.3.1 → 1.3.1…).</div>'
-                        f'<div class="iv-dup-sec-head">▢ Apps with issues '
-                        f'<b>{_iv_nv_total}</b></div>'
-                        f'<table class="iv-dup-table"><tbody>{_nv_rows}'
-                        f'</tbody></table>',
+                        '<code>ef-cicd-versions-lookup</code>. Every app must have '
+                        'a record with <code>next_develop</code> / '
+                        '<code>next_release</code> (and <code>next_hotfix</code> '
+                        'beginning with the live PRD version). <b>Orphan</b> '
+                        'documents match no app/project; <b>duplicated</b> '
+                        'documents repeat an application/project key.</div>'
+                        + _apps_sec + _orphan_sec + _dup_sec,
                         unsafe_allow_html=True,
                     )
 

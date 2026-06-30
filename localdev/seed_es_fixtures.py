@@ -210,6 +210,15 @@ def gen_versions():
             "next_develop": f"{qcv}", "next_release": f"{qcv}",
             "next_stress": "", "next_hotfix": f"{prd_ver}-hf1",
         })
+    # Index-hygiene violations to exercise the version-lookup warnings:
+    #  - ORPHAN: an app/project that exists in no inventory row.
+    out.append({"id": "ver-ghost", "application": "ghost-service",
+                "project": "retired", "next_develop": "9.9.9",
+                "next_release": "9.9.9", "next_stress": "", "next_hotfix": ""})
+    #  - DUPLICATE: a second document for an existing app (payments/api).
+    out.append({"id": "ver-api-dup", "application": "api", "project": "payments",
+                "next_develop": "1.5.1", "next_release": "1.5.1",
+                "next_stress": "", "next_hotfix": "1.4.2-hf2"})
     _dump("ef-cicd-versions-lookup", out)
 
 
