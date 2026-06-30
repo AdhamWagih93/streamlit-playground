@@ -12744,10 +12744,12 @@ def _fetch_next_versions_all() -> dict:
     whether the index is keyed per-app or per-project, and regardless of whether
     ``application`` is aggregatable (the terms-agg approach silently returned
     nothing when it wasn't)."""
-    # ``docs`` carries every doc's identity (for orphan / duplicate detection),
-    # ``app_counts`` / ``proj_counts`` count how many docs share each key.
+    # ``docs`` carries every doc's identity (for orphan detection);
+    # ``pair_counts`` counts docs per (project, application) PAIR (a duplicate is
+    # the same project+app appearing in more than one doc — not just a repeated
+    # project), with ``pair_display`` holding the first-seen casing for display.
     out: dict = {"by_app": {}, "by_project": {}, "docs": [],
-                 "app_counts": {}, "proj_counts": {}}
+                 "pair_counts": {}, "pair_display": {}}
     try:
         resp = cached_search(
             IDX["versions"],
@@ -12771,10 +12773,12 @@ def _fetch_next_versions_all() -> dict:
         # an empty doc can still be an orphan or a duplicate).
         out["docs"].append({"app": _app, "app_lc": _app_lc,
                             "project": _proj, "proj_lc": _proj_lc})
-        if _app_lc:
-            out["app_counts"][_app_lc] = out["app_counts"].get(_app_lc, 0) + 1
-        if _proj_lc:
-            out["proj_counts"][_proj_lc] = out["proj_counts"].get(_proj_lc, 0) + 1
+        # Count by the (project, application) pair so duplicates mean the SAME
+        # project+app in two docs. Only docs that carry at least one identity.
+        if _app_lc or _proj_lc:
+            _pair = (_proj_lc, _app_lc)
+            out["pair_counts"][_pair] = out["pair_counts"].get(_pair, 0) + 1
+            out["pair_display"].setdefault(_pair, {"app": _app, "project": _proj})
         if not any(_rec.values()):
             continue
         if _app:
@@ -31548,6 +31552,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     # next_hotfix must start with the current PRD version (1.3.1 → 1.3.1…).
     # [{app, project, issues:[str]}]
     _iv_nv_issues: list[dict] = []
+    # "missing: next_hotfix" is noisy (many apps legitimately lag a hotfix
+    # version), so it's HIDDEN by default — a toggle inside the warning popover
+    # opts it into view. The widget below persists this flag in session_state,
+    # and the detector reads it here (set on the previous run's toggle).
+    _iv_nv_show_hotfix = bool(st.session_state.get("iv_nv_show_hotfix_v1", False))
+    _iv_nv_hotfix_hidden = 0  # count of next_hotfix warnings suppressed by the toggle
     if _is_admin:
         _seen_nv: set[str] = set()
         for _r_v in _inv_rows_filtered:
@@ -31576,7 +31586,11 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 # legitimately absent.
                 _hot = (_nv.get("hotfix") or "").strip()
                 if _ever_prd and not _hot:
-                    _issues.append("missing: next_hotfix (app has PRD history)")
+                    # Hidden by default — only surfaced when the toggle is on.
+                    if _iv_nv_show_hotfix:
+                        _issues.append("missing: next_hotfix (app has PRD history)")
+                    else:
+                        _iv_nv_hotfix_hidden += 1
                 # When live on PRD, next_hotfix must begin with the live PRD
                 # version (1.3.1 → 1.3.1…) so a hotfix extends what's running.
                 elif _prd_live and _prd_v and _hot and not _hot.startswith(_prd_v):
@@ -31613,15 +31627,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _seen_orphan.add(_okey)
             _iv_nv_orphans.append({"app": _d["app"] or "—",
                                    "project": _d["project"] or "—"})
-        for _al, _cnt in (_iv_next_versions.get("app_counts") or {}).items():
+        _pair_disp = _iv_next_versions.get("pair_display") or {}
+        for _pair, _cnt in (_iv_next_versions.get("pair_counts") or {}).items():
             if _cnt > 1:
-                _iv_nv_dups.append({"kind": "application", "key": _al, "count": _cnt})
-        for _pl, _cnt in (_iv_next_versions.get("proj_counts") or {}).items():
-            if _cnt > 1:
-                _iv_nv_dups.append({"kind": "project", "key": _pl, "count": _cnt})
+                _d = _pair_disp.get(_pair) or {}
+                _iv_nv_dups.append({"app": _d.get("app") or "—",
+                                    "project": _d.get("project") or "—",
+                                    "count": _cnt})
         _iv_nv_orphans.sort(key=lambda d: (d["project"].lower(), d["app"].lower()))
-        _iv_nv_dups.sort(key=lambda d: (-d["count"], d["key"]))
+        _iv_nv_dups.sort(key=lambda d: (-d["count"], d["project"].lower(),
+                                        d["app"].lower()))
     _iv_nv_total = len(_iv_nv_issues) + len(_iv_nv_orphans) + len(_iv_nv_dups)
+    # The popover/badge must still appear when the ONLY problems are hidden
+    # next_hotfix warnings, otherwise the toggle to reveal them is unreachable.
+    _iv_nv_show = bool(_iv_nv_total or _iv_nv_hotfix_hidden)
 
     # ── Action toolbar — Prisma report viewer only ─────────────────────────
     # Build / Deploy / Release triggers were moved into the dedicated
@@ -31687,7 +31706,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         )
 
         # ── Data-quality warnings row (duplicates + namespaces + versions) ──
-        if (_iv_dup_total or _iv_ns_total or _iv_nv_total
+        if (_iv_dup_total or _iv_ns_total or _iv_nv_show
                 or _iv_repo_total or _iv_url_total):
             _warn_cols = st.columns([1.3, 1.3, 1.3, 1.3, 1.3, 1.5])
         else:
@@ -31861,18 +31880,34 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     )
 
         # ── Next-version hygiene warning (admin-only, sibling popover) ──
-        if _iv_nv_total:
+        if _iv_nv_show:
+            _nv_badge = (f"⚠ {_iv_nv_total} version issue"
+                         f"{'s' if _iv_nv_total != 1 else ''}"
+                         if _iv_nv_total else "⚠ version hygiene")
+            if _iv_nv_hotfix_hidden:
+                _nv_badge += f" · +{_iv_nv_hotfix_hidden} hidden"
             with (_warn_cols[2] if _warn_cols else st.container()), \
                     st.container(key="cc_iv_nvwarn_pop"):
                 with st.popover(
-                    f"⚠ {_iv_nv_total} version issue"
-                    f"{'s' if _iv_nv_total != 1 else ''}",
+                    _nv_badge,
                     use_container_width=False,
                     help="Apps missing / mis-set next-version fields in "
                          "ef-cicd-versions-lookup, plus index hygiene: documents "
                          "that match no app/project (orphans) and duplicated "
                          "documents. Admin-only.",
                 ):
+                    # next_hotfix warnings are noisy — opt them into view.
+                    st.toggle(
+                        (f"Show {_iv_nv_hotfix_hidden} hidden "
+                         "“missing next_hotfix” warning"
+                         f"{'s' if _iv_nv_hotfix_hidden != 1 else ''}")
+                        if _iv_nv_hotfix_hidden
+                        else "Show “missing next_hotfix” warnings",
+                        key="iv_nv_show_hotfix_v1",
+                        help="Apps with PRD history but no next_hotfix set. "
+                             "Hidden by default because it's commonly expected "
+                             "to lag; toggle on to review them.",
+                    )
                     _nv_rows = "".join(
                         f'<tr><td class="iv-dup-key">{html.escape(_x["app"])}'
                         + (f'<div class="iv-dup-projs">in: '
@@ -31902,17 +31937,20 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                         '<th>application</th><th>project</th></tr></thead>'
                         f'<tbody>{_orphan_rows}</tbody></table>'
                         if _iv_nv_orphans else "")
-                    # Duplicate documents — same key in >1 doc.
+                    # Duplicate documents — same (project, application) pair in
+                    # more than one doc.
                     _dup_rows = "".join(
-                        f'<tr><td class="iv-dup-key">{html.escape(_du["key"])}</td>'
-                        f'<td><span class="iv-dup-proj">{html.escape(_du["kind"])}'
-                        f'</span> · <b>{_du["count"]}</b> docs</td></tr>'
+                        f'<tr><td class="iv-dup-key">{html.escape(_du["app"])}'
+                        f'<div class="iv-dup-projs">in: <span class="iv-dup-proj">'
+                        f'{html.escape(_du["project"])}</span></div></td>'
+                        f'<td><b>{_du["count"]}</b> docs</td></tr>'
                         for _du in _iv_nv_dups)
                     _dup_sec = (
                         f'<div class="iv-dup-sec-head">⧉ Duplicated documents '
                         f'<b>{len(_iv_nv_dups)}</b></div>'
-                        f'<table class="iv-dup-table"><tbody>{_dup_rows}'
-                        f'</tbody></table>' if _iv_nv_dups else "")
+                        '<table class="iv-dup-table"><thead><tr>'
+                        '<th>application / project</th><th>count</th></tr></thead>'
+                        f'<tbody>{_dup_rows}</tbody></table>' if _iv_nv_dups else "")
                     st.markdown(
                         '<div class="iv-dup-intro">Per-branch next versions from '
                         '<code>ef-cicd-versions-lookup</code>. Every app must have '

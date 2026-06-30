@@ -203,12 +203,15 @@ def gen_security():
 
 def gen_versions():
     out = []
-    for proj, app, co, dev, qc, ops, jk, prd_ver, qcv, plat in APPS:
+    for _i, (proj, app, co, dev, qc, ops, jk, prd_ver, qcv, plat) in enumerate(APPS):
         base = prd_ver.rsplit(".", 1)[0]
+        # First app: PRD history but no next_hotfix → exercises the (hidden by
+        # default) "missing next_hotfix" warning + its reveal toggle.
+        _hot = "" if _i == 0 else f"{prd_ver}-hf1"
         out.append({
             "id": f"ver-{app}", "application": app, "project": proj,
             "next_develop": f"{qcv}", "next_release": f"{qcv}",
-            "next_stress": "", "next_hotfix": f"{prd_ver}-hf1",
+            "next_stress": "", "next_hotfix": _hot,
         })
     # Index-hygiene violations to exercise the version-lookup warnings:
     #  - ORPHAN: an app/project that exists in no inventory row.
