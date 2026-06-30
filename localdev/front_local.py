@@ -57,7 +57,7 @@ if os.environ.get("LOCALDEV_EAGER_TABS"):
     for _flag in ("_tab_open_teams_v1", "_tab_open_eventlog_v1",
                   "_tab_open_actions_v1", "_tab_open_sync_v1",
                   "_tab_open_history_v1", "_tab_open_ado_v1",
-                  "_tab_open_arch_v1"):
+                  "_tab_open_arch_v1", "_tab_open_tp_v1"):
         st.session_state.setdefault(_flag, True)
 
 # Run the real dashboard (repo-root file) as the script. It calls

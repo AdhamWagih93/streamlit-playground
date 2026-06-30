@@ -4776,6 +4776,122 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-size: 0.7rem;
 }
 
+/* ── Technologies & Platforms tab ──────────────────────────────────────── */
+.tp-kpis {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+    margin: 2px 0 14px 0;
+}
+@media (max-width: 900px) { .tp-kpis { grid-template-columns: repeat(2, 1fr); } }
+.tp-kpi {
+    padding: 12px 14px; border-radius: 13px;
+    border: 1px solid var(--cc-border); background: var(--cc-surface);
+    border-top: 3px solid var(--cc-border-hi);
+    box-shadow: 0 2px 6px rgba(10,14,30,.03); cursor: help;
+}
+.tp-kpi.is-build { border-top-color: var(--cc-accent); }
+.tp-kpi.is-deploy { border-top-color: var(--cc-teal); }
+.tp-kpi.is-plat { border-top-color: var(--cc-blue); }
+.tp-kpi.is-apps { border-top-color: var(--cc-amber); }
+.tp-kpi.is-cov { border-top-color: var(--cc-green); }
+.tp-kpi-lbl {
+    font-family: var(--cc-mono); font-size: 0.6rem; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--cc-text-mute); font-weight: 700;
+}
+.tp-kpi-val {
+    font-family: var(--cc-data, var(--cc-mono)); font-size: 1.9rem;
+    font-weight: 700; color: var(--cc-text); line-height: 1.05; margin: 5px 0 2px;
+    font-variant-numeric: tabular-nums;
+}
+.tp-kpi-sub { font-size: 0.68rem; color: var(--cc-text-dim); line-height: 1.35; }
+/* most / least highlight cards */
+.tp-hl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 14px; }
+@media (max-width: 760px) { .tp-hl-grid { grid-template-columns: 1fr; } }
+.tp-hl {
+    padding: 13px 15px; border-radius: 13px; border: 1px solid var(--cc-border);
+    background: linear-gradient(180deg, var(--cc-surface), var(--cc-surface2));
+    position: relative; overflow: hidden;
+}
+.tp-hl.is-most  { border-left: 4px solid var(--cc-green); }
+.tp-hl.is-least { border-left: 4px solid var(--cc-amber); }
+.tp-hl-cap {
+    font-family: var(--cc-mono); font-size: 0.62rem; text-transform: uppercase;
+    letter-spacing: 0.12em; font-weight: 700; color: var(--cc-text-mute);
+}
+.tp-hl.is-most .tp-hl-cap  { color: var(--cc-green); }
+.tp-hl.is-least .tp-hl-cap { color: var(--cc-amber); }
+.tp-hl-name {
+    font-family: var(--cc-sans); font-size: 1.2rem; font-weight: 800;
+    color: var(--cc-text); margin: 4px 0 2px; word-break: break-word;
+}
+.tp-hl-meta { font-size: 0.74rem; color: var(--cc-text-dim); }
+.tp-hl-meta b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
+/* ranked usage bars */
+.tp-rank { margin: 2px 0 6px; }
+.tp-rank-row {
+    display: grid; grid-template-columns: 34% 1fr 92px; align-items: center;
+    gap: 10px; padding: 3px 0;
+}
+.tp-rank-name {
+    font-family: var(--cc-sans); font-size: 0.82rem; font-weight: 600;
+    color: var(--cc-text); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tp-rank-name.is-unset { color: var(--cc-text-mute); font-style: italic; }
+.tp-rank-track {
+    position: relative; height: 16px; border-radius: 8px;
+    background: var(--cc-surface2); overflow: hidden;
+}
+.tp-rank-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px;
+    background: linear-gradient(90deg, var(--cc-accent), var(--cc-teal));
+    min-width: 2px;
+}
+.tp-rank-fill.is-unset { background: repeating-linear-gradient(
+    45deg, var(--cc-border-hi), var(--cc-border-hi) 5px, var(--cc-surface2) 5px, var(--cc-surface2) 10px); }
+.tp-rank-val {
+    font-family: var(--cc-data, var(--cc-mono)); font-size: 0.74rem;
+    color: var(--cc-text-dim); text-align: right; font-variant-numeric: tabular-nums;
+}
+.tp-rank-val b { color: var(--cc-text); }
+/* cross-reference matrix */
+.tp-mx-wrap { overflow-x: auto; border: 1px solid var(--cc-border); border-radius: 12px; }
+.tp-mx { border-collapse: collapse; width: 100%; font-size: 0.74rem; }
+.tp-mx th, .tp-mx td {
+    padding: 6px 9px; text-align: center; border-bottom: 1px solid var(--cc-border);
+    white-space: nowrap;
+}
+.tp-mx thead th {
+    position: sticky; top: 0; background: var(--cc-surface2); z-index: 1;
+    font-family: var(--cc-mono); font-size: 0.62rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--cc-text-dim); font-weight: 700;
+}
+.tp-mx tbody th {
+    text-align: left; font-family: var(--cc-sans); font-weight: 700;
+    color: var(--cc-text); background: var(--cc-surface); position: sticky;
+    left: 0; z-index: 1; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+}
+.tp-mx td.is-z { color: var(--cc-text-mute); }
+.tp-mx td .tp-cell {
+    display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6px;
+    font-family: var(--cc-data, var(--cc-mono)); font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+.tp-mx tfoot td, .tp-mx tfoot th {
+    font-family: var(--cc-mono); font-size: 0.64rem; color: var(--cc-text-mute);
+    background: var(--cc-surface2); font-weight: 700;
+}
+.tp-note {
+    font-size: 0.72rem; color: var(--cc-text-dim); line-height: 1.5;
+    margin: 8px 0 2px;
+}
+.tp-chip {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid var(--cc-border); background: var(--cc-surface2);
+    font-family: var(--cc-mono); font-size: 0.68rem; color: var(--cc-text-dim);
+    margin: 2px 4px 2px 0;
+}
+.tp-chip b { color: var(--cc-amber); }
+
 /* ── Teams matrix: companies (columns) × roles (rows) ──────────────────── */
 .tm-mx-co {
     display: flex; align-items: center; gap: 6px;
@@ -15346,6 +15462,287 @@ def _render_architecture() -> None:
         '</tbody></table>'
         '</div>',
         unsafe_allow_html=True)
+
+
+# =============================================================================
+# TECHNOLOGIES & PLATFORMS TAB — build/deploy tech + platform analytics
+# =============================================================================
+# A consolidated, read-only view of the fleet's technology footprint: which
+# build technologies, deployment technologies and deploy platforms are most and
+# least used, cross-referenced against the teams and projects that own them.
+# Pure inventory-row driven (build_technology / deploy_technology /
+# deploy_platform + teams + project), so it costs nothing beyond the rows the
+# inventory tab already loaded. Scope follows the Filter Console (filtered rows).
+
+# (dim-key, label, row-field, KPI css-modifier, accent colour)
+_TP_DIMS: list[tuple[str, str, str, str, str]] = [
+    ("build",    "Build technology",      "build_technology",  "is-build",  "var(--cc-accent)"),
+    ("deploy",   "Deployment technology", "deploy_technology", "is-deploy", "var(--cc-teal)"),
+    ("platform", "Deploy platform",       "deploy_platform",   "is-plat",   "var(--cc-blue)"),
+]
+_TP_UNSET = "— unset —"
+_TP_MX_COL_CAP = 14   # max cross-reference columns (teams/projects) before "+N more"
+_TP_MX_ROW_CAP = 20   # max cross-reference rows (technology values)
+
+
+def _tp_row_teams(r: dict) -> set[str]:
+    """Every distinct team owning this app across any ``*_team`` field."""
+    out: set[str] = set()
+    for fld, vals in (r.get("teams") or {}).items():
+        if not str(fld).endswith("_team"):
+            continue
+        _it = vals if isinstance(vals, (list, tuple, set)) else ([vals] if vals else [])
+        for v in _it:
+            _v = str(v).strip()
+            if _v:
+                out.add(_v)
+    return out
+
+
+def _tp_heat(val: int, vmax: int) -> str:
+    """Inline style for a matrix cell — teal shade scaled to the column max."""
+    if val <= 0 or vmax <= 0:
+        return ""
+    _t = val / vmax
+    # interpolate light teal → deep teal
+    if _t >= 0.75:
+        _bg, _fg = "#0f766e", "#ffffff"
+    elif _t >= 0.45:
+        _bg, _fg = "#14b8a6", "#063b36"
+    elif _t >= 0.20:
+        _bg, _fg = "#5eead4", "#063b36"
+    else:
+        _bg, _fg = "#ccfbf1", "#0b5048"
+    return f'background:{_bg};color:{_fg};'
+
+
+@st.fragment
+def _render_tech_platforms() -> None:
+    from collections import Counter, defaultdict
+
+    _rows = (st.session_state.get("_inv_rows_filtered_v1")
+             or st.session_state.get("_inv_rows_all_v1") or [])
+    _scoped = bool(st.session_state.get("_inv_rows_filtered_v1"))
+    if not _rows:
+        st.info("No inventory rows in scope yet — adjust the Filter Console, or "
+                "wait for the inventory tab to finish loading.")
+        return
+
+    # ── Aggregate once: per-dimension value counts + cross-ref maps ──────────
+    _counts: dict[str, Counter] = {k: Counter() for k, *_ in _TP_DIMS}
+    _by_team: dict[str, dict] = {k: defaultdict(Counter) for k, *_ in _TP_DIMS}
+    _by_proj: dict[str, dict] = {k: defaultdict(Counter) for k, *_ in _TP_DIMS}
+    _fully = 0
+    _total = len(_rows)
+    for r in _rows:
+        _proj = (str(r.get("project") or "").strip()) or _TP_UNSET
+        _teams = _tp_row_teams(r)
+        _all_set = True
+        for _k, _lbl, _field, _mod, _col in _TP_DIMS:
+            _val = (str(r.get(_field) or "").strip()) or _TP_UNSET
+            if _val == _TP_UNSET:
+                _all_set = False
+            _counts[_k][_val] += 1
+            _by_proj[_k][_val][_proj] += 1
+            for _t in _teams:
+                _by_team[_k][_val][_t] += 1
+        if _all_set:
+            _fully += 1
+
+    def _distinct(k: str) -> int:
+        return len([v for v in _counts[k] if v != _TP_UNSET])
+
+    # ── KPI tiles ───────────────────────────────────────────────────────────
+    _cov_pct = (100.0 * _fully / _total) if _total else 0.0
+    st.markdown(
+        '<div class="tp-kpis">'
+        f'<div class="tp-kpi is-build" title="Distinct non-empty build_technology '
+        f'values across {_total} app(s) in scope.">'
+        f'<div class="tp-kpi-lbl">Build techs</div>'
+        f'<div class="tp-kpi-val">{_distinct("build")}</div>'
+        f'<div class="tp-kpi-sub">distinct build technologies</div></div>'
+        f'<div class="tp-kpi is-deploy" title="Distinct non-empty '
+        f'deploy_technology values.">'
+        f'<div class="tp-kpi-lbl">Deploy techs</div>'
+        f'<div class="tp-kpi-val">{_distinct("deploy")}</div>'
+        f'<div class="tp-kpi-sub">distinct deployment technologies</div></div>'
+        f'<div class="tp-kpi is-plat" title="Distinct non-empty deploy_platform '
+        f'values.">'
+        f'<div class="tp-kpi-lbl">Platforms</div>'
+        f'<div class="tp-kpi-val">{_distinct("platform")}</div>'
+        f'<div class="tp-kpi-sub">distinct deploy platforms</div></div>'
+        f'<div class="tp-kpi is-apps" title="Application rows in the current '
+        f'Filter Console scope.">'
+        f'<div class="tp-kpi-lbl">Apps</div>'
+        f'<div class="tp-kpi-val">{_total:,}</div>'
+        f'<div class="tp-kpi-sub">{"filtered scope" if _scoped else "whole fleet"}</div></div>'
+        f'<div class="tp-kpi is-cov" title="Apps with all three of '
+        f'build_technology, deploy_technology and deploy_platform set.">'
+        f'<div class="tp-kpi-lbl">Fully specified</div>'
+        f'<div class="tp-kpi-val">{_cov_pct:.0f}%</div>'
+        f'<div class="tp-kpi-sub">{_fully:,} of {_total:,} apps have all three set</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Dimension + cross-reference selectors ────────────────────────────────
+    _c1, _c2 = st.columns([2, 1])
+    with _c1:
+        _dim_label = st.radio(
+            "Dimension", [d[1] for d in _TP_DIMS], horizontal=True,
+            key="_tp_dim_v1", label_visibility="collapsed",
+        )
+    with _c2:
+        _xref = st.radio(
+            "Cross-reference by", ["Team", "Project"], horizontal=True,
+            key="_tp_xref_v1", label_visibility="collapsed",
+        )
+    _dim = next((d for d in _TP_DIMS if d[1] == _dim_label), _TP_DIMS[0])
+    _dk, _dlabel, _dfield, _dmod, _dcol = _dim
+
+    _ranked = _counts[_dk].most_common()
+    _real = [(v, n) for v, n in _ranked if v != _TP_UNSET]
+    _unset_n = _counts[_dk].get(_TP_UNSET, 0)
+
+    # ── Most / least used highlight cards ────────────────────────────────────
+    if _real:
+        _most_v, _most_n = _real[0]
+        _least_v, _least_n = _real[-1]
+        _singletons = [v for v, n in _real if n == 1]
+        st.markdown(
+            '<div class="tp-hl-grid">'
+            '<div class="tp-hl is-most">'
+            f'<div class="tp-hl-cap">▲ Most used {html.escape(_dlabel.lower())}</div>'
+            f'<div class="tp-hl-name">{html.escape(_most_v)}</div>'
+            f'<div class="tp-hl-meta"><b>{_most_n:,}</b> app(s) · '
+            f'<b>{100.0*_most_n/_total:.0f}%</b> of scope</div></div>'
+            '<div class="tp-hl is-least">'
+            f'<div class="tp-hl-cap">▼ Least used {html.escape(_dlabel.lower())}</div>'
+            f'<div class="tp-hl-name">{html.escape(_least_v)}</div>'
+            f'<div class="tp-hl-meta"><b>{_least_n:,}</b> app(s) · '
+            f'<b>{100.0*_least_n/_total:.0f}%</b> of scope'
+            + (f' · {len(_singletons)} tech used by a single app'
+               if len(_singletons) > 1 else "")
+            + '</div></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info(f"No {_dlabel.lower()} values are set on any app in scope.")
+
+    # ── Ranked usage bars (most → least) ─────────────────────────────────────
+    _vmax = _real[0][1] if _real else 1
+    _bars = []
+    for _v, _n in _real:
+        _pct = 100.0 * _n / _vmax
+        _share = 100.0 * _n / _total
+        _bars.append(
+            '<div class="tp-rank-row">'
+            f'<div class="tp-rank-name" title="{html.escape(_v)}">{html.escape(_v)}</div>'
+            f'<div class="tp-rank-track"><div class="tp-rank-fill" '
+            f'style="width:{_pct:.1f}%"></div></div>'
+            f'<div class="tp-rank-val"><b>{_n:,}</b> · {_share:.0f}%</div>'
+            '</div>'
+        )
+    if _unset_n:
+        _pct = 100.0 * _unset_n / _vmax
+        _bars.append(
+            '<div class="tp-rank-row">'
+            f'<div class="tp-rank-name is-unset" title="No {html.escape(_dfield)} '
+            f'set">{html.escape(_TP_UNSET)}</div>'
+            f'<div class="tp-rank-track"><div class="tp-rank-fill is-unset" '
+            f'style="width:{_pct:.1f}%"></div></div>'
+            f'<div class="tp-rank-val"><b>{_unset_n:,}</b> · '
+            f'{100.0*_unset_n/_total:.0f}%</div>'
+            '</div>'
+        )
+    st.markdown(
+        f'<div class="cc-panel-sub" style="margin:6px 0 4px">Usage ranking — '
+        f'<b>{html.escape(_dlabel)}</b> · bar width is relative to the most-used '
+        f'value; percentages are share of the {_total:,} app(s) in scope.</div>'
+        f'<div class="tp-rank">{"".join(_bars)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Cross-reference matrix: technology (rows) × team|project (cols) ──────
+    _xmap = (_by_team if _xref == "Team" else _by_proj)[_dk]
+    # Column universe = all teams/projects, ranked by total apps; cap with +more.
+    _col_tot: Counter = Counter()
+    for _v, _cc in _xmap.items():
+        for _c, _n in _cc.items():
+            _col_tot[_c] += _n
+    _all_cols = [c for c, _ in _col_tot.most_common() if c and c != _TP_UNSET]
+    _cols = _all_cols[:_TP_MX_COL_CAP]
+    _cols_more = len(_all_cols) - len(_cols)
+    # Rows = technology values, ranked by usage, capped.
+    _rrows = [v for v, _ in _real][:_TP_MX_ROW_CAP]
+    _rows_more = len(_real) - len(_rrows)
+
+    if _rrows and _cols:
+        _head = "".join(
+            f'<th title="{html.escape(_c)}">{html.escape(_c[:18])}'
+            f'{"…" if len(_c) > 18 else ""}</th>' for _c in _cols)
+        _body = []
+        for _v in _rrows:
+            _cc = _xmap.get(_v) or {}
+            _cells = []
+            for _c in _cols:
+                _n = _cc.get(_c, 0)
+                _vmax_col = _col_tot.get(_c, 1)
+                if _n:
+                    _cells.append(
+                        f'<td><span class="tp-cell" style="{_tp_heat(_n, _vmax_col)}">'
+                        f'{_n}</span></td>')
+                else:
+                    _cells.append('<td class="is-z">·</td>')
+            _rtot = _counts[_dk].get(_v, 0)
+            _body.append(
+                f'<tr><th title="{html.escape(_v)}">{html.escape(_v)}</th>'
+                f'{"".join(_cells)}</tr>')
+        _foot = "".join(f'<td>{_col_tot.get(_c, 0)}</td>' for _c in _cols)
+        st.markdown(
+            f'<div class="cc-panel-sub" style="margin:12px 0 4px">'
+            f'Cross-reference — <b>{html.escape(_dlabel)}</b> × '
+            f'<b>{_xref}</b> · cell = apps where that {_xref.lower()} owns an app '
+            f'on that technology. Colour scales within each column.</div>'
+            '<div class="tp-mx-wrap"><table class="tp-mx">'
+            f'<thead><tr><th>{html.escape(_dlabel)} ╲ {html.escape(_xref)}</th>'
+            f'{_head}</tr></thead>'
+            f'<tbody>{"".join(_body)}</tbody>'
+            f'<tfoot><tr><th>column total</th>{_foot}</tr></tfoot>'
+            '</table></div>',
+            unsafe_allow_html=True,
+        )
+        _notes = []
+        if _rows_more > 0:
+            _notes.append(f'<span class="tp-chip">+<b>{_rows_more}</b> more '
+                          f'technolog{"ies" if _rows_more != 1 else "y"} (rows)</span>')
+        if _cols_more > 0:
+            _notes.append(f'<span class="tp-chip">+<b>{_cols_more}</b> more '
+                          f'{_xref.lower()}{"s" if _cols_more != 1 else ""} (columns)</span>')
+        if _notes:
+            st.markdown('<div class="tp-note">Showing the busiest rows/columns. '
+                        + "".join(_notes) + '</div>', unsafe_allow_html=True)
+    elif _rrows:
+        st.markdown(f'<div class="tp-note">No {_xref.lower()} ownership is '
+                    f'recorded for these apps, so the cross-reference matrix is '
+                    f'empty.</div>', unsafe_allow_html=True)
+
+    # ── Consolidation note ───────────────────────────────────────────────────
+    _bits = []
+    if _unset_n:
+        _bits.append(f'<b>{_unset_n:,}</b> app(s) have no <code>{html.escape(_dfield)}'
+                     f'</code> set')
+    _sings = [v for v, n in _real if n == 1]
+    if _sings:
+        _shown = ", ".join(html.escape(s) for s in _sings[:8])
+        _bits.append(f'<b>{len(_sings)}</b> technolog'
+                     f'{"ies are" if len(_sings) != 1 else "y is"} used by just one '
+                     f'app ({_shown}{"…" if len(_sings) > 8 else ""}) — consolidation '
+                     f'candidates')
+    if _bits:
+        st.markdown('<div class="tp-note">⚑ ' + ' · '.join(_bits) + '.</div>',
+                    unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -34658,6 +35055,10 @@ if _show_inv and _inventory_slot is not None:
         # Architecture tab — admin-only; per-env service topology parsed from
         # the Control config.yml files, with two-env comparison. Deferred.
         _arch_show = _is_admin
+        # Technologies & Platforms tab — admin-only; build/deploy tech + deploy
+        # platform usage analytics, cross-referenced with teams + projects.
+        # Pure inventory-row driven (no extra fetch). Deferred until opened.
+        _tp_show = _is_admin
         # NOTE: per-team configurations are no longer a standalone tab — they
         # now live as a ⚙ cog popover inside each environment cell of the
         # Pipelines Inventory table (see `_iv_cfg_*` in `_render_inventory_view`).
@@ -34677,6 +35078,8 @@ if _show_inv and _inventory_slot is not None:
             _tab_labels.append("☁  ADO COVERAGE")
         if _arch_show:
             _tab_labels.append("🗺  ARCHITECTURE")
+        if _tp_show:
+            _tab_labels.append("🧬  TECH & PLATFORMS")
 
         # ── Admin: Elastic ↔ Postgres drift banner ──────────────────────────
         # Postgres is the primary read source; when an index's PG mirror trails
@@ -34728,6 +35131,9 @@ if _show_inv and _inventory_slot is not None:
             if _ado_show:
                 _idx += 1
             _tab_arch = _tabs[_idx] if _arch_show else None
+            if _arch_show:
+                _idx += 1
+            _tab_tp = _tabs[_idx] if _tp_show else None
             if _tab_teams is not None:
                 with _tab_teams:
                     st.markdown(
@@ -34844,6 +35250,23 @@ if _show_inv and _inventory_slot is not None:
                     _arch_slot = st.empty()
             else:
                 _arch_slot = None
+
+            if _tab_tp is not None:
+                with _tab_tp:
+                    st.markdown(
+                        '<div class="cc-panel-sub" style="margin:0 0 6px 0">'
+                        'Technology footprint — most and least used '
+                        '<b>build</b> / <b>deployment</b> technologies and '
+                        '<b>deploy platforms</b>, cross-referenced with the '
+                        'teams and projects that own them. Derived from the '
+                        'inventory rows already in scope (no extra load); '
+                        'scope follows the Filter Console. Admin only.'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _tp_slot = st.empty()
+            else:
+                _tp_slot = None
 
         # Run the inventory fragment first — it emits into slots A + B and
         # publishes scope keys + user blobs the other tabs depend on.
@@ -34975,6 +35398,17 @@ if _show_inv and _inventory_slot is not None:
                     hint="Per-environment service topology from the Control "
                          "config.yml files, with two-env comparison. Clones + "
                          "parses on open; cached 10 min.",
+                )
+
+        # Tech & Platforms — deferred; reads inventory rows already in session.
+        if _tp_slot is not None:
+            with _tp_slot.container():
+                _lazy_tab_body(
+                    "_tab_open_tp_v1", "Tech & Platforms",
+                    _render_tech_platforms,
+                    hint="Most/least used build + deploy technologies and "
+                         "platforms, cross-referenced with teams and projects. "
+                         "Reads the inventory rows already in scope — instant.",
                 )
 elif _show_el:
     # Fallback for roles that somehow have event-log-only visibility (none today,

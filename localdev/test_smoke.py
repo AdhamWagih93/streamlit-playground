@@ -36,7 +36,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 _TAB_FLAGS = [
     "_tab_open_teams_v1", "_tab_open_eventlog_v1", "_tab_open_actions_v1",
     "_tab_open_sync_v1", "_tab_open_history_v1", "_tab_open_ado_v1",
-    "_tab_open_arch_v1",
+    "_tab_open_arch_v1", "_tab_open_tp_v1",
 ]
 
 _ADMIN_SESSION = {

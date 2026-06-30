@@ -24,9 +24,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GITSRV = os.path.join(HERE, "gitsrv")
 
 # (project, app, company, dev_team, qc_team, ops_team, platform)
+# (project, app, company, dev_team, qc_team, ops_team, platform, build_tech,
+#  deploy_tech). Build/deploy technologies + platforms are deliberately varied
+# (a dominant value, a couple of mid-tier ones, and a few singletons) so the
+# Tech & Platforms tab has a realistic "most/least used" distribution to rank
+# and cross-reference against teams + projects.
 INV_APPS = [
-    ("payments", "api",    "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "ocp"),
-    ("billing",  "worker", "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "k8s"),
+    ("payments",  "api",      "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "ocp", "maven",  "helm"),
+    ("payments",  "checkout", "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "ocp", "maven",  "helm"),
+    ("payments",  "ledger",   "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "k8s", "gradle", "ansible"),
+    ("billing",   "worker",   "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "k8s", "dotnet", "helm"),
+    ("billing",   "invoice",  "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "ocp", "dotnet", "ansible"),
+    ("billing",   "settle",   "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "vm",  "dotnet", "ansible"),
+    ("portal",    "web",      "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "k8s", "npm",    "helm"),
+    ("portal",    "admin",    "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "ocp", "maven",  "helm"),
+    ("portal",    "gateway",  "ACME",   "DEVJAVA",   "QCJAVA", "OPS", "ocp", "maven",  "helm"),
+    ("analytics", "etl",      "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "k8s", "python", "kustomize"),
+    ("analytics", "report",   "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "ocp", "gradle", "helm"),
+    ("analytics", "stream",   "GLOBEX", "DEVDOTNET", "QCNET",  "OPS", "vm",  "maven",  "helm"),
 ]
 # Every team that owns inventory rows also owns a Control config repo, so the
 # Architecture tab's repo discovery (which falls back to the inventory team set)
@@ -73,7 +88,7 @@ def _seed_inventories() -> None:
     these levels."""
     repo = os.path.join(GITSRV, "DevOps", "Platform", "_git", "inventories")
     _init_repo(repo)
-    for proj, app, co, dev, qc, ops, plat in INV_APPS:
+    for proj, app, co, dev, qc, ops, plat, build, dtech in INV_APPS:
         # app definition file (its presence defines the app)
         _write(repo, f"{proj}/{app}.yml", f"# {proj}/{app} inventory\n")
         # project baseline
@@ -81,8 +96,8 @@ def _seed_inventories() -> None:
         # app vars
         _write(repo, f"{proj}/group_vars/{app}/vars.yml",
                f"app_type: service\nrepository_name: {proj}-{app}\n"
-               f"build_technology: {'maven' if co == 'ACME' else 'dotnet'}\n"
-               f"deploy_technology: helm\ndeploy_platform: {plat}\n"
+               f"build_technology: {build}\n"
+               f"deploy_technology: {dtech}\ndeploy_platform: {plat}\n"
                f"dev_team: {dev}\nqc_team: {qc}\n")
         # per-env team ownership + image tags
         for env, team in (("dev", dev), ("qc", qc), ("uat", ops), ("prd", ops)):

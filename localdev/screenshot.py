@@ -37,6 +37,7 @@ TABS = [
     ("06_history", "HISTORY"),
     ("07_ado_coverage", "ADO COVERAGE"),
     ("08_architecture", "ARCHITECTURE"),
+    ("09_tech_platforms", "TECH & PLATFORMS"),
 ]
 
 
