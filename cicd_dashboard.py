@@ -4895,6 +4895,63 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     margin: 2px 4px 2px 0;
 }
 .tp-chip b { color: var(--cc-amber); }
+.tp-kpi.is-unauth { border-top-color: var(--cc-red); }
+
+/* ── Tool access & RBAC (Teams & Members) ──────────────────────────────── */
+.ta-warn-head {
+    display: flex; align-items: center; gap: 8px; margin: 10px 0 6px;
+    font-size: 0.82rem; font-weight: 800; color: #b3221f;
+}
+.ta-warn-head code { background: var(--cc-red-bg); padding: 0 4px;
+    border-radius: 3px; font-size: 0.74rem; }
+.ta-warn-wrap {
+    overflow-x: auto; border: 1px solid rgba(220,38,38,.35);
+    border-radius: 12px; background: var(--cc-red-bg);
+}
+.ta-warn-table { border-collapse: collapse; width: 100%; font-size: 0.75rem; }
+.ta-warn-table th, .ta-warn-table td {
+    padding: 6px 10px; text-align: left; border-bottom: 1px solid rgba(220,38,38,.18);
+    vertical-align: top;
+}
+.ta-warn-table thead th {
+    font-family: var(--cc-mono); font-size: 0.62rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: #9a2420; background: rgba(220,38,38,.08);
+    position: sticky; top: 0;
+}
+.ta-user { font-weight: 700; color: var(--cc-text); }
+.ta-team {
+    font-family: var(--cc-mono); font-size: 0.7rem; color: var(--cc-text-dim);
+    background: var(--cc-surface); border: 1px solid var(--cc-border);
+    border-radius: 6px; padding: 1px 6px;
+}
+.ta-tool {
+    font-family: var(--cc-mono); font-size: 0.62rem; font-weight: 800;
+    letter-spacing: 0.04em; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--cc-border);
+}
+.ta-tool-ado     { background: var(--cc-blue-bg);  color: var(--cc-blue); }
+.ta-tool-jira    { background: var(--cc-amber-bg); color: #9a5b06; }
+.ta-tool-jenkins { background: var(--cc-red-bg);   color: #b3221f; }
+.ta-priv {
+    font-family: var(--cc-mono); font-size: 0.7rem; color: var(--cc-text-dim);
+}
+.ta-reason { color: #9a2420; }
+.ta-owners {
+    font-size: 0.66rem; color: var(--cc-text-mute); margin-top: 2px;
+    font-family: var(--cc-mono);
+}
+.ta-ok {
+    margin: 8px 0; padding: 8px 12px; border-radius: 10px;
+    background: var(--cc-green-bg); border: 1px solid rgba(5,150,105,.3);
+    color: #056646; font-size: 0.8rem; font-weight: 600;
+}
+.ta-priv-row {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin: 4px 0;
+}
+.ta-priv-tool {
+    font-family: var(--cc-mono); font-size: 0.62rem; font-weight: 800;
+    padding: 1px 8px; border-radius: 999px; margin-right: 4px;
+}
 
 /* ── Application / project health score ────────────────────────────────── */
 .iv-score {
@@ -13014,6 +13071,58 @@ def _fetch_trufflehog(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDic
     return _LooseVerDict(_fetch_trufflehog_raw(app_versions))
 
 
+_TOOLS_ACCESS_TRUE = {"true", "1", "yes", "y", "t", "active", "enabled"}
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_tools_access() -> list[dict]:
+    """Current access-management grants from ef-devops-tools-access.
+
+    One row per (user, tool, project/repo) grant, extracted directly from the
+    source systems (ADO / JIRA / Jenkins). Only rows where ``isactive`` is
+    truthy are returned — inactive/revoked grants are dropped. ``isactive`` is
+    a ``text`` field, so we match a small truthy set case-insensitively.
+
+    Returns a list of plain dicts (cache-friendly): ``{usermail, username,
+    team, project, toolname, userprivilege, collection, repository, company,
+    lastupdated}``.
+    """
+    try:
+        resp = cached_search(
+            IDX["tools_access"],
+            json.dumps({
+                "query": {"match_all": {}},
+                "_source": ["usermail", "username", "team", "project",
+                            "toolname", "userprivilege", "collection",
+                            "repository", "company", "isactive", "lastupdated"],
+                "track_total_hits": True,
+            }, sort_keys=True, default=str),
+            10000,
+        )
+    except Exception:
+        return []
+    if not resp or resp.get("_error"):
+        return []
+    out: list[dict] = []
+    for _h in resp.get("hits", {}).get("hits", []):
+        _s = _h.get("_source", {}) or {}
+        if str(_s.get("isactive") or "").strip().lower() not in _TOOLS_ACCESS_TRUE:
+            continue
+        out.append({
+            "usermail":      str(_s.get("usermail") or "").strip(),
+            "username":      str(_s.get("username") or "").strip(),
+            "team":          str(_s.get("team") or "").strip(),
+            "project":       str(_s.get("project") or "").strip(),
+            "toolname":      str(_s.get("toolname") or "").strip(),
+            "userprivilege": str(_s.get("userprivilege") or "").strip(),
+            "collection":    str(_s.get("collection") or "").strip(),
+            "repository":    str(_s.get("repository") or "").strip(),
+            "company":       str(_s.get("company") or "").strip(),
+            "lastupdated":   str(_s.get("lastupdated") or "").strip(),
+        })
+    return out
+
+
 # Stage ordering drives the inventory columns and the "previous stage" chain
 # used for Δ-vs-previous-stage comparisons in stage popovers.
 _STAGE_ORDER = ("build", "dev", "qc", "release", "uat", "prd")
@@ -17710,6 +17819,225 @@ def _render_teams_and_members_view() -> None:
             f'{_overflow}',
             unsafe_allow_html=True,
         )
+
+    # ══ Tool access & RBAC (ADO · JIRA · Jenkins) ════════════════════════════
+    _render_tool_access_rbac(_inv_rows_all, _inv_rows_scoped)
+
+
+# Toolname normalisation — the index stores free-text tool names.
+_TA_TOOL_CANON = {
+    "ado": "ADO", "azuredevops": "ADO", "azure devops": "ADO", "tfs": "ADO",
+    "jira": "JIRA", "atlassian": "JIRA",
+    "jenkins": "JENKINS",
+}
+# Only these two tools carry a project field that maps to a CI/CD project, so
+# only they are RBAC-checked (per the source-system semantics).
+_TA_RBAC_TOOLS = {"ADO", "JIRA"}
+
+
+def _ta_canon_tool(name: str) -> str:
+    _k = (name or "").strip().lower()
+    return _TA_TOOL_CANON.get(_k, (name or "").strip().upper() or "—")
+
+
+def _render_tool_access_rbac(inv_rows_all: list[dict],
+                             inv_rows_scoped: list[dict]) -> None:
+    """Current access (ADO/JIRA/Jenkins) from ef-devops-tools-access + an RBAC
+    audit: flag active ADO/JIRA grants on a dashboard project whose team does
+    NOT own that project per the inventory `*_team` ownership. Projects not in
+    the dashboard's list are ignored (some ADO/JIRA projects have no CI/CD)."""
+    _rows = _fetch_tools_access()
+    st.markdown(
+        '<div class="cc-panel-sub" style="margin:16px 0 6px 0">'
+        '🔐 <b>Tool access &amp; RBAC</b> — current active access extracted '
+        'from ADO, JIRA and Jenkins (<code>ef-devops-tools-access</code>, '
+        '<code>isactive=true</code> only). ADO &amp; JIRA grants are audited '
+        'against the inventory\'s <code>*_team</code> project ownership; grants '
+        'on projects outside the dashboard\'s list are ignored.</div>',
+        unsafe_allow_html=True,
+    )
+    if not _rows:
+        st.info("No active tool-access records found in "
+                "`ef-devops-tools-access` (or the index is unreachable).")
+        return
+
+    # ── Project → owning-team match keys, from inventory (full fleet) ────────
+    _proj_owners: dict[str, set[str]] = {}   # proj_key → {team_key,...}
+    _proj_display: dict[str, str] = {}       # proj_key → display name
+    for _r in inv_rows_all:
+        _p = (_r.get("project") or "").strip()
+        if not _p:
+            continue
+        _pk = _team_match_key(_p)
+        _proj_display.setdefault(_pk, _p)
+        _own = _proj_owners.setdefault(_pk, set())
+        for _fld, _vals in (_r.get("teams") or {}).items():
+            if not str(_fld).endswith("_team"):
+                continue
+            _it = _vals if isinstance(_vals, (list, tuple, set)) else ([_vals] if _vals else [])
+            for _v in _it:
+                _tk = _team_match_key(_v)
+                if _tk:
+                    _own.add(_tk)
+    _dash_projects = set(_proj_owners)     # dashboard project keys
+
+    # ── Classify every active grant ─────────────────────────────────────────
+    _tool_counts: dict[str, int] = {}
+    _tool_users: dict[str, set[str]] = {}
+    _priv_by_tool: dict[str, dict[str, int]] = {}
+    _users_all: set[str] = set()
+    _proj_tool_grants: dict[tuple[str, str], int] = {}   # (proj_key, tool) → n
+    _unauthorized: list[dict] = []
+    _rbac_checked = 0
+    for _g in _rows:
+        _tool = _ta_canon_tool(_g["toolname"])
+        _uid = (_g["usermail"] or _g["username"]).lower()
+        _tool_counts[_tool] = _tool_counts.get(_tool, 0) + 1
+        _tool_users.setdefault(_tool, set()).add(_uid)
+        _priv_by_tool.setdefault(_tool, {})
+        _pv = _g["userprivilege"] or "—"
+        _priv_by_tool[_tool][_pv] = _priv_by_tool[_tool].get(_pv, 0) + 1
+        if _uid:
+            _users_all.add(_uid)
+        # RBAC check — ADO/JIRA only, dashboard projects only.
+        if _tool not in _TA_RBAC_TOOLS:
+            continue
+        _pk = _team_match_key(_g["project"])
+        if not _pk or _pk not in _dash_projects:
+            continue   # out-of-dashboard project → ignore per spec
+        _proj_tool_grants[(_pk, _tool)] = _proj_tool_grants.get((_pk, _tool), 0) + 1
+        _rbac_checked += 1
+        _tk = _team_match_key(_g["team"])
+        _owners = _proj_owners.get(_pk, set())
+        if _tk and _tk in _owners:
+            continue   # authorised — grant's team owns the project
+        _reason = ("grant has no team recorded" if not _tk
+                   else f"team '{_g['team']}' does not own project "
+                        f"'{_proj_display.get(_pk, _g['project'])}'")
+        _unauthorized.append({
+            "user": _g["usermail"] or _g["username"] or "—",
+            "team": _g["team"] or "—", "tool": _tool,
+            "project": _proj_display.get(_pk, _g["project"]),
+            "privilege": _pv, "reason": _reason,
+            "owners": sorted(_proj_display.get(_o, _o) for _o in _owners) if _owners else [],
+        })
+
+    # ── KPI tiles ────────────────────────────────────────────────────────────
+    _n_ado = _tool_counts.get("ADO", 0)
+    _n_jira = _tool_counts.get("JIRA", 0)
+    _n_jenk = _tool_counts.get("JENKINS", 0)
+    _n_unauth = len(_unauthorized)
+    st.markdown(
+        '<div class="tp-kpis">'
+        f'<div class="tp-kpi is-apps" title="Active access grants across all '
+        f'three tools."><div class="tp-kpi-lbl">Active grants</div>'
+        f'<div class="tp-kpi-val">{len(_rows):,}</div>'
+        f'<div class="tp-kpi-sub">isactive = true</div></div>'
+        f'<div class="tp-kpi is-build" title="Distinct users with any active '
+        f'grant."><div class="tp-kpi-lbl">Users</div>'
+        f'<div class="tp-kpi-val">{len(_users_all):,}</div>'
+        f'<div class="tp-kpi-sub">distinct identities</div></div>'
+        f'<div class="tp-kpi is-deploy" title="Grants per source system.">'
+        f'<div class="tp-kpi-lbl">ADO · JIRA · Jenkins</div>'
+        f'<div class="tp-kpi-val" style="font-size:1.25rem">{_n_ado:,} · '
+        f'{_n_jira:,} · {_n_jenk:,}</div>'
+        f'<div class="tp-kpi-sub">grants per tool</div></div>'
+        f'<div class="tp-kpi is-plat" title="ADO/JIRA grants on dashboard '
+        f'projects that were RBAC-checked."><div class="tp-kpi-lbl">RBAC '
+        f'checked</div><div class="tp-kpi-val">{_rbac_checked:,}</div>'
+        f'<div class="tp-kpi-sub">ADO+JIRA on in-scope projects</div></div>'
+        f'<div class="tp-kpi {"is-cov" if not _n_unauth else "is-unauth"}" '
+        f'title="Grants violating RBAC ownership."><div class="tp-kpi-lbl">'
+        f'Unauthorized</div><div class="tp-kpi-val">{_n_unauth:,}</div>'
+        f'<div class="tp-kpi-sub">{"all grants respect ownership" if not _n_unauth else "RBAC violations"}</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Unauthorized-access warnings (prominent) ─────────────────────────────
+    if _unauthorized:
+        _TA_ROW_CAP = 100
+        _shown = _unauthorized[:_TA_ROW_CAP]
+        _urows = "".join(
+            f'<tr><td class="ta-user">{html.escape(_u["user"])}</td>'
+            f'<td><span class="ta-team">{html.escape(_u["team"])}</span></td>'
+            f'<td><span class="ta-tool ta-tool-{_u["tool"].lower()}">{_u["tool"]}</span></td>'
+            f'<td>{html.escape(_u["project"])}</td>'
+            f'<td><span class="ta-priv">{html.escape(_u["privilege"])}</span></td>'
+            f'<td class="ta-reason">{html.escape(_u["reason"])}'
+            + (f'<div class="ta-owners">owners: '
+               + ", ".join(html.escape(_o) for _o in _u["owners"]) + '</div>'
+               if _u["owners"] else "")
+            + '</td></tr>'
+            for _u in _shown
+        )
+        _more = (f'<div class="tp-note">+{len(_unauthorized) - _TA_ROW_CAP} more '
+                 f'violations not shown.</div>'
+                 if len(_unauthorized) > _TA_ROW_CAP else "")
+        st.markdown(
+            f'<div class="ta-warn-head">⚠ {_n_unauth} unauthorized access '
+            f'grant{"s" if _n_unauth != 1 else ""} — the accessing team does '
+            f'not own the project per your <code>*_team</code> RBAC rules</div>'
+            '<div class="ta-warn-wrap"><table class="ta-warn-table"><thead><tr>'
+            '<th>User</th><th>Team</th><th>Tool</th><th>Project</th>'
+            '<th>Privilege</th><th>Why it\'s flagged</th></tr></thead>'
+            f'<tbody>{_urows}</tbody></table></div>{_more}',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="ta-ok">✓ Every active ADO/JIRA grant on a dashboard '
+            'project is held by a team that owns it — no RBAC violations.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Access matrix: project × tool (dashboard projects) + privilege chips ─
+    with st.expander("Access breakdown — project × tool + privileges", expanded=False):
+        _proj_keys_sorted = sorted(
+            {_pk for (_pk, _t) in _proj_tool_grants},
+            key=lambda k: (-sum(_proj_tool_grants.get((k, _t), 0)
+                                for _t in _TA_RBAC_TOOLS), _proj_display.get(k, k).lower()))
+        if _proj_keys_sorted:
+            _TA_MX_CAP = 40
+            _mx_keys = _proj_keys_sorted[:_TA_MX_CAP]
+            _mx_rows = []
+            for _pk in _mx_keys:
+                _cells = []
+                for _t in ("ADO", "JIRA"):
+                    _n = _proj_tool_grants.get((_pk, _t), 0)
+                    _cell = f"<b>{_n}</b>" if _n else '<span class="is-z">·</span>'
+                    _cells.append(f'<td>{_cell}</td>')
+                _mx_rows.append(
+                    f'<tr><th>{html.escape(_proj_display.get(_pk, _pk))}</th>'
+                    f'{"".join(_cells)}</tr>')
+            st.markdown(
+                '<div class="cc-panel-sub" style="margin:2px 0 6px">Active '
+                'ADO/JIRA grants per in-scope project (source of the RBAC '
+                'audit).</div>'
+                '<div class="tp-mx-wrap"><table class="tp-mx"><thead><tr>'
+                '<th>Project</th><th>ADO</th><th>JIRA</th></tr></thead>'
+                f'<tbody>{"".join(_mx_rows)}</tbody></table></div>'
+                + (f'<div class="tp-note">+{len(_proj_keys_sorted) - _TA_MX_CAP} '
+                   f'more projects not shown.</div>'
+                   if len(_proj_keys_sorted) > _TA_MX_CAP else ""),
+                unsafe_allow_html=True,
+            )
+        # Privilege chips per tool.
+        _priv_html = []
+        for _t in ("ADO", "JIRA", "JENKINS"):
+            _pv_map = _priv_by_tool.get(_t)
+            if not _pv_map:
+                continue
+            _chips = "".join(
+                f'<span class="tp-chip">{html.escape(_p)} <b>{_n}</b></span>'
+                for _p, _n in sorted(_pv_map.items(), key=lambda kv: -kv[1]))
+            _priv_html.append(
+                f'<div class="ta-priv-row"><span class="ta-priv-tool '
+                f'ta-tool-{_t.lower()}">{_t}</span>{_chips}</div>')
+        if _priv_html:
+            st.markdown('<div class="cc-panel-sub" style="margin:10px 0 4px">'
+                        'Privileges granted per tool</div>'
+                        + "".join(_priv_html), unsafe_allow_html=True)
 
 
 def _render_people_insights_panel(start_dt, end_dt) -> None:

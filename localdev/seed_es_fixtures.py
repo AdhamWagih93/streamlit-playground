@@ -231,6 +231,49 @@ def gen_trufflehog():
     _dump("ef-cicd-trufflehog", out)
 
 
+def gen_tools_access():
+    """Current access management from ADO / JIRA / Jenkins
+    (ef-devops-tools-access). Mix of authorised + unauthorised (RBAC-violating)
+    + inactive + out-of-dashboard-project rows so the Teams-tab audit exercises
+    every path. Project ownership (from seed_git INV_APPS):
+      payments  → DEVJAVA(dev) QCJAVA(qc) OPS(uat/prd)
+      billing   → DEVDOTNET   QCNET       OPS
+      portal    → DEVJAVA     QCJAVA      OPS
+      analytics → DEVDOTNET   QCNET       OPS
+    """
+    def _row(mail, user, team, proj, tool, priv, active=True, repo="", coll=""):
+        return {
+            "id": f"acc-{user}-{tool}-{proj}-{priv}".lower().replace(" ", "-"),
+            "usermail": mail, "username": user, "team": team, "project": proj,
+            "toolname": tool, "userprivilege": priv, "collection": coll,
+            "repository": repo, "company": "ACME" if "acme" in mail else "GLOBEX",
+            "isactive": "true" if active else "false", "lastupdated": _iso(1),
+        }
+    out = [
+        # ── authorised (grant team owns the project) ──
+        _row("alice.dev@acme.local",  "alice.dev", "DEVJAVA",   "payments",  "ADO",     "Contributor"),
+        _row("carol.qc@acme.local",   "carol.qc",  "QCJAVA",    "payments",  "JIRA",    "Developer"),
+        _row("eve.ops@acme.local",    "eve.ops",   "OPS",       "billing",   "ADO",     "Project Administrator"),
+        _row("dan.net@globex.local",  "dan.net",   "DEVDOTNET", "billing",   "ADO",     "Contributor"),
+        _row("nina.net@globex.local", "nina.net",  "QCNET",     "analytics", "JIRA",    "Developer"),
+        # ── UNAUTHORISED (grant team does NOT own the project) ──
+        _row("dan.net@globex.local",  "dan.net",   "DEVDOTNET", "payments",  "ADO",     "Contributor"),
+        _row("nina.net@globex.local", "nina.net",  "QCNET",     "portal",    "JIRA",    "Administrator"),
+        _row("bob.dev@acme.local",    "bob.dev",   "DEVJAVA",   "billing",   "ADO",     "Reader"),
+        # ── UNAUTHORISED — grant has no team recorded ──
+        _row("contractor@acme.local", "contractor", "",         "payments",  "JIRA",    "Developer"),
+        # ── ignored — project not in the dashboard's list ──
+        _row("alice.dev@acme.local",  "alice.dev", "DEVJAVA",   "SANDBOX",   "ADO",     "Contributor"),
+        # ── inactive — must be DROPPED ──
+        _row("carol.qc@acme.local",   "carol.qc",  "QCJAVA",    "payments",  "ADO",     "Administrator", active=False),
+        # ── Jenkins — shown in counts, NOT RBAC-checked (no valid project) ──
+        _row("eve.ops@acme.local",    "eve.ops",   "OPS",       "",          "JENKINS", "admin"),
+        _row("omar.ops@globex.local", "omar.ops",  "OPS",       "",          "JENKINS", "build"),
+        _row("alice.dev@acme.local",  "alice.dev", "DEVJAVA",   "",          "JENKINS", "build"),
+    ]
+    _dump("ef-devops-tools-access", out)
+
+
 def gen_versions():
     out = []
     for _i, (proj, app, co, dev, qc, ops, jk, prd_ver, qcv, plat) in enumerate(APPS):
@@ -299,6 +342,7 @@ def main():
     gen_releases()
     gen_security()
     gen_trufflehog()
+    gen_tools_access()
     gen_versions()
     gen_commits()
     gen_requests()
