@@ -244,9 +244,13 @@ IDX = {
     "prismacloud": "ef-cicd-prismacloud",   # container image scan
     "invicti":     "ef-cicd-invicti",       # DAST web scan
     "zap":         "ef-cicd-zap",           # DAST OWASP-ZAP scan
+    "trufflehog":  "ef-cicd-trufflehog",    # secret detection scan
     # Per-app metadata: dev / qc URLs, Remedy product info, recommended
     # build & deploy image versions for outdated-image detection.
     "devops_projects": "ef-devops-projects",
+    # Current access management extracted from ADO / JIRA / Jenkins — one row
+    # per (user, tool, project/repo) grant, with `isactive` marking live access.
+    "tools_access":    "ef-devops-tools-access",
 }
 
 CACHE_TTL = 300  # seconds — 5 minutes balances freshness vs cluster load
@@ -4965,6 +4969,28 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .ap-score-pill.is-healthy { background: var(--cc-green-bg); color: #056646; }
 .ap-score-pill.is-fair    { background: var(--cc-amber-bg); color: #9a5b06; }
 .ap-score-pill.is-risk    { background: var(--cc-red-bg); color: #b3221f; }
+/* overall vulnerability strip (project popover) */
+.ap-vuln-strip {
+    display: flex; gap: 6px; margin: 2px 0 6px; flex-wrap: wrap;
+}
+.ap-vuln-cell {
+    display: inline-flex; align-items: baseline; gap: 3px; padding: 2px 9px;
+    border-radius: 8px; font-family: var(--cc-mono); font-size: 0.66rem;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    border: 1px solid var(--cc-border);
+}
+.ap-vuln-cell b {
+    font-family: var(--cc-data, var(--cc-mono)); font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+}
+.ap-vuln-cell.is-c { background: var(--cc-red-bg); color: #b3221f;
+    border-color: rgba(220,38,38,.3); }
+.ap-vuln-cell.is-h { background: var(--cc-amber-bg); color: #9a5b06;
+    border-color: rgba(217,119,6,.3); }
+.ap-vuln-cell.is-m { background: var(--cc-blue-bg); color: var(--cc-blue);
+    border-color: rgba(37,99,235,.3); }
+.ap-vuln-cell.is-l { background: var(--cc-surface2); color: var(--cc-text-mute); }
+.ap-vuln-cell.zero { opacity: 0.45; }
 /* "How the score works" explainer */
 .iv-score-explain {
     font-size: 0.74rem; color: var(--cc-text-dim); line-height: 1.6;
@@ -7070,6 +7096,32 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     white-space: nowrap;
     line-height: 1.3;
 }
+/* Platform-wide overall vulnerability chip (leads the ribbon) */
+.iv-proj-ribbon .iv-pr-platform {
+    display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+    padding: 2px 10px; border-radius: 12px; white-space: nowrap;
+    background: var(--cc-surface2); border: 1px solid var(--cc-border-hi);
+    font-size: 0.62rem; line-height: 1.4; cursor: help;
+}
+.iv-proj-ribbon .iv-pr-platform.is-crit { border-color: rgba(220,38,38,.45);
+    background: var(--cc-red-bg); }
+.iv-proj-ribbon .iv-pr-platform.is-high { border-color: rgba(217,119,6,.45);
+    background: var(--cc-amber-bg); }
+.iv-proj-ribbon .iv-pr-platform-lbl {
+    font-family: var(--cc-mono); font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--cc-text-dim); font-size: 0.58rem;
+}
+.iv-proj-ribbon .iv-pr-platform b {
+    font-family: var(--cc-data, var(--cc-mono)); font-weight: 800;
+    font-variant-numeric: tabular-nums; padding: 0 1px;
+}
+.iv-proj-ribbon .iv-pr-platform b.sev-c { color: #b3221f; }
+.iv-proj-ribbon .iv-pr-platform b.sev-h { color: #9a5b06; }
+.iv-proj-ribbon .iv-pr-platform b.sev-m { color: var(--cc-blue); }
+.iv-proj-ribbon .iv-pr-platform b.sev-l { color: var(--cc-text-mute); }
+.iv-proj-ribbon .iv-pr-platform-sub {
+    color: var(--cc-text-mute); font-size: 0.56rem; margin-left: 2px;
+}
 /* DEVOPS-misassignment indicators (admin-only) */
 .iv-proj-ribbon .iv-pr-devops {
     display: inline-flex;
@@ -8435,7 +8487,7 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .ap-scan-grid {
     grid-column: 1 / -1;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px;
     margin-top: 4px;
 }
@@ -8532,6 +8584,11 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .ap-scan-card-aux {
     color: var(--cc-text-mute);
+}
+.ap-scan-card-verified {
+    color: #b3221f; font-weight: 800; letter-spacing: 0.03em;
+    background: var(--cc-red-bg); border: 1px solid rgba(220,38,38,.3);
+    border-radius: 999px; padding: 0 6px;
 }
 .ap-scan-card-aux b {
     color: var(--cc-ink);
@@ -12863,6 +12920,98 @@ def _fetch_zap_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str,
 def _fetch_zap(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDict:
     """Whitespace/case-tolerant wrapper around the cached raw fetcher."""
     return _LooseVerDict(_fetch_zap_raw(app_versions))
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_trufflehog_raw(app_versions: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], dict]:
+    """Cached, plain-``dict`` body of :func:`_fetch_trufflehog`.
+
+    TruffleHog is a SECRET-detection scanner (ef-cicd-trufflehog). Its severity
+    buckets are ``CRITICAL`` / ``HIGH`` / ``MEDIUM`` / ``LOW`` (uppercase longs);
+    we NORMALISE them onto the same ``Vcritical`` / ``Vhigh`` / ``Vmedium`` /
+    ``Vlow`` shape the other three scanners expose so every downstream
+    aggregator (posture tile, per-row chips, health score, project/platform
+    rollups) can sum across all four uniformly. A leaked secret is a live
+    credential, so a *verified* finding is the worst signal — surfaced via
+    ``verified`` + ``findings_count`` + ``detector`` for the scan card.
+
+    Returns a plain ``dict`` for ``st.cache_data`` compatibility; the public
+    :func:`_fetch_trufflehog` wraps it in :class:`_LooseVerDict`.
+    """
+    if not app_versions:
+        return {}
+    apps = sorted({_a for _a, _ in app_versions if _a})
+    if not apps:
+        return {}
+    try:
+        resp = es_search(
+            IDX["trufflehog"],
+            {
+                "query": {"bool": {"filter": [{"terms": {"application": apps}}]}},
+                "aggs": {
+                    "by_app": {
+                        "terms": {"field": "application", "size": len(apps)},
+                        "aggs": {
+                            "by_ver": {
+                                "terms": {"field": "codeversion", "size": 200},
+                                "aggs": {
+                                    "latest": {
+                                        "top_hits": {
+                                            "size": 1,
+                                            "sort": [{"enddate": {"order": "desc", "unmapped_type": "date"}}],
+                                            "_source": [
+                                                "application", "codeversion", "status",
+                                                "CRITICAL", "HIGH", "MEDIUM", "LOW",
+                                                "findings_count", "verified", "detector",
+                                                "branch", "enddate", "startdate",
+                                            ],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+            size=0,
+        )
+    except Exception:
+        return {}
+
+    def _coerce_int(v) -> int:
+        try:
+            return int(v) if v not in (None, "") else 0
+        except (TypeError, ValueError):
+            return 0
+
+    out: dict[tuple[str, str], dict] = {}
+    for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _app = _ab.get("key")
+        for _vb in _ab.get("by_ver", {}).get("buckets", []):
+            _ver = _vb.get("key")
+            _hits = _vb.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            # Normalise the UPPERCASE severity buckets onto the shared V* shape.
+            out[(_app, _ver)] = {
+                "Vcritical":      _coerce_int(_s.get("CRITICAL")),
+                "Vhigh":          _coerce_int(_s.get("HIGH")),
+                "Vmedium":        _coerce_int(_s.get("MEDIUM")),
+                "Vlow":           _coerce_int(_s.get("LOW")),
+                "findings_count": _coerce_int(_s.get("findings_count")),
+                "verified":       bool(_s.get("verified")),
+                "detector":       _s.get("detector", "") or "",
+                "branch":         _s.get("branch", "") or "",
+                "status":         _s.get("status", "") or "",
+                "when":           _s.get("enddate") or _s.get("startdate") or "",
+            }
+    return out
+
+
+def _fetch_trufflehog(app_versions: tuple[tuple[str, str], ...]) -> _LooseVerDict:
+    """Whitespace/case-tolerant wrapper around the cached raw fetcher."""
+    return _LooseVerDict(_fetch_trufflehog_raw(app_versions))
 
 
 # Stage ordering drives the inventory columns and the "previous stage" chain
@@ -29735,17 +29884,19 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     st.session_state["_psv_prisma_keys"] = [
         (_a, _v) for (_a, _v) in _iv_prisma_keys if _v]
     if _iv_prisma_keys:
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="iv-stage3") as _ex:
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="iv-stage3") as _ex:
             _f_pri = _ex.submit(_fetch_prismacloud,  _iv_prisma_keys_t)
             _f_inv = _ex.submit(_fetch_invicti,      _iv_prisma_keys_t)
             _f_zap = _ex.submit(_fetch_zap,          _iv_prisma_keys_t)
+            _f_thg = _ex.submit(_fetch_trufflehog,   _iv_prisma_keys_t)
             _f_vmd = _ex.submit(_fetch_version_meta, _iv_prisma_keys_t)
             _iv_prisma_map  = _f_pri.result()
             _iv_invicti_map = _f_inv.result()
             _iv_zap_map     = _f_zap.result()
+            _iv_thog_map    = _f_thg.result()
             _iv_vermeta_map = _f_vmd.result()
     else:
-        _iv_prisma_map = _iv_invicti_map = _iv_zap_map = _iv_vermeta_map = {}
+        _iv_prisma_map = _iv_invicti_map = _iv_zap_map = _iv_thog_map = _iv_vermeta_map = {}
     _perf_mark("inventory: PRD · stages · security · version fetches")
 
     def _iv_image_outdated(current: str, recommended: str) -> bool:
@@ -31146,13 +31297,14 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             ] or ["prd"]
 
         def _sec_aggregate(stage: str) -> dict:
-            """Sum V* across all 3 scanners for the given stage's version
+            """Sum V* across all 4 scanners for the given stage's version
             of every in-scope app. Returns ``{vc, vh, vm, vl, src_totals,
             apps_scanned, apps_with_ver}``."""
             _src = {
-                "prisma":  {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
-                "invicti": {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
-                "zap":     {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+                "prisma":     {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+                "invicti":    {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+                "zap":        {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
+                "trufflehog": {"vc": 0, "vh": 0, "vm": 0, "vl": 0, "apps": 0},
             }
             _scanned: set[str] = set()
             _with_ver = 0
@@ -31164,9 +31316,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                     continue
                 _with_ver += 1
                 for _name, _smap in (
-                    ("prisma",  _iv_prisma_map),
-                    ("invicti", _iv_invicti_map),
-                    ("zap",     _iv_zap_map),
+                    ("prisma",     _iv_prisma_map),
+                    ("invicti",    _iv_invicti_map),
+                    ("zap",        _iv_zap_map),
+                    ("trufflehog", _iv_thog_map),
                 ):
                     _sc = _smap.get((_ap, _ver))
                     if not _sc:
@@ -31190,9 +31343,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _sec_per_stage = {st: _sec_aggregate(st) for st in _sec_stages}
 
         _SRC_META = {
-            "prisma":  ("⛟",  "Prismacloud", "var(--cc-blue)"),
-            "invicti": ("⊛",  "Invicti",     "var(--cc-teal)"),
-            "zap":     ("⌖",  "ZAP",         "var(--cc-amber)"),
+            "prisma":     ("⛟",  "Prismacloud", "var(--cc-blue)"),
+            "invicti":    ("⊛",  "Invicti",     "var(--cc-teal)"),
+            "zap":        ("⌖",  "ZAP",         "var(--cc-amber)"),
+            "trufflehog": ("⚿",  "TruffleHog",  "var(--cc-red)"),
         }
 
         # Tile-level severity tag: pick the WORST stage's worst severity
@@ -31231,7 +31385,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         def _stage_src_chips(stage: str) -> str:
             _ag = _sec_per_stage[stage]
             _chips: list[str] = []
-            for _src in ("prisma", "invicti", "zap"):
+            for _src in ("prisma", "invicti", "zap", "trufflehog"):
                 _t = _ag["src_totals"][_src]
                 _findings = _t["vc"] + _t["vh"] + _t["vm"] + _t["vl"]
                 if _t["apps"] == 0:
@@ -33269,11 +33423,52 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         return (f'<span class="iv-sec-chip iv-sec-{_tier}" title="{_title}">'
                 f'<span class="iv-sec-label">{kind}</span>{_n}</span>')
 
-    def _iv_app_posture_html(app: str) -> str:
-        """Render V + C chips side-by-side for *app*'s PRD-live scan.
+    # Worst TruffleHog secret scan per app (across every scanned version) —
+    # secrets attach to source, not a deploy version, so we don't PRD-lock them.
+    _iv_thog_by_app: dict[str, dict] = {}
+    for (_a_t, _v_t), _tsc in _iv_thog_map.items():
+        if not _tsc:
+            continue
+        _rank = (int(_tsc.get("Vcritical") or 0), int(_tsc.get("Vhigh") or 0),
+                 int(_tsc.get("Vmedium") or 0), int(_tsc.get("Vlow") or 0),
+                 int(_tsc.get("findings_count") or 0))
+        _cur = _iv_thog_by_app.get(_a_t)
+        if _cur is None or _rank > _cur["_rank"]:
+            _iv_thog_by_app[_a_t] = {**_tsc, "_rank": _rank}
 
-        Returns an "N/A" chip when we don't have a PRD version or no scan for
-        it — that way the column's visual rhythm stays even across the table.
+    def _iv_secrets_chip(app: str) -> str:
+        """Secret-exposure ('S') chip from TruffleHog — verified secrets force
+        a critical tint (a verified finding is a live leaked credential)."""
+        _ts = _iv_thog_by_app.get(app)
+        if not _ts:
+            return ('<span class="iv-sec-chip iv-sec-na" '
+                    'title="No TruffleHog scan on record">'
+                    '<span class="iv-sec-label">S</span>·</span>')
+        _tier, _n, _c, _h, _m, _l = _iv_sec_tier(_ts, "V")
+        _verified = bool(_ts.get("verified"))
+        _fc = int(_ts.get("findings_count") or 0)
+        _det = (_ts.get("detector") or "").strip()
+        _title = (f"Secrets (TruffleHog): {_c} critical · {_h} high · {_m} "
+                  f"medium · {_l} low · {_fc} finding{'s' if _fc != 1 else ''}"
+                  + (" · VERIFIED (leaked credential)" if _verified else "")
+                  + (f" · {_det}" if _det else ""))
+        if _tier == "clean" and not _fc and not _verified:
+            return (f'<span class="iv-sec-chip iv-sec-clean" title="{html.escape(_title, quote=True)}">'
+                    f'<span class="iv-sec-label">S</span>✓</span>')
+        _cls = "crit" if _verified or _tier == "crit" else (
+            _tier if _tier != "clean" else "low")
+        _val = _n if _n else _fc
+        return (f'<span class="iv-sec-chip iv-sec-{_cls}" '
+                f'title="{html.escape(_title, quote=True)}">'
+                f'<span class="iv-sec-label">S</span>{_val}'
+                f'{"!" if _verified else ""}</span>')
+
+    def _iv_app_posture_html(app: str) -> str:
+        """Render V + C + S chips side-by-side for *app*'s posture.
+
+        V/C come from the PRD-live Prismacloud scan; S (secrets) is the worst
+        TruffleHog scan for the app. An "N/A" chip keeps the column's visual
+        rhythm even when a scanner has nothing on record.
         """
         _prd = _iv_prd_map.get(app) or {}
         _pv = _prd.get("version") or ""
@@ -33281,18 +33476,16 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if not _sc:
             _reason = ("no PRD version on record" if not _pv
                        else f"no Prismacloud scan for {app}@{_pv}")
-            return (
-                f'<span class="iv-sec-row">'
+            _vc = (
                 f'<span class="iv-sec-chip iv-sec-na" title="{_reason}">'
                 f'<span class="iv-sec-label">V</span>·</span>'
                 f'<span class="iv-sec-chip iv-sec-na" title="{_reason}">'
                 f'<span class="iv-sec-label">C</span>·</span>'
-                f'</span>'
             )
+        else:
+            _vc = f'{_iv_sec_chip("V", _sc)}{_iv_sec_chip("C", _sc)}'
         return (
-            f'<span class="iv-sec-row">'
-            f'{_iv_sec_chip("V", _sc)}{_iv_sec_chip("C", _sc)}'
-            f'</span>'
+            f'<span class="iv-sec-row">{_vc}{_iv_secrets_chip(app)}</span>'
         )
 
     def _iv_outdated_pills(app: str) -> str:
@@ -33374,10 +33567,12 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             return "fair", "Fair"
         return "risk", "At risk"
 
-    # Worst-known V* counts per app across all 3 scanners / every scanned
+    # Worst-known V* counts per app across all 4 scanners / every scanned
     # version — one pass over the (already-loaded) scan maps, O(total scans).
+    # TruffleHog (secrets) is normalised onto the same V* shape, so a verified
+    # leaked secret (CRITICAL) tanks the security dimension like any critical.
     _iv_scan_worst: dict[str, list[int]] = {}
-    for _smap_sc in (_iv_prisma_map, _iv_invicti_map, _iv_zap_map):
+    for _smap_sc in (_iv_prisma_map, _iv_invicti_map, _iv_zap_map, _iv_thog_map):
         for (_a_sc, _v_sc), _sc in _smap_sc.items():
             if not _sc:
                 continue
@@ -33689,25 +33884,26 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
     _pr_by_proj: dict[str, dict] = {}
     for _r in _inv_rows_filtered:
         _pk = _r.get("project") or "(no project)"
-        _p_bucket = _pr_by_proj.setdefault(_pk, {"count": 0, "worst": "na", "covered": 0})
+        _p_bucket = _pr_by_proj.setdefault(
+            _pk, {"count": 0, "worst": "na", "covered": 0,
+                  "c": 0, "h": 0, "m": 0, "l": 0})
         _p_bucket["count"] += 1
         _a = _r.get("application") or ""
-        _prd = _iv_prd_map.get(_a) or {}
-        _pv = _prd.get("version") or ""
-        _sc = _iv_prisma_map.get((_a, _pv)) if _pv else None
-        if not _sc:
+        # Worst-known counts across ALL FOUR scanners (Prisma / Invicti / ZAP /
+        # TruffleHog secrets), normalised onto V*. `_iv_scan_worst` is the same
+        # basis the health score uses, so ribbon + score + rollups agree.
+        _cnts = _iv_scan_worst.get(_a)
+        if not _cnts:
             continue
         _p_bucket["covered"] += 1
-        if int(_sc.get("Vcritical") or 0) or int(_sc.get("Ccritical") or 0):
-            _t = "crit"
-        elif int(_sc.get("Vhigh") or 0) or int(_sc.get("Chigh") or 0):
-            _t = "high"
-        elif int(_sc.get("Vmedium") or 0) or int(_sc.get("Cmedium") or 0):
-            _t = "med"
-        elif int(_sc.get("Vlow") or 0) or int(_sc.get("Clow") or 0):
-            _t = "low"
-        else:
-            _t = "clean"
+        _c, _h, _m, _l = _cnts
+        _p_bucket["c"] += _c; _p_bucket["h"] += _h
+        _p_bucket["m"] += _m; _p_bucket["l"] += _l
+        if _c:   _t = "crit"
+        elif _h: _t = "high"
+        elif _m: _t = "med"
+        elif _l: _t = "low"
+        else:    _t = "clean"
         if _pr_TIER_RANK[_t] > _pr_TIER_RANK[_p_bucket["worst"]]:
             _p_bucket["worst"] = _t
 
@@ -33729,7 +33925,9 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             _n = _b["count"]
             _tip = (
                 f"{_proj} · {_n} app{'s' if _n != 1 else ''} · "
-                f"{_b['covered']} scanned · worst tier: {_t}"
+                f"{_b['covered']} scanned · worst tier: {_t} · vuln "
+                f"{_b['c']}C/{_b['h']}H/{_b['m']}M/{_b['l']}L "
+                f"(Prisma+Invicti+ZAP+TruffleHog)"
             )
             _devops_chip = (
                 '<span class="iv-pr-devops" '
@@ -33758,10 +33956,37 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'{"s" if _pr_overflow != 1 else ""} not shown — '
                 f'narrow filters to surface them">+{_pr_overflow} more</span>'
             )
+        # ── Platform-wide overall vulnerability (all 4 scanners) ─────────────
+        _plat_c = sum(_b["c"] for _b in _pr_by_proj.values())
+        _plat_h = sum(_b["h"] for _b in _pr_by_proj.values())
+        _plat_m = sum(_b["m"] for _b in _pr_by_proj.values())
+        _plat_l = sum(_b["l"] for _b in _pr_by_proj.values())
+        _plat_scanned = sum(_b["covered"] for _b in _pr_by_proj.values())
+        _plat_apps = sum(_b["count"] for _b in _pr_by_proj.values())
+        _plat_tier = ("crit" if _plat_c else "high" if _plat_h else "med"
+                      if _plat_m else "low" if _plat_l
+                      else "clean" if _plat_scanned else "na")
+        _plat_tip = (
+            f"Platform-wide overall vulnerability across Prismacloud + Invicti + "
+            f"ZAP + TruffleHog (worst scan per app): {_plat_c} critical · "
+            f"{_plat_h} high · {_plat_m} medium · {_plat_l} low — over "
+            f"{_plat_scanned}/{_plat_apps} apps with a scan on record."
+        )
+        _plat_chip = (
+            f'<span class="iv-pr-platform is-{_plat_tier}" '
+            f'title="{html.escape(_plat_tip, quote=True)}">'
+            f'<span class="iv-pr-dot is-{_plat_tier}"></span>'
+            f'<span class="iv-pr-platform-lbl">Platform vuln</span>'
+            f'<b class="sev-c">{_plat_c}C</b><b class="sev-h">{_plat_h}H</b>'
+            f'<b class="sev-m">{_plat_m}M</b><b class="sev-l">{_plat_l}L</b>'
+            f'<span class="iv-pr-platform-sub">{_plat_scanned}/{_plat_apps} '
+            f'scanned</span></span>'
+        )
         st.markdown(
             '<div class="iv-proj-ribbon">'
             f'<span class="iv-pr-lbl">{len(_pr_by_proj)} project'
             f'{"s" if len(_pr_by_proj) != 1 else ""}</span>'
+            + _plat_chip
             + "".join(_pr_chips) +
             '</div>',
             unsafe_allow_html=True,
@@ -33900,9 +34125,10 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         # popover is anchored to the live PRD version, no Δ-vs-baseline is
         # needed — each scanner is a display-only card.
         _APP_SCAN_SOURCES = (
-            ("prisma",  "Prismacloud", "⛟", "var(--cc-blue)",  _iv_prisma_map,  True),
-            ("invicti", "Invicti",     "⊛", "var(--cc-teal)",  _iv_invicti_map, False),
-            ("zap",     "ZAP",         "⌖", "var(--cc-amber)", _iv_zap_map,     False),
+            ("prisma",     "Prismacloud", "⛟", "var(--cc-blue)",  _iv_prisma_map,  True),
+            ("invicti",    "Invicti",     "⊛", "var(--cc-teal)",  _iv_invicti_map, False),
+            ("zap",        "ZAP",         "⌖", "var(--cc-amber)", _iv_zap_map,     False),
+            ("trufflehog", "TruffleHog",  "⚿", "var(--cc-red)",   _iv_thog_map,    False),
         )
         _APP_SEV_KEYS = [("critical", "Critical"), ("high", "High"),
                          ("medium", "Medium"), ("low", "Low")]
@@ -33959,9 +34185,33 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 )
             return _meta
 
+        def _app_secrets_meta(scan: dict) -> str:
+            """Meta strip for the TruffleHog card: verified badge, total
+            findings and the detector that fired."""
+            _verified = bool(scan.get("verified"))
+            _fc = int(scan.get("findings_count") or 0)
+            _det = (scan.get("detector") or "").strip()
+            _bits = [
+                (f'<span class="ap-scan-card-verified" title="At least one '
+                 f'secret was VERIFIED against its live service — treat as a '
+                 f'leaked credential">✓ VERIFIED</span>'
+                 if _verified else
+                 '<span class="ap-scan-card-aux" title="No finding verified '
+                 'against a live service">unverified</span>'),
+                f'<span class="ap-scan-card-aux" title="Total secret findings">'
+                f'FINDINGS <b>{_fc}</b></span>',
+            ]
+            _meta = '<div class="ap-scan-card-meta">' + "".join(_bits) + '</div>'
+            if _det:
+                _short = _det if len(_det) <= 38 else _det[:35] + "…"
+                _meta += (f'<div class="ap-scan-card-url" '
+                          f'title="Detector: {html.escape(_det)}">'
+                          f'⚿ {html.escape(_short)}</div>')
+            return _meta
+
         def _app_scan_card(name: str, glyph: str, color: str,
                            scan: dict | None, has_compliance: bool,
-                           meta_html: str = "") -> str:
+                           meta_html: str = "", sev_label: str = "Vulnerabilities") -> str:
             if not scan:
                 return (
                     f'<div class="ap-scan-card ap-scan-card--empty" '
@@ -33990,7 +34240,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                    if _when else '')
                 + meta_html
                 + '<div class="ap-scan-card-section">'
-                + f'  <span>Vulnerabilities</span>'
+                + f'  <span>{sev_label}</span>'
                 + f'  <span class="ap-scan-card-total">{_v_total}</span>'
                 + '</div>'
                 + f'<div class="ap-scan-card-rows">{_v_rows}</div>'
@@ -34010,13 +34260,17 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         _app_scan_cards: list[str] = []
         for _src_key, _src_lbl, _src_glyph, _src_color, _src_map, _has_c in _APP_SCAN_SOURCES:
             _scan_app = _src_map.get((_app, _prd_ver)) if _prd_ver else None
-            _meta_app = (
-                _app_dast_meta(_src_key, _scan_app)
-                if _scan_app and _src_key in ("invicti", "zap") else ""
-            )
+            if _scan_app and _src_key == "trufflehog":
+                _meta_app = _app_secrets_meta(_scan_app)
+            elif _scan_app and _src_key in ("invicti", "zap"):
+                _meta_app = _app_dast_meta(_src_key, _scan_app)
+            else:
+                _meta_app = ""
             _app_scan_cards.append(
                 _app_scan_card(_src_lbl, _src_glyph, _src_color,
-                               _scan_app, _has_c, _meta_app)
+                               _scan_app, _has_c, _meta_app,
+                               sev_label=("Secrets" if _src_key == "trufflehog"
+                                          else "Vulnerabilities"))
             )
 
         if _prd_ver:
@@ -34803,6 +35057,27 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'{_pscore["n"]} app score{"s" if _pscore["n"] != 1 else ""} · open '
                 f'an app below for its breakdown</span>'
             )
+
+        # ── Project overall vulnerability (all 4 scanners) ───────────────────
+        _proj_vuln_block_p = ""
+        _pvuln = _pr_by_proj.get(_proj)
+        if _pvuln and _pvuln.get("covered"):
+            _pc, _ph, _pm, _pl = (_pvuln["c"], _pvuln["h"], _pvuln["m"], _pvuln["l"])
+            _pv_tier = ("crit" if _pc else "high" if _ph else "med" if _pm
+                        else "low" if _pl else "clean")
+            _pv_cells = "".join(
+                f'<span class="ap-vuln-cell is-{_cls}{"" if _val else " zero"}">'
+                f'<b>{_val}</b>{_lbl}</span>'
+                for _val, _lbl, _cls in ((_pc, "crit", "c"), (_ph, "high", "h"),
+                                         (_pm, "med", "m"), (_pl, "low", "l")))
+            _proj_vuln_block_p = (
+                '    <div class="ap-section">Overall vulnerability</div>'
+                f'    <div class="ap-vuln-strip is-{_pv_tier}">{_pv_cells}</div>'
+                f'    <span class="ap-k">Coverage</span><span class="ap-v">'
+                f'{_pvuln["covered"]}/{_pvuln["count"]} app'
+                f'{"s" if _pvuln["count"] != 1 else ""} scanned · worst scan '
+                f'across Prismacloud + Invicti + ZAP + TruffleHog (secrets)</span>'
+            )
         _iv_popovers.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -34816,6 +35091,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  <div class="ap-body">'
             f'    {_devops_banner_p}'
             f'    {_proj_score_block_p}'
+            f'    {_proj_vuln_block_p}'
             f'    {_company_block_p}'
             f'    {_proj_created_block_p}'
             f'    <div class="ap-section">Teams</div>'
@@ -35213,7 +35489,8 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         '<table><thead><tr><th>Dimension</th><th>Weight</th><th>How it scores</th>'
         '</tr></thead><tbody>'
         '<tr><td><b>Security posture</b></td><td><b>30</b></td><td>Worst '
-        'vulnerability counts across Prismacloud + Invicti + ZAP over every '
+        'vulnerability + secret counts across Prismacloud + Invicti + ZAP + '
+        'TruffleHog (a verified leaked secret counts as critical) over every '
         'scanned version. Start 30; subtract <code>12×critical</code>, '
         '<code>5×high</code>, <code>1.5×medium</code>, <code>0.4×low</code> '
         '(each capped, floor 0). No scan on record → <b>18</b> (neutral).</td></tr>'

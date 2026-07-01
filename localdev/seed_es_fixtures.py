@@ -201,6 +201,36 @@ def gen_security():
         _dump(index, out)
 
 
+def gen_trufflehog():
+    """Secret-detection scans (ef-cicd-trufflehog). Uppercase severity buckets
+    + verified flag + detector + findings_count. A couple of apps carry a
+    VERIFIED critical secret so the score/rollup/verified-badge paths fire."""
+    _DETECTORS = ["AWS", "GitHubToken", "SlackWebhook", "PrivateKey", "GCP"]
+    out = []
+    for _i, (proj, app, co, dev, qc, ops, jk, prd_ver, qcv, plat) in enumerate(APPS):
+        for ver in (prd_ver, qcv):
+            seed = (len(app) + len(ver)) % 4
+            # Every 2nd app on its PRD version has a VERIFIED critical secret.
+            _verified = (_i % 2 == 0 and ver == prd_ver)
+            _crit = 1 if _verified else 0
+            _high = seed % 2
+            _med = seed
+            _low = seed + 1
+            _fc = _crit + _high + _med + _low
+            out.append({
+                "id": f"ef-cicd-trufflehog-{app}-{ver}",
+                "application": app, "codeversion": ver, "codeVersion": ver,
+                "project": proj, "branch": "main",
+                "CRITICAL": _crit, "HIGH": _high, "MEDIUM": _med, "LOW": _low,
+                "findings_count": _fc, "verified": _verified,
+                "detector": _DETECTORS[_i % len(_DETECTORS)],
+                "severity": "CRITICAL" if _crit else "HIGH" if _high else "LOW",
+                "status": "Completed", "tool": "trufflehog",
+                "startdate": _iso(1), "enddate": _iso(1),
+            })
+    _dump("ef-cicd-trufflehog", out)
+
+
 def gen_versions():
     out = []
     for _i, (proj, app, co, dev, qc, ops, jk, prd_ver, qcv, plat) in enumerate(APPS):
@@ -268,6 +298,7 @@ def main():
     gen_deployments()
     gen_releases()
     gen_security()
+    gen_trufflehog()
     gen_versions()
     gen_commits()
     gen_requests()
