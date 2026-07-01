@@ -4892,6 +4892,98 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 }
 .tp-chip b { color: var(--cc-amber); }
 
+/* ── Application / project health score ────────────────────────────────── */
+.iv-score {
+    display: inline-flex; align-items: baseline; gap: 2px;
+    padding: 1px 7px 1px 6px; border-radius: 999px; cursor: help;
+    font-family: var(--cc-data, var(--cc-mono)); font-weight: 800;
+    font-size: 0.72rem; line-height: 1.5; white-space: nowrap;
+    border: 1px solid transparent; font-variant-numeric: tabular-nums;
+    vertical-align: middle;
+}
+.iv-score .iv-score-max { font-weight: 600; font-size: 0.6rem; opacity: 0.7; }
+.iv-score .iv-score-dot { font-size: 0.62rem; margin-right: 1px; }
+.iv-score.is-healthy { background: var(--cc-green-bg); color: #056646;
+    border-color: rgba(5,150,105,.30); }
+.iv-score.is-fair    { background: var(--cc-amber-bg); color: #9a5b06;
+    border-color: rgba(217,119,6,.30); }
+.iv-score.is-risk    { background: var(--cc-red-bg); color: #b3221f;
+    border-color: rgba(220,38,38,.30); }
+.iv-score.is-na      { background: var(--cc-surface2); color: var(--cc-text-mute);
+    border-color: var(--cc-border); }
+.iv-score.is-proj    { font-size: 0.68rem; padding: 0 7px; }
+/* breakdown inside popovers */
+.ap-score-head {
+    display: flex; align-items: center; gap: 8px; margin: 2px 0 8px;
+}
+.ap-score-big {
+    font-family: var(--cc-data, var(--cc-mono)); font-weight: 800;
+    font-size: 1.65rem; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.ap-score-big .s-max { font-size: 0.82rem; font-weight: 600; opacity: 0.6; }
+.ap-score-band {
+    font-family: var(--cc-mono); font-size: 0.62rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 8px;
+    border-radius: 999px;
+}
+.ap-score-band.is-healthy { background: var(--cc-green-bg); color: #056646; }
+.ap-score-band.is-fair    { background: var(--cc-amber-bg); color: #9a5b06; }
+.ap-score-band.is-risk    { background: var(--cc-red-bg); color: #b3221f; }
+.ap-score-bd { display: grid; grid-template-columns: 1fr; gap: 5px; margin-top: 2px; }
+.ap-score-row {
+    display: grid; grid-template-columns: 40% 1fr auto; align-items: center;
+    gap: 8px;
+}
+.ap-score-lbl {
+    font-family: var(--cc-sans); font-size: 0.74rem; font-weight: 600;
+    color: var(--cc-text); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ap-score-lbl small {
+    display: block; font-weight: 400; font-size: 0.64rem;
+    color: var(--cc-text-mute); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ap-score-track {
+    position: relative; height: 7px; border-radius: 4px;
+    background: var(--cc-surface2); overflow: hidden;
+}
+.ap-score-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+.ap-score-fill.is-hi  { background: var(--cc-green); }
+.ap-score-fill.is-mid { background: var(--cc-amber); }
+.ap-score-fill.is-lo  { background: var(--cc-red); }
+.ap-score-pts {
+    font-family: var(--cc-data, var(--cc-mono)); font-size: 0.68rem;
+    color: var(--cc-text-dim); font-variant-numeric: tabular-nums; text-align: right;
+}
+.ap-score-pts b { color: var(--cc-text); }
+.ap-score-dist { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+.ap-score-pill {
+    font-family: var(--cc-mono); font-size: 0.64rem; font-weight: 700;
+    padding: 1px 8px; border-radius: 999px; border: 1px solid var(--cc-border);
+}
+.ap-score-pill.is-healthy { background: var(--cc-green-bg); color: #056646; }
+.ap-score-pill.is-fair    { background: var(--cc-amber-bg); color: #9a5b06; }
+.ap-score-pill.is-risk    { background: var(--cc-red-bg); color: #b3221f; }
+/* "How the score works" explainer */
+.iv-score-explain {
+    font-size: 0.74rem; color: var(--cc-text-dim); line-height: 1.6;
+}
+.iv-score-explain table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+.iv-score-explain th, .iv-score-explain td {
+    padding: 4px 8px; border-bottom: 1px solid var(--cc-border); text-align: left;
+    vertical-align: top;
+}
+.iv-score-explain th {
+    font-family: var(--cc-mono); font-size: 0.62rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--cc-text-mute);
+}
+.iv-score-explain td b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.iv-score-explain code {
+    background: var(--cc-surface2); padding: 0 3px; border-radius: 3px;
+    font-size: 0.7rem;
+}
+
 /* ── Teams matrix: companies (columns) × roles (rows) ──────────────────── */
 .tm-mx-co {
     display: flex; align-items: center; gap: 6px;
@@ -33266,6 +33358,215 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             + '</div>'
         )
 
+    # ══ Application / project HEALTH SCORE (0–10) ════════════════════════════
+    # A transparent composite over signals already loaded for this render (no
+    # extra fetch). Internal 100-pt model, six weighted dimensions, ÷10 → /10.
+    # Every dimension degrades to a neutral partial when its data is absent, so
+    # an app isn't punished for signals the platform simply hasn't captured.
+    # The published rubric is rendered verbatim in the "How the score works"
+    # explainer above the table — keep the two in sync.
+    _IV_SUCCESS_LC = {s.lower() for s in SUCCESS_STATUSES}
+
+    def _iv_score_band(score: float) -> tuple[str, str]:
+        if score >= 8.0:
+            return "healthy", "Healthy"
+        if score >= 6.0:
+            return "fair", "Fair"
+        return "risk", "At risk"
+
+    # Worst-known V* counts per app across all 3 scanners / every scanned
+    # version — one pass over the (already-loaded) scan maps, O(total scans).
+    _iv_scan_worst: dict[str, list[int]] = {}
+    for _smap_sc in (_iv_prisma_map, _iv_invicti_map, _iv_zap_map):
+        for (_a_sc, _v_sc), _sc in _smap_sc.items():
+            if not _sc:
+                continue
+            _cur = _iv_scan_worst.setdefault(_a_sc, [0, 0, 0, 0])
+            _cur[0] = max(_cur[0], int(_sc.get("Vcritical") or 0))
+            _cur[1] = max(_cur[1], int(_sc.get("Vhigh") or 0))
+            _cur[2] = max(_cur[2], int(_sc.get("Vmedium") or 0))
+            _cur[3] = max(_cur[3], int(_sc.get("Vlow") or 0))
+
+    def _iv_compute_score(r: dict) -> dict:
+        """Return {score, band, label, components:[{key,label,earned,max,note}]}."""
+        _app = r.get("application") or ""
+        _proj = r.get("project") or ""
+        _comps: list[dict] = []
+
+        # 1 ── Security posture — 30 pts (worst scanned V* across scanners) ──
+        _c, _h, _m, _l = _iv_scan_worst.get(_app, [0, 0, 0, 0])
+        if _app not in _iv_scan_worst:
+            _sec, _snote = 18.0, "no scan on record — neutral"
+        else:
+            _sec = 30.0
+            _sec -= min(_c * 12.0, 30.0)
+            _sec -= min(_h * 5.0, 20.0)
+            _sec -= min(_m * 1.5, 9.0)
+            _sec -= min(_l * 0.4, 4.0)
+            _sec = max(0.0, _sec)
+            _snote = (f"worst scan: {_c} crit · {_h} high · {_m} med · {_l} low"
+                      if (_c or _h or _m or _l) else "clean across all scanners")
+        _comps.append({"key": "security", "label": "Security posture",
+                       "earned": _sec, "max": 30.0, "note": _snote})
+
+        # 2 ── PRD deployment — 20 pts ──────────────────────────────────────
+        _prd = _iv_prd_map.get(_app) or {}
+        if _prd.get("live"):
+            _pd, _pnote = 20.0, f"live in PRD · {_prd.get('version') or '—'}"
+        elif _prd:
+            _pd, _pnote = 11.0, "has PRD history but not currently live"
+        else:
+            _pd, _pnote = 5.0, "never deployed to PRD"
+        _comps.append({"key": "prd", "label": "PRD deployment",
+                       "earned": _pd, "max": 20.0, "note": _pnote})
+
+        # 3 ── Pipeline stages — 15 pts (build / prd-deploy / release) ───────
+        _stages = _iv_stages_map.get(_app) or {}
+        _ps, _ok, _bad, _na = 0.0, [], [], []
+        for _sk, _slbl in (("build", "build"), ("prd", "deploy"), ("release", "release")):
+            _sd = _stages.get(_sk) or {}
+            _stt = (_sd.get("status") or "").strip()
+            if not _stt:
+                _ps += 3.0; _na.append(_slbl)
+            elif _stt.lower() in _IV_SUCCESS_LC:
+                _ps += 5.0; _ok.append(_slbl)
+            else:
+                _bad.append(_slbl)
+        _pbits = []
+        if _ok:  _pbits.append("✓ " + "/".join(_ok))
+        if _bad: _pbits.append("✗ " + "/".join(_bad))
+        if _na:  _pbits.append("– " + "/".join(_na) + " (no record)")
+        _comps.append({"key": "stages", "label": "Pipeline stages",
+                       "earned": _ps, "max": 15.0,
+                       "note": " · ".join(_pbits) or "no stage records"})
+
+        # 4 ── Image currency — 15 pts (build + deploy vs recommended) ───────
+        _b_old, _d_old, _ver = _iv_outdated_flags(_app)
+        def _img_pts(_old: bool, _rec: str) -> tuple[float, str]:
+            if not (_rec or "").strip():
+                return 5.0, "no advisory"
+            return (0.0, "outdated") if _old else (7.5, "current")
+        _bp, _bn = _img_pts(_b_old, _ver.get("build_recommended", ""))
+        _dp, _dn = _img_pts(_d_old, _ver.get("deploy_recommended", ""))
+        _comps.append({"key": "images", "label": "Image currency",
+                       "earned": _bp + _dp, "max": 15.0,
+                       "note": f"build {_bn} · deploy {_dn}"})
+
+        # 5 ── Version-lookup hygiene — 12 pts ──────────────────────────────
+        _nv = _next_versions_for(_app, _proj, _iv_next_versions)
+        if not _nv:
+            _vh, _vnote = 4.0, "no ef-cicd-versions-lookup record"
+        else:
+            _vh = 12.0
+            _miss = [f"next_{_b}" for _b in ("develop", "release") if not _nv.get(_b)]
+            _vh -= 4.0 * len(_miss)
+            _hot = (_nv.get("hotfix") or "").strip()
+            _pv = (_prd.get("version") or "").strip()
+            _bad_hot = bool(_prd.get("live") and _pv and _hot and not _hot.startswith(_pv))
+            if _bad_hot:
+                _vh -= 2.0
+            _vh = max(0.0, _vh)
+            _vnote = ("complete" if not _miss and not _bad_hot
+                      else ", ".join(([("missing " + ", ".join(_miss))] if _miss else [])
+                                     + (["next_hotfix ≠ live PRD"] if _bad_hot else [])))
+        _comps.append({"key": "version", "label": "Version hygiene",
+                       "earned": _vh, "max": 12.0, "note": _vnote})
+
+        # 6 ── Inventory completeness — 8 pts (2 each) ──────────────────────
+        _fields = (("build_technology", "build tech"), ("deploy_technology", "deploy tech"),
+                   ("deploy_platform", "platform"), ("repository_name", "repository"))
+        _set = [lbl for f, lbl in _fields if (r.get(f) or "").strip()]
+        _comps.append({"key": "inventory", "label": "Inventory completeness",
+                       "earned": 2.0 * len(_set), "max": 8.0,
+                       "note": (f"{len(_set)}/4 set" if len(_set) == 4
+                                else f"{len(_set)}/4 set · missing "
+                                     + ", ".join(lbl for f, lbl in _fields
+                                                 if not (r.get(f) or "").strip()))})
+
+        _total = sum(_c["earned"] for _c in _comps)
+        _score = round(_total / 10.0, 1)
+        _band, _lbl = _iv_score_band(_score)
+        return {"score": _score, "band": _band, "label": _lbl, "components": _comps}
+
+    # Compute once for every app in scope + a project mean.
+    _iv_score_map: dict[str, dict] = {}
+    for _rs in _inv_rows_all:
+        _asc = _rs.get("application") or ""
+        if _asc and _asc not in _iv_score_map:
+            _iv_score_map[_asc] = _iv_compute_score(_rs)
+    _iv_proj_scores: dict[str, list[float]] = {}
+    for _rs in _inv_rows_all:
+        _psc = _rs.get("project") or ""
+        _asc = _rs.get("application") or ""
+        if _psc and _asc in _iv_score_map:
+            _iv_proj_scores.setdefault(_psc, []).append(_iv_score_map[_asc]["score"])
+    _iv_proj_score_map: dict[str, dict] = {}
+    for _psc, _vals in _iv_proj_scores.items():
+        if not _vals:
+            continue
+        _pavg = round(sum(_vals) / len(_vals), 1)
+        _pband, _plbl = _iv_score_band(_pavg)
+        _iv_proj_score_map[_psc] = {
+            "score": _pavg, "band": _pband, "label": _plbl, "n": len(_vals),
+            "healthy": sum(1 for v in _vals if v >= 8.0),
+            "fair":    sum(1 for v in _vals if 6.0 <= v < 8.0),
+            "risk":    sum(1 for v in _vals if v < 6.0),
+        }
+
+    def _iv_app_score_badge(app: str) -> str:
+        _s = _iv_score_map.get(app)
+        if not _s:
+            return ('<span class="iv-score is-na" title="Not scored — no '
+                    'inventory row in scope">·<span class="iv-score-max">/10</span></span>')
+        _tip = (f"Health score {_s['score']}/10 — {_s['label']}. "
+                + " · ".join(f"{c['label']} {c['earned']:.0f}/{c['max']:.0f}"
+                             for c in _s["components"])
+                + ". Open the app for the full breakdown.")
+        return (f'<span class="iv-score is-{_s["band"]}" '
+                f'title="{html.escape(_tip, quote=True)}">'
+                f'<span class="iv-score-dot">●</span>{_s["score"]:g}'
+                f'<span class="iv-score-max">/10</span></span>')
+
+    def _iv_proj_score_badge(proj: str) -> str:
+        _s = _iv_proj_score_map.get(proj)
+        if not _s:
+            return ""
+        _tip = (f"Project score {_s['score']}/10 — {_s['label']} · mean of "
+                f"{_s['n']} app{'s' if _s['n'] != 1 else ''} "
+                f"({_s['healthy']} healthy · {_s['fair']} fair · {_s['risk']} at risk)")
+        return (f'<span class="iv-score is-proj is-{_s["band"]}" '
+                f'title="{html.escape(_tip, quote=True)}">'
+                f'{_s["score"]:g}<span class="iv-score-max">/10</span></span>')
+
+    def _iv_score_breakdown_html(app: str) -> str:
+        """The "Health score" ap-section for the application popover."""
+        _s = _iv_score_map.get(app)
+        if not _s:
+            return ""
+        _rows = []
+        for _c in _s["components"]:
+            _pct = (100.0 * _c["earned"] / _c["max"]) if _c["max"] else 0.0
+            _fillcls = "is-hi" if _pct >= 75 else "is-mid" if _pct >= 40 else "is-lo"
+            _rows.append(
+                '<div class="ap-score-row">'
+                f'<div class="ap-score-lbl">{html.escape(_c["label"])}'
+                f'<small>{html.escape(_c["note"])}</small></div>'
+                f'<div class="ap-score-track"><div class="ap-score-fill {_fillcls}" '
+                f'style="width:{_pct:.0f}%"></div></div>'
+                f'<div class="ap-score-pts"><b>{_c["earned"]:.0f}</b>/{_c["max"]:.0f}</div>'
+                '</div>'
+            )
+        return (
+            '<div class="ap-section">Health score</div>'
+            '<div class="ap-score-head">'
+            f'<span class="ap-score-big">{_s["score"]:g}<span class="s-max">/10</span></span>'
+            f'<span class="ap-score-band is-{_s["band"]}">{html.escape(_s["label"])}</span>'
+            '</div>'
+            f'<div class="ap-score-bd">{"".join(_rows)}</div>'
+            '<div class="ap-foot" style="border:0;padding:6px 0 0;margin:0">'
+            'Weighted composite ÷10 — see "How the score works" above the table.</div>'
+        )
+
     def _iv_app_cell(app: str, project: str = "") -> str:
         # Repo link removed from the table cell — it now only appears
         # inside the application popover (and only when the row carries
@@ -33275,6 +33576,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'<button type="button" class="el-app-trigger" '
             f'popovertarget="{_iv_app_pop_id(app)}" '
             f'title="Click for full inventory details">{app}</button>'
+            f'{_iv_app_score_badge(app)}'
             f'{_iv_outdated_pills(app)}'
             f'{_iv_ocp_pill(project, app)}'
             f'{_iv_app_posture_html(app)}'
@@ -33319,6 +33621,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                 f'<button type="button" class="el-proj-trigger" '
                 f'popovertarget="{_iv_proj_pop_id(proj)}" '
                 f'title="Click for teams & applications">{proj}</button>'
+                f'{_iv_proj_score_badge(proj)}'
                 f'{_jira_chip}'
                 f'</span>'
                 + (f'<span class="iv-proj-flag-row">{_flag_html}</span>'
@@ -33838,6 +34141,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  </div>'
             f'  <div class="ap-body">'
             f'    {_banner}'
+            f'    {_iv_score_breakdown_html(_app)}'
             f'    <div class="ap-section">Identity</div>'
             f'    <span class="ap-k">Project</span>{_iv_v(r.get("project", ""))}'
             f'    <span class="ap-k">Company</span>{_iv_v(r.get("company", ""))}'
@@ -34477,6 +34781,28 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
                    f'</span>' if _pc_rel else "")
                 + '</span>'
             )
+
+        # ── Project health score block (mean of its apps' scores) ────────────
+        _proj_score_block_p = ""
+        _pscore = _iv_proj_score_map.get(_proj)
+        if _pscore:
+            _dist = []
+            for _bk, _blbl in (("healthy", "healthy"), ("fair", "fair"), ("risk", "at risk")):
+                if _pscore[_bk]:
+                    _dist.append(f'<span class="ap-score-pill is-{_bk}">'
+                                 f'{_pscore[_bk]} {_blbl}</span>')
+            _proj_score_block_p = (
+                '    <div class="ap-section">Health score</div>'
+                '    <div class="ap-score-head">'
+                f'<span class="ap-score-big">{_pscore["score"]:g}'
+                f'<span class="s-max">/10</span></span>'
+                f'<span class="ap-score-band is-{_pscore["band"]}">'
+                f'{html.escape(_pscore["label"])}</span></div>'
+                f'    <div class="ap-score-dist">{"".join(_dist)}</div>'
+                f'    <span class="ap-k">Basis</span><span class="ap-v">mean of '
+                f'{_pscore["n"]} app score{"s" if _pscore["n"] != 1 else ""} · open '
+                f'an app below for its breakdown</span>'
+            )
         _iv_popovers.append(
             f'<div id="{_pid_p}" popover="auto" class="el-app-pop is-project">'
             f'  <div class="ap-head">'
@@ -34489,6 +34815,7 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
             f'  </div>'
             f'  <div class="ap-body">'
             f'    {_devops_banner_p}'
+            f'    {_proj_score_block_p}'
             f'    {_company_block_p}'
             f'    {_proj_created_block_p}'
             f'    <div class="ap-section">Teams</div>'
@@ -34871,12 +35198,58 @@ def _render_inventory_view(controls_slot, body_slot) -> None:
         if _inv_total > _IV_PAGE_SIZE
         else f"showing {_inv_total:,}"
     )
+    _iv_score_explainer = (
+        '<details class="iv-score-explain-wrap" style="margin:2px 0 8px">'
+        '<summary style="cursor:pointer;font-size:0.78rem;font-weight:700;'
+        'color:var(--cc-text-dim)">ⓘ How the health score (●&nbsp;/10) works</summary>'
+        '<div class="iv-score-explain">'
+        '<p style="margin:6px 0">Every application carries a <b>health score out '
+        'of 10</b> — a weighted composite of six signals already tracked in this '
+        'table, so it needs no extra data. Each dimension has a fixed weight on a '
+        '100-point scale; the total is divided by 10. A dimension with no data '
+        'earns a <b>neutral partial</b> (never a zero) so an app isn\'t punished '
+        'for a signal the platform simply hasn\'t captured. A <b>project\'s '
+        'score is the mean</b> of its applications\' scores.</p>'
+        '<table><thead><tr><th>Dimension</th><th>Weight</th><th>How it scores</th>'
+        '</tr></thead><tbody>'
+        '<tr><td><b>Security posture</b></td><td><b>30</b></td><td>Worst '
+        'vulnerability counts across Prismacloud + Invicti + ZAP over every '
+        'scanned version. Start 30; subtract <code>12×critical</code>, '
+        '<code>5×high</code>, <code>1.5×medium</code>, <code>0.4×low</code> '
+        '(each capped, floor 0). No scan on record → <b>18</b> (neutral).</td></tr>'
+        '<tr><td><b>PRD deployment</b></td><td><b>20</b></td><td>Live in PRD = '
+        '<b>20</b>; has PRD history but not currently live = <b>11</b>; never '
+        'deployed to PRD = <b>5</b>.</td></tr>'
+        '<tr><td><b>Pipeline stages</b></td><td><b>15</b></td><td>Latest '
+        '<code>build</code>, <code>PRD deploy</code> and <code>release</code> — '
+        'each worth 5: success = 5, failure = 0, no record = 3 (neutral).</td></tr>'
+        '<tr><td><b>Image currency</b></td><td><b>15</b></td><td>Build + deploy '
+        'images vs the recommended versions — each worth 7.5: current = 7.5, '
+        'outdated = 0, no recommendation = 5 (neutral).</td></tr>'
+        '<tr><td><b>Version hygiene</b></td><td><b>12</b></td><td>The '
+        '<code>ef-cicd-versions-lookup</code> record: −4 for each missing '
+        '<code>next_develop</code>/<code>next_release</code>, −2 if '
+        '<code>next_hotfix</code> doesn\'t extend the live PRD version; no '
+        'record = <b>4</b>.</td></tr>'
+        '<tr><td><b>Inventory completeness</b></td><td><b>8</b></td><td>2 points '
+        'each for <code>build_technology</code>, <code>deploy_technology</code>, '
+        '<code>deploy_platform</code> and <code>repository_name</code> being set.'
+        '</td></tr>'
+        '</tbody></table>'
+        '<p style="margin:6px 0">Bands: <span class="ap-score-band is-healthy">'
+        '≥ 8.0 Healthy</span> &nbsp; <span class="ap-score-band is-fair">6.0–7.9 '
+        'Fair</span> &nbsp; <span class="ap-score-band is-risk">&lt; 6.0 At risk'
+        '</span>. Hover any badge for its component summary, or open an '
+        'application for the full breakdown.</p>'
+        '</div></details>'
+    )
     st.markdown(
         f'<p class="el-tf-caption">'
         f'  <span class="el-tf-caption-count">{_iv_visible_badge}</span>'
         f'  <span class="el-tf-caption-sep">·</span>'
         f'  <span>click any <b>application</b> or <b>project</b> chip to open its detail popover</span>'
         f'</p>'
+        + _iv_score_explainer
         + _iv_main
         + _iv_popovers_html,
         unsafe_allow_html=True,
