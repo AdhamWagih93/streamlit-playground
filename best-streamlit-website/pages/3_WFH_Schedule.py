@@ -1,15 +1,37 @@
 from __future__ import annotations
 
-import json
+import os
+import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from itertools import combinations
-from pathlib import Path
 from typing import Dict, List, Sequence, Set
-import random
 
 import pandas as pd
 import streamlit as st
+
+# --- Optional infrastructure deps -------------------------------------------
+# Postgres driver: psycopg v3 preferred, psycopg2 as a fallback (both are
+# common in this org). Either works for our simple reads/writes.
+try:
+    import psycopg as _psycopg  # type: ignore  # v3
+    _POSTGRES_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    try:
+        import psycopg2 as _psycopg  # type: ignore  # v2
+        _POSTGRES_AVAILABLE = True
+    except ImportError:
+        _psycopg = None  # type: ignore
+        _POSTGRES_AVAILABLE = False
+
+# Platform vault SDK — present where the app is deployed; absent on local / CI
+# boxes, in which case the page degrades to an in-memory, read-only schedule.
+try:
+    from utils.vault import VaultClient as _VaultClient  # type: ignore
+    _VAULT_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _VaultClient = None  # type: ignore
+    _VAULT_AVAILABLE = False
 
 
 TEAM_MEMBERS: List[str] = [
@@ -33,9 +55,39 @@ OFFICE_WEEKDAYS = {0, 1, 2, 3}  # Mon-Thu
 DAILY_OFFICE_MIN, DAILY_OFFICE_MAX = 2, 3  # people in the office on each office day
 WEEKLY_WFO = 2                  # office days per member per week (50% of the 4 office days)
 WFO_PER_MEMBER_FORTNIGHT = 4    # exactly half of the 8 office days in a 2-week window
-WEEK_STORAGE_DIR = Path("data") / "wfh_schedules" / str(YEAR)
-HOLIDAYS_FILE = Path("data") / f"holidays_{YEAR}.json"
-PUBLIC_HOLIDAYS_FILE = Path("data") / f"public_holidays_{YEAR}.json"
+# --- Postgres-backed storage (replaces the old per-week / holiday JSON files).
+# Credentials resolve from the platform vault, mirroring cicd_dashboard.py.
+# The page persists ONLY the rolling two-week window (current + next week)
+# in the schedule table; the holiday registers are kept in full. Table names
+# are env-overridable but default to dedicated, namespaced WFH tables.
+POSTGRES_VAULT_PATH = os.environ.get("WFH_POSTGRES_VAULT_PATH", "postgres").strip()
+POSTGRES_CONNECT_TIMEOUT = 10  # seconds
+POSTGRES_DATA_TTL = 60         # seconds (vault cache)
+
+WFH_SCHEDULE_TABLE = os.environ.get("WFH_SCHEDULE_TABLE", "wfh_schedule_days").strip()
+WFH_PERSONAL_HOLIDAYS_TABLE = os.environ.get(
+    "WFH_PERSONAL_HOLIDAYS_TABLE", "wfh_personal_holidays").strip()
+WFH_PUBLIC_HOLIDAYS_TABLE = os.environ.get(
+    "WFH_PUBLIC_HOLIDAYS_TABLE", "wfh_public_holidays").strip()
+
+# --- Actuals: real attendance derived from the shared `session_states` table.
+# A member counts as physically in the office on a given day when at least one
+# of their sessions that day came from an on-site IP (client_ip starts with
+# the office prefix below). This table is written by the wider platform, not
+# by this page, so we only ever READ it.
+SESSION_STATES_TABLE = os.environ.get("WFH_SESSION_STATES_TABLE", "session_states").strip()
+OFFICE_IP_PREFIX = os.environ.get("WFH_OFFICE_IP_PREFIX", "10.26").strip()
+
+# Maps a team member (as used throughout this page) to their `username` value
+# in the session_states table.
+MEMBER_TO_SESSION_USER: Dict[str, str] = {
+    "Adham": "Adham_Wagih",
+    "Karam": "Karam_Mohamed",
+    "Hesham": "Hesham_Mostafa",
+    "Salma": "Salma_Adel",
+    "Zanaty": "Ahmed_Zanaty",
+}
+SESSION_USER_TO_MEMBER: Dict[str, str] = {v: k for k, v in MEMBER_TO_SESSION_USER.items()}
 
 # Role metadata used for role-based rules
 ROLE_BY_MEMBER: Dict[str, str] = {
@@ -49,12 +101,13 @@ ROLE_BY_MEMBER: Dict[str, str] = {
 # Personal, soft attendance preferences (validated as warnings only).
 # Weekday indices follow datetime.weekday(): Monday=0, ..., Sunday=6.
 PREFERS_WFO_DAYS: Dict[str, Set[int]] = {
-    # (No active "prefers to be in office on these days" preferences.)
+    # Prefer being in-office on specific weekdays.
+    "Hesham": {1, 3},       # Tuesday (1), Thursday (3)
 }
 
 DISLIKES_WFO_DAYS: Dict[str, Set[int]] = {
     # Dislike being in-office on specific weekdays.
-    "Hesham": {0, 3},       # Monday (0), Thursday (3)
+    "Hesham": {0, 2},       # Monday (0), Wednesday (2)
     "Salma": {3},           # Thursday (3)
 }
 
@@ -313,149 +366,445 @@ def iter_sundays_in_year() -> List[date]:
     return sundays
 
 
-def week_file_path(week_start: date) -> Path:
-    return WEEK_STORAGE_DIR / f"week_{week_start.isoformat()}.json"
+# =============================================================================
+# POSTGRES STORAGE LAYER
+# =============================================================================
+# Mirrors the connection pattern in cicd_dashboard.py: vault-resolved creds,
+# psycopg v3/v2, idempotent `CREATE TABLE IF NOT EXISTS` schema. Three
+# dedicated tables back this page:
+#
+#   wfh_schedule_days      — (day, member) -> status; holds ONLY the rolling
+#                            two-week window (older rows are pruned on load).
+#   wfh_personal_holidays  — (day, member) personal days off.
+#   wfh_public_holidays    — (day) -> name public holidays.
+#
+# Every read/write degrades gracefully: when vault or Postgres is unavailable
+# (local dev / CI), reads fall back to the rule-based base schedule and the
+# default holiday list, and writes become no-ops with a surfaced warning.
 
 
-def ensure_week_files(base_schedule: Dict[str, Dict[str, str]]) -> None:
-    WEEK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    for ws in iter_sundays_in_year():
-        path = week_file_path(ws)
-        if path.exists():
-            continue
-        # Build this week's schedule from base
-        week_days: Dict[str, Dict[str, str]] = {}
-        for offset in range(5):  # Sun-Thu
-            d = ws + timedelta(days=offset)
-            iso = d.isoformat()
-            if iso in base_schedule:
-                week_days[iso] = base_schedule[iso]
-        payload = {"week_start": ws.isoformat(), "days": week_days}
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def load_week(week_start: date, base_schedule: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
-    path = week_file_path(week_start)
-    if not path.exists():
-        # Fall back to generating from base schedule (and caching it)
-        WEEK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-        week_days: Dict[str, Dict[str, str]] = {}
-        for offset in range(5):
-            d = week_start + timedelta(days=offset)
-            iso = d.isoformat()
-            if iso in base_schedule:
-                week_days[iso] = base_schedule[iso]
-        payload = {"week_start": week_start.isoformat(), "days": week_days}
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return week_days
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        days: Dict[str, Dict[str, str]] = payload.get("days", {})
-        return days
-    except Exception:  # noqa: BLE001
-        # If file is corrupted, regenerate from base
-        week_days = {}
-        for offset in range(5):
-            d = week_start + timedelta(days=offset)
-            iso = d.isoformat()
-            if iso in base_schedule:
-                week_days[iso] = base_schedule[iso]
-        payload = {"week_start": week_start.isoformat(), "days": week_days}
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return week_days
-
-
-def save_week(week_start: date, days: Dict[str, Dict[str, str]]) -> None:
-    WEEK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"week_start": week_start.isoformat(), "days": days}
-    path = week_file_path(week_start)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def load_holidays() -> Dict[str, List[str]]:
-    """Load per-date holidays as {iso_date: [member, ...]} mapping."""
-
-    if not HOLIDAYS_FILE.exists():
+@st.cache_data(ttl=POSTGRES_DATA_TTL, show_spinner=False)
+def _vault_secrets_raw(path: str) -> dict:
+    """Cached vault read. Returns ``{}`` when vault is unavailable. Re-raises
+    on a genuine vault error so a transient failure isn't memoised as empty."""
+    if not _VAULT_AVAILABLE or not path:
         return {}
+    vc = _VaultClient()  # constructor (re)initialises the auth token per call
+    cfg = vc.read_all_nested_secrets(path) or {}
+    return dict(cfg) if isinstance(cfg, dict) else {}
 
+
+def _vault_secrets(path: str) -> dict:
+    """Public resolver — returns ``{}`` on any error instead of raising."""
+    if not _VAULT_AVAILABLE or not path:
+        return {}
     try:
-        raw = json.loads(HOLIDAYS_FILE.read_text(encoding="utf-8"))
+        return _vault_secrets_raw(path)
     except Exception:  # noqa: BLE001
         return {}
 
-    holidays: Dict[str, List[str]] = {}
-    if isinstance(raw, dict):
-        for iso, members in raw.items():
-            if not isinstance(members, list):
-                continue
-            # Keep only known team members and normalise duplicates
-            unique = sorted({m for m in members if isinstance(m, str)})
-            if unique:
-                holidays[iso] = unique
-    return holidays
+
+def _postgres_creds() -> dict:
+    """Resolve ``{host, port, database, username, password}`` from vault.
+    An empty ``host`` means "not configured" (the caller then degrades)."""
+    cfg = _vault_secrets(POSTGRES_VAULT_PATH)
+    if not cfg:
+        return {}
+    return {
+        "host":     (cfg.get("host") or "").strip(),
+        "port":     str(cfg.get("port") or "5432").strip(),
+        "database": (cfg.get("database") or "").strip(),
+        "username": (cfg.get("username") or "").strip(),
+        "password": (cfg.get("password") or "").strip(),
+    }
 
 
-def save_holidays(holidays: Dict[str, List[str]]) -> None:
-    """Persist holidays mapping to disk."""
+def _pg_safe_ident(s: str) -> bool:
+    """Permissive identifier guard — alphanumerics, underscore and dot only.
+    Gates the env-overridable table names before interpolating into DDL/DML."""
+    return bool(s) and all(c.isalnum() or c in "_." for c in s)
 
-    HOLIDAYS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    HOLIDAYS_FILE.write_text(json.dumps(holidays, indent=2), encoding="utf-8")
 
-
-def load_public_holidays() -> Dict[str, str]:
-    """Load public holidays for YEAR as {iso_date: name}.
-
-    If no custom file exists or it cannot be parsed, fall back to a
-    built-in list for Egypt in YEAR.
-    """
-
-    if not PUBLIC_HOLIDAYS_FILE.exists():
-        return DEFAULT_PUBLIC_HOLIDAYS.copy()
-
+def _pg_connect():
+    """Open a Postgres connection from vault-resolved creds. Raises on any
+    misconfiguration *without* attempting a socket connect (so local/CI boxes
+    fail fast instead of blocking on a connect timeout)."""
+    if not _POSTGRES_AVAILABLE:
+        raise RuntimeError("psycopg not installed")
+    creds = _postgres_creds()
+    if not creds or not creds.get("host"):
+        raise RuntimeError("postgres creds not resolved (check vault)")
     try:
-        raw = json.loads(PUBLIC_HOLIDAYS_FILE.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return DEFAULT_PUBLIC_HOLIDAYS.copy()
-
-    holidays: Dict[str, str] = {}
-    if isinstance(raw, dict):
-        for iso, name in raw.items():
-            if not isinstance(iso, str):
-                continue
-            try:
-                d = date.fromisoformat(iso)
-            except ValueError:
-                continue
-            if d.year != YEAR:
-                continue
-            holidays[iso] = str(name)
-    return holidays or DEFAULT_PUBLIC_HOLIDAYS.copy()
-
-
-def save_public_holidays(public_holidays: Dict[str, str]) -> None:
-    """Persist public holidays mapping to disk."""
-
-    PUBLIC_HOLIDAYS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PUBLIC_HOLIDAYS_FILE.write_text(
-        json.dumps(public_holidays, indent=2),
-        encoding="utf-8",
+        _port = int(creds["port"])
+    except (ValueError, TypeError):
+        _port = 5432
+    return _psycopg.connect(
+        host=creds["host"], port=_port, dbname=creds["database"],
+        user=creds["username"], password=creds["password"],
+        connect_timeout=POSTGRES_CONNECT_TIMEOUT,
     )
 
 
-def load_full_year_from_weeks(base_schedule: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
-    """Merge all persisted week files into a year schedule map.
+def _pg_ensure_schema(conn) -> None:
+    """Idempotent schema creation. Cheap on warm runs; safe every cold start."""
+    for _name in (WFH_SCHEDULE_TABLE, WFH_PERSONAL_HOLIDAYS_TABLE,
+                  WFH_PUBLIC_HOLIDAYS_TABLE):
+        if not _pg_safe_ident(_name):
+            raise RuntimeError(f"unsafe table identifier: {_name!r}")
+    cur = conn.cursor()
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {WFH_SCHEDULE_TABLE} (
+            day        DATE NOT NULL,
+            member     TEXT NOT NULL,
+            status     TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (day, member)
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {WFH_PERSONAL_HOLIDAYS_TABLE} (
+            day        DATE NOT NULL,
+            member     TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (day, member)
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {WFH_PUBLIC_HOLIDAYS_TABLE} (
+            day        DATE PRIMARY KEY,
+            name       TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    cur.close()
+    try:
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
-    Weeks without files will be generated from the base schedule.
+
+def _base_day_map(base_schedule: Dict[str, Dict[str, str]], iso: str) -> Dict[str, str]:
+    """The rule-based assignment for one day, normalised to WFO/WFH."""
+    base_day = base_schedule.get(iso, {})
+    return {m: ("WFO" if base_day.get(m) == "WFO" else "WFH") for m in TEAM_MEMBERS}
+
+
+def _seed_and_read(
+    dates: List[date],
+    base_schedule: Dict[str, Dict[str, str]],
+    prune: bool,
+) -> Dict[str, Dict[str, str]]:
+    """Read ``dates`` from the schedule table, seeding any missing day from the
+    rule-based base schedule. When ``prune`` is set, rows for any day outside
+    ``dates`` are deleted first — this is how the table is kept to the rolling
+    two-week window. Falls back to the in-memory base schedule on any DB error.
     """
+    out: Dict[str, Dict[str, str]] = {}
+    conn = None
+    try:
+        conn = _pg_connect()
+        _pg_ensure_schema(conn)
+        cur = conn.cursor()
+        if prune and dates:
+            cur.execute(
+                f"DELETE FROM {WFH_SCHEDULE_TABLE} WHERE day <> ALL(%s)",
+                ([d for d in dates],),
+            )
+        cur.execute(
+            f"SELECT day, member, status FROM {WFH_SCHEDULE_TABLE} WHERE day = ANY(%s)",
+            ([d for d in dates],),
+        )
+        existing: Dict[str, Dict[str, str]] = {}
+        for d, m, s in cur.fetchall():
+            iso = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            existing.setdefault(iso, {})[m] = s
 
-    year_sched: Dict[str, Dict[str, str]] = {}
-    for ws in iter_sundays_in_year():
-        days = load_week(ws, base_schedule)
-        for iso, members in days.items():
-            if iso.startswith(str(YEAR)):
-                year_sched[iso] = members
-    return year_sched
+        to_insert: List[tuple] = []
+        for d in dates:
+            iso = d.isoformat()
+            base_map = _base_day_map(base_schedule, iso)
+            day_map: Dict[str, str] = {}
+            for m in TEAM_MEMBERS:
+                if iso in existing and m in existing[iso]:
+                    day_map[m] = existing[iso][m]
+                else:
+                    day_map[m] = base_map[m]
+                    to_insert.append((d, m, base_map[m]))
+            out[iso] = day_map
+
+        if to_insert:
+            cur.executemany(
+                f"INSERT INTO {WFH_SCHEDULE_TABLE} (day, member, status) "
+                f"VALUES (%s, %s, %s) ON CONFLICT (day, member) DO NOTHING",
+                to_insert,
+            )
+        conn.commit()
+        cur.close()
+        return out
+    except Exception:  # noqa: BLE001
+        # Postgres / vault unavailable — render from the rules in memory.
+        return {d.isoformat(): _base_day_map(base_schedule, d.isoformat()) for d in dates}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def load_window(
+    window: List[date],
+    base_schedule: Dict[str, Dict[str, str]],
+) -> Dict[str, Dict[str, str]]:
+    """Read (and prune to) the rolling two-week window. Call once per render."""
+    return _seed_and_read(window, base_schedule, prune=True)
+
+
+def load_week(
+    week_start: date,
+    base_schedule: Dict[str, Dict[str, str]],
+) -> Dict[str, Dict[str, str]]:
+    """Read a single week's workdays (no pruning) — used by the editor."""
+    dates = [
+        week_start + timedelta(days=offset)
+        for offset in range(5)
+        if is_workday(week_start + timedelta(days=offset))
+    ]
+    return _seed_and_read(dates, base_schedule, prune=False)
+
+
+def save_schedule_days(days: Dict[str, Dict[str, str]]) -> None:
+    """Upsert a set of ``{iso: {member: status}}`` assignments."""
+    rows: List[tuple] = []
+    for iso, members in days.items():
+        try:
+            d = date.fromisoformat(iso)
+        except ValueError:
+            continue
+        for m in TEAM_MEMBERS:
+            rows.append((d, m, "WFO" if members.get(m) == "WFO" else "WFH"))
+    if not rows:
+        return
+    conn = None
+    try:
+        conn = _pg_connect()
+        _pg_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.executemany(
+            f"INSERT INTO {WFH_SCHEDULE_TABLE} (day, member, status) "
+            f"VALUES (%s, %s, %s) "
+            f"ON CONFLICT (day, member) DO UPDATE "
+            f"SET status = EXCLUDED.status, updated_at = NOW()",
+            rows,
+        )
+        conn.commit()
+        cur.close()
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Could not save the schedule to Postgres: {e}", icon="⚠️")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def save_week(week_start: date, days: Dict[str, Dict[str, str]]) -> None:
+    """Persist a week's assignments (kept for the editor's call sites)."""
+    save_schedule_days(days)
+
+
+def load_holidays() -> Dict[str, List[str]]:
+    """Personal holidays as ``{iso_date: [member, ...]}``. Empty on DB error."""
+    conn = None
+    try:
+        conn = _pg_connect()
+        _pg_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.execute(f"SELECT day, member FROM {WFH_PERSONAL_HOLIDAYS_TABLE}")
+        out: Dict[str, List[str]] = {}
+        for d, m in cur.fetchall():
+            iso = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            if m in TEAM_MEMBERS:
+                out.setdefault(iso, []).append(m)
+        cur.close()
+        return {iso: sorted(set(v)) for iso, v in out.items()}
+    except Exception:  # noqa: BLE001
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def save_holidays(holidays: Dict[str, List[str]]) -> None:
+    """Replace the personal-holiday table with ``holidays`` (full snapshot)."""
+    rows: List[tuple] = []
+    for iso, members in holidays.items():
+        try:
+            d = date.fromisoformat(iso)
+        except ValueError:
+            continue
+        for m in members:
+            if m in TEAM_MEMBERS:
+                rows.append((d, m))
+    conn = None
+    try:
+        conn = _pg_connect()
+        _pg_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM {WFH_PERSONAL_HOLIDAYS_TABLE}")
+        if rows:
+            cur.executemany(
+                f"INSERT INTO {WFH_PERSONAL_HOLIDAYS_TABLE} (day, member) "
+                f"VALUES (%s, %s) ON CONFLICT (day, member) DO NOTHING",
+                rows,
+            )
+        conn.commit()
+        cur.close()
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Could not save personal holidays to Postgres: {e}", icon="⚠️")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def load_public_holidays() -> Dict[str, str]:
+    """Public holidays for YEAR as ``{iso_date: name}``. Seeds the built-in
+    Egypt list into the table on first use; falls back to it on any DB error."""
+    conn = None
+    try:
+        conn = _pg_connect()
+        _pg_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.execute(f"SELECT day, name FROM {WFH_PUBLIC_HOLIDAYS_TABLE}")
+        rows = cur.fetchall()
+        if not rows:
+            # First run — seed the suggested defaults.
+            seed = [(date.fromisoformat(iso), name)
+                    for iso, name in DEFAULT_PUBLIC_HOLIDAYS.items()]
+            cur.executemany(
+                f"INSERT INTO {WFH_PUBLIC_HOLIDAYS_TABLE} (day, name) "
+                f"VALUES (%s, %s) ON CONFLICT (day) DO NOTHING",
+                seed,
+            )
+            conn.commit()
+            cur.close()
+            return dict(DEFAULT_PUBLIC_HOLIDAYS)
+        cur.close()
+        out: Dict[str, str] = {}
+        for d, name in rows:
+            dd = d if hasattr(d, "year") else date.fromisoformat(str(d))
+            if dd.year == YEAR:
+                out[dd.isoformat()] = str(name)
+        return out or dict(DEFAULT_PUBLIC_HOLIDAYS)
+    except Exception:  # noqa: BLE001
+        return dict(DEFAULT_PUBLIC_HOLIDAYS)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def save_public_holidays(public_holidays: Dict[str, str]) -> None:
+    """Replace the public-holiday table with ``public_holidays``."""
+    rows: List[tuple] = []
+    for iso, name in public_holidays.items():
+        try:
+            d = date.fromisoformat(iso)
+        except ValueError:
+            continue
+        rows.append((d, str(name)))
+    conn = None
+    try:
+        conn = _pg_connect()
+        _pg_ensure_schema(conn)
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM {WFH_PUBLIC_HOLIDAYS_TABLE}")
+        if rows:
+            cur.executemany(
+                f"INSERT INTO {WFH_PUBLIC_HOLIDAYS_TABLE} (day, name) "
+                f"VALUES (%s, %s) "
+                f"ON CONFLICT (day) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()",
+                rows,
+            )
+        conn.commit()
+        cur.close()
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Could not save public holidays to Postgres: {e}", icon="⚠️")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def load_actuals(window: List[date]) -> Dict[str, Dict[str, dict]]:
+    """Derive real per-day attendance from the shared ``session_states`` table.
+
+    Returns ``{iso_date: {member: {"status": "WFO"|"WFH", "sessions": int,
+    "office_sessions": int}}}`` — a member only appears on days they had at
+    least one session. Detection rule:
+
+    * ``WFO`` (on-site) when *any* of the member's sessions that day came from
+      an office IP (``client_ip`` starts with ``OFFICE_IP_PREFIX``).
+    * ``WFH`` otherwise (they were active but never from an office IP).
+    * A member absent from a day's map simply had no sessions (no signal).
+
+    Impersonated sessions (``original_user`` set to someone else) are excluded
+    so an admin "view as user" doesn't get attributed as that member's
+    presence. Read-only; ``{}`` on any DB error."""
+    out: Dict[str, Dict[str, dict]] = {}
+    if not window or not _pg_safe_ident(SESSION_STATES_TABLE):
+        return out
+    start = min(window)
+    end = max(window) + timedelta(days=1)
+    usernames = list(MEMBER_TO_SESSION_USER.values())
+    conn = None
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT s.username, (s.timestamp)::date AS day, "
+            f"COUNT(*) FILTER (WHERE s.client_ip LIKE %s) AS office_sessions, "
+            f"COUNT(*) AS sessions "
+            f"FROM {SESSION_STATES_TABLE} AS s "
+            f"WHERE s.username = ANY(%s) "
+            f"AND s.timestamp >= %s AND s.timestamp < %s "
+            f"AND (s.original_user IS NULL OR s.original_user = s.username) "
+            f"GROUP BY s.username, (s.timestamp)::date",
+            (OFFICE_IP_PREFIX + "%", usernames, start, end),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        for username, day, office_sessions, sessions in rows:
+            member = SESSION_USER_TO_MEMBER.get(username)
+            if not member:
+                continue
+            iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
+            office_n = int(office_sessions or 0)
+            out.setdefault(iso, {})[member] = {
+                "status": "WFO" if office_n > 0 else "WFH",
+                "sessions": int(sessions or 0),
+                "office_sessions": office_n,
+            }
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def get_week_start_for_date(d: date) -> date:
@@ -589,182 +938,6 @@ def render_week_table(
     """
     st.markdown(table_html, unsafe_allow_html=True)
     st.caption("Amber-bordered office cells mark low-impact (3rd+ WFO with 3+ in office) days.")
-
-
-def render_grid_for_dates(
-    year_sched: Dict[str, Dict[str, str]],
-    dates: List[date],
-    title: str,
-    extra_class: str = "",
-    holidays: Dict[str, List[str]] | None = None,
-    public_holidays: Dict[str, str] | None = None,
-) -> None:
-    if not year_sched or not dates:
-        return
-
-    all_dates = sorted(d for d in dates if is_workday(d))
-    if not all_dates:
-        return
-
-    today = date.today()
-
-    # Build header (dates) and rows (members)
-    header_cells = ["<th class='header-cell member-col'>Member</th>"]
-    for d in all_dates:
-        is_today = d == today
-        header_class = "grid-day-header today-header" if is_today else "grid-day-header"
-        header_cells.append(
-            f"<th class='{header_class}'>{d.strftime('%d %b')}</th>"
-        )
-
-    body_rows: List[str] = []
-    for member in TEAM_MEMBERS:
-        row_cells = [f"<td class='member-label'>{member}</td>"]
-        for d in all_dates:
-            iso = d.isoformat()
-            day_assign = year_sched.get(iso, {})
-            status = day_assign.get(member, "WFH")
-            is_public = public_holidays is not None and public_holidays.get(iso)
-            is_member_holiday = holidays is not None and member in holidays.get(iso, [])
-            if is_public or is_member_holiday:
-                base_class = "grid-holiday"
-            else:
-                base_class = "grid-wfo" if status == "WFO" else "grid-wfh"
-            extra = " grid-today" if d == today else ""
-            row_cells.append(f"<td class='{base_class}{extra}'></td>")
-        body_rows.append("<tr>" + "".join(row_cells) + "</tr>")
-
-    wrapper_class = f"year-grid-wrapper {extra_class}".strip()
-    grid_html = f"""
-    <div class='{wrapper_class}'>
-        <h3 class='section-title'>{title}</h3>
-        <div class='year-grid-scroll'>
-            <table class='year-grid-table'>
-                <thead>
-                    <tr>{''.join(header_cells)}</tr>
-                </thead>
-                <tbody>
-                    {''.join(body_rows)}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    """
-    st.markdown(grid_html, unsafe_allow_html=True)
-
-
-def render_year_grid(
-    year_sched: Dict[str, Dict[str, str]],
-    holidays: Dict[str, List[str]] | None = None,
-    public_holidays: Dict[str, str] | None = None,
-) -> None:
-    if not year_sched:
-        return
-
-    all_dates = sorted(
-        d for d in (date.fromisoformat(k) for k in year_sched.keys()) if is_workday(d)
-    )
-    if not all_dates:
-        return
-
-    render_grid_for_dates(
-        year_sched,
-        all_dates,
-        "Rest of 2026 overview",
-        holidays=holidays,
-        public_holidays=public_holidays,
-    )
-
-
-def compute_pair_meet_counts(
-    year_sched: Dict[str, Dict[str, str]]
-) -> pd.DataFrame:
-    """Return a symmetric matrix of how often members meet in-office.
-
-    A "meeting" is counted for each working day where both members are
-    scheduled WFO.
-    """
-
-    from collections import defaultdict
-
-    pair_counts: Dict[tuple[str, str], int] = defaultdict(int)
-
-    for _iso, assignments in year_sched.items():
-        wfo_members = [m for m, v in assignments.items() if v == "WFO"]
-        wfo_members = [m for m in wfo_members if m in TEAM_MEMBERS]
-        wfo_members.sort()
-        n = len(wfo_members)
-        for i in range(n):
-            for j in range(i + 1, n):
-                a, b = wfo_members[i], wfo_members[j]
-                pair_counts[(a, b)] += 1
-
-    matrix = pd.DataFrame(0, index=TEAM_MEMBERS, columns=TEAM_MEMBERS, dtype=int)
-    for (a, b), count in pair_counts.items():
-        matrix.loc[a, b] = count
-        matrix.loc[b, a] = count
-
-    for m in TEAM_MEMBERS:
-        matrix.loc[m, m] = 0
-
-    return matrix
-
-
-def compute_member_totals(year_sched: Dict[str, Dict[str, str]]) -> pd.DataFrame:
-    """Aggregate total office days per member across the year."""
-
-    counts: Dict[str, int] = {m: 0 for m in TEAM_MEMBERS}
-    for assignments in year_sched.values():
-        for m in TEAM_MEMBERS:
-            if assignments.get(m) == "WFO":
-                counts[m] += 1
-
-    records = [
-        {
-            "Member": m,
-            "Office days": counts[m],
-            "Approx. weeks in office": round(counts[m] / 5.0, 1),
-        }
-        for m in TEAM_MEMBERS
-    ]
-    df = pd.DataFrame(records).sort_values("Member").reset_index(drop=True)
-    return df
-
-
-def compute_role_mix(year_sched: Dict[str, Dict[str, str]]) -> Dict[str, int]:
-    """Summarise how often mgmt-support and engineering are together in office."""
-
-    stats = {
-        "mgmt_only": 0,
-        "engineering_only": 0,
-        "mixed": 0,
-        "no_office": 0,
-    }
-
-    for iso, assignments in year_sched.items():
-        try:
-            _ = date.fromisoformat(iso)
-        except ValueError:
-            continue
-
-        wfo_members = [m for m, v in assignments.items() if v == "WFO"]
-        if not wfo_members:
-            stats["no_office"] += 1
-            continue
-
-        mgmt_present = any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in wfo_members)
-        eng_present = any(ROLE_BY_MEMBER.get(m) == "engineering" for m in wfo_members)
-
-        if mgmt_present and eng_present:
-            stats["mixed"] += 1
-        elif mgmt_present:
-            stats["mgmt_only"] += 1
-        elif eng_present:
-            stats["engineering_only"] += 1
-        else:
-            stats["no_office"] += 1
-
-    return stats
 
 
 def validate_schedule(
@@ -1531,65 +1704,9 @@ def render_edit_interface(
                     members[member] = "WFO" if val == "WFO" else "WFH"
                 new_week_days[iso] = members
             save_week(week_start, new_week_days)
-            st.success("Week schedule saved. Validations and grids updated.")
+            st.success("Week schedule saved. Validations updated.")
             st.rerun()
 
-        st.markdown("---")
-        st.markdown("**Propagate this 2-week pattern to the rest of 2026**")
-
-        if st.button(
-            "Apply current + next week pattern to all future weeks",
-            type="secondary",
-            key="propagate_pattern_2026",
-        ):
-            curr_week_days = load_week(current_ws, base_schedule)
-            if not curr_week_days:
-                st.warning("Current week has no working days; nothing to propagate.")
-                return
-
-            def build_pattern(week_start: date, week_days: Dict[str, Dict[str, str]]
-                              ) -> Dict[int, Dict[str, str]]:
-                pattern: Dict[int, Dict[str, str]] = {}
-                for offset in range(5):
-                    d = week_start + timedelta(days=offset)
-                    iso = d.isoformat()
-                    if iso in week_days:
-                        pattern[offset] = week_days[iso]
-                return pattern
-
-            curr_pattern = build_pattern(current_ws, curr_week_days)
-
-            next_pattern: Dict[int, Dict[str, str]] | None = None
-            if next_ws is not None:
-                nxt_week_days = load_week(next_ws, base_schedule)
-                if nxt_week_days:
-                    next_pattern = build_pattern(next_ws, nxt_week_days)
-
-            for ws in iter_sundays_in_year():
-                if ws <= current_ws:
-                    continue
-
-                offset_weeks = (ws - current_ws).days // 7
-                use_curr = offset_weeks % 2 == 0
-
-                if use_curr or not next_pattern:
-                    pattern = curr_pattern
-                else:
-                    pattern = next_pattern
-
-                new_week_days: Dict[str, Dict[str, str]] = {}
-                for offset, members in pattern.items():
-                    d = ws + timedelta(days=offset)
-                    iso = d.isoformat()
-                    new_week_days[iso] = members
-
-                if new_week_days:
-                    save_week(ws, new_week_days)
-
-            st.success(
-                "Current and next week patterns have been propagated to all future weeks in 2026.",
-            )
-            st.rerun()
 
 def render_holidays_tab(
     holidays: Dict[str, List[str]],
@@ -1598,7 +1715,7 @@ def render_holidays_tab(
     st.markdown("<h3 class='section-title'>Holidays</h3>", unsafe_allow_html=True)
     st.caption(
         "Define personal holidays and review public holidays; both overlay "
-        "the base schedule in all grids and week views."
+        "the two-week schedule and the office views."
     )
 
     tabs = st.tabs(["Public holidays", "Personal holidays"])
@@ -1607,7 +1724,7 @@ def render_holidays_tab(
     with tabs[0]:
         st.markdown(
             "<p class='info-line'>Egypt 2026 public holidays used to "
-            "decorate week views and grids.</p>",
+            "decorate the two-week schedule and office views.</p>",
             unsafe_allow_html=True,
         )
 
@@ -1766,6 +1883,219 @@ def render_holidays_tab(
                 st.rerun()
 
     return holidays
+
+
+def _classify_actual(
+    member: str,
+    d: date,
+    window_sched: Dict[str, Dict[str, str]],
+    holidays: Dict[str, List[str]],
+    public_holidays: Dict[str, str],
+    actuals: Dict[str, Dict[str, dict]],
+) -> tuple[str, str, str | None, str | None]:
+    """Return ``(category, planned, actual, note)`` for one member-day.
+
+    category ∈ {"off", "nodata", "match", "mismatch"}; planned/actual are
+    "WFO"/"WFH" (actual is None when off / no data)."""
+    iso = d.isoformat()
+    planned = window_sched.get(iso, {}).get(member, "WFH")
+    is_public = bool(public_holidays.get(iso)) if public_holidays else False
+    is_personal = member in holidays.get(iso, []) if holidays else False
+    if is_public or is_personal:
+        return ("off", planned, None, "Public holiday" if is_public else "Day off")
+    info = actuals.get(iso, {}).get(member)
+    if not info:
+        return ("nodata", planned, None, None)
+    actual = info.get("status")
+    return ("match" if actual == planned else "mismatch", planned, actual, None)
+
+
+def render_actuals_tab(
+    window: List[date],
+    window_sched: Dict[str, Dict[str, str]],
+    holidays: Dict[str, List[str]],
+    public_holidays: Dict[str, str],
+) -> None:
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown(
+        "<h3 class='section-title'>Plan vs actual attendance</h3>",
+        unsafe_allow_html=True,
+    )
+
+    user_map = " · ".join(
+        f"{k}→<code>{v}</code>" for k, v in MEMBER_TO_SESSION_USER.items()
+    )
+    st.markdown(
+        f"""
+        <div class='algo-box'>
+          <div class='algo-title'>How these actuals are computed</div>
+          <ul class='algo-list'>
+            <li><b>Source</b> — read-only from the shared <code>{SESSION_STATES_TABLE}</code>
+                table. Members are matched by session <code>username</code>: {user_map}.</li>
+            <li><b>On-site rule</b> — a member is counted <b>at the office</b> on a day when
+                <em>any</em> of their sessions that day came from an office IP
+                (<code>client_ip</code> starting <code>{OFFICE_IP_PREFIX}</code>). Active but
+                never from an office IP → <b>home</b>. No sessions → <b>no data</b>.</li>
+            <li><b>Impersonation</b> — sessions whose <code>original_user</code> is someone else
+                (admin “view as”) are ignored.</li>
+            <li><b>Off days</b> — public holidays and personal days off carry no expectation:
+                shown as <b>Off</b> and excluded from every percentage.</li>
+            <li><b>Adherence %</b> = matched days ÷ comparable days (workdays that are not Off
+                and have session data). Future days have no data yet, so they don't count.</li>
+          </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    actuals = load_actuals(window)
+    workdays = sorted(d for d in window if is_workday(d))
+
+    stats: Dict[str, Dict[str, int]] = {
+        m: {
+            "comparable": 0, "matches": 0,
+            "plan_office_data": 0, "attended_office": 0,
+            "plan_home_data": 0, "stayed_home": 0,
+            "nodata": 0, "off": 0,
+        }
+        for m in TEAM_MEMBERS
+    }
+
+    for m in TEAM_MEMBERS:
+        for d in workdays:
+            cat, planned, actual, _note = _classify_actual(
+                m, d, window_sched, holidays, public_holidays, actuals
+            )
+            s = stats[m]
+            if cat == "off":
+                s["off"] += 1
+            elif cat == "nodata":
+                s["nodata"] += 1
+            else:
+                s["comparable"] += 1
+                if cat == "match":
+                    s["matches"] += 1
+                if planned == "WFO":
+                    s["plan_office_data"] += 1
+                    if actual == "WFO":
+                        s["attended_office"] += 1
+                else:
+                    s["plan_home_data"] += 1
+                    if actual == "WFH":
+                        s["stayed_home"] += 1
+
+    team_comparable = sum(s["comparable"] for s in stats.values())
+    team_matches = sum(s["matches"] for s in stats.values())
+
+    def pct(a: int, b: int) -> str:
+        return f"{round(100 * a / b)}%" if b else "—"
+
+    any_data = any(actuals.get(d.isoformat()) for d in workdays)
+    if not any_data:
+        st.info(
+            "No session activity found for these two weeks yet (or the session "
+            "table is unavailable). Actuals fill in as the team uses the platform."
+        )
+
+    # --- Team headline metrics ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Team adherence", pct(team_matches, team_comparable),
+        help="Actual matched the plan across all comparable member-days.",
+    )
+    c2.metric(
+        "Comparable days", f"{team_comparable}",
+        help="Workdays with session data, excluding holidays / days off.",
+    )
+    c3.metric("Matches", f"{team_matches}")
+    c4.metric("Mismatches", f"{team_comparable - team_matches}")
+
+    # --- Per-member summary ---
+    st.markdown(
+        "<h4 class='section-title'>Per member</h4>", unsafe_allow_html=True
+    )
+    headers = ["Member", "Adherence", "Office attended", "Home kept", "No data", "Off"]
+    header_html = "".join(f"<th class='header-cell'>{h}</th>" for h in headers)
+    rows_html: List[str] = []
+    for m in TEAM_MEMBERS:
+        s = stats[m]
+        adh = pct(s["matches"], s["comparable"])
+        adh_cls = ""
+        if s["comparable"]:
+            r = s["matches"] / s["comparable"]
+            adh_cls = "adh-good" if r >= 0.8 else ("adh-mid" if r >= 0.5 else "adh-bad")
+        office = (
+            f"{s['attended_office']}/{s['plan_office_data']} "
+            f"({pct(s['attended_office'], s['plan_office_data'])})"
+        )
+        home = (
+            f"{s['stayed_home']}/{s['plan_home_data']} "
+            f"({pct(s['stayed_home'], s['plan_home_data'])})"
+        )
+        rows_html.append(
+            f"<tr><td class='day-cell'>{m}</td>"
+            f"<td class='{adh_cls}'>{adh}</td>"
+            f"<td>{office}</td><td>{home}</td>"
+            f"<td>{s['nodata']}</td><td>{s['off']}</td></tr>"
+        )
+    st.markdown(
+        f"<div class='week-table-wrapper'><table class='schedule-table'>"
+        f"<thead><tr>{header_html}</tr></thead>"
+        f"<tbody>{''.join(rows_html)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Office attended = of planned-office days with data, how many were actually "
+        "on-site. Home kept = of planned-home days with data, how many stayed home."
+    )
+
+    # --- Day-by-day plan vs actual grid ---
+    st.markdown(
+        "<h4 class='section-title'>Day by day</h4>", unsafe_allow_html=True
+    )
+    grid_header = "<th class='header-cell'>Day</th>" + "".join(
+        f"<th class='header-cell'>{m}</th>" for m in TEAM_MEMBERS
+    )
+    grid_rows: List[str] = []
+    for d in workdays:
+        iso = d.isoformat()
+        friendly = d.strftime("%a %d %b")
+        tag = ""
+        if public_holidays and public_holidays.get(iso):
+            tag = " <span class='public-holiday-tag'>Public</span>"
+        cells = [f"<td class='day-cell'>{friendly}{tag}</td>"]
+        for m in TEAM_MEMBERS:
+            cat, planned, actual, note = _classify_actual(
+                m, d, window_sched, holidays, public_holidays, actuals
+            )
+            plan_lbl = "Office" if planned == "WFO" else "Home"
+            if cat == "off":
+                cells.append(
+                    "<td class='actual-cell actual-off'>"
+                    "<div class='actual-status'>Off</div>"
+                    f"<div class='actual-plan'>{note}</div></td>"
+                )
+            elif cat == "nodata":
+                cells.append(
+                    "<td class='actual-cell actual-nodata'>"
+                    "<div class='actual-status'>No data</div>"
+                    f"<div class='actual-plan'>plan: {plan_lbl}</div></td>"
+                )
+            else:
+                act_lbl = "Office" if actual == "WFO" else "Home"
+                icon = "✓" if cat == "match" else "✗"
+                cells.append(
+                    f"<td class='actual-cell actual-{cat}'>"
+                    f"<div class='actual-status'>{icon} {act_lbl}</div>"
+                    f"<div class='actual-plan'>plan: {plan_lbl}</div></td>"
+                )
+        grid_rows.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown(
+        f"<div class='week-table-wrapper'><table class='schedule-table'>"
+        f"<thead><tr>{grid_header}</tr></thead>"
+        f"<tbody>{''.join(grid_rows)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def inject_css() -> None:
@@ -2108,6 +2438,79 @@ def inject_css() -> None:
         .validation-item-text {
             color: #111827;
         }
+        .algo-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #0b3c5d;
+            border-radius: 8px;
+            padding: 0.6rem 0.9rem;
+            margin: 0.25rem 0 0.9rem 0;
+        }
+        .algo-title {
+            font-weight: 600;
+            color: #0b3c5d;
+            margin-bottom: 0.3rem;
+            font-size: 0.92rem;
+        }
+        .algo-list {
+            margin: 0;
+            padding-left: 1.1rem;
+            font-size: 0.82rem;
+            color: #334155;
+        }
+        .algo-list li {
+            margin-bottom: 0.2rem;
+        }
+        .algo-box code {
+            background: #eef2f7;
+            padding: 0.02rem 0.3rem;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            color: #0b3c5d;
+        }
+        .actual-cell {
+            text-align: center;
+            line-height: 1.15;
+        }
+        .actual-status {
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        .actual-plan {
+            font-size: 0.68rem;
+            opacity: 0.75;
+        }
+        .actual-match {
+            background: #c8e6c9;
+            color: #1b5e20;
+        }
+        .actual-mismatch {
+            background: #ffcdd2;
+            color: #b71c1c;
+        }
+        .actual-off {
+            background: #eceff1;
+            color: #607d8b;
+        }
+        .actual-nodata {
+            background: #f9fafb;
+            color: #9ca3af;
+        }
+        .adh-good {
+            background: #c8e6c9;
+            color: #1b5e20;
+            font-weight: 600;
+        }
+        .adh-mid {
+            background: #fff3c4;
+            color: #8a6d00;
+            font-weight: 600;
+        }
+        .adh-bad {
+            background: #ffcdd2;
+            color: #b71c1c;
+            font-weight: 600;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -2204,22 +2607,20 @@ def main() -> None:
 
     inject_css()
 
-    st.markdown("<h1 class='section-title'>WFH vs WFO Schedule - 2026</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='section-title'>WFH vs WFO Schedule</h1>", unsafe_allow_html=True)
     st.caption(
-        "Auto-generated two-week rotation respecting attendance rules and preferences, "
-        "with per-week overrides and a full-year visualization. "
+        "Rolling two-week rotation (current + next week) respecting attendance "
+        "rules and preferences, with per-week overrides, persisted in Postgres. "
         "Sundays are always work-from-home; the office rotation runs Mon–Thu "
         "with each person in the office 2 of those 4 days (a 50/50 split). "
         f"{NEW_JOINER} works fully from the office through "
         f"{NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y} while onboarding, then joins the rotation."
     )
 
-    # Core schedule generation (pattern + base year schedule).
-    # Keep regenerating until the base schedule has no hard-rule
-    # validation errors (warnings are allowed).
-    pattern, base_schedule = build_error_free_base_schedule()
-    ensure_week_files(base_schedule)
-    year_sched = load_full_year_from_weeks(base_schedule)
+    # Rule-based pattern, used to seed any day not yet persisted in Postgres.
+    # Keep regenerating until the base schedule has no hard-rule validation
+    # errors (warnings are allowed).
+    _pattern, base_schedule = build_error_free_base_schedule()
     holidays = load_holidays()
     public_holidays = load_public_holidays()
 
@@ -2227,17 +2628,37 @@ def main() -> None:
     today = date.today()
     if today.year == YEAR:
         current_week_start = get_week_start_for_date(today)
-        current_month = today.month
     else:
         sundays = iter_sundays_in_year()
         current_week_start = sundays[0] if sundays else date(YEAR, 1, 1)
-        current_month = 1
 
     next_week_start = current_week_start + timedelta(days=7)
 
-    # Pre-compute validations so both the tab label and the
-    # week-level warnings share the same data.
-    val_errors, val_warnings = validate_schedule(year_sched)
+    # The rolling two-week window: current week + next week (workdays only).
+    # Postgres only ever holds these days — older rows are pruned on load.
+    window: List[date] = []
+    for ws in (current_week_start, next_week_start):
+        if ws.year != YEAR:
+            continue
+        for offset in range(5):
+            d = ws + timedelta(days=offset)
+            if is_workday(d):
+                window.append(d)
+    window.sort()
+
+    window_sched = load_window(window, base_schedule)
+
+    def _slice_week(ws: date) -> Dict[str, Dict[str, str]]:
+        out: Dict[str, Dict[str, str]] = {}
+        for offset in range(5):
+            iso = (ws + timedelta(days=offset)).isoformat()
+            if iso in window_sched:
+                out[iso] = window_sched[iso]
+        return out
+
+    # Pre-compute validations (scoped to the two-week window) so both the tab
+    # label and the week-level warnings share the same data.
+    val_errors, val_warnings = validate_schedule(window_sched)
     val_tab_label = "Validations"
     if val_errors or val_warnings:
         parts: List[str] = []
@@ -2249,85 +2670,27 @@ def main() -> None:
 
     col1, col2 = st.columns(2)
     with col1:
-        current_week_days = load_week(current_week_start, base_schedule)
-        render_week_table("Current week", current_week_days, holidays, public_holidays, highlight_today=True)
+        render_week_table(
+            "Current week", _slice_week(current_week_start),
+            holidays, public_holidays, highlight_today=True,
+        )
         render_week_warnings(current_week_start, val_errors, val_warnings, "Current week")
     with col2:
         if next_week_start.year == YEAR:
-            next_week_days = load_week(next_week_start, base_schedule)
-            render_week_table("Next week", next_week_days, holidays, public_holidays)
+            render_week_table(
+                "Next week", _slice_week(next_week_start), holidays, public_holidays,
+            )
             render_week_warnings(next_week_start, val_errors, val_warnings, "Next week")
         else:
             st.markdown("<p>No next week within 2026.</p>", unsafe_allow_html=True)
 
     # Who's in the office today / next working day
-    render_today_and_next(year_sched, holidays, public_holidays)
+    render_today_and_next(window_sched, holidays, public_holidays)
 
-    tabs = st.tabs(["Grids", "Editing", "Statistics", "Preferences", val_tab_label, "Holidays"])
-
-    # --- Grids tab ---
-    with tabs[0]:
-        st.markdown("<hr>", unsafe_allow_html=True)
-        st.markdown("<h3 class='section-title'>Grids overview</h3>", unsafe_allow_html=True)
-        st.caption(
-            "Colored squares show WFH (blue), WFO (green), and holidays (peach) "
-            "for each team member across the selected month."
-        )
-
-        # Pre-compute all workdays in the year
-        all_dates = sorted(
-            d
-            for d in (date.fromisoformat(k) for k in year_sched.keys())
-            if is_workday(d)
-        )
-
-        months_with_days = sorted({d.month for d in all_dates})
-        if current_month in months_with_days:
-            default_month = current_month
-        else:
-            default_month = months_with_days[0] if months_with_days else 1
-
-        month_labels = {m: date(YEAR, m, 1).strftime("%B") for m in months_with_days}
-        selected_month = st.selectbox(
-            "Select month",
-            months_with_days,
-            index=months_with_days.index(default_month) if months_with_days else 0,
-            format_func=lambda m: month_labels.get(m, str(m)),
-        )
-
-        # Per-week grids within the selected month, arranged in Streamlit columns
-        sundays = iter_sundays_in_year()
-        week_entries = []
-        for ws in sundays:
-            week_dates = [
-                ws + timedelta(days=offset)
-                for offset in range(5)
-                if is_workday(ws + timedelta(days=offset))
-            ]
-            # Only keep weeks that intersect the selected month
-            if any(d.month == selected_month for d in week_dates):
-                week_entries.append((ws, week_dates))
-
-        if week_entries:
-            # Show two weekly grids per row where possible
-            for i in range(0, len(week_entries), 2):
-                row_entries = week_entries[i : i + 2]
-                cols = st.columns(len(row_entries))
-                for col, (ws, week_dates) in zip(cols, row_entries):
-                    with col:
-                        render_grid_for_dates(
-                            year_sched,
-                            week_dates,
-                            f"Week of {ws.strftime('%d %b %Y')}",
-                            extra_class="week-grid",
-                            holidays=holidays,
-                            public_holidays=public_holidays,
-                        )
-        else:
-            st.info("No working days found for the selected month.")
+    tabs = st.tabs(["Editing", "Actuals", "Preferences", val_tab_label, "Holidays"])
 
     # --- Editing tab ---
-    with tabs[1]:
+    with tabs[0]:
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown(
             "<h3 class='section-title'>Editing tools</h3>",
@@ -2345,77 +2708,32 @@ def main() -> None:
             next_week_start if next_week_start.year == YEAR else None,
         )
 
-        # Optional: allow regenerating all weeks from the current base schedule
-        with st.expander("Advanced: regenerate all 2026 weeks", expanded=False):
+        # Reset the two-week window back to the rule-based rotation.
+        with st.expander("Advanced: reset the two-week schedule", expanded=False):
             st.caption(
-                "Rebuild every persisted week file from the current two-week "
-                "rotation. This will discard all manual edits."
+                "Rebuild the current and next week from the rules, discarding "
+                "any manual edits."
             )
-            if st.button("Rebuild all weeks from rules", type="secondary"):
-                # Build a fresh, validated schedule and overwrite all
-                # persisted weeks from these rules.
+            if st.button("Reset to rule-based rotation", type="secondary"):
                 _, refreshed_base = build_error_free_base_schedule()
-                for ws in iter_sundays_in_year():
-                    week_days: Dict[str, Dict[str, str]] = {}
-                    for offset in range(5):
-                        d = ws + timedelta(days=offset)
-                        iso = d.isoformat()
-                        if iso in refreshed_base:
-                            week_days[iso] = refreshed_base[iso]
-                    save_week(ws, week_days)
-                st.success("All week files regenerated from the updated rules.")
+                reset_days: Dict[str, Dict[str, str]] = {}
+                for d in window:
+                    iso = d.isoformat()
+                    reset_days[iso] = _base_day_map(refreshed_base, iso)
+                save_schedule_days(reset_days)
+                st.success("Two-week schedule reset from the rules.")
                 st.rerun()
 
-    # --- Statistics tab ---
+    with tabs[1]:
+        render_actuals_tab(window, window_sched, holidays, public_holidays)
+
     with tabs[2]:
-        st.markdown("<hr>", unsafe_allow_html=True)
-        st.markdown("<h3 class='section-title'>Statistics</h3>", unsafe_allow_html=True)
-        st.caption(
-            "Pairwise office meetings, individual office loads, and role-mix "
-            "insights based on the current 2026 schedule.",
-        )
-
-        pair_matrix = compute_pair_meet_counts(year_sched)
-        member_totals = compute_member_totals(year_sched)
-        role_mix = compute_role_mix(year_sched)
-
-        st.markdown("<h4 class='section-title'>Pairwise office meetings</h4>", unsafe_allow_html=True)
-        st.caption(
-            "Number of working days where each pair of team members were both "
-            "scheduled in the office.",
-        )
-        st.dataframe(pair_matrix, use_container_width=True)
-
-        st.markdown("<h4 class='section-title'>Per-member office load</h4>", unsafe_allow_html=True)
-        col_table, col_chart = st.columns([2, 3])
-        with col_table:
-            st.dataframe(member_totals, hide_index=True, use_container_width=True)
-        with col_chart:
-            chart_df = member_totals.set_index("Member")["Office days"]
-            st.bar_chart(chart_df)
-
-        st.markdown("<h4 class='section-title'>Role mix in the office</h4>", unsafe_allow_html=True)
-        total_days = sum(role_mix.values()) or 1
-        cols_stats = st.columns(4)
-        labels = [
-            ("Mixed (mgmt + engineering)", "mixed"),
-            ("Mgmt-support only", "mgmt_only"),
-            ("Engineering only", "engineering_only"),
-            ("No one in office", "no_office"),
-        ]
-        for col_stat, (title, key) in zip(cols_stats, labels):
-            count = role_mix.get(key, 0)
-            pct = 100.0 * count / total_days
-            with col_stat:
-                st.metric(title, f"{count}", help=f"{pct:.1f}% of all scheduled working days")
-
-    with tabs[3]:
         render_preferences_tab()
 
-    with tabs[4]:
-        render_validations(year_sched)
+    with tabs[3]:
+        render_validations(window_sched)
 
-    with tabs[5]:
+    with tabs[4]:
         render_holidays_tab(holidays, public_holidays)
 
 
