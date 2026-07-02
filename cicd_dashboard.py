@@ -15481,26 +15481,23 @@ def _ado_cov_bar(_pl: int, _np: int) -> str:
     )
 
 
-def _ado_render_diagnostics(host: str, diag: dict) -> None:
+def _ado_render_diagnostics(org_url: str, diag: dict) -> None:
     """Rich failure panel for the ADO coverage tab: the exact request, HTTP
     status + response body, resolved connection settings, cause-specific hints,
     and an on-demand connection probe. Turns an opaque 'blocked' into a
-    step-by-step fix — the caller's ADO git access already works, so this
-    isolates what's different about the REST path/scope/api-version."""
-    _creds = _git_creds()
-    _user = _creds.get("username", "")
-    _pw = _creds.get("password", "")
+    step-by-step fix. Auth is the vault `ado` secret (host + token)."""
+    _creds = _ado_coverage_creds()
+    _token = _creds.get("token", "")
+    _auth = _creds.get("auth", "")
     _status = diag.get("status")
     _rows = [
         ("Request URL", diag.get("url") or "—"),
         ("HTTP status", str(_status) if _status is not None else "no response (connection-level failure)"),
         ("Failure kind", diag.get("kind") or "—"),
-        ("REST base", diag.get("base") or _ado_base_url(host)),
-        ("Scheme · virtual dir", f"{diag.get('scheme', ADO_REST_SCHEME)} · {diag.get('base_path', ADO_BASE_PATH or '(none)')}"),
+        ("REST base (vault `ado.host`)", diag.get("base") or org_url or "—"),
         ("api-version", diag.get("api_version") or ADO_API_VERSION),
-        ("Vault username", (_user[:2] + "…" if len(_user) > 2 else (_user or "—"))),
-        ("Vault password", f"present ({len(_pw)} chars)" if _pw else "MISSING"),
-        ("Git clone (known-good)", f"http://{host}/DevOps/Platform/_git/inventories"),
+        ("Auth", "Basic · empty username + token (platform client convention)"),
+        ("Vault `ado.token`", f"present ({len(_token)} chars)" if _token else "MISSING"),
     ]
     _row_html = "".join(
         f'<tr><td class="adoc-diag-k">{html.escape(_k)}</td>'
@@ -15521,25 +15518,23 @@ def _ado_render_diagnostics(host: str, diag: dict) -> None:
         '<div class="adoc-diag-head">🩺 Connection diagnostics</div>'
         f'<table class="adoc-diag-tbl"><tbody>{_row_html}</tbody></table>'
         f'{_body_html}{_hints_html}'
-        '<div class="adoc-diag-note">These are env-overridable without a code '
-        'change: <code>ADO_REST_SCHEME</code> (http/https), '
-        '<code>ADO_BASE_PATH</code> (e.g. <code>tfs</code>), '
-        '<code>ADO_API_VERSION</code> (e.g. <code>5.0</code>). Set the combo the '
-        'probe reports as ✓ and Refresh.</div>'
+        '<div class="adoc-diag-note">The REST base + token come from the vault '
+        '<code>ado</code> secret (<code>host</code> + <code>token</code>). '
+        '<code>ADO_API_VERSION</code> is env-overridable (e.g. <code>5.0</code> '
+        'for on-prem ADO Server). Set the api-version the probe reports as ✓ and '
+        'Refresh.</div>'
         '</div>',
         unsafe_allow_html=True,
     )
     # ── On-demand connection probe (opt-in — makes several short calls) ──────
     if st.button("🔍 Run connection probe", key="_ado_probe_btn_v1",
-                 help="Try scheme × virtual-directory × api-version combos "
-                      "against the collections endpoint and report what each "
-                      "returns. Stops at the first that works."):
-        if not (_user and _pw):
-            st.warning("No ADO credentials resolved from vault — can't probe.")
+                 help="Try the vault org URL against a few api-versions and "
+                      "report what each returns. Stops at the first that works."):
+        if not (org_url and _auth):
+            st.warning("No ADO org URL / token resolved from vault — can't probe.")
             return
-        _auth = "Basic " + base64.b64encode(f"{_user}:{_pw}".encode()).decode()
         with st.spinner("Probing ADO endpoints…"):
-            _probe = _ado_probe(host, _auth)
+            _probe = _ado_probe(org_url, _auth)
         _win = next((r for r in _probe if r["ok"]), None)
         _prows = "".join(
             f'<tr class="{"is-ok" if r["ok"] else ""}">'
@@ -15549,14 +15544,14 @@ def _ado_render_diagnostics(host: str, diag: dict) -> None:
             f'<td>{html.escape((r["error"] or "")[:60])}</td></tr>'
             for r in _probe)
         st.markdown(
-            (f'<div class="adoc-diag-win">✓ This combo works — set '
-             f'<code>ADO_REST_SCHEME</code> / <code>ADO_BASE_PATH</code> / '
-             f'<code>ADO_API_VERSION</code> to match:<br><code>{html.escape(_win["url"])}'
-             f'</code></div>' if _win else
-             '<div class="adoc-diag-win is-fail">No combo returned JSON. If '
-             'every row is 401/403 it\'s a PAT scope issue (not the URL); if '
-             'every row is a connection failure, the host/port/scheme is wrong '
-             'or the server is unreachable from here.</div>')
+            (f'<div class="adoc-diag-win">✓ This works — set '
+             f'<code>ADO_API_VERSION</code> to match:<br>'
+             f'<code>{html.escape(_win["url"])}</code></div>' if _win else
+             '<div class="adoc-diag-win is-fail">No api-version returned JSON. If '
+             'every row is 401/403 it\'s a PAT scope issue (the token needs '
+             'Project&amp;Team / Code / Build read); if every row is a connection '
+             'failure, the vault <code>ado.host</code> URL is wrong or '
+             'unreachable from here.</div>')
             + '<table class="adoc-diag-tbl adoc-probe-tbl"><thead><tr><th></th>'
             '<th>URL</th><th>Status</th><th>Error</th></tr></thead>'
             f'<tbody>{_prows}</tbody></table>',
@@ -15572,7 +15567,8 @@ def _render_ado_coverage() -> None:
     if not _is_admin:
         st.info("Admin only.")
         return
-    _host = (_git_creds().get("hostname") or "").strip()
+    _ado = _ado_coverage_creds()
+    _org_url = _ado["org_url"]
     _hc, _bc = st.columns([5, 1])
     with _bc:
         if st.button("↻ Refresh", key="_ado_cov_refresh_v1",
@@ -15580,21 +15576,24 @@ def _render_ado_coverage() -> None:
                      help="Re-walk ADO (clears the 30-min cache)."):
             _ado_pipeline_coverage.clear()
             st.rerun()
-    if not _host:
+    if not (_org_url and _ado["token"]):
         st.markdown(
-            '<div class="adoc-err">ADO host not resolved from vault — the '
-            'coverage walk needs the same <code>ado.hostname / username / '
-            'password</code> the inventory git loader uses.</div>',
+            '<div class="adoc-err">ADO org URL / token not resolved from vault — '
+            'the coverage walk reads the <code>ado</code> secret '
+            '(<code>host</code> + <code>token</code>), exactly like the platform '
+            'client: <code>read_all_nested_secrets("ado")</code> → '
+            '<code>host</code> as the org URL and <code>token</code> as the '
+            'Basic-auth password (empty username).</div>',
             unsafe_allow_html=True)
         return
     with st.spinner("Walking ADO collections → projects → repositories…"):
-        _cov = _ado_pipeline_coverage(_host)
+        _cov = _ado_pipeline_coverage(_org_url)
     if not _cov.get("ok"):
         st.markdown(
             f'<div class="adoc-err">Could not load ADO coverage — '
             f'{html.escape(_cov.get("error") or "unknown error")}</div>',
             unsafe_allow_html=True)
-        _ado_render_diagnostics(_host, _cov.get("diag") or {})
+        _ado_render_diagnostics(_org_url, _cov.get("diag") or {})
         return
     _t = _cov["totals"]
     _repos = int(_t["repos"])
@@ -24107,6 +24106,29 @@ def _ado_base_url(host: str) -> str:
     return f"{ADO_REST_SCHEME}://{host}{ADO_BASE_PATH}"
 
 
+def _ado_coverage_creds() -> dict:
+    """ADO REST credentials for the coverage walk — read EXACTLY like the
+    platform's own client:
+
+        vc.read_all_nested_secrets("ado")
+        org_url = config["host"].rstrip("/")
+        auth    = HTTPBasicAuth('', config["token"])
+
+    i.e. vault path ``ado`` with ``host`` (the full org/REST base URL) + ``token``
+    (a PAT used as the Basic-auth PASSWORD with an EMPTY username). This is
+    SEPARATE from ``_git_creds`` (which reads hostname/username/password for git
+    clone under a different path) — the coverage tab was wrongly using that.
+
+    Returns ``{"org_url": str, "token": str, "auth": str}`` where ``auth`` is the
+    ready-to-use ``Basic …`` header (empty user + token)."""
+    cfg = _vault_secrets("ado") or {}
+    org_url = str(cfg.get("host") or "").strip().rstrip("/")
+    token = str(cfg.get("token") or "").strip()
+    auth = ("Basic " + base64.b64encode(f":{token}".encode()).decode()
+            if token else "")
+    return {"org_url": org_url, "token": token, "auth": auth}
+
+
 def _ado_get_verbose(url: str, auth: str, timeout: int = 20) -> dict:
     """GET an ADO REST resource, returning FULL diagnostics rather than
     swallowing failures. Returns ``{ok, data, status, kind, error, body, url}``
@@ -24166,18 +24188,17 @@ def _ado_diag_hints(d: dict) -> list[str]:
     _hints: list[str] = []
     if _st in (401, 403) or "unauthorized" in _body or "tf400813" in _body:
         _hints.append(
-            "401/403 — the credential is valid for git clone but the REST token "
-            "lacks a READ scope. A PAT used for coverage needs <b>Project and "
-            "Team (Read)</b>, <b>Code (Read)</b> and <b>Build (Read)</b>. Git "
-            "push/pull only needs Code, so a Code-only PAT clones fine yet can't "
-            "list collections/projects.")
+            "401/403 — the vault <code>ado.token</code> lacks a READ scope. A PAT "
+            "used for coverage needs <b>Project and Team (Read)</b>, <b>Code "
+            "(Read)</b> and <b>Build (Read)</b>. Confirm the token is a valid PAT "
+            "(sent as Basic with an empty username, per the platform client).")
     if _st == 404 or "tf200016" in _body or "does not exist" in _body:
         _hints.append(
-            "404 — the REST base path is wrong. On-prem ADO Server/TFS commonly "
-            "lives under a virtual directory. Your git URLs use collection "
-            "<code>DevOps</code> (…/DevOps/_git/…); if the server root is "
-            "<code>/tfs</code>, set <code>ADO_BASE_PATH=tfs</code>. Use the "
-            "probe below to confirm.")
+            "404 — the vault <code>ado.host</code> URL doesn't point at the REST "
+            "root. It must be the org/server base the collections API hangs off "
+            "(e.g. <code>https://server/tfs</code> for on-prem ADO Server, or "
+            "<code>https://dev.azure.com/&lt;org&gt;</code> for cloud). Use the "
+            "probe to confirm.")
     if _st == 400 or "api-version" in _body or "version" in _body:
         _hints.append(
             f"400 / api-version — the server may not support "
@@ -24188,42 +24209,38 @@ def _ado_diag_hints(d: dict) -> list[str]:
         _hints.append(
             "Non-JSON (HTML) body — Basic/PAT auth is likely disabled and the "
             "server redirected to an NTLM/SAML sign-in. Enable Basic Auth on the "
-            "ADO Server, or ensure the PAT is sent (it is, as Basic).")
+            "ADO Server, or confirm the token is a PAT.")
     if _kind == "url":
         _hints.append(
-            "Connection failed outright — check host/port and scheme. Git may "
-            "use <b>https</b> while this REST call defaults to http. Try "
-            "<code>ADO_REST_SCHEME=https</code>.")
+            "Connection failed outright — the vault <code>ado.host</code> URL "
+            "(scheme + host + port) is wrong or unreachable from here.")
     if not _hints:
         _hints.append(
             "No specific signature matched — inspect the status + response body "
-            "above and run the connection probe to see which scheme / base path "
-            "/ api-version the server accepts.")
+            "above and run the connection probe to see which api-version the "
+            "server accepts.")
     return _hints
 
 
-def _ado_probe(host: str, auth: str) -> list[dict]:
-    """Try a small matrix of scheme × virtual-directory × api-version against
-    the collections endpoint and report what each returns. Stops early on the
-    first JSON success. Short per-try timeout so an unreachable host fails fast."""
+def _ado_probe(org_url: str, auth: str) -> list[dict]:
+    """Try the vault org URL against a few api-versions on the collections
+    endpoint and report what each returns. Stops early on the first JSON
+    success. Short per-try timeout so an unreachable host fails fast."""
+    _base = (org_url or "").rstrip("/")
     _results: list[dict] = []
     _seen: set[str] = set()
-    for _scheme in (ADO_REST_SCHEME, "http", "https"):
-        for _path in (ADO_BASE_PATH, "", "/tfs", "/DefaultCollection"):
-            for _ver in (ADO_API_VERSION, "6.0", "5.0", "7.1"):
-                _url = f"{_scheme}://{host}{_path}/_apis/projectCollections?api-version={_ver}"
-                if _url in _seen:
-                    continue
-                _seen.add(_url)
-                _d = _ado_get_verbose(_url, auth, timeout=8)
-                _results.append({
-                    "url": _url, "ok": _d["ok"], "status": _d["status"],
-                    "kind": _d["kind"], "error": _d["error"],
-                })
-                if _d["ok"]:
-                    return _results
-                if len(_results) >= 16:   # hard cap so we never hang forever
-                    return _results
+    for _ver in (ADO_API_VERSION, "6.0", "5.0", "7.1", "4.1"):
+        _url = f"{_base}/_apis/projectCollections?api-version={_ver}"
+        if _url in _seen:
+            continue
+        _seen.add(_url)
+        _d = _ado_get_verbose(_url, auth, timeout=8)
+        _results.append({
+            "url": _url, "ok": _d["ok"], "status": _d["status"],
+            "kind": _d["kind"], "error": _d["error"],
+        })
+        if _d["ok"]:
+            return _results
     return _results
 
 
@@ -24245,19 +24262,23 @@ def _ado_parse_description(desc: str) -> tuple[str, str]:
 
 
 @st.cache_data(ttl=ADO_COVERAGE_TTL, show_spinner=False)
-def _ado_pipeline_coverage(host: str) -> dict:
+def _ado_pipeline_coverage(org_url: str) -> dict:
     """Walk the ADO Server: collections → projects (+description) → repos, and
     cross-reference build definitions to mark each repo pipelined / not. Cached
-    (30 min) and threaded; returns a structured coverage report."""
+    (30 min) and threaded; returns a structured coverage report.
+
+    Auth is the platform's own ADO client convention: vault ``ado`` → ``host``
+    (the org/REST base = ``org_url``) + ``token`` (PAT sent as Basic-auth
+    password with an EMPTY username). See :func:`_ado_coverage_creds`."""
     _empty = {"ok": False, "error": "", "capped": 0, "collections": [],
               "totals": {"collections": 0, "projects": 0, "repos": 0,
                          "pipelined": 0, "no_pipeline": 0}}
-    creds = _git_creds()
-    user, pw = creds.get("username", ""), creds.get("password", "")
-    if not (host and user and pw):
-        return {**_empty, "error": "ADO host / credentials not resolved from vault."}
-    auth = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
-    base = _ado_base_url(host)
+    creds = _ado_coverage_creds()
+    token, auth = creds["token"], creds["auth"]
+    if not (org_url and token):
+        return {**_empty, "error": ("ADO org URL / token not resolved from the "
+                                    "vault `ado` secret (need host + token).")}
+    base = org_url.rstrip("/")
     ver = ADO_API_VERSION
     _q = urllib.parse.quote
 
@@ -24273,8 +24294,8 @@ def _ado_pipeline_coverage(host: str) -> dict:
                     "kind": _cd["kind"], "body": _cd["body"],
                     "hints": _ado_diag_hints(_cd),
                     "base": base, "api_version": ver,
-                    "scheme": ADO_REST_SCHEME, "base_path": ADO_BASE_PATH or "(none)",
-                    "user": user,
+                    "scheme": "(from vault host)", "base_path": "(from vault host)",
+                    "user": "(empty · token auth)",
                 }}
     cj = _cd["data"]
     coll_names = sorted(
