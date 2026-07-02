@@ -122,16 +122,56 @@ def _seed_mirrors() -> None:
 
 def _seed_control() -> None:
     """Per-team config repos: <project>/<env>_<app>/config.yml with connection
-    variables so the Architecture tab has nodes + edges to draw. Connections
-    reference sibling app names (e.g. `api` → `worker`) so some edges resolve
-    to internal app→app links rather than external endpoints."""
+    variables so the Architecture tab has nodes + edges to draw.
+
+    URL convention (matches the real fleet): a call to an app's service uses
+    host ``<image>-service`` where image = app name lowercased with . / _ → -.
+    So ``http://worker-service:9090`` resolves to the app ``worker``. This lets
+    the arch tab draw INTERNAL app→app edges (including to OUT-OF-SCOPE apps,
+    which get their own project box) and reserve external endpoints for hosts
+    that match no app. ``*.svc.cluster.local`` hosts that match no app are
+    grouped into a single "Cluster Services" box. Also seeds a ``_bkp`` folder
+    (must be ignored) and commented-out lines (must be ignored)."""
     # team → (project, app)
     layout = {
         "DEVJAVA":   ("payments", "api"),
         "QCJAVA":    ("payments", "checkout"),
         "DEVDOTNET": ("billing",  "worker"),
-        "QCNET":     ("billing",  "portal"),
+        "QCNET":     ("portal",   "web"),
         "OPS":       ("platform", "gateway"),
+    }
+    # Per-app extra connection block — references OTHER apps by the -service
+    # convention so cross-project (out-of-scope) edges appear.
+    _refs = {
+        "api": (
+            "siblings:\n"
+            "  checkout_url: http://checkout-service:8080/api     # in-scope (payments)\n"
+            "  worker_endpoint: http://worker-service:9090        # OUT of scope (billing)\n"
+            "cluster:\n"
+            "  # gateway reached via its cluster DNS — still resolves to the app\n"
+            "  gateway_via_cluster: http://gateway-service.platform.svc.cluster.local:8080\n"
+            "  session_store: sessionstore.default.svc.cluster.local:6379  # → Cluster Services\n"
+            "  metrics_sink: prometheus-pushgateway.monitoring.svc.cluster.local:9091\n"
+            "external:\n"
+            "  auth_url: https://auth.acme.local/oauth\n"
+            "#  old_worker_url: http://legacy-worker.acme.local:9090   # COMMENTED — must be ignored\n"
+        ),
+        "checkout": (
+            "siblings:\n"
+            "  api_url: http://api-service:8080/checkout   # in-scope internal edge\n"
+        ),
+        "worker": (
+            "siblings:\n"
+            "  gateway_url: http://gateway-service:8080/route   # → platform (out of scope)\n"
+        ),
+        "web": (
+            "siblings:\n"
+            "  api_url: http://api-service:8080   # → payments (out of scope)\n"
+        ),
+        "gateway": (
+            "cluster:\n"
+            "  shared_cache: shared-redis.platform.svc.cluster.local:6379   # → Cluster Services\n"
+        ),
     }
     for team in TEAMS:
         proj, app = layout.get(team, ("platform", team.lower()))
@@ -139,23 +179,23 @@ def _seed_control() -> None:
         _init_repo(repo)
         for env in ("dev", "qc", "prd"):
             _write(repo, f"{proj}/{env}_{app}/config.yml",
-                   f"# {proj}/{env}_{app}\n"
+                   f"# {proj}/{env}_{app} — service config\n"
                    f"service:\n"
                    f"  name: {app}\n"
                    f"  port: 8080\n"
                    f"database:\n"
-                   f"  db_hostname: {proj}-db-{env}\n"
-                   f"  db_port: 5432\n"
-                   f"  url: postgresql://{proj}-db-{env}:5432/{proj}\n"
-                   f"upstream:\n"
-                   f"  # resolves to the gateway app (internal edge)\n"
-                   f"  gateway_url: http://gateway:8080/route\n"
-                   f"  worker_endpoint: http://worker:9090\n"
-                   f"  auth_url: https://auth-{env}.acme.local/oauth\n"
-                   f"messaging:\n"
-                   f"  kafka_url: kafka://broker-{env}:9092\n"
-                   f"cache:\n"
-                   f"  redis_url: redis://cache-{env}:6379\n")
+                   f"  url: postgresql://{proj}-db.acme.local:5432/{proj}\n"
+                   + _refs.get(app, ""))
+        # ── Backup folders that MUST be ignored (end with _bkp) ──
+        if team == "DEVJAVA":
+            # env_app-level backup folder
+            _write(repo, f"{proj}/prd_{app}_bkp/config.yml",
+                   "service:\n  name: api-bkp\n"
+                   "external:\n  bad_url: http://bkp-should-not-appear.acme.local:1234\n")
+            # project-level backup folder
+            _write(repo, f"{proj}_bkp/prd_{app}/config.yml",
+                   "service:\n  name: api-oldproj\n"
+                   "external:\n  bad_url: http://alsobad-bkp.acme.local:1234\n")
         _commit_all(repo, f"seed control config for {team}")
 
 

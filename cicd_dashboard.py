@@ -6422,6 +6422,18 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .arch-leg-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .arch-err-row { font-family: var(--cc-mono); font-size: 0.7rem;
     color: var(--cc-amber); padding: 1px 0; }
+/* Single-env viewer: bound the height + let a natural-size (readable) diagram
+   scroll INSIDE the box instead of stretching the whole page. */
+.st-key-arch_single_wrap {
+    max-height: 78vh; overflow: auto;
+    border: 1px solid var(--cc-border); border-radius: 12px;
+    background:
+        linear-gradient(90deg, var(--cc-surface2) 1px, transparent 1px) 0 0 / 22px 22px,
+        linear-gradient(180deg, var(--cc-surface2) 1px, transparent 1px) 0 0 / 22px 22px,
+        var(--cc-surface);
+    padding: 8px;
+}
+.st-key-arch_single_wrap [data-testid="stGraphVizChart"] { overflow: visible; }
 .arch-env-head {
     font-family: var(--cc-mono); font-size: 0.72rem; font-weight: 700;
     letter-spacing: 0.04em; color: var(--cc-text); margin: 4px 0 2px 0;
@@ -15612,6 +15624,15 @@ def _arch_node_id(prefix: str, *parts: str) -> str:
     return prefix + "_" + re.sub(r"\W", "_", "__".join(parts))
 
 
+def _arch_service_name(app: str) -> str:
+    """The in-cluster service hostname convention for an application:
+    ``<image_name>-service`` where image_name is the app name lowercased with
+    every ``.`` / ``_`` turned into ``-``. A connection whose host STARTS WITH
+    this is a call to that app's service, not an external endpoint."""
+    _img = re.sub(r"[._]", "-", str(app or "").strip().lower())
+    return f"{_img}-service" if _img else ""
+
+
 def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
                     highlight: dict | None = None,
                     max_nodes: int = ARCH_MAX_NODES) -> tuple[str, int, bool]:
@@ -15626,46 +15647,58 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
     'added'/'removed'/'changed' for the comparison overlay."""
     _all = ed.get("apps", {})
     _keys = set(scope_keys) if scope_keys is not None else set(_all)
-    apps = {k: _all[k] for k in _keys if k in _all}
+    apps = {k: _all[k] for k in _keys if k in _all}     # in-scope apps
     _hl = highlight or {}
-    _name_to_key = {_a: (_p, _a) for (_p, _a) in apps}
-    # Resolve a connection target to a SCOPED sibling app (host contains the
-    # app's name, ≥3 chars, not itself) — only against the in-scope names, so
-    # it's cheap even on a huge fleet. Memoised per (host, self) for this build.
-    _scoped_names_lc = sorted(
-        ((_a, _a.lower()) for (_p, _a) in apps),
-        key=lambda t: len(t[1]), reverse=True)
+
+    # Service-name index over EVERY app in the environment (in- AND out-of-scope)
+    # so a connection host that follows the `<image>-service` convention resolves
+    # to the real service — even when that service lives in an app the current
+    # scope doesn't include. Longest service name first → longest-prefix wins.
+    _svc_first: dict[str, tuple] = {}
+    for (_p, _a) in _all:
+        _svc = _arch_service_name(_a)
+        if _svc:
+            _svc_first.setdefault(_svc, (_p, _a))
+    _svc_index = sorted(_svc_first.items(), key=lambda kv: len(kv[0]), reverse=True)
     _resolve_cache: dict = {}
 
-    def _resolve_tgt(host: str, self_app: str) -> str:
-        _ck = (host, self_app)
-        _hit = _resolve_cache.get(_ck)
-        if _hit is not None:
-            return _hit
-        _sl = self_app.lower()
-        _r = ""
-        for _nm, _nlc in _scoped_names_lc:
-            if len(_nlc) >= 3 and _nlc != _sl and _nlc in host:
-                _r = _nm
+    def _resolve_svc(host: str):
+        """Return the (project, app) whose service the host addresses, or None."""
+        _h = (host or "").lower()
+        if _h in _resolve_cache:
+            return _resolve_cache[_h]
+        _r = None
+        for _svc, _key in _svc_index:
+            if _h.startswith(_svc):
+                _r = _key
                 break
-        _resolve_cache[_ck] = _r
+        _resolve_cache[_h] = _r
         return _r
 
-    # Pre-count nodes (apps + distinct external endpoints among in-scope apps)
-    # WITHOUT building the (potentially huge) DOT string first.
+    # Pre-pass: resolve every in-scope app's connections into (a) internal edges
+    # to sibling services, (b) OUT-OF-SCOPE apps that must be pulled in as their
+    # own project box, and (c) genuinely external endpoints. Counts nodes before
+    # building the (potentially huge) DOT so the cap can short-circuit.
+    _referenced: set = set()          # out-of-scope (p,a) pulled in as dependency boxes
     _ext_pre: set = set()
     for (_p, _a), _ad in apps.items():
         for _c in _ad.get("connections") or []:
-            _tgt = _resolve_tgt(_c["host"], _a)
-            if not (_tgt and _tgt in _name_to_key):
+            _tgt = _resolve_svc(_c["host"])
+            if _tgt is None:
                 _ext_pre.add(_c["host"] + (f':{_c["port"]}' if _c.get("port") else ""))
-    _node_count = len(apps) + len(_ext_pre)
+            elif _tgt != (_p, _a) and _tgt not in apps:
+                _referenced.add(_tgt)
+    _render_keys = set(apps) | _referenced
+    _node_count = len(_render_keys) + len(_ext_pre)
     if _node_count > max_nodes:
         return "", _node_count, True
 
-    by_proj: dict[str, list[dict]] = {}
-    for (_p, _a), _ad in apps.items():
-        by_proj.setdefault(_p, []).append(_ad)
+    # Group render apps by project; a project is "out of scope" when NONE of its
+    # rendered apps are in the current scope (it was pulled in purely as a
+    # dependency target) — it still gets a project box, drawn distinctly.
+    by_proj: dict[str, list[tuple]] = {}
+    for _key in _render_keys:
+        by_proj.setdefault(_key[0], []).append(_key)
     L = [
         "digraph A {",
         'rankdir=LR; bgcolor="transparent"; pad=0.25;',
@@ -15678,50 +15711,89 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
     ]
     _ci = 0
     for _p in sorted(by_proj):
-        L.append(f'subgraph cluster_{_ci} {{ label="{_arch_dot_esc(_p)}"; '
-                 'style="rounded,filled"; fillcolor="#f8fafc"; '
-                 'color="#e2e8f0"; fontname="Helvetica-Bold"; fontsize=10; '
-                 'labeljust="l";')
-        for _ad in sorted(by_proj[_p], key=lambda d: d["app"].lower()):
-            _nid = _arch_node_id("app", _p, _ad["app"])
-            _state = _hl.get((_p, _ad["app"]), "")
-            _fill = ("#dcfce7" if _state == "added"
-                     else "#fee2e2" if _state == "removed"
-                     else "#fef9c3" if _state == "changed" else "#ffffff")
-            _bord = ("#16a34a" if _state == "added"
-                     else "#dc2626" if _state == "removed"
-                     else "#ca8a04" if _state == "changed" else "#94a3b8")
-            _nconn = len(_ad.get("connections") or [])
-            _lbl = (f'{_arch_dot_esc(_ad["app"])}'
-                    + (f'\\n{_nconn} conn' if _nconn else ''))
-            L.append(f'  {_nid} [label="{_lbl}" fillcolor="{_fill}" '
-                     f'color="{_bord}"];')
+        _proj_keys = by_proj[_p]
+        _proj_out = all(_k not in apps for _k in _proj_keys)
+        _clbl = _arch_dot_esc(_p) + ("  ·  out of scope" if _proj_out else "")
+        # Out-of-scope project boxes use a dashed border + cooler fill so they
+        # read as "referenced dependency", while staying a proper project box.
+        _cstyle = ('style="rounded,dashed,filled"; fillcolor="#f1f5f9"; '
+                   'color="#cbd5e1";' if _proj_out else
+                   'style="rounded,filled"; fillcolor="#f8fafc"; color="#e2e8f0";')
+        L.append(f'subgraph cluster_{_ci} {{ label="{_clbl}"; {_cstyle} '
+                 'fontname="Helvetica-Bold"; fontsize=10; labeljust="l";')
+        for _key in sorted(_proj_keys, key=lambda k: k[1].lower()):
+            _a = _key[1]
+            _nid = _arch_node_id("app", _p, _a)
+            if _key in apps:
+                _state = _hl.get(_key, "")
+                _fill = ("#dcfce7" if _state == "added"
+                         else "#fee2e2" if _state == "removed"
+                         else "#fef9c3" if _state == "changed" else "#ffffff")
+                _bord = ("#16a34a" if _state == "added"
+                         else "#dc2626" if _state == "removed"
+                         else "#ca8a04" if _state == "changed" else "#94a3b8")
+                _nconn = len(_all[_key].get("connections") or [])
+                _lbl = (f'{_arch_dot_esc(_a)}'
+                        + (f'\\n{_nconn} conn' if _nconn else ''))
+                L.append(f'  {_nid} [label="{_lbl}" fillcolor="{_fill}" '
+                         f'color="{_bord}"];')
+            else:
+                # Out-of-scope dependency service — dashed stub (we don't expand
+                # its own connections; it's shown to place the dependency).
+                _lbl = f'{_arch_dot_esc(_a)}\\n(out of scope)'
+                L.append(f'  {_nid} [label="{_lbl}" fillcolor="#f8fafc" '
+                         f'color="#cbd5e1" style="filled,rounded,dashed" '
+                         f'fontcolor="#64748b"];')
         L.append("}")
         _ci += 1
-    # External endpoint nodes + edges.
+    # External endpoint nodes + edges from in-scope apps.
     _ext: dict[str, str] = {}
     _edges: set = set()
-    _name_to_proj = {_a: _p for (_p, _a) in apps}
     for (_p, _a), _ad in apps.items():
         _src = _arch_node_id("app", _p, _a)
         for _c in _ad.get("connections") or []:
             _kind = _c.get("kind") or "other"
             _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
-            _tgt_app = _resolve_tgt(_c["host"], _a)
-            if _tgt_app and _tgt_app in _name_to_proj:
-                _dst = _arch_node_id("app", _name_to_proj[_tgt_app], _tgt_app)
+            _tgt = _resolve_svc(_c["host"])
+            if _tgt is not None:
+                if _tgt == (_p, _a):
+                    continue   # self-reference — don't draw a self-loop
+                _dst = _arch_node_id("app", _tgt[0], _tgt[1])
             else:
                 _label = _c["host"] + (f':{_c["port"]}' if _c.get("port") else "")
                 _ext[_label] = _kind
                 _dst = _arch_node_id("ext", _label)
             _edges.add((_src, _dst, _kind, _col))
-    for _label, _kind in _ext.items():
+    # Kubernetes/OCP in-cluster service DNS that didn't resolve to one of our
+    # apps (a shared/platform service, or an app we don't model) is grouped into
+    # a single "Cluster Services" box rather than scattered as loose endpoints.
+    _CLUSTER_SUFFIX = ".svc.cluster.local"
+
+    def _ext_node(_label: str, _kind: str, *, strip_cluster: bool = False) -> str:
         _eid = _arch_node_id("ext", _label)
         _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
         _shape = _ARCH_KIND_SHAPE.get(_kind, "box")
-        L.append(f'{_eid} [label="{_arch_dot_esc(_label)}" shape={_shape} '
-                 f'style="filled" fillcolor="#f1f5f9" color="{_col}" '
-                 f'fontsize=9 fontname="Helvetica"];')
+        _disp = _label
+        if strip_cluster:
+            # Drop the long ".svc.cluster.local[:port]" tail for readability —
+            # the enclosing box already says these are cluster services.
+            _disp = _label.split(_CLUSTER_SUFFIX, 1)[0]
+        return (f'{_eid} [label="{_arch_dot_esc(_disp)}" shape={_shape} '
+                f'style="filled" fillcolor="#f1f5f9" color="{_col}" '
+                f'fontsize=9 fontname="Helvetica"];')
+
+    _cluster_ext = {l: k for l, k in _ext.items() if _CLUSTER_SUFFIX in l}
+    _plain_ext = {l: k for l, k in _ext.items() if _CLUSTER_SUFFIX not in l}
+    if _cluster_ext:
+        L.append('subgraph cluster_svc { label="Cluster Services"; '
+                 'style="rounded,dashed,filled"; fillcolor="#eef2ff"; '
+                 'color="#c7d2fe"; fontname="Helvetica-Bold"; fontsize=10; '
+                 'labeljust="l";')
+        for _label, _kind in _cluster_ext.items():
+            L.append("  " + _ext_node(_label, _kind, strip_cluster=True))
+        L.append("}")
+    for _label, _kind in _plain_ext.items():
+        L.append(_ext_node(_label, _kind))
     for _src, _dst, _kind, _col in sorted(_edges):
         L.append(f'{_src} -> {_dst} [color="{_col}"];')
     L.append("}")
@@ -15851,7 +15923,8 @@ def _render_architecture() -> None:
                 'keeps the browser responsive. Narrow the project selection '
                 'above (or set a higher <code>ARCH_MAX_NODES</code>).</div>')
 
-    def _draw(env: str, ed: dict, highlight: dict | None = None) -> None:
+    def _draw(env: str, ed: dict, highlight: dict | None = None,
+              fit_width: bool = True) -> None:
         _keys = _scope_keys(ed)
         if not _keys:
             st.info(f"No apps in the selected project(s) for {env}.")
@@ -15861,13 +15934,25 @@ def _render_architecture() -> None:
         if _trunc:
             st.markdown(_too_big_html(_n), unsafe_allow_html=True)
         else:
-            st.graphviz_chart(_dot, use_container_width=True)
+            st.graphviz_chart(_dot, use_container_width=fit_width)
 
     _cmp = st.toggle("Compare two environments", key="_arch_cmp_v1",
                      value=len(_env_names) > 1)
     if not _cmp:
-        _env = st.selectbox("Environment", _env_names, key="_arch_env_single_v1")
-        _draw(_env, _envs[_env])
+        _cE, _cF = st.columns([3, 2])
+        with _cE:
+            _env = st.selectbox("Environment", _env_names,
+                                key="_arch_env_single_v1")
+        with _cF:
+            # Default OFF → the diagram renders at its NATURAL size (readable
+            # text) inside a scroll box, instead of being stretched to the full
+            # page width (which blows small diagrams up and forces long scrolls).
+            _fit = st.toggle(
+                "↔ Fit to width", key="_arch_fit_width_v1", value=False,
+                help="Off: natural, readable size — pan inside the box. "
+                     "On: scale the whole diagram to the page width.")
+        with st.container(key="arch_single_wrap"):
+            _draw(_env, _envs[_env], fit_width=_fit)
         return
 
     _cA, _cB = st.columns(2)
@@ -24035,10 +24120,16 @@ def _config_scan_team(team: str, head_marker: str) -> dict:
     }
     if not os.path.isdir(repo_path):
         return out
+    # Backup folders (any dir whose name ends with `_bkp`, case-insensitive) are
+    # snapshots, NOT live config — skip them everywhere so they don't pollute
+    # the project list, the app topology, or the architecture model.
+    def _is_bkp(name: str) -> bool:
+        return name.strip().lower().endswith("_bkp")
     try:
         _projects = sorted(
             d for d in os.listdir(repo_path)
-            if d != ".git" and os.path.isdir(os.path.join(repo_path, d))
+            if d != ".git" and not _is_bkp(d)
+            and os.path.isdir(os.path.join(repo_path, d))
         )
     except OSError:
         return out
@@ -24047,7 +24138,8 @@ def _config_scan_team(team: str, head_marker: str) -> dict:
         try:
             _apps = sorted(
                 d for d in os.listdir(_proj_abs)
-                if os.path.isdir(os.path.join(_proj_abs, d))
+                if not _is_bkp(d)
+                and os.path.isdir(os.path.join(_proj_abs, d))
             )
         except OSError:
             _apps = []
@@ -24142,6 +24234,17 @@ def _arch_kind(scheme: str) -> str:
     if s in ("tcp", "udp"):
         return "socket"
     return "other"
+
+
+def _arch_strip_comment_lines(text: str) -> str:
+    """Drop whole-line YAML comments (first non-space char is ``#``) BEFORE
+    parsing, so a commented-out connection can never be detected. YAML already
+    ignores these, but this guarantees it for any edge case (and keeps the
+    connection heuristics from ever seeing a `#`-prefixed line)."""
+    return "\n".join(
+        _ln for _ln in (text or "").splitlines()
+        if not _ln.lstrip().startswith("#")
+    )
 
 
 def _arch_extract_connections(cfg: Any) -> list[dict]:
@@ -24265,7 +24368,7 @@ def _arch_build_model(host: str, teams_json: str) -> dict:
                 if _is_bin or _err or not _text:
                     continue
                 try:
-                    _cfg = _yaml.safe_load(_text)
+                    _cfg = _yaml.safe_load(_arch_strip_comment_lines(_text))
                 except Exception:
                     _cfg = None
                 _conns = (_arch_extract_connections(_cfg)
