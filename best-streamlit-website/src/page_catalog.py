@@ -21,6 +21,7 @@ def get_page_catalog() -> List[PageSpec]:
         PageSpec("pages/1_Team_Task_Manager.py", "Team Task Manager", "📋", "Team"),
         PageSpec("pages/2_DevOps_Referral_Agent.py", "DevOps Referral Agent", "🧑‍💼", "Team"),
         PageSpec("pages/3_WFH_Schedule.py", "WFH Schedule", "📅", "Team"),
+        PageSpec("pages/13_Attendance.py", "Team Attendance", "🏢", "Team"),
         PageSpec("pages/4_DataGen_Agent.py", "DataGen Agent", "🧪", "AI Playground"),
         PageSpec("pages/5_Agent_Management.py", "Agent Management", "🧠", "AI Playground"),
         PageSpec("pages/6_Kubernetes.py", "Kubernetes", "☸️", "AI Playground"),
