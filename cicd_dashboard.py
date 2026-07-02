@@ -6422,6 +6422,46 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
 .arch-leg-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .arch-err-row { font-family: var(--cc-mono); font-size: 0.7rem;
     color: var(--cc-amber); padding: 1px 0; }
+/* Common-apps-only comparison — which apps are excluded from each env */
+.arch-excl {
+    margin: 4px 0 10px; padding: 10px 14px; border-radius: 11px;
+    background: var(--cc-amber-bg); border: 1px solid rgba(217,119,6,.28);
+}
+.arch-excl-head { font-size: 0.8rem; color: var(--cc-text); margin-bottom: 6px; }
+.arch-excl-head b { color: #9a5b06; font-family: var(--cc-mono); }
+.arch-excl-row {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;
+    padding: 3px 0;
+}
+.arch-excl-lbl {
+    font-family: var(--cc-mono); font-size: 0.64rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em; color: #9a5b06;
+    min-width: 150px;
+}
+.arch-excl-lbl small {
+    display: block; font-weight: 400; text-transform: none; letter-spacing: 0;
+    color: var(--cc-text-mute); font-size: 0.62rem;
+}
+.arch-excl-chip {
+    display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 8px;
+    border-radius: 999px; background: var(--cc-surface); border: 1px solid var(--cc-border);
+    font-size: 0.72rem; font-weight: 600; color: var(--cc-text);
+}
+.arch-excl-proj {
+    font-family: var(--cc-mono); font-size: 0.6rem; color: var(--cc-text-mute);
+}
+.arch-excl-none { font-size: 0.72rem; color: var(--cc-text-mute); font-style: italic; }
+/* Repeated-URL (identical across both envs) banner */
+.arch-repeated {
+    display: flex; align-items: center; gap: 7px; margin: 4px 0 8px;
+    padding: 8px 13px; border-radius: 10px; font-size: 0.79rem;
+    color: #9a3412; background: #fff7ed; border: 1px solid #fdba74;
+}
+.arch-repeated b { color: #9a3412; font-family: var(--cc-mono); }
+.arch-repeated-dot {
+    width: 11px; height: 11px; border-radius: 3px; background: #ea580c;
+    border: 1px solid #c2410c; flex: 0 0 auto;
+}
 /* Single-env viewer: bound the height + let a natural-size (readable) diagram
    scroll INSIDE the box instead of stretching the whole page. */
 .st-key-arch_single_wrap {
@@ -15614,6 +15654,39 @@ _ARCH_KIND_SHAPE = {
     "db": "cylinder", "queue": "component", "ldap": "octagon",
     "file/mail": "folder",
 }
+# Coarse-kind fallback labels (shown on the endpoint box when the finer scheme
+# isn't distinctive).
+_ARCH_KIND_LABEL = {
+    "http": "HTTP", "db": "DB", "queue": "QUEUE", "socket": "SOCKET",
+    "ldap": "LDAP", "file/mail": "FTP/MAIL", "other": "NET",
+}
+# Finer per-scheme display labels so http vs gRPC vs WS (and each DB / broker)
+# are distinguishable on the endpoint box, per the connection-type request.
+_ARCH_SCHEME_LABEL = {
+    "http": "HTTP", "https": "HTTPS", "ws": "WS", "wss": "WSS", "grpc": "gRPC",
+    "postgres": "PostgreSQL", "postgresql": "PostgreSQL", "mysql": "MySQL",
+    "mariadb": "MariaDB", "mongodb": "MongoDB", "mongodb+srv": "MongoDB",
+    "redis": "Redis", "rediss": "Redis", "oracle": "Oracle",
+    "sqlserver": "SQLServer", "mssql": "MSSQL", "cassandra": "Cassandra",
+    "clickhouse": "ClickHouse", "elasticsearch": "Elasticsearch",
+    "amqp": "AMQP", "amqps": "AMQP", "kafka": "Kafka", "mqtt": "MQTT",
+    "nats": "NATS", "stomp": "STOMP",
+    "ldap": "LDAP", "ldaps": "LDAPS", "ftp": "FTP", "sftp": "SFTP",
+    "smtp": "SMTP", "smtps": "SMTP", "imap": "IMAP", "imaps": "IMAP",
+    "tcp": "TCP", "udp": "UDP",
+}
+_ARCH_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+
+
+def _arch_type_label(kind: str, scheme: str) -> str:
+    """Display tag for a connection's TYPE — prefers the finer scheme (gRPC, WS,
+    Kafka, PostgreSQL…) and falls back to the coarse kind (HTTP/DB/QUEUE/…)."""
+    _s = (scheme or "").lower()
+    if _s.startswith("jdbc:"):
+        _s = _s[5:]
+    if _s in _ARCH_SCHEME_LABEL:
+        return _ARCH_SCHEME_LABEL[_s]
+    return _ARCH_KIND_LABEL.get(kind, "NET")
 
 
 def _arch_dot_esc(s: str) -> str:
@@ -15633,8 +15706,36 @@ def _arch_service_name(app: str) -> str:
     return f"{_img}-service" if _img else ""
 
 
+def _arch_ext_labels(ed: dict, scope_keys: set) -> set:
+    """The set of EXTERNAL endpoint labels (``host[:port]``) for the scoped apps
+    of one environment — i.e. connection hosts that DON'T resolve to one of the
+    env's app services (same rule as `_arch_build_dot`). Used to find URLs that
+    are byte-identical across two environments."""
+    _all = ed.get("apps", {})
+    _svc_first: dict[str, tuple] = {}
+    for (_p, _a) in _all:
+        _svc = _arch_service_name(_a)
+        if _svc:
+            _svc_first.setdefault(_svc, (_p, _a))
+    _svc_index = sorted(_svc_first, key=len, reverse=True)
+
+    def _resolves(host: str) -> bool:
+        _h = (host or "").lower()
+        return any(_h.startswith(_svc) for _svc in _svc_index)
+
+    _labels: set = set()
+    for _key in scope_keys:
+        _ad = _all.get(_key)
+        if not _ad:
+            continue
+        for _c in _ad.get("connections") or []:
+            if not _resolves(_c["host"]):
+                _labels.add(_c["host"] + (f':{_c["port"]}' if _c.get("port") else ""))
+    return _labels
+
+
 def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
-                    highlight: dict | None = None,
+                    highlight: dict | None = None, repeated_ext: set | None = None,
                     max_nodes: int = ARCH_MAX_NODES) -> tuple[str, int, bool]:
     """Render one environment's topology to Graphviz DOT, restricted to the apps
     in ``scope_keys`` (default: all). Returns ``(dot, node_count, truncated)``.
@@ -15685,7 +15786,12 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
         for _c in _ad.get("connections") or []:
             _tgt = _resolve_svc(_c["host"])
             if _tgt is None:
-                _ext_pre.add(_c["host"] + (f':{_c["port"]}' if _c.get("port") else ""))
+                # IP endpoints collapse to ONE node per IP (ports listed inside),
+                # so count each distinct IP once — not once per port.
+                if _ARCH_IPV4_RE.match(_c["host"]):
+                    _ext_pre.add("ip:" + _c["host"])
+                else:
+                    _ext_pre.add(_c["host"] + (f':{_c["port"]}' if _c.get("port") else ""))
             elif _tgt != (_p, _a) and _tgt not in apps:
                 _referenced.add(_tgt)
     _render_keys = set(apps) | _referenced
@@ -15747,55 +15853,99 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
         L.append("}")
         _ci += 1
     # External endpoint nodes + edges from in-scope apps.
-    _ext: dict[str, str] = {}
-    _edges: set = set()
+    #   · host that follows the -service convention → internal app edge
+    #   · IPv4 host → grouped into ONE node per IP (ports listed inside)
+    #   · everything else → a per-host:port endpoint box
+    # Every endpoint box carries its connection TYPE (HTTP/gRPC/DB/Kafka/…).
+    _CLUSTER_SUFFIX = ".svc.cluster.local"
+    _rep = repeated_ext or set()
+    _ext: dict[str, dict] = {}            # label -> {kind, type}
+    _ip_ports: dict[str, dict] = {}       # ip -> {port(or None): {kind,type}}
+    _edges: set = set()                   # (src, dst, col, edge_label)
     for (_p, _a), _ad in apps.items():
         _src = _arch_node_id("app", _p, _a)
         for _c in _ad.get("connections") or []:
             _kind = _c.get("kind") or "other"
             _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
+            _type = _arch_type_label(_kind, _c.get("scheme"))
             _tgt = _resolve_svc(_c["host"])
             if _tgt is not None:
                 if _tgt == (_p, _a):
                     continue   # self-reference — don't draw a self-loop
                 _dst = _arch_node_id("app", _tgt[0], _tgt[1])
+                _elabel = ""             # internal app→app edge stays clean
+            elif _ARCH_IPV4_RE.match(_c["host"]):
+                _ip = _c["host"]
+                _dst = _arch_node_id("ip", _ip)
+                _ip_ports.setdefault(_ip, {})[_c.get("port")] = {"kind": _kind, "type": _type}
+                _elabel = (f'{_type} :{_c["port"]}' if _c.get("port") else _type)
             else:
                 _label = _c["host"] + (f':{_c["port"]}' if _c.get("port") else "")
-                _ext[_label] = _kind
+                _ext[_label] = {"kind": _kind, "type": _type}
                 _dst = _arch_node_id("ext", _label)
-            _edges.add((_src, _dst, _kind, _col))
-    # Kubernetes/OCP in-cluster service DNS that didn't resolve to one of our
-    # apps (a shared/platform service, or an app we don't model) is grouped into
-    # a single "Cluster Services" box rather than scattered as loose endpoints.
-    _CLUSTER_SUFFIX = ".svc.cluster.local"
+                _elabel = ""             # box already shows type — keep edge clean
+            _edges.add((_src, _dst, _col, _elabel))
 
-    def _ext_node(_label: str, _kind: str, *, strip_cluster: bool = False) -> str:
+    def _ext_node(_label: str, _kind: str, _type: str, *,
+                  strip_cluster: bool = False) -> str:
         _eid = _arch_node_id("ext", _label)
-        _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
-        _shape = _ARCH_KIND_SHAPE.get(_kind, "box")
         _disp = _label
         if strip_cluster:
-            # Drop the long ".svc.cluster.local[:port]" tail for readability —
-            # the enclosing box already says these are cluster services.
             _disp = _label.split(_CLUSTER_SUFFIX, 1)[0]
-        return (f'{_eid} [label="{_arch_dot_esc(_disp)}" shape={_shape} '
-                f'style="filled" fillcolor="#f1f5f9" color="{_col}" '
-                f'fontsize=9 fontname="Helvetica"];')
+        _box = f'{_type}\\n{_arch_dot_esc(_disp)}'   # TYPE on top, URL below
+        # Byte-identical endpoint in BOTH compared environments → orange.
+        if _label in _rep:
+            return (f'{_eid} [label="{_box}" shape=box style="filled,bold" '
+                    f'fillcolor="#ffedd5" color="#ea580c" penwidth=2.2 '
+                    f'fontcolor="#9a3412" fontsize=9 fontname="Helvetica-Bold"];')
+        _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
+        _shape = _ARCH_KIND_SHAPE.get(_kind, "box")
+        return (f'{_eid} [label="{_box}" shape={_shape} style="filled" '
+                f'fillcolor="#f1f5f9" color="{_col}" fontsize=9 '
+                f'fontname="Helvetica"];')
 
-    _cluster_ext = {l: k for l, k in _ext.items() if _CLUSTER_SUFFIX in l}
-    _plain_ext = {l: k for l, k in _ext.items() if _CLUSTER_SUFFIX not in l}
+    # IP-grouped nodes — one per IP, every port + its type listed inside.
+    for _ip, _ports in _ip_ports.items():
+        _eid = _arch_node_id("ip", _ip)
+        _rep_ip = any((f"{_ip}:{_pt}" if _pt else _ip) in _rep for _pt in _ports)
+        # Representative colour = the first port's kind.
+        _first = next(iter(_ports.values()))
+        _col = _ARCH_KIND_COLOR.get(_first["kind"], "#94a3b8")
+        _plines = "".join(
+            f'\\n{_meta["type"]} :{_pt}' if _pt else f'\\n{_meta["type"]}'
+            for _pt, _meta in sorted(_ports.items(),
+                                     key=lambda kv: (kv[0] is None, kv[0])))
+        _box = f'{_arch_dot_esc(_ip)}{_plines}'
+        if _rep_ip:
+            L.append(f'{_eid} [label="{_box}" shape=box3d style="filled,bold" '
+                     f'fillcolor="#ffedd5" color="#ea580c" penwidth=2.2 '
+                     f'fontcolor="#9a3412" fontsize=9 fontname="Helvetica-Bold"];')
+        else:
+            L.append(f'{_eid} [label="{_box}" shape=box3d style="filled" '
+                     f'fillcolor="#f1f5f9" color="{_col}" fontsize=9 '
+                     f'fontname="Helvetica"];')
+
+    # Kubernetes/OCP in-cluster service DNS that didn't resolve to one of our
+    # apps → grouped into a single "Cluster Services" box.
+    _cluster_ext = {l: m for l, m in _ext.items() if _CLUSTER_SUFFIX in l}
+    _plain_ext = {l: m for l, m in _ext.items() if _CLUSTER_SUFFIX not in l}
     if _cluster_ext:
         L.append('subgraph cluster_svc { label="Cluster Services"; '
                  'style="rounded,dashed,filled"; fillcolor="#eef2ff"; '
                  'color="#c7d2fe"; fontname="Helvetica-Bold"; fontsize=10; '
                  'labeljust="l";')
-        for _label, _kind in _cluster_ext.items():
-            L.append("  " + _ext_node(_label, _kind, strip_cluster=True))
+        for _label, _m in _cluster_ext.items():
+            L.append("  " + _ext_node(_label, _m["kind"], _m["type"],
+                                      strip_cluster=True))
         L.append("}")
-    for _label, _kind in _plain_ext.items():
-        L.append(_ext_node(_label, _kind))
-    for _src, _dst, _kind, _col in sorted(_edges):
-        L.append(f'{_src} -> {_dst} [color="{_col}"];')
+    for _label, _m in _plain_ext.items():
+        L.append(_ext_node(_label, _m["kind"], _m["type"]))
+    for _src, _dst, _col, _elabel in sorted(_edges):
+        if _elabel:
+            L.append(f'{_src} -> {_dst} [color="{_col}" label="'
+                     f'{_arch_dot_esc(_elabel)}" fontsize=7 fontcolor="{_col}"];')
+        else:
+            L.append(f'{_src} -> {_dst} [color="{_col}"];')
     L.append("}")
     return "\n".join(L), _node_count, False
 
@@ -15914,8 +16064,26 @@ def _render_architecture() -> None:
     _scope_set = set(_sel_projects)
     _scope_n = sum(_proj_apps.get(p, 0) for p in _sel_projects)
 
+    # Optional app-level narrowing — keep the project view, but let a single
+    # application be isolated (still comparable across two environments). App
+    # options = every app in the selected projects, across all environments.
+    _ALL_APPS_SENTINEL = "— all apps in scope —"
+    _apps_in_scope = sorted({
+        _a for _e in _envs.values() for (_p, _a) in _e["apps"] if _p in _scope_set
+    })
+    _focus_choice = st.selectbox(
+        "Focus on one application (optional)",
+        [_ALL_APPS_SENTINEL] + _apps_in_scope,
+        key="_arch_focus_app_v1",
+        help="Isolate a single application (with its dependencies + endpoints). "
+             "Works in single-env and two-env compare mode.")
+    _focus_app = None if _focus_choice == _ALL_APPS_SENTINEL else _focus_choice
+
     def _scope_keys(ed: dict) -> set:
-        return {(p, a) for (p, a) in ed["apps"] if p in _scope_set}
+        _k = {(p, a) for (p, a) in ed["apps"] if p in _scope_set}
+        if _focus_app:
+            _k = {(p, a) for (p, a) in _k if a == _focus_app}
+        return _k
 
     def _too_big_html(n: int) -> str:
         return (f'<div class="adoc-err">⚠ This scope resolves to <b>{n}</b> '
@@ -15924,13 +16092,17 @@ def _render_architecture() -> None:
                 'above (or set a higher <code>ARCH_MAX_NODES</code>).</div>')
 
     def _draw(env: str, ed: dict, highlight: dict | None = None,
-              fit_width: bool = True) -> None:
+              fit_width: bool = True, restrict: set | None = None,
+              repeated_ext: set | None = None) -> None:
         _keys = _scope_keys(ed)
+        if restrict is not None:
+            _keys &= restrict
         if not _keys:
             st.info(f"No apps in the selected project(s) for {env}.")
             return
         _dot, _n, _trunc = _arch_build_dot(env, ed, scope_keys=_keys,
-                                           highlight=highlight)
+                                           highlight=highlight,
+                                           repeated_ext=repeated_ext)
         if _trunc:
             st.markdown(_too_big_html(_n), unsafe_allow_html=True)
         else:
@@ -15975,15 +16147,72 @@ def _render_architecture() -> None:
     for _ch in _diff["changed"]:
         _hl_a[_ch["key"]] = "changed"
         _hl_b[_ch["key"]] = "changed"
+
+    # ── Common-apps-only comparison ─────────────────────────────────────────
+    # Apps present in only ONE environment add noise when you want a like-for-
+    # like diff. Optionally restrict both diagrams to apps present in BOTH.
+    # Uses _scope_keys so a single-app focus narrows the comparison too.
+    _a_scoped = _scope_keys(_envs[_ea])
+    _b_scoped = _scope_keys(_envs[_eb])
+    _common_keys = _a_scoped & _b_scoped
+    _excl_a = sorted(_a_scoped - _common_keys)   # in A only → excluded
+    _excl_b = sorted(_b_scoped - _common_keys)   # in B only → excluded
+    _common_only = st.toggle(
+        "Only apps present in both environments", key="_arch_common_only_v1",
+        value=False,
+        help="Restrict both diagrams to apps that exist in BOTH environments, "
+             "so the comparison is like-for-like. Excluded apps are listed below.")
+    _restrict = _common_keys if _common_only else None
+
+    if _common_only:
+        def _excl_chips(keys: list) -> str:
+            if not keys:
+                return '<span class="arch-excl-none">none — all present in both</span>'
+            return "".join(
+                f'<span class="arch-excl-chip">{html.escape(_a)}'
+                f'<span class="arch-excl-proj">{html.escape(_p)}</span></span>'
+                for (_p, _a) in keys)
+        st.markdown(
+            '<div class="arch-excl">'
+            f'<div class="arch-excl-head">Comparing <b>{len(_common_keys)}</b> '
+            f'app(s) present in both <b>{html.escape(_ea)}</b> and '
+            f'<b>{html.escape(_eb)}</b> · <b>{len(_excl_a) + len(_excl_b)}</b> '
+            f'excluded</div>'
+            f'<div class="arch-excl-row"><span class="arch-excl-lbl">Excluded '
+            f'from {html.escape(_ea)}<small>only in {html.escape(_ea)}</small>'
+            f'</span>{_excl_chips(_excl_a)}</div>'
+            f'<div class="arch-excl-row"><span class="arch-excl-lbl">Excluded '
+            f'from {html.escape(_eb)}<small>only in {html.escape(_eb)}</small>'
+            f'</span>{_excl_chips(_excl_b)}</div>'
+            '</div>',
+            unsafe_allow_html=True)
+
+    # ── Repeated URLs — endpoints byte-identical in BOTH environments ───────
+    # An env-specific URL that wasn't differentiated per environment (e.g. dev
+    # still pointing at the prod DB) is a real smell — highlight it orange in
+    # both diagrams. Computed over the same key set actually drawn.
+    _a_keys = (_common_keys if _common_only else _a_scoped)
+    _b_keys = (_common_keys if _common_only else _b_scoped)
+    _repeated = _arch_ext_labels(_envs[_ea], _a_keys) & _arch_ext_labels(_envs[_eb], _b_keys)
+    if _repeated:
+        st.markdown(
+            '<div class="arch-repeated">'
+            f'<span class="arch-repeated-dot"></span><b>{len(_repeated)}</b> URL'
+            f'{"s" if len(_repeated) != 1 else ""} identical in both '
+            f'<b>{html.escape(_ea)}</b> and <b>{html.escape(_eb)}</b> '
+            '(highlighted orange below) — these endpoints are not '
+            'environment-specific.</div>',
+            unsafe_allow_html=True)
+
     _gA, _gB = st.columns(2)
     with _gA:
         st.markdown(f'<div class="arch-env-head">A · {html.escape(_ea)}</div>',
                     unsafe_allow_html=True)
-        _draw(_ea, _envs[_ea], _hl_a)
+        _draw(_ea, _envs[_ea], _hl_a, restrict=_restrict, repeated_ext=_repeated)
     with _gB:
         st.markdown(f'<div class="arch-env-head">B · {html.escape(_eb)}</div>',
                     unsafe_allow_html=True)
-        _draw(_eb, _envs[_eb], _hl_b)
+        _draw(_eb, _envs[_eb], _hl_b, restrict=_restrict, repeated_ext=_repeated)
 
     # ── Structured diff (row-capped) ───────────────────────────────────────
     _DIFF_ROW_CAP = 150

@@ -146,12 +146,19 @@ def _seed_control() -> None:
         "api": (
             "siblings:\n"
             "  checkout_url: http://checkout-service:8080/api     # in-scope (payments)\n"
-            "  worker_endpoint: http://worker-service:9090        # OUT of scope (billing)\n"
+            "  worker_grpc: grpc://worker-service:9090            # OUT of scope (billing), gRPC\n"
             "cluster:\n"
             "  # gateway reached via its cluster DNS — still resolves to the app\n"
             "  gateway_via_cluster: http://gateway-service.platform.svc.cluster.local:8080\n"
-            "  session_store: sessionstore.default.svc.cluster.local:6379  # → Cluster Services\n"
+            "  session_store: redis://sessionstore.default.svc.cluster.local:6379  # → Cluster Services\n"
             "  metrics_sink: prometheus-pushgateway.monitoring.svc.cluster.local:9091\n"
+            "legacy_host:\n"
+            "  # same IP, three different ports → ONE grouped IP box w/ port + type\n"
+            "  rest_api: http://10.20.30.40:8080/v1\n"
+            "  grpc_api: grpc://10.20.30.40:9090\n"
+            "  metrics: tcp://10.20.30.40:9100\n"
+            "messaging:\n"
+            "  events: kafka://kafka-broker.acme.local:9092   # Kafka (queue type)\n"
             "external:\n"
             "  auth_url: https://auth.acme.local/oauth\n"
             "#  old_worker_url: http://legacy-worker.acme.local:9090   # COMMENTED — must be ignored\n"
@@ -186,6 +193,15 @@ def _seed_control() -> None:
                    f"database:\n"
                    f"  url: postgresql://{proj}-db.acme.local:5432/{proj}\n"
                    + _refs.get(app, ""))
+        # ── Env-specific apps (exist in only ONE environment) so the
+        #    "compare only common apps" mode has something to exclude. ──
+        if team == "DEVJAVA":
+            _write(repo, f"{proj}/dev_canary/config.yml",
+                   "service:\n  name: canary\n  port: 8080\n"
+                   "siblings:\n  api_url: http://api-service:8080\n")   # dev only
+            _write(repo, f"{proj}/qc_sandbox/config.yml",
+                   "service:\n  name: sandbox\n  port: 8080\n"
+                   "siblings:\n  api_url: http://api-service:8080\n")   # qc only
         # ── Backup folders that MUST be ignored (end with _bkp) ──
         if team == "DEVJAVA":
             # env_app-level backup folder
