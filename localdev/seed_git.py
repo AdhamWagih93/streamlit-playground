@@ -19,9 +19,16 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GITSRV = os.path.join(HERE, "gitsrv")
+
+
+def _days_ago_iso(days: float) -> str:
+    """Git-friendly ISO timestamp N days before now (for backdated commits)."""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
 
 # (project, app, company, dev_team, qc_team, ops_team, platform)
 # (project, app, company, dev_team, qc_team, ops_team, platform, build_tech,
@@ -75,6 +82,27 @@ def _init_repo(path: str) -> None:
 def _commit_all(path: str, msg: str) -> None:
     _git(path, "add", "-A")
     _git(path, "commit", "-q", "-m", msg)
+
+
+def _commit_all_dated(path: str, msg: str, days_ago: float,
+                      author: str = "Config Bot <config@acme.local>") -> None:
+    """Commit with a backdated author+committer date and a specific author, so
+    the Architecture tab's config-commit vs deployment provenance is testable."""
+    _when = _days_ago_iso(days_ago)
+    _name, _email = author.rsplit("<", 1)
+    _name = _name.strip()
+    _email = _email.rstrip(">").strip()
+    env = dict(os.environ)
+    env["GIT_AUTHOR_NAME"] = _name
+    env["GIT_AUTHOR_EMAIL"] = _email
+    env["GIT_COMMITTER_NAME"] = _name
+    env["GIT_COMMITTER_EMAIL"] = _email
+    env["GIT_AUTHOR_DATE"] = _when
+    env["GIT_COMMITTER_DATE"] = _when
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True, env=env,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["git", "commit", "-q", "-m", msg], cwd=path, check=True,
+                   env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _seed_inventories() -> None:
@@ -212,7 +240,27 @@ def _seed_control() -> None:
             _write(repo, f"{proj}_bkp/prd_{app}/config.yml",
                    "service:\n  name: api-oldproj\n"
                    "external:\n  bad_url: http://alsobad-bkp.acme.local:1234\n")
-        _commit_all(repo, f"seed control config for {team}")
+        # Base commit is BACKDATED 30 days so the (1–4 day-old) deployments in
+        # ef-cicd-deployments land AFTER it → these configs read as "deployed".
+        _commit_all_dated(repo, f"seed control config for {team}", days_ago=30)
+
+    # A RECENT, un-deployed change to payments/api (all envs) → HEAD is newer
+    # than the last successful deploy, so the tab shows the deployed revision
+    # and flags "repo ahead (undeployed change)".
+    _devjava = os.path.join(GITSRV, "DevOps", "Control", "_git", "DEVJAVA")
+    for env in ("dev", "qc", "prd"):
+        _write(_devjava, f"payments/{env}_api/config.yml",
+               "# payments/{0}_api — service config (edited, NOT yet deployed)\n"
+               "service:\n  name: api\n  port: 8080\n"
+               "database:\n  url: postgresql://payments-db.acme.local:5432/payments\n"
+               "siblings:\n"
+               "  checkout_url: http://checkout-service:8080/api\n"
+               "  worker_grpc: grpc://worker-service:9090\n"
+               "newfeature:\n"
+               "  flags_api: http://feature-flags.acme.local:8080   # NEW undeployed dep\n"
+               .format(env))
+    _commit_all_dated(_devjava, "add feature-flags dependency to api (undeployed)",
+                      days_ago=0, author="Alice Dev <alice.dev@acme.local>")
 
 
 def main() -> None:

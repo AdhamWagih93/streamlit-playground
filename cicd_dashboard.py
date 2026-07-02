@@ -6462,6 +6462,45 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     width: 11px; height: 11px; border-radius: 3px; background: #ea580c;
     border: 1px solid #c2410c; flex: 0 0 auto;
 }
+/* Configuration provenance table (commit vs deployment, per env) */
+.arch-prov { margin: 8px 0 14px; }
+.arch-prov-head {
+    font-size: 0.78rem; font-weight: 700; color: var(--cc-text-dim);
+    margin-bottom: 5px;
+}
+.arch-prov-head b { color: var(--cc-text); font-family: var(--cc-mono); }
+.arch-prov-wrap {
+    overflow-x: auto; border: 1px solid var(--cc-border); border-radius: 10px;
+}
+.arch-prov-tbl { border-collapse: collapse; width: 100%; font-size: 0.74rem; }
+.arch-prov-tbl th, .arch-prov-tbl td {
+    padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--cc-border);
+    vertical-align: top;
+}
+.arch-prov-tbl thead th {
+    font-family: var(--cc-mono); font-size: 0.6rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--cc-text-mute); background: var(--cc-surface2);
+}
+.arch-prov-tbl td b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.arch-prov-app { font-weight: 700; color: var(--cc-text); }
+.arch-prov-proj {
+    font-family: var(--cc-mono); font-size: 0.6rem; color: var(--cc-text-mute);
+    margin-left: 5px;
+}
+.arch-prov-sub {
+    font-size: 0.64rem; color: var(--cc-text-mute); margin-top: 1px; line-height: 1.4;
+}
+.arch-prov-sub code {
+    font-family: var(--cc-mono); background: var(--cc-surface2); padding: 0 3px;
+    border-radius: 3px;
+}
+.arch-prov-tag {
+    display: inline-block; font-family: var(--cc-mono); font-size: 0.62rem;
+    font-weight: 700; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+}
+.arch-prov-tag.ok    { background: var(--cc-green-bg); color: #056646; }
+.arch-prov-tag.ahead { background: var(--cc-amber-bg); color: #9a5b06; }
+.arch-prov-tag.bad   { background: var(--cc-red-bg);   color: #b3221f; }
 /* Single-env viewer: bound the height + let a natural-size (readable) diagram
    scroll INSIDE the box instead of stretching the whole page. */
 .st-key-arch_single_wrap {
@@ -15839,8 +15878,21 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
                          else "#dc2626" if _state == "removed"
                          else "#ca8a04" if _state == "changed" else "#94a3b8")
                 _nconn = len(_all[_key].get("connections") or [])
+                # Provenance marker — is the drawn (deployed) config the repo HEAD?
+                _prov = _all[_key].get("prov") or {}
+                if _prov.get("deployed") and not _prov.get("is_head"):
+                    _pmark = '\\n⚠ repo ahead (undeployed change)'
+                elif not _prov.get("deployed"):
+                    _pmark = ('\\n✗ not deployed' if _prov.get("has_deploy")
+                              or _prov.get("commit_date") else '')
+                else:
+                    _pmark = ''
                 _lbl = (f'{_arch_dot_esc(_a)}'
-                        + (f'\\n{_nconn} conn' if _nconn else ''))
+                        + (f'\\n{_nconn} conn' if _nconn else '') + _pmark)
+                # Un-deployed / ahead configs get an amber border unless the diff
+                # overlay already colours them.
+                if not _state and _pmark:
+                    _bord = "#d97706"
                 L.append(f'  {_nid} [label="{_lbl}" fillcolor="{_fill}" '
                          f'color="{_bord}"];')
             else:
@@ -15868,22 +15920,28 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
             _kind = _c.get("kind") or "other"
             _col = _ARCH_KIND_COLOR.get(_kind, "#94a3b8")
             _type = _arch_type_label(_kind, _c.get("scheme"))
+            # The config key path this connection was declared under (full YAML
+            # variable tree, e.g. "siblings.checkout_url") — shown subtly on the
+            # edge so you can see what each connection MEANS to the app.
+            _via = (_c.get("via") or "").strip()
             _tgt = _resolve_svc(_c["host"])
             if _tgt is not None:
                 if _tgt == (_p, _a):
                     continue   # self-reference — don't draw a self-loop
                 _dst = _arch_node_id("app", _tgt[0], _tgt[1])
-                _elabel = ""             # internal app→app edge stays clean
+                _elabel = _via
             elif _ARCH_IPV4_RE.match(_c["host"]):
                 _ip = _c["host"]
                 _dst = _arch_node_id("ip", _ip)
                 _ip_ports.setdefault(_ip, {})[_c.get("port")] = {"kind": _kind, "type": _type}
-                _elabel = (f'{_type} :{_c["port"]}' if _c.get("port") else _type)
+                # keep the port distinction on the edge too, alongside the key.
+                _pfx = (f':{_c["port"]} ' if _c.get("port") else "")
+                _elabel = (f'{_pfx}{_via}').strip() or _type
             else:
                 _label = _c["host"] + (f':{_c["port"]}' if _c.get("port") else "")
                 _ext[_label] = {"kind": _kind, "type": _type}
                 _dst = _arch_node_id("ext", _label)
-                _elabel = ""             # box already shows type — keep edge clean
+                _elabel = _via           # box shows type; edge shows the config key
             _edges.add((_src, _dst, _col, _elabel))
 
     def _ext_node(_label: str, _kind: str, _type: str, *,
@@ -15942,8 +16000,10 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
         L.append(_ext_node(_label, _m["kind"], _m["type"]))
     for _src, _dst, _col, _elabel in sorted(_edges):
         if _elabel:
+            # Subtle muted key-path label so the topology stays readable.
             L.append(f'{_src} -> {_dst} [color="{_col}" label="'
-                     f'{_arch_dot_esc(_elabel)}" fontsize=7 fontcolor="{_col}"];')
+                     f'{_arch_dot_esc(_elabel)}" fontsize=7 fontcolor="#94a3b8" '
+                     f'fontname="Helvetica"];')
         else:
             L.append(f'{_src} -> {_dst} [color="{_col}"];')
     L.append("}")
@@ -15989,6 +16049,63 @@ def _arch_legend_html() -> str:
         f'style="background:{_ARCH_KIND_COLOR[_k]}"></span>{_lbl}</span>'
         for _k, _lbl in _items)
     return f'<div class="arch-legend">{_chips}</div>'
+
+
+def _arch_provenance_html(ed: dict, keys) -> str:
+    """Per-env configuration provenance table for the scoped apps: config commit
+    (date · author) vs its deployment (date · requester / approver), and whether
+    the DRAWN revision is the repository HEAD or an older deployed one."""
+    _all = ed.get("apps", {})
+    _rows: list[str] = []
+    _n_cur = _n_ahead = _n_nodep = 0
+    for _key in sorted(keys, key=lambda k: (k[0].lower(), k[1].lower())):
+        _ad = _all.get(_key)
+        if not _ad:
+            continue
+        _pv = _ad.get("prov") or {}
+        _cdate = fmt_dt(_pv.get("commit_date"), "%Y-%m-%d %H:%M") or "—"
+        _cauth = html.escape(_pv.get("commit_author") or "—")
+        _csha = html.escape((_pv.get("commit_sha") or "")[:8] or "—")
+        _ddate = fmt_dt(_pv.get("deploy_date"), "%Y-%m-%d %H:%M") or "—"
+        _dreq = html.escape(_pv.get("deploy_requester") or "—")
+        _dapp = html.escape(_pv.get("deploy_approver") or "—")
+        if _pv.get("deployed") and _pv.get("is_head"):
+            _status = '<span class="arch-prov-tag ok">✓ deployed · current</span>'
+            _n_cur += 1
+        elif _pv.get("deployed"):
+            _hsha = html.escape((_pv.get("head_sha") or "")[:8] or "?")
+            _hd = fmt_dt(_pv.get("head_date"), "%Y-%m-%d") or "?"
+            _ha = html.escape(_pv.get("head_author") or "?")
+            _status = ('<span class="arch-prov-tag ahead">⚠ repo ahead</span>'
+                       f'<div class="arch-prov-sub">HEAD <code>{_hsha}</code> by '
+                       f'{_ha} on {html.escape(_hd)} is NOT deployed — showing the '
+                       'last deployed revision</div>')
+            _n_ahead += 1
+        else:
+            _why = ("committed after the last deploy" if _pv.get("has_deploy")
+                    else "no successful deployment on record")
+            _status = ('<span class="arch-prov-tag bad">✗ not deployed</span>'
+                       f'<div class="arch-prov-sub">{html.escape(_why)}</div>')
+            _n_nodep += 1
+        _rows.append(
+            f'<tr><td class="arch-prov-app">{html.escape(_key[1])}'
+            f'<span class="arch-prov-proj">{html.escape(_key[0])}</span></td>'
+            f'<td><b>{html.escape(_cdate)}</b><div class="arch-prov-sub">'
+            f'{_cauth} · <code>{_csha}</code></div></td>'
+            f'<td><b>{html.escape(_ddate)}</b><div class="arch-prov-sub">'
+            f'req {_dreq} · appr {_dapp}</div></td>'
+            f'<td>{_status}</td></tr>')
+    if not _rows:
+        return ""
+    _summary = (f'<b>{_n_cur}</b> deployed &amp; current · '
+                f'<b>{_n_ahead}</b> repo-ahead · <b>{_n_nodep}</b> not deployed')
+    return (
+        '<div class="arch-prov">'
+        f'<div class="arch-prov-head">Configuration provenance — {_summary}</div>'
+        '<div class="arch-prov-wrap"><table class="arch-prov-tbl"><thead><tr>'
+        '<th>Application</th><th>Config commit</th><th>Deployment</th>'
+        '<th>State</th></tr></thead>'
+        f'<tbody>{"".join(_rows)}</tbody></table></div></div>')
 
 
 @st.fragment
@@ -16107,6 +16224,9 @@ def _render_architecture() -> None:
             st.markdown(_too_big_html(_n), unsafe_allow_html=True)
         else:
             st.graphviz_chart(_dot, use_container_width=fit_width)
+            _prov_html = _arch_provenance_html(ed, _keys)
+            if _prov_html:
+                st.markdown(_prov_html, unsafe_allow_html=True)
 
     _cmp = st.toggle("Compare two environments", key="_arch_cmp_v1",
                      value=len(_env_names) > 1)
@@ -24554,6 +24674,138 @@ def _arch_extract_connections(cfg: Any) -> list[dict]:
 
 
 @st.cache_data(ttl=ARCH_MODEL_TTL, show_spinner=False)
+def _arch_parse_dt(s: Any):
+    """Tolerant ISO-ish → naive-UTC datetime (for commit-vs-deploy comparison)."""
+    if not s:
+        return None
+    _s = str(s).strip()
+    if _s.endswith("Z"):
+        _s = _s[:-1] + "+00:00"
+    for _cand in (_s, _s[:19], _s[:10]):
+        try:
+            _d = datetime.fromisoformat(_cand)
+            if _d.tzinfo is not None:
+                _d = _d.astimezone(timezone.utc).replace(tzinfo=None)
+            return _d
+        except Exception:
+            continue
+    return None
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_arch_deploys(apps_json: str) -> dict:
+    """Latest SUCCESSFUL deployment per (application, environment) from
+    ef-cicd-deployments → ``{"app||env": {date, requester, approver, version}}``.
+    Drives the architecture tab's "is this config actually deployed?" check."""
+    try:
+        apps = json.loads(apps_json)
+    except Exception:
+        apps = []
+    apps = [a for a in apps if a]
+    if not apps:
+        return {}
+    _date_fields = _DATE_CANDIDATES.get("deploy", ["startdate"])
+    _src = ["application", "environment", "codeversion", "status",
+            "requester", "Requester", "approver", "Approver", *_date_fields]
+    try:
+        resp = es_search(
+            IDX["deployments"],
+            {
+                "query": {"bool": {"filter": [
+                    {"terms": {"application": apps}},
+                    {"terms": {"status": SUCCESS_STATUSES}},
+                ]}},
+                "aggs": {"by_app": {
+                    "terms": {"field": "application", "size": len(apps)},
+                    "aggs": {"by_env": {
+                        "terms": {"field": "environment", "size": 12},
+                        "aggs": {"latest": {"top_hits": {
+                            "size": 1,
+                            "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}],
+                            "_source": _src,
+                        }}},
+                    }},
+                }},
+            },
+            size=0,
+        )
+    except Exception:
+        return {}
+    out: dict = {}
+    for _ab in resp.get("aggregations", {}).get("by_app", {}).get("buckets", []):
+        _app = _ab.get("key")
+        for _eb in _ab.get("by_env", {}).get("buckets", []):
+            _env = _eb.get("key")
+            _hits = _eb.get("latest", {}).get("hits", {}).get("hits", [])
+            if not _hits:
+                continue
+            _s = _hits[0].get("_source", {}) or {}
+            _dt = next((_s.get(_f) for _f in _date_fields if _s.get(_f)), "") or ""
+            out[f"{_app}||{_env}"] = {
+                "date": _dt,
+                "requester": (_s.get("requester") or _s.get("Requester") or "").strip(),
+                "approver": (_s.get("approver") or _s.get("Approver") or "").strip(),
+                "version": (_s.get("codeversion") or "").strip(),
+            }
+    return out
+
+
+@st.cache_data(ttl=CONFIG_SCAN_TTL, show_spinner=False)
+def _arch_repo_file_history(team: str, head_marker: str) -> dict:
+    """One ``git log --name-only`` pass over *team*'s config clone →
+    ``{relpath: [{sha,date,author}, …]}`` newest-first per file. Keyed on HEAD
+    so a re-sync invalidates it."""
+    repo = _config_team_repo_path(team)
+    if not os.path.isdir(repo):
+        return {}
+    try:
+        r = _run_git("log", "--no-merges", "--name-only",
+                     "--format=%x01%H|%aI|%an", cwd=repo,
+                     inject_auth=False, timeout=90)
+    except Exception:
+        return {}
+    if r.returncode != 0:
+        return {}
+    hist: dict[str, list] = {}
+    _cur = None
+    for _ln in (r.stdout or "").splitlines():
+        if _ln.startswith("\x01"):
+            _parts = _ln[1:].split("|", 2)
+            if len(_parts) == 3:
+                _cur = {"sha": _parts[0], "date": _parts[1], "author": _parts[2]}
+        elif _ln.strip() and _cur is not None:
+            _rel = _ln.strip().replace(os.sep, "/")
+            hist.setdefault(_rel, []).append(_cur)
+    return hist
+
+
+def _arch_show_file(team: str, sha: str, relpath: str) -> str:
+    """Content of *relpath* AS OF commit *sha* (git show). '' on any failure."""
+    repo = _config_team_repo_path(team)
+    if not os.path.isdir(repo):
+        return ""
+    try:
+        r = _run_git("show", f"{sha}:{relpath}", cwd=repo,
+                     inject_auth=False, timeout=30)
+    except Exception:
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+def _arch_pick_deployed_commit(history: list, deploy_date) -> dict | None:
+    """Newest config commit that has a successful deployment AFTER it — i.e. the
+    latest commit whose date <= the latest successful-deploy date. ``None`` when
+    nothing qualifies (no deploy, or every commit is newer than the deploy)."""
+    _dd = _arch_parse_dt(deploy_date)
+    if _dd is None:
+        return None
+    for _c in history:            # history is newest-first
+        _cd = _arch_parse_dt(_c.get("date"))
+        if _cd is not None and _cd <= _dd:
+            return _c
+    return None
+
+
 def _arch_build_model(host: str, teams_json: str) -> dict:
     """Clone/scan every team's Control repo, parse each config.yml, and build a
     per-environment topology. Cached; returns
@@ -24574,6 +24826,9 @@ def _arch_build_model(host: str, teams_json: str) -> dict:
     envs: dict[str, dict] = {}
     errors: list[str] = []
     _n_cfg = 0
+    # ── Phase 1: collect config entries + per-team commit history ───────────
+    _entries: list[dict] = []
+    _hist_by_team: dict[str, dict] = {}
     for _team in teams:
         try:
             _ok, _head, _msg = _ensure_config_repo(host, _team)
@@ -24583,6 +24838,7 @@ def _arch_build_model(host: str, teams_json: str) -> dict:
         if not _ok:
             errors.append(f"{_team}: {_msg}")
             continue
+        _hist_by_team[_team] = _arch_repo_file_history(_team, _head)
         _scan = _config_scan_team(_team, _head)
         for _proj in _scan.get("projects", []):
             _pname = _proj["project"]
@@ -24592,21 +24848,64 @@ def _arch_build_model(host: str, teams_json: str) -> dict:
                 _env, _appname = _app.get("env", ""), _app.get("app", "")
                 if not (_env and _appname):
                     continue
-                _rel = f'{_app["rel"]}/{CONFIG_MANDATORY_FILE}'
-                _text, _is_bin, _err = _config_read_file(_team, _rel, _head)
-                if _is_bin or _err or not _text:
-                    continue
-                try:
-                    _cfg = _yaml.safe_load(_arch_strip_comment_lines(_text))
-                except Exception:
-                    _cfg = None
-                _conns = (_arch_extract_connections(_cfg)
-                          if isinstance(_cfg, (dict, list)) else [])
-                _n_cfg += 1
-                envs.setdefault(_env, {"apps": {}})["apps"][(_pname, _appname)] = {
-                    "team": _team, "project": _pname, "app": _appname,
-                    "rel": _rel, "connections": _conns,
-                }
+                _entries.append({
+                    "team": _team, "project": _pname, "env": _env,
+                    "app": _appname, "head": _head,
+                    "rel": f'{_app["rel"]}/{CONFIG_MANDATORY_FILE}',
+                })
+    # ── Phase 2: latest successful deployment per (app, env) ────────────────
+    _apps_all = sorted({_e["app"] for _e in _entries})
+    _deploys = _fetch_arch_deploys(json.dumps(_apps_all)) if _apps_all else {}
+    # ── Phase 3: for each config, show the LATEST DEPLOYED revision ─────────
+    # (newest commit with a successful deploy after it). If HEAD isn't deployed
+    # we show the deployed revision + flag that the repo is ahead. Provenance
+    # (commit date/author + deploy date/requester/approver) rides on each app.
+    for _e in _entries:
+        _team, _env, _app, _pname = _e["team"], _e["env"], _e["app"], _e["project"]
+        _rel = _e["rel"]
+        _hist = (_hist_by_team.get(_team) or {}).get(_rel, [])
+        _head_commit = _hist[0] if _hist else None
+        _deploy = _deploys.get(f"{_app}||{_env}")
+        _dep_commit = _arch_pick_deployed_commit(_hist, (_deploy or {}).get("date")) \
+            if _deploy else None
+        _deployed = _dep_commit is not None
+        _is_head = bool(_deployed and _head_commit
+                        and _dep_commit["sha"] == _head_commit["sha"])
+        _shown = _dep_commit if _deployed else _head_commit
+        # Read the shown revision — working tree for HEAD, else git show.
+        if _shown is None or (_head_commit and _shown["sha"] == _head_commit["sha"]):
+            _text, _is_bin, _err = _config_read_file(_team, _rel, _e["head"])
+        else:
+            _text = _arch_show_file(_team, _shown["sha"], _rel)
+            _is_bin, _err = False, ("" if _text else "empty at revision")
+        if _is_bin or _err or not _text:
+            continue
+        try:
+            _cfg = _yaml.safe_load(_arch_strip_comment_lines(_text))
+        except Exception:
+            _cfg = None
+        _conns = (_arch_extract_connections(_cfg)
+                  if isinstance(_cfg, (dict, list)) else [])
+        _n_cfg += 1
+        envs.setdefault(_env, {"apps": {}})["apps"][(_pname, _app)] = {
+            "team": _team, "project": _pname, "app": _app,
+            "rel": _rel, "connections": _conns,
+            "prov": {
+                "commit_sha": (_shown or {}).get("sha", ""),
+                "commit_date": (_shown or {}).get("date", ""),
+                "commit_author": (_shown or {}).get("author", ""),
+                "is_head": _is_head,
+                "head_sha": (_head_commit or {}).get("sha", ""),
+                "head_date": (_head_commit or {}).get("date", ""),
+                "head_author": (_head_commit or {}).get("author", ""),
+                "deployed": _deployed,
+                "has_deploy": _deploy is not None,
+                "deploy_date": (_deploy or {}).get("date", ""),
+                "deploy_requester": (_deploy or {}).get("requester", ""),
+                "deploy_approver": (_deploy or {}).get("approver", ""),
+                "deploy_version": (_deploy or {}).get("version", ""),
+            },
+        }
     # Resolve each connection's target to a sibling app in the same env where
     # NOTE: target-app resolution (which connection hosts reference a sibling
     # app) is deliberately NOT done here — on a 1000-app fleet that's an
