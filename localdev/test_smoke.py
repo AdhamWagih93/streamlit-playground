@@ -25,6 +25,8 @@ for _p in (_HERE, _ROOT):
 os.environ.setdefault("LOCALDEV_SECRETS", os.path.join(_HERE, "secrets.local.json"))
 os.environ.setdefault("CICD_REPO_BASE", os.path.join(_HERE, "clones"))
 os.environ.setdefault("DOCCHAT_OLLAMA_URL", "http://localhost:0")
+os.environ.setdefault("LOCALDEV_ADO_FIXTURE",
+                      os.path.join(_HERE, "fixtures", "ado_snapshot.json"))
 _GITSRV = os.path.join(_HERE, "gitsrv").replace("\\", "/")
 os.environ["GIT_CONFIG_COUNT"] = "1"
 os.environ["GIT_CONFIG_KEY_0"] = f"url.{_GITSRV}/.insteadof"

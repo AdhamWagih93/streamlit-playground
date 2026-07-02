@@ -341,6 +341,8 @@ def main() -> int:
         _run("Compile", [PY, "-m", "py_compile", "cicd_dashboard.py", "cc_docchat.py"], True),
         _run("Seed git", [PY, "localdev/seed_git.py"], True),
         _run("Seed ES fixtures", [PY, "localdev/seed_es_fixtures.py"], True),
+        _run("Seed ADO fixture (coverage tab)",
+             [PY, "localdev/seed_ado_fixture.py"], False),
         _run("Seed Postgres (Teams + Architecture data)",
              [PY, "localdev/seed_pg.py"], False),
         _run("Smoke test (all tabs render)",

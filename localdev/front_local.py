@@ -24,6 +24,8 @@ for _p in (_HERE, _ROOT):
 # Fake-vault secrets + an isolated clone base so we never touch a real /tmp repo.
 os.environ.setdefault("LOCALDEV_SECRETS", os.path.join(_HERE, "secrets.local.json"))
 os.environ.setdefault("CICD_REPO_BASE", os.path.join(_HERE, "clones"))
+os.environ.setdefault("LOCALDEV_ADO_FIXTURE",
+                      os.path.join(_HERE, "fixtures", "ado_snapshot.json"))
 # Keep Ollama/docchat pointed at nothing reachable by default (graceful).
 os.environ.setdefault("DOCCHAT_OLLAMA_URL", "http://localhost:0")
 

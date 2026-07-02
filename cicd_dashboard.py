@@ -6408,6 +6408,39 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     border-color: var(--cc-border); }
 .adoc-allpl { font-family: var(--cc-mono); font-size: 0.68rem; font-weight: 700;
     color: var(--cc-green); }
+.adoc-devteam.is-ado { color: var(--cc-blue);
+    background: color-mix(in srgb, var(--cc-blue) 12%, transparent);
+    border-color: color-mix(in srgb, var(--cc-blue) 28%, transparent); }
+.adoc-arrow { color: var(--cc-text-mute); margin: 0 5px; font-weight: 700; }
+/* inventory-centric coverage warning sections */
+.adoc-warnsec { margin: 12px 0 4px; }
+.adoc-warnsec-h {
+    font-size: 0.82rem; font-weight: 800; margin-bottom: 5px;
+    display: flex; align-items: center; gap: 7px;
+}
+.adoc-warnsec-h b { font-family: var(--cc-mono); }
+.adoc-warnsec.is-bad  .adoc-warnsec-h { color: #b3221f; }
+.adoc-warnsec.is-warn .adoc-warnsec-h { color: #9a5b06; }
+.adoc-warnsec.is-info .adoc-warnsec-h { color: var(--cc-text-dim); }
+.adoc-warn-wrap { overflow-x: auto; border: 1px solid var(--cc-border);
+    border-radius: 10px; }
+.adoc-warntbl { font-size: 0.76rem; }
+.adoc-warntbl th { font-family: var(--cc-mono); font-size: 0.6rem;
+    text-transform: uppercase; letter-spacing: 0.04em; color: var(--cc-text-mute);
+    background: var(--cc-surface2); padding: 5px 9px; text-align: left; }
+.adoc-warntbl td { padding: 5px 9px; border-bottom: 1px solid var(--cc-border);
+    vertical-align: top; }
+.adoc-warntbl code { font-family: var(--cc-mono); font-size: 0.72rem;
+    background: var(--cc-surface2); padding: 0 3px; border-radius: 3px; }
+.adoc-hooks { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.adoc-hook {
+    font-family: var(--cc-mono); font-size: 0.64rem; font-weight: 700;
+    padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+}
+.adoc-hook.ok   { color: #056646; background: var(--cc-green-bg);
+    border: 1px solid rgba(5,150,105,.3); }
+.adoc-hook.miss { color: #b3221f; background: var(--cc-red-bg);
+    border: 1px solid rgba(220,38,38,.3); }
 
 /* ── Environment architecture tab ──────────────────────────────────────── */
 .arch-summary {
@@ -15595,28 +15628,40 @@ def _render_ado_coverage() -> None:
             unsafe_allow_html=True)
         _ado_render_diagnostics(_org_url, _cov.get("diag") or {})
         return
-    _t = _cov["totals"]
-    _repos = int(_t["repos"])
-    _pl = int(_t["pipelined"])
-    _np = int(_t["no_pipeline"])
-    _pct = (_pl / _repos * 100) if _repos else 0.0
+    # ── Reconcile against the inventory (the real "pipelined" definition) ───
+    _inv_rows = st.session_state.get("_inv_rows_all_v1") or []
+    if not _inv_rows:
+        st.info("Inventory not loaded yet — open the Pipelines Inventory tab "
+                "first so each app's project_name + repository_name are "
+                "available to match against ADO.")
+        return
+    _rec = _ado_coverage_reconcile(_cov, _inv_rows)
+    _apps = _rec["apps"]
+    _tt = _rec["totals"]
+    _ado_tt = _cov.get("totals_ado") or {}
+    _n_inv = _tt["inv_apps"]
+    _n_pl = _tt["pipelined"]
+    _n_np = _tt["not_pipelined"]
+    _pct = (_n_pl / _n_inv * 100) if _n_inv else 0.0
 
     # ── Headline ───────────────────────────────────────────────────────────
     st.markdown(
         '<div class="adoc-head">'
         '<div class="adoc-headline">'
         f'<span class="adoc-pct">{_pct:.1f}%</span>'
-        '<span class="adoc-pct-lbl">of repositories are pipelined</span>'
+        '<span class="adoc-pct-lbl">of applications are pipelined '
+        '(inventory app whose project + repository matches an ADO repo)</span>'
         '</div>'
-        + _ado_cov_bar(_pl, _np)
+        + _ado_cov_bar(_n_pl, _n_np)
         + '<div class="adoc-legend">'
-        f'<span class="adoc-leg is-pl">▰ {_pl:,} pipelined</span>'
-        f'<span class="adoc-leg is-np">▰ {_np:,} no pipeline</span>'
+        f'<span class="adoc-leg is-pl">▰ {_n_pl:,} pipelined</span>'
+        f'<span class="adoc-leg is-np">▰ {_n_np:,} no ADO repo</span>'
         '</div>'
         '<div class="adoc-totals">'
-        f'<span><b>{_t["collections"]:,}</b> collections</span>'
-        f'<span><b>{_t["projects"]:,}</b> projects</span>'
-        f'<span><b>{_repos:,}</b> repositories</span>'
+        f'<span><b>{_ado_tt.get("collections", 0):,}</b> ADO collections</span>'
+        f'<span><b>{_ado_tt.get("projects", 0):,}</b> ADO projects</span>'
+        f'<span><b>{_ado_tt.get("repos", 0):,}</b> ADO repos</span>'
+        f'<span><b>{_n_inv:,}</b> inventory apps</span>'
         '</div>'
         '</div>',
         unsafe_allow_html=True)
@@ -15626,53 +15671,130 @@ def _render_ado_coverage() -> None:
             f'projects · {_cov["capped"]} not scanned (raise '
             f'<code>ADO_PROJECT_CAP</code>).</div>', unsafe_allow_html=True)
 
-    # ── Per-collection breakdown ───────────────────────────────────────────
-    for _c in _cov["collections"]:
-        _cr, _cpl = int(_c["repos_total"]), int(_c["repos_pipelined"])
-        _cnp = _cr - _cpl
-        _cpct = (_cpl / _cr * 100) if _cr else 0.0
-        with st.expander(
-                f"📁 {_c['name']}  —  {_cpl}/{_cr} pipelined ({_cpct:.0f}%)"
-                f"  ·  {len(_c['projects'])} projects",
-                expanded=False):
-            st.markdown(_ado_cov_bar(_cpl, _cnp), unsafe_allow_html=True)
-            _rows = []
-            for _p in _c["projects"]:
-                _pr, _ppl = int(_p["repos_total"]), int(_p["repos_pipelined"])
-                _pnp = _pr - _ppl
-                _ppct = (_ppl / _pr * 100) if _pr else 0.0
-                _dev_chip = (
-                    f'<span class="adoc-devteam">{html.escape(_p["dev_team"])}</span>'
-                    if _p["dev_team"]
-                    else '<span class="adoc-devteam is-none">no [dev_team]</span>')
-                _np_repos = [r["name"] for r in _p["repos"] if not r["pipelined"]]
-                _np_html = (
-                    '<div class="adoc-nplist">' + "".join(
-                        f'<span class="adoc-nprepo">{html.escape(_n)}</span>'
-                        for _n in _np_repos[:40])
-                    + (f' <span class="adoc-nprepo is-more">+{len(_np_repos) - 40}</span>'
-                       if len(_np_repos) > 40 else "")
-                    + '</div>'
-                    if _np_repos else
-                    '<span class="adoc-allpl">✓ all pipelined</span>')
-                _rows.append(
-                    '<tr>'
-                    f'<td class="adoc-proj">{html.escape(_p["name"])}{_dev_chip}'
-                    + (f'<div class="adoc-desc">{html.escape(_p["description"])}</div>'
-                       if _p["description"] else "")
-                    + '</td>'
-                    f'<td class="adoc-cov">'
-                    f'<div class="adoc-cov-pct {"is-low" if _ppct < 50 else "is-mid" if _ppct < 90 else "is-hi"}">'
-                    f'{_ppl}/{_pr} · {_ppct:.0f}%</div>'
-                    + _ado_cov_bar(_ppl, _pnp) + '</td>'
-                    f'<td class="adoc-npcell">{_np_html}</td>'
-                    '</tr>')
-            st.markdown(
-                '<table class="adoc-table"><thead><tr>'
-                '<th>Project · [dev_team] description</th>'
-                '<th>Coverage</th><th>Repos without a pipeline</th>'
-                f'</tr></thead><tbody>{"".join(_rows)}</tbody></table>',
-                unsafe_allow_html=True)
+    # ── KPI tiles ────────────────────────────────────────────────────────────
+    def _tile(mod, lbl, val, sub):
+        return (f'<div class="tp-kpi {mod}"><div class="tp-kpi-lbl">{lbl}</div>'
+                f'<div class="tp-kpi-val">{val:,}</div>'
+                f'<div class="tp-kpi-sub">{sub}</div></div>')
+    st.markdown(
+        '<div class="tp-kpis" style="grid-template-columns:repeat(6,1fr)">'
+        + _tile("is-build", "Pipelined", _n_pl, "matched an ADO repo")
+        + _tile("is-apps", "No ADO repo", _n_np, "not pipelined")
+        + _tile("is-cov" if not _tt["hooks_complete"] == _n_pl else "is-cov",
+                "Hooks complete", _tt["hooks_complete"],
+                f"all 4 branch hooks · of {_n_pl}")
+        + _tile("is-unauth" if _tt["missing_hooks"] else "is-deploy",
+                "Missing hooks", _tt["missing_hooks"], "incomplete pipelines")
+        + _tile("is-unauth" if _tt["team_mismatch"] else "is-plat",
+                "Team mismatch", _tt["team_mismatch"], "dev_team ≠ ADO team")
+        + _tile("is-unauth" if _tt["azure_pipeline"] else "is-deploy",
+                "Azure Pipelines", _tt["azure_pipeline"], "not the sanctioned CI")
+        + '</div>',
+        unsafe_allow_html=True)
+
+    _REQ = ADO_REQUIRED_HOOK_BRANCHES
+    _CAP = 200
+
+    def _hook_chips(app: dict) -> str:
+        _have = set(app["hook_branches"])
+        return '<span class="adoc-hooks">' + "".join(
+            f'<span class="adoc-hook {"ok" if _b in _have else "miss"}">'
+            f'{"✓" if _b in _have else "✗"} {_b}</span>' for _b in _REQ
+        ) + '</span>'
+
+    def _warn_table(title, glyph, tone, headers, rows_html, n):
+        if not rows_html:
+            return
+        _ths = "".join(f'<th>{h}</th>' for h in headers)
+        st.markdown(
+            f'<div class="adoc-warnsec is-{tone}"><div class="adoc-warnsec-h">'
+            f'{glyph} {title} <b>{n}</b></div>'
+            f'<div class="adoc-warn-wrap"><table class="adoc-table adoc-warntbl">'
+            f'<thead><tr>{_ths}</tr></thead><tbody>{rows_html}</tbody></table>'
+            f'</div></div>', unsafe_allow_html=True)
+
+    def _app_cell(a):
+        return (f'<td class="adoc-proj">{html.escape(a["application"])}'
+                f'<div class="adoc-desc">{html.escape(a["project"])} · '
+                f'{html.escape(a["repository"] or "— no repository_name —")}</div></td>')
+
+    # 1 ── Not pipelined (no matching ADO repo) ─────────────────────────────
+    _npl = [a for a in _apps if not a["pipelined"]]
+    _warn_table(
+        "Applications with no matching ADO repository", "🚫", "bad",
+        ["Application", "Expected (project / repository_name)"],
+        "".join(
+            f'<tr>{_app_cell(a)}<td class="adoc-npcell">'
+            + (f'<code>{html.escape(a["project"])}/{html.escape(a["repository"])}</code> '
+               'not found in ADO' if a["repository"]
+               else '<span class="adoc-devteam is-none">no repository_name in inventory</span>')
+            + '</td></tr>' for a in _npl[:_CAP]),
+        len(_npl))
+
+    # 2 ── Missing service hooks (of the 4 required branches) ────────────────
+    _mh = [a for a in _apps if a["pipelined"] and a["missing_hooks"]]
+    _warn_table(
+        "Pipelines missing service hooks (need develop / release / hotfixes / stress)",
+        "🪝", "warn", ["Application", "Service hooks per branch"],
+        "".join(f'<tr>{_app_cell(a)}<td>{_hook_chips(a)}</td></tr>'
+                for a in _mh[:_CAP]),
+        len(_mh))
+
+    # 3 ── Team discrepancies (inventory dev_team ≠ ADO team) ────────────────
+    _tm = [a for a in _apps if a["team_mismatch"]]
+    _warn_table(
+        "Team discrepancies — inventory dev_team ≠ ADO repository/project team",
+        "👥", "warn", ["Application", "Inventory dev_team → ADO team"],
+        "".join(
+            f'<tr>{_app_cell(a)}<td><span class="adoc-devteam">'
+            f'{html.escape(a["dev_team"] or "—")}</span>'
+            f'<span class="adoc-arrow">→</span>'
+            f'<span class="adoc-devteam is-ado">{html.escape(a["ado_team"] or "—")}'
+            f'</span></td></tr>' for a in _tm[:_CAP]),
+        len(_tm))
+
+    # 4 ── Azure Pipelines present (SUBTLE warning — not the sanctioned CI) ──
+    _az = [a for a in _apps if a["azure_pipeline"]]
+    _warn_table(
+        "Azure Pipelines detected (informational — the platform ships via "
+        "service hooks, not Azure Pipelines)", "⚙", "info",
+        ["Application", "ADO repository"],
+        "".join(
+            f'<tr>{_app_cell(a)}<td><code>{html.escape(a["project"])}/'
+            f'{html.escape(a["repository"])}</code> has an Azure Pipeline</td></tr>'
+            for a in _az[:_CAP]),
+        len(_az))
+
+    # 5 ── Orphan ADO repos (in ADO, no inventory app) ──────────────────────
+    _orph = _rec["orphans"]
+    _warn_table(
+        "ADO repositories with no inventory application", "❔", "info",
+        ["ADO project / repository"],
+        "".join(f'<tr><td class="adoc-proj"><code>{html.escape(o["project"])}/'
+                f'{html.escape(o["repo"])}</code></td></tr>'
+                for o in _orph[:_CAP]),
+        len(_orph))
+
+    # 6 ── Full per-app matrix (collapsed) ──────────────────────────────────
+    with st.expander(f"All {_n_inv} applications — pipeline · hooks · team", expanded=False):
+        _rows = "".join(
+            f'<tr>{_app_cell(a)}'
+            f'<td>{"<span class=adoc-allpl>✓ pipelined</span>" if a["pipelined"] else "<span class=adoc-devteam style=color:#b91c1c>✗ no ADO repo</span>"}</td>'
+            f'<td>{_hook_chips(a) if a["pipelined"] else "—"}</td>'
+            f'<td><span class="adoc-devteam{" is-ado" if a["team_mismatch"] else ""}">'
+            f'{html.escape(a["dev_team"] or "—")}</span>'
+            + ('<span class="adoc-arrow">≠</span><span class="adoc-devteam is-ado">'
+               + html.escape(a["ado_team"] or "—") + '</span>' if a["team_mismatch"] else '')
+            + '</td></tr>'
+            for a in _apps[:_CAP])
+        st.markdown(
+            '<div class="adoc-warn-wrap"><table class="adoc-table adoc-warntbl">'
+            '<thead><tr><th>Application</th><th>Pipeline</th>'
+            '<th>Service hooks</th><th>Team</th></tr></thead>'
+            f'<tbody>{_rows}</tbody></table></div>'
+            + (f'<div class="adoc-note">+{_n_inv - _CAP} more…</div>'
+               if _n_inv > _CAP else ""),
+            unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -24099,6 +24221,9 @@ _ADO_DESC_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(.*)$", re.S)
 ADO_REST_SCHEME = os.environ.get("ADO_REST_SCHEME", "http").strip() or "http"
 ADO_BASE_PATH = "/" + os.environ.get("ADO_BASE_PATH", "").strip().strip("/") \
     if os.environ.get("ADO_BASE_PATH", "").strip() else ""
+# An application's pipeline is wired to ADO by ONE service hook per branch. All
+# four must exist on the repo for the pipeline to be complete.
+ADO_REQUIRED_HOOK_BRANCHES = ("develop", "release", "hotfixes", "stress")
 
 
 def _ado_base_url(host: str) -> str:
@@ -24270,9 +24395,19 @@ def _ado_pipeline_coverage(org_url: str) -> dict:
     Auth is the platform's own ADO client convention: vault ``ado`` → ``host``
     (the org/REST base = ``org_url``) + ``token`` (PAT sent as Basic-auth
     password with an EMPTY username). See :func:`_ado_coverage_creds`."""
-    _empty = {"ok": False, "error": "", "capped": 0, "collections": [],
-              "totals": {"collections": 0, "projects": 0, "repos": 0,
-                         "pipelined": 0, "no_pipeline": 0}}
+    _empty = {"ok": False, "error": "", "capped": 0, "repos": [],
+              "project_teams": {},
+              "totals_ado": {"collections": 0, "projects": 0, "repos": 0,
+                             "azure_pipeline": 0, "with_hooks": 0}}
+    # Local/CI escape hatch — a fixture standing in for a live ADO REST server so
+    # the reconcile + render can be exercised without one.
+    _fix = os.environ.get("LOCALDEV_ADO_FIXTURE")
+    if _fix and os.path.isfile(_fix):
+        try:
+            with open(_fix, "r", encoding="utf-8") as _fh:
+                return json.load(_fh)
+        except Exception as _e:
+            return {**_empty, "error": f"ADO fixture unreadable: {_e}"}
     creds = _ado_coverage_creds()
     token, auth = creds["token"], creds["auth"]
     if not (org_url and token):
@@ -24324,9 +24459,37 @@ def _ado_pipeline_coverage(org_url: str) -> dict:
     _capped = max(0, len(proj_pairs) - _ADO_PROJECT_CAP)
     proj_pairs = proj_pairs[:_ADO_PROJECT_CAP]
 
-    # 3. Repos + build definitions per project (threaded). A repo is
-    #    "pipelined" when ANY build definition in its project targets it
-    #    (matched by repository id, with a name fallback).
+    # 2b. Service-hook subscriptions per COLLECTION (one call each) → map
+    #     repository id → set of branch names that have a hook. The platform
+    #     wires each app's pipeline via git hooks (one per branch), so this is
+    #     what actually says "the pipeline exists".
+    def _hooks_for(coll: str) -> dict:
+        hj = _ado_get(
+            f"{base}/{_q(coll)}/_apis/hooks/subscriptions?api-version={ver}", auth)
+        _out: dict[str, set] = {}
+        for s in (hj or {}).get("value", []) or []:
+            _pi = s.get("publisherInputs") or {}
+            _rid = str(_pi.get("repository") or "").strip()
+            if not _rid:
+                continue
+            _br = str(_pi.get("branch") or "").strip()
+            # normalise refs/heads/develop → develop
+            _br = _br.rsplit("/", 1)[-1].lower() if _br else ""
+            _out.setdefault(_rid, set())
+            if _br:
+                _out[_rid].add(_br)
+        return _out
+
+    _hooks_by_repo: dict[str, set] = {}
+    if coll_names:
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="ado-hook") as _ex:
+            for _hm in _ex.map(_hooks_for, coll_names):
+                for _rid, _brs in _hm.items():
+                    _hooks_by_repo.setdefault(_rid, set()).update(_brs)
+
+    # 3. Repos + build definitions per project (threaded). A repo has an AZURE
+    #    PIPELINE (a warning — the platform doesn't use Azure Pipelines) when a
+    #    build definition in its project targets it. hook_branches come from 2b.
     def _project_cov(p: dict) -> dict:
         _cu, _pu = _q(p["collection"]), _q(p["name"])
         rj = _ado_get(
@@ -24338,29 +24501,25 @@ def _ado_pipeline_coverage(org_url: str) -> dict:
         dj = _ado_get(
             f"{base}/{_cu}/{_pu}/_apis/build/definitions"
             f"?includeAllProperties=true&$top=1000&api-version={ver}", auth)
-        _pl_ids: set[str] = set()
-        _pl_names: set[str] = set()
+        _az_ids: set[str] = set()
+        _az_names: set[str] = set()
         for d in (dj or {}).get("value", []) or []:
             _rep = d.get("repository") or {}
             if _rep.get("id"):
-                _pl_ids.add(str(_rep["id"]))
+                _az_ids.add(str(_rep["id"]))
             if _rep.get("name"):
-                _pl_names.add(str(_rep["name"]).lower())
+                _az_names.add(str(_rep["name"]).lower())
+        _dev_team, _desc = _ado_parse_description(p["description"])
         _repo_out = []
         for r in repos:
-            _pl = (r["id"] in _pl_ids) or (r["name"].lower() in _pl_names)
-            _repo_out.append({"name": r["name"], "pipelined": _pl})
-        _dev_team, _desc = _ado_parse_description(p["description"])
-        _np = sum(1 for r in _repo_out if not r["pipelined"])
-        return {
-            "collection": p["collection"], "name": p["name"],
-            "dev_team": _dev_team, "description": _desc,
-            "repos": sorted(_repo_out, key=lambda r: r["name"].lower()),
-            "repos_total": len(_repo_out),
-            "repos_pipelined": len(_repo_out) - _np,
-            "repos_no_pipeline": _np,
-            "defs_unreachable": dj is None,
-        }
+            _repo_out.append({
+                "project": p["name"], "repo": r["name"], "id": r["id"],
+                "azure_pipeline": (r["id"] in _az_ids) or (r["name"].lower() in _az_names),
+                "hook_branches": sorted(_hooks_by_repo.get(r["id"], set())),
+                "ado_team": _dev_team,
+            })
+        return {"project": p["name"], "dev_team": _dev_team,
+                "description": _desc, "repos": _repo_out}
 
     proj_results: list[dict] = []
     if proj_pairs:
@@ -24368,33 +24527,99 @@ def _ado_pipeline_coverage(org_url: str) -> dict:
             for _r in _ex.map(_project_cov, proj_pairs):
                 proj_results.append(_r)
 
-    # 4. Group by collection + totals.
-    _by_coll: dict[str, list[dict]] = {}
+    # 4. Flatten → repos list + project→team map + ADO-side totals.
+    repos_flat: list[dict] = []
+    project_teams: dict[str, dict] = {}
     for pr in proj_results:
-        _by_coll.setdefault(pr["collection"], []).append(pr)
-    collections = []
-    _t_repos = _t_pl = 0
-    for _cn in sorted(_by_coll, key=str.lower):
-        _plist = sorted(_by_coll[_cn], key=lambda p: p["name"].lower())
-        _c_repos = sum(p["repos_total"] for p in _plist)
-        _c_pl = sum(p["repos_pipelined"] for p in _plist)
-        _t_repos += _c_repos
-        _t_pl += _c_pl
-        collections.append({
-            "name": _cn, "projects": _plist,
-            "repos_total": _c_repos, "repos_pipelined": _c_pl,
-            "repos_no_pipeline": _c_repos - _c_pl,
-        })
+        project_teams[pr["project"].strip().lower()] = {
+            "project": pr["project"], "team": pr["dev_team"]}
+        repos_flat.extend(pr["repos"])
     return {
         "ok": True, "error": "", "capped": _capped,
-        "collections": collections,
-        "totals": {
-            "collections": len(collections),
+        "repos": repos_flat,
+        "project_teams": project_teams,
+        "totals_ado": {
+            "collections": len(coll_names),
             "projects": len(proj_results),
-            "repos": _t_repos, "pipelined": _t_pl,
-            "no_pipeline": _t_repos - _t_pl,
+            "repos": len(repos_flat),
+            "azure_pipeline": sum(1 for r in repos_flat if r["azure_pipeline"]),
+            "with_hooks": sum(1 for r in repos_flat if r["hook_branches"]),
         },
     }
+
+
+def _ado_row_dev_team(row: dict) -> str:
+    """The dev_team assigned to an inventory app (first value of its dev_team
+    field)."""
+    _t = (row.get("teams") or {}).get("dev_team")
+    if isinstance(_t, (list, tuple, set)):
+        return next((str(x).strip() for x in _t if str(x).strip()), "")
+    return str(_t or "").strip()
+
+
+def _ado_coverage_reconcile(snapshot: dict, inv_rows: list[dict]) -> dict:
+    """Cross-reference INVENTORY apps against the ADO snapshot (pure — no I/O).
+
+    An app is PIPELINED when its (project_name, repository_name) matches an ADO
+    repository. For matched apps we additionally flag: an Azure Pipeline on the
+    repo (a warning — the platform uses service hooks, not Azure Pipelines);
+    missing service hooks (each pipeline needs one per branch:
+    develop/release/hotfixes/stress); and a team discrepancy between the app's
+    inventory dev_team and the ADO repo/project team."""
+    _repos = snapshot.get("repos") or []
+    _pt = snapshot.get("project_teams") or {}
+    _idx = {(str(r.get("project")).strip().lower(),
+             str(r.get("repo")).strip().lower()): r for r in _repos}
+    _required = set(ADO_REQUIRED_HOOK_BRANCHES)
+    apps: list[dict] = []
+    _seen_app: set[str] = set()
+    _matched_keys: set = set()
+    for row in inv_rows or []:
+        _app = (row.get("application") or "").strip()
+        if not _app or _app in _seen_app:
+            continue
+        _seen_app.add(_app)
+        _proj = (row.get("project") or "").strip()
+        _repo = (row.get("repository_name") or "").strip()
+        _dev = _ado_row_dev_team(row)
+        _key = (_proj.lower(), _repo.lower())
+        _ado = _idx.get(_key) if _repo else None
+        _pipelined = _ado is not None
+        if _pipelined:
+            _matched_keys.add(_key)
+        _hooks = set(_ado.get("hook_branches") or []) if _ado else set()
+        _missing = sorted(_required - _hooks) if _pipelined else sorted(_required)
+        _ado_team = ((_ado.get("ado_team") if _ado else "")
+                     or (_pt.get(_proj.lower()) or {}).get("team", ""))
+        _mismatch = bool(_pipelined and _dev and _ado_team
+                         and _team_match_key(_dev) != _team_match_key(_ado_team))
+        apps.append({
+            "application": _app, "project": _proj, "repository": _repo,
+            "pipelined": _pipelined,
+            "azure_pipeline": bool(_ado and _ado.get("azure_pipeline")),
+            "hook_branches": sorted(_hooks),
+            "missing_hooks": _missing,
+            "hooks_complete": bool(_pipelined and not _missing),
+            "ado_team": _ado_team, "dev_team": _dev,
+            "team_mismatch": _mismatch,
+        })
+    apps.sort(key=lambda a: (a["project"].lower(), a["application"].lower()))
+    _orphans = sorted(
+        ({"project": r["project"], "repo": r["repo"]} for r in _repos
+         if (str(r.get("project")).strip().lower(),
+             str(r.get("repo")).strip().lower()) not in _matched_keys),
+        key=lambda r: (r["project"].lower(), r["repo"].lower()))
+    _tot = {
+        "inv_apps": len(apps),
+        "pipelined": sum(1 for a in apps if a["pipelined"]),
+        "not_pipelined": sum(1 for a in apps if not a["pipelined"]),
+        "azure_pipeline": sum(1 for a in apps if a["azure_pipeline"]),
+        "missing_hooks": sum(1 for a in apps if a["pipelined"] and a["missing_hooks"]),
+        "team_mismatch": sum(1 for a in apps if a["team_mismatch"]),
+        "hooks_complete": sum(1 for a in apps if a["hooks_complete"]),
+        "orphan_repos": len(_orphans),
+    }
+    return {"apps": apps, "orphans": _orphans, "totals": _tot}
 
 
 @st.cache_resource(ttl=INVENTORY_SYNC_TTL, show_spinner=False)

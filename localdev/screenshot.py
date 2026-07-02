@@ -85,6 +85,8 @@ def main() -> int:
     # Pre-open every lazy tab so switching tabs never triggers a Load-button
     # rerun (which would reset st.tabs to the first tab and ruin the capture).
     env["LOCALDEV_EAGER_TABS"] = "1"
+    env.setdefault("LOCALDEV_ADO_FIXTURE",
+                   os.path.join(HERE, "fixtures", "ado_snapshot.json"))
     proc = subprocess.Popen(
         [sys.executable, "-m", "streamlit", "run", APP,
          "--server.headless", "true", "--server.port", str(port),
