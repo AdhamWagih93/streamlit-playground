@@ -15857,13 +15857,56 @@ def _arch_node_id(prefix: str, *parts: str) -> str:
     return prefix + "_" + re.sub(r"\W", "_", "__".join(parts))
 
 
+def _arch_image_name(app: str) -> str:
+    """image_name = app name lowercased with every ``.`` / ``_`` turned into ``-``."""
+    return re.sub(r"[._]", "-", str(app or "").strip().lower())
+
+
 def _arch_service_name(app: str) -> str:
-    """The in-cluster service hostname convention for an application:
-    ``<image_name>-service`` where image_name is the app name lowercased with
-    every ``.`` / ``_`` turned into ``-``. A connection whose host STARTS WITH
-    this is a call to that app's service, not an external endpoint."""
-    _img = re.sub(r"[._]", "-", str(app or "").strip().lower())
+    """The primary in-cluster service host for an app: ``<image_name>-service``.
+    (Retained for callers/tests; the resolver uses :func:`_arch_service_names`.)"""
+    _img = _arch_image_name(app)
     return f"{_img}-service" if _img else ""
+
+
+def _arch_service_names(app: str, project: str = "", env: str = "") -> list[str]:
+    """Candidate in-cluster service host PREFIXES for an application. The URL
+    convention is EITHER ``<image_name>-service`` OR ``<image_name>-<namespace>``
+    (the namespace being the project, the project-env, or the env), so we emit
+    every plausible prefix; a connection host is matched against the LONGEST one.
+    """
+    _img = _arch_image_name(app)
+    if not _img:
+        return []
+    _cands = [f"{_img}-service"]
+    _proj = re.sub(r"[._]", "-", str(project or "").strip().lower())
+    _env = re.sub(r"[._]", "-", str(env or "").strip().lower())
+    for _ns in ((f"{_proj}-{_env}" if _proj and _env else ""), _proj, _env):
+        _c = f"{_img}-{_ns}" if _ns else ""
+        if _c and _c not in _cands:
+            _cands.append(_c)
+    return _cands
+
+
+def _arch_host_matches(host_lc: str, cand: str) -> bool:
+    """True when *host_lc* addresses the service *cand* — exact match, or *cand*
+    followed by a boundary (``.`` / ``/``) so e.g. ``worker-dev`` can't match
+    ``worker-development`` (ports are already split off the host)."""
+    return (host_lc == cand
+            or host_lc.startswith(cand + ".")
+            or host_lc.startswith(cand + "/"))
+
+
+def _arch_svc_index(ed_apps: dict) -> list[tuple]:
+    """Build the service-prefix → (project, app) index over every app in the env,
+    longest prefix first. Each app contributes all its candidate service hosts
+    (``<image>-service`` plus ``<image>-<namespace>`` forms)."""
+    _first: dict[str, tuple] = {}
+    for (_p, _a), _ad in ed_apps.items():
+        _env = (_ad or {}).get("env", "") if isinstance(_ad, dict) else ""
+        for _svc in _arch_service_names(_a, _p, _env):
+            _first.setdefault(_svc, (_p, _a))
+    return sorted(_first.items(), key=lambda kv: len(kv[0]), reverse=True)
 
 
 def _arch_ext_labels(ed: dict, scope_keys: set) -> set:
@@ -15872,16 +15915,11 @@ def _arch_ext_labels(ed: dict, scope_keys: set) -> set:
     env's app services (same rule as `_arch_build_dot`). Used to find URLs that
     are byte-identical across two environments."""
     _all = ed.get("apps", {})
-    _svc_first: dict[str, tuple] = {}
-    for (_p, _a) in _all:
-        _svc = _arch_service_name(_a)
-        if _svc:
-            _svc_first.setdefault(_svc, (_p, _a))
-    _svc_index = sorted(_svc_first, key=len, reverse=True)
+    _svc_index = _arch_svc_index(_all)
 
     def _resolves(host: str) -> bool:
         _h = (host or "").lower()
-        return any(_h.startswith(_svc) for _svc in _svc_index)
+        return any(_arch_host_matches(_h, _svc) for _svc, _ in _svc_index)
 
     _labels: set = set()
     for _key in scope_keys:
@@ -15912,15 +15950,10 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
     _hl = highlight or {}
 
     # Service-name index over EVERY app in the environment (in- AND out-of-scope)
-    # so a connection host that follows the `<image>-service` convention resolves
-    # to the real service — even when that service lives in an app the current
-    # scope doesn't include. Longest service name first → longest-prefix wins.
-    _svc_first: dict[str, tuple] = {}
-    for (_p, _a) in _all:
-        _svc = _arch_service_name(_a)
-        if _svc:
-            _svc_first.setdefault(_svc, (_p, _a))
-    _svc_index = sorted(_svc_first.items(), key=lambda kv: len(kv[0]), reverse=True)
+    # so a connection host that follows the service convention resolves to the
+    # real service — even when it lives in an out-of-scope app. Each app emits
+    # BOTH `<image>-service` and `<image>-<namespace>` prefixes; longest wins.
+    _svc_index = _arch_svc_index(_all)
     _resolve_cache: dict = {}
 
     def _resolve_svc(host: str):
@@ -15930,7 +15963,7 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
             return _resolve_cache[_h]
         _r = None
         for _svc, _key in _svc_index:
-            if _h.startswith(_svc):
+            if _arch_host_matches(_h, _svc):
                 _r = _key
                 break
         _resolve_cache[_h] = _r
@@ -25134,7 +25167,7 @@ def _arch_build_model(host: str, teams_json: str) -> dict:
                   if isinstance(_cfg, (dict, list)) else [])
         _n_cfg += 1
         envs.setdefault(_env, {"apps": {}})["apps"][(_pname, _app)] = {
-            "team": _team, "project": _pname, "app": _app,
+            "team": _team, "project": _pname, "app": _app, "env": _env,
             "rel": _rel, "connections": _conns,
             "prov": {
                 "commit_sha": (_shown or {}).get("sha", ""),
