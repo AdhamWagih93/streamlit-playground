@@ -1,0 +1,15 @@
+# Remote deployment. Copy .env.example → .env and fill in your environment's
+# values/secrets (Entra or LDAP config, Vault address+token, ES hosts, …).
+services:
+  meridian:
+    build: .
+    ports:
+      - "8080:8000"
+    env_file: .env
+    environment:
+      RUNNING_IN_CONTAINER: "true"
+    restart: unless-stopped
+    # To mount a Vault token or CA bundle instead of passing via env:
+    # volumes:
+    #   - ./secrets/vault-token:/run/secrets/vault-token:ro
+    #   (then set VAULT_TOKEN_FILE=/run/secrets/vault-token in .env)

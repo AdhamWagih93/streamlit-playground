@@ -1,0 +1,30 @@
+MERIDIAN {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+
+{{- if .Values.gatewayApi.enabled }}
+Exposed via Gateway API:
+{{- range .Values.gatewayApi.hostnames }}
+  https://{{ . }}/
+{{- end }}
+  (HTTPRoute "{{ include "meridian.fullname" . }}" → Gateway
+   {{- range .Values.gatewayApi.parentRefs }} {{ .namespace }}/{{ .name }}{{ end }};
+   TLS terminates at the Gateway listener.)
+{{- else }}
+Gateway API disabled — reach the app via the ClusterIP service
+"{{ include "meridian.fullname" . }}" on port {{ .Values.service.port }}.
+{{- end }}
+
+HA posture:
+  replicas: {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }} (HPA){{ else }}{{ .Values.replicaCount }} (fixed){{ end }}
+  PDB: {{ if .Values.podDisruptionBudget.enabled }}minAvailable={{ .Values.podDisruptionBudget.minAvailable }}{{ else }}disabled{{ end }}
+  rollout: maxUnavailable=0, spread across zones (soft) and nodes (hard)
+
+Checks:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "meridian.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} get httproute {{ include "meridian.fullname" . }}
+
+Reminders:
+  * AUTH_MODE must be entra or ldap in-cluster (none is refused by the app).
+  * Put ENTRA_CLIENT_SECRET / SESSION_SECRET / VAULT_TOKEN in a Secret and set
+    `existingSecret` — avoid `secretEnv` outside dev clusters.
+  * DATA_MODE=demo with >1 replica keeps independent in-memory worlds per pod;
+    set service.sessionAffinity=ClientIP for demos, or run live mode (stateless).

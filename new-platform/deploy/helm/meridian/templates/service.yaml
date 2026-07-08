@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "meridian.fullname" . }}
+  labels: {{- include "meridian.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if ne .Values.service.sessionAffinity "None" }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- end }}
+  selector: {{- include "meridian.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP

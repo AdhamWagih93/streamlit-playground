@@ -1,0 +1,8 @@
+# local environments & build outputs (repo root .gitignore lacks node_modules)
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.tsbuildinfo
+.env
+!.env.example

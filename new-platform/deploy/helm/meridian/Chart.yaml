@@ -1,0 +1,7 @@
+apiVersion: v2
+name: meridian
+description: MERIDIAN Engineering Platform — React SPA + FastAPI API in one stateless image
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords: [idp, platform-engineering, cicd]

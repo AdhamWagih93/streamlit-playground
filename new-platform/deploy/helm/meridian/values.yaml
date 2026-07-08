@@ -1,0 +1,118 @@
+# ============================================================================
+# MERIDIAN Helm values.
+# The app is stateless (all state lives in your ES/Postgres/Vault/Jenkins),
+# so HA = replicas + spreading + PDB + HPA, all enabled below by default.
+# ============================================================================
+
+image:
+  repository: registry.example.com/platform/meridian
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 3
+
+# ---- app configuration (non-secret) → ConfigMap --------------------------
+env:
+  DATA_MODE: "live"
+  AUTH_MODE: "entra"            # entra | ldap  (none is refused in-container)
+  COOKIE_SECURE: "true"
+  ES_HOSTS: "https://es.corp.example.com:9200"
+  ES_VERIFY_CERTS: "false"
+  CICD_REPO_BASE: "/tmp/meridian-repos"
+  # ENTRA_TENANT_ID / ENTRA_CLIENT_ID / ENTRA_REDIRECT_URI may live here;
+  # secrets (client secret, vault token, session secret) belong below.
+
+# ---- secrets ---------------------------------------------------------------
+# Preferred: create the Secret yourself (sealed-secrets / external-secrets /
+# vault-injector) and reference it here. All keys become env vars.
+existingSecret: ""              # e.g. "meridian-secrets"
+# Or (dev/testing only) inline values rendered into a chart-managed Secret:
+secretEnv: {}
+#  SESSION_SECRET: "…long random…"
+#  ENTRA_CLIENT_SECRET: "…"
+#  VAULT_ADDR: "https://vault.corp.example.com"
+#  VAULT_TOKEN: "…"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  # DATA_MODE=demo keeps per-pod in-memory state; pin clients to one pod then.
+  # Irrelevant (and best left "None") for live mode.
+  sessionAffinity: "None"
+
+# ---- Gateway API exposure ---------------------------------------------------
+gatewayApi:
+  enabled: true
+  # Reference an existing Gateway managed by your platform/infra team:
+  parentRefs:
+    - name: corp-gateway
+      namespace: gateway-system
+      sectionName: https        # listener name (TLS terminates at the Gateway)
+  hostnames:
+    - meridian.corp.example.com
+  # Extra HTTPRoute rules run before the default catch-all if you need them.
+  annotations: {}
+
+# ---- high availability -------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2               # keep quorum of replicas through node drains
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+topologySpread:
+  enabled: true
+  # Soft-spread across zones and hard-spread across nodes.
+  zoneKey: topology.kubernetes.io/zone
+  nodeKey: kubernetes.io/hostname
+
+priorityClassName: ""
+
+# ---- pod runtime ---------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+probes:
+  liveness:
+    path: /api/health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  readiness:
+    path: /api/health
+    initialDelaySeconds: 3
+    periodSeconds: 5
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}          # extra affinity merged on top of the built-in anti-affinity
+podAnnotations: {}
+podLabels: {}
+extraVolumes: []
+extraVolumeMounts: []

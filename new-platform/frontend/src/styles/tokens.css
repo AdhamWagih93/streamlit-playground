@@ -1,0 +1,53 @@
+/* MERIDIAN design tokens — lapis night + gold. Single dark theme by design. */
+:root {
+  /* surfaces */
+  --bg: #0b1020;
+  --surface-1: #101731;
+  --surface-2: #121a36;
+  --surface-3: #17204233;
+  --console: #080d1d;
+  --stroke: rgba(128, 156, 255, 0.13);
+  --stroke-strong: rgba(128, 156, 255, 0.24);
+  --stroke-gold: rgba(232, 180, 74, 0.35);
+
+  /* brand + accents */
+  --gold: #e8b44a;
+  --gold-deep: #bb8524;
+  --teal: #3ac6b4;
+  --blue: #7a9bff;
+
+  /* status (reserved — never used as chart series) */
+  --ok: #3dd68c;
+  --warn: #f2b14c;
+  --err: #f06a6a;
+  --info: #7a9bff;
+
+  /* ink */
+  --ink: #e8ecf8;
+  --ink-2: #a8b3d6;
+  --ink-3: #6b7699;
+
+  /* charts — validated categorical order (dark surface #101731); never cycle */
+  --chart-1: #5b7fe8;
+  --chart-2: #1fa28c;
+  --chart-3: #bb8524;
+  --chart-4: #8b67e0;
+  --chart-5: #d5688a;
+  --chart-grid: rgba(128, 156, 255, 0.08);
+
+  /* type */
+  --font-display: "Bricolage Grotesque", sans-serif;
+  --font-body: "Instrument Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  /* geometry */
+  --r-lg: 16px;
+  --r-md: 12px;
+  --r-sm: 8px;
+  --sidebar-w: 232px;
+  --topbar-h: 56px;
+  --max-w: 1560px;
+
+  /* motion */
+  --ease: cubic-bezier(0.22, 0.9, 0.3, 1);
+}
