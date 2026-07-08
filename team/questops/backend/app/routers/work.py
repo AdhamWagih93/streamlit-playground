@@ -68,10 +68,13 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
                       "why": "red build blocks the team" + (" — you claimed it" if mine else ""),
                       "url": f["url"], "claimed": bool(f.get("claimed_by"))})
     for l in ci["long_running"]:
+        avg = l.get("avg_min")
         items.append({"source": "jenkins", "key": l["job"],
                       "title": f"Long-running: {l['job']} #{l['number']}",
-                      "subtitle": f"running for {l['running_min']} min",
-                      "score": 55, "why": "possibly stuck — check or kill it",
+                      "subtitle": f"running {l['running_min']}m"
+                                  + (f" vs ~{avg}m average" if avg else ""),
+                      "score": 55,
+                      "why": "running well past its usual duration — possibly stuck",
                       "url": l["url"], "claimed": bool(l.get("claimed_by"))})
 
     if user.role == "approver":

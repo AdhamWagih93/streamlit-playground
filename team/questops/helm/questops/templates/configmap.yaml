@@ -17,6 +17,7 @@ data:
   JIRA_REOPENED_STATUSES: {{ .Values.jira.reopenedStatuses | quote }}
   JENKINS_URL: {{ .Values.jenkins.url | quote }}
   JENKINS_USER: {{ .Values.jenkins.user | quote }}
+  JENKINS_LONG_RUNNING_FACTOR: {{ .Values.jenkins.longRunningFactor | quote }}
   JENKINS_LONG_RUNNING_MINUTES: {{ .Values.jenkins.longRunningMinutes | quote }}
   JENKINS_FAILURE_WINDOW_DAYS: {{ .Values.jenkins.failureWindowDays | quote }}
   JENKINS_IGNORE: {{ .Values.jenkins.ignore | quote }}

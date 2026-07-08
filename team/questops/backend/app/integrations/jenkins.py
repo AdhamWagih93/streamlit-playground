@@ -31,9 +31,9 @@ _DEMO_JOBS = [
     {"name": "inventory-service/main", "result": "SUCCESS", "building": False,
      "ago_min": 55, "duration_min": 9, "number": 764},
     {"name": "data-warehouse/nightly-etl", "result": None, "building": True,
-     "ago_min": 95, "duration_min": None, "number": 1201},
+     "ago_min": 95, "duration_min": None, "number": 1201, "avg_min": 38.0},   # 95m vs ~38m avg → stuck
     {"name": "monolith/regression-suite", "result": None, "building": True,
-     "ago_min": 61, "duration_min": None, "number": 3391},
+     "ago_min": 61, "duration_min": None, "number": 3391, "avg_min": 52.0},   # within normal range
     {"name": "auth-service/main", "result": "SUCCESS", "building": False,
      "ago_min": 20, "duration_min": 6, "number": 512},
     {"name": "DevOps_Test/sandbox-pipeline", "result": "FAILURE", "building": False,
@@ -53,9 +53,10 @@ def _demo_overview() -> dict:
         jobs.append({"name": j["name"], "result": j["result"], "building": j["building"],
                      "number": j["number"], "url": url,
                      "started": started, "duration_min": j["duration_min"]})
-        if j["building"] and j["ago_min"] >= settings.jenkins_long_running_minutes:
+        if j["building"] and _is_long_running(j["ago_min"], j.get("avg_min") or 0):
             long_running.append({"job": j["name"], "number": j["number"], "url": url,
                                  "running_min": j["ago_min"],
+                                 "avg_min": j.get("avg_min") or 0,
                                  "claimed_by": CLAIMS.get(j["name"])})
         elif j["result"] in ("FAILURE", "UNSTABLE"):
             failures.append({"job": j["name"], "number": j["number"], "url": url,
@@ -66,10 +67,12 @@ def _demo_overview() -> dict:
             "jobs": jobs, "source": "demo"}
 
 
-# leaf fields we need per runnable job; folders/multibranch expose 'jobs' instead
+# leaf fields we need per runnable job; folders/multibranch expose 'jobs' instead.
+# builds{0,20} = recent history used to compute the job's average runtime.
 _LEAF = ("fullName,name,url,"
          "lastBuild[number,building,timestamp,duration,result,url],"
-         "lastCompletedBuild[number,timestamp,duration,result,url]")
+         "lastCompletedBuild[number,timestamp,duration,result,url],"
+         "builds[duration,result,building]{0,20}")
 
 
 def _tree_query(depth: int = 5) -> str:
@@ -87,6 +90,23 @@ def _flatten(items: list, out: list) -> list:
         if j.get("lastBuild") or j.get("lastCompletedBuild"):  # runnable job
             out.append(j)
     return out
+
+
+def _avg_duration_min(builds: list) -> float:
+    """Average runtime of recent builds; successful ones are the baseline
+    (failed builds often die early and would skew the average down)."""
+    done = [b["duration"] for b in builds
+            if not b.get("building") and (b.get("duration") or 0) > 0]
+    ok = [b["duration"] for b in builds
+          if b.get("result") == "SUCCESS" and (b.get("duration") or 0) > 0]
+    sample = ok or done
+    return round(sum(sample) / len(sample) / 60_000, 1) if sample else 0.0
+
+
+def _is_long_running(running_min: float, avg_min: float) -> bool:
+    if avg_min > 0:
+        return running_min > avg_min * settings.jenkins_long_running_factor
+    return running_min >= settings.jenkins_long_running_minutes  # no history fallback
 
 
 def _live_overview() -> dict:
@@ -107,10 +127,13 @@ def _live_overview() -> dict:
                      "started": last.get("timestamp"),
                      "duration_min": round((completed.get("duration") or 0) / 60_000, 1)})
         if last.get("building"):
-            running_min = int((now - last.get("timestamp", now)) / 60_000)
-            if running_min >= settings.jenkins_long_running_minutes:
+            running_min = (now - last.get("timestamp", now)) / 60_000
+            avg_min = _avg_duration_min(j.get("builds") or [])
+            if _is_long_running(running_min, avg_min):
                 long_running.append({"job": name, "number": last.get("number"),
-                                     "url": last.get("url"), "running_min": running_min,
+                                     "url": last.get("url"),
+                                     "running_min": int(running_min),
+                                     "avg_min": avg_min,
                                      "claimed_by": CLAIMS.get(name)})
         if completed.get("result") in ("FAILURE", "UNSTABLE"):
             ago_min = int((now - completed.get("timestamp", now)) / 60_000)

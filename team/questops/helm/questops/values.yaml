@@ -50,7 +50,8 @@ jenkins:
   url: "https://jenkins.mycorp.local"
   user: "svc-questops"
   token: ""          # prefer app.existingSecret
-  longRunningMinutes: 45
+  longRunningFactor: 1.5   # long-running = elapsed > job avg * factor
+  longRunningMinutes: 45   # fallback for jobs with no build history
   failureWindowDays: 14
   ignore: "DevOps_Test"   # comma-separated path tokens to skip
 

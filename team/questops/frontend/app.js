@@ -342,7 +342,7 @@ async function renderCI() {
     <div class="ci-row">
       <span class="ci-dot dot-amber"></span>
       <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
-      <span class="ci-meta">running ${l.running_min}m${l.claimed_by ? ` · 👀 @${esc(l.claimed_by)}` : ""}</span>
+      <span class="ci-meta">running ${l.running_min}m${l.avg_min ? ` · avg ${l.avg_min}m` : ""}${l.claimed_by ? ` · 👀 @${esc(l.claimed_by)}` : ""}</span>
       ${linkBtn(l.url)}
       ${l.claimed_by ? "" : `<button class="btn btn-sm" data-claim="${esc(l.job)}">Investigate +10</button>`}
     </div>`).join("") || `<div class="empty">nothing stuck</div>`;

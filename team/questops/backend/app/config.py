@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     jenkins_url: str = ""
     jenkins_user: str = ""
     jenkins_token: str = ""
+    # a running build is 'long-running' when elapsed > avg-of-recent-builds * factor;
+    # the static minutes threshold is used only for jobs with no build history
+    jenkins_long_running_factor: float = 1.5
     jenkins_long_running_minutes: int = 45
     jenkins_failure_window_days: int = 14  # failures older than this are not shown
     jenkins_ignore: str = "DevOps_Test"    # comma list; skip pipeline paths containing these
