@@ -18,6 +18,7 @@ const Technology = lazy(() => import("./pages/Technology"));
 const Teams = lazy(() => import("./pages/Teams"));
 const People = lazy(() => import("./pages/People"));
 const Governance = lazy(() => import("./pages/Governance"));
+const Settings = lazy(() => import("./pages/Settings"));
 
 export default function App() {
   const { me, loading } = useAuth();
@@ -41,6 +42,7 @@ export default function App() {
           <Route path="/teams" element={admin ? <Teams /> : <Navigate to="/" />} />
           <Route path="/people" element={admin ? <People /> : <Navigate to="/" />} />
           <Route path="/governance" element={admin ? <Governance /> : <Navigate to="/" />} />
+          <Route path="/settings" element={admin ? <Settings /> : <Navigate to="/" />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Suspense>

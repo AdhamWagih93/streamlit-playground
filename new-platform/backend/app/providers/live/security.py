@@ -260,16 +260,16 @@ def report(user: User, scanner: str, project: str, application: str, version: st
     if src is None or (project and str(src.get("project") or "") != project):
         raise HTTPException(status_code=404, detail="Application not found in your scope")
 
-    s = get_settings()
-    key = s.prisma_s3_key_pattern.format(project=project, application=application,
-                                         version=version)
+    from .clients import s3_report_location
+    bucket, key_pattern = s3_report_location()
+    key = key_pattern.format(project=project, application=application, version=version)
     try:
-        obj = s3_client().get_object(Bucket=s.prisma_s3_bucket, Key=key)
+        obj = s3_client().get_object(Bucket=bucket, Key=key)
         raw = obj["Body"].read()
     except HTTPException:
         raise
     except Exception as exc:
-        raise IntegrationUnavailable("S3", f"get {s.prisma_s3_bucket}/{key} failed: {exc}")
+        raise IntegrationUnavailable("S3", f"get {bucket}/{key} failed: {exc}")
 
     text = raw.decode("utf-8", errors="replace")
     if text.lstrip()[:200].lower().startswith(("<!doctype", "<html")):

@@ -39,6 +39,19 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
   }).then((r) => handle<T>(r));
 }
 
+export function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  return fetch(`/api${path}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then((r) => handle<T>(r));
+}
+
+export function apiDelete<T = { ok: boolean }>(path: string): Promise<T> {
+  return fetch(`/api${path}`, { method: "DELETE", credentials: "include" }).then((r) => handle<T>(r));
+}
+
 export type SseEvent = { event: string; data: any };
 
 /** POST-initiated SSE stream (fetch + ReadableStream parser).

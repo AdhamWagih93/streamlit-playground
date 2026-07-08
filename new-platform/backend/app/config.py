@@ -48,7 +48,16 @@ class Settings(BaseSettings):
     ldap_service_bind_dn: str = ""    # optional service account for lookups
     ldap_service_password: str = ""
 
-    # ---- live integrations (names match the original platform) ---------------
+    # ---- platform database (the ONLY external integration configured via env) --
+    # e.g. postgresql://meridian:secret@localhost:5433/meridian
+    database_url: str = ""
+    # Fernet key (32-byte urlsafe base64) encrypting integration configs at rest.
+    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Empty → key derived from session_secret (dev only; the UI warns).
+    settings_encryption_key: str = ""
+
+    # ---- legacy env fallbacks (runtime integrations now live in the in-app
+    #      Settings page, encrypted in Postgres; these remain only as defaults) ----
     vault_addr: str = ""
     vault_token: str = ""
     vault_token_file: str = ""        # mounted secret file wins over env token

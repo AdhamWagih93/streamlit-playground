@@ -18,21 +18,34 @@ scan results, a failed-PRD-deploy incident story, a legacy system, drift rows, �
 `AUTH_MODE=none` auto-signs you in; click your avatar (top right) to preview the app as
 Admin / CLevel / Developer / QC / Operations — RBAC scoping is enforced server-side.
 
+## Integrations model
+
+**The only external integration configured via `.env` is PostgreSQL** — the platform's
+own database (docker-compose bundles `postgres:17`, or point `DATABASE_URL` at an
+existing instance). Everything else — Elasticsearch, Jenkins, Azure DevOps, S3/MinIO,
+LDAP directory, Ollama, Vault — is configured inside the app at **Settings →
+Integrations** (admin-only) and stored **encrypted at rest** (Fernet; key from
+`SETTINGS_ENCRYPTION_KEY`) in that database. Each integration card shows a connection
+test, enable/disable, and exactly which features it powers.
+
+Every page carries an **integration strip** showing which integrations that page's
+features require, which are missing, and what breaks without them — with a one-click
+path to Settings. In demo mode the strip shows what live mode will need; in live mode
+missing integrations are flagged red and their endpoints return a clear 503 pointing
+at Settings — never silent demo data.
+
 ## Deploy (live integrations, real auth)
 
 ```bash
-cp .env.example .env   # fill in Entra/LDAP + Vault + ES config
+cp .env.example .env   # set POSTGRES_PASSWORD (or DATABASE_URL), auth + secrets
 docker compose up -d --build
-# → http://host:8080
+# → http://host:8080 — then Settings → Integrations to connect your systems
 ```
 
 - `AUTH_MODE=entra` — OIDC auth-code flow against Entra ID (tenant/client/secret/redirect
   from env; group→role JSON map).
 - `AUTH_MODE=ldap` — direct bind + group→role mapping (login form).
 - The container **refuses** `AUTH_MODE=none` unless `ALLOW_INSECURE_NO_AUTH=true`.
-- `DATA_MODE=live` — integrations resolve credentials through Vault using the same paths
-  as the original platform (`new_git`, `jenkins`, `postgres`, `s3`, `ado`). Live slices that
-  are not yet configured return a clear 503 — never silent demo data.
 
 ## Deploy to Kubernetes (Helm + Gateway API, HA)
 

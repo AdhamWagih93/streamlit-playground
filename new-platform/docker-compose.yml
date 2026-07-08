@@ -1,5 +1,7 @@
-# Remote deployment. Copy .env.example → .env and fill in your environment's
-# values/secrets (Entra or LDAP config, Vault address+token, ES hosts, …).
+# Remote deployment. Copy .env.example → .env and fill in the values.
+# Postgres (the platform database) is the ONLY external integration configured
+# here — everything else (Elasticsearch, Jenkins, ADO, S3, LDAP, Ollama, Vault)
+# is configured in the app: Settings → Integrations, stored encrypted in this DB.
 services:
   meridian:
     build: .
@@ -8,8 +10,30 @@ services:
     env_file: .env
     environment:
       RUNNING_IN_CONTAINER: "true"
+      # Uses the bundled DB below unless DATABASE_URL in .env points elsewhere.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://meridian:${POSTGRES_PASSWORD:-change-me}@db:5432/meridian}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
-    # To mount a Vault token or CA bundle instead of passing via env:
-    # volumes:
-    #   - ./secrets/vault-token:/run/secrets/vault-token:ro
-    #   (then set VAULT_TOKEN_FILE=/run/secrets/vault-token in .env)
+
+  # Bundled platform database (latest Postgres major). To use an EXISTING
+  # Postgres instead: set DATABASE_URL in .env and remove this service +
+  # the depends_on block above.
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: meridian
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: meridian
+    volumes:
+      - meridian-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meridian -d meridian"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  meridian-pgdata:

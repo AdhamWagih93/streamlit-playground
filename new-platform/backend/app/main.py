@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from .auth.router import router as auth_router
 from .config import get_settings
 from .routers import (actions, ai, architecture, events, governance, inventory,
-                      meta, overview, people, security, teams, technology)
+                      meta, overview, people, security, settings as settings_router,
+                      teams, technology)
 
 settings = get_settings()
 settings.validate_runtime()
@@ -28,7 +29,7 @@ app.add_middleware(
 API = "/api"
 app.include_router(auth_router, prefix=API)
 for r in (overview, inventory, events, actions, security, ai, architecture,
-          technology, teams, people, governance, meta):
+          technology, teams, people, governance, meta, settings_router):
     app.include_router(r.router, prefix=API)
 
 

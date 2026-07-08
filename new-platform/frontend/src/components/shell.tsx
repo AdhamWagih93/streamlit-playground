@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
 import { useAuth } from "../lib/auth";
+import { IntegrationStrip } from "./IntegrationStrip";
 import "./shell.css";
 
 const NAV: Array<{ section: string; items: Array<{ to: string; label: string; glyph: string; admin?: boolean }> }> = [
@@ -30,6 +31,7 @@ const NAV: Array<{ section: string; items: Array<{ to: string; label: string; gl
       { to: "/teams", label: "Teams & Members", glyph: "◎", admin: true },
       { to: "/people", label: "People Insights", glyph: "☺", admin: true },
       { to: "/governance", label: "Governance", glyph: "⚖", admin: true },
+      { to: "/settings", label: "Settings", glyph: "⚙", admin: true },
     ],
   },
 ];
@@ -142,7 +144,10 @@ export function Shell({ children }: { children: ReactNode }) {
             )}
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main className="content">
+          <IntegrationStrip />
+          {children}
+        </main>
       </div>
     </div>
   );

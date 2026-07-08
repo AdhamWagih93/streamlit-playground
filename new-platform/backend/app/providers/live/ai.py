@@ -50,11 +50,10 @@ def analyze_incident(user: User, incident_id: int):
 
 # ---------------------------------------------------------------- assistant
 def assistant_sources(user: User) -> dict:
-    s = get_settings()
-    if not s.docchat_ollama_url:
-        raise IntegrationUnavailable("DocChat", "DOCCHAT_OLLAMA_URL not configured")
+    from .clients import ollama_config
+    cfg = ollama_config()
     # No retrieval index wired yet — report the model honestly, with no corpus stats.
-    return {"categories": [], "total": 0, "grounded": False, "model": s.docchat_model}
+    return {"categories": [], "total": 0, "grounded": False, "model": cfg["model"]}
 
 
 def assistant_stats(user: User) -> dict:
@@ -62,9 +61,8 @@ def assistant_stats(user: User) -> dict:
 
 
 def assistant_chat(user: User, messages: list[dict], persona: str):
-    s = get_settings()
-    if not s.docchat_ollama_url:
-        raise IntegrationUnavailable("Ollama", "DOCCHAT_OLLAMA_URL not configured")
+    from .clients import ollama_config
+    cfg = ollama_config()
     try:
         import httpx
     except ImportError:
@@ -80,7 +78,7 @@ def assistant_chat(user: User, messages: list[dict], persona: str):
         "say so rather than inventing it."
     )
     payload = {
-        "model": s.docchat_model,
+        "model": cfg["model"],
         "stream": True,
         "messages": [
             {"role": "system", "content": system},
@@ -96,7 +94,7 @@ def assistant_chat(user: User, messages: list[dict], persona: str):
         "when": datetime.now(timezone.utc).isoformat(),
         "question": question[:300],
     })
-    url = f"{s.docchat_ollama_url.rstrip('/')}/api/chat"
+    url = f"{cfg['url'].rstrip('/')}/api/chat"
 
     def gen():
         try:

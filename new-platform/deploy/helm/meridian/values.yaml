@@ -13,26 +13,32 @@ imagePullSecrets: []
 replicaCount: 3
 
 # ---- app configuration (non-secret) → ConfigMap --------------------------
+# NOTE: the ONLY external integration configured via env is the platform's
+# PostgreSQL (DATABASE_URL, in the Secret below). Elasticsearch/Jenkins/ADO/
+# S3/LDAP-directory/Ollama/Vault are configured in-app (Settings →
+# Integrations) and stored encrypted in that database.
 env:
   DATA_MODE: "live"
   AUTH_MODE: "entra"            # entra | ldap  (none is refused in-container)
   COOKIE_SECURE: "true"
-  ES_HOSTS: "https://es.corp.example.com:9200"
-  ES_VERIFY_CERTS: "false"
   CICD_REPO_BASE: "/tmp/meridian-repos"
   # ENTRA_TENANT_ID / ENTRA_CLIENT_ID / ENTRA_REDIRECT_URI may live here;
-  # secrets (client secret, vault token, session secret) belong below.
+  # secrets (client secret, session secret, DATABASE_URL, encryption key) below.
 
 # ---- secrets ---------------------------------------------------------------
 # Preferred: create the Secret yourself (sealed-secrets / external-secrets /
 # vault-injector) and reference it here. All keys become env vars.
+# Required keys: DATABASE_URL (point at an HA Postgres — managed service,
+# CloudNativePG, or Patroni; the app is stateless, the DB is the state),
+# SETTINGS_ENCRYPTION_KEY (Fernet key encrypting integration configs at rest),
+# SESSION_SECRET, and your ENTRA_CLIENT_SECRET / LDAP bind password.
 existingSecret: ""              # e.g. "meridian-secrets"
 # Or (dev/testing only) inline values rendered into a chart-managed Secret:
 secretEnv: {}
+#  DATABASE_URL: "postgresql://meridian:…@pg.corp:5432/meridian"
+#  SETTINGS_ENCRYPTION_KEY: "…fernet key…"
 #  SESSION_SECRET: "…long random…"
 #  ENTRA_CLIENT_SECRET: "…"
-#  VAULT_ADDR: "https://vault.corp.example.com"
-#  VAULT_TOKEN: "…"
 
 service:
   type: ClusterIP
