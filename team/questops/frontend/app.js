@@ -299,8 +299,8 @@ async function renderBoard() {
           <div class="card-foot">
             <span class="prio prio-${esc(i.priority)}">${esc(i.priority)}</span>
             ${i.due ? `<span class="chip">${esc(i.due)}</span>` : ""}
-            ${(i.components || []).length ? `<span class="chip chip-violet" title="${esc(i.components.join(", "))}">🎯 ${esc(i.components[0])}${i.components.length > 1 ? " +" + (i.components.length - 1) : ""}</span>` : ""}
-            ${i.needs_objective ? `<button class="chip chip-red" data-objective="${esc(i.key)}" title="assign a team objective">⚠ no objective</button>` : ""}
+            ${(i.components || []).length ? `<button class="chip chip-violet" data-objective="${esc(i.key)}" data-current="${esc(i.components.join("|"))}" title="${esc(i.components.join(", "))} — click to edit">🎯 ${esc(i.components[0])}${i.components.length > 1 ? " +" + (i.components.length - 1) : ""}</button>` : ""}
+            ${i.needs_objective ? `<button class="chip chip-red" data-objective="${esc(i.key)}" title="assign team objectives">⚠ no objective</button>` : ""}
             <span class="assignee">${i.assignee ? "@" + esc(i.assignee) : "unassigned"}</span>
           </div>
           <div class="card-foot" style="margin-top:6px">
@@ -352,13 +352,18 @@ async function renderBoard() {
     try {
       const data = await api("/api/objectives");
       const names = data.objectives.map((o) => o.name);
-      const pick = prompt(`Assign a team objective to ${b.dataset.objective}:\n` +
-        names.map((n, i) => `${i + 1}. ${n}`).join("\n") + "\n\nEnter a number:");
-      if (!pick) return;
-      const name = names[parseInt(pick, 10) - 1];
-      if (!name) return oops(new Error("invalid choice"));
+      const current = (b.dataset.current || "").split("|").filter(Boolean);
+      const preset = current.map((c) => names.indexOf(c) + 1).filter((n) => n > 0).join(",");
+      const pick = prompt(
+        `Objectives for ${b.dataset.objective} — a ticket can serve several.\n` +
+        names.map((n, i) => `${i + 1}. ${n}${current.includes(n) ? " ✓" : ""}`).join("\n") +
+        "\n\nEnter numbers separated by commas (e.g. 1,3):", preset);
+      if (pick === null) return;
+      const chosen = [...new Set(pick.split(",")
+        .map((s) => names[parseInt(s.trim(), 10) - 1]).filter(Boolean))];
+      if (!chosen.length) return oops(new Error("pick at least one objective"));
       act(api(`/api/issues/${b.dataset.objective}/components`,
-              { method: "POST", body: { components: [name] } }));
+              { method: "POST", body: { components: chosen } }));
     } catch (e) { oops(e); }
   });
   view().querySelectorAll("[data-claim]").forEach((b) => b.onclick = () =>

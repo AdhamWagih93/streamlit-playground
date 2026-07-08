@@ -46,7 +46,8 @@ def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc=
 _DEMO_ISSUES: list[dict] = [
     _demo_issue(101, "Payments pipeline: flaky integration stage blocks releases", "Reopened",
                 "Highest", "alice", 0, "Bug", "3 of the last 5 runs failed on testcontainers startup.", components=["Platform Reliability"]),
-    _demo_issue(102, "Add SLO dashboard for checkout service", "Open", "High", "bob", 2, "Story", components=["Platform Reliability"]),
+    _demo_issue(102, "Add SLO dashboard for checkout service", "Open", "High", "bob", 2, "Story",
+                components=["Platform Reliability", "Developer Experience"]),  # multi-objective
     _demo_issue(103, "Security sweep: rotate registry pull secrets", "Open", "High", None, 1, "Task", components=["Security Hardening"]),
     _demo_issue(104, "Upgrade ingress-nginx to 1.11 in staging", "In Progress", "Medium", "carol", 4, "Task"),
     _demo_issue(105, "Self-service: microservice scaffold template", "In Progress", "High", "alice", 6, "Story", components=["Developer Experience"]),
@@ -204,6 +205,13 @@ def set_components(key: str, names: list[str]) -> dict:
     issue["components"] = names
     issue["updated"] = _now().isoformat()
     return dict(issue)
+
+
+def get_components(key: str) -> list[str]:
+    if is_live():
+        found = _live_search(f'key = "{key}"')
+        return found[0].get("components", []) if found else []
+    return list(_demo_find(key).get("components") or [])
 
 
 def get_assignee(key: str) -> str | None:

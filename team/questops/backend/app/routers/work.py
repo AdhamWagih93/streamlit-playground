@@ -130,13 +130,17 @@ def set_issue_components(key: str, body: ComponentsBody,
     if not body.components:
         raise HTTPException(400, "pick at least one objective")
     try:
+        first_tagging = not jira.get_components(key)
         issue = jira.set_components(key, body.components)
     except KeyError:
         raise HTTPException(404, f"issue {key} not found")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    game = award(db, user, "ticket_objective",
-                 message=f"tagged {key} with {', '.join(body.components)}", ref=key)
+    # XP only when the ticket goes from untagged -> tagged (edits are free)
+    game = None
+    if first_tagging:
+        game = award(db, user, "ticket_objective",
+                     message=f"tagged {key} with {', '.join(body.components)}", ref=key)
     return {"issue": issue, "game": game}
 
 
