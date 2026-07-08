@@ -116,10 +116,20 @@ def _is_open(issue: dict) -> bool:
     return issue["status"].lower() not in settings.done_statuses
 
 
+def _board_jql() -> str:
+    """All open issues + issues closed within the recent window only."""
+    days = settings.jira_closed_window_days
+    recently_closed = " OR ".join(
+        f'status CHANGED TO "{s}" AFTER -{days}d'
+        for s in settings._csv(settings.jira_done_statuses))
+    return (f'project = "{settings.jira_project_key}" '
+            f'AND ({_not_done_jql()} OR {recently_closed}) '
+            f'ORDER BY priority DESC, updated DESC')
+
+
 def board() -> dict:
     if is_live():
-        issues = _live_search(
-            f'project = "{settings.jira_project_key}" ORDER BY priority DESC, updated DESC')
+        issues = _live_search(_board_jql())
     else:
         issues = [dict(i) for i in _DEMO_ISSUES]
     columns = [{"name": s, "issues": [i for i in issues if _column_for(i) == s]}

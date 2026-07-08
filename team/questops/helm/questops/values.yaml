@@ -42,6 +42,7 @@ jira:
   doneStatuses: "Closed"
   reviewStatuses: "Resolved"
   reopenedStatuses: "Reopened"
+  closedWindowDays: 30
   user: "svc-questops"
   password: ""       # prefer app.existingSecret
 
@@ -50,6 +51,8 @@ jenkins:
   user: "svc-questops"
   token: ""          # prefer app.existingSecret
   longRunningMinutes: 45
+  failureWindowDays: 14
+  ignore: "DevOps_Test"   # comma-separated path tokens to skip
 
 ldap:
   url: "ldaps://ldap.mycorp.local:636"

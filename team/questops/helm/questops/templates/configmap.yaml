@@ -18,6 +18,9 @@ data:
   JENKINS_URL: {{ .Values.jenkins.url | quote }}
   JENKINS_USER: {{ .Values.jenkins.user | quote }}
   JENKINS_LONG_RUNNING_MINUTES: {{ .Values.jenkins.longRunningMinutes | quote }}
+  JENKINS_FAILURE_WINDOW_DAYS: {{ .Values.jenkins.failureWindowDays | quote }}
+  JENKINS_IGNORE: {{ .Values.jenkins.ignore | quote }}
+  JIRA_CLOSED_WINDOW_DAYS: {{ .Values.jira.closedWindowDays | quote }}
   LDAP_URL: {{ .Values.ldap.url | quote }}
   LDAP_BIND_DN: {{ .Values.ldap.bindDn | quote }}
   LDAP_BASE_DN: {{ .Values.ldap.baseDn | quote }}

@@ -60,6 +60,12 @@ function md(text) {
   }
 }
 
+// external-link button (demo URLs start with '#' and get no link)
+function linkBtn(url, cls = "btn btn-sm btn-ghost") {
+  return url && !url.startsWith("#")
+    ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
+}
+
 function ago(iso) {
   if (!iso) return "";
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -203,7 +209,7 @@ async function renderFocus() {
             &nbsp;${esc(it.key)} · ${esc(it.subtitle)}</div>
           <div class="focus-why">${esc(it.why)}</div>
         </div>
-        <div class="focus-actions">${buttons}</div>
+        <div class="focus-actions">${linkBtn(it.url)}${buttons}</div>
       </div>`;
   }).join("") || `<div class="empty">Nothing urgent. Enjoy it — or grab a quest.</div>`;
 
@@ -326,6 +332,7 @@ async function renderCI() {
       <span class="ci-dot dot-red"></span>
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
       <span class="ci-meta">${esc(f.result)} · ${f.ago_min}m ago${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
+      ${linkBtn(f.url)}
       ${f.claimed_by
         ? `<button class="btn btn-sm" data-fixed="${esc(f.job)}">It's green +35</button>`
         : `<button class="btn btn-sm" data-claim="${esc(f.job)}">I'm on it +10</button>`}
@@ -336,6 +343,7 @@ async function renderCI() {
       <span class="ci-dot dot-amber"></span>
       <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
       <span class="ci-meta">running ${l.running_min}m${l.claimed_by ? ` · 👀 @${esc(l.claimed_by)}` : ""}</span>
+      ${linkBtn(l.url)}
       ${l.claimed_by ? "" : `<button class="btn btn-sm" data-claim="${esc(l.job)}">Investigate +10</button>`}
     </div>`).join("") || `<div class="empty">nothing stuck</div>`;
 
@@ -344,7 +352,8 @@ async function renderCI() {
       : j.result ? "dot-red" : "dot-grey";
     return `<div class="ci-row"><span class="ci-dot ${dot}"></span>
       <span class="ci-job">${esc(j.name)}</span>
-      <span class="ci-meta">${j.building ? "building…" : esc(j.result || "—")}${j.duration_min ? ` · ${j.duration_min}m` : ""}</span></div>`;
+      <span class="ci-meta">${j.building ? "building…" : esc(j.result || "—")}${j.duration_min ? ` · ${j.duration_min}m` : ""}</span>
+      ${linkBtn(j.url)}</div>`;
   }).join("");
 
   view().innerHTML = `

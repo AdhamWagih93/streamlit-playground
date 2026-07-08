@@ -28,12 +28,15 @@ class Settings(BaseSettings):
     jira_done_statuses: str = "Closed"        # landing here = ticket-closed XP
     jira_review_statuses: str = "Resolved"    # 'resolved' means awaiting review
     jira_reopened_statuses: str = "Reopened"  # shown in the first column, flagged as regression
+    jira_closed_window_days: int = 30         # board shows only tickets closed this recently
 
     # --- Jenkins ---
     jenkins_url: str = ""
     jenkins_user: str = ""
     jenkins_token: str = ""
     jenkins_long_running_minutes: int = 45
+    jenkins_failure_window_days: int = 14  # failures older than this are not shown
+    jenkins_ignore: str = "DevOps_Test"    # comma list; skip pipeline paths containing these
 
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389
@@ -68,6 +71,10 @@ class Settings(BaseSettings):
     @property
     def reopened_statuses(self) -> set[str]:
         return {s.lower() for s in self._csv(self.jira_reopened_statuses)}
+
+    @property
+    def jenkins_ignore_tokens(self) -> list[str]:
+        return [t.lower() for t in self._csv(self.jenkins_ignore)]
 
 
 settings = Settings()

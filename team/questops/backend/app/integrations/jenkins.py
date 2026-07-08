@@ -36,6 +36,8 @@ _DEMO_JOBS = [
      "ago_min": 61, "duration_min": None, "number": 3391},
     {"name": "auth-service/main", "result": "SUCCESS", "building": False,
      "ago_min": 20, "duration_min": 6, "number": 512},
+    {"name": "DevOps_Test/sandbox-pipeline", "result": "FAILURE", "building": False,
+     "ago_min": 10, "duration_min": 2, "number": 77},  # filtered out by JENKINS_IGNORE
     {"name": "notifications-service/main", "result": "SUCCESS", "building": False,
      "ago_min": 400, "duration_min": 7, "number": 289},
 ]
@@ -44,6 +46,8 @@ _DEMO_JOBS = [
 def _demo_overview() -> dict:
     failures, long_running, jobs = [], [], []
     for j in _DEMO_JOBS:
+        if any(tok in j["name"].lower() for tok in settings.jenkins_ignore_tokens):
+            continue
         started = _now_ms() - j["ago_min"] * 60_000
         url = f"#demo/jenkins/{j['name']}/{j['number']}"
         jobs.append({"name": j["name"], "result": j["result"], "building": j["building"],
@@ -93,7 +97,9 @@ def _live_overview() -> dict:
     now = _now_ms()
     failures, long_running, jobs = [], [], []
     for j in _flatten(r.json().get("jobs", []), []):
-        name = j.get("fullName") or j.get("name")
+        name = j.get("fullName") or j.get("name") or ""
+        if any(tok in name.lower() for tok in settings.jenkins_ignore_tokens):
+            continue
         last, completed = j.get("lastBuild") or {}, j.get("lastCompletedBuild") or {}
         jobs.append({"name": name, "result": completed.get("result"),
                      "building": last.get("building", False),
@@ -107,11 +113,13 @@ def _live_overview() -> dict:
                                      "url": last.get("url"), "running_min": running_min,
                                      "claimed_by": CLAIMS.get(name)})
         if completed.get("result") in ("FAILURE", "UNSTABLE"):
-            failures.append({"job": name, "number": completed.get("number"),
-                             "url": completed.get("url"), "result": completed.get("result"),
-                             "ago_min": int((now - completed.get("timestamp", now)) / 60_000),
-                             "duration_min": round((completed.get("duration") or 0) / 60_000, 1),
-                             "claimed_by": CLAIMS.get(name)})
+            ago_min = int((now - completed.get("timestamp", now)) / 60_000)
+            if ago_min <= settings.jenkins_failure_window_days * 24 * 60:
+                failures.append({"job": name, "number": completed.get("number"),
+                                 "url": completed.get("url"),
+                                 "result": completed.get("result"), "ago_min": ago_min,
+                                 "duration_min": round((completed.get("duration") or 0) / 60_000, 1),
+                                 "claimed_by": CLAIMS.get(name)})
     failures.sort(key=lambda f: f["ago_min"])
     return {"failures": failures, "long_running": long_running,
             "jobs": jobs, "source": "live"}
