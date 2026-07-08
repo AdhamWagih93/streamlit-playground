@@ -47,16 +47,16 @@ _DEMO_ISSUES: list[dict] = [
     _demo_issue(101, "Payments pipeline: flaky integration stage blocks releases", "Reopened",
                 "Highest", "alice", 0, "Bug", "3 of the last 5 runs failed on testcontainers startup.", components=["Platform Reliability"]),
     _demo_issue(102, "Add SLO dashboard for checkout service", "Open", "High", "bob", 2, "Story", components=["Platform Reliability"]),
-    _demo_issue(103, "Rotate registry pull secrets across all namespaces", "Open", "High", None, 1, "Task", components=["Security Hardening"]),
+    _demo_issue(103, "Security sweep: rotate registry pull secrets", "Open", "High", None, 1, "Task", components=["Security Hardening"]),
     _demo_issue(104, "Upgrade ingress-nginx to 1.11 in staging", "In Progress", "Medium", "carol", 4, "Task"),
-    _demo_issue(105, "Self-service: template for new microservice scaffold", "In Progress", "High", "alice", 6, "Story", components=["Developer Experience"]),
-    _demo_issue(106, "Document on-call escalation for platform tools", "In Progress", "Low", "dave", 9, "Task"),
+    _demo_issue(105, "Self-service: microservice scaffold template", "In Progress", "High", "alice", 6, "Story", components=["Developer Experience"]),
+    _demo_issue(106, "Self-service: document usage & on-call escalation", "In Progress", "Low", "dave", 9, "Task"),
     _demo_issue(107, "Terraform module: standard RDS with backups", "Resolved", "Medium", "bob", 3, "Story", components=["Cost Optimization"]),
     _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "Resolved", "Medium", "carol", None, "Bug", components=["Platform Reliability"]),
     _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Closed", "High", "dave", None, "Story", components=["Developer Experience"]),
-    _demo_issue(110, "Enable image signing in the release pipeline", "Closed", "Highest", "alice", None, "Story", components=["Security Hardening"]),
+    _demo_issue(110, "Security sweep: enable image signing in releases", "Closed", "Highest", "alice", None, "Story", components=["Security Hardening"]),
     _demo_issue(111, "Spike: cost report per team namespace", "Open", "Low", None, 12, "Spike", components=["Cost Optimization"]),
-    _demo_issue(112, "Harden Jenkins agents (drop root, pin images)", "Open", "Medium",
+    _demo_issue(112, "Security sweep: harden Jenkins agents (no root)", "Open", "Medium",
                 "dave", 5, "Task", components=["Security Hardening"]),
 ]
 
@@ -198,13 +198,59 @@ def get_assignee(key: str) -> str | None:
     return _demo_find(key)["assignee"]
 
 
+_GROUP_MIN_PREFIX = 8  # chars a shared summary prefix needs (after trimming) to form a group
+
+
+def _prefix_groups(issues: list[dict]) -> dict[str, str]:
+    """Cluster issues by the longest common starting string of their summaries.
+    Greedy pass over the sorted summaries; a cluster needs >= 2 members and a
+    word-boundary-trimmed prefix of at least _GROUP_MIN_PREFIX chars."""
+    def common(a: str, b: str) -> str:
+        n = 0
+        for x, y in zip(a, b):
+            if x.lower() != y.lower():
+                break
+            n += 1
+        return a[:n]
+
+    def trim(prefix: str) -> str:
+        if " " in prefix and not prefix.endswith(" "):
+            prefix = prefix[:prefix.rfind(" ")]  # never cut mid-word
+        prefix = prefix.strip(" |-:/·—–,.(")
+        return prefix if len(prefix) >= _GROUP_MIN_PREFIX else ""
+
+    groups: dict[str, str] = {}
+    cluster: list[dict] = []
+    prefix = ""
+
+    def flush() -> None:
+        label = trim(prefix)
+        if len(cluster) >= 2 and label:
+            for i in cluster:
+                groups[i["key"]] = label
+
+    for issue in sorted(issues, key=lambda i: i["summary"].lower()):
+        if cluster:
+            shared = common(prefix, issue["summary"])
+            if trim(shared):
+                cluster.append(issue)
+                prefix = shared
+                continue
+            flush()
+        cluster, prefix = [issue], issue["summary"]
+    flush()
+    return groups
+
+
 def board() -> dict:
     if is_live():
         issues = _live_search(_board_jql())
     else:
         issues = [dict(i) for i in _DEMO_ISSUES]
+    groups = _prefix_groups(issues)
     for i in issues:
         i["needs_objective"] = _is_open(i) and not i.get("components")
+        i["group"] = groups.get(i["key"])
     def _label(s: str) -> str:
         # done columns are windowed to the recent past, name them accordingly
         return f"Recently {s.lower()}" if s.lower() in settings.done_statuses else s

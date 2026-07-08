@@ -291,10 +291,7 @@ async function renderBoard() {
   const data = await api("/api/board");
   BOARD_STATUSES = data.columns.map((c) => c.name);
 
-  const cols = data.columns.map((col) => `
-    <div class="col" data-col="${esc(col.name)}">
-      <div class="col-head"><span>${esc(col.label || col.name)}</span><span>${col.issues.length}</span></div>
-      ${col.issues.map((i) => `
+  const cardHtml = (i) => `
         <div class="card" draggable="true" data-key="${esc(i.key)}" data-assignee="${esc(i.assignee || "")}">
           <div class="card-key">${esc(i.key)} · ${esc(i.type)}
             <span class="card-dates">created ${ago(i.created)} · upd ${ago(i.updated)}</span></div>
@@ -311,8 +308,25 @@ async function renderBoard() {
             <button class="btn btn-sm btn-ghost" data-comment="${esc(i.key)}">💬</button>
             ${i.url && !i.url.startsWith("#") ? `<a class="btn btn-sm btn-ghost" href="${esc(i.url)}" target="_blank">↗</a>` : ""}
           </div>
-        </div>`).join("")}
-    </div>`).join("");
+        </div>`;
+
+  // cards cluster under their longest-common-prefix group; loners go last
+  const colHtml = (col) => {
+    const byGroup = {};
+    col.issues.forEach((i) => { const g = i.group || ""; (byGroup[g] = byGroup[g] || []).push(i); });
+    const names = Object.keys(byGroup).sort((a, b) =>
+      a === "" ? 1 : b === "" ? -1 : a.localeCompare(b));
+    const body = names.map((g) =>
+      (g ? `<div class="group-head">▾ ${esc(g)}<span>${byGroup[g].length}</span></div>`
+         : (names.length > 1 ? `<div class="group-head group-other">other<span>${byGroup[g].length}</span></div>` : ""))
+      + byGroup[g].map(cardHtml).join("")).join("");
+    return `
+    <div class="col" data-col="${esc(col.name)}">
+      <div class="col-head"><span>${esc(col.label || col.name)}</span><span>${col.issues.length}</span></div>
+      ${body}
+    </div>`;
+  };
+  const cols = data.columns.map(colHtml).join("");
 
   view().innerHTML = `
     <div class="view-head"><h1>BOARD</h1>
@@ -374,8 +388,9 @@ const FLAG_COLORS = ["chip-red", "chip-amber", "chip-cyan", "chip-green", "chip-
 const flagClass = (flag, flags) => FLAG_COLORS[Math.max(0, flags.indexOf(flag)) % FLAG_COLORS.length];
 
 async function renderCI() {
+  const kpiHours = state.kpiHours || 24;
   const [data, kpi, errs] = await Promise.all([
-    api("/api/ci"), api("/api/kpi"), api("/api/errors")]);
+    api("/api/ci"), api(`/api/kpi?hours=${kpiHours}`), api("/api/errors")]);
   const failures = data.failures.map((f) => `
     <div class="ci-row">
       <span class="ci-dot dot-red"></span>
@@ -428,9 +443,32 @@ async function renderCI() {
       <div class="kpi-risk">
         <h2>⚠ will enter your KPIs unless cleaned up</h2>
         ${atRisk}
-        <div class="kpi-note">${kpi.loaded_failures.length} failure(s) already loaded in the last 24h
+        <div class="kpi-note">${kpi.loaded_failures.length} failure(s) already loaded in the last ${kpi.hours}h
           (${kpi.loaded_total} builds total)</div>
       </div>
+    </div>`;
+
+  // --- the actual KPI documents already in the index ---
+  const kpiDot = (s) => {
+    const u = String(s || "").toUpperCase();
+    return u === "SUCCESS" ? "dot-green" : u.startsWith("FAIL") || u === "UNSTABLE" || u === "ABORTED"
+      ? "dot-red" : "dot-grey";
+  };
+  const hourChips = [6, 24, 72, 168].map((h) =>
+    `<button class="btn btn-sm ${h === kpiHours ? "btn-primary" : ""}" data-hours="${h}">${h < 48 ? h + "h" : h / 24 + "d"}</button>`).join(" ");
+  const loadedRows = kpi.loaded.map((d) => `
+    <div class="ci-row">
+      <span class="ci-dot ${kpiDot(d.status)}"></span>
+      <span class="ci-job">${esc(d.jobpath || d.jobname)} <small>#${esc(d.buildnumber)}</small></span>
+      <span class="ci-meta">${esc(String(d.status || "").toUpperCase())} · ${ago(d.builddate || d["@timestamp"])}
+        · ${esc(d.triggertype || "?")}${d.triggeredby ? " by " + esc(d.triggeredby) : ""}</span>
+      ${linkBtn(d.buildurl)}
+    </div>`).join("") || `<div class="empty">nothing loaded in this window</div>`;
+  const loadedPanel = `
+    <div class="panel" style="margin-bottom:18px">
+      <h2>📦 loaded KPI records — ${esc(kpi.source)} · showing ${kpi.loaded.length} of ${kpi.loaded_total}</h2>
+      <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
+      <div class="kpi-loaded">${loadedRows}</div>
     </div>`;
 
   // --- error analysis (grouped by TicketFlag) ---
@@ -460,6 +498,7 @@ async function renderCI() {
   view().innerHTML = `
     <div class="view-head"><h1>PIPELINES</h1><span class="sub">Jenkins · ${data.source}</span></div>
     ${kpiPanel}
+    ${loadedPanel}
     <div class="ci-grid">
       <div>
         <div class="panel" style="margin-bottom:18px"><h2>🔴 recent failures (last ${data.failure_window_days}d)</h2>${failures}</div>
@@ -474,6 +513,10 @@ async function renderCI() {
   startKpiCountdown(kpi.seconds_remaining);
   view().querySelectorAll("[data-flag]").forEach((b) => b.onclick = () => {
     state.errorFlag = b.dataset.flag;
+    renderCI();
+  });
+  view().querySelectorAll("[data-hours]").forEach((b) => b.onclick = () => {
+    state.kpiHours = parseInt(b.dataset.hours, 10);
     renderCI();
   });
 

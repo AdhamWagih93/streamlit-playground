@@ -18,7 +18,7 @@ _FAILED = ("FAILURE", "FAILED", "UNSTABLE", "ABORTED")
 
 
 @router.get("/kpi")
-def kpi(user: User = Depends(current_user)):
+def kpi(hours: int = 24, user: User = Depends(current_user)):
     last_sync, next_sync = elastic.sync_times()
     now = elastic._now()
 
@@ -28,7 +28,7 @@ def kpi(user: User = Depends(current_user)):
     ci = jenkins.overview()
     at_risk = [f for f in ci["failures"] if f["ago_min"] <= since_last_min]
 
-    recent = elastic.kpi_recent()
+    recent = elastic.kpi_recent(hours=hours)
     loaded_failures = [d for d in recent
                        if str(d.get("status", "")).upper() in _FAILED]
 
@@ -38,6 +38,8 @@ def kpi(user: User = Depends(current_user)):
         "next_sync": next_sync.isoformat(),
         "seconds_remaining": max(0, int((next_sync - now).total_seconds())),
         "at_risk": at_risk,
+        "hours": hours,
+        "loaded": recent[:100],  # the actual KPI documents, newest first
         "loaded_failures": loaded_failures[:25],
         "loaded_total": len(recent),
         "source": "live" if elastic.is_live() else "demo",
