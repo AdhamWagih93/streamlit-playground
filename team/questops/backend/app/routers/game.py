@@ -13,13 +13,21 @@ from ..gamification import BADGES, level_info
 router = APIRouter(prefix="/api", tags=["game"])
 
 
+def _since_for(window: str) -> dt.datetime | None:
+    """window: number of days ('7', '30', …), 'week' (legacy) or 'all'."""
+    if window == "all":
+        return None
+    if window == "week":
+        window = "7"
+    days = int("".join(ch for ch in window if ch.isdigit()) or 7)
+    return utcnow() - dt.timedelta(days=days)
+
+
 @router.get("/leaderboard")
-def leaderboard(window: str = "week", user: User = Depends(current_user),
+def leaderboard(window: str = "7", user: User = Depends(current_user),
                 db: Session = Depends(get_db)):
     users = db.query(User).all()
-    since = None
-    if window == "week":
-        since = utcnow() - dt.timedelta(days=7)
+    since = _since_for(window)
 
     rows = []
     for u in users:
@@ -60,11 +68,24 @@ def history(username: str = "", limit: int = 60, user: User = Depends(current_us
     }
 
 
+@router.get("/activity")
+def activity(days: int = 7, limit: int = 200, user: User = Depends(current_user),
+             db: Session = Depends(get_db)):
+    """Team-wide activity feed for the selected time window."""
+    since = utcnow() - dt.timedelta(days=days)
+    events = (db.query(XPEvent).filter(XPEvent.created_at >= since)
+              .order_by(XPEvent.created_at.desc()).limit(limit).all())
+    return {"days": days,
+            "events": [{"username": e.username, "kind": e.kind, "points": e.points,
+                        "message": e.message, "at": e.created_at.isoformat()}
+                       for e in events]}
+
+
 @router.get("/recap")
-def recap(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def recap(days: int = 7, user: User = Depends(current_user), db: Session = Depends(get_db)):
     now = utcnow()
-    this_start = now - dt.timedelta(days=7)
-    last_start = now - dt.timedelta(days=14)
+    this_start = now - dt.timedelta(days=days)
+    last_start = now - dt.timedelta(days=days * 2)
 
     def stats(start: dt.datetime, end: dt.datetime) -> dict:
         events = db.query(XPEvent).filter(XPEvent.created_at >= start,

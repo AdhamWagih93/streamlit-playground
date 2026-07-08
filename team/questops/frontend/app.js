@@ -206,7 +206,7 @@ async function renderFocus() {
         <div class="focus-body">
           <div class="focus-title">${esc(it.title)}</div>
           <div class="focus-sub"><span class="chip ${srcCls[it.source]}">${it.source}</span>
-            &nbsp;${esc(it.key)} · ${esc(it.subtitle)}</div>
+            &nbsp;${esc(it.key)} · ${esc(it.subtitle)}${it.created ? ` · created ${ago(it.created)}` : ""}${it.updated ? ` · updated ${ago(it.updated)}` : ""}</div>
           <div class="focus-why">${esc(it.why)}</div>
         </div>
         <div class="focus-actions">${linkBtn(it.url)}${buttons}</div>
@@ -242,7 +242,7 @@ async function renderFocus() {
   view().querySelectorAll("[data-cifixed]").forEach((b) => b.onclick = () =>
     act(api("/api/ci/fixed", { method: "POST", body: { job: b.dataset.cifixed } })));
   view().querySelectorAll("[data-advance]").forEach((b) => b.onclick = () =>
-    advanceIssue(b.dataset.advance, b.dataset.status));
+    advanceIssue(b.dataset.advance, b.dataset.status, state.me.username));
 }
 
 async function loadBriefing(refresh) {
@@ -263,14 +263,28 @@ async function act(promise) {
 /* ================= BOARD ================= */
 let BOARD_STATUSES = [];
 
-async function advanceIssue(key, current) {
+// every status change asks: take the ticket, or keep the current assignee?
+// (skipped when it's already yours; backend restores the original assignee
+// either way so the Jira service account never ends up owning it)
+function transitionIssue(key, status, assignee) {
+  let assignToMe = false;
+  if (assignee !== state.me.username) {
+    assignToMe = confirm(
+      `${key} → ${status}\n\nOK — assign to me (@${state.me.username})\n` +
+      `Cancel — keep current assignee${assignee ? ` (@${assignee})` : " (unassigned)"}`);
+  }
+  act(api(`/api/issues/${key}/transition`,
+          { method: "POST", body: { status, assign_to_me: assignToMe } }));
+}
+
+async function advanceIssue(key, current, assignee) {
   if (!BOARD_STATUSES.length) BOARD_STATUSES = (await api("/api/board")).columns.map((c) => c.name);
   const idx = BOARD_STATUSES.indexOf(current);
   // unknown status (e.g. Reopened) → advance means "back to work"
   const next = idx === -1 ? BOARD_STATUSES[1]
     : BOARD_STATUSES[Math.min(idx + 1, BOARD_STATUSES.length - 1)];
   if (next === current) return;
-  act(api(`/api/issues/${key}/transition`, { method: "POST", body: { status: next } }));
+  transitionIssue(key, next, assignee);
 }
 
 async function renderBoard() {
@@ -281,12 +295,15 @@ async function renderBoard() {
     <div class="col" data-col="${esc(col.name)}">
       <div class="col-head"><span>${esc(col.label || col.name)}</span><span>${col.issues.length}</span></div>
       ${col.issues.map((i) => `
-        <div class="card" draggable="true" data-key="${esc(i.key)}">
-          <div class="card-key">${esc(i.key)} · ${esc(i.type)}</div>
+        <div class="card" draggable="true" data-key="${esc(i.key)}" data-assignee="${esc(i.assignee || "")}">
+          <div class="card-key">${esc(i.key)} · ${esc(i.type)}
+            <span class="card-dates">created ${ago(i.created)} · upd ${ago(i.updated)}</span></div>
           <div class="card-sum">${esc(i.summary)}</div>
           <div class="card-foot">
             <span class="prio prio-${esc(i.priority)}">${esc(i.priority)}</span>
             ${i.due ? `<span class="chip">${esc(i.due)}</span>` : ""}
+            ${(i.components || []).length ? `<span class="chip chip-violet" title="${esc(i.components.join(", "))}">🎯 ${esc(i.components[0])}${i.components.length > 1 ? " +" + (i.components.length - 1) : ""}</span>` : ""}
+            ${i.needs_objective ? `<button class="chip chip-red" data-objective="${esc(i.key)}" title="assign a team objective">⚠ no objective</button>` : ""}
             <span class="assignee">${i.assignee ? "@" + esc(i.assignee) : "unassigned"}</span>
           </div>
           <div class="card-foot" style="margin-top:6px">
@@ -313,8 +330,22 @@ async function renderBoard() {
       e.preventDefault();
       col.classList.remove("dragover");
       const key = e.dataTransfer.getData("text/plain");
-      act(api(`/api/issues/${key}/transition`, { method: "POST", body: { status: col.dataset.col } }));
+      const card = view().querySelector(`[data-key="${key}"]`);
+      transitionIssue(key, col.dataset.col, card?.dataset.assignee || null);
     });
+  });
+  view().querySelectorAll("[data-objective]").forEach((b) => b.onclick = async () => {
+    try {
+      const data = await api("/api/objectives");
+      const names = data.objectives.map((o) => o.name);
+      const pick = prompt(`Assign a team objective to ${b.dataset.objective}:\n` +
+        names.map((n, i) => `${i + 1}. ${n}`).join("\n") + "\n\nEnter a number:");
+      if (!pick) return;
+      const name = names[parseInt(pick, 10) - 1];
+      if (!name) return oops(new Error("invalid choice"));
+      act(api(`/api/issues/${b.dataset.objective}/components`,
+              { method: "POST", body: { components: [name] } }));
+    } catch (e) { oops(e); }
   });
   view().querySelectorAll("[data-claim]").forEach((b) => b.onclick = () =>
     act(api(`/api/issues/${b.dataset.claim}/claim`, { method: "POST" })));
@@ -541,9 +572,14 @@ function promptForm(t = null) {
 }
 
 /* ================= GUILD ================= */
+const GUILD_WINDOWS = [["7", "7d"], ["14", "14d"], ["30", "30d"], ["90", "90d"], ["all", "All"]];
+
 async function renderGuild() {
-  const [lb, recap, badges] = await Promise.all([
-    api("/api/leaderboard?window=week"), api("/api/recap"), api("/api/badges")]);
+  const win = state.guildWindow || "7";
+  const days = win === "all" ? 3650 : parseInt(win, 10);
+  const [lb, recap, badges, obj, act_] = await Promise.all([
+    api(`/api/leaderboard?window=${win}`), api(`/api/recap?days=${Math.min(days, 365)}`),
+    api("/api/badges"), api("/api/objectives"), api(`/api/activity?days=${days}`)]);
 
   const maxXp = Math.max(...lb.rows.map((r) => r.xp), 1);
   const rows = lb.rows.map((r, i) => `
@@ -567,19 +603,56 @@ async function renderGuild() {
       <span class="holders">${b.holders.length ? b.holders.map((h) => "@" + esc(h)).join(" ") : "unclaimed"}</span>
     </div>`).join("");
 
+  const maxObjOpen = Math.max(...obj.objectives.map((o) => o.open), 1);
+  const objRows = obj.objectives.map((o) => `
+    <div class="lb-row">
+      <span class="lb-name"><b>🎯 ${esc(o.name)}</b>
+        <small>${o.open} open · ${o.closed_recent} recently closed</small></span>
+      <span class="lb-bar"><div style="width:${(o.open / maxObjOpen) * 100}%"></div></span>
+      <span class="lb-xp">${o.open}</span>
+    </div>`).join("");
+  const missing = obj.missing.length ? `
+    <div class="obj-missing">⚠ ${obj.missing.length} open ticket(s) without an objective:
+      ${obj.missing.map((m) => `<div class="obj-missing-row">${esc(m.key)} — ${esc(m.summary).slice(0, 60)}
+        <span class="assignee">${m.assignee ? "@" + esc(m.assignee) : "unassigned"}</span>${linkBtn(m.url)}</div>`).join("")}
+      <a href="#/board" class="btn btn-sm" style="margin-top:6px">fix on the board ▸</a></div>`
+    : `<div class="empty">✅ every open ticket has an objective</div>`;
+
+  const feed = act_.events.map((e) => `
+    <div class="tl-item kind-${esc(e.kind)}">
+      <div class="tl-msg"><b>@${esc(e.username)}</b> ${esc(e.message || e.kind.replace(/_/g, " "))}
+        ${e.points ? `<span class="tl-pts">+${e.points}</span>` : ""}</div>
+      <div class="tl-meta">${esc(e.kind)} · ${ago(e.at)}</div>
+    </div>`).join("") || `<div class="empty">no activity in this window</div>`;
+
+  const filters = GUILD_WINDOWS.map(([v, label]) =>
+    `<button class="btn btn-sm ${v === win ? "btn-primary" : ""}" data-win="${v}">${label}</button>`).join("");
+
   view().innerHTML = `
-    <div class="view-head"><h1>GUILD</h1><span class="sub">the team, this week</span></div>
+    <div class="view-head"><h1>GUILD</h1>
+      <span class="sub">the team, last ${win === "all" ? "∞" : win + " days"}</span>
+      <span class="spacer"></span><div class="filter-row">${filters}</div></div>
     <div class="stat-tiles">
       <div class="stat-tile"><b>${tw.xp}</b><span>team XP</span> ${delta(tw.xp, lw.xp)}</div>
-      <div class="stat-tile"><b>${tw.tickets_done}</b><span>tickets done</span> ${delta(tw.tickets_done, lw.tickets_done)}</div>
+      <div class="stat-tile"><b>${tw.tickets_done}</b><span>tickets closed</span> ${delta(tw.tickets_done, lw.tickets_done)}</div>
       <div class="stat-tile"><b>${tw.builds_fixed}</b><span>builds fixed</span> ${delta(tw.builds_fixed, lw.builds_fixed)}</div>
       <div class="stat-tile"><b>${tw.reviews}</b><span>reviews</span> ${delta(tw.reviews, lw.reviews)}</div>
-      <div class="stat-tile"><b>@${esc(tw.top_user)}</b><span>MVP of the week</span></div>
+      <div class="stat-tile"><b>@${esc(tw.top_user)}</b><span>MVP of the window</span></div>
     </div>
     <div class="guild-grid">
-      <div class="panel"><h2>♛ weekly leaderboard</h2>${rows}</div>
+      <div>
+        <div class="panel" style="margin-bottom:18px"><h2>♛ leaderboard</h2>${rows}</div>
+        <div class="panel" style="margin-bottom:18px"><h2>🎯 objectives coverage</h2>
+          ${objRows}${missing}</div>
+        <div class="panel"><h2>team activity</h2><div class="timeline">${feed}</div></div>
+      </div>
       <div class="panel"><h2>badge wall</h2><div class="badge-grid">${badgeTiles}</div></div>
     </div>`;
+
+  view().querySelectorAll("[data-win]").forEach((b) => b.onclick = () => {
+    state.guildWindow = b.dataset.win;
+    renderGuild();
+  });
 }
 
 /* ================= PROFILE ================= */

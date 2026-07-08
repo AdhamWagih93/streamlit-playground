@@ -38,7 +38,16 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
     """One ranked answer to 'what should I do right now?'."""
     items = []
 
-    for issue in jira.my_open_issues(user.username):
+    my_issues = jira.my_open_issues(user.username)
+    untagged = [i for i in my_issues if not i.get("components")]
+    if untagged:
+        items.append({"source": "jira", "key": "objectives",
+                      "title": f"Tag {len(untagged)} of your ticket(s) with a team objective",
+                      "subtitle": ", ".join(i["key"] for i in untagged[:5]),
+                      "score": 45, "why": "every open ticket must map to a team objective",
+                      "url": "#/board"})
+
+    for issue in my_issues:
         score = PRIORITY_SCORE.get(issue["priority"], 50)
         bonus, due_note = _due_bonus(issue.get("due"))
         score += bonus
@@ -54,7 +63,8 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
         items.append({"source": "jira", "key": issue["key"], "title": issue["summary"],
                       "subtitle": f"{issue['type']} · {issue['status']}",
                       "score": score, "why": ", ".join(why), "url": issue["url"],
-                      "status": issue["status"]})
+                      "status": issue["status"],
+                      "created": issue.get("created"), "updated": issue.get("updated")})
 
     ci = jenkins.overview()
     for f in ci["failures"]:
@@ -91,7 +101,8 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
         items.append({"source": "jira", "key": issue["key"], "title": issue["summary"],
                       "subtitle": f"{issue['type']} · unassigned", "score": max(score, 15),
                       "why": "nobody owns this yet — claim it for XP",
-                      "url": issue["url"], "unassigned": True})
+                      "url": issue["url"], "unassigned": True,
+                      "created": issue.get("created"), "updated": issue.get("updated")})
 
     items.sort(key=lambda i: -i["score"])
     return {"items": items, "quests": quest_progress(db, user.username),
@@ -103,8 +114,33 @@ def board(user: User = Depends(current_user)):
     return jira.board()
 
 
+@router.get("/objectives")
+def objectives(user: User = Depends(current_user)):
+    return jira.objectives_coverage()
+
+
+class ComponentsBody(BaseModel):
+    components: list[str]
+
+
+@router.post("/issues/{key}/components")
+def set_issue_components(key: str, body: ComponentsBody,
+                         user: User = Depends(current_user),
+                         db: Session = Depends(get_db)):
+    if not body.components:
+        raise HTTPException(400, "pick at least one objective")
+    try:
+        issue = jira.set_components(key, body.components)
+    except KeyError:
+        raise HTTPException(404, f"issue {key} not found")
+    game = award(db, user, "ticket_objective",
+                 message=f"tagged {key} with {', '.join(body.components)}", ref=key)
+    return {"issue": issue, "game": game}
+
+
 class TransitionBody(BaseModel):
     status: str
+    assign_to_me: bool = False
 
 
 @router.post("/issues/{key}/transition")
@@ -113,7 +149,15 @@ def transition(key: str, body: TransitionBody, user: User = Depends(current_user
     if body.status not in settings.board_statuses:
         raise HTTPException(400, f"unknown status '{body.status}'")
     try:
+        original_assignee = jira.get_assignee(key)
         issue = jira.transition_issue(key, body.status)
+        # never leave the ticket on the service account: either take it,
+        # or restore whoever had it before (workflow post-functions can
+        # silently reassign on transition)
+        if body.assign_to_me:
+            issue = jira.assign(key, user.username)
+        elif issue.get("assignee") != original_assignee:
+            issue = jira.assign(key, original_assignee)
     except (KeyError, ValueError) as exc:
         raise HTTPException(400, str(exc))
     st = body.status.lower()

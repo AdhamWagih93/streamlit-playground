@@ -16,6 +16,7 @@ XP_RULES = {
     "ticket_resolved": 15,  # moved to review ('Resolved')
     "ticket_progress": 10,
     "ticket_comment": 5,
+    "ticket_objective": 5,  # tagged a ticket with a team objective
     "ticket_claimed": 5,
     "build_claimed": 10,
     "build_fixed": 35,

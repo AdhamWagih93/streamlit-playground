@@ -20,7 +20,12 @@ def is_live() -> bool:
 
 
 # ---------------------------------------------------------------- demo store
-def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc=""):
+DEMO_OBJECTIVES = ["Platform Reliability", "Developer Experience",
+                   "Security Hardening", "Cost Optimization"]
+
+
+def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc="",
+                components=None):
     return {
         "key": f"{settings.jira_project_key}-{num}",
         "summary": summary,
@@ -29,8 +34,10 @@ def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc=
         "assignee": assignee,
         "type": itype,
         "due": (_now() + dt.timedelta(days=due_days)).date().isoformat() if due_days is not None else None,
+        "created": (_now() - dt.timedelta(days=(num % 18) + 3)).isoformat(),
         "updated": (_now() - dt.timedelta(hours=num % 30)).isoformat(),
         "description": desc,
+        "components": components or [],
         "url": f"#demo/{settings.jira_project_key}-{num}",
         "comments": [],
     }
@@ -38,18 +45,19 @@ def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc=
 
 _DEMO_ISSUES: list[dict] = [
     _demo_issue(101, "Payments pipeline: flaky integration stage blocks releases", "Reopened",
-                "Highest", "alice", 0, "Bug", "3 of the last 5 runs failed on testcontainers startup."),
-    _demo_issue(102, "Add SLO dashboard for checkout service", "Open", "High", "bob", 2, "Story"),
-    _demo_issue(103, "Rotate registry pull secrets across all namespaces", "Open", "High", None, 1, "Task"),
+                "Highest", "alice", 0, "Bug", "3 of the last 5 runs failed on testcontainers startup.", components=["Platform Reliability"]),
+    _demo_issue(102, "Add SLO dashboard for checkout service", "Open", "High", "bob", 2, "Story", components=["Platform Reliability"]),
+    _demo_issue(103, "Rotate registry pull secrets across all namespaces", "Open", "High", None, 1, "Task", components=["Security Hardening"]),
     _demo_issue(104, "Upgrade ingress-nginx to 1.11 in staging", "In Progress", "Medium", "carol", 4, "Task"),
-    _demo_issue(105, "Self-service: template for new microservice scaffold", "In Progress", "High", "alice", 6, "Story"),
+    _demo_issue(105, "Self-service: template for new microservice scaffold", "In Progress", "High", "alice", 6, "Story", components=["Developer Experience"]),
     _demo_issue(106, "Document on-call escalation for platform tools", "In Progress", "Low", "dave", 9, "Task"),
-    _demo_issue(107, "Terraform module: standard RDS with backups", "Resolved", "Medium", "bob", 3, "Story"),
-    _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "Resolved", "Medium", "carol", None, "Bug"),
-    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Closed", "High", "dave", None, "Story"),
-    _demo_issue(110, "Enable image signing in the release pipeline", "Closed", "Highest", "alice", None, "Story"),
-    _demo_issue(111, "Spike: cost report per team namespace", "Open", "Low", None, 12, "Spike"),
-    _demo_issue(112, "Harden Jenkins agents (drop root, pin images)", "Open", "Medium", "dave", 5, "Task"),
+    _demo_issue(107, "Terraform module: standard RDS with backups", "Resolved", "Medium", "bob", 3, "Story", components=["Cost Optimization"]),
+    _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "Resolved", "Medium", "carol", None, "Bug", components=["Platform Reliability"]),
+    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Closed", "High", "dave", None, "Story", components=["Developer Experience"]),
+    _demo_issue(110, "Enable image signing in the release pipeline", "Closed", "Highest", "alice", None, "Story", components=["Security Hardening"]),
+    _demo_issue(111, "Spike: cost report per team namespace", "Open", "Low", None, 12, "Spike", components=["Cost Optimization"]),
+    _demo_issue(112, "Harden Jenkins agents (drop root, pin images)", "Open", "Medium",
+                "dave", 5, "Task", components=["Security Hardening"]),
 ]
 
 
@@ -78,8 +86,10 @@ def _normalize(raw: dict) -> dict:
         "assignee": (f.get("assignee") or {}).get("name"),
         "type": (f.get("issuetype") or {}).get("name", "Task"),
         "due": f.get("duedate"),
+        "created": f.get("created", ""),
         "updated": f.get("updated", ""),
         "description": f.get("description") or "",
+        "components": [c.get("name") for c in (f.get("components") or [])],
         "url": f"{settings.jira_base_url}/browse/{raw['key']}",
         "comments": [],
     }
@@ -94,7 +104,8 @@ def _live_search(jql: str, page_size: int = 100, limit: int = 5000) -> list[dict
         r = s.post(f"{settings.jira_base_url}/rest/api/2/search",
                    json={"jql": jql, "startAt": len(out), "maxResults": page_size,
                          "fields": ["summary", "status", "priority", "assignee",
-                                    "issuetype", "duedate", "updated", "description"]},
+                                    "issuetype", "duedate", "created", "updated",
+                                    "description", "components"]},
                    timeout=30)
         r.raise_for_status()
         data = r.json()
@@ -137,11 +148,63 @@ def _board_jql() -> str:
             f'ORDER BY priority DESC, updated DESC')
 
 
+def list_objectives() -> list[str]:
+    """Team objectives = the Jira project's components."""
+    if is_live():
+        r = _session().get(
+            f"{settings.jira_base_url}/rest/api/2/project/{settings.jira_project_key}/components",
+            timeout=20)
+        r.raise_for_status()
+        return sorted(c["name"] for c in r.json())
+    return list(DEMO_OBJECTIVES)
+
+
+def objectives_coverage() -> dict:
+    """Open + recently-closed tickets per objective, and open tickets
+    that violate the 'every open ticket has an objective' rule."""
+    issues = _live_search(_board_jql()) if is_live() else [dict(i) for i in _DEMO_ISSUES]
+    per = {o: {"open": 0, "closed_recent": 0} for o in list_objectives()}
+    missing = []
+    for i in issues:
+        comps = i.get("components") or []
+        if not comps:
+            if _is_open(i):
+                missing.append({"key": i["key"], "summary": i["summary"],
+                                "assignee": i["assignee"], "url": i["url"]})
+            continue
+        bucket = "open" if _is_open(i) else "closed_recent"
+        for c in comps:
+            per.setdefault(c, {"open": 0, "closed_recent": 0})[bucket] += 1
+    return {"objectives": [{"name": k, **v} for k, v in per.items()],
+            "missing": missing}
+
+
+def set_components(key: str, names: list[str]) -> dict:
+    if is_live():
+        _session().put(f"{settings.jira_base_url}/rest/api/2/issue/{key}",
+                       json={"fields": {"components": [{"name": n} for n in names]}},
+                       timeout=20).raise_for_status()
+        return _live_search(f'key = "{key}"')[0]
+    issue = _demo_find(key)
+    issue["components"] = names
+    issue["updated"] = _now().isoformat()
+    return dict(issue)
+
+
+def get_assignee(key: str) -> str | None:
+    if is_live():
+        found = _live_search(f'key = "{key}"')
+        return found[0]["assignee"] if found else None
+    return _demo_find(key)["assignee"]
+
+
 def board() -> dict:
     if is_live():
         issues = _live_search(_board_jql())
     else:
         issues = [dict(i) for i in _DEMO_ISSUES]
+    for i in issues:
+        i["needs_objective"] = _is_open(i) and not i.get("components")
     def _label(s: str) -> str:
         # done columns are windowed to the recent past, name them accordingly
         return f"Recently {s.lower()}" if s.lower() in settings.done_statuses else s
@@ -197,7 +260,8 @@ def add_comment(key: str, body: str, username: str) -> None:
         {"author": username, "body": body, "at": _now().isoformat()})
 
 
-def assign(key: str, username: str) -> dict:
+def assign(key: str, username: str | None) -> dict:
+    """username=None unassigns (used to restore an originally-unassigned ticket)."""
     if is_live():
         _session().put(f"{settings.jira_base_url}/rest/api/2/issue/{key}/assignee",
                        json={"name": username}, timeout=20).raise_for_status()
