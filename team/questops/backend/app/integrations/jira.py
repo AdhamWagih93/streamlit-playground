@@ -85,14 +85,24 @@ def _normalize(raw: dict) -> dict:
     }
 
 
-def _live_search(jql: str, max_results: int = 100) -> list[dict]:
-    r = _session().post(f"{settings.jira_base_url}/rest/api/2/search",
-                        json={"jql": jql, "maxResults": max_results,
-                              "fields": ["summary", "status", "priority", "assignee",
-                                         "issuetype", "duedate", "updated", "description"]},
-                        timeout=20)
-    r.raise_for_status()
-    return [_normalize(i) for i in r.json().get("issues", [])]
+def _live_search(jql: str, page_size: int = 100, limit: int = 5000) -> list[dict]:
+    """Paginates through ALL matching issues (Jira caps a page at ~100/1000).
+    `limit` is a runaway safety net, not a feature."""
+    out: list[dict] = []
+    s = _session()
+    while True:
+        r = s.post(f"{settings.jira_base_url}/rest/api/2/search",
+                   json={"jql": jql, "startAt": len(out), "maxResults": page_size,
+                         "fields": ["summary", "status", "priority", "assignee",
+                                    "issuetype", "duedate", "updated", "description"]},
+                   timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        page = data.get("issues", [])
+        out.extend(_normalize(i) for i in page)
+        total = data.get("total", len(out))
+        if not page or len(out) >= min(total, limit):
+            return out
 
 
 # ---------------------------------------------------------------- public API
@@ -132,7 +142,12 @@ def board() -> dict:
         issues = _live_search(_board_jql())
     else:
         issues = [dict(i) for i in _DEMO_ISSUES]
-    columns = [{"name": s, "issues": [i for i in issues if _column_for(i) == s]}
+    def _label(s: str) -> str:
+        # done columns are windowed to the recent past, name them accordingly
+        return f"Recently {s.lower()}" if s.lower() in settings.done_statuses else s
+
+    columns = [{"name": s, "label": _label(s),
+                "issues": [i for i in issues if _column_for(i) == s]}
                for s in settings.board_statuses]
     return {"project": settings.jira_project_key, "columns": columns,
             "source": "live" if is_live() else "demo"}

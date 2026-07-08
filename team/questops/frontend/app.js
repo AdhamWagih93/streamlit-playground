@@ -279,7 +279,7 @@ async function renderBoard() {
 
   const cols = data.columns.map((col) => `
     <div class="col" data-col="${esc(col.name)}">
-      <div class="col-head"><span>${esc(col.name)}</span><span>${col.issues.length}</span></div>
+      <div class="col-head"><span>${esc(col.label || col.name)}</span><span>${col.issues.length}</span></div>
       ${col.issues.map((i) => `
         <div class="card" draggable="true" data-key="${esc(i.key)}">
           <div class="card-key">${esc(i.key)} · ${esc(i.type)}</div>
