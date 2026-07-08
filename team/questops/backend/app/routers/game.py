@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..auth import current_user
+from ..auth import current_user, sync_group_members
 from ..db import BadgeAward, User, XPEvent, get_db, utcnow
-from ..gamification import BADGES, level_info
+from ..gamification import BADGES, TEAM_BADGES, level_info
 
 router = APIRouter(prefix="/api", tags=["game"])
 
@@ -26,8 +26,17 @@ def _since_for(window: str) -> dt.datetime | None:
 @router.get("/leaderboard")
 def leaderboard(window: str = "7", user: User = Depends(current_user),
                 db: Session = Depends(get_db)):
+    sync_group_members(db)  # everyone in the LDAP group appears, XP or not
     users = db.query(User).all()
     since = _since_for(window)
+
+    # per-member activity counts for the window, one grouped query
+    kq = db.query(XPEvent.username, XPEvent.kind, func.count(XPEvent.id))
+    if since is not None:
+        kq = kq.filter(XPEvent.created_at >= since)
+    counts: dict[str, dict[str, int]] = {}
+    for uname, kind, n in kq.group_by(XPEvent.username, XPEvent.kind):
+        counts.setdefault(uname, {})[kind] = n
 
     rows = []
     for u in users:
@@ -38,10 +47,16 @@ def leaderboard(window: str = "7", user: User = Depends(current_user),
         window_xp = q.scalar() or 0
         badge_count = db.query(func.count(BadgeAward.id)).filter(
             BadgeAward.username == u.username).scalar() or 0
+        c = counts.get(u.username, {})
         rows.append({"username": u.username, "display_name": u.display_name,
                      "role": u.role, "xp": window_xp if since else u.xp,
                      "total_xp": u.xp, "streak": u.streak,
-                     "level": level_info(u.xp), "badges": badge_count})
+                     "level": level_info(u.xp), "badges": badge_count,
+                     "stats": {"tickets_done": c.get("ticket_done", 0),
+                               "resolved": c.get("ticket_resolved", 0),
+                               "builds_fixed": c.get("build_fixed", 0),
+                               "reviews": c.get("approval_review", 0),
+                               "actions": c.get("repo_action_executed", 0)}})
     rows.sort(key=lambda r: -r["xp"])
     return {"window": window, "rows": rows}
 
@@ -111,4 +126,5 @@ def badges(user: User = Depends(current_user), db: Session = Depends(get_db)):
     holders: dict[str, list[str]] = {}
     for a in awards:
         holders.setdefault(a.key, []).append(a.username)
-    return {"catalog": [{**b, "holders": holders.get(b["key"], [])} for b in BADGES]}
+    return {"catalog": [{**b, "holders": holders.get(b["key"], [])}
+                        for b in BADGES + TEAM_BADGES]}

@@ -73,7 +73,8 @@ ldap:
   baseDn: "OU=Users,DC=mycorp,DC=local"
   userAttr: "sAMAccountName"
   requiredGroup: "CN=devops-team,OU=Groups,DC=mycorp,DC=local"
-  approverGroup: "CN=devops-leads,OU=Groups,DC=mycorp,DC=local"
+  # everyone in the group is an approver EXCEPT these usernames (comma-separated)
+  memberUsernames: ""
 
 git:
   token: ""          # prefer app.existingSecret

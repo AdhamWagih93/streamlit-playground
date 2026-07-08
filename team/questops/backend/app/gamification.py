@@ -63,6 +63,24 @@ DAILY_QUESTS = [
      "kind": "approval_review", "target": 1, "bonus": 20},
 ]
 
+# counted across the WHOLE team; completing one pays every member
+TEAM_QUESTS = [
+    {"key": "team_five", "name": "Clear Five", "desc": "Close 5 tickets as a team today",
+     "kind": "ticket_done", "target": 5, "bonus": 15},
+    {"key": "team_green", "name": "Green Machine", "desc": "Fix 2 builds as a team today",
+     "kind": "build_fixed", "target": 2, "bonus": 15},
+    {"key": "team_ship", "name": "Ship It", "desc": "Land 3 approved repo actions today",
+     "kind": "repo_action_executed", "target": 3, "bonus": 10},
+]
+
+# awarded to every member when the team earns them
+TEAM_BADGES = [
+    {"key": "full_squad", "name": "Full Squad", "icon": "🤝", "team": True,
+     "desc": "Every member earns XP on the same day"},
+    {"key": "powerhouse", "name": "Powerhouse", "icon": "⚡", "team": True,
+     "desc": "500 team XP in a single day"},
+]
+
 
 def xp_for_level(level: int) -> int:
     if level <= 1:
@@ -147,6 +165,69 @@ def quest_progress(db: Session, username: str) -> list[dict]:
     return out
 
 
+def team_quest_progress(db: Session) -> list[dict]:
+    day_start = dt.datetime.combine(_today(), dt.time.min)
+    out = []
+    for q in TEAM_QUESTS:
+        done = (db.query(func.count(XPEvent.id))
+                .filter(XPEvent.kind == q["kind"], XPEvent.created_at >= day_start)
+                .scalar() or 0)
+        out.append({**q, "progress": min(done, q["target"]),
+                    "complete": done >= q["target"], "team": True})
+    return out
+
+
+def _check_team_quests(db: Session) -> list[dict]:
+    """Completing a team quest pays the bonus to EVERY member, once per day."""
+    day = _today().isoformat()
+    users = db.query(User).all()
+    completed = []
+    for q in team_quest_progress(db):
+        if not q["complete"]:
+            continue
+        ref = f"teamquest:{q['key']}:{day}"
+        if db.query(XPEvent).filter(XPEvent.ref == ref).first():
+            continue
+        for u in users:
+            db.add(XPEvent(username=u.username, kind="quest_bonus", points=q["bonus"],
+                           message=f"Team quest complete: {q['name']}", ref=ref))
+            u.xp += q["bonus"]
+        completed.append({"name": q["name"], "bonus": q["bonus"]})
+    return completed
+
+
+def _check_team_badges(db: Session) -> list[dict]:
+    """Team badges land on every member's wall the moment the team earns them."""
+    users = db.query(User).all()
+    if not users:
+        return []
+    day_start = dt.datetime.combine(_today(), dt.time.min)
+    rows = (db.query(XPEvent.username, func.coalesce(func.sum(XPEvent.points), 0))
+            .filter(XPEvent.created_at >= day_start)
+            .group_by(XPEvent.username).all())
+    active = {r[0] for r in rows}
+    day_xp = sum(r[1] for r in rows)
+
+    earned = []
+    if all(u.username in active for u in users):
+        earned.append(TEAM_BADGES[0])
+    if day_xp >= 500:
+        earned.append(TEAM_BADGES[1])
+
+    new = []
+    for badge in earned:
+        holders = {b.username for b in
+                   db.query(BadgeAward).filter(BadgeAward.key == badge["key"])}
+        missing = [u for u in users if u.username not in holders]
+        if not missing:
+            continue
+        for u in missing:
+            db.add(BadgeAward(username=u.username, key=badge["key"],
+                              name=badge["name"], icon=badge["icon"]))
+        new.append({"key": badge["key"], "name": badge["name"], "icon": badge["icon"]})
+    return new
+
+
 def _check_quests(db: Session, user: User) -> list[dict]:
     """Grant the daily bonus once per quest per day."""
     day = _today().isoformat()
@@ -179,7 +260,9 @@ def award(db: Session, user: User, kind: str, message: str = "", ref: str = "") 
     user.xp += points
     _update_streak(user)
     quests = _check_quests(db, user)
+    team_quests = _check_team_quests(db)
     badges = _check_badges(db, user)
+    team_badges = _check_team_badges(db)
     db.commit()
 
     info = level_info(user.xp)
@@ -187,8 +270,9 @@ def award(db: Session, user: User, kind: str, message: str = "", ref: str = "") 
         "points": points,
         "message": message,
         "level_up": info["level"] if info["level"] > level_before else None,
-        "new_badges": badges,
+        "new_badges": badges + team_badges,
         "quests_completed": quests,
+        "team_quests_completed": team_quests,
         "level": info,
         "streak": user.streak,
     }

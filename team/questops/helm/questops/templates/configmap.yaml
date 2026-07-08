@@ -34,7 +34,7 @@ data:
   LDAP_BASE_DN: {{ .Values.ldap.baseDn | quote }}
   LDAP_USER_ATTR: {{ .Values.ldap.userAttr | quote }}
   LDAP_REQUIRED_GROUP: {{ .Values.ldap.requiredGroup | quote }}
-  LDAP_APPROVER_GROUP: {{ .Values.ldap.approverGroup | quote }}
+  MEMBER_USERNAMES: {{ .Values.ldap.memberUsernames | quote }}
   GIT_USER_NAME: {{ .Values.git.userName | quote }}
   GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}

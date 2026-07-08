@@ -10,8 +10,8 @@ Then open http://localhost:8080
 
 Checks:
   - Ollama reachable from the pod at {{ .Values.ai.ollamaUrl }} (model: {{ .Values.ai.ollamaModel }})
-  - LDAP group gating: {{ .Values.ldap.requiredGroup }}
-  - Approvers group:   {{ .Values.ldap.approverGroup }}
+  - LDAP team group: {{ .Values.ldap.requiredGroup }}
+  - Plain members (everyone else is approver): {{ .Values.ldap.memberUsernames | default "(none)" }}
 {{- if not .Values.app.existingSecret }}
 
 WARNING: secrets are rendered inline from values. For production create a

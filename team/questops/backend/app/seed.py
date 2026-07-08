@@ -60,11 +60,13 @@ def seed_demo(db: Session) -> None:
     if db.query(User).count() > 0:
         return
 
+    from .auth import role_for
+
     rng = random.Random(42)
     users = []
     for username, meta in DEMO_USERS.items():
         u = User(username=username, display_name=meta["display_name"],
-                 email=meta["email"], role=meta["role"], xp=0)
+                 email=meta["email"], role=role_for(username), xp=0)
         db.add(u)
         users.append(u)
     db.flush()

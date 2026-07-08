@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..auth import current_user
 from ..config import settings
 from ..db import RepoAction, User, get_db, utcnow
-from ..gamification import award, quest_progress
+from ..gamification import award, quest_progress, team_quest_progress
 from ..integrations import jenkins, jira
 
 router = APIRouter(prefix="/api", tags=["work"])
@@ -106,7 +106,7 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
     items.sort(key=lambda i: -i["score"])
     return {"items": items, "quests": quest_progress(db, user.username),
-            "ci_source": ci["source"]}
+            "team_quests": team_quest_progress(db), "ci_source": ci["source"]}
 
 
 @router.get("/board")

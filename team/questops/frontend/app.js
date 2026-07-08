@@ -90,6 +90,8 @@ function handleGame(game) {
     toast(`<b>+${game.points} XP</b> &nbsp;${esc(game.message)}`, "toast-xp");
   for (const q of game.quests_completed || [])
     toast(`🏁 <b>Quest complete:</b> ${esc(q.name)} <b>+${q.bonus} XP</b>`, "toast-quest", 5000);
+  for (const q of game.team_quests_completed || [])
+    toast(`🏆 <b>TEAM quest:</b> ${esc(q.name)} — <b>+${q.bonus} XP for everyone</b>`, "toast-quest", 6000);
   for (const b of game.new_badges || [])
     toast(`<span class="b-big">${b.icon}</span><b>Badge unlocked:</b> ${esc(b.name)}`, "toast-badge", 6000);
   if (game.level_up)
@@ -170,7 +172,7 @@ async function refreshMe() {
 /* ---------------- router ---------------- */
 const VIEWS = { focus: renderFocus, board: renderBoard, ci: renderCI,
                 actions: renderActions, prompts: renderPrompts, repos: renderRepos,
-                guild: renderGuild, me: renderProfile };
+                team: renderTeam, me: renderProfile };
 
 function route() {
   const name = (location.hash.replace("#/", "") || "focus").split("?")[0];
@@ -213,13 +215,16 @@ async function renderFocus() {
       </div>`;
   }).join("") || `<div class="empty">Nothing urgent. Enjoy it — or grab a quest.</div>`;
 
-  const quests = data.quests.map((q) => `
+  const questCard = (q) => `
     <div class="quest-card ${q.complete ? "complete" : ""}">
-      <div class="quest-name">${q.complete ? "✅" : "🎯"} ${esc(q.name)}</div>
+      <div class="quest-name">${q.complete ? "✅" : q.team ? "🏆" : "🎯"} ${esc(q.name)}
+        ${q.team ? '<span class="chip chip-amber">TEAM</span>' : ""}</div>
       <div class="quest-desc">${esc(q.desc)}</div>
       <div class="quest-track"><div class="quest-fill" style="width:${(q.progress / q.target) * 100}%"></div></div>
-      <div class="quest-meta"><span>${q.progress}/${q.target}</span><span>+${q.bonus} XP</span></div>
-    </div>`).join("");
+      <div class="quest-meta"><span>${q.progress}/${q.target}</span><span>+${q.bonus} XP${q.team ? " each" : ""}</span></div>
+    </div>`;
+  const quests = data.quests.map(questCard).join("");
+  const teamQuests = (data.team_quests || []).map(questCard).join("");
 
   view().innerHTML = `
     <div class="view-head"><h1>FOCUS</h1>
@@ -229,7 +234,8 @@ async function renderFocus() {
       <button class="btn btn-sm btn-ghost" id="briefing-refresh">↻ regenerate</button></div>
     <div class="focus-grid">
       <div>${items}</div>
-      <div><div class="panel"><h2>daily quests</h2>${quests}</div></div>
+      <div><div class="panel"><h2>daily quests</h2>${quests}
+        <h2 style="margin-top:16px">team quests</h2>${teamQuests}</div></div>
     </div>`;
 
   loadBriefing(false);
@@ -851,11 +857,11 @@ async function renderRepos() {
   });
 }
 
-/* ================= GUILD ================= */
-const GUILD_WINDOWS = [["7", "7d"], ["14", "14d"], ["30", "30d"], ["90", "90d"], ["all", "All"]];
+/* ================= TEAM ================= */
+const TEAM_WINDOWS = [["7", "7d"], ["14", "14d"], ["30", "30d"], ["90", "90d"], ["all", "All"]];
 
-async function renderGuild() {
-  const win = state.guildWindow || "7";
+async function renderTeam() {
+  const win = state.teamWindow || "7";
   const days = win === "all" ? 3650 : parseInt(win, 10);
   const [lb, recap, badges, obj, act_] = await Promise.all([
     api(`/api/leaderboard?window=${win}`), api(`/api/recap?days=${Math.min(days, 365)}`),
@@ -866,7 +872,8 @@ async function renderGuild() {
     <div class="lb-row ${r.username === state.me.username ? "me" : ""}">
       <span class="lb-rank r${i + 1}">${i === 0 ? "♛" : i + 1}</span>
       <span class="lb-name"><b>${esc(r.display_name || r.username)}</b>
-        <small>LV ${r.level.level} ${esc(r.level.rank)}${r.role === "approver" ? " · 🛡" : ""} · 🔥${r.streak} · ${r.badges} badges</small></span>
+        <small>LV ${r.level.level} ${esc(r.level.rank)}${r.role === "approver" ? " · 🛡" : ""} · 🔥${r.streak} · ${r.badges} badges
+          · ✅${r.stats.tickets_done} 👁${r.stats.resolved} ⛑${r.stats.builds_fixed} 🛡${r.stats.reviews} ⇄${r.stats.actions}</small></span>
       <span class="lb-bar"><div style="width:${(r.xp / maxXp) * 100}%"></div></span>
       <span class="lb-xp">${r.xp} XP</span>
     </div>`).join("");
@@ -905,11 +912,11 @@ async function renderGuild() {
       <div class="tl-meta">${esc(e.kind)} · ${ago(e.at)}</div>
     </div>`).join("") || `<div class="empty">no activity in this window</div>`;
 
-  const filters = GUILD_WINDOWS.map(([v, label]) =>
+  const filters = TEAM_WINDOWS.map(([v, label]) =>
     `<button class="btn btn-sm ${v === win ? "btn-primary" : ""}" data-win="${v}">${label}</button>`).join("");
 
   view().innerHTML = `
-    <div class="view-head"><h1>GUILD</h1>
+    <div class="view-head"><h1>TEAM</h1>
       <span class="sub">the team, last ${win === "all" ? "∞" : win + " days"}</span>
       <span class="spacer"></span><div class="filter-row">${filters}</div></div>
     <div class="stat-tiles">
@@ -930,8 +937,8 @@ async function renderGuild() {
     </div>`;
 
   view().querySelectorAll("[data-win]").forEach((b) => b.onclick = () => {
-    state.guildWindow = b.dataset.win;
-    renderGuild();
+    state.teamWindow = b.dataset.win;
+    renderTeam();
   });
 }
 

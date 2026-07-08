@@ -11,11 +11,17 @@ from .config import settings
 from .db import User, get_db, utcnow
 
 DEMO_USERS = {
-    "alice": {"display_name": "Alice Nasr", "role": "approver", "email": "alice@demo.local"},
-    "bob": {"display_name": "Bob Farid", "role": "member", "email": "bob@demo.local"},
-    "carol": {"display_name": "Carol Adel", "role": "member", "email": "carol@demo.local"},
-    "dave": {"display_name": "Dave Samir", "role": "member", "email": "dave@demo.local"},
+    "alice": {"display_name": "Alice Nasr", "email": "alice@demo.local"},
+    "bob": {"display_name": "Bob Farid", "email": "bob@demo.local"},
+    "carol": {"display_name": "Carol Adel", "email": "carol@demo.local"},
+    "dave": {"display_name": "Dave Samir", "email": "dave@demo.local"},
 }
+
+
+def role_for(username: str) -> str:
+    """One group, per-username roles: approver by default, plain member
+    only when the username is listed in MEMBER_USERNAMES."""
+    return "member" if username.lower() in settings.member_users else "approver"
 
 
 def _ldap_authenticate(username: str, password: str) -> dict | None:
@@ -37,7 +43,7 @@ def _ldap_authenticate(username: str, password: str) -> dict | None:
         svc.unbind()
 
     if settings.ldap_required_group and settings.ldap_required_group.lower() not in groups:
-        return None  # authenticated identity but not in the allowed group
+        return None  # authenticated identity but not in the team group
 
     # verify the password by binding as the user
     try:
@@ -45,11 +51,65 @@ def _ldap_authenticate(username: str, password: str) -> dict | None:
     except ldap3.core.exceptions.LDAPException:
         return None
 
-    role = ("approver" if settings.ldap_approver_group
-            and settings.ldap_approver_group.lower() in groups else "member")
     display = str(entry.displayName) if "displayName" in entry else username
     mail = str(entry.mail) if "mail" in entry else ""
-    return {"username": username, "display_name": display, "email": mail, "role": role}
+    return {"username": username, "display_name": display, "email": mail,
+            "role": role_for(username)}
+
+
+def list_group_members() -> list[dict]:
+    """Everyone in the team group — the roster shown even before first login."""
+    if settings.demo_mode:
+        return [{"username": u, **m} for u, m in DEMO_USERS.items()]
+    if not (settings.ldap_url and settings.ldap_required_group):
+        return []
+    import ldap3
+
+    server = ldap3.Server(settings.ldap_url, get_info=ldap3.NONE)
+    conn = ldap3.Connection(server, user=settings.ldap_bind_dn,
+                            password=settings.ldap_bind_password, auto_bind=True)
+    try:
+        conn.search(settings.ldap_base_dn,
+                    f"(memberOf={ldap3.utils.conv.escape_filter_chars(settings.ldap_required_group)})",
+                    attributes=[settings.ldap_user_attr, "displayName", "mail"])
+        out = []
+        for e in conn.entries:
+            uname = (str(getattr(e, settings.ldap_user_attr))
+                     if settings.ldap_user_attr in e else "")
+            if not uname:
+                continue
+            out.append({"username": uname.lower(),
+                        "display_name": str(e.displayName) if "displayName" in e else uname,
+                        "email": str(e.mail) if "mail" in e else ""})
+        return out
+    finally:
+        conn.unbind()
+
+
+_ROSTER_CACHE: dict = {"at": 0.0, "rows": []}
+_ROSTER_TTL = 600  # seconds
+
+
+def sync_group_members(db: Session) -> None:
+    """Upsert the whole group into the users table so the leaderboard always
+    lists everyone, XP or not. Cached; LDAP hiccups never break callers."""
+    import time
+
+    try:
+        if time.time() - _ROSTER_CACHE["at"] > _ROSTER_TTL:
+            _ROSTER_CACHE["rows"] = list_group_members()
+            _ROSTER_CACHE["at"] = time.time()
+    except Exception:  # noqa: BLE001 — stale roster beats a dead leaderboard
+        return
+    for m in _ROSTER_CACHE["rows"]:
+        user = db.get(User, m["username"])
+        if user is None:
+            user = User(username=m["username"])
+            db.add(user)
+        user.display_name = m["display_name"] or user.display_name
+        user.email = m["email"] or user.email
+        user.role = role_for(m["username"])
+    db.commit()
 
 
 def authenticate(username: str, password: str) -> dict | None:
@@ -57,7 +117,7 @@ def authenticate(username: str, password: str) -> dict | None:
     if settings.demo_mode:
         profile = DEMO_USERS.get(username)
         if profile and password == settings.demo_password:
-            return {"username": username, **profile}
+            return {"username": username, "role": role_for(username), **profile}
         return None
     # live mode: demo accounts must never work
     if not settings.ldap_url:

@@ -20,15 +20,15 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   is anything cloned, committed and pushed (to a branch, never to main).
 - **Prompt templates** — visible, editable, `{{variable}}`-parameterized, improvable via
   AI (proposal first, human saves).
-- **LDAP auth** — login restricted to one group; a second group grants approver rights.
+- **LDAP auth** — one team group gates login and defines the roster (everyone appears on
+  the leaderboard); per-username roles default to approver, `MEMBER_USERNAMES` demotes.
 
 ## Run it locally (demo mode, zero external services)
 
 ```bash
 cd questops
 ./dev.sh start        # wraps podman-compose (or docker compose), waits for health
-# open http://localhost:8080  →  alice / demo   (team lead, approver)
-#                               bob, carol, dave / demo
+# open http://localhost:8080  →  alice, bob, carol or dave / password: demo
 ./dev.sh stop|restart|status|logs|reset
 ```
 
@@ -63,7 +63,7 @@ credentials. Live-mode behavior per integration is in `backend/app/integrations/
 | Jira DC (one project) | `JIRA_BASE_URL`, `JIRA_USER` + `JIRA_PASSWORD` (basic auth), `JIRA_PROJECT_KEY`, `JIRA_BOARD_STATUSES` |
 | Jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN`, `JENKINS_LONG_RUNNING_FACTOR`, `JENKINS_FAILURE_WINDOW_DAYS`, `JENKINS_IGNORE` |
 | Elasticsearch | `ES_URL`, `ES_API_KEY`, `JENKINS_KPI_INDEX` (+ `KPI_SYNC_MINUTES`, `TZ` for the load countdown), `ERROR_ANALYSIS_INDEX`, `ERROR_ANALYSIS_DAYS` |
-| LDAP | `LDAP_URL`, service `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD`, `LDAP_BASE_DN`, `LDAP_REQUIRED_GROUP` (login), `LDAP_APPROVER_GROUP` (approvals) |
+| LDAP | `LDAP_URL`, service `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD`, `LDAP_BASE_DN`, `LDAP_REQUIRED_GROUP` (one team group: login + roster), `MEMBER_USERNAMES` (everyone else is approver) |
 | Repo actions | `GIT_TOKEN` (https push), `GIT_USER_NAME`, `GIT_USER_EMAIL` |
 
 ## Deploy with Helm

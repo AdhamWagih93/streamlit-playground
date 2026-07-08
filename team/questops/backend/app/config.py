@@ -56,8 +56,10 @@ class Settings(BaseSettings):
     ldap_bind_password: str = ""
     ldap_base_dn: str = ""
     ldap_user_attr: str = "sAMAccountName"
-    ldap_required_group: str = ""    # group DN required to log in
-    ldap_approver_group: str = ""    # group DN allowed to approve repo actions
+    ldap_required_group: str = ""    # THE team group: gates login + defines the roster
+    # role is decided per username: everyone in the group is an APPROVER unless
+    # listed here (comma-separated usernames -> plain member)
+    member_usernames: str = ""
 
     # --- Repositories page: up to 6 slots, cloned server-side, edited locally ---
     repos_workdir: str = "./repos"
@@ -108,6 +110,10 @@ class Settings(BaseSettings):
     @property
     def jenkins_ignore_tokens(self) -> list[str]:
         return [t.lower() for t in self._csv(self.jenkins_ignore)]
+
+    @property
+    def member_users(self) -> set[str]:
+        return {u.lower() for u in self._csv(self.member_usernames)}
 
     @property
     def kpi_sync_marks(self) -> list[int]:
