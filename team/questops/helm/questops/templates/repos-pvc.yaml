@@ -1,0 +1,16 @@
+{{- if .Values.repositories.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "questops.fullname" . }}-repos
+  labels:
+    {{- include "questops.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.repositories.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.repositories.persistence.size }}
+{{- end }}

@@ -80,6 +80,20 @@ git:
   userName: "questops-bot"
   userEmail: "questops-bot@mycorp.local"
 
+repositories:
+  workdir: /data/repos
+  persistence:
+    enabled: false   # true = PVC so clones/local edits survive restarts
+    size: 5Gi
+    storageClassName: ""
+  # up to 6 slots; passwords land in the Secret (REPO<n>_PASSWORD —
+  # add them to app.existingSecret if you use one)
+  items: []
+  # items:
+  #   - url: https://git.mycorp.local/platform/service-one.git
+  #     user: svc-questops
+  #     password: ""
+
 database:
   # external Postgres DSN, e.g. postgresql+psycopg2://user:pass@host:5432/questops
   url: ""

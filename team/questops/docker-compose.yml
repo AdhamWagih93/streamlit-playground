@@ -46,10 +46,31 @@ services:
       LDAP_REQUIRED_GROUP: ${QO_LDAP_REQUIRED_GROUP:-}
       LDAP_APPROVER_GROUP: ${QO_LDAP_APPROVER_GROUP:-}
       GIT_TOKEN: ${QO_GIT_TOKEN:-}
+      REPOS_WORKDIR: /data/repos
+      REPO1_URL: ${QO_REPO1_URL:-}
+      REPO1_USER: ${QO_REPO1_USER:-}
+      REPO1_PASSWORD: ${QO_REPO1_PASSWORD:-}
+      REPO2_URL: ${QO_REPO2_URL:-}
+      REPO2_USER: ${QO_REPO2_USER:-}
+      REPO2_PASSWORD: ${QO_REPO2_PASSWORD:-}
+      REPO3_URL: ${QO_REPO3_URL:-}
+      REPO3_USER: ${QO_REPO3_USER:-}
+      REPO3_PASSWORD: ${QO_REPO3_PASSWORD:-}
+      REPO4_URL: ${QO_REPO4_URL:-}
+      REPO4_USER: ${QO_REPO4_USER:-}
+      REPO4_PASSWORD: ${QO_REPO4_PASSWORD:-}
+      REPO5_URL: ${QO_REPO5_URL:-}
+      REPO5_USER: ${QO_REPO5_USER:-}
+      REPO5_PASSWORD: ${QO_REPO5_PASSWORD:-}
+      REPO6_URL: ${QO_REPO6_URL:-}
+      REPO6_USER: ${QO_REPO6_USER:-}
+      REPO6_PASSWORD: ${QO_REPO6_PASSWORD:-}
       GIT_USER_NAME: ${QO_GIT_USER_NAME:-questops-bot}
       GIT_USER_EMAIL: ${QO_GIT_USER_EMAIL:-questops-bot@local}
     # podman-compose doesn't honor healthcheck conditions reliably;
     # the app retries the DB connection on startup instead (db.init_db)
+    volumes:
+      - repos:/data/repos
     depends_on:
       - db
     networks: [backend]
@@ -86,3 +107,4 @@ networks:
 volumes:
   pgdata:
   ollama:
+  repos:

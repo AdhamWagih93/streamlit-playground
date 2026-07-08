@@ -2,3 +2,5 @@
 .dev/
 *.db
 __pycache__/
+repos/
+backend/repos/

@@ -41,3 +41,14 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: repos
+              mountPath: {{ .Values.repositories.workdir }}
+      volumes:
+        - name: repos
+          {{- if .Values.repositories.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "questops.fullname" . }}-repos
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

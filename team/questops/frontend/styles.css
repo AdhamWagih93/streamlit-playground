@@ -312,6 +312,31 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .form-col label { margin-bottom: 12px; }
 .var-chip { font: 500 11px var(--mono); color: var(--violet); background: rgba(165,139,245,.1); padding: 1px 7px; border-radius: 4px; margin-right: 5px; }
 
+/* ---------- repositories ---------- */
+.dirty-badge { background: var(--amber); color: #1a1206; border-radius: 999px;
+  font: 700 10px var(--mono); padding: 0 6px; }
+.repo-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.crumbs { font: 500 13px var(--mono); }
+.crumbs a { color: var(--dim); }
+.crumbs a:last-child { color: var(--amber); }
+.crumbs a:hover { color: var(--amber); }
+.repo-grid { display: grid; grid-template-columns: 300px 1fr; gap: 18px; align-items: start; }
+@media (max-width: 1000px) { .repo-grid { grid-template-columns: 1fr; } }
+.tree-panel { padding: 10px; max-height: 620px; overflow-y: auto; }
+.tree-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-radius: 7px; cursor: pointer; font: 400 13px var(--mono); color: var(--text); }
+.tree-item:hover { background: var(--panel-2); }
+.tree-item.active { background: var(--amber-soft); color: var(--amber); }
+.tree-item small { margin-left: auto; color: var(--faint); font-size: 10.5px; }
+.tree-item.dirty::before { content: "●"; color: var(--amber); font-size: 9px; order: 2; margin-left: auto; }
+.tree-item.dirty small { margin-left: 6px; }
+.editor-panel { min-height: 500px; }
+.editor-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+#repo-editor { width: 100%; min-height: 440px; resize: vertical;
+  font: 400 12.5px/1.55 var(--mono); background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px; tab-size: 2; }
+#repo-editor:focus { outline: none; border-color: var(--amber); }
+
 /* ---------- guild ---------- */
 .guild-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start; }
 @media (max-width: 1100px) { .guild-grid { grid-template-columns: 1fr; } }

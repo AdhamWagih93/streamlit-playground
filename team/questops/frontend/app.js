@@ -169,7 +169,7 @@ async function refreshMe() {
 
 /* ---------------- router ---------------- */
 const VIEWS = { focus: renderFocus, board: renderBoard, ci: renderCI,
-                actions: renderActions, prompts: renderPrompts,
+                actions: renderActions, prompts: renderPrompts, repos: renderRepos,
                 guild: renderGuild, me: renderProfile };
 
 function route() {
@@ -724,6 +724,131 @@ function promptForm(t = null) {
     act(t ? api(`/api/prompts/${t.id}`, { method: "PUT", body })
           : api("/api/prompts", { method: "POST", body }));
   };
+}
+
+/* ================= REPOSITORIES ================= */
+async function renderRepos() {
+  const data = await api("/api/repos");
+  if (!data.repos.length) {
+    view().innerHTML = `
+      <div class="view-head"><h1>REPOSITORIES</h1></div>
+      <div class="empty">no repositories configured — set REPO1_URL … REPO6_URL
+        (+ _USER / _PASSWORD) and restart</div>`;
+    return;
+  }
+  if (!data.repos.some((r) => r.slot === state.repoSlot)) {
+    state.repoSlot = data.repos[0].slot;
+    state.repoPath = ""; state.repoFile = null;
+  }
+  const cur = data.repos.find((r) => r.slot === state.repoSlot);
+
+  const chips = data.repos.map((r) => `
+    <button class="btn btn-sm ${r.slot === cur.slot ? "btn-primary" : ""}" data-repo="${r.slot}">
+      ⛁ ${esc(r.name)}${r.dirty ? ` <span class="dirty-badge">${r.dirty}</span>` : ""}${r.cloned ? "" : " ⬇"}
+    </button>`).join(" ");
+
+  let body;
+  if (!cur.cloned) {
+    body = `
+      <div class="panel" style="text-align:center;padding:40px">
+        <p style="color:var(--dim);margin-bottom:6px">${esc(cur.url)}</p>
+        <p style="color:var(--faint);font-size:12px;margin-bottom:18px">not cloned yet</p>
+        <button class="btn btn-primary" id="repo-clone">⬇ Clone repository</button>
+      </div>`;
+  } else {
+    const [treeData, fileData, diffData] = await Promise.all([
+      api(`/api/repos/${cur.slot}/tree?path=${encodeURIComponent(state.repoPath || "")}`),
+      state.repoFile ? api(`/api/repos/${cur.slot}/file?path=${encodeURIComponent(state.repoFile)}`).catch((e) => ({ error: e.message })) : null,
+      state.repoFile ? api(`/api/repos/${cur.slot}/diff?path=${encodeURIComponent(state.repoFile)}`).catch(() => ({ diff: "" })) : null,
+    ]);
+
+    const segs = (state.repoPath || "").split("/").filter(Boolean);
+    const crumbs = [`<a href="javascript:void 0" data-crumb="">${esc(cur.name)}</a>`]
+      .concat(segs.map((s, i) =>
+        `<a href="javascript:void 0" data-crumb="${esc(segs.slice(0, i + 1).join("/"))}">${esc(s)}</a>`))
+      .join(" / ");
+
+    const up = state.repoPath
+      ? `<div class="tree-item" data-dir="${esc(segs.slice(0, -1).join("/"))}">📁 ..</div>` : "";
+    const items = treeData.entries.map((e) => e.type === "dir"
+      ? `<div class="tree-item ${e.dirty ? "dirty" : ""}" data-dir="${esc(e.path)}">📁 ${esc(e.name)}</div>`
+      : `<div class="tree-item ${e.dirty ? "dirty" : ""} ${e.path === state.repoFile ? "active" : ""}" data-file="${esc(e.path)}">📄 ${esc(e.name)}<small>${(e.size / 1024).toFixed(1)}k</small></div>`
+    ).join("") || `<div class="empty">empty directory</div>`;
+
+    const editor = !state.repoFile
+      ? `<div class="empty" style="padding-top:120px">select a file to view or edit<br>
+           <small>edits stay on the server — nothing is pushed to remote</small></div>`
+      : fileData.error
+        ? `<div class="empty">⚠ ${esc(fileData.error)}</div>`
+        : `
+        <div class="editor-bar">
+          <span class="ci-job">${esc(state.repoFile)}</span>
+          <span class="spacer"></span>
+          <button class="btn btn-sm btn-primary" id="repo-save">💾 Save (local)</button>
+        </div>
+        <textarea id="repo-editor" spellcheck="false">${esc(fileData.content)}</textarea>
+        ${diffData.diff ? `<details class="filebox" open><summary>± local changes vs HEAD</summary><pre>${esc(diffData.diff)}</pre></details>` : ""}`;
+
+    body = `
+      <div class="repo-bar">
+        <span class="crumbs">${crumbs}</span>
+        <span class="spacer"></span>
+        <span class="ci-meta">${esc(cur.branch)} · ${esc(cur.last_commit)}
+          ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
+        <button class="btn btn-sm" id="repo-pull">⇣ Pull</button>
+        <button class="btn btn-sm btn-danger" id="repo-discard">Discard local edits</button>
+      </div>
+      <div class="repo-grid">
+        <div class="panel tree-panel">${up}${items}</div>
+        <div class="panel editor-panel">${editor}</div>
+      </div>`;
+  }
+
+  view().innerHTML = `
+    <div class="view-head"><h1>REPOSITORIES</h1>
+      <span class="sub">shared local workspaces · edits are never pushed</span></div>
+    <div class="filter-row" style="margin-bottom:16px;flex-wrap:wrap">${chips}</div>
+    ${body}`;
+
+  view().querySelectorAll("[data-repo]").forEach((b) => b.onclick = () => {
+    state.repoSlot = parseInt(b.dataset.repo, 10);
+    state.repoPath = ""; state.repoFile = null;
+    renderRepos();
+  });
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  on("repo-clone", async () => {
+    try { await api(`/api/repos/${cur.slot}/clone`, { method: "POST" });
+          toast(`⛁ ${esc(cur.name)} cloned`, "toast-xp"); renderRepos(); }
+    catch (e) { oops(e); }
+  });
+  on("repo-pull", async () => {
+    try { const r = await api(`/api/repos/${cur.slot}/pull`, { method: "POST" });
+          toast(`⇣ ${esc(r.output.split("\n")[0])}`); renderRepos(); }
+    catch (e) { oops(e); }
+  });
+  on("repo-discard", async () => {
+    if (!confirm(`Discard ALL local edits in ${cur.name}?`)) return;
+    try { await api(`/api/repos/${cur.slot}/discard`, { method: "POST" }); renderRepos(); }
+    catch (e) { oops(e); }
+  });
+  on("repo-save", async () => {
+    try {
+      await api(`/api/repos/${cur.slot}/file`, {
+        method: "PUT",
+        body: { path: state.repoFile, content: document.getElementById("repo-editor").value } });
+      toast(`💾 ${esc(state.repoFile)} saved locally`);
+      renderRepos();
+    } catch (e) { oops(e); }
+  });
+  view().querySelectorAll("[data-dir]").forEach((el) => el.onclick = () => {
+    state.repoPath = el.dataset.dir; state.repoFile = null; renderRepos();
+  });
+  view().querySelectorAll("[data-file]").forEach((el) => el.onclick = () => {
+    state.repoFile = el.dataset.file; renderRepos();
+  });
+  view().querySelectorAll("[data-crumb]").forEach((el) => el.onclick = () => {
+    state.repoPath = el.dataset.crumb; state.repoFile = null; renderRepos();
+  });
 }
 
 /* ================= GUILD ================= */

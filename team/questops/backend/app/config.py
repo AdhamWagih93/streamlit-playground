@@ -59,6 +59,27 @@ class Settings(BaseSettings):
     ldap_required_group: str = ""    # group DN required to log in
     ldap_approver_group: str = ""    # group DN allowed to approve repo actions
 
+    # --- Repositories page: up to 6 slots, cloned server-side, edited locally ---
+    repos_workdir: str = "./repos"
+    repo1_url: str = ""
+    repo1_user: str = ""
+    repo1_password: str = ""
+    repo2_url: str = ""
+    repo2_user: str = ""
+    repo2_password: str = ""
+    repo3_url: str = ""
+    repo3_user: str = ""
+    repo3_password: str = ""
+    repo4_url: str = ""
+    repo4_user: str = ""
+    repo4_password: str = ""
+    repo5_url: str = ""
+    repo5_user: str = ""
+    repo5_password: str = ""
+    repo6_url: str = ""
+    repo6_user: str = ""
+    repo6_password: str = ""
+
     # --- Git (repo actions) ---
     git_token: str = ""              # https token used for clone/push
     git_user_name: str = "questops-bot"
@@ -91,6 +112,20 @@ class Settings(BaseSettings):
     @property
     def kpi_sync_marks(self) -> list[int]:
         return sorted(int(m) % 60 for m in self._csv(self.kpi_sync_minutes)) or [5, 35]
+
+    @property
+    def repos(self) -> list[dict]:
+        out = []
+        for i in range(1, 7):
+            url = getattr(self, f"repo{i}_url").strip()
+            if url:
+                out.append({
+                    "slot": i, "url": url,
+                    "user": getattr(self, f"repo{i}_user"),
+                    "password": getattr(self, f"repo{i}_password"),
+                    "name": url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1],
+                })
+        return out
 
 
 settings = Settings()
