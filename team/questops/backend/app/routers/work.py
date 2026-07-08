@@ -45,7 +45,10 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
         why = [f"{issue['priority']} priority"]
         if due_note:
             why.append(due_note)
-        if issue["status"] != settings.board_statuses[0]:
+        if issue["status"].lower() in settings.reopened_statuses:
+            score += 20
+            why.append("reopened — regression, needs attention")
+        elif issue["status"] != settings.board_statuses[0]:
             score += 10
             why.append("already started — finish it")
         items.append({"source": "jira", "key": issue["key"], "title": issue["summary"],
@@ -110,8 +113,13 @@ def transition(key: str, body: TransitionBody, user: User = Depends(current_user
         issue = jira.transition_issue(key, body.status)
     except (KeyError, ValueError) as exc:
         raise HTTPException(400, str(exc))
-    done = settings.board_statuses[-1]
-    kind = "ticket_done" if body.status == done else "ticket_progress"
+    st = body.status.lower()
+    if st in settings.done_statuses:
+        kind = "ticket_done"
+    elif st in settings.review_statuses:
+        kind = "ticket_resolved"
+    else:
+        kind = "ticket_progress"
     game = award(db, user, kind,
                  message=f"{key} → {body.status}", ref=key)
     return {"issue": issue, "game": game}

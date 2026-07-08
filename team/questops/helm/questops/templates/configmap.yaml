@@ -12,6 +12,9 @@ data:
   JIRA_PROJECT_KEY: {{ .Values.jira.projectKey | quote }}
   JIRA_USER: {{ .Values.jira.user | quote }}
   JIRA_BOARD_STATUSES: {{ .Values.jira.boardStatuses | quote }}
+  JIRA_DONE_STATUSES: {{ .Values.jira.doneStatuses | quote }}
+  JIRA_REVIEW_STATUSES: {{ .Values.jira.reviewStatuses | quote }}
+  JIRA_REOPENED_STATUSES: {{ .Values.jira.reopenedStatuses | quote }}
   JENKINS_URL: {{ .Values.jenkins.url | quote }}
   JENKINS_USER: {{ .Values.jenkins.user | quote }}
   JENKINS_LONG_RUNNING_MINUTES: {{ .Values.jenkins.longRunningMinutes | quote }}

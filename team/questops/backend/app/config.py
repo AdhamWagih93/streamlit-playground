@@ -23,7 +23,11 @@ class Settings(BaseSettings):
     jira_user: str = ""              # basic auth
     jira_password: str = ""
     jira_project_key: str = "DEVOPS"
-    jira_board_statuses: str = "To Do,In Progress,In Review,Done"
+    # board columns, in flow order (classic Jira DC workflow)
+    jira_board_statuses: str = "Open,In Progress,Resolved,Closed"
+    jira_done_statuses: str = "Closed"        # landing here = ticket-closed XP
+    jira_review_statuses: str = "Resolved"    # 'resolved' means awaiting review
+    jira_reopened_statuses: str = "Reopened"  # shown in the first column, flagged as regression
 
     # --- Jenkins ---
     jenkins_url: str = ""
@@ -45,9 +49,25 @@ class Settings(BaseSettings):
     git_user_name: str = "questops-bot"
     git_user_email: str = "questops-bot@local"
 
+    @staticmethod
+    def _csv(raw: str) -> list[str]:
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
     @property
     def board_statuses(self) -> list[str]:
-        return [s.strip() for s in self.jira_board_statuses.split(",") if s.strip()]
+        return self._csv(self.jira_board_statuses)
+
+    @property
+    def done_statuses(self) -> set[str]:
+        return {s.lower() for s in self._csv(self.jira_done_statuses)}
+
+    @property
+    def review_statuses(self) -> set[str]:
+        return {s.lower() for s in self._csv(self.jira_review_statuses)}
+
+    @property
+    def reopened_statuses(self) -> set[str]:
+        return {s.lower() for s in self._csv(self.jira_reopened_statuses)}
 
 
 settings = Settings()

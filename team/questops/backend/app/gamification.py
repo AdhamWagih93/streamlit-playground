@@ -13,6 +13,7 @@ from .db import BadgeAward, User, XPEvent, utcnow
 
 XP_RULES = {
     "ticket_done": 40,
+    "ticket_resolved": 15,  # moved to review ('Resolved')
     "ticket_progress": 10,
     "ticket_comment": 5,
     "ticket_claimed": 5,
@@ -53,7 +54,7 @@ BADGES = [
 ]
 
 DAILY_QUESTS = [
-    {"key": "clear_two", "name": "Clear the Deck", "desc": "Move 2 tickets to Done today",
+    {"key": "clear_two", "name": "Clear the Deck", "desc": "Get 2 tickets closed today",
      "kind": "ticket_done", "target": 2, "bonus": 25},
     {"key": "medic", "name": "Build Medic", "desc": "Fix a failing build today",
      "kind": "build_fixed", "target": 1, "bonus": 25},

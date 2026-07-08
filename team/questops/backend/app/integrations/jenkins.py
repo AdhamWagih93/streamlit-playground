@@ -62,16 +62,37 @@ def _demo_overview() -> dict:
             "jobs": jobs, "source": "demo"}
 
 
+# leaf fields we need per runnable job; folders/multibranch expose 'jobs' instead
+_LEAF = ("fullName,name,url,"
+         "lastBuild[number,building,timestamp,duration,result,url],"
+         "lastCompletedBuild[number,timestamp,duration,result,url]")
+
+
+def _tree_query(depth: int = 5) -> str:
+    """Nested tree so jobs inside folders / multibranch pipelines are included."""
+    tree = _LEAF
+    for _ in range(depth):
+        tree = f"{_LEAF},jobs[{tree}]"
+    return f"jobs[{tree}]"
+
+
+def _flatten(items: list, out: list) -> list:
+    for j in items or []:
+        if j.get("jobs") is not None:  # folder or multibranch — descend
+            _flatten(j["jobs"], out)
+        if j.get("lastBuild") or j.get("lastCompletedBuild"):  # runnable job
+            out.append(j)
+    return out
+
+
 def _live_overview() -> dict:
     auth = (settings.jenkins_user, settings.jenkins_token) if settings.jenkins_user else None
-    tree = ("jobs[fullName,name,url,lastBuild[number,building,timestamp,duration,result,url],"
-            "lastCompletedBuild[number,timestamp,duration,result,url]]")
-    r = requests.get(f"{settings.jenkins_url}/api/json", params={"tree": tree},
-                     auth=auth, timeout=20)
+    r = requests.get(f"{settings.jenkins_url}/api/json",
+                     params={"tree": _tree_query()}, auth=auth, timeout=30)
     r.raise_for_status()
     now = _now_ms()
     failures, long_running, jobs = [], [], []
-    for j in r.json().get("jobs", []):
+    for j in _flatten(r.json().get("jobs", []), []):
         name = j.get("fullName") or j.get("name")
         last, completed = j.get("lastBuild") or {}, j.get("lastCompletedBuild") or {}
         jobs.append({"name": name, "result": completed.get("result"),

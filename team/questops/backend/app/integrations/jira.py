@@ -37,19 +37,19 @@ def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc=
 
 
 _DEMO_ISSUES: list[dict] = [
-    _demo_issue(101, "Payments pipeline: flaky integration stage blocks releases", "To Do",
+    _demo_issue(101, "Payments pipeline: flaky integration stage blocks releases", "Reopened",
                 "Highest", "alice", 0, "Bug", "3 of the last 5 runs failed on testcontainers startup."),
-    _demo_issue(102, "Add SLO dashboard for checkout service", "To Do", "High", "bob", 2, "Story"),
-    _demo_issue(103, "Rotate registry pull secrets across all namespaces", "To Do", "High", None, 1, "Task"),
+    _demo_issue(102, "Add SLO dashboard for checkout service", "Open", "High", "bob", 2, "Story"),
+    _demo_issue(103, "Rotate registry pull secrets across all namespaces", "Open", "High", None, 1, "Task"),
     _demo_issue(104, "Upgrade ingress-nginx to 1.11 in staging", "In Progress", "Medium", "carol", 4, "Task"),
     _demo_issue(105, "Self-service: template for new microservice scaffold", "In Progress", "High", "alice", 6, "Story"),
     _demo_issue(106, "Document on-call escalation for platform tools", "In Progress", "Low", "dave", 9, "Task"),
-    _demo_issue(107, "Terraform module: standard RDS with backups", "In Review", "Medium", "bob", 3, "Story"),
-    _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "In Review", "Medium", "carol", None, "Bug"),
-    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Done", "High", "dave", None, "Story"),
-    _demo_issue(110, "Enable image signing in the release pipeline", "Done", "Highest", "alice", None, "Story"),
-    _demo_issue(111, "Spike: cost report per team namespace", "To Do", "Low", None, 12, "Spike"),
-    _demo_issue(112, "Harden Jenkins agents (drop root, pin images)", "To Do", "Medium", "dave", 5, "Task"),
+    _demo_issue(107, "Terraform module: standard RDS with backups", "Resolved", "Medium", "bob", 3, "Story"),
+    _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "Resolved", "Medium", "carol", None, "Bug"),
+    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Closed", "High", "dave", None, "Story"),
+    _demo_issue(110, "Enable image signing in the release pipeline", "Closed", "Highest", "alice", None, "Story"),
+    _demo_issue(111, "Spike: cost report per team namespace", "Open", "Low", None, 12, "Spike"),
+    _demo_issue(112, "Harden Jenkins agents (drop root, pin images)", "Open", "Medium", "dave", 5, "Task"),
 ]
 
 
@@ -96,35 +96,52 @@ def _live_search(jql: str, max_results: int = 100) -> list[dict]:
 
 
 # ---------------------------------------------------------------- public API
+def _column_for(issue: dict) -> str | None:
+    """Reopened (etc.) issues are shown in the first column."""
+    st = issue["status"].lower()
+    if st in settings.reopened_statuses:
+        return settings.board_statuses[0]
+    for s in settings.board_statuses:
+        if s.lower() == st:
+            return s
+    return None
+
+
+def _not_done_jql() -> str:
+    quoted = ", ".join(f'"{s}"' for s in settings._csv(settings.jira_done_statuses))
+    return f"status not in ({quoted})"
+
+
+def _is_open(issue: dict) -> bool:
+    return issue["status"].lower() not in settings.done_statuses
+
+
 def board() -> dict:
-    statuses = settings.board_statuses
     if is_live():
         issues = _live_search(
             f'project = "{settings.jira_project_key}" ORDER BY priority DESC, updated DESC')
     else:
         issues = [dict(i) for i in _DEMO_ISSUES]
-    columns = [{"name": s, "issues": [i for i in issues if i["status"] == s]}
-               for s in statuses]
+    columns = [{"name": s, "issues": [i for i in issues if _column_for(i) == s]}
+               for s in settings.board_statuses]
     return {"project": settings.jira_project_key, "columns": columns,
             "source": "live" if is_live() else "demo"}
 
 
 def my_open_issues(username: str) -> list[dict]:
-    done = settings.board_statuses[-1] if settings.board_statuses else "Done"
     if is_live():
         return _live_search(
             f'project = "{settings.jira_project_key}" AND assignee = "{username}" '
-            f'AND status != "{done}" ORDER BY priority DESC, duedate ASC')
-    return [i for i in _DEMO_ISSUES if i["assignee"] == username and i["status"] != done]
+            f'AND {_not_done_jql()} ORDER BY priority DESC, duedate ASC')
+    return [i for i in _DEMO_ISSUES if i["assignee"] == username and _is_open(i)]
 
 
 def unassigned_issues() -> list[dict]:
-    done = settings.board_statuses[-1] if settings.board_statuses else "Done"
     if is_live():
         return _live_search(
             f'project = "{settings.jira_project_key}" AND assignee IS EMPTY '
-            f'AND status != "{done}" ORDER BY priority DESC')
-    return [i for i in _DEMO_ISSUES if not i["assignee"] and i["status"] != done]
+            f'AND {_not_done_jql()} ORDER BY priority DESC')
+    return [i for i in _DEMO_ISSUES if not i["assignee"] and _is_open(i)]
 
 
 def transition_issue(key: str, to_status: str) -> dict:

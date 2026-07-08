@@ -38,7 +38,10 @@ ai:
 jira:
   baseUrl: "https://jira.mycorp.local"
   projectKey: "DEVOPS"
-  boardStatuses: "To Do,In Progress,In Review,Done"
+  boardStatuses: "Open,In Progress,Resolved,Closed"
+  doneStatuses: "Closed"
+  reviewStatuses: "Resolved"
+  reopenedStatuses: "Reopened"
   user: "svc-questops"
   password: ""       # prefer app.existingSecret
 

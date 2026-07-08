@@ -260,7 +260,9 @@ let BOARD_STATUSES = [];
 async function advanceIssue(key, current) {
   if (!BOARD_STATUSES.length) BOARD_STATUSES = (await api("/api/board")).columns.map((c) => c.name);
   const idx = BOARD_STATUSES.indexOf(current);
-  const next = BOARD_STATUSES[Math.min(idx + 1, BOARD_STATUSES.length - 1)];
+  // unknown status (e.g. Reopened) → advance means "back to work"
+  const next = idx === -1 ? BOARD_STATUSES[1]
+    : BOARD_STATUSES[Math.min(idx + 1, BOARD_STATUSES.length - 1)];
   if (next === current) return;
   act(api(`/api/issues/${key}/transition`, { method: "POST", body: { status: next } }));
 }
