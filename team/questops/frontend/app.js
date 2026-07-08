@@ -356,8 +356,26 @@ async function renderBoard() {
 }
 
 /* ================= PIPELINES ================= */
+let KPI_TIMER = null;
+
+function startKpiCountdown(seconds) {
+  clearInterval(KPI_TIMER);
+  const end = Date.now() + seconds * 1000;
+  KPI_TIMER = setInterval(() => {
+    const el = document.getElementById("kpi-countdown");
+    if (!el) { clearInterval(KPI_TIMER); return; }
+    const s = Math.max(0, Math.round((end - Date.now()) / 1000));
+    el.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    if (s <= 0) { clearInterval(KPI_TIMER); renderCI().catch(() => {}); }
+  }, 1000);
+}
+
+const FLAG_COLORS = ["chip-red", "chip-amber", "chip-cyan", "chip-green", "chip-violet"];
+const flagClass = (flag, flags) => FLAG_COLORS[Math.max(0, flags.indexOf(flag)) % FLAG_COLORS.length];
+
 async function renderCI() {
-  const data = await api("/api/ci");
+  const [data, kpi, errs] = await Promise.all([
+    api("/api/ci"), api("/api/kpi"), api("/api/errors")]);
   const failures = data.failures.map((f) => `
     <div class="ci-row">
       <span class="ci-dot dot-red"></span>
@@ -387,15 +405,77 @@ async function renderCI() {
       ${linkBtn(j.url)}</div>`;
   }).join("");
 
+  // --- KPI window: countdown to the next loader run + failures at risk ---
+  const nextAt = new Date(kpi.next_sync);
+  const hhmm = `${String(nextAt.getHours()).padStart(2, "0")}:${String(nextAt.getMinutes()).padStart(2, "0")}`;
+  const atRisk = kpi.at_risk.map((f) => `
+    <div class="ci-row">
+      <span class="ci-dot dot-red"></span>
+      <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
+      <span class="ci-meta">failed ${f.ago_min}m ago</span>
+      ${linkBtn(f.url)}
+      ${f.claimed_by ? `<span class="chip">🛠 @${esc(f.claimed_by)}</span>`
+        : `<button class="btn btn-sm" data-claim="${esc(f.job)}">I'm on it +10</button>`}
+    </div>`).join("")
+    || `<div class="empty">✅ KPI window is clean — nothing bad gets loaded at ${hhmm}</div>`;
+  const kpiPanel = `
+    <div class="panel kpi-panel" style="margin-bottom:18px">
+      <div class="kpi-clock">
+        <div id="kpi-countdown" class="kpi-count">--:--</div>
+        <div class="kpi-sub">until KPI load @ ${hhmm}<br>
+          <small>runs at :${kpi.sync_marks.map((m) => String(m).padStart(2, "0")).join(" / :")} · ${kpi.source}</small></div>
+      </div>
+      <div class="kpi-risk">
+        <h2>⚠ will enter your KPIs unless cleaned up</h2>
+        ${atRisk}
+        <div class="kpi-note">${kpi.loaded_failures.length} failure(s) already loaded in the last 24h
+          (${kpi.loaded_total} builds total)</div>
+      </div>
+    </div>`;
+
+  // --- error analysis (grouped by TicketFlag) ---
+  const flag = state.errorFlag || "all";
+  const flagChips = [`<button class="btn btn-sm ${flag === "all" ? "btn-primary" : ""}" data-flag="all">All (${errs.errors.length})</button>`]
+    .concat(errs.flags.map((f) => {
+      const n = errs.errors.filter((e) => (e.TicketFlag || "Unflagged") === f).length;
+      return `<button class="btn btn-sm ${flag === f ? "btn-primary" : ""}" data-flag="${esc(f)}">${esc(f)} (${n})</button>`;
+    })).join(" ");
+  const errRows = errs.errors
+    .filter((e) => flag === "all" || (e.TicketFlag || "Unflagged") === flag)
+    .map((e) => `
+      <div class="err-row">
+        <div class="err-head">
+          <span class="chip ${flagClass(e.TicketFlag || "Unflagged", errs.flags)}">${esc(e.TicketFlag || "Unflagged")}</span>
+          <span class="ci-job">${esc(e.jobpath || e.jobname)}</span>
+          <span class="chip chip-red">${esc(e.ErrorCode || "?")}</span>
+          <span class="ci-meta">${esc(e.ErrorType || "")} · ${ago(e.Date)}</span>
+          ${linkBtn(e.buildurl)}
+        </div>
+        <div class="err-action">→ ${esc(e.ErrorAction || "no action recorded")}</div>
+        <details class="filebox"><summary>✦ AI analysis ${e.AIConfidence ? `(confidence ${esc(e.AIConfidence)})` : ""}</summary>
+          <pre>${esc(`type:   ${e.AIErrorType || "-"}\ncode:   ${e.AIErrorCode || "-"}\naction: ${e.AIErrorAction || "-"}\nticket: ${e.AITicketFlag || "-"}\n\n${e.AIRaw || ""}`)}</pre>
+        </details>
+      </div>`).join("") || `<div class="empty">no analyzed errors for this filter</div>`;
+
   view().innerHTML = `
     <div class="view-head"><h1>PIPELINES</h1><span class="sub">Jenkins · ${data.source}</span></div>
+    ${kpiPanel}
     <div class="ci-grid">
       <div>
-        <div class="panel" style="margin-bottom:18px"><h2>🔴 recent failures</h2>${failures}</div>
-        <div class="panel"><h2>⏳ long-running (possibly stuck)</h2>${longRunning}</div>
+        <div class="panel" style="margin-bottom:18px"><h2>🔴 recent failures (last ${data.failure_window_days}d)</h2>${failures}</div>
+        <div class="panel"><h2>⏳ long-running (past their average)</h2>${longRunning}</div>
       </div>
       <div class="panel"><h2>all jobs</h2>${jobs}</div>
-    </div>`;
+    </div>
+    <div class="panel" style="margin-top:18px"><h2>🧬 error analysis — last ${errs.days}d · ${errs.source}</h2>
+      <div class="filter-row" style="margin-bottom:12px;flex-wrap:wrap">${flagChips}</div>
+      ${errRows}</div>`;
+
+  startKpiCountdown(kpi.seconds_remaining);
+  view().querySelectorAll("[data-flag]").forEach((b) => b.onclick = () => {
+    state.errorFlag = b.dataset.flag;
+    renderCI();
+  });
 
   view().querySelectorAll("[data-claim]").forEach((b) => b.onclick = () =>
     act(api("/api/ci/claim", { method: "POST", body: { job: b.dataset.claim } })));

@@ -55,6 +55,17 @@ jenkins:
   failureWindowDays: 14
   ignore: "DevOps_Test"   # comma-separated path tokens to skip
 
+elasticsearch:
+  url: "https://es.mycorp.local:9200"
+  apiKey: ""              # prefer app.existingSecret (key: ES_API_KEY)
+  verifySsl: true
+  kpiIndex: "jenkins-kpi"
+  errorAnalysisIndex: "jenkins-error-analysis"
+  kpiSyncMinutes: "5,35"  # loader schedule; countdown uses the pod TZ
+  errorAnalysisDays: 14
+
+app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)
+
 ldap:
   url: "ldaps://ldap.mycorp.local:636"
   bindDn: "CN=svc-questops,OU=Service Accounts,DC=mycorp,DC=local"

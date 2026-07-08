@@ -61,7 +61,8 @@ credentials. Live-mode behavior per integration is in `backend/app/integrations/
 |---|---|
 | Ollama | `OLLAMA_URL`, `OLLAMA_MODEL` |
 | Jira DC (one project) | `JIRA_BASE_URL`, `JIRA_USER` + `JIRA_PASSWORD` (basic auth), `JIRA_PROJECT_KEY`, `JIRA_BOARD_STATUSES` |
-| Jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN`, `JENKINS_LONG_RUNNING_MINUTES` |
+| Jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN`, `JENKINS_LONG_RUNNING_FACTOR`, `JENKINS_FAILURE_WINDOW_DAYS`, `JENKINS_IGNORE` |
+| Elasticsearch | `ES_URL`, `ES_API_KEY`, `JENKINS_KPI_INDEX` (+ `KPI_SYNC_MINUTES`, `TZ` for the load countdown), `ERROR_ANALYSIS_INDEX`, `ERROR_ANALYSIS_DAYS` |
 | LDAP | `LDAP_URL`, service `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD`, `LDAP_BASE_DN`, `LDAP_REQUIRED_GROUP` (login), `LDAP_APPROVER_GROUP` (approvals) |
 | Repo actions | `GIT_TOKEN` (https push), `GIT_USER_NAME`, `GIT_USER_EMAIL` |
 

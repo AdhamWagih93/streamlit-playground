@@ -23,7 +23,7 @@ def is_live() -> bool:
 
 _DEMO_JOBS = [
     {"name": "payments-service/main", "result": "FAILURE", "building": False,
-     "ago_min": 42, "duration_min": 11, "number": 481},
+     "ago_min": 18, "duration_min": 11, "number": 481},  # < 30m → 'at risk' in demo
     {"name": "checkout-service/main", "result": "FAILURE", "building": False,
      "ago_min": 130, "duration_min": 8, "number": 902},
     {"name": "platform-terraform/apply", "result": "UNSTABLE", "building": False,
@@ -64,6 +64,7 @@ def _demo_overview() -> dict:
                              "duration_min": j["duration_min"],
                              "claimed_by": CLAIMS.get(j["name"])})
     return {"failures": failures, "long_running": long_running,
+            "failure_window_days": settings.jenkins_failure_window_days,
             "jobs": jobs, "source": "demo"}
 
 
@@ -145,6 +146,7 @@ def _live_overview() -> dict:
                                  "claimed_by": CLAIMS.get(name)})
     failures.sort(key=lambda f: f["ago_min"])
     return {"failures": failures, "long_running": long_running,
+            "failure_window_days": settings.jenkins_failure_window_days,
             "jobs": jobs, "source": "live"}
 
 

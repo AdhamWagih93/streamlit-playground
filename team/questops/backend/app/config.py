@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     jenkins_failure_window_days: int = 14  # failures older than this are not shown
     jenkins_ignore: str = "DevOps_Test"    # comma list; skip pipeline paths containing these
 
+    # --- Elasticsearch (Jenkins KPI + error analysis indices) ---
+    es_url: str = ""                 # e.g. https://es.mycorp.local:9200
+    es_api_key: str = ""             # sent as 'Authorization: ApiKey <key>'
+    es_verify_ssl: bool = True
+    jenkins_kpi_index: str = "jenkins-kpi"
+    error_analysis_index: str = "jenkins-error-analysis"
+    kpi_sync_minutes: str = "5,35"   # minute marks each hour when the KPI loader runs
+    error_analysis_days: int = 14
+
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389
     ldap_bind_dn: str = ""           # service account for the user search
@@ -78,6 +87,10 @@ class Settings(BaseSettings):
     @property
     def jenkins_ignore_tokens(self) -> list[str]:
         return [t.lower() for t in self._csv(self.jenkins_ignore)]
+
+    @property
+    def kpi_sync_marks(self) -> list[int]:
+        return sorted(int(m) % 60 for m in self._csv(self.kpi_sync_minutes)) or [5, 35]
 
 
 settings = Settings()

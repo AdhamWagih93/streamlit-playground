@@ -22,6 +22,13 @@ data:
   JENKINS_FAILURE_WINDOW_DAYS: {{ .Values.jenkins.failureWindowDays | quote }}
   JENKINS_IGNORE: {{ .Values.jenkins.ignore | quote }}
   JIRA_CLOSED_WINDOW_DAYS: {{ .Values.jira.closedWindowDays | quote }}
+  ES_URL: {{ .Values.elasticsearch.url | quote }}
+  ES_VERIFY_SSL: {{ .Values.elasticsearch.verifySsl | quote }}
+  JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}
+  ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
+  KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}
+  ERROR_ANALYSIS_DAYS: {{ .Values.elasticsearch.errorAnalysisDays | quote }}
+  TZ: {{ .Values.app_timezone | quote }}
   LDAP_URL: {{ .Values.ldap.url | quote }}
   LDAP_BIND_DN: {{ .Values.ldap.bindDn | quote }}
   LDAP_BASE_DN: {{ .Values.ldap.baseDn | quote }}
