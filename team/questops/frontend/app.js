@@ -469,12 +469,33 @@ async function renderCI() {
     : (!kpi.window_applied
       ? `<div class="kpi-note">⚠ the ${kpi.hours}h window matched nothing on @timestamp/builddate — showing the newest records in '${esc(kpi.index)}' instead</div>`
       : "");
+  const pctCls = (p) => p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad";
+  const st = kpi.stats || { total: 0, pipelines: [] };
+  const kpiStats = st.total ? `
+    <div class="kpi-stats">
+      <div class="kpi-overall">
+        <b class="${pctCls(st.overall_pct)}">${st.overall_pct}%</b>
+        <span>overall success<br>${st.success}/${st.total} builds</span>
+      </div>
+      <div class="kpi-pipes">
+        ${st.pipelines.map((p) => `
+          <div class="kpi-pipe">
+            <span class="ci-job" title="${esc(p.job)}">${esc(p.job)}</span>
+            <span class="lb-bar"><div class="${pctCls(p.pct)}" style="width:${p.pct}%"></div></span>
+            <span class="kpi-pct ${pctCls(p.pct)}">${p.pct}%</span>
+            <span class="ci-meta">${p.success}/${p.total}</span>
+          </div>`).join("")}
+      </div>
+    </div>` : "";
   const loadedPanel = `
     <div class="panel" style="margin-bottom:18px">
-      <h2>📦 loaded KPI records — ${esc(kpi.source)} · showing ${kpi.loaded.length} of ${kpi.loaded_total}</h2>
+      <h2>📦 pipeline KPIs — ${esc(kpi.source)} · ${kpi.loaded_total} builds in window</h2>
       <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
       ${kpiWarn}
-      <div class="kpi-loaded">${loadedRows}</div>
+      ${kpiStats}
+      <details class="filebox"><summary>📄 loaded records (showing ${kpi.loaded.length} of ${kpi.loaded_total})</summary>
+        <div class="kpi-loaded" style="padding:4px 10px">${loadedRows}</div>
+      </details>
     </div>`;
 
   // --- error analysis (grouped by TicketFlag) ---

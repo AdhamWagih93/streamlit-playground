@@ -220,6 +220,20 @@ main#view { flex: 1; overflow-y: auto; padding: 26px 30px 60px; }
 .group-head span { color: var(--faint); }
 .group-head.group-other { color: var(--faint); }
 .kpi-loaded { max-height: 300px; overflow-y: auto; }
+.kpi-stats { display: flex; gap: 22px; margin: 4px 0 12px; align-items: flex-start; }
+.kpi-overall { flex: none; text-align: center; padding: 12px 20px;
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2); }
+.kpi-overall b { font: 700 32px var(--display); display: block; font-variant-numeric: tabular-nums; }
+.kpi-overall span { color: var(--faint); font-size: 11px; line-height: 1.4; }
+.kpi-pipes { flex: 1; min-width: 0; }
+.kpi-pipe { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.kpi-pipe .ci-job { flex: 0 1 260px; }
+.kpi-pipe .lb-bar { flex: 1; }
+.kpi-pct { font: 600 12px var(--mono); width: 52px; text-align: right; flex: none; }
+.pct-good { color: var(--green); } .pct-warn { color: var(--amber); } .pct-bad { color: var(--red); }
+.lb-bar div.pct-good { background: var(--green); }
+.lb-bar div.pct-warn { background: linear-gradient(90deg, #7d5510, var(--amber)); }
+.lb-bar div.pct-bad { background: var(--red); }
 .card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 10px 12px; margin-bottom: 8px; cursor: grab;

@@ -40,7 +40,30 @@ def kpi(hours: int = 24, user: User = Depends(current_user)):
     loaded_failures = [d for d in recent
                        if str(d.get("status", "")).upper() in _FAILED]
 
+    # success percentages: overall and per pipeline, worst first
+    def _pct(ok: int, total: int) -> float:
+        return round(ok / total * 100, 1) if total else 0.0
+
+    by_job: dict[str, dict] = {}
+    ok_total = 0
+    for d in recent:
+        job = d.get("jobpath") or d.get("jobname") or "?"
+        row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0})
+        row["total"] += 1
+        if str(d.get("status", "")).upper() == "SUCCESS":
+            row["success"] += 1
+            ok_total += 1
+    stats = {
+        "total": len(recent),
+        "success": ok_total,
+        "overall_pct": _pct(ok_total, len(recent)),
+        "pipelines": sorted(
+            ({**r, "pct": _pct(r["success"], r["total"])} for r in by_job.values()),
+            key=lambda r: (r["pct"], -r["total"])),
+    }
+
     return {
+        "stats": stats,
         "sync_marks": settings.kpi_sync_marks,
         "last_sync": last_sync.isoformat(),
         "next_sync": next_sync.isoformat(),
