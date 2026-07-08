@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuestOps — Team Alignment Deck</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ============ LOGIN ============ -->
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-card">
+      <div class="login-logo">QUEST<span>OPS</span></div>
+      <div class="login-tag">the team alignment deck · ship together, level up together</div>
+      <form id="login-form">
+        <label>Username<input id="login-user" autocomplete="username" required></label>
+        <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
+        <button type="submit" class="btn btn-primary btn-wide">Enter the deck</button>
+        <div id="login-error" class="login-error"></div>
+        <div id="login-hint" class="login-hint hidden">
+          demo mode — try <code>alice</code> (team lead), <code>bob</code>, <code>carol</code>
+          or <code>dave</code> · password <code>demo</code>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ APP SHELL ============ -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="logo">QUEST<span>OPS</span></div>
+      <nav id="nav">
+        <a href="#/focus"   data-view="focus"><span class="nav-ico">◎</span>Focus</a>
+        <a href="#/board"   data-view="board"><span class="nav-ico">▦</span>Board</a>
+        <a href="#/ci"      data-view="ci"><span class="nav-ico">⚙</span>Pipelines</a>
+        <a href="#/actions" data-view="actions"><span class="nav-ico">⇄</span>Repo Actions</a>
+        <a href="#/prompts" data-view="prompts"><span class="nav-ico">✎</span>Prompts</a>
+        <a href="#/guild"   data-view="guild"><span class="nav-ico">♜</span>Guild</a>
+        <a href="#/me"      data-view="me"><span class="nav-ico">◈</span>My Journey</a>
+      </nav>
+      <div class="sidebar-foot">
+        <button id="ai-toggle" class="btn btn-ghost btn-wide">✦ Copilot</button>
+        <button id="logout" class="btn btn-ghost btn-wide">Sign out</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-user">
+          <svg id="level-ring" viewBox="0 0 44 44" width="44" height="44">
+            <circle class="ring-bg" cx="22" cy="22" r="19"></circle>
+            <circle id="ring-fg" class="ring-fg" cx="22" cy="22" r="19"></circle>
+            <text id="ring-level" x="22" y="27" text-anchor="middle">1</text>
+          </svg>
+          <div>
+            <div id="top-name" class="top-name">—</div>
+            <div id="top-rank" class="top-rank">Recruit</div>
+          </div>
+        </div>
+        <div class="topbar-xp">
+          <div class="xp-labels"><span id="xp-now">0 XP</span><span id="xp-next">next level: —</span></div>
+          <div class="xp-track"><div id="xp-fill" class="xp-fill"></div></div>
+        </div>
+        <div class="topbar-right">
+          <span id="streak-chip" class="chip chip-streak" title="daily activity streak">🔥 0</span>
+          <span id="mode-chip" class="chip chip-mode hidden">DEMO</span>
+        </div>
+      </header>
+      <main id="view"></main>
+    </div>
+
+    <!-- AI drawer -->
+    <aside id="ai-drawer" class="ai-drawer">
+      <div class="ai-head">
+        <span>✦ Copilot <small id="ai-model"></small></span>
+        <button id="ai-close" class="btn btn-ghost">✕</button>
+      </div>
+      <div id="ai-log" class="ai-log">
+        <div class="ai-msg ai-bot">Ask me anything about your tickets, builds or pending
+          approvals — I can see the live state.</div>
+      </div>
+      <form id="ai-form" class="ai-form">
+        <input id="ai-input" placeholder="e.g. what should I tackle first?" autocomplete="off">
+        <button class="btn btn-primary">➤</button>
+      </form>
+    </aside>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>

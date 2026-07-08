@@ -1,0 +1,165 @@
+"""Jira Data Center client scoped to ONE project (JIRA_PROJECT_KEY).
+
+Live mode uses a Personal Access Token (Bearer). Demo mode keeps a
+mutable in-memory board so the whole flow works without a Jira."""
+
+import datetime as dt
+
+import requests
+
+from ..config import settings
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
+def is_live() -> bool:
+    return bool(settings.jira_base_url and settings.jira_pat and not settings.demo_mode)
+
+
+# ---------------------------------------------------------------- demo store
+def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc=""):
+    return {
+        "key": f"{settings.jira_project_key}-{num}",
+        "summary": summary,
+        "status": status,
+        "priority": priority,
+        "assignee": assignee,
+        "type": itype,
+        "due": (_now() + dt.timedelta(days=due_days)).date().isoformat() if due_days is not None else None,
+        "updated": (_now() - dt.timedelta(hours=num % 30)).isoformat(),
+        "description": desc,
+        "url": f"#demo/{settings.jira_project_key}-{num}",
+        "comments": [],
+    }
+
+
+_DEMO_ISSUES: list[dict] = [
+    _demo_issue(101, "Payments pipeline: flaky integration stage blocks releases", "To Do",
+                "Highest", "alice", 0, "Bug", "3 of the last 5 runs failed on testcontainers startup."),
+    _demo_issue(102, "Add SLO dashboard for checkout service", "To Do", "High", "bob", 2, "Story"),
+    _demo_issue(103, "Rotate registry pull secrets across all namespaces", "To Do", "High", None, 1, "Task"),
+    _demo_issue(104, "Upgrade ingress-nginx to 1.11 in staging", "In Progress", "Medium", "carol", 4, "Task"),
+    _demo_issue(105, "Self-service: template for new microservice scaffold", "In Progress", "High", "alice", 6, "Story"),
+    _demo_issue(106, "Document on-call escalation for platform tools", "In Progress", "Low", "dave", 9, "Task"),
+    _demo_issue(107, "Terraform module: standard RDS with backups", "In Review", "Medium", "bob", 3, "Story"),
+    _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "In Review", "Medium", "carol", None, "Bug"),
+    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Done", "High", "dave", None, "Story"),
+    _demo_issue(110, "Enable image signing in the release pipeline", "Done", "Highest", "alice", None, "Story"),
+    _demo_issue(111, "Spike: cost report per team namespace", "To Do", "Low", None, 12, "Spike"),
+    _demo_issue(112, "Harden Jenkins agents (drop root, pin images)", "To Do", "Medium", "dave", 5, "Task"),
+]
+
+
+def _demo_find(key: str) -> dict:
+    for issue in _DEMO_ISSUES:
+        if issue["key"] == key:
+            return issue
+    raise KeyError(key)
+
+
+# ---------------------------------------------------------------- live client
+def _session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({"Authorization": f"Bearer {settings.jira_pat}",
+                      "Accept": "application/json"})
+    return s
+
+
+def _normalize(raw: dict) -> dict:
+    f = raw.get("fields", {})
+    return {
+        "key": raw["key"],
+        "summary": f.get("summary", ""),
+        "status": (f.get("status") or {}).get("name", ""),
+        "priority": (f.get("priority") or {}).get("name", "Medium"),
+        "assignee": (f.get("assignee") or {}).get("name"),
+        "type": (f.get("issuetype") or {}).get("name", "Task"),
+        "due": f.get("duedate"),
+        "updated": f.get("updated", ""),
+        "description": f.get("description") or "",
+        "url": f"{settings.jira_base_url}/browse/{raw['key']}",
+        "comments": [],
+    }
+
+
+def _live_search(jql: str, max_results: int = 100) -> list[dict]:
+    r = _session().post(f"{settings.jira_base_url}/rest/api/2/search",
+                        json={"jql": jql, "maxResults": max_results,
+                              "fields": ["summary", "status", "priority", "assignee",
+                                         "issuetype", "duedate", "updated", "description"]},
+                        timeout=20)
+    r.raise_for_status()
+    return [_normalize(i) for i in r.json().get("issues", [])]
+
+
+# ---------------------------------------------------------------- public API
+def board() -> dict:
+    statuses = settings.board_statuses
+    if is_live():
+        issues = _live_search(
+            f'project = "{settings.jira_project_key}" ORDER BY priority DESC, updated DESC')
+    else:
+        issues = [dict(i) for i in _DEMO_ISSUES]
+    columns = [{"name": s, "issues": [i for i in issues if i["status"] == s]}
+               for s in statuses]
+    return {"project": settings.jira_project_key, "columns": columns,
+            "source": "live" if is_live() else "demo"}
+
+
+def my_open_issues(username: str) -> list[dict]:
+    done = settings.board_statuses[-1] if settings.board_statuses else "Done"
+    if is_live():
+        return _live_search(
+            f'project = "{settings.jira_project_key}" AND assignee = "{username}" '
+            f'AND status != "{done}" ORDER BY priority DESC, duedate ASC')
+    return [i for i in _DEMO_ISSUES if i["assignee"] == username and i["status"] != done]
+
+
+def unassigned_issues() -> list[dict]:
+    done = settings.board_statuses[-1] if settings.board_statuses else "Done"
+    if is_live():
+        return _live_search(
+            f'project = "{settings.jira_project_key}" AND assignee IS EMPTY '
+            f'AND status != "{done}" ORDER BY priority DESC')
+    return [i for i in _DEMO_ISSUES if not i["assignee"] and i["status"] != done]
+
+
+def transition_issue(key: str, to_status: str) -> dict:
+    if is_live():
+        s = _session()
+        r = s.get(f"{settings.jira_base_url}/rest/api/2/issue/{key}/transitions", timeout=20)
+        r.raise_for_status()
+        match = next((t for t in r.json().get("transitions", [])
+                      if t["to"]["name"].lower() == to_status.lower()
+                      or t["name"].lower() == to_status.lower()), None)
+        if not match:
+            raise ValueError(f"no transition to '{to_status}' from current status of {key}")
+        s.post(f"{settings.jira_base_url}/rest/api/2/issue/{key}/transitions",
+               json={"transition": {"id": match["id"]}}, timeout=20).raise_for_status()
+        return _live_search(f'key = "{key}"')[0]
+    issue = _demo_find(key)
+    issue["status"] = to_status
+    issue["updated"] = _now().isoformat()
+    return dict(issue)
+
+
+def add_comment(key: str, body: str, username: str) -> None:
+    if is_live():
+        _session().post(f"{settings.jira_base_url}/rest/api/2/issue/{key}/comment",
+                        json={"body": body}, timeout=20).raise_for_status()
+        return
+    _demo_find(key)["comments"].append(
+        {"author": username, "body": body, "at": _now().isoformat()})
+
+
+def assign(key: str, username: str) -> dict:
+    if is_live():
+        _session().put(f"{settings.jira_base_url}/rest/api/2/issue/{key}/assignee",
+                       json={"name": username}, timeout=20).raise_for_status()
+        return _live_search(f'key = "{key}"')[0]
+    issue = _demo_find(key)
+    issue["assignee"] = username
+    issue["updated"] = _now().isoformat()
+    return dict(issue)

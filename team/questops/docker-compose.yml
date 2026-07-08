@@ -1,0 +1,60 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DEMO_MODE: ${DEMO_MODE:-true}
+      SECRET_KEY: ${SECRET_KEY:-local-dev-secret}
+      DATABASE_URL: postgresql+psycopg2://questops:questops@db:5432/questops
+      # host Ollama by default; switch to http://ollama:11434 with `--profile ollama`
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_PAT: ${JIRA_PAT:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-DEVOPS}
+      JENKINS_URL: ${JENKINS_URL:-}
+      JENKINS_USER: ${JENKINS_USER:-}
+      JENKINS_TOKEN: ${JENKINS_TOKEN:-}
+      LDAP_URL: ${LDAP_URL:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-}
+      LDAP_REQUIRED_GROUP: ${LDAP_REQUIRED_GROUP:-}
+      LDAP_APPROVER_GROUP: ${LDAP_APPROVER_GROUP:-}
+      GIT_TOKEN: ${GIT_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: questops
+      POSTGRES_PASSWORD: questops
+      POSTGRES_DB: questops
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U questops"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # optional in-compose Ollama:  docker compose --profile ollama up
+  # then set OLLAMA_URL=http://ollama:11434
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  pgdata:
+  ollama:

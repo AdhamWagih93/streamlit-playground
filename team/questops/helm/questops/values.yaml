@@ -1,0 +1,73 @@
+replicaCount: 1
+
+image:
+  repository: registry.mycorp.local/platform/questops
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: nginx
+  host: questops.mycorp.local
+  tls: []
+  annotations: {}
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: "1", memory: 512Mi }
+
+app:
+  demoMode: false
+  # existing Secret with keys: SECRET_KEY, JIRA_PAT, JENKINS_TOKEN,
+  # LDAP_BIND_PASSWORD, GIT_TOKEN (and DATABASE_URL if database.url is empty).
+  # Leave empty to render a Secret from the inline values below (not for prod).
+  existingSecret: ""
+  secretKey: "change-me"
+
+ai:
+  # your local / in-cluster Ollama — the values you said you'd configure
+  ollamaUrl: "http://ollama.ai-tools.svc.cluster.local:11434"
+  ollamaModel: "llama3.1"
+
+jira:
+  baseUrl: "https://jira.mycorp.local"
+  projectKey: "DEVOPS"
+  boardStatuses: "To Do,In Progress,In Review,Done"
+  pat: ""            # prefer app.existingSecret
+
+jenkins:
+  url: "https://jenkins.mycorp.local"
+  user: "svc-questops"
+  token: ""          # prefer app.existingSecret
+  longRunningMinutes: 45
+
+ldap:
+  url: "ldaps://ldap.mycorp.local:636"
+  bindDn: "CN=svc-questops,OU=Service Accounts,DC=mycorp,DC=local"
+  bindPassword: ""   # prefer app.existingSecret
+  baseDn: "OU=Users,DC=mycorp,DC=local"
+  userAttr: "sAMAccountName"
+  requiredGroup: "CN=devops-team,OU=Groups,DC=mycorp,DC=local"
+  approverGroup: "CN=devops-leads,OU=Groups,DC=mycorp,DC=local"
+
+git:
+  token: ""          # prefer app.existingSecret
+  userName: "questops-bot"
+  userEmail: "questops-bot@mycorp.local"
+
+database:
+  # external Postgres DSN, e.g. postgresql+psycopg2://user:pass@host:5432/questops
+  url: ""
+  # or run a tiny in-cluster Postgres (dev/small-team use)
+  builtin:
+    enabled: true
+    image: postgres:16-alpine
+    storage: 2Gi
+    storageClassName: ""
+    password: "questops"

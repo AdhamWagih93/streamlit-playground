@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "questops.fullname" . }}-config
+  labels:
+    {{- include "questops.labels" . | nindent 4 }}
+data:
+  DEMO_MODE: {{ .Values.app.demoMode | quote }}
+  OLLAMA_URL: {{ .Values.ai.ollamaUrl | quote }}
+  OLLAMA_MODEL: {{ .Values.ai.ollamaModel | quote }}
+  JIRA_BASE_URL: {{ .Values.jira.baseUrl | quote }}
+  JIRA_PROJECT_KEY: {{ .Values.jira.projectKey | quote }}
+  JIRA_BOARD_STATUSES: {{ .Values.jira.boardStatuses | quote }}
+  JENKINS_URL: {{ .Values.jenkins.url | quote }}
+  JENKINS_USER: {{ .Values.jenkins.user | quote }}
+  JENKINS_LONG_RUNNING_MINUTES: {{ .Values.jenkins.longRunningMinutes | quote }}
+  LDAP_URL: {{ .Values.ldap.url | quote }}
+  LDAP_BIND_DN: {{ .Values.ldap.bindDn | quote }}
+  LDAP_BASE_DN: {{ .Values.ldap.baseDn | quote }}
+  LDAP_USER_ATTR: {{ .Values.ldap.userAttr | quote }}
+  LDAP_REQUIRED_GROUP: {{ .Values.ldap.requiredGroup | quote }}
+  LDAP_APPROVER_GROUP: {{ .Values.ldap.approverGroup | quote }}
+  GIT_USER_NAME: {{ .Values.git.userName | quote }}
+  GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}

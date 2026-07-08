@@ -1,0 +1,20 @@
+QuestOps deployed. 🎮
+
+{{- if .Values.ingress.enabled }}
+Open: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else }}
+Port-forward to try it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "questops.fullname" . }} 8080:{{ .Values.service.port }}
+Then open http://localhost:8080
+{{- end }}
+
+Checks:
+  - Ollama reachable from the pod at {{ .Values.ai.ollamaUrl }} (model: {{ .Values.ai.ollamaModel }})
+  - LDAP group gating: {{ .Values.ldap.requiredGroup }}
+  - Approvers group:   {{ .Values.ldap.approverGroup }}
+{{- if not .Values.app.existingSecret }}
+
+WARNING: secrets are rendered inline from values. For production create a
+Secret with keys SECRET_KEY/DATABASE_URL/JIRA_PAT/JENKINS_TOKEN/
+LDAP_BIND_PASSWORD/GIT_TOKEN and set app.existingSecret.
+{{- end }}

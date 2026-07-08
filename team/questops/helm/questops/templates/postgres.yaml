@@ -1,0 +1,59 @@
+{{- if and .Values.database.builtin.enabled (not .Values.database.url) }}
+# Minimal single-replica Postgres for dev / small-team installs.
+# For anything serious, set database.url to a managed instance instead.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "questops.fullname" . }}-db
+  labels:
+    {{- include "questops.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "questops.fullname" . }}-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "questops.fullname" . }}-db
+  template:
+    metadata:
+      labels:
+        app: {{ include "questops.fullname" . }}-db
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.database.builtin.image }}
+          env:
+            - name: POSTGRES_USER
+              value: questops
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.database.builtin.password | quote }}
+            - name: POSTGRES_DB
+              value: questops
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.database.builtin.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.database.builtin.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "questops.fullname" . }}-db
+  labels:
+    {{- include "questops.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 5432
+  selector:
+    app: {{ include "questops.fullname" . }}-db
+{{- end }}
