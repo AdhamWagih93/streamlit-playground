@@ -24,7 +24,7 @@ resources:
 
 app:
   demoMode: false
-  # existing Secret with keys: SECRET_KEY, JIRA_PAT, JENKINS_TOKEN,
+  # existing Secret with keys: SECRET_KEY, JIRA_PASSWORD, JENKINS_TOKEN,
   # LDAP_BIND_PASSWORD, GIT_TOKEN (and DATABASE_URL if database.url is empty).
   # Leave empty to render a Secret from the inline values below (not for prod).
   existingSecret: ""
@@ -39,7 +39,8 @@ jira:
   baseUrl: "https://jira.mycorp.local"
   projectKey: "DEVOPS"
   boardStatuses: "To Do,In Progress,In Review,Done"
-  pat: ""            # prefer app.existingSecret
+  user: "svc-questops"
+  password: ""       # prefer app.existingSecret
 
 jenkins:
   url: "https://jenkins.mycorp.local"

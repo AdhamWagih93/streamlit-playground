@@ -20,7 +20,8 @@ class Settings(BaseSettings):
 
     # --- Jira Data Center (one project) ---
     jira_base_url: str = ""          # e.g. https://jira.mycorp.local
-    jira_pat: str = ""               # personal access token (Bearer)
+    jira_user: str = ""              # basic auth
+    jira_password: str = ""
     jira_project_key: str = "DEVOPS"
     jira_board_statuses: str = "To Do,In Progress,In Review,Done"
 

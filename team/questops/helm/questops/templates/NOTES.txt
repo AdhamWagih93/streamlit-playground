@@ -15,6 +15,6 @@ Checks:
 {{- if not .Values.app.existingSecret }}
 
 WARNING: secrets are rendered inline from values. For production create a
-Secret with keys SECRET_KEY/DATABASE_URL/JIRA_PAT/JENKINS_TOKEN/
+Secret with keys SECRET_KEY/DATABASE_URL/JIRA_PASSWORD/JENKINS_TOKEN/
 LDAP_BIND_PASSWORD/GIT_TOKEN and set app.existingSecret.
 {{- end }}

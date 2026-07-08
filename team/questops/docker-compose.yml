@@ -15,7 +15,8 @@ services:
       OLLAMA_URL: ${QO_OLLAMA_URL:-http://host.containers.internal:11434}
       OLLAMA_MODEL: ${QO_OLLAMA_MODEL:-llama3.1}
       JIRA_BASE_URL: ${QO_JIRA_BASE_URL:-}
-      JIRA_PAT: ${QO_JIRA_PAT:-}
+      JIRA_USER: ${QO_JIRA_USER:-}
+      JIRA_PASSWORD: ${QO_JIRA_PASSWORD:-}
       JIRA_PROJECT_KEY: ${QO_JIRA_PROJECT_KEY:-DEVOPS}
       JIRA_BOARD_STATUSES: ${QO_JIRA_BOARD_STATUSES:-To Do,In Progress,In Review,Done}
       JENKINS_URL: ${QO_JENKINS_URL:-}

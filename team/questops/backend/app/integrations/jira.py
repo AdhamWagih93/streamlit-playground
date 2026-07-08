@@ -1,6 +1,6 @@
 """Jira Data Center client scoped to ONE project (JIRA_PROJECT_KEY).
 
-Live mode uses a Personal Access Token (Bearer). Demo mode keeps a
+Live mode uses basic auth (JIRA_USER / JIRA_PASSWORD). Demo mode keeps a
 mutable in-memory board so the whole flow works without a Jira."""
 
 import datetime as dt
@@ -15,7 +15,8 @@ def _now() -> dt.datetime:
 
 
 def is_live() -> bool:
-    return bool(settings.jira_base_url and settings.jira_pat and not settings.demo_mode)
+    return bool(settings.jira_base_url and settings.jira_user
+                and settings.jira_password and not settings.demo_mode)
 
 
 # ---------------------------------------------------------------- demo store
@@ -62,8 +63,8 @@ def _demo_find(key: str) -> dict:
 # ---------------------------------------------------------------- live client
 def _session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"Authorization": f"Bearer {settings.jira_pat}",
-                      "Accept": "application/json"})
+    s.auth = (settings.jira_user, settings.jira_password)
+    s.headers.update({"Accept": "application/json"})
     return s
 
 
