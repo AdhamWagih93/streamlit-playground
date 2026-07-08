@@ -26,10 +26,15 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
 
 ```bash
 cd questops
-docker compose up --build
+./dev.sh start        # wraps podman-compose (or docker compose), waits for health
 # open http://localhost:8080  →  alice / demo   (team lead, approver)
 #                               bob, carol, dave / demo
+./dev.sh stop|restart|status|logs|reset
 ```
+
+Requires podman ≥ 4 (or docker) — podman 3.x/CNI can't resolve service names the
+way podman-compose wires them. `docker compose up --build` works too; `dev.sh` just
+adds health-waiting, stale-port cleanup and no-systemd (WSL/CI) handling.
 
 Demo mode seeds a 4-person team (1 leader + 3 members — add the 4th in
 `backend/app/auth.py:DEMO_USERS`), 3 weeks of history, a Jira board, Jenkins jobs and a

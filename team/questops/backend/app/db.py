@@ -98,8 +98,21 @@ engine = create_engine(settings.database_url, pool_pre_ping=True, **_engine_kwar
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def init_db() -> None:
-    Base.metadata.create_all(engine)
+def init_db(retries: int = 30, delay: float = 1.0) -> None:
+    """Retry while the database container is still coming up — compose
+    orchestrators (podman-compose especially) don't gate on healthchecks."""
+    import time
+
+    from sqlalchemy.exc import OperationalError
+
+    for attempt in range(retries):
+        try:
+            Base.metadata.create_all(engine)
+            return
+        except OperationalError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
 
 
 def get_db():

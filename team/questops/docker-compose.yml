@@ -4,32 +4,39 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:8080"
     environment:
-      DEMO_MODE: ${DEMO_MODE:-true}
-      SECRET_KEY: ${SECRET_KEY:-local-dev-secret}
-      DATABASE_URL: postgresql+psycopg2://questops:questops@db:5432/questops
-      # host Ollama by default; switch to http://ollama:11434 with `--profile ollama`
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
-      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
-      JIRA_PAT: ${JIRA_PAT:-}
-      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-DEVOPS}
-      JENKINS_URL: ${JENKINS_URL:-}
-      JENKINS_USER: ${JENKINS_USER:-}
-      JENKINS_TOKEN: ${JENKINS_TOKEN:-}
-      LDAP_URL: ${LDAP_URL:-}
-      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
-      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
-      LDAP_BASE_DN: ${LDAP_BASE_DN:-}
-      LDAP_REQUIRED_GROUP: ${LDAP_REQUIRED_GROUP:-}
-      LDAP_APPROVER_GROUP: ${LDAP_APPROVER_GROUP:-}
-      GIT_TOKEN: ${GIT_TOKEN:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      DEMO_MODE: ${QO_DEMO_MODE:-true}
+      SECRET_KEY: ${QO_SECRET_KEY:-local-dev-secret}
+      DATABASE_URL: ${QO_DATABASE_URL:-postgresql+psycopg2://questops:questops@db:5432/questops}
+      # host Ollama by default (podman resolves host.containers.internal itself;
+      # on plain docker set OLLAMA_URL=http://host.docker.internal:11434 in .env)
+      # switch to http://ollama:11434 with `--profile ollama`
+      OLLAMA_URL: ${QO_OLLAMA_URL:-http://host.containers.internal:11434}
+      OLLAMA_MODEL: ${QO_OLLAMA_MODEL:-llama3.1}
+      JIRA_BASE_URL: ${QO_JIRA_BASE_URL:-}
+      JIRA_PAT: ${QO_JIRA_PAT:-}
+      JIRA_PROJECT_KEY: ${QO_JIRA_PROJECT_KEY:-DEVOPS}
+      JIRA_BOARD_STATUSES: ${QO_JIRA_BOARD_STATUSES:-To Do,In Progress,In Review,Done}
+      JENKINS_URL: ${QO_JENKINS_URL:-}
+      JENKINS_USER: ${QO_JENKINS_USER:-}
+      JENKINS_TOKEN: ${QO_JENKINS_TOKEN:-}
+      JENKINS_LONG_RUNNING_MINUTES: ${QO_JENKINS_LONG_RUNNING_MINUTES:-45}
+      LDAP_URL: ${QO_LDAP_URL:-}
+      LDAP_BIND_DN: ${QO_LDAP_BIND_DN:-}
+      LDAP_BIND_PASSWORD: ${QO_LDAP_BIND_PASSWORD:-}
+      LDAP_BASE_DN: ${QO_LDAP_BASE_DN:-}
+      LDAP_USER_ATTR: ${QO_LDAP_USER_ATTR:-sAMAccountName}
+      LDAP_REQUIRED_GROUP: ${QO_LDAP_REQUIRED_GROUP:-}
+      LDAP_APPROVER_GROUP: ${QO_LDAP_APPROVER_GROUP:-}
+      GIT_TOKEN: ${QO_GIT_TOKEN:-}
+      GIT_USER_NAME: ${QO_GIT_USER_NAME:-questops-bot}
+      GIT_USER_EMAIL: ${QO_GIT_USER_EMAIL:-questops-bot@local}
+    # podman-compose doesn't honor healthcheck conditions reliably;
+    # the app retries the DB connection on startup instead (db.init_db)
     depends_on:
-      db:
-        condition: service_healthy
+      - db
+    networks: [backend]
 
   db:
     image: postgres:16-alpine
@@ -39,6 +46,7 @@ services:
       POSTGRES_DB: questops
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks: [backend]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U questops"]
       interval: 5s
@@ -54,6 +62,10 @@ services:
       - "11434:11434"
     volumes:
       - ollama:/root/.ollama
+    networks: [backend]
+
+networks:
+  backend: {}
 
 volumes:
   pgdata:
