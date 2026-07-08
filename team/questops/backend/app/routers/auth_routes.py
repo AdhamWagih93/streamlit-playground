@@ -30,7 +30,10 @@ def profile_payload(db: Session, user: User) -> dict:
 
 @router.post("/login")
 def login(body: LoginBody, db: Session = Depends(get_db)):
-    profile = authenticate(body.username, body.password)
+    try:
+        profile = authenticate(body.username, body.password)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
     if profile is None:
         raise HTTPException(401, "invalid credentials or not in the allowed LDAP group")
     user = upsert_user(db, profile)

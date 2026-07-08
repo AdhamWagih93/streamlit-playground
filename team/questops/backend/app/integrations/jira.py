@@ -61,7 +61,18 @@ _DEMO_ISSUES: list[dict] = [
 ]
 
 
+def _source() -> str:
+    return "live" if is_live() else ("demo" if settings.demo_mode else "not configured")
+
+
+def _require_demo() -> None:
+    if not settings.demo_mode:
+        raise ValueError("Jira integration is not configured "
+                         "(set JIRA_BASE_URL, JIRA_USER, JIRA_PASSWORD)")
+
+
 def _demo_find(key: str) -> dict:
+    _require_demo()
     for issue in _DEMO_ISSUES:
         if issue["key"] == key:
             return issue
@@ -156,13 +167,16 @@ def list_objectives() -> list[str]:
             timeout=20)
         r.raise_for_status()
         return sorted(c["name"] for c in r.json() if not c.get("archived"))
-    return list(DEMO_OBJECTIVES)
+    return list(DEMO_OBJECTIVES) if settings.demo_mode else []
 
 
 def objectives_coverage() -> dict:
     """Open + recently-closed tickets per objective, and open tickets
     that violate the 'every open ticket has an objective' rule."""
-    issues = _live_search(_board_jql()) if is_live() else [dict(i) for i in _DEMO_ISSUES]
+    if is_live():
+        issues = _live_search(_board_jql())
+    else:
+        issues = [dict(i) for i in _DEMO_ISSUES] if settings.demo_mode else []
     per = {o: {"open": 0, "closed_recent": 0} for o in list_objectives()}
     missing = []
     for i in issues:
@@ -247,7 +261,7 @@ def board() -> dict:
     if is_live():
         issues = _live_search(_board_jql())
     else:
-        issues = [dict(i) for i in _DEMO_ISSUES]
+        issues = [dict(i) for i in _DEMO_ISSUES] if settings.demo_mode else []
     groups = _prefix_groups(issues)
     for i in issues:
         i["needs_objective"] = _is_open(i) and not i.get("components")
@@ -260,7 +274,7 @@ def board() -> dict:
                 "issues": [i for i in issues if _column_for(i) == s]}
                for s in settings.board_statuses]
     return {"project": settings.jira_project_key, "columns": columns,
-            "source": "live" if is_live() else "demo"}
+            "source": _source()}
 
 
 def my_open_issues(username: str) -> list[dict]:
@@ -268,6 +282,8 @@ def my_open_issues(username: str) -> list[dict]:
         return _live_search(
             f'project = "{settings.jira_project_key}" AND assignee = "{username}" '
             f'AND {_not_done_jql()} ORDER BY priority DESC, duedate ASC')
+    if not settings.demo_mode:
+        return []
     return [i for i in _DEMO_ISSUES if i["assignee"] == username and _is_open(i)]
 
 
@@ -276,6 +292,8 @@ def unassigned_issues() -> list[dict]:
         return _live_search(
             f'project = "{settings.jira_project_key}" AND assignee IS EMPTY '
             f'AND {_not_done_jql()} ORDER BY priority DESC')
+    if not settings.demo_mode:
+        return []
     return [i for i in _DEMO_ISSUES if not i["assignee"] and _is_open(i)]
 
 

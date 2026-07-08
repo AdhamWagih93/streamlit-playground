@@ -7,7 +7,7 @@ import random
 from sqlalchemy.orm import Session
 
 from .auth import DEMO_USERS
-from .db import PromptTemplate, RepoAction, User, XPEvent, utcnow
+from .db import BadgeAward, PromptTemplate, RepoAction, User, XPEvent, utcnow
 from .gamification import BADGES, _check_badges, level_for_xp
 
 SEED_KINDS = [
@@ -34,6 +34,26 @@ TEMPLATES = [
               "Update any apt/apk package names that changed. Summarize breaking-change "
               "risks in the plan before touching files.")},
 ]
+
+
+def cleanup_demo_data(db: Session) -> None:
+    """Live mode must never show leftovers from an earlier demo run.
+    Demo rows carry unambiguous markers: @demo.local emails, '(seeded)'
+    event messages, git.example.local repo URLs."""
+    demo_users = [u.username for u in
+                  db.query(User).filter(User.email.like("%@demo.local"))]
+    if demo_users:
+        db.query(XPEvent).filter(XPEvent.username.in_(demo_users)).delete(
+            synchronize_session=False)
+        db.query(BadgeAward).filter(BadgeAward.username.in_(demo_users)).delete(
+            synchronize_session=False)
+        db.query(User).filter(User.username.in_(demo_users)).delete(
+            synchronize_session=False)
+    db.query(XPEvent).filter(XPEvent.message.like("(seeded)%")).delete(
+        synchronize_session=False)
+    db.query(RepoAction).filter(RepoAction.repo_url.like("%git.example.local%")).delete(
+        synchronize_session=False)
+    db.commit()
 
 
 def seed_demo(db: Session) -> None:

@@ -17,6 +17,10 @@ router = APIRouter(prefix="/api", tags=["insights"])
 _FAILED = ("FAILURE", "FAILED", "UNSTABLE", "ABORTED")
 
 
+def _es_source() -> str:
+    return "live" if elastic.is_live() else ("demo" if settings.demo_mode else "not configured")
+
+
 @router.get("/kpi")
 def kpi(hours: int = 24, user: User = Depends(current_user)):
     last_sync, next_sync = elastic.sync_times()
@@ -49,7 +53,7 @@ def kpi(hours: int = 24, user: User = Depends(current_user)):
         "window_applied": window_applied,
         "es_error": es_error,
         "index": settings.jenkins_kpi_index,
-        "source": "live" if elastic.is_live() else "demo",
+        "source": _es_source(),
     }
 
 
@@ -63,4 +67,4 @@ def errors(days: int = 0, user: User = Depends(current_user)):
     flags = sorted({d.get("TicketFlag") or "Unflagged" for d in docs})
     return {"errors": docs, "flags": flags, "es_error": es_error,
             "days": days or settings.error_analysis_days,
-            "source": "live" if elastic.is_live() else "demo"}
+            "source": _es_source()}

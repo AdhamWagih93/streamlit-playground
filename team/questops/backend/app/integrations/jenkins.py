@@ -151,7 +151,13 @@ def _live_overview() -> dict:
 
 
 def overview() -> dict:
-    return _live_overview() if is_live() else _demo_overview()
+    if is_live():
+        return _live_overview()
+    if settings.demo_mode:
+        return _demo_overview()
+    return {"failures": [], "long_running": [], "jobs": [],
+            "failure_window_days": settings.jenkins_failure_window_days,
+            "source": "not configured"}
 
 
 def claim(job: str, username: str) -> None:
@@ -161,6 +167,8 @@ def claim(job: str, username: str) -> None:
 def verify_fixed(job: str) -> bool:
     """A 'fixed' claim only pays out if Jenkins agrees (live mode)."""
     if not is_live():
+        if not settings.demo_mode:
+            return False  # unconfigured live mode: nothing to verify against
         for j in _DEMO_JOBS:
             if j["name"] == job and j["result"] in ("FAILURE", "UNSTABLE"):
                 j["result"] = "SUCCESS"

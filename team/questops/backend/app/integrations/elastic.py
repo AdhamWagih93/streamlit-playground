@@ -96,7 +96,7 @@ def kpi_recent(hours: int = 24, size: int = 200) -> tuple[list[dict], bool]:
     then builddate; if both come back empty, falls back to the newest
     documents regardless of window so the panel is never silently blank."""
     if not is_live():
-        return _demo_kpi(), True
+        return (_demo_kpi(), True) if settings.demo_mode else ([], True)
     for field in ("@timestamp", "builddate"):
         try:
             docs = _search(settings.jenkins_kpi_index, {
@@ -123,4 +123,4 @@ def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:
             "query": {"range": {"Date": {"gte": f"now-{days}d"}}},
             "sort": [{"Date": {"order": "desc"}}],
         })
-    return _demo_errors()
+    return _demo_errors() if settings.demo_mode else []

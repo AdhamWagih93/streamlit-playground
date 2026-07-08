@@ -54,11 +54,14 @@ def _ldap_authenticate(username: str, password: str) -> dict | None:
 
 def authenticate(username: str, password: str) -> dict | None:
     username = username.strip().lower()
-    if settings.demo_mode or not settings.ldap_url:
+    if settings.demo_mode:
         profile = DEMO_USERS.get(username)
         if profile and password == settings.demo_password:
             return {"username": username, **profile}
         return None
+    # live mode: demo accounts must never work
+    if not settings.ldap_url:
+        raise RuntimeError("demo mode is off but LDAP_URL is not configured — no way to log in")
     if not password:
         return None
     return _ldap_authenticate(username, password)

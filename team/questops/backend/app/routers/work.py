@@ -133,6 +133,8 @@ def set_issue_components(key: str, body: ComponentsBody,
         issue = jira.set_components(key, body.components)
     except KeyError:
         raise HTTPException(404, f"issue {key} not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     game = award(db, user, "ticket_objective",
                  message=f"tagged {key} with {', '.join(body.components)}", ref=key)
     return {"issue": issue, "game": game}
@@ -183,6 +185,8 @@ def comment(key: str, body: CommentBody, user: User = Depends(current_user),
         jira.add_comment(key, body.body, user.username)
     except KeyError:
         raise HTTPException(404, f"issue {key} not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     game = award(db, user, "ticket_comment", message=f"commented on {key}", ref=key)
     return {"game": game}
 
@@ -193,6 +197,8 @@ def claim_issue(key: str, user: User = Depends(current_user), db: Session = Depe
         issue = jira.assign(key, user.username)
     except KeyError:
         raise HTTPException(404, f"issue {key} not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     game = award(db, user, "ticket_claimed", message=f"claimed {key}", ref=key)
     return {"issue": issue, "game": game}
 

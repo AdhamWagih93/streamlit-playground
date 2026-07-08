@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .db import SessionLocal, init_db
 from .routers import actions, ai, auth_routes, game, insights, prompts, work
-from .seed import seed_demo
+from .seed import cleanup_demo_data, seed_demo
 
 app = FastAPI(title=settings.app_name, docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -23,12 +23,14 @@ def health():
 @app.on_event("startup")
 def startup() -> None:
     init_db()
-    if settings.demo_mode:
-        db = SessionLocal()
-        try:
+    db = SessionLocal()
+    try:
+        if settings.demo_mode:
             seed_demo(db)
-        finally:
-            db.close()
+        else:
+            cleanup_demo_data(db)  # purge leftovers from any earlier demo run
+    finally:
+        db.close()
 
 
 def _frontend_dir() -> Path:
