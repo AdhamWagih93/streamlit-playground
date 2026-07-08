@@ -91,14 +91,28 @@ def _demo_errors() -> list[dict]:
 
 
 # ---------------------------------------------------------------- public API
-def kpi_recent(hours: int = 24, size: int = 200) -> list[dict]:
-    if is_live():
-        return _search(settings.jenkins_kpi_index, {
-            "size": size,
-            "query": {"range": {"@timestamp": {"gte": f"now-{hours}h"}}},
-            "sort": [{"@timestamp": {"order": "desc"}}],
-        })
-    return _demo_kpi()
+def kpi_recent(hours: int = 24, size: int = 200) -> tuple[list[dict], bool]:
+    """Returns (docs, window_applied). Tries the time window on @timestamp,
+    then builddate; if both come back empty, falls back to the newest
+    documents regardless of window so the panel is never silently blank."""
+    if not is_live():
+        return _demo_kpi(), True
+    for field in ("@timestamp", "builddate"):
+        try:
+            docs = _search(settings.jenkins_kpi_index, {
+                "size": size,
+                "query": {"range": {field: {"gte": f"now-{hours}h"}}},
+                "sort": [{field: {"order": "desc", "unmapped_type": "date"}}],
+            })
+        except requests.HTTPError:
+            continue
+        if docs:
+            return docs, True
+    docs = _search(settings.jenkins_kpi_index, {
+        "size": size, "query": {"match_all": {}},
+        "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
+    })
+    return docs, False
 
 
 def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:

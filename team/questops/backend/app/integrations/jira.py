@@ -149,13 +149,13 @@ def _board_jql() -> str:
 
 
 def list_objectives() -> list[str]:
-    """Team objectives = the Jira project's components."""
+    """Team objectives = the Jira project's components (archived ones excluded)."""
     if is_live():
         r = _session().get(
             f"{settings.jira_base_url}/rest/api/2/project/{settings.jira_project_key}/components",
             timeout=20)
         r.raise_for_status()
-        return sorted(c["name"] for c in r.json())
+        return sorted(c["name"] for c in r.json() if not c.get("archived"))
     return list(DEMO_OBJECTIVES)
 
 
@@ -174,7 +174,8 @@ def objectives_coverage() -> dict:
             continue
         bucket = "open" if _is_open(i) else "closed_recent"
         for c in comps:
-            per.setdefault(c, {"open": 0, "closed_recent": 0})[bucket] += 1
+            if c in per:  # archived components never surface as objective rows
+                per[c][bucket] += 1
     return {"objectives": [{"name": k, **v} for k, v in per.items()],
             "missing": missing}
 

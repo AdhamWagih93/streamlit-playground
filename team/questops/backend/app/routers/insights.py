@@ -28,7 +28,11 @@ def kpi(hours: int = 24, user: User = Depends(current_user)):
     ci = jenkins.overview()
     at_risk = [f for f in ci["failures"] if f["ago_min"] <= since_last_min]
 
-    recent = elastic.kpi_recent(hours=hours)
+    try:
+        recent, window_applied = elastic.kpi_recent(hours=hours)
+        es_error = None
+    except Exception as exc:  # noqa: BLE001 — surface ES problems in the panel
+        recent, window_applied, es_error = [], True, str(exc)[:300]
     loaded_failures = [d for d in recent
                        if str(d.get("status", "")).upper() in _FAILED]
 
@@ -42,14 +46,21 @@ def kpi(hours: int = 24, user: User = Depends(current_user)):
         "loaded": recent[:100],  # the actual KPI documents, newest first
         "loaded_failures": loaded_failures[:25],
         "loaded_total": len(recent),
+        "window_applied": window_applied,
+        "es_error": es_error,
+        "index": settings.jenkins_kpi_index,
         "source": "live" if elastic.is_live() else "demo",
     }
 
 
 @router.get("/errors")
 def errors(days: int = 0, user: User = Depends(current_user)):
-    docs = elastic.error_analysis(days or None)
+    try:
+        docs = elastic.error_analysis(days or None)
+        es_error = None
+    except Exception as exc:  # noqa: BLE001
+        docs, es_error = [], str(exc)[:300]
     flags = sorted({d.get("TicketFlag") or "Unflagged" for d in docs})
-    return {"errors": docs, "flags": flags,
+    return {"errors": docs, "flags": flags, "es_error": es_error,
             "days": days or settings.error_analysis_days,
             "source": "live" if elastic.is_live() else "demo"}

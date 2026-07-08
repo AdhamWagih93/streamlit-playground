@@ -464,10 +464,16 @@ async function renderCI() {
         · ${esc(d.triggertype || "?")}${d.triggeredby ? " by " + esc(d.triggeredby) : ""}</span>
       ${linkBtn(d.buildurl)}
     </div>`).join("") || `<div class="empty">nothing loaded in this window</div>`;
+  const kpiWarn = kpi.es_error
+    ? `<div class="empty">⚠ Elasticsearch query failed on '${esc(kpi.index)}': ${esc(kpi.es_error)}</div>`
+    : (!kpi.window_applied
+      ? `<div class="kpi-note">⚠ the ${kpi.hours}h window matched nothing on @timestamp/builddate — showing the newest records in '${esc(kpi.index)}' instead</div>`
+      : "");
   const loadedPanel = `
     <div class="panel" style="margin-bottom:18px">
       <h2>📦 loaded KPI records — ${esc(kpi.source)} · showing ${kpi.loaded.length} of ${kpi.loaded_total}</h2>
       <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
+      ${kpiWarn}
       <div class="kpi-loaded">${loadedRows}</div>
     </div>`;
 
