@@ -21,7 +21,10 @@ async function api(path, opts = {}) {
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (res.status === 401) { logout(); throw new Error("session expired"); }
+  if (res.status === 401 && !path.startsWith("/api/login")) {
+    logout();
+    throw new Error("session expired");
+  }
   if (!res.ok) {
     const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
     throw new Error(detail);
