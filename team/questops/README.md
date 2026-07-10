@@ -25,9 +25,11 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   in local server-side workspaces (never pushed). Each repo gets a **tech scan**
   (deterministic detection of Python/Node/Docker/Helm/Jenkins/Terraform/… with
   concrete recommendations) and a **repo agent** — a LangChain agent on your Ollama
-  that explores with whitelisted read-only commands (ls/grep/find/git log…), shows
-  every tool call it ran, and only gains write tools (local workspace only) when you
-  flip "enable write actions" on the page.
+  that explores with whitelisted read-only commands (ls/grep/find/git log…).
+  **Every command the agent proposes waits for human approval before it runs**, and
+  every proposal/decision/output is logged to the database (agent audit log on the
+  page). Write tools (local workspace only) appear only when you flip "enable write
+  actions" — and each write still needs its own approval.
 - **Upgrade checker** — detects the running version of each integration (Jenkins,
   Elasticsearch, Jira, PostgreSQL, Ollama) and compares it against the latest LTS /
   supported line (endoflife.date / GitHub releases); one click files a prioritized

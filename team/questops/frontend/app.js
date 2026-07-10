@@ -1062,34 +1062,94 @@ function scanPanelHtml(s) {
 
 function agentState(slot) {
   state.agents = state.agents || {};
-  return (state.agents[slot] = state.agents[slot] || { msgs: [], write: false, busy: false });
+  return (state.agents[slot] = state.agents[slot]
+    || { msgs: [], write: false, busy: false, pending: [], session: null });
 }
 
-function agentPanelHtml(cur) {
+function fmtAgentArgs(tool, input) {
+  try {
+    const a = JSON.parse(input);
+    if (a.command) return a.command;
+    if (a.path !== undefined)
+      return a.path + (a.content !== undefined ? ` (${a.content.length} chars)` : "");
+    return JSON.stringify(a);
+  } catch { return input; }
+}
+
+const AGENT_ST_CLS = { executed: "chip-green", denied: "chip-red",
+                       pending: "chip-amber", error: "chip-red" };
+
+function handleAgentResponse(ag, r) {
+  if (r.status === "pending") {
+    ag.session = r.session;
+    ag.pending = r.pending;
+  } else {
+    ag.msgs.push({ role: "assistant", content: r.reply, steps: r.steps, engine: r.engine });
+    ag.pending = [];
+    ag.session = null;
+  }
+}
+
+function agentPanelHtml(cur, logData) {
   const ag = agentState(cur.slot);
+  const stepHtml = (s) => `
+    <div class="agent-step"><b>${esc(s.tool)}</b> <code>${esc(fmtAgentArgs(s.tool, s.input))}</code>
+      <span class="chip ${AGENT_ST_CLS[s.status] || ""}">${esc(s.status)}</span>
+      ${s.output && s.status !== "denied" ? `<pre>${esc(s.output)}</pre>` : ""}</div>`;
   const msgs = ag.msgs.map((m) => m.role === "user"
     ? `<div class="ai-msg ai-user">${esc(m.content)}</div>`
     : `<div class="ai-msg ai-bot">${md(m.content)}
-        ${(m.steps || []).length ? `<details class="filebox"><summary>🔧 ${m.steps.length} tool call(s) — see exactly what the agent ran</summary>
-          ${m.steps.map((s) => `<div class="agent-step"><b>${esc(s.tool)}</b> <code>${esc(s.input)}</code><pre>${esc(s.output)}</pre></div>`).join("")}</details>` : ""}
-        ${m.engine === "fallback" ? `<div class="ci-meta" style="margin-top:4px">engine: offline fallback</div>` : ""}
+        ${(m.steps || []).length ? `<details class="filebox"><summary>🔧 ${m.steps.length} command(s) this turn — every one human-decided &amp; logged</summary>
+          ${m.steps.map(stepHtml).join("")}</details>` : ""}
+        ${m.engine && m.engine !== "langchain+ollama" ? `<div class="ci-meta" style="margin-top:4px">engine: ${esc(m.engine)}</div>` : ""}
       </div>`).join("");
+
+  const pendingBlock = ag.pending.length ? `
+    <div class="agent-pending">
+      <div class="agent-pending-head">🛡 the agent wants to run ${ag.pending.length} command(s) —
+        nothing executes without your approval</div>
+      ${ag.pending.map((p) => `
+        <div class="agent-cmd ${p.write ? "agent-cmd-write" : ""}">
+          <span class="chip ${p.write ? "chip-amber" : "chip-cyan"}">${p.write ? "WRITE" : "read-only"}</span>
+          <code>${esc(p.tool)}: ${esc(fmtAgentArgs(p.tool, p.input))}</code>
+          <button class="btn btn-sm btn-primary" data-agent-approve="${p.id}">✓ Approve</button>
+          <button class="btn btn-sm btn-danger" data-agent-deny="${p.id}">✕ Deny</button>
+        </div>`).join("")}
+      ${ag.pending.length > 1 ? `<button class="btn btn-sm" id="agent-approve-all">✓ approve all ${ag.pending.length}</button>` : ""}
+    </div>` : "";
+
+  const log = (logData && logData.log) || [];
+  const audit = `
+    <details class="filebox" style="margin-top:10px">
+      <summary>🗒 agent audit log (${log.length}) — every command, decision and output is stored in the database</summary>
+      ${log.map((l) => `
+        <div class="agent-step"><b>${esc(l.tool)}</b> <code>${esc(fmtAgentArgs(l.tool, l.input))}</code>
+          <span class="chip ${AGENT_ST_CLS[l.status] || ""}">${esc(l.status)}</span>
+          <span class="ci-meta">@${esc(l.username)} · ${ago(l.at)}${l.decided_by ? ` · decided by @${esc(l.decided_by)}` : ""}</span>
+          ${l.output && l.status !== "denied" ? `<pre>${esc(l.output)}</pre>` : ""}</div>`).join("")
+        || `<div class="empty">no agent activity yet for this repository</div>`}
+    </details>`;
+
   return `
     <div class="panel" style="margin-top:18px">
       <h2>✦ repo agent — ${esc(cur.name)}
-        <label class="agent-write-toggle" title="give the agent write tools (LOCAL workspace only — never pushed)">
+        <label class="agent-write-toggle" title="offer the agent write tools (LOCAL workspace only — never pushed; each write still needs your approval)">
           <input type="checkbox" id="agent-write" ${ag.write ? "checked" : ""}> enable write actions</label></h2>
-      ${ag.write ? `<div class="kpi-note" style="margin-bottom:8px">⚠ write actions ON — the agent can create/overwrite files in the local workspace; review them as diffs, discard anytime. Nothing is committed or pushed.</div>` : ""}
+      ${ag.write ? `<div class="kpi-note" style="margin-bottom:8px">⚠ write actions ON — the agent may PROPOSE file writes; each one still needs your approval, lands only in the local workspace, and is reviewable as a diff.</div>` : ""}
       <div class="ai-log agent-log" id="agent-log">
-        ${msgs || `<div class="ai-msg ai-bot">Ask me about this repository — I explore it with read-only
-          commands (ls, grep, find, git log…) and cite what I find. Tool calls are shown under each answer.</div>`}
-        ${ag.busy ? `<div class="ai-msg ai-bot">✦ exploring the repository…</div>` : ""}
+        ${msgs || `<div class="ai-msg ai-bot">Ask me about this repository. I explore with read-only commands
+          (ls, grep, find, git log…) — but <b>every command waits for your approval</b> before it runs,
+          and everything is logged to the audit trail below.</div>`}
+        ${pendingBlock}
+        ${ag.busy ? `<div class="ai-msg ai-bot">✦ working…</div>` : ""}
       </div>
       <form class="ai-form agent-form" id="agent-form">
-        <input id="agent-input" placeholder="e.g. what does this service do? is the Dockerfile production-ready?"
-          autocomplete="off" ${ag.busy ? "disabled" : ""}>
-        <button class="btn btn-primary" ${ag.busy ? "disabled" : ""}>➤</button>
+        <input id="agent-input" autocomplete="off"
+          placeholder="${ag.pending.length ? "approve or deny the proposed commands first" : "e.g. what does this service do? is the Dockerfile production-ready?"}"
+          ${ag.busy || ag.pending.length ? "disabled" : ""}>
+        <button class="btn btn-primary" ${ag.busy || ag.pending.length ? "disabled" : ""}>➤</button>
       </form>
+      ${audit}
     </div>`;
 }
 
@@ -1140,11 +1200,13 @@ async function renderRepos() {
       }
       scanHtml = scanPanelHtml(state.scanData);
     }
-    const [treeData, fileData, diffData] = await Promise.all([
+    const [treeData, fileData, diffData, agentLogData] = await Promise.all([
       api(`/api/repos/${cur.slot}/tree?path=${encodeURIComponent(state.repoPath || "")}`),
       state.repoFile ? api(`/api/repos/${cur.slot}/file?path=${encodeURIComponent(state.repoFile)}`).catch((e) => ({ error: e.message })) : null,
       state.repoFile ? api(`/api/repos/${cur.slot}/diff?path=${encodeURIComponent(state.repoFile)}`).catch(() => ({ diff: "" })) : null,
+      api(`/api/repos/${cur.slot}/agent/log`).catch(() => ({ log: [] })),
     ]);
+    state.agentLog = agentLogData;
 
     const segs = (state.repoPath || "").split("/").filter(Boolean);
     const crumbs = [`<a href="javascript:void 0" data-crumb="">${esc(cur.name)}</a>`]
@@ -1197,7 +1259,7 @@ async function renderRepos() {
     ${addPanel}
     <div class="filter-row" style="margin-bottom:16px;flex-wrap:wrap">${chips}</div>
     ${body}
-    ${cur.cloned ? agentPanelHtml(cur) : ""}`;
+    ${cur.cloned ? agentPanelHtml(cur, state.agentLog) : ""}`;
   wireRepoAdd();
 
   view().querySelectorAll("[data-repo]").forEach((b) => b.onclick = () => {
@@ -1248,10 +1310,31 @@ async function renderRepos() {
     if (wt) wt.onchange = () => { ag.write = wt.checked; renderRepos(); };
     const log = document.getElementById("agent-log");
     if (log) log.scrollTop = log.scrollHeight;
+
+    const decide = async (ids, approve) => {
+      if (ag.busy) return;
+      ag.busy = true;
+      renderRepos();
+      try {
+        let r = null;
+        for (const id of ids)  // deciding the last call of a round resumes the agent
+          r = await api("/api/repos/agent/decide",
+                        { method: "POST", body: { command_id: id, approve } });
+        if (r) handleAgentResponse(ag, r);
+      } catch (err) { oops(err); }
+      ag.busy = false;
+      renderRepos();
+    };
+    view().querySelectorAll("[data-agent-approve]").forEach((b) =>
+      b.onclick = () => decide([parseInt(b.dataset.agentApprove, 10)], true));
+    view().querySelectorAll("[data-agent-deny]").forEach((b) =>
+      b.onclick = () => decide([parseInt(b.dataset.agentDeny, 10)], false));
+    on("agent-approve-all", () => decide(ag.pending.map((p) => p.id), true));
+
     agentForm.onsubmit = async (e) => {
       e.preventDefault();
       const msg = document.getElementById("agent-input").value.trim();
-      if (!msg || ag.busy) return;
+      if (!msg || ag.busy || ag.pending.length) return;
       const history = ag.msgs.slice(-8).map((m) => ({ role: m.role, content: m.content }));
       ag.msgs.push({ role: "user", content: msg });
       ag.busy = true;
@@ -1259,7 +1342,7 @@ async function renderRepos() {
       try {
         const r = await api(`/api/repos/${cur.slot}/agent`, { method: "POST",
           body: { message: msg, history, allow_write: ag.write } });
-        ag.msgs.push({ role: "assistant", content: r.reply, steps: r.steps, engine: r.engine });
+        handleAgentResponse(ag, r);
       } catch (err) {
         ag.msgs.push({ role: "assistant", content: `⚠ ${err.message}`, steps: [] });
       }

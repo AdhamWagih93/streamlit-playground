@@ -7,8 +7,8 @@ import random
 from sqlalchemy.orm import Session
 
 from .auth import DEMO_USERS
-from .db import (BadgeAward, PromptTemplate, RepoAction, Repository, User,
-                 XPEvent, utcnow)
+from .db import (AgentCommand, BadgeAward, PromptTemplate, RepoAction,
+                 Repository, User, XPEvent, utcnow)
 from .gamification import BADGES, _check_badges, level_for_xp
 
 SEED_KINDS = [
@@ -44,6 +44,8 @@ def cleanup_demo_data(db: Session) -> None:
     demo_users = [u.username for u in
                   db.query(User).filter(User.email.like("%@demo.local"))]
     if demo_users:
+        db.query(AgentCommand).filter(AgentCommand.username.in_(demo_users)).delete(
+            synchronize_session=False)
         db.query(XPEvent).filter(XPEvent.username.in_(demo_users)).delete(
             synchronize_session=False)
         db.query(BadgeAward).filter(BadgeAward.username.in_(demo_users)).delete(

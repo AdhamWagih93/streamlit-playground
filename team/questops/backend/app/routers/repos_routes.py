@@ -106,9 +106,31 @@ class AgentBody(BaseModel):
 
 
 @router.post("/{slot}/agent")
-def agent(slot: int, body: AgentBody, user: User = Depends(current_user)):
-    """LangChain exploration agent; write tools only when the page enables them."""
+def agent(slot: int, body: AgentBody, user: User = Depends(current_user),
+          db: Session = Depends(get_db)):
+    """Start an agent turn. The agent only PROPOSES tool calls — they come
+    back as pending commands that a human must approve via /agent/decide."""
     if not body.message.strip():
         raise HTTPException(400, "message is required")
-    return _wrap(repo_agent.run_agent, slot, body.message.strip(),
-                 body.history, body.allow_write)
+    return _wrap(repo_agent.start, db, slot, user.username,
+                 body.message.strip(), body.history, body.allow_write)
+
+
+class DecideBody(BaseModel):
+    command_id: int
+    approve: bool
+
+
+@router.post("/agent/decide")
+def agent_decide(body: DecideBody, user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """Approve (execute) or deny one proposed agent command; the decision and
+    any output land in the agent_commands audit log."""
+    return _wrap(repo_agent.decide, db, body.command_id, body.approve,
+                 user.username)
+
+
+@router.get("/{slot}/agent/log")
+def agent_log(slot: int, user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
+    return {"log": repo_agent.audit_log(db, slot)}

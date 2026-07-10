@@ -65,6 +65,28 @@ class Repository(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class AgentCommand(Base):
+    """Every command/action the repo agent proposes. Nothing executes until a
+    human approves; the row is the permanent audit log either way."""
+
+    __tablename__ = "agent_commands"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(40), index=True)
+    repo_slot: Mapped[int] = mapped_column(Integer, index=True)
+    repo_name: Mapped[str] = mapped_column(String(200), default="")
+    username: Mapped[str] = mapped_column(String(120), index=True)  # who ran the chat
+    tool: Mapped[str] = mapped_column(String(60))
+    input: Mapped[str] = mapped_column(Text, default="")            # JSON args
+    write: Mapped[bool] = mapped_column(default=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    # pending | executed | denied | error
+    output: Mapped[str] = mapped_column(Text, default="")
+    requested_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+    decided_by: Mapped[str] = mapped_column(String(120), default="")
+    decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class PromptTemplate(Base):
     __tablename__ = "prompt_templates"
 

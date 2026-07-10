@@ -359,6 +359,18 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   display: inline-flex; align-items: center; gap: 6px;
 }
 .agent-write-toggle input { accent-color: var(--amber); }
+.agent-pending {
+  border: 1px solid rgba(255,178,36,.5); border-radius: 10px; padding: 12px;
+  background: var(--amber-soft); margin-top: 6px;
+}
+.agent-pending-head { font: 600 12px var(--mono); color: var(--amber); margin-bottom: 8px; }
+.agent-cmd {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px;
+  border-top: 1px dashed var(--line); flex-wrap: wrap;
+}
+.agent-cmd:first-of-type { border-top: none; }
+.agent-cmd code { flex: 1; min-width: 200px; word-break: break-all; }
+.agent-cmd-write { background: rgba(239,95,102,.06); border-radius: 6px; }
 .agent-step { border-top: 1px dashed var(--line); padding: 8px 10px; }
 .agent-step b { color: var(--cyan); font: 600 11.5px var(--mono); margin-right: 6px; }
 .agent-step pre { font: 400 11px var(--mono); background: var(--bg); padding: 8px;
