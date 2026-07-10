@@ -23,7 +23,7 @@ from ..config import settings
 from ..db import AgentCommand, utcnow
 from . import ollama as ollama_client
 from . import repo_scan
-from .repos import (RepoError, _dir_for, _repo_by_slot,
+from .repos import (RepoError, _repo_by_slot,
                     read_file as repos_read_file, tree as repos_tree,
                     write_file as repos_write_file)
 
@@ -46,19 +46,18 @@ WRITE_TOOLS = {"write_file"}
 _SESSIONS: dict[str, dict] = {}
 
 
-def _repo_dir(slot: int):
+def _repo_dir(slot: int, username: str | None = None):
+    """username -> that member's own worktree; None -> the server copy."""
+    from .repos import _workspace
     repo = _repo_by_slot(slot)
-    d = _dir_for(repo)
-    if not d.exists():
-        raise RepoError("not cloned yet")
-    return repo, d
+    return repo, _workspace(repo, username)
 
 
 # ------------------------------------------------------------- the sandbox
-def run_readonly(slot: int, command: str) -> str:
+def run_readonly(slot: int, command: str, username: str | None = None) -> str:
     """Run one whitelisted read-only command inside the repo workspace.
     shell=False (no interpolation); paths must stay inside the repo."""
-    _, repo_dir = _repo_dir(slot)
+    _, repo_dir = _repo_dir(slot, username)
     try:
         argv = shlex.split(command)
     except ValueError as exc:
@@ -100,26 +99,28 @@ def _tech_scan_text(slot: int) -> str:
     return "\n".join(out) or "nothing detected"
 
 
-def _execute(slot: int, allow_write: bool, tool: str, args: dict) -> str:
-    """The ONLY place agent tool calls are executed — always post-approval."""
+def _execute(slot: int, allow_write: bool, tool: str, args: dict,
+             username: str | None = None) -> str:
+    """The ONLY place agent tool calls are executed — always post-approval,
+    always inside the requesting member's own worktree."""
     try:
         if tool == "run_command":
-            return run_readonly(slot, str(args.get("command", "")))
+            return run_readonly(slot, str(args.get("command", "")), username)
         if tool == "list_directory":
-            t = repos_tree(slot, str(args.get("path", "")))
+            t = repos_tree(slot, str(args.get("path", "")), username)
             return "\n".join(f"{'dir ' if e['type'] == 'dir' else 'file'} {e['path']}"
                              for e in t["entries"]) or "(empty directory)"
         if tool == "read_file":
-            return repos_read_file(slot, str(args.get("path", "")))["content"]
+            return repos_read_file(slot, str(args.get("path", "")), username)["content"]
         if tool == "tech_scan":
             return _tech_scan_text(slot)
         if tool == "write_file":
             if not allow_write:
                 return "error: write actions are disabled for this session"
             content = str(args.get("content", ""))
-            repos_write_file(slot, str(args.get("path", "")), content)
+            repos_write_file(slot, str(args.get("path", "")), content, username)
             return (f"wrote {args.get('path')} ({len(content.encode())} bytes) — "
-                    "local only, visible as a diff on the Repositories page")
+                    "local to your workspace, visible as a diff on the Repositories page")
         return f"error: unknown tool '{tool}'"
     except RepoError as exc:
         return f"error: {exc}"
@@ -326,8 +327,9 @@ def decide(db: Session, command_id: int, approve: bool, username: str) -> dict:
     sess = _SESSIONS.get(row.session_id)
     if approve:
         allow_write = sess["allow_write"] if sess else False
+        # execute in the CHAT USER's worktree — never in a teammate's
         row.output = _execute(row.repo_slot, allow_write, row.tool,
-                              json.loads(row.input or "{}"))
+                              json.loads(row.input or "{}"), row.username)
         row.status = "error" if row.output.startswith("error:") else "executed"
     else:
         row.status = "denied"

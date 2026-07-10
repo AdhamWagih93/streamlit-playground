@@ -27,8 +27,12 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   → fix steps) runs **only after you confirm** — log + groovy + known error patterns
   go to your local Ollama; offline it degrades to heuristic error extraction.
 - **Repositories, defined from the UI** — add repos from your ADO instance (browse or
-  paste a URL; config holds only the shared ADO credentials), clone/explore/edit them
-  in local server-side workspaces (never pushed). Each repo gets a **tech scan**
+  paste a URL; config holds only the shared ADO credentials). **Every member gets
+  their own git worktree** (shared objects, isolated files) so edits never overlap;
+  the page auto-watches the server (throttled fetch each minute) and banners new
+  commits with one-click "update my workspace", shows commit history (whole repo or
+  current file) with per-commit diffs on demand, and colorizes your local diffs.
+  Nothing is ever pushed. Each repo gets a **tech scan**
   (deterministic detection of Python/Node/Docker/Helm/Jenkins/Terraform/… with
   concrete recommendations) and a **repo agent** — a LangChain agent on your Ollama
   that explores with whitelisted read-only commands (ls/grep/find/git log…).

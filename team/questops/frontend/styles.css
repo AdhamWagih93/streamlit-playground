@@ -377,6 +377,31 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   border-radius: 6px; margin-top: 6px; white-space: pre-wrap; word-break: break-word;
   max-height: 200px; overflow-y: auto; }
 
+/* ---------- remote banner / history / diffs ---------- */
+.remote-banner {
+  font: 500 11.5px var(--mono); color: var(--faint); padding: 6px 2px 12px;
+}
+.remote-banner.remote-new {
+  color: var(--text); background: var(--amber-soft); border: 1px solid rgba(255,178,36,.4);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+}
+.remote-banner.remote-new > b { color: var(--amber); }
+.hist-list { max-height: 380px; overflow-y: auto; }
+.hist-row {
+  display: flex; align-items: center; gap: 12px; padding: 7px 8px;
+  border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 6px;
+}
+.hist-row:hover { background: var(--panel-2); }
+.hist-row.open { background: var(--amber-soft); }
+.hist-sha { color: var(--cyan); font: 500 12px var(--mono); flex: none; }
+.hist-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.hist-scope { float: right; display: inline-flex; gap: 6px; }
+.commit-diff { margin: 4px 0 10px; max-height: 360px; }
+.diff-add { color: var(--green); }
+.diff-del { color: var(--red); }
+.diff-hunk { color: var(--cyan); }
+.diff-file { color: var(--amber); font-weight: 600; }
+
 /* ---------- failure dive ---------- */
 .dive-log {
   font: 400 11.5px/1.5 var(--mono); background: var(--bg); color: var(--dim);

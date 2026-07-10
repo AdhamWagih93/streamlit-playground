@@ -1,14 +1,17 @@
-"""Shared local git workspaces for the Repositories page.
+"""Per-user git workspaces for the Repositories page.
 
 Repositories are DEFINED FROM THE UI (rows in the `repositories` table);
-config carries only the shared ADO instance credentials. Clones live
-server-side under REPOS_WORKDIR; edits stay LOCAL — nothing is ever pushed
-from this page. Credentials are used only for browse/clone/pull and are
-never written into .git/config."""
+config carries only the shared ADO instance credentials. The clone under
+REPOS_WORKDIR is the SERVER COPY (nobody edits it); every logged-in member
+gets their own git worktree next to it ({id}-{name}.wt/{username}) so edits
+never overlap. Edits stay LOCAL — nothing is ever pushed from this page.
+Credentials are used only for browse/clone/fetch and are never written
+into .git/config."""
 
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -103,10 +106,12 @@ def remove_repo(db: Session, slot: int) -> None:
     row = db.get(Repository, slot)
     if row is None:
         raise RepoError("repository not found")
-    workspace = _workdir() / f"{row.id:02d}-{row.name}"
+    base = _workdir() / f"{row.id:02d}-{row.name}"
+    worktrees = _workdir() / f"{row.id:02d}-{row.name}.wt"
     db.delete(row)
     db.commit()
-    shutil.rmtree(workspace, ignore_errors=True)
+    shutil.rmtree(worktrees, ignore_errors=True)  # members' workspaces too
+    shutil.rmtree(base, ignore_errors=True)
 
 
 def discover() -> list[dict]:
@@ -141,7 +146,40 @@ def _repo_by_slot(slot: int) -> dict:
 
 
 def _dir_for(repo: dict) -> Path:
+    """The server copy — the plain clone nobody edits directly."""
     return _workdir() / f"{repo['slot']:02d}-{repo['name']}"
+
+
+def _safe_user(username: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", username or "").strip("._-") or "user"
+
+
+def _worktree_root(repo: dict) -> Path:
+    return _workdir() / f"{repo['slot']:02d}-{repo['name']}.wt"
+
+
+def _ensure_worktree(repo: dict, username: str) -> Path:
+    """Each member works in their own detached worktree (shared objects,
+    isolated files) so teammates never step on each other's edits."""
+    base = _dir_for(repo)
+    if not base.exists():
+        raise RepoError("not cloned yet")
+    wt = _worktree_root(repo) / _safe_user(username)
+    if not wt.exists():
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        _git(base, "worktree", "add", "--detach", str(wt), "HEAD")
+    return wt
+
+
+def _workspace(repo: dict, username: str | None) -> Path:
+    """username=None -> the server copy (read-only callers like the Failure
+    Dive); a username -> that member's own worktree (created on demand)."""
+    if username:
+        return _ensure_worktree(repo, username)
+    base = _dir_for(repo)
+    if not base.exists():
+        raise RepoError("not cloned yet")
+    return base
 
 
 def _scrub(text: str) -> str:
@@ -212,23 +250,115 @@ def clone(slot: int) -> None:
     _git(repo_dir, "remote", "set-url", "origin", repo["url"])  # keep creds out
 
 
-def pull(slot: int) -> str:
+def pull(slot: int, username: str | None = None) -> str:
+    """Update the server copy from origin, then fast-forward the member's
+    worktree to it (git refuses if their local edits would be clobbered)."""
     repo = _repo_by_slot(slot)
-    repo_dir = _dir_for(repo)
-    if not repo_dir.exists():
+    base = _dir_for(repo)
+    if not base.exists():
         raise RepoError("not cloned yet")
-    if settings.demo_mode:
-        return "demo repository — nothing to pull"
-    return _scrub(_git(repo_dir, "pull", "--ff-only", _authed(repo))) or "up to date"
+    out = ""
+    if not settings.demo_mode:
+        out = _scrub(_git(base, "pull", "--ff-only", _authed(repo))).strip()
+    if username:
+        wt = _ensure_worktree(repo, username)
+        base_head = _git(base, "rev-parse", "HEAD").strip()
+        wt_head = _git(wt, "rev-parse", "HEAD").strip()
+        if wt_head != base_head:
+            try:
+                _git(wt, "checkout", "--detach", base_head)
+                out += f"\nyour workspace moved to {base_head[:8]}"
+            except RepoError as exc:
+                raise RepoError("server copy updated, but your workspace has "
+                                f"local edits that conflict: {exc}")
+        else:
+            out += "\nyour workspace is already at the server copy"
+    return out.strip() or "up to date"
 
 
-def discard(slot: int) -> None:
-    """Throw away all local edits (checkout + clean)."""
-    repo_dir = _dir_for(_repo_by_slot(slot))
-    if not repo_dir.exists():
+def discard(slot: int, username: str | None = None) -> None:
+    """Throw away the member's local edits (checkout + clean in THEIR worktree)."""
+    wt = _workspace(_repo_by_slot(slot), username)
+    _git(wt, "checkout", "--", ".", ok_fail=True)
+    _git(wt, "clean", "-fd", ok_fail=True)
+
+
+_FETCH_AT: dict[int, float] = {}
+_FETCH_TTL = 90  # seconds between real fetches per repo
+
+
+def remote_status(slot: int, username: str | None = None) -> dict:
+    """What changed on the server: throttled fetch + behind counts + the
+    incoming commits. Cheap enough for the page to poll."""
+    repo = _repo_by_slot(slot)
+    base = _dir_for(repo)
+    if not base.exists():
         raise RepoError("not cloned yet")
-    _git(repo_dir, "checkout", "--", ".", ok_fail=True)
-    _git(repo_dir, "clean", "-fd", ok_fail=True)
+    fetch_error = None
+    if not settings.demo_mode and time.time() - _FETCH_AT.get(slot, 0) > _FETCH_TTL:
+        try:  # authed URL on the command line; origin's config stays cred-free
+            _git(base, "fetch", _authed(repo), "+refs/heads/*:refs/remotes/origin/*")
+            _FETCH_AT[slot] = time.time()
+        except RepoError as exc:
+            fetch_error = _scrub(str(exc))[:200]
+    branch = _git(base, "rev-parse", "--abbrev-ref", "HEAD", ok_fail=True).strip()
+    upstream = f"origin/{branch}" if branch and branch != "HEAD" else ""
+    behind, incoming = 0, []
+    if upstream and _git(base, "rev-parse", "--verify", upstream, ok_fail=True).strip():
+        behind = int(_git(base, "rev-list", "--count", f"HEAD..{upstream}",
+                          ok_fail=True).strip() or 0)
+        if behind:
+            raw = _git(base, "log", "--format=%h\x1f%an\x1f%ct\x1f%s", "-10",
+                       f"HEAD..{upstream}", ok_fail=True)
+            for line in raw.splitlines():
+                p = line.split("\x1f", 3)
+                if len(p) == 4:
+                    incoming.append({"short": p[0], "author": p[1],
+                                     "at": int(p[2]), "subject": p[3]})
+    wt_pending = 0
+    if username:
+        wt = _worktree_root(repo) / _safe_user(username)
+        if wt.exists():
+            base_head = _git(base, "rev-parse", "HEAD").strip()
+            wt_pending = int(_git(wt, "rev-list", "--count",
+                                  f"HEAD..{base_head}", ok_fail=True).strip() or 0)
+    return {"branch": branch, "behind": behind, "incoming": incoming,
+            "wt_pending": wt_pending, "fetch_error": fetch_error,
+            "checked_at": time.time()}
+
+
+def history(slot: int, username: str | None = None, path: str = "",
+            limit: int = 30) -> dict:
+    """Commit history (optionally for one path), from the member's workspace."""
+    repo = _repo_by_slot(slot)
+    d = _workspace(repo, username)
+    if path:
+        _safe(d, path)
+    args = ["log", "--format=%h\x1f%H\x1f%an\x1f%ct\x1f%s", f"-{min(int(limit), 100)}"]
+    if path:
+        args += ["--", path]
+    commits = []
+    for line in _git(d, *args, ok_fail=True).splitlines():
+        p = line.split("\x1f", 4)
+        if len(p) == 5:
+            commits.append({"short": p[0], "sha": p[1], "author": p[2],
+                            "at": int(p[3]), "subject": p[4]})
+    return {"commits": commits, "path": path}
+
+
+MAX_DIFF_BYTES = 60_000
+
+
+def commit_diff(slot: int, sha: str, username: str | None = None) -> str:
+    """Full patch for one commit — fetched on demand from the UI."""
+    if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+        raise RepoError("invalid commit id")
+    d = _workspace(_repo_by_slot(slot), username)
+    out = _git(d, "show", "--stat", "--patch",
+               "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ci%n%n    %s%n", sha)
+    if len(out) > MAX_DIFF_BYTES:
+        out = out[:MAX_DIFF_BYTES] + f"\n… (truncated at {MAX_DIFF_BYTES} chars)"
+    return out
 
 
 # ---------------------------------------------------------------- inspection
@@ -237,27 +367,27 @@ def _dirty_paths(repo_dir: Path) -> list[str]:
     return [line[3:].strip().strip('"') for line in out.splitlines() if line.strip()]
 
 
-def list_repos() -> list[dict]:
+def list_repos(username: str | None = None) -> list[dict]:
     rows = []
     for repo in configured():
-        repo_dir = _dir_for(repo)
+        base = _dir_for(repo)
         row = {"slot": repo["slot"], "name": repo["name"], "url": repo["url"],
-               "cloned": repo_dir.exists(), "branch": "", "last_commit": "",
+               "cloned": base.exists(), "branch": "", "last_commit": "",
                "dirty": 0}
         if row["cloned"]:
-            row["branch"] = _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD",
+            row["branch"] = _git(base, "rev-parse", "--abbrev-ref", "HEAD",
                                  ok_fail=True).strip()
-            row["last_commit"] = _git(repo_dir, "log", "-1", "--format=%s · %an · %cr",
+            row["last_commit"] = _git(base, "log", "-1", "--format=%s · %an · %cr",
                                       ok_fail=True).strip()
-            row["dirty"] = len(_dirty_paths(repo_dir))
+            if username:  # dirty = THIS member's local edits, in their worktree
+                wt = _worktree_root(repo) / _safe_user(username)
+                row["dirty"] = len(_dirty_paths(wt)) if wt.exists() else 0
         rows.append(row)
     return rows
 
 
-def tree(slot: int, rel: str = "") -> dict:
-    repo_dir = _dir_for(_repo_by_slot(slot))
-    if not repo_dir.exists():
-        raise RepoError("not cloned yet")
+def tree(slot: int, rel: str = "", username: str | None = None) -> dict:
+    repo_dir = _workspace(_repo_by_slot(slot), username)
     target = _safe(repo_dir, rel)
     if not target.is_dir():
         raise RepoError(f"not a directory: {rel}")
@@ -276,8 +406,8 @@ def tree(slot: int, rel: str = "") -> dict:
     return {"path": rel, "entries": entries}
 
 
-def read_file(slot: int, rel: str) -> dict:
-    repo_dir = _dir_for(_repo_by_slot(slot))
+def read_file(slot: int, rel: str, username: str | None = None) -> dict:
+    repo_dir = _workspace(_repo_by_slot(slot), username)
     target = _safe(repo_dir, rel)
     if not target.is_file():
         raise RepoError(f"not a file: {rel}")
@@ -290,10 +420,9 @@ def read_file(slot: int, rel: str) -> dict:
     return {"path": rel, "content": content}
 
 
-def write_file(slot: int, rel: str, content: str) -> None:
-    repo_dir = _dir_for(_repo_by_slot(slot))
-    if not repo_dir.exists():
-        raise RepoError("not cloned yet")
+def write_file(slot: int, rel: str, content: str,
+               username: str | None = None) -> None:
+    repo_dir = _workspace(_repo_by_slot(slot), username)
     target = _safe(repo_dir, rel)
     if len(content.encode()) > MAX_FILE_BYTES:
         raise RepoError("content too large")
@@ -301,9 +430,7 @@ def write_file(slot: int, rel: str, content: str) -> None:
     target.write_text(content, encoding="utf-8")
 
 
-def diff(slot: int, rel: str = "") -> str:
-    repo_dir = _dir_for(_repo_by_slot(slot))
-    if not repo_dir.exists():
-        raise RepoError("not cloned yet")
+def diff(slot: int, rel: str = "", username: str | None = None) -> str:
+    repo_dir = _workspace(_repo_by_slot(slot), username)
     args = ["diff"] + (["--", rel] if rel else [])
     return _git(repo_dir, *args, ok_fail=True)

@@ -1085,6 +1085,75 @@ function promptForm(t = null) {
 }
 
 /* ================= REPOSITORIES ================= */
+function diffHtml(d) {
+  return esc(d).split("\n").map((l) =>
+    l.startsWith("+++") || l.startsWith("---") || l.startsWith("commit ")
+      ? `<span class="diff-file">${l}</span>`
+      : l.startsWith("+") ? `<span class="diff-add">${l}</span>`
+      : l.startsWith("-") ? `<span class="diff-del">${l}</span>`
+      : l.startsWith("@@") ? `<span class="diff-hunk">${l}</span>` : l).join("\n");
+}
+
+function remoteBannerHtml(r) {
+  if (!r) return "";
+  const n = r.behind || 0, p = r.wt_pending || 0;
+  if (!n && !p)
+    return `<div class="remote-banner">✓ in sync with the server${r.branch ? ` · ${esc(r.branch)}` : ""}${r.fetch_error ? ` · ⚠ fetch failed: ${esc(r.fetch_error)}` : " · auto-checked every minute"}</div>`;
+  return `<div class="remote-banner remote-new">
+    <b>⇣ ${n ? `${n} new commit(s) on the server` : ""}${n && p ? " · " : ""}${p ? `${p} commit(s) not yet in your workspace` : ""}</b>
+    ${(r.incoming || []).map((c) => `<div class="ci-meta">• ${esc(c.subject)} — ${esc(c.author)} · ${ago(new Date(c.at * 1000).toISOString())}</div>`).join("")}
+    <button class="btn btn-sm btn-primary" id="remote-sync" style="margin-top:6px">⟳ Update my workspace</button>
+  </div>`;
+}
+
+async function syncWorkspace(slot) {
+  try {
+    const r = await api(`/api/repos/${slot}/pull`, { method: "POST" });
+    toast(`⟳ ${esc(r.output.split("\n")[0])}`);
+    renderRepos();
+  } catch (e) { oops(e); }
+}
+
+function wireRemoteSync() {
+  const b = document.getElementById("remote-sync");
+  if (b) b.onclick = () => syncWorkspace(state.repoSlot);
+}
+
+// server-change watcher: refreshes ONLY the banner node so a member mid-edit
+// in the editor is never clobbered by a full re-render
+setInterval(async () => {
+  if (state.view !== "repos" || document.hidden || !state.me || !state.repoSlot) return;
+  const el = document.getElementById("remote-banner");
+  if (!el) return;
+  try {
+    const r = await api(`/api/repos/${state.repoSlot}/remote`);
+    el.innerHTML = remoteBannerHtml(r);
+    wireRemoteSync();
+  } catch { /* next tick retries */ }
+}, 60000);
+
+function historyPanelHtml(hist) {
+  if (!hist) return "";
+  const scopeChips = state.repoFile ? `
+    <button class="btn btn-sm ${state.historyScope !== "file" ? "btn-primary" : ""}" data-hscope="repo">whole repo</button>
+    <button class="btn btn-sm ${state.historyScope === "file" ? "btn-primary" : ""}" data-hscope="file">${esc(state.repoFile.split("/").pop())}</button>` : "";
+  const rows = (hist.commits || []).map((c) => `
+    <div class="hist-row ${state.commitDiff && state.commitDiff.sha === c.sha ? "open" : ""}" data-commit="${esc(c.sha)}">
+      <code class="hist-sha">${esc(c.short)}</code>
+      <span class="hist-subject">${esc(c.subject)}</span>
+      <span class="ci-meta">${esc(c.author)} · ${ago(new Date(c.at * 1000).toISOString())}</span>
+      <span class="ci-meta">${state.commitDiff && state.commitDiff.sha === c.sha ? "▾ diff" : "▸ diff"}</span>
+    </div>
+    ${state.commitDiff && state.commitDiff.sha === c.sha
+      ? `<pre class="dive-log commit-diff">${diffHtml(state.commitDiff.diff)}</pre>` : ""}`
+  ).join("") || `<div class="empty">${esc(hist.error || "no commits")}</div>`;
+  return `
+    <div class="panel" style="margin-bottom:16px">
+      <h2>🕘 commit history${hist.path ? ` — ${esc(hist.path)}` : ""}
+        ${scopeChips ? `<span class="hist-scope">${scopeChips}</span>` : ""}</h2>
+      <div class="hist-list">${rows}</div>
+    </div>`;
+}
 function repoAddHtml() {
   const d = state.repoDiscover;
   const list = !d ? `<div class="empty">browsing the ADO instance…</div>`
@@ -1261,7 +1330,7 @@ async function renderRepos() {
   const addPanel = state.repoAddOpen ? repoAddHtml() : "";
   const headHtml = `
     <div class="view-head"><h1>REPOSITORIES</h1>
-      <span class="sub">defined here, cloned with the ADO creds · edits are never pushed</span>
+      <span class="sub">your personal workspace (@${esc(state.me.username)}) — teammates never overlap · server changes auto-watched · edits never pushed</span>
       <span class="spacer"></span>
       <button class="btn btn-sm ${state.repoAddOpen ? "" : "btn-primary"}" id="repo-add-toggle">
         ${state.repoAddOpen ? "✕ close" : "+ Add repository"}</button></div>`;
@@ -1303,11 +1372,15 @@ async function renderRepos() {
       }
       scanHtml = scanPanelHtml(state.scanData);
     }
-    const [treeData, fileData, diffData, agentLogData] = await Promise.all([
+    const histPath = state.historyScope === "file" && state.repoFile ? state.repoFile : "";
+    const [treeData, fileData, diffData, agentLogData, remoteData, histData] = await Promise.all([
       api(`/api/repos/${cur.slot}/tree?path=${encodeURIComponent(state.repoPath || "")}`),
       state.repoFile ? api(`/api/repos/${cur.slot}/file?path=${encodeURIComponent(state.repoFile)}`).catch((e) => ({ error: e.message })) : null,
       state.repoFile ? api(`/api/repos/${cur.slot}/diff?path=${encodeURIComponent(state.repoFile)}`).catch(() => ({ diff: "" })) : null,
       api(`/api/repos/${cur.slot}/agent/log`).catch(() => ({ log: [] })),
+      api(`/api/repos/${cur.slot}/remote`).catch(() => null),
+      state.historyOpen ? api(`/api/repos/${cur.slot}/history?path=${encodeURIComponent(histPath)}`)
+        .catch((e) => ({ commits: [], error: e.message })) : null,
     ]);
     state.agentLog = agentLogData;
 
@@ -1336,7 +1409,7 @@ async function renderRepos() {
           <button class="btn btn-sm btn-primary" id="repo-save">💾 Save (local)</button>
         </div>
         <textarea id="repo-editor" spellcheck="false">${esc(fileData.content)}</textarea>
-        ${diffData.diff ? `<details class="filebox" open><summary>± local changes vs HEAD</summary><pre>${esc(diffData.diff)}</pre></details>` : ""}`;
+        ${diffData.diff ? `<details class="filebox" open><summary>± my local changes vs HEAD</summary><pre>${diffHtml(diffData.diff)}</pre></details>` : ""}`;
 
     body = `
       <div class="repo-bar">
@@ -1345,12 +1418,15 @@ async function renderRepos() {
         <span class="ci-meta">${esc(cur.branch)} · ${esc(cur.last_commit)}
           ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
         <button class="btn btn-sm ${state.scanOpen ? "btn-primary" : ""}" id="repo-scan">🔬 Tech scan</button>
-        <button class="btn btn-sm" id="repo-pull">⇣ Pull</button>
-        <button class="btn btn-sm btn-danger" id="repo-discard">Discard local edits</button>
+        <button class="btn btn-sm ${state.historyOpen ? "btn-primary" : ""}" id="repo-history">🕘 History</button>
+        <button class="btn btn-sm" id="repo-pull" title="fetch the server copy and move your workspace to it">⟳ Sync</button>
+        <button class="btn btn-sm btn-danger" id="repo-discard">Discard my edits</button>
         <button class="btn btn-sm btn-danger" id="repo-remove"
-          title="remove from QuestOps (local workspace deleted; the remote repo is untouched)">🗑</button>
+          title="remove from QuestOps (all members' workspaces deleted; the remote repo is untouched)">🗑</button>
       </div>
+      <div id="remote-banner">${remoteBannerHtml(remoteData)}</div>
       ${scanHtml}
+      ${state.historyOpen ? historyPanelHtml(histData) : ""}
       <div class="repo-grid">
         <div class="panel tree-panel">${up}${items}</div>
         <div class="panel editor-panel">${editor}</div>
@@ -1376,13 +1452,31 @@ async function renderRepos() {
           toast(`⛁ ${esc(cur.name)} cloned`, "toast-xp"); renderRepos(); }
     catch (e) { oops(e); }
   });
-  on("repo-pull", async () => {
-    try { const r = await api(`/api/repos/${cur.slot}/pull`, { method: "POST" });
-          toast(`⇣ ${esc(r.output.split("\n")[0])}`); renderRepos(); }
-    catch (e) { oops(e); }
+  on("repo-pull", () => syncWorkspace(cur.slot));
+  wireRemoteSync();
+  on("repo-history", () => {
+    state.historyOpen = !state.historyOpen;
+    state.commitDiff = null;
+    renderRepos();
+  });
+  view().querySelectorAll("[data-commit]").forEach((el) => el.onclick = async () => {
+    const sha = el.dataset.commit;
+    if (state.commitDiff && state.commitDiff.sha === sha) {
+      state.commitDiff = null;
+      return renderRepos();
+    }
+    try {
+      state.commitDiff = await api(`/api/repos/${cur.slot}/commit/${sha}`);
+      renderRepos();
+    } catch (e) { oops(e); }
+  });
+  view().querySelectorAll("[data-hscope]").forEach((b) => b.onclick = () => {
+    state.historyScope = b.dataset.hscope;
+    state.commitDiff = null;
+    renderRepos();
   });
   on("repo-discard", async () => {
-    if (!confirm(`Discard ALL local edits in ${cur.name}?`)) return;
+    if (!confirm(`Discard ALL of YOUR local edits in ${cur.name}?\n(teammates' workspaces are untouched)`)) return;
     try { await api(`/api/repos/${cur.slot}/discard`, { method: "POST" }); renderRepos(); }
     catch (e) { oops(e); }
   });

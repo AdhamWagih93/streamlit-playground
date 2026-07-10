@@ -44,10 +44,17 @@ def _rel(root: Path, paths: list[Path], cap: int = 6) -> list[str]:
     return [str(p.relative_to(root)) for p in paths[:cap]]
 
 
-def scan(slot: int) -> dict:
-    """Detect technologies and return per-tech + general recommendations."""
+def scan(slot: int, username: str | None = None) -> dict:
+    """Detect technologies and return per-tech + general recommendations.
+    Scans the member's worktree when they have one (their edits count),
+    else the server copy."""
     repo = _repo_by_slot(slot)
     root = _dir_for(repo)
+    if username:
+        from .repos import _safe_user, _worktree_root
+        wt = _worktree_root(repo) / _safe_user(username)
+        if wt.exists():
+            root = wt
     if not root.exists():
         raise RepoError("not cloned yet")
 

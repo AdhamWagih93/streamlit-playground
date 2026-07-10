@@ -23,7 +23,7 @@ def _wrap(fn, *args, **kwargs):
 
 @router.get("")
 def list_repos(user: User = Depends(current_user)):
-    return {"repos": _wrap(repos.list_repos)}
+    return {"repos": _wrap(repos.list_repos, user.username)}
 
 
 class AddRepoBody(BaseModel):
@@ -58,23 +58,23 @@ def clone(slot: int, user: User = Depends(current_user)):
 
 @router.post("/{slot}/pull")
 def pull(slot: int, user: User = Depends(current_user)):
-    return {"output": _wrap(repos.pull, slot)}
+    return {"output": _wrap(repos.pull, slot, user.username)}
 
 
 @router.post("/{slot}/discard")
 def discard(slot: int, user: User = Depends(current_user)):
-    _wrap(repos.discard, slot)
+    _wrap(repos.discard, slot, user.username)
     return {"ok": True}
 
 
 @router.get("/{slot}/tree")
 def tree(slot: int, path: str = "", user: User = Depends(current_user)):
-    return _wrap(repos.tree, slot, path)
+    return _wrap(repos.tree, slot, path, user.username)
 
 
 @router.get("/{slot}/file")
 def read_file(slot: int, path: str, user: User = Depends(current_user)):
-    return _wrap(repos.read_file, slot, path)
+    return _wrap(repos.read_file, slot, path, user.username)
 
 
 class WriteBody(BaseModel):
@@ -84,19 +84,36 @@ class WriteBody(BaseModel):
 
 @router.put("/{slot}/file")
 def write_file(slot: int, body: WriteBody, user: User = Depends(current_user)):
-    _wrap(repos.write_file, slot, body.path, body.content)
+    _wrap(repos.write_file, slot, body.path, body.content, user.username)
     return {"ok": True}
 
 
 @router.get("/{slot}/diff")
 def diff(slot: int, path: str = "", user: User = Depends(current_user)):
-    return {"diff": _wrap(repos.diff, slot, path)}
+    return {"diff": _wrap(repos.diff, slot, path, user.username)}
+
+
+@router.get("/{slot}/remote")
+def remote(slot: int, user: User = Depends(current_user)):
+    """Server-side changes: throttled fetch + behind counts + incoming commits."""
+    return _wrap(repos.remote_status, slot, user.username)
+
+
+@router.get("/{slot}/history")
+def history(slot: int, path: str = "", limit: int = 30,
+            user: User = Depends(current_user)):
+    return _wrap(repos.history, slot, user.username, path, limit)
+
+
+@router.get("/{slot}/commit/{sha}")
+def commit_diff(slot: int, sha: str, user: User = Depends(current_user)):
+    return {"sha": sha, "diff": _wrap(repos.commit_diff, slot, sha, user.username)}
 
 
 @router.get("/{slot}/scan")
 def scan(slot: int, user: User = Depends(current_user)):
     """Deterministic technology detection + recommendations."""
-    return _wrap(repo_scan.scan, slot)
+    return _wrap(repo_scan.scan, slot, user.username)
 
 
 class AgentBody(BaseModel):
