@@ -337,6 +337,45 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   border: 1px solid var(--line); border-radius: 8px; padding: 14px; tab-size: 2; }
 #repo-editor:focus { outline: none; border-color: var(--amber); }
 
+/* ---------- repo scan / agent / add ---------- */
+.repo-bar input {
+  padding: 7px 11px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font: 400 13px var(--body);
+}
+.repo-bar input:focus { outline: none; border-color: var(--amber); }
+.scan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.scan-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--bg-2); }
+.scan-head { font-size: 14px; margin-bottom: 6px; }
+.scan-evidence { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.scan-evidence .chip { font-size: 10px; }
+.scan-recs { margin: 4px 0 0 16px; font-size: 12.5px; color: var(--dim); }
+.scan-recs li { margin: 3px 0; }
+.scan-ok { color: var(--green); font: 500 11.5px var(--mono); }
+.agent-log { max-height: 340px; padding: 4px 2px; }
+.agent-form { padding: 10px 0 0; border-top: 1px solid var(--line); margin-top: 10px; }
+.agent-write-toggle {
+  float: right; color: var(--amber); font: 500 11px var(--mono);
+  text-transform: none; letter-spacing: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.agent-write-toggle input { accent-color: var(--amber); }
+.agent-step { border-top: 1px dashed var(--line); padding: 8px 10px; }
+.agent-step b { color: var(--cyan); font: 600 11.5px var(--mono); margin-right: 6px; }
+.agent-step pre { font: 400 11px var(--mono); background: var(--bg); padding: 8px;
+  border-radius: 6px; margin-top: 6px; white-space: pre-wrap; word-break: break-word;
+  max-height: 200px; overflow-y: auto; }
+
+/* ---------- upgrades ---------- */
+.upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.upg-row.upg-needs { border-left: 3px solid var(--red); }
+.upg-name { flex: 0 0 190px; font-size: 14px; }
+.upg-vers { display: flex; align-items: center; gap: 14px; }
+.upg-ver { display: flex; flex-direction: column; min-width: 110px; }
+.upg-ver b { font: 700 17px var(--display); font-variant-numeric: tabular-nums; }
+.upg-ver small { color: var(--faint); font-size: 10px; }
+.upg-arrow { color: var(--faint); font-size: 16px; }
+.upg-src { flex-basis: 100%; margin-top: -4px; }
+
 /* ---------- guild ---------- */
 .guild-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start; }
 @media (max-width: 1100px) { .guild-grid { grid-template-columns: 1fr; } }

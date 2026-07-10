@@ -20,9 +20,22 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   comments, claim-a-ticket.
 - **Jenkins** — recent failures and long-running (possibly stuck) builds; "I'm on it"
   claims; the fix bounty only pays out when Jenkins reports green.
+- **Repositories, defined from the UI** — add repos from your ADO instance (browse or
+  paste a URL; config holds only the shared ADO credentials), clone/explore/edit them
+  in local server-side workspaces (never pushed). Each repo gets a **tech scan**
+  (deterministic detection of Python/Node/Docker/Helm/Jenkins/Terraform/… with
+  concrete recommendations) and a **repo agent** — a LangChain agent on your Ollama
+  that explores with whitelisted read-only commands (ls/grep/find/git log…), shows
+  every tool call it ran, and only gains write tools (local workspace only) when you
+  flip "enable write actions" on the page.
+- **Upgrade checker** — detects the running version of each integration (Jenkins,
+  Elasticsearch, Jira, PostgreSQL, Ollama) and compares it against the latest LTS /
+  supported line (endoflife.date / GitHub releases); one click files a prioritized
+  upgrade ticket into the pool (EOL → Highest).
 - **Repo actions with a human gate** — a saved prompt template + params → AI drafts a
   plan + full file contents → an **approver** (LDAP group) reviews the diff → only then
-  is anything cloned, committed and pushed (to a branch, never to main).
+  is anything cloned, committed and pushed (to a branch, never to main). Actions can
+  only target repositories defined on the Repositories page.
 - **Prompt templates** — visible, editable, `{{variable}}`-parameterized, improvable via
   AI (proposal first, human saves).
 - **LDAP auth** — one team group gates login and defines the roster (everyone appears on
@@ -69,6 +82,7 @@ credentials. Live-mode behavior per integration is in `backend/app/integrations/
 | Jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN`, `JENKINS_LONG_RUNNING_FACTOR`, `JENKINS_FAILURE_WINDOW_DAYS`, `JENKINS_IGNORE` |
 | Elasticsearch | `ES_URL`, `ES_API_KEY`, `JENKINS_KPI_INDEX` (+ `KPI_SYNC_MINUTES`, `TZ` for the load countdown), `ERROR_ANALYSIS_INDEX`, `ERROR_ANALYSIS_DAYS` |
 | LDAP | `LDAP_URL`, service `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD`, `LDAP_BASE_DN`, `LDAP_REQUIRED_GROUP` (one team group: login + roster), `MEMBER_USERNAMES` (everyone else is approver) |
+| Repositories page | `ADO_URL`, `ADO_USER`, `ADO_PASSWORD` (PAT) — repos themselves are added from the UI |
 | Repo actions | `GIT_TOKEN` (https push), `GIT_USER_NAME`, `GIT_USER_EMAIL` |
 
 ## Deploy with Helm

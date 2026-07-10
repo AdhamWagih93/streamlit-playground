@@ -38,7 +38,5 @@ data:
   GIT_USER_NAME: {{ .Values.git.userName | quote }}
   GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}
-  {{- range $i, $r := .Values.repositories.items }}
-  REPO{{ add $i 1 }}_URL: {{ $r.url | quote }}
-  REPO{{ add $i 1 }}_USER: {{ $r.user | default "" | quote }}
-  {{- end }}
+  ADO_URL: {{ .Values.ado.url | quote }}
+  ADO_USER: {{ .Values.ado.user | quote }}

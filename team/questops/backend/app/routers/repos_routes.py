@@ -1,12 +1,14 @@
-"""Repositories page API: clone/pull/discard + explore/edit local workspaces.
+"""Repositories page API: define repos from the UI (ADO creds from config),
+clone/pull/discard + explore/edit local workspaces.
 Edits never leave the server — there is deliberately no push endpoint."""
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from ..auth import current_user
-from ..db import User
-from ..integrations import repos
+from ..db import User, get_db
+from ..integrations import repo_agent, repo_scan, repos
 from ..integrations.repos import RepoError
 
 router = APIRouter(prefix="/api/repos", tags=["repos"])
@@ -22,6 +24,30 @@ def _wrap(fn, *args, **kwargs):
 @router.get("")
 def list_repos(user: User = Depends(current_user)):
     return {"repos": _wrap(repos.list_repos)}
+
+
+class AddRepoBody(BaseModel):
+    url: str
+    name: str = ""
+
+
+@router.post("")
+def add_repo(body: AddRepoBody, user: User = Depends(current_user),
+             db: Session = Depends(get_db)):
+    return {"repo": _wrap(repos.add_repo, db, body.url, body.name, user.username)}
+
+
+@router.get("/discover")
+def discover(user: User = Depends(current_user)):
+    """Browse the configured ADO instance for repositories to add."""
+    return {"repos": _wrap(repos.discover)}
+
+
+@router.delete("/{slot}")
+def remove_repo(slot: int, user: User = Depends(current_user),
+                db: Session = Depends(get_db)):
+    _wrap(repos.remove_repo, db, slot)
+    return {"ok": True}
 
 
 @router.post("/{slot}/clone")
@@ -65,3 +91,24 @@ def write_file(slot: int, body: WriteBody, user: User = Depends(current_user)):
 @router.get("/{slot}/diff")
 def diff(slot: int, path: str = "", user: User = Depends(current_user)):
     return {"diff": _wrap(repos.diff, slot, path)}
+
+
+@router.get("/{slot}/scan")
+def scan(slot: int, user: User = Depends(current_user)):
+    """Deterministic technology detection + recommendations."""
+    return _wrap(repo_scan.scan, slot)
+
+
+class AgentBody(BaseModel):
+    message: str
+    history: list[dict] = []
+    allow_write: bool = False
+
+
+@router.post("/{slot}/agent")
+def agent(slot: int, body: AgentBody, user: User = Depends(current_user)):
+    """LangChain exploration agent; write tools only when the page enables them."""
+    if not body.message.strip():
+        raise HTTPException(400, "message is required")
+    return _wrap(repo_agent.run_agent, slot, body.message.strip(),
+                 body.history, body.allow_write)

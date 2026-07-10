@@ -52,6 +52,19 @@ class BadgeAward(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Repository(Base):
+    """Repositories-page entries — defined from the UI, cloned with the
+    shared ADO credentials from config."""
+
+    __tablename__ = "repositories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200))
+    url: Mapped[str] = mapped_column(String(500), unique=True)
+    added_by: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class PromptTemplate(Base):
     __tablename__ = "prompt_templates"
 

@@ -172,7 +172,8 @@ async function refreshMe() {
 /* ---------------- router ---------------- */
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
-                repos: renderRepos, team: renderTeam, me: renderProfile };
+                repos: renderRepos, upgrades: renderUpgrades,
+                team: renderTeam, me: renderProfile };
 
 function route() {
   const name = (location.hash.replace("#/", "") || "overview").split("?")[0];
@@ -856,16 +857,25 @@ async function renderActions() {
   });
 }
 
-function renderActionForm() {
+async function renderActionForm() {
   const slot = $("#action-form-slot");
-  const first = state.templates[0];
+  // actions only target repositories DEFINED on the Repositories page
+  const repoData = await api("/api/repos").catch(() => ({ repos: [] }));
+  if (!repoData.repos.length) {
+    slot.innerHTML = `
+      <div class="panel" style="margin-bottom:16px"><h2>new repo action</h2>
+        <div class="empty">no repositories defined —
+          <a href="#/repos">add one on the Repositories page</a> first</div></div>`;
+    return;
+  }
   slot.innerHTML = `
     <div class="panel" style="margin-bottom:16px">
       <h2>new repo action</h2>
       <div class="form-grid">
         <label>Template<select id="af-template">${state.templates.map((t) =>
           `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></label>
-        <label>Repo URL<input id="af-repo" placeholder="https://git.example.com/team/service.git"></label>
+        <label>Repository<select id="af-repo">${repoData.repos.map((r) =>
+          `<option value="${esc(r.url)}">⛁ ${esc(r.name)}</option>`).join("")}</select></label>
         <label>Branch<input id="af-branch" placeholder="questops/my-change"></label>
         <label>Title<input id="af-title" placeholder="(defaults to template name)"></label>
       </div>
@@ -977,13 +987,125 @@ function promptForm(t = null) {
 }
 
 /* ================= REPOSITORIES ================= */
+function repoAddHtml() {
+  const d = state.repoDiscover;
+  const list = !d ? `<div class="empty">browsing the ADO instance…</div>`
+    : d.error ? `<div class="empty">⚠ ${esc(d.error)}</div>`
+    : d.repos.map((r) => `
+        <div class="ci-row"><span class="ci-job">⛁ ${esc(r.name)}</span>
+          <span class="ci-meta">${esc(r.project)}</span>
+          <button class="btn btn-sm" data-adourl="${esc(r.url)}" data-adoname="${esc(r.name)}">+ add</button>
+        </div>`).join("") || `<div class="empty">no repositories found on the ADO instance</div>`;
+  return `
+    <div class="panel" style="margin-bottom:16px">
+      <h2>add repository — cloned with the shared ADO credentials</h2>
+      <div class="repo-bar">
+        <input id="repo-new-url" placeholder="https://ado.mycorp.local/Collection/Project/_git/my-repo" style="flex:1">
+        <input id="repo-new-name" placeholder="name (optional)" style="width:170px">
+        <button class="btn btn-primary btn-sm" id="repo-add-submit">Add</button>
+      </div>
+      <h2 style="margin-top:14px">or pick from the ADO instance</h2>
+      <div class="kpi-loaded">${list}</div>
+    </div>`;
+}
+
+async function addRepo(url, name) {
+  try {
+    const r = await api("/api/repos", { method: "POST", body: { url, name } });
+    toast(`⛁ <b>${esc(r.repo.name)}</b> defined — clone it to explore`, "toast-xp");
+    state.repoSlot = r.repo.slot; state.repoPath = ""; state.repoFile = null;
+    state.repoAddOpen = false;
+    renderRepos();
+  } catch (e) { oops(e); }
+}
+
+function wireRepoAdd() {
+  const t = document.getElementById("repo-add-toggle");
+  if (t) t.onclick = async () => {
+    state.repoAddOpen = !state.repoAddOpen;
+    if (state.repoAddOpen && !state.repoDiscover) {
+      renderRepos();  // paints the loading row while ADO is queried
+      try { state.repoDiscover = await api("/api/repos/discover"); }
+      catch (e) { state.repoDiscover = { error: e.message, repos: [] }; }
+    }
+    renderRepos();
+  };
+  const submit = document.getElementById("repo-add-submit");
+  if (submit) submit.onclick = () =>
+    addRepo($("#repo-new-url").value.trim(), $("#repo-new-name").value.trim());
+  view().querySelectorAll("[data-adourl]").forEach((b) => b.onclick = () =>
+    addRepo(b.dataset.adourl, b.dataset.adoname));
+}
+
+function scanPanelHtml(s) {
+  if (s.error) return `<div class="panel" style="margin-bottom:16px">
+    <h2>🔬 tech scan</h2><div class="empty">⚠ ${esc(s.error)}</div></div>`;
+  const cards = s.technologies.map((t) => `
+    <div class="scan-card">
+      <div class="scan-head">${t.icon} <b>${esc(t.name)}</b></div>
+      <div class="scan-evidence">${t.evidence.map((e) => `<span class="chip">${esc(e)}</span>`).join(" ")}</div>
+      ${t.recommendations.length
+        ? `<ul class="scan-recs">${t.recommendations.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`
+        : `<div class="scan-ok">✓ no findings</div>`}
+    </div>`).join("") || `<div class="empty">no known technologies detected</div>`;
+  const general = s.general.length ? `
+    <div class="obj-missing" style="margin-top:12px">⚠ repo hygiene:
+      <ul class="scan-recs">${s.general.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>` : "";
+  return `
+    <div class="panel" style="margin-bottom:16px">
+      <h2>🔬 tech scan — ${s.files_scanned} files${s.truncated ? " (truncated)" : ""}
+        <button class="btn btn-sm ov-more" id="repo-rescan">↻ rescan</button></h2>
+      <div class="scan-grid">${cards}</div>
+      ${general}
+    </div>`;
+}
+
+function agentState(slot) {
+  state.agents = state.agents || {};
+  return (state.agents[slot] = state.agents[slot] || { msgs: [], write: false, busy: false });
+}
+
+function agentPanelHtml(cur) {
+  const ag = agentState(cur.slot);
+  const msgs = ag.msgs.map((m) => m.role === "user"
+    ? `<div class="ai-msg ai-user">${esc(m.content)}</div>`
+    : `<div class="ai-msg ai-bot">${md(m.content)}
+        ${(m.steps || []).length ? `<details class="filebox"><summary>🔧 ${m.steps.length} tool call(s) — see exactly what the agent ran</summary>
+          ${m.steps.map((s) => `<div class="agent-step"><b>${esc(s.tool)}</b> <code>${esc(s.input)}</code><pre>${esc(s.output)}</pre></div>`).join("")}</details>` : ""}
+        ${m.engine === "fallback" ? `<div class="ci-meta" style="margin-top:4px">engine: offline fallback</div>` : ""}
+      </div>`).join("");
+  return `
+    <div class="panel" style="margin-top:18px">
+      <h2>✦ repo agent — ${esc(cur.name)}
+        <label class="agent-write-toggle" title="give the agent write tools (LOCAL workspace only — never pushed)">
+          <input type="checkbox" id="agent-write" ${ag.write ? "checked" : ""}> enable write actions</label></h2>
+      ${ag.write ? `<div class="kpi-note" style="margin-bottom:8px">⚠ write actions ON — the agent can create/overwrite files in the local workspace; review them as diffs, discard anytime. Nothing is committed or pushed.</div>` : ""}
+      <div class="ai-log agent-log" id="agent-log">
+        ${msgs || `<div class="ai-msg ai-bot">Ask me about this repository — I explore it with read-only
+          commands (ls, grep, find, git log…) and cite what I find. Tool calls are shown under each answer.</div>`}
+        ${ag.busy ? `<div class="ai-msg ai-bot">✦ exploring the repository…</div>` : ""}
+      </div>
+      <form class="ai-form agent-form" id="agent-form">
+        <input id="agent-input" placeholder="e.g. what does this service do? is the Dockerfile production-ready?"
+          autocomplete="off" ${ag.busy ? "disabled" : ""}>
+        <button class="btn btn-primary" ${ag.busy ? "disabled" : ""}>➤</button>
+      </form>
+    </div>`;
+}
+
 async function renderRepos() {
   const data = await api("/api/repos");
+  const addPanel = state.repoAddOpen ? repoAddHtml() : "";
+  const headHtml = `
+    <div class="view-head"><h1>REPOSITORIES</h1>
+      <span class="sub">defined here, cloned with the ADO creds · edits are never pushed</span>
+      <span class="spacer"></span>
+      <button class="btn btn-sm ${state.repoAddOpen ? "" : "btn-primary"}" id="repo-add-toggle">
+        ${state.repoAddOpen ? "✕ close" : "+ Add repository"}</button></div>`;
   if (!data.repos.length) {
-    view().innerHTML = `
-      <div class="view-head"><h1>REPOSITORIES</h1></div>
-      <div class="empty">no repositories configured — set REPO1_URL … REPO6_URL
-        (+ _USER / _PASSWORD) and restart</div>`;
+    view().innerHTML = headHtml + addPanel +
+      `<div class="empty">no repositories defined yet — add one from your ADO instance ↑</div>`;
+    wireRepoAdd();
     return;
   }
   if (!data.repos.some((r) => r.slot === state.repoSlot)) {
@@ -1004,8 +1126,20 @@ async function renderRepos() {
         <p style="color:var(--dim);margin-bottom:6px">${esc(cur.url)}</p>
         <p style="color:var(--faint);font-size:12px;margin-bottom:18px">not cloned yet</p>
         <button class="btn btn-primary" id="repo-clone">⬇ Clone repository</button>
+        <button class="btn btn-danger" id="repo-remove">🗑 Remove</button>
       </div>`;
   } else {
+    let scanHtml = "";
+    if (state.scanOpen) {
+      if (!state.scanData || state.scanData._slot !== cur.slot) {
+        try {
+          state.scanData = { ...(await api(`/api/repos/${cur.slot}/scan`)), _slot: cur.slot };
+        } catch (e) {
+          state.scanData = { _slot: cur.slot, error: e.message, technologies: [], general: [] };
+        }
+      }
+      scanHtml = scanPanelHtml(state.scanData);
+    }
     const [treeData, fileData, diffData] = await Promise.all([
       api(`/api/repos/${cur.slot}/tree?path=${encodeURIComponent(state.repoPath || "")}`),
       state.repoFile ? api(`/api/repos/${cur.slot}/file?path=${encodeURIComponent(state.repoFile)}`).catch((e) => ({ error: e.message })) : null,
@@ -1045,9 +1179,13 @@ async function renderRepos() {
         <span class="spacer"></span>
         <span class="ci-meta">${esc(cur.branch)} · ${esc(cur.last_commit)}
           ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
+        <button class="btn btn-sm ${state.scanOpen ? "btn-primary" : ""}" id="repo-scan">🔬 Tech scan</button>
         <button class="btn btn-sm" id="repo-pull">⇣ Pull</button>
         <button class="btn btn-sm btn-danger" id="repo-discard">Discard local edits</button>
+        <button class="btn btn-sm btn-danger" id="repo-remove"
+          title="remove from QuestOps (local workspace deleted; the remote repo is untouched)">🗑</button>
       </div>
+      ${scanHtml}
       <div class="repo-grid">
         <div class="panel tree-panel">${up}${items}</div>
         <div class="panel editor-panel">${editor}</div>
@@ -1055,10 +1193,12 @@ async function renderRepos() {
   }
 
   view().innerHTML = `
-    <div class="view-head"><h1>REPOSITORIES</h1>
-      <span class="sub">shared local workspaces · edits are never pushed</span></div>
+    ${headHtml}
+    ${addPanel}
     <div class="filter-row" style="margin-bottom:16px;flex-wrap:wrap">${chips}</div>
-    ${body}`;
+    ${body}
+    ${cur.cloned ? agentPanelHtml(cur) : ""}`;
+  wireRepoAdd();
 
   view().querySelectorAll("[data-repo]").forEach((b) => b.onclick = () => {
     state.repoSlot = parseInt(b.dataset.repo, 10);
@@ -1090,6 +1230,43 @@ async function renderRepos() {
       renderRepos();
     } catch (e) { oops(e); }
   });
+  on("repo-scan", () => { state.scanOpen = !state.scanOpen; renderRepos(); });
+  on("repo-rescan", () => { state.scanData = null; renderRepos(); });
+  on("repo-remove", async () => {
+    if (!confirm(`Remove ${cur.name} from QuestOps?\n\nThe local workspace (including un-pushed edits) is deleted.\nThe remote repository is untouched.`)) return;
+    try {
+      await api(`/api/repos/${cur.slot}`, { method: "DELETE" });
+      toast(`🗑 ${esc(cur.name)} removed`);
+      state.repoSlot = null; state.scanData = null;
+      renderRepos();
+    } catch (e) { oops(e); }
+  });
+  const agentForm = document.getElementById("agent-form");
+  if (agentForm) {
+    const ag = agentState(cur.slot);
+    const wt = document.getElementById("agent-write");
+    if (wt) wt.onchange = () => { ag.write = wt.checked; renderRepos(); };
+    const log = document.getElementById("agent-log");
+    if (log) log.scrollTop = log.scrollHeight;
+    agentForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById("agent-input").value.trim();
+      if (!msg || ag.busy) return;
+      const history = ag.msgs.slice(-8).map((m) => ({ role: m.role, content: m.content }));
+      ag.msgs.push({ role: "user", content: msg });
+      ag.busy = true;
+      renderRepos();
+      try {
+        const r = await api(`/api/repos/${cur.slot}/agent`, { method: "POST",
+          body: { message: msg, history, allow_write: ag.write } });
+        ag.msgs.push({ role: "assistant", content: r.reply, steps: r.steps, engine: r.engine });
+      } catch (err) {
+        ag.msgs.push({ role: "assistant", content: `⚠ ${err.message}`, steps: [] });
+      }
+      ag.busy = false;
+      renderRepos();
+    };
+  }
   view().querySelectorAll("[data-dir]").forEach((el) => el.onclick = () => {
     state.repoPath = el.dataset.dir; state.repoFile = null; renderRepos();
   });
@@ -1098,6 +1275,74 @@ async function renderRepos() {
   });
   view().querySelectorAll("[data-crumb]").forEach((el) => el.onclick = () => {
     state.repoPath = el.dataset.crumb; state.repoFile = null; renderRepos();
+  });
+}
+
+/* ================= UPGRADES ================= */
+const UPG_STATUS = {
+  eol:     { label: "END OF LIFE", cls: "chip-red" },
+  upgrade: { label: "upgrade available", cls: "chip-red" },
+  patch:   { label: "patch available", cls: "chip-amber" },
+  ok:      { label: "✓ up to date", cls: "chip-green" },
+  unknown: { label: "unknown", cls: "" },
+};
+
+async function renderUpgrades(refresh) {
+  const data = await api(`/api/upgrades${refresh === true ? "?refresh=true" : ""}`);
+  const rows = data.rows.map((r) => {
+    const st = UPG_STATUS[r.status] || UPG_STATUS.unknown;
+    const needs = ["eol", "upgrade", "patch"].includes(r.status);
+    return `
+    <div class="panel upg-row ${needs ? "upg-needs" : ""}">
+      <div class="upg-name">${r.icon} <b>${esc(r.name)}</b></div>
+      <div class="upg-vers">
+        <div class="upg-ver"><span class="ci-meta">current</span>
+          <b>${esc(r.current || "—")}</b>
+          ${r.detect_error ? `<small class="pct-warn">${esc(r.detect_error)}</small>` : ""}</div>
+        <div class="upg-arrow">${needs ? "→" : "·"}</div>
+        <div class="upg-ver"><span class="ci-meta">${r.lts ? "latest LTS" : "latest supported"}</span>
+          <b>${esc(r.latest || r.recommended || "—")}</b>
+          ${r.eol_date ? `<small>supported until ${esc(r.eol_date)}</small>` : ""}</div>
+      </div>
+      <span class="chip ${st.cls}">${st.label}</span>
+      ${needs && r.current ? `<button class="btn btn-sm btn-primary"
+          data-upg="${esc(r.name)}" data-cur="${esc(r.current)}"
+          data-to="${esc(r.latest || r.recommended)}" data-status="${r.status}">＋ upgrade ticket</button>` : ""}
+      <a class="btn btn-sm btn-ghost" href="${esc(r.page)}" target="_blank" rel="noopener">versions ↗</a>
+      <div class="upg-src ci-meta">source: ${esc(r.source)}${r.lookup_error ? ` · lookup failed: ${esc(r.lookup_error)}` : ""}</div>
+    </div>`;
+  }).join("");
+
+  view().innerHTML = `
+    <div class="view-head"><h1>UPGRADES</h1>
+      <span class="sub">running version vs latest LTS per integration ·
+        checked ${ago(data.checked_at)}${data.cached ? " (cached)" : ""}${data.demo_versions ? " · demo versions" : ""}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="upg-refresh">↻ re-check now</button></div>
+    ${rows || `<div class="empty">no tools to check</div>`}
+    <div class="kpi-note" style="margin-top:12px">outdated tools feed the task pool:
+      “＋ upgrade ticket” creates a prioritized Jira ticket (EOL → Highest, major → High, patch → Medium)</div>`;
+
+  $("#upg-refresh").onclick = () => {
+    view().innerHTML = `<div class="empty">re-checking versions…</div>`;
+    renderUpgrades(true).catch((e) => { view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; });
+  };
+  view().querySelectorAll("[data-upg]").forEach((b) => b.onclick = async () => {
+    const prio = b.dataset.status === "eol" ? "Highest"
+      : b.dataset.status === "upgrade" ? "High" : "Medium";
+    b.disabled = true;
+    try {
+      const d = await api("/api/issues", { method: "POST", body: {
+        summary: `Upgrade ${b.dataset.upg} ${b.dataset.cur} → ${b.dataset.to}`,
+        type: "Task", priority: prio,
+        description: `Created by the QuestOps upgrade checker.\n` +
+          `${b.dataset.upg} is running ${b.dataset.cur}; latest ${b.dataset.status === "patch" ? "patch" : "LTS/supported"} is ${b.dataset.to}.\n` +
+          `Status: ${b.dataset.status}.`,
+      }});
+      handleGame(d.game);
+      toast(`🎫 <b>${esc(d.issue.key)}</b> added to the pool · ${esc(prio)}`, "toast-xp", 5000);
+      b.textContent = `✓ ${d.issue.key}`;
+    } catch (e) { oops(e); b.disabled = false; }
   });
 }
 

@@ -9,6 +9,7 @@ from ..auth import current_user, require_approver
 from ..db import PromptTemplate, RepoAction, User, get_db, utcnow
 from ..gamification import award
 from ..integrations import gitops
+from ..integrations import repos as repos_integration
 
 router = APIRouter(prefix="/api/actions", tags=["actions"])
 
@@ -43,6 +44,11 @@ def create_action(body: CreateActionBody, user: User = Depends(current_user),
     template = db.get(PromptTemplate, body.template_id)
     if template is None:
         raise HTTPException(404, "template not found")
+    # prompt-driven actions only target repositories defined on the Repositories page
+    defined = {r["url"] for r in repos_integration.configured()}
+    if body.repo_url not in defined:
+        raise HTTPException(400, "repository is not defined — add it on the "
+                                 "Repositories page first")
     draft = gitops.generate_plan(template, body.params, body.repo_url, body.branch)
     action = RepoAction(
         title=body.title or template.name, template_id=template.id,

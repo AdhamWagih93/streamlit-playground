@@ -87,13 +87,13 @@ repositories:
     enabled: false   # true = PVC so clones/local edits survive restarts
     size: 5Gi
     storageClassName: ""
-  # up to 6 slots; passwords land in the Secret (REPO<n>_PASSWORD —
-  # add them to app.existingSecret if you use one)
-  items: []
-  # items:
-  #   - url: https://git.mycorp.local/platform/service-one.git
-  #     user: svc-questops
-  #     password: ""
+
+# repositories are ADDED FROM THE UI; only the ADO instance creds live here
+# (browse + clone/pull; a PAT works as the password)
+ado:
+  url: "https://ado.mycorp.local/DefaultCollection"
+  user: "svc-questops"
+  password: ""       # prefer app.existingSecret (key: ADO_PASSWORD)
 
 database:
   # external Postgres DSN, e.g. postgresql+psycopg2://user:pass@host:5432/questops

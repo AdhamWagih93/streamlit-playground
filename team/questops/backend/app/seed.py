@@ -7,7 +7,8 @@ import random
 from sqlalchemy.orm import Session
 
 from .auth import DEMO_USERS
-from .db import BadgeAward, PromptTemplate, RepoAction, User, XPEvent, utcnow
+from .db import (BadgeAward, PromptTemplate, RepoAction, Repository, User,
+                 XPEvent, utcnow)
 from .gamification import BADGES, _check_badges, level_for_xp
 
 SEED_KINDS = [
@@ -53,10 +54,19 @@ def cleanup_demo_data(db: Session) -> None:
         synchronize_session=False)
     db.query(RepoAction).filter(RepoAction.repo_url.like("%git.example.local%")).delete(
         synchronize_session=False)
+    db.query(Repository).filter(Repository.url.like("%git.example.local%")).delete(
+        synchronize_session=False)
     db.commit()
 
 
 def seed_demo(db: Session) -> None:
+    # demo repositories (normally defined from the UI) — idempotent
+    if db.query(Repository).count() == 0:
+        for name in ("payments-service", "platform-helm"):
+            db.add(Repository(name=name, added_by="alice",
+                              url=f"https://git.example.local/platform/{name}.git"))
+        db.commit()
+
     if db.query(User).count() > 0:
         return
 
