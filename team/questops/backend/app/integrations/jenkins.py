@@ -160,6 +160,96 @@ def overview() -> dict:
             "source": "not configured"}
 
 
+MAX_LOG_TAIL = 40_000  # chars; failures live at the end of the console log
+
+
+def _job_path(name: str) -> str:
+    from urllib.parse import quote
+    return "".join(f"/job/{quote(seg, safe='')}" for seg in name.split("/"))
+
+
+def _auth():
+    return (settings.jenkins_user, settings.jenkins_token) if settings.jenkins_user else None
+
+
+def _demo_console(job: str, number: int) -> str:
+    entry = next((j for j in _DEMO_JOBS if j["name"] == job), None)
+    script = f"pipelines/{job.split('/')[0]}.groovy"
+    head = (f"Started by user alice\n"
+            f"Obtained {script} from git https://git.example.local/platform/Engine.git\n"
+            "[Pipeline] Start of Pipeline\n"
+            "[Pipeline] stage\n[Pipeline] { (Build) }\n"
+            "+ ./gradlew assemble\nBUILD SUCCESSFUL in 42s\n"
+            "[Pipeline] stage\n[Pipeline] { (Unit Tests) }\n"
+            "+ ./gradlew test\n")
+    if entry is None or entry["result"] in ("FAILURE", "UNSTABLE"):
+        return head + (
+            "PaymentsServiceTest > chargeCard() STARTED\n"
+            "ERROR: org.testcontainers.containers.ContainerLaunchException: "
+            "Container startup failed for image postgres:16-alpine\n"
+            "Caused by: java.net.SocketTimeoutException: timeout waiting for docker daemon\n"
+            "\tat org.testcontainers.DockerClientFactory.client(DockerClientFactory.java:272)\n"
+            "PaymentsServiceTest > chargeCard() FAILED\n"
+            "3 tests completed, 1 failed\n"
+            "> Task :test FAILED\n"
+            "FAILURE: Build failed with an exception.\n"
+            f"Finished: {entry['result'] if entry else 'FAILURE'}\n")
+    if entry["building"]:
+        return head + "PaymentsServiceTest > chargeCard() STARTED\n(…still running…)\n"
+    return head + "BUILD SUCCESSFUL in 3m 12s\nFinished: SUCCESS\n"
+
+
+def console_log(job: str, number: int) -> str:
+    """Tail of the build's console log (the part that holds the failure)."""
+    if not is_live():
+        if settings.demo_mode:
+            return _demo_console(job, number)
+        raise ValueError("Jenkins is not configured")
+    r = requests.get(f"{settings.jenkins_url}{_job_path(job)}/{int(number)}/consoleText",
+                     auth=_auth(), timeout=30)
+    r.raise_for_status()
+    text = r.text
+    if len(text) > MAX_LOG_TAIL:
+        text = f"… (showing the last {MAX_LOG_TAIL} of {len(text)} chars)\n" + text[-MAX_LOG_TAIL:]
+    return text
+
+
+def job_definition(job: str) -> dict:
+    """Where this job's pipeline lives: scriptPath + SCM url from config.xml
+    (pipeline-from-SCM). For multibranch branch jobs the definition sits on
+    the parent folder, so we walk up when the job itself has none."""
+    if not is_live():
+        if settings.demo_mode:
+            return {"script_path": f"pipelines/{job.split('/')[0]}.groovy",
+                    "scm_url": "https://git.example.local/platform/Engine.git",
+                    "source": "demo"}
+        raise ValueError("Jenkins is not configured")
+    import xml.etree.ElementTree as ET
+    segments = job.split("/")
+    while segments:
+        r = requests.get(f"{settings.jenkins_url}{_job_path('/'.join(segments))}/config.xml",
+                         auth=_auth(), timeout=20)
+        if r.ok:
+            try:
+                root = ET.fromstring(r.text)
+            except ET.ParseError:
+                root = None
+            if root is not None:
+                script_path = root.findtext(".//scriptPath") or ""
+                scm_url = ""
+                for tag in (".//hudson.plugins.git.UserRemoteConfig/url",
+                            ".//scm//url", ".//source/remote"):
+                    scm_url = root.findtext(tag) or ""
+                    if scm_url:
+                        break
+                if script_path:
+                    return {"script_path": script_path, "scm_url": scm_url,
+                            "source": "live", "defined_on": "/".join(segments)}
+        segments.pop()  # try the parent (multibranch folder)
+    return {"script_path": "", "scm_url": "", "source": "live",
+            "note": "no pipeline-from-SCM definition found in the job or its parents"}
+
+
 def claim(job: str, username: str) -> None:
     CLAIMS[job] = username
 

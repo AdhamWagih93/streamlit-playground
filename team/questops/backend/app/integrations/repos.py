@@ -45,11 +45,25 @@ DEMO_REPO_FILES = {
         "charts/app/values.yaml": "replicaCount: 1\nresources:\n  requests: { cpu: 100m, memory: 128Mi }\n",
         "charts/app/templates/deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ .Release.Name }}\n",
     },
+    "Engine": {
+        "README.md": "# Engine\n\nAll Jenkins pipeline definitions (groovy) live here.\n",
+        "pipelines/payments-service.groovy":
+            "pipeline {\n  agent { label 'java' }\n  stages {\n"
+            "    stage('Build') { steps { sh './gradlew assemble' } }\n"
+            "    stage('Unit Tests') { steps { sh './gradlew test' } }  "
+            "// testcontainers: needs the docker daemon\n"
+            "    stage('Package') { steps { sh './gradlew jibDockerBuild' } }\n"
+            "  }\n}\n",
+        "pipelines/checkout-service.groovy":
+            "pipeline {\n  agent { label 'java' }\n  stages {\n"
+            "    stage('Build') { steps { sh './gradlew build' } }\n  }\n}\n",
+    },
 }
 
 
-DEMO_DISCOVERABLE = ["payments-service", "platform-helm", "checkout-service",
-                     "notifications-service", "inventory-service"]
+DEMO_DISCOVERABLE = ["Engine", "UI", "inventories", "ocp-templates",
+                     "payments-service", "platform-helm", "checkout-service",
+                     "notifications-service"]
 
 
 def configured() -> list[dict]:
@@ -65,19 +79,20 @@ def configured() -> list[dict]:
             for r in rows]
 
 
-def _derive_name(url: str) -> str:
-    return url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
-
-
 def add_repo(db: Session, url: str, name: str, username: str) -> dict:
     from ..db import Repository
     url = url.strip()
+    name = name.strip()
     if not re.match(r"^https?://\S+$", url):
         raise RepoError("repository URL must be http(s)")
+    if not name:
+        raise RepoError("repository name is required "
+                        "(e.g. inventories, Engine, UI, ocp-templates)")
     if db.query(Repository).filter(Repository.url == url).first():
         raise RepoError("this repository is already defined")
-    row = Repository(name=(name.strip() or _derive_name(url)), url=url,
-                     added_by=username)
+    if db.query(Repository).filter(Repository.name.ilike(name)).first():
+        raise RepoError(f"a repository named '{name}' is already defined")
+    row = Repository(name=name, url=url, added_by=username)
     db.add(row)
     db.commit()
     return {"slot": row.id, "name": row.name, "url": row.url}

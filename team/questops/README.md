@@ -20,6 +20,12 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   comments, claim-a-ticket.
 - **Jenkins** — recent failures and long-running (possibly stuck) builds; "I'm on it"
   claims; the fix bounty only pays out when Jenkins reports green.
+- **Failure Dive** — 🔎 on any failure pulls the console log (error lines highlighted)
+  and reads the job's config.xml to find the pipeline-from-SCM scriptPath, resolving
+  the groovy source from your defined **Engine** repository (or whichever defined repo
+  matches the job's SCM URL). AI root-cause guidance (symptom → evidence → root cause
+  → fix steps) runs **only after you confirm** — log + groovy + known error patterns
+  go to your local Ollama; offline it degrades to heuristic error extraction.
 - **Repositories, defined from the UI** — add repos from your ADO instance (browse or
   paste a URL; config holds only the shared ADO credentials), clone/explore/edit them
   in local server-side workspaces (never pushed). Each repo gets a **tech scan**

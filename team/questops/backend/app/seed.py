@@ -64,7 +64,7 @@ def cleanup_demo_data(db: Session) -> None:
 def seed_demo(db: Session) -> None:
     # demo repositories (normally defined from the UI) — idempotent
     if db.query(Repository).count() == 0:
-        for name in ("payments-service", "platform-helm"):
+        for name in ("payments-service", "platform-helm", "Engine"):
             db.add(Repository(name=name, added_by="alice",
                               url=f"https://git.example.local/platform/{name}.git"))
         db.commit()

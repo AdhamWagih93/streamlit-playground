@@ -643,7 +643,97 @@ function startKpiCountdown(seconds) {
 const FLAG_COLORS = ["chip-red", "chip-amber", "chip-cyan", "chip-green", "chip-violet"];
 const flagClass = (flag, flags) => FLAG_COLORS[Math.max(0, flags.indexOf(flag)) % FLAG_COLORS.length];
 
+/* ---- Failure Dive: log first, AI guidance only after the user confirms ---- */
+function diveBtn(job, number) {
+  return `<button class="btn btn-sm" data-dive="${esc(job)}" data-divenum="${number}"
+    title="console log + pipeline source + AI root-cause guidance">🔎 Dive</button>`;
+}
+
+async function renderDive() {
+  const { job, number } = state.dive;
+  const [logData, pipe] = await Promise.all([
+    api(`/api/dive/log?job=${encodeURIComponent(job)}&number=${number}`)
+      .catch((e) => ({ log: "", error: e.message })),
+    api(`/api/dive/pipeline?job=${encodeURIComponent(job)}`)
+      .catch((e) => ({ script_path: "", note: e.message })),
+  ]);
+
+  const logHtml = (logData.log || "").split("\n").map((l) =>
+    /(?:ERROR|Exception|FAILED|FAILURE|fatal|Caused by)/i.test(l)
+      ? `<span class="log-err">${esc(l)}</span>` : esc(l)).join("\n");
+
+  const pipePanel = pipe.script_path ? `
+    <div class="panel" style="margin-bottom:18px">
+      <h2>⚙ pipeline definition (from the Jenkins job's SCM config)</h2>
+      <div class="repo-bar" style="margin-bottom:8px">
+        <span class="chip chip-violet">📜 ${esc(pipe.script_path)}</span>
+        ${pipe.repo ? `<span class="chip ${pipe.repo.cloned ? "chip-green" : "chip-amber"}">⛁ ${esc(pipe.repo.name)}${pipe.repo.cloned ? "" : " — not cloned"}</span>` : ""}
+        ${pipe.defined_on && pipe.defined_on !== job ? `<span class="ci-meta">defined on ${esc(pipe.defined_on)}</span>` : ""}
+        <span class="spacer"></span>
+        ${pipe.repo && pipe.repo.cloned && pipe.script ? `<button class="btn btn-sm" id="dive-open-repo">open in Repositories ▸</button>` : ""}
+      </div>
+      ${pipe.note ? `<div class="kpi-note">${esc(pipe.note)}</div>` : ""}
+      ${pipe.script ? `<details class="filebox" open><summary>groovy source</summary><pre>${esc(pipe.script)}</pre></details>` : ""}
+    </div>` : `
+    <div class="panel" style="margin-bottom:18px">
+      <h2>⚙ pipeline definition</h2>
+      <div class="empty">${esc(pipe.note || "no pipeline-from-SCM definition found")}</div>
+    </div>`;
+
+  const cached = state.diveAnalysis && state.diveAnalysis.key === `${job}#${number}`
+    ? state.diveAnalysis : null;
+  const aiPanel = cached ? `
+    <div class="panel briefing"><h2>✦ AI root-cause analysis
+      <span class="ci-meta" style="float:right">engine: ${esc(cached.engine)}${cached.used_pipeline ? " · pipeline source included" : ""}</span></h2>
+      ${md(cached.analysis)}
+      <button class="btn btn-sm btn-ghost" id="dive-reanalyze">↻ re-run analysis</button>
+    </div>` : `
+    <div class="panel briefing"><h2>✦ AI root-cause analysis</h2>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">
+        Sends the log tail${pipe.script ? ", the pipeline groovy source" : ""} and known
+        error patterns for this job to your local Ollama — nothing runs until you confirm.</p>
+      <button class="btn btn-primary" id="dive-analyze">✦ Analyze this failure</button>
+    </div>`;
+
+  view().innerHTML = `
+    <div class="view-head"><h1>FAILURE DIVE</h1>
+      <span class="sub">${esc(job)} · build #${number}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="dive-back">◂ back to pipelines</button></div>
+    ${aiPanel}
+    ${pipePanel}
+    <div class="panel">
+      <h2>🧾 console log${logData.error ? "" : " (tail)"}</h2>
+      ${logData.error ? `<div class="empty">⚠ ${esc(logData.error)}</div>`
+        : `<pre class="dive-log">${logHtml}</pre>`}
+    </div>`;
+
+  $("#dive-back").onclick = () => { state.dive = null; state.diveAnalysis = null; renderCI(); };
+  const analyze = async (btn) => {
+    btn.disabled = true;
+    btn.textContent = "✦ analyzing…";
+    try {
+      const r = await api("/api/dive/analyze", { method: "POST", body: { job, number } });
+      state.diveAnalysis = { key: `${job}#${number}`, ...r };
+      renderDive();
+    } catch (e) { oops(e); btn.disabled = false; btn.textContent = "✦ Analyze this failure"; }
+  };
+  const ab = document.getElementById("dive-analyze");
+  if (ab) ab.onclick = () => analyze(ab);
+  const rb = document.getElementById("dive-reanalyze");
+  if (rb) rb.onclick = () => { state.diveAnalysis = null; renderDive().then(() => {
+    const b = document.getElementById("dive-analyze"); if (b) b.click(); }); };
+  const or_ = document.getElementById("dive-open-repo");
+  if (or_) or_.onclick = () => {
+    state.repoSlot = pipe.repo.slot;
+    state.repoFile = pipe.script_path;
+    state.repoPath = pipe.script_path.split("/").slice(0, -1).join("/");
+    location.hash = "#/repos";
+  };
+}
+
 async function renderCI() {
+  if (state.dive) return renderDive();
   const kpiHours = state.kpiHours || 24;
   const [data, kpi, errs] = await Promise.all([
     api("/api/ci"), api(`/api/kpi?hours=${kpiHours}`), api("/api/errors")]);
@@ -653,6 +743,7 @@ async function renderCI() {
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
       <span class="ci-meta">${esc(f.result)} · ${f.ago_min}m ago${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
       ${linkBtn(f.url)}
+      ${diveBtn(f.job, f.number)}
       ${f.claimed_by
         ? `<button class="btn btn-sm" data-fixed="${esc(f.job)}">It's green +35</button>`
         : `<button class="btn btn-sm" data-claim="${esc(f.job)}">I'm on it +10</button>`}
@@ -664,6 +755,7 @@ async function renderCI() {
       <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
       <span class="ci-meta">running ${l.running_min}m${l.avg_min ? ` · avg ${l.avg_min}m` : ""}${l.claimed_by ? ` · 👀 @${esc(l.claimed_by)}` : ""}</span>
       ${linkBtn(l.url)}
+      ${diveBtn(l.job, l.number)}
       ${l.claimed_by ? "" : `<button class="btn btn-sm" data-claim="${esc(l.job)}">Investigate +10</button>`}
     </div>`).join("") || `<div class="empty">nothing stuck</div>`;
 
@@ -685,6 +777,7 @@ async function renderCI() {
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
       <span class="ci-meta">failed ${f.ago_min}m ago</span>
       ${linkBtn(f.url)}
+      ${diveBtn(f.job, f.number)}
       ${f.claimed_by ? `<span class="chip">🛠 @${esc(f.claimed_by)}</span>`
         : `<button class="btn btn-sm" data-claim="${esc(f.job)}">I'm on it +10</button>`}
     </div>`).join("")
@@ -807,6 +900,11 @@ async function renderCI() {
     act(api("/api/ci/claim", { method: "POST", body: { job: b.dataset.claim } })));
   view().querySelectorAll("[data-fixed]").forEach((b) => b.onclick = () =>
     act(api("/api/ci/fixed", { method: "POST", body: { job: b.dataset.fixed } })));
+  view().querySelectorAll("[data-dive]").forEach((b) => b.onclick = () => {
+    state.dive = { job: b.dataset.dive, number: parseInt(b.dataset.divenum, 10) };
+    state.diveAnalysis = null;
+    renderCI();
+  });
 }
 
 /* ================= REPO ACTIONS ================= */
@@ -1001,9 +1099,11 @@ function repoAddHtml() {
       <h2>add repository — cloned with the shared ADO credentials</h2>
       <div class="repo-bar">
         <input id="repo-new-url" placeholder="https://ado.mycorp.local/Collection/Project/_git/my-repo" style="flex:1">
-        <input id="repo-new-name" placeholder="name (optional)" style="width:170px">
+        <input id="repo-new-name" placeholder="name (required — e.g. Engine, UI, inventories)" style="width:250px">
         <button class="btn btn-primary btn-sm" id="repo-add-submit">Add</button>
       </div>
+      <div class="kpi-note" style="margin-top:6px">the name matters: the Failure Dive looks for your
+        pipeline groovy sources in the repo named <b>Engine</b> (or the one matching the job's SCM URL)</div>
       <h2 style="margin-top:14px">or pick from the ADO instance</h2>
       <div class="kpi-loaded">${list}</div>
     </div>`;
@@ -1031,8 +1131,11 @@ function wireRepoAdd() {
     renderRepos();
   };
   const submit = document.getElementById("repo-add-submit");
-  if (submit) submit.onclick = () =>
-    addRepo($("#repo-new-url").value.trim(), $("#repo-new-name").value.trim());
+  if (submit) submit.onclick = () => {
+    const url = $("#repo-new-url").value.trim(), name = $("#repo-new-name").value.trim();
+    if (!name) return oops(new Error("repository name is required (e.g. Engine, UI, inventories, ocp-templates)"));
+    addRepo(url, name);
+  };
   view().querySelectorAll("[data-adourl]").forEach((b) => b.onclick = () =>
     addRepo(b.dataset.adourl, b.dataset.adoname));
 }

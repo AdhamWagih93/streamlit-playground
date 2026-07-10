@@ -377,6 +377,14 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   border-radius: 6px; margin-top: 6px; white-space: pre-wrap; word-break: break-word;
   max-height: 200px; overflow-y: auto; }
 
+/* ---------- failure dive ---------- */
+.dive-log {
+  font: 400 11.5px/1.5 var(--mono); background: var(--bg); color: var(--dim);
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+  max-height: 480px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+.log-err { color: var(--red); font-weight: 600; background: rgba(239,95,102,.08); }
+
 /* ---------- upgrades ---------- */
 .upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
 .upg-row.upg-needs { border-left: 3px solid var(--red); }
