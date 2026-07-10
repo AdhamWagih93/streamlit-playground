@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from .db import BadgeAward, User, XPEvent, utcnow
 
 XP_RULES = {
+    "ticket_created": 8,  # added work to the pool with priority/urgency set
     "ticket_done": 40,
     "ticket_resolved": 15,  # moved to review ('Resolved')
     "ticket_progress": 10,

@@ -3,7 +3,7 @@
 const state = {
   token: localStorage.getItem("qo_token") || null,
   me: null,
-  view: "focus",
+  view: "overview",
   aiHistory: [],
   templates: [],
 };
@@ -170,19 +170,236 @@ async function refreshMe() {
 }
 
 /* ---------------- router ---------------- */
-const VIEWS = { focus: renderFocus, board: renderBoard, ci: renderCI,
-                actions: renderActions, prompts: renderPrompts, repos: renderRepos,
-                team: renderTeam, me: renderProfile };
+const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
+                ci: renderCI, actions: renderActions, prompts: renderPrompts,
+                repos: renderRepos, team: renderTeam, me: renderProfile };
 
 function route() {
-  const name = (location.hash.replace("#/", "") || "focus").split("?")[0];
-  state.view = VIEWS[name] ? name : "focus";
+  const name = (location.hash.replace("#/", "") || "overview").split("?")[0];
+  state.view = VIEWS[name] ? name : "overview";
   document.querySelectorAll("#nav a").forEach((a) =>
     a.classList.toggle("active", a.dataset.view === state.view));
   view().innerHTML = `<div class="empty">loading…</div>`;
   VIEWS[state.view]().catch((e) => { view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; });
 }
 window.addEventListener("hashchange", route);
+
+/* ================= OVERVIEW ================= */
+async function renderOverview() {
+  const data = await api("/api/overview");
+  const j = data.jira, ci = data.ci, kpi = data.kpi, team = data.team;
+  const pctCls = (p) => p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad";
+
+  const tile = (href, value, label, cls = "", note = "") => `
+    <a class="stat-tile ov-tile ${cls}" href="${href}">
+      <b>${value}</b><span>${label}</span>${note ? `<small>${note}</small>` : ""}
+    </a>`;
+  const tiles = [
+    tile("#/board", j.open_total, "open tickets",
+         j.overdue ? "ov-bad" : "", j.overdue ? `⚠ ${j.overdue} overdue` : (j.due_soon ? `${j.due_soon} due soon` : "")),
+    tile("#/board", j.unassigned, "in the pool", "", "unassigned — claim them"),
+    tile("#/ci", ci.failures, "red builds", ci.failures ? "ov-bad" : "ov-good",
+         ci.long_running ? `+ ${ci.long_running} stuck` : ""),
+    tile("#/ci", `${kpi.overall_pct}%`, "pipeline success (24h)", pctCls(kpi.overall_pct),
+         kpi.at_risk ? `⚠ ${kpi.at_risk} failure(s) entering KPIs` : `${kpi.success}/${kpi.total} builds`),
+    tile("#/actions", data.approvals.pending, "pending approvals",
+         data.approvals.pending ? "ov-warn" : ""),
+    tile("#/team", j.missing_objective, "tickets w/o objective",
+         j.missing_objective ? "ov-warn" : "ov-good"),
+    tile("#/team", team.this_week.xp, "team XP this week",
+         team.this_week.xp >= team.last_week.xp ? "ov-good" : "",
+         `${team.this_week.xp >= team.last_week.xp ? "▲" : "▼"} vs ${team.last_week.xp} last wk`),
+  ].join("");
+
+  const maxCol = Math.max(...j.columns.map((c) => c.count), 1);
+  const boardRows = j.columns.map((c) => `
+    <div class="lb-row">
+      <span class="lb-name"><b>${esc(c.label)}</b></span>
+      <span class="lb-bar"><div style="width:${(c.count / maxCol) * 100}%"></div></span>
+      <span class="lb-xp">${c.count}</span>
+    </div>`).join("") || `<div class="empty">board unavailable (${esc(j.error || j.source)})</div>`;
+  const boardChips = [
+    j.reopened ? `<span class="chip chip-red">↩ ${j.reopened} reopened</span>` : "",
+    j.overdue ? `<span class="chip chip-red">⏰ ${j.overdue} overdue</span>` : "",
+    j.due_soon ? `<span class="chip chip-amber">📅 ${j.due_soon} due ≤2d</span>` : "",
+    j.unassigned ? `<span class="chip chip-cyan">🖐 ${j.unassigned} unassigned</span>` : "",
+  ].filter(Boolean).join(" ");
+
+  const maxObj = Math.max(...j.objectives.map((o) => o.open), 1);
+  const objRows = j.objectives.map((o) => `
+    <div class="lb-row">
+      <span class="lb-name"><b>🎯 ${esc(o.name)}</b><small>${o.open} open · ${o.closed_recent} closed recently</small></span>
+      <span class="lb-bar"><div style="width:${(o.open / maxObj) * 100}%"></div></span>
+      <span class="lb-xp">${o.open}</span>
+    </div>`).join("") || `<div class="empty">no objectives defined</div>`;
+
+  const attention = [
+    ...ci.top_failures.map((f) => `
+      <div class="ci-row"><span class="ci-dot dot-red"></span>
+        <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
+        <span class="ci-meta">failed ${f.ago_min}m ago${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
+        ${linkBtn(f.url)}<a class="btn btn-sm" href="#/ci">act ▸</a></div>`),
+    ...ci.stuck.map((l) => `
+      <div class="ci-row"><span class="ci-dot dot-amber"></span>
+        <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
+        <span class="ci-meta">running ${l.running_min}m${l.avg_min ? ` vs ~${l.avg_min}m avg` : ""}</span>
+        ${linkBtn(l.url)}<a class="btn btn-sm" href="#/ci">act ▸</a></div>`),
+    data.approvals.pending ? `
+      <div class="ci-row"><span class="ci-dot dot-amber"></span>
+        <span class="ci-job">🛡 ${data.approvals.pending} repo action(s) awaiting approval</span>
+        <a class="btn btn-sm" href="#/actions">review ▸</a></div>` : "",
+    j.missing_objective ? `
+      <div class="ci-row"><span class="ci-dot dot-amber"></span>
+        <span class="ci-job">🎯 ${j.missing_objective} open ticket(s) without an objective</span>
+        <a class="btn btn-sm" href="#/board">tag them ▸</a></div>` : "",
+  ].filter(Boolean).join("") || `<div class="empty">✅ all clear — nothing needs attention</div>`;
+
+  const medals = ["🥇", "🥈", "🥉"];
+  const top3 = team.top3.map((r, i) => `
+    <div class="ci-row"><span>${medals[i]}</span>
+      <span class="ci-job">${esc(r.display_name || r.username)}</span>
+      <span class="lb-xp">${r.xp} XP</span></div>`).join("")
+    || `<div class="empty">no XP earned this week yet</div>`;
+  const questRows = team.quests.map((q) => `
+    <div class="ov-quest ${q.complete ? "complete" : ""}">
+      <span>${q.complete ? "✅" : "🏆"} ${esc(q.name)}</span>
+      <div class="quest-track"><div class="quest-fill" style="width:${(q.progress / q.target) * 100}%"></div></div>
+      <span class="ci-meta">${q.progress}/${q.target}</span>
+    </div>`).join("");
+
+  const feed = data.activity.map((e) => `
+    <div class="tl-item kind-${esc(e.kind)}">
+      <div class="tl-msg"><b>@${esc(e.username)}</b> ${esc(e.message || e.kind.replace(/_/g, " "))}
+        ${e.points ? `<span class="tl-pts">+${e.points}</span>` : ""}</div>
+      <div class="tl-meta">${ago(e.at)}</div>
+    </div>`).join("") || `<div class="empty">no activity yet</div>`;
+
+  const srcNote = [["Jira", j], ["Jenkins", ci], ["Elasticsearch", kpi]]
+    .filter(([, s]) => s.source === "error")
+    .map(([n, s]) => `⚠ ${n}: ${esc(s.error || "unavailable")}`).join(" · ");
+
+  view().innerHTML = `
+    <div class="view-head"><h1>OVERVIEW</h1>
+      <span class="sub">the whole picture · ${esc(j.project || "")} · ${j.source}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-primary" id="ov-add">+ Add ticket</button></div>
+    ${srcNote ? `<div class="kpi-note" style="margin-bottom:10px">${srcNote}</div>` : ""}
+    <div class="stat-tiles">${tiles}</div>
+    <div class="ov-grid">
+      <div>
+        <div class="panel" style="margin-bottom:18px"><h2>🚨 needs attention</h2>${attention}</div>
+        <div class="panel" style="margin-bottom:18px"><h2>▦ board at a glance
+          <a class="ov-more" href="#/board">open board ▸</a></h2>
+          ${boardRows}
+          ${boardChips ? `<div class="filter-row" style="margin-top:10px;flex-wrap:wrap">${boardChips}</div>` : ""}</div>
+        <div class="panel"><h2>🎯 objectives
+          <a class="ov-more" href="#/team">details ▸</a></h2>${objRows}</div>
+      </div>
+      <div>
+        <div class="panel" style="margin-bottom:18px"><h2>♛ team pulse — this week
+          <a class="ov-more" href="#/team">team ▸</a></h2>
+          <div class="ci-row"><span class="ci-job">tickets closed</span><span class="lb-xp">${team.this_week.tickets_done}</span></div>
+          <div class="ci-row"><span class="ci-job">builds fixed</span><span class="lb-xp">${team.this_week.builds_fixed}</span></div>
+          ${top3}
+          ${questRows ? `<div style="margin-top:10px">${questRows}</div>` : ""}</div>
+        <div class="panel"><h2>latest activity</h2><div class="timeline">${feed}</div></div>
+      </div>
+    </div>`;
+
+  $("#ov-add").onclick = openQuickAdd;
+}
+
+/* ================= QUICK ADD TICKET ================= */
+// importance × urgency presets → priority (+ a due date when it's urgent)
+const QUICK_PRESETS = [
+  { key: "now",   label: "🔥 Do now",    hint: "important + urgent",   priority: "Highest", dueDays: 0 },
+  { key: "plan",  label: "📌 Plan it",   hint: "important, can wait",  priority: "High",    dueDays: null },
+  { key: "quick", label: "⚡ Quick win", hint: "urgent, not critical", priority: "Medium",  dueDays: 1 },
+  { key: "later", label: "🧊 Backlog",   hint: "no rush",              priority: "Low",     dueDays: null },
+];
+
+async function openQuickAdd() {
+  if ($("#qa-back")) return;
+  const [objectives, members] = await Promise.all([
+    api("/api/objectives").then((d) => d.objectives.map((o) => o.name)).catch(() => []),
+    api("/api/members").then((d) => d.members).catch(() => []),
+  ]);
+
+  const presets = QUICK_PRESETS.map((p) => `
+    <button type="button" class="preset-chip" data-preset="${p.key}">
+      <b>${p.label}</b><small>${p.hint} → ${p.priority}</small></button>`).join("");
+  const memberOpts = members.map((m) => `
+    <option value="${esc(m.username)}">${esc(m.display_name || m.username)}${m.username === state.me.username ? " (me)" : ""}</option>`).join("");
+  const objBoxes = objectives.map((o) => `
+    <label class="qa-obj"><input type="checkbox" value="${esc(o)}"> ${esc(o)}</label>`).join("");
+
+  const back = document.createElement("div");
+  back.id = "qa-back";
+  back.className = "modal-back";
+  back.innerHTML = `
+    <div class="modal panel">
+      <div class="action-head"><span class="action-title">＋ add a ticket to the pool</span>
+        <button class="btn btn-ghost" id="qa-close">✕</button></div>
+      <label class="qa-label">Summary
+        <input id="qa-summary" placeholder="what needs doing?" maxlength="255"></label>
+      <div class="preset-row">${presets}</div>
+      <div class="form-grid" style="margin:10px 0 0">
+        <label>Type<select id="qa-type">
+          <option>Task</option><option>Bug</option><option>Story</option><option>Spike</option>
+        </select></label>
+        <label>Priority<select id="qa-priority">
+          <option>Highest</option><option>High</option><option selected>Medium</option>
+          <option>Low</option><option>Lowest</option>
+        </select></label>
+        <label>Due date<input id="qa-due" type="date"></label>
+        <label>Assignee<select id="qa-assignee">
+          <option value="">— leave in the pool (unassigned)</option>${memberOpts}
+        </select></label>
+      </div>
+      ${objectives.length ? `<div class="qa-label" style="margin-top:10px">Objectives
+        <div class="qa-objs">${objBoxes}</div></div>` : ""}
+      <label class="qa-label" style="margin-top:10px">Description (optional)
+        <textarea id="qa-desc" rows="3" placeholder="context, links, acceptance criteria…"></textarea></label>
+      <div class="action-buttons">
+        <button class="btn btn-primary" id="qa-submit">Create ticket +8 XP</button>
+        <button class="btn btn-ghost" id="qa-cancel">cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  $("#qa-summary").focus();
+
+  const close = () => back.remove();
+  $("#qa-close").onclick = close;
+  $("#qa-cancel").onclick = close;
+  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  back.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+
+  back.querySelectorAll("[data-preset]").forEach((b) => b.onclick = () => {
+    const p = QUICK_PRESETS.find((x) => x.key === b.dataset.preset);
+    back.querySelectorAll(".preset-chip").forEach((c) => c.classList.toggle("active", c === b));
+    $("#qa-priority").value = p.priority;
+    $("#qa-due").value = p.dueDays === null ? ""
+      : new Date(Date.now() + p.dueDays * 864e5).toISOString().slice(0, 10);
+  });
+
+  $("#qa-submit").onclick = async () => {
+    const summary = $("#qa-summary").value.trim();
+    if (!summary) return oops(new Error("summary is required"));
+    const components = [...back.querySelectorAll(".qa-obj input:checked")].map((c) => c.value);
+    $("#qa-submit").disabled = true;
+    try {
+      const data = await api("/api/issues", { method: "POST", body: {
+        summary, type: $("#qa-type").value, priority: $("#qa-priority").value,
+        due: $("#qa-due").value || null, assignee: $("#qa-assignee").value || null,
+        components, description: $("#qa-desc").value,
+      }});
+      handleGame(data.game);
+      toast(`🎫 <b>${esc(data.issue.key)}</b> created · ${esc(data.issue.priority)}${data.issue.assignee ? ` · @${esc(data.issue.assignee)}` : " · in the pool"}`, "toast-xp", 5000);
+      close();
+      if (["overview", "board", "focus"].includes(state.view)) route();
+    } catch (e) { oops(e); $("#qa-submit").disabled = false; }
+  };
+}
 
 /* ================= FOCUS ================= */
 async function renderFocus() {
@@ -979,6 +1196,8 @@ async function renderProfile() {
         </div></div>
     </div>`;
 }
+
+$("#quick-add").addEventListener("click", () => { if (state.me) openQuickAdd(); });
 
 /* ================= AI DRAWER ================= */
 $("#ai-toggle").addEventListener("click", async () => {

@@ -61,6 +61,15 @@ def leaderboard(window: str = "7", user: User = Depends(current_user),
     return {"window": window, "rows": rows}
 
 
+@router.get("/members")
+def members(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Lightweight roster for pickers (e.g. quick-add assignee)."""
+    sync_group_members(db)
+    rows = db.query(User).order_by(User.username).all()
+    return {"members": [{"username": u.username, "display_name": u.display_name}
+                        for u in rows]}
+
+
 @router.get("/history")
 def history(username: str = "", limit: int = 60, user: User = Depends(current_user),
             db: Session = Depends(get_db)):

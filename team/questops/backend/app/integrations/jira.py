@@ -285,6 +285,42 @@ def board() -> dict:
             "source": _source()}
 
 
+def create_issue(summary: str, itype: str = "Task", priority: str = "Medium",
+                 assignee: str | None = None, components: list[str] | None = None,
+                 description: str = "", due: str | None = None) -> dict:
+    """Quick-add into the project pool; assignee=None leaves it unassigned."""
+    if is_live():
+        fields: dict = {
+            "project": {"key": settings.jira_project_key},
+            "summary": summary,
+            "issuetype": {"name": itype},
+            "priority": {"name": priority},
+            "description": description,
+        }
+        if assignee:
+            fields["assignee"] = {"name": assignee}
+        if components:
+            fields["components"] = [{"name": c} for c in components]
+        if due:
+            fields["duedate"] = due
+        r = _session().post(f"{settings.jira_base_url}/rest/api/2/issue",
+                            json={"fields": fields}, timeout=30)
+        r.raise_for_status()
+        return _live_search(f'key = "{r.json()["key"]}"')[0]
+    _require_demo()
+    num = max((int(i["key"].rsplit("-", 1)[1]) for i in _DEMO_ISSUES), default=100) + 1
+    issue = {
+        "key": f"{settings.jira_project_key}-{num}",
+        "summary": summary, "status": settings.board_statuses[0],
+        "priority": priority, "assignee": assignee, "type": itype,
+        "due": due, "created": _now().isoformat(), "updated": _now().isoformat(),
+        "description": description, "components": components or [],
+        "url": f"#demo/{settings.jira_project_key}-{num}", "comments": [],
+    }
+    _DEMO_ISSUES.append(issue)
+    return dict(issue)
+
+
 def my_open_issues(username: str) -> list[dict]:
     if is_live():
         return _live_search(

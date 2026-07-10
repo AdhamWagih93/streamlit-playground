@@ -4,6 +4,11 @@ A gamified, AI-powered harness for a DevOps/platform team: one screen that answe
 **"what should I do right now?"**, keeps the present and the past visible, and turns the
 grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
 
+- **Overview** — the landing page: the whole picture summarized (board counts,
+  objectives, red/stuck builds, KPI success %, pending approvals, team pulse,
+  latest activity), every number linking into its detail page.
+- **Quick add** — a global "+ Ticket" button drops work into the pool (assigned
+  or unassigned) with importance/urgency presets that map to Jira priority + due date.
 - **Focus feed** — Jira tickets, Jenkins failures/long-runners and pending approvals
   merged into one ranked list, each with a "why now" reason.
 - **Gamification** — XP per action, levels & ranks, daily quests with bonuses, 🔥 streaks,

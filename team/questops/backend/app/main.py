@@ -5,15 +5,15 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .db import SessionLocal, init_db
-from .routers import (actions, ai, auth_routes, game, insights, prompts,
-                      repos_routes, work)
+from .routers import (actions, ai, auth_routes, game, insights, overview,
+                      prompts, repos_routes, work)
 from .seed import cleanup_demo_data, seed_demo
 
 app = FastAPI(title=settings.app_name, docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 for router in (auth_routes.router, work.router, game.router,
                prompts.router, actions.router, ai.router, insights.router,
-               repos_routes.router):
+               repos_routes.router, overview.router):
     app.include_router(router)
 
 

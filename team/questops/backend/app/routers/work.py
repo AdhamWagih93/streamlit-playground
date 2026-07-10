@@ -114,6 +114,37 @@ def board(user: User = Depends(current_user)):
     return jira.board()
 
 
+class CreateIssueBody(BaseModel):
+    summary: str
+    description: str = ""
+    type: str = "Task"
+    priority: str = "Medium"
+    assignee: str | None = None
+    components: list[str] = []
+    due: str | None = None
+
+
+@router.post("/issues")
+def create_issue(body: CreateIssueBody, user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """Quick-add a ticket into the pool — assigned or left for anyone to claim."""
+    summary = body.summary.strip()
+    if not summary:
+        raise HTTPException(400, "summary is required")
+    if body.priority not in PRIORITY_SCORE:
+        raise HTTPException(400, f"unknown priority '{body.priority}'")
+    try:
+        issue = jira.create_issue(
+            summary=summary, itype=body.type, priority=body.priority,
+            assignee=body.assignee or None, components=body.components,
+            description=body.description, due=body.due or None)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    game = award(db, user, "ticket_created",
+                 message=f"created {issue['key']} — {summary[:60]}", ref=issue["key"])
+    return {"issue": issue, "game": game}
+
+
 @router.get("/objectives")
 def objectives(user: User = Depends(current_user)):
     return jira.objectives_coverage()
