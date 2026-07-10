@@ -74,6 +74,18 @@ def _kpi_section(ci_failures: list[dict]) -> dict:
     }
 
 
+@router.get("/overview/cursor")
+def overview_cursor(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Cheap change beacon the Overview polls: bumps whenever any member's
+    action lands an XPEvent or a repo action changes state. External
+    Jira/Jenkins/ES drift is covered by the frontend's slow full refresh."""
+    last_event = db.query(func.max(XPEvent.id)).scalar() or 0
+    actions = db.query(func.count(RepoAction.id)).scalar() or 0
+    pending = db.query(func.count(RepoAction.id)).filter(
+        RepoAction.status == "pending_approval").scalar() or 0
+    return {"cursor": f"{last_event}:{actions}:{pending}"}
+
+
 @router.get("/overview")
 def overview(user: User = Depends(current_user), db: Session = Depends(get_db)):
     out: dict = {"generated_at": utcnow().isoformat()}

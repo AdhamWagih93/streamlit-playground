@@ -433,6 +433,8 @@ a.ov-tile:hover { border-color: var(--amber); }
 .ov-tile.pct-warn b { color: var(--amber); }
 .ov-tile.pct-bad b { color: var(--red); }
 .ov-more { float: right; font: 500 10.5px var(--mono); color: var(--cyan); text-transform: none; letter-spacing: 0; }
+.ov-live { color: var(--green); font: 500 11px var(--mono); }
+.ov-live::before { content: "● "; display: inline-block; animation: pulse 1.8s infinite; }
 .ov-quest { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12.5px; }
 .ov-quest .quest-track { flex: 1; }
 .ov-quest.complete { color: var(--green); }

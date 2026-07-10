@@ -185,8 +185,32 @@ function route() {
 window.addEventListener("hashchange", route);
 
 /* ================= OVERVIEW ================= */
+// live refresh: poll a cheap cursor every 5s (any member's action bumps it)
+// and do a full re-pull every 60s for changes made outside QuestOps
+let OV_CURSOR = null, OV_RENDERED = 0, OV_BUSY = false;
+const OV_POLL_MS = 5000, OV_STALE_MS = 60000;
+
+setInterval(async () => {
+  if (state.view !== "overview" || document.hidden || OV_BUSY || !state.me) return;
+  try {
+    const { cursor } = await api("/api/overview/cursor");
+    if (cursor !== OV_CURSOR || Date.now() - OV_RENDERED > OV_STALE_MS)
+      await renderOverview();
+  } catch { /* transient — next tick retries */ }
+}, OV_POLL_MS);
+
 async function renderOverview() {
-  const data = await api("/api/overview");
+  OV_BUSY = true;
+  try {
+    await renderOverviewInner();
+  } finally { OV_BUSY = false; }
+}
+
+async function renderOverviewInner() {
+  const [data, cur] = await Promise.all([
+    api("/api/overview"), api("/api/overview/cursor").catch(() => null)]);
+  OV_CURSOR = cur ? cur.cursor : OV_CURSOR;
+  OV_RENDERED = Date.now();
   const j = data.jira, ci = data.ci, kpi = data.kpi, team = data.team;
   const pctCls = (p) => p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad";
 
@@ -278,9 +302,11 @@ async function renderOverview() {
     .filter(([, s]) => s.source === "error")
     .map(([n, s]) => `⚠ ${n}: ${esc(s.error || "unavailable")}`).join(" · ");
 
+  const scroll = view().scrollTop;  // live re-renders must not yank the page
   view().innerHTML = `
     <div class="view-head"><h1>OVERVIEW</h1>
-      <span class="sub">the whole picture · ${esc(j.project || "")} · ${j.source}</span>
+      <span class="sub">the whole picture · ${esc(j.project || "")} · ${j.source}
+        · <span class="ov-live">live</span></span>
       <span class="spacer"></span>
       <button class="btn btn-primary" id="ov-add">+ Add ticket</button></div>
     ${srcNote ? `<div class="kpi-note" style="margin-bottom:10px">${srcNote}</div>` : ""}
@@ -305,6 +331,7 @@ async function renderOverview() {
         <div class="panel"><h2>latest activity</h2><div class="timeline">${feed}</div></div>
       </div>
     </div>`;
+  view().scrollTop = scroll;
 
   $("#ov-add").onclick = openQuickAdd;
 }
