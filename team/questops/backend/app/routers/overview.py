@@ -12,6 +12,7 @@ from ..config import settings
 from ..db import RepoAction, User, XPEvent, get_db, utcnow
 from ..gamification import team_quest_progress
 from ..integrations import elastic, jenkins, jira
+from ..ticket_sync import sync_closed_tickets
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
@@ -88,6 +89,7 @@ def overview_cursor(user: User = Depends(current_user), db: Session = Depends(ge
 
 @router.get("/overview")
 def overview(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    sync_closed_tickets(db)  # Jira-side closures count toward team pulse
     out: dict = {"generated_at": utcnow().isoformat()}
 
     try:

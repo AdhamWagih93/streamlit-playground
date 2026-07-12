@@ -13,7 +13,9 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   merged into one ranked list, each with a "why now" reason.
 - **Gamification** — XP per action, levels & ranks, daily quests with bonuses, 🔥 streaks,
   badge wall, weekly leaderboard and team recap. History is a first-class timeline
-  (every XP event *is* an activity record).
+  (every XP event *is* an activity record). Tickets closed **directly in Jira** are
+  reconciled in too (deduped by key, credited to the assignee, backdated to the Jira
+  resolution date) so stats, quests and achievements never miss them.
 - **AI copilot (local Ollama)** — daily briefing, contextual chat over your live
   Jira/Jenkins state, prompt-template refinement, and drafting of repo changes.
 - **Jira Data Center** — one project, PAT auth: board, transitions (drag & drop),

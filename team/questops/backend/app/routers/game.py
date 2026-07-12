@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..auth import current_user, sync_group_members
 from ..db import BadgeAward, User, XPEvent, get_db, utcnow
 from ..gamification import BADGES, TEAM_BADGES, level_info
+from ..ticket_sync import sync_closed_tickets
 
 router = APIRouter(prefix="/api", tags=["game"])
 
@@ -27,6 +28,7 @@ def _since_for(window: str) -> dt.datetime | None:
 def leaderboard(window: str = "7", user: User = Depends(current_user),
                 db: Session = Depends(get_db)):
     sync_group_members(db)  # everyone in the LDAP group appears, XP or not
+    sync_closed_tickets(db)  # Jira-side closures count too
     users = db.query(User).all()
     since = _since_for(window)
 
@@ -107,6 +109,7 @@ def activity(days: int = 7, limit: int = 200, user: User = Depends(current_user)
 
 @router.get("/recap")
 def recap(days: int = 7, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    sync_closed_tickets(db)
     now = utcnow()
     this_start = now - dt.timedelta(days=days)
     last_start = now - dt.timedelta(days=days * 2)

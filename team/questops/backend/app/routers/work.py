@@ -11,6 +11,7 @@ from ..config import settings
 from ..db import RepoAction, User, get_db, utcnow
 from ..gamification import award, quest_progress, team_quest_progress
 from ..integrations import jenkins, jira
+from ..ticket_sync import sync_closed_tickets
 
 router = APIRouter(prefix="/api", tags=["work"])
 
@@ -36,6 +37,7 @@ def _due_bonus(due: str | None) -> tuple[int, str]:
 @router.get("/focus")
 def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
     """One ranked answer to 'what should I do right now?'."""
+    sync_closed_tickets(db)  # quests/streaks see Jira-side closures too
     items = []
 
     my_issues = jira.my_open_issues(user.username)

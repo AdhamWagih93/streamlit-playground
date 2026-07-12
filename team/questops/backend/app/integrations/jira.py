@@ -25,8 +25,10 @@ DEMO_OBJECTIVES = ["Platform Reliability", "Developer Experience",
 
 
 def _demo_issue(num, summary, status, priority, assignee, due_days, itype, desc="",
-                components=None):
+                components=None, resolved_days_ago=None):
     return {
+        "resolved": ((_now() - dt.timedelta(days=resolved_days_ago)).isoformat()
+                     if resolved_days_ago is not None else None),
         "key": f"{settings.jira_project_key}-{num}",
         "summary": summary,
         "status": status,
@@ -54,8 +56,9 @@ _DEMO_ISSUES: list[dict] = [
     _demo_issue(106, "Self-service: document usage & on-call escalation", "In Progress", "Low", "dave", 9, "Task"),
     _demo_issue(107, "Terraform module: standard RDS with backups", "Resolved", "Medium", "bob", 3, "Story", components=["Cost Optimization"]),
     _demo_issue(108, "Fix cert-manager renewal alerts firing twice", "Resolved", "Medium", "carol", None, "Bug", components=["Platform Reliability"]),
-    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Closed", "High", "dave", None, "Story", components=["Developer Experience"]),
-    _demo_issue(110, "Security sweep: enable image signing in releases", "Closed", "Highest", "alice", None, "Story", components=["Security Hardening"]),
+    # closed DIRECTLY in Jira (no QuestOps transition) — the sync must credit them
+    _demo_issue(109, "Migrate legacy cron jobs to Argo Workflows", "Closed", "High", "dave", None, "Story", components=["Developer Experience"], resolved_days_ago=2),
+    _demo_issue(110, "Security sweep: enable image signing in releases", "Closed", "Highest", "alice", None, "Story", components=["Security Hardening"], resolved_days_ago=5),
     _demo_issue(111, "Spike: cost report per team namespace", "Open", "Low", None, 12, "Spike", components=["Cost Optimization"]),
     _demo_issue(112, "Security sweep: harden Jenkins agents (no root)", "Open", "Medium",
                 "dave", 5, "Task", components=["Security Hardening"]),
@@ -100,6 +103,7 @@ def _normalize(raw: dict) -> dict:
         "due": f.get("duedate"),
         "created": f.get("created", ""),
         "updated": f.get("updated", ""),
+        "resolved": f.get("resolutiondate"),
         "description": f.get("description") or "",
         "components": [c.get("name") for c in (f.get("components") or [])],
         "url": f"{settings.jira_base_url}/browse/{raw['key']}",
@@ -117,7 +121,7 @@ def _live_search(jql: str, page_size: int = 100, limit: int = 5000) -> list[dict
                    json={"jql": jql, "startAt": len(out), "maxResults": page_size,
                          "fields": ["summary", "status", "priority", "assignee",
                                     "issuetype", "duedate", "created", "updated",
-                                    "description", "components"]},
+                                    "resolutiondate", "description", "components"]},
                    timeout=30)
         r.raise_for_status()
         data = r.json()
@@ -319,6 +323,25 @@ def create_issue(summary: str, itype: str = "Task", priority: str = "Medium",
     }
     _DEMO_ISSUES.append(issue)
     return dict(issue)
+
+
+def closed_recently() -> list[dict]:
+    """Tickets that reached a done status within the closed window —
+    INCLUDING ones closed directly in Jira, never touched via QuestOps."""
+    if is_live():
+        days = settings.jira_closed_window_days
+        done = ", ".join(f'"{s}"' for s in settings._csv(settings.jira_done_statuses))
+        changed = " OR ".join(f'status CHANGED TO "{s}" AFTER -{days}d'
+                              for s in settings._csv(settings.jira_done_statuses))
+        issues = _live_search(f'project = "{settings.jira_project_key}" '
+                              f'AND status in ({done}) AND ({changed})')
+    elif settings.demo_mode:
+        issues = [dict(i) for i in _DEMO_ISSUES if not _is_open(i)]
+    else:
+        return []
+    return [{"key": i["key"], "assignee": i["assignee"], "summary": i["summary"],
+             "resolved": i.get("resolved"), "updated": i.get("updated")}
+            for i in issues]
 
 
 def my_open_issues(username: str) -> list[dict]:
