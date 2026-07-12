@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     error_analysis_index: str = "jenkins-error-analysis"
     kpi_sync_minutes: str = "5,35"   # minute marks each hour when the KPI loader runs
     kpi_max_docs: int = 10000        # per-request fetch cap (ES max_result_window)
+    # comma-separated tokens; KPI docs whose jobpath/jobname contains one are
+    # excluded from the KPI panel (stats, bars, loaded records) — the KPI
+    # sibling of JENKINS_IGNORE, deliberately its own knob
+    kpi_ignore: str = ""
     error_analysis_days: int = 14
 
     # --- Upgrade checker: outbound version lookups (endoflife.date / GitHub).
@@ -115,5 +119,9 @@ class Settings(BaseSettings):
     @property
     def kpi_sync_marks(self) -> list[int]:
         return sorted(int(m) % 60 for m in self._csv(self.kpi_sync_minutes)) or [5, 35]
+
+    @property
+    def kpi_ignore_tokens(self) -> list[str]:
+        return [t.lower() for t in self._csv(self.kpi_ignore)]
 
 settings = Settings()

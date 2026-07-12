@@ -63,6 +63,7 @@ elasticsearch:
   errorAnalysisIndex: "jenkins-error-analysis"
   kpiSyncMinutes: "5,35"  # loader schedule; countdown uses the pod TZ
   kpiMaxDocs: 10000       # KPI panel reads the whole window; per-request cap
+  kpiIgnore: ""           # comma tokens; exclude matching job paths from KPIs
   errorAnalysisDays: 14
 
 app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)

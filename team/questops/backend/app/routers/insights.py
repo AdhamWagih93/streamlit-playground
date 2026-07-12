@@ -34,10 +34,10 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
     at_risk = [f for f in ci["failures"] if f["ago_min"] <= since_last_min]
 
     try:
-        recent, window_applied, total_in_window = elastic.kpi_recent(hours=hours)
+        recent, window_applied, total_in_window, ignored = elastic.kpi_recent(hours=hours)
         es_error = None
     except Exception as exc:  # noqa: BLE001 — surface ES problems in the panel
-        recent, window_applied, total_in_window, es_error = [], True, 0, str(exc)[:300]
+        recent, window_applied, total_in_window, ignored, es_error = [], True, 0, 0, str(exc)[:300]
     loaded_failures = [d for d in recent
                        if str(d.get("status", "")).upper() in _FAILED]
 
@@ -76,6 +76,8 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         "loaded_total": total_in_window,   # TRUE count in the window
         "fetched": len(recent),            # docs stats were computed over
         "truncated": total_in_window > len(recent),
+        "ignored": ignored,                # docs excluded by KPI_IGNORE
+        "ignore_tokens": settings.kpi_ignore_tokens,
         "window_applied": window_applied,
         "es_error": es_error,
         "index": settings.jenkins_kpi_index,

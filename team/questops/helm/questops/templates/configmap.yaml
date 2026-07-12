@@ -28,6 +28,7 @@ data:
   ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
   KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}
   KPI_MAX_DOCS: {{ .Values.elasticsearch.kpiMaxDocs | quote }}
+  KPI_IGNORE: {{ .Values.elasticsearch.kpiIgnore | quote }}
   UPGRADES_PROXY: {{ .Values.upgrades.proxy | quote }}
   UPGRADES_VERIFY_SSL: {{ .Values.upgrades.verifySsl | quote }}
   EOL_API_BASE: {{ .Values.upgrades.eolApiBase | quote }}

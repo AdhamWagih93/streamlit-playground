@@ -60,7 +60,7 @@ def _jira_section() -> dict:
 def _kpi_section(ci_failures: list[dict]) -> dict:
     last_sync, next_sync = elastic.sync_times()
     now = elastic._now()
-    docs, _, _total = elastic.kpi_recent(hours=24)
+    docs, _, _total, _ignored = elastic.kpi_recent(hours=24)
     ok = sum(1 for d in docs if str(d.get("status", "")).upper() == "SUCCESS")
     since_last_min = (now - last_sync).total_seconds() / 60
     return {

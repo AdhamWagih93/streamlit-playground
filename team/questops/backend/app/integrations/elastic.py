@@ -100,17 +100,37 @@ def _demo_errors() -> list[dict]:
 
 
 # ---------------------------------------------------------------- public API
-def kpi_recent(hours: int = 168, size: int | None = None) -> tuple[list[dict], bool, int]:
-    """Returns (docs, window_applied, total_in_window) for the whole time
-    window — the past week by default, or the UI's time filter. Fetches up
-    to KPI_MAX_DOCS in one request (ES's max_result_window default) and
-    reports the TRUE window total so a truncated fetch is never silent.
-    Tries the window on @timestamp, then builddate; if both come back empty,
-    falls back to the newest documents so the panel is never blank."""
+def _kpi_ignored(doc: dict) -> bool:
+    """KPI_IGNORE: same substring semantics as JENKINS_IGNORE, own knob."""
+    if not settings.kpi_ignore_tokens:
+        return False
+    hay = f"{doc.get('jobpath') or ''}/{doc.get('jobname') or ''}".lower()
+    return any(tok in hay for tok in settings.kpi_ignore_tokens)
+
+
+def _apply_kpi_ignore(docs: list[dict], total: int) -> tuple[list[dict], int, int]:
+    """(kept docs, adjusted total, ignored count). The total adjustment is
+    exact whenever the fetch wasn't truncated (the normal case)."""
+    if not settings.kpi_ignore_tokens:
+        return docs, total, 0
+    kept = [d for d in docs if not _kpi_ignored(d)]
+    ignored = len(docs) - len(kept)
+    return kept, max(total - ignored, len(kept)), ignored
+
+
+def kpi_recent(hours: int = 168,
+               size: int | None = None) -> tuple[list[dict], bool, int, int]:
+    """Returns (docs, window_applied, total_in_window, ignored) for the whole
+    time window — the past week by default, or the UI's time filter. Fetches
+    up to KPI_MAX_DOCS in one request and reports the TRUE window total so a
+    truncated fetch is never silent; KPI_IGNORE tokens filter out matching
+    job paths. Tries the window on @timestamp, then builddate; if both come
+    back empty, falls back to the newest documents so the panel is never blank."""
     size = size or settings.kpi_max_docs
     if not is_live():
         docs = _demo_kpi() if settings.demo_mode else []
-        return docs, True, len(docs)
+        docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
+        return docs, True, total, ignored
     for field in ("@timestamp", "builddate"):
         try:
             docs, total = _search_hits(settings.jenkins_kpi_index, {
@@ -121,12 +141,14 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> tuple[list[dict], b
         except requests.HTTPError:
             continue
         if docs:
-            return docs, True, total
+            docs, total, ignored = _apply_kpi_ignore(docs, total)
+            return docs, True, total, ignored
     docs, total = _search_hits(settings.jenkins_kpi_index, {
         "size": size, "track_total_hits": True, "query": {"match_all": {}},
         "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
     })
-    return docs, False, total
+    docs, total, ignored = _apply_kpi_ignore(docs, total)
+    return docs, False, total, ignored
 
 
 def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:

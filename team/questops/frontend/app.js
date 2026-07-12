@@ -876,6 +876,7 @@ async function renderCI() {
       <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
       ${kpiWarn}
       ${kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats are computed on the newest ${kpi.fetched} (raise KPI_MAX_DOCS to widen)</div>` : ""}
+      ${kpi.ignored ? `<div class="kpi-note">🚫 ${kpi.ignored} build(s) excluded by KPI_IGNORE (${esc((kpi.ignore_tokens || []).join(", "))})</div>` : ""}
       ${kpiStats}
       <details class="filebox"><summary>📄 loaded records (showing ${kpi.loaded.length} of ${kpi.loaded_total})</summary>
         <div class="kpi-loaded" style="padding:4px 10px">${loadedRows}</div>
