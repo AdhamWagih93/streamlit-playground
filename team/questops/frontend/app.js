@@ -1408,7 +1408,7 @@ function agentPanelHtml(cur, logData) {
         <div class="agent-input-wrap">
           <div id="agent-ac" class="agent-ac hidden"></div>
           <input id="agent-input" autocomplete="off"
-            placeholder="${ag.pending.length ? "approve or deny the proposed commands first" : "ask about this repo — type @ to reference files/folders"}"
+            placeholder="${ag.pending.length ? "approve or deny the proposed commands first" : "ask about this repo — @ references files/folders, # references Jira tickets"}"
             ${ag.busy || ag.pending.length ? "disabled" : ""}>
         </div>
         <button class="btn btn-primary" ${ag.busy || ag.pending.length ? "disabled" : ""}>➤</button>
@@ -1627,10 +1627,10 @@ async function renderRepos() {
       b.onclick = () => decide([parseInt(b.dataset.agentDeny, 10)], false));
     on("agent-approve-all", () => decide(ag.pending.map((p) => p.id), true));
 
-    // ---- '@' path autocomplete over the member's workspace ----
+    // ---- autocomplete: '@' = workspace paths, '#' = Jira tickets ----
     const acInput = document.getElementById("agent-input");
     const acBox = document.getElementById("agent-ac");
-    let acList = [], acIdx = 0, acStart = -1;
+    let acList = [], acIdx = 0, acStart = -1, acTrig = "";
 
     const pathsFor = async () => {
       state.repoPaths = state.repoPaths || {};
@@ -1640,11 +1640,23 @@ async function renderRepos() {
       state.repoPaths[cur.slot] = { at: Date.now(), paths: r.paths || [] };
       return state.repoPaths[cur.slot].paths;
     };
+    const ticketsFor = async () => {
+      const c = state.agentTickets;
+      if (c && Date.now() - c.at < 120000) return c.items;
+      const b = await api("/api/board").catch(() => ({ columns: [] }));
+      const items = (b.columns || []).flatMap((col) => col.issues.map((i) => ({
+        key: i.key, summary: i.summary || "", status: i.status || "" })));
+      state.agentTickets = { at: Date.now(), items };
+      return items;
+    };
     const closeAc = () => { acBox.classList.add("hidden"); acList = []; acStart = -1; };
     const renderAc = () => {
-      acBox.innerHTML = acList.map((p, i) => `
+      acBox.innerHTML = acList.map((it, i) => `
         <div class="ac-item ${i === acIdx ? "active" : ""}" data-ac="${i}">
-          ${p.type === "dir" ? "📁" : "📄"} ${esc(p.path)}${p.type === "dir" ? "/" : ""}</div>`).join("");
+          ${acTrig === "@"
+            ? `${it.type === "dir" ? "📁" : "📄"} ${esc(it.path)}${it.type === "dir" ? "/" : ""}`
+            : `🎫 ${esc(it.key)} <span class="ac-sub">${esc(it.summary.slice(0, 60))} · ${esc(it.status)}</span>`}
+        </div>`).join("");
       acBox.classList.remove("hidden");
       acBox.querySelectorAll("[data-ac]").forEach((el) =>
         el.onmousedown = (e) => { e.preventDefault(); pickAc(parseInt(el.dataset.ac, 10)); });
@@ -1654,33 +1666,47 @@ async function renderRepos() {
     const updateAc = async () => {
       const pos = acInput.selectionStart;
       const upto = acInput.value.slice(0, pos);
-      const at = upto.lastIndexOf("@");
+      const at = Math.max(upto.lastIndexOf("@"), upto.lastIndexOf("#"));
       if (at === -1) return closeAc();
+      acTrig = upto[at];
       const q = upto.slice(at + 1);
       if (/\s/.test(q)) return closeAc();
       const ql = q.toLowerCase();
-      const paths = await pathsFor();
-      acList = paths.filter((p) => p.path.toLowerCase().includes(ql))
-        .sort((a, b) => {
-          const ap = a.path.toLowerCase().startsWith(ql) ? 0 : 1;
-          const bp = b.path.toLowerCase().startsWith(ql) ? 0 : 1;
-          return ap - bp || a.path.length - b.path.length;
-        }).slice(0, 8);
+      if (acTrig === "@") {
+        const paths = await pathsFor();
+        acList = paths.filter((p) => p.path.toLowerCase().includes(ql))
+          .sort((a, b) => {
+            const ap = a.path.toLowerCase().startsWith(ql) ? 0 : 1;
+            const bp = b.path.toLowerCase().startsWith(ql) ? 0 : 1;
+            return ap - bp || a.path.length - b.path.length;
+          }).slice(0, 8);
+      } else {
+        const tickets = await ticketsFor();
+        acList = tickets.filter((t) =>
+          t.key.toLowerCase().includes(ql) || t.summary.toLowerCase().includes(ql))
+          .sort((a, b) => {
+            const ap = a.key.toLowerCase().startsWith(ql) ? 0 : 1;
+            const bp = b.key.toLowerCase().startsWith(ql) ? 0 : 1;
+            return ap - bp || a.key.localeCompare(b.key);
+          }).slice(0, 8);
+      }
       acIdx = 0; acStart = at;
       acList.length ? renderAc() : closeAc();
     };
     const pickAc = (i) => {
-      const p = acList[i];
-      if (!p || acStart < 0) return;
+      const it = acList[i];
+      if (!it || acStart < 0) return;
       const pos = acInput.selectionStart;
-      // keep the '@' marker; a trailing '/' on folders keeps the drill-down going
-      const insert = `@${p.path}${p.type === "dir" ? "/" : " "}`;
+      // keep the marker; a trailing '/' on folders keeps the drill-down going
+      const insert = acTrig === "@"
+        ? `@${it.path}${it.type === "dir" ? "/" : " "}`
+        : `#${it.key} `;
       acInput.value = acInput.value.slice(0, acStart) + insert + acInput.value.slice(pos);
       const np = acStart + insert.length;
       acInput.setSelectionRange(np, np);
       closeAc();
       acInput.focus();
-      if (p.type === "dir") updateAc();
+      if (acTrig === "@" && it.type === "dir") updateAc();
     };
     acInput.addEventListener("input", updateAc);
     acInput.addEventListener("keydown", (e) => {

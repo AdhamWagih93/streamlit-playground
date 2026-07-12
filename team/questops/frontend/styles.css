@@ -396,6 +396,7 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 }
 .ac-item:hover { background: var(--panel); }
 .ac-item.active { background: var(--amber-soft); color: var(--amber); }
+.ac-sub { color: var(--faint); font-size: 10.5px; }
 .agent-step { border-top: 1px dashed var(--line); padding: 8px 10px; }
 .agent-step b { color: var(--cyan); font: 600 11.5px var(--mono); margin-right: 6px; }
 .agent-step pre { font: 400 11px var(--mono); background: var(--bg); padding: 8px;

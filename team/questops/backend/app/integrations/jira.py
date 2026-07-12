@@ -325,6 +325,17 @@ def create_issue(summary: str, itype: str = "Task", priority: str = "Medium",
     return dict(issue)
 
 
+def issue_brief(key: str) -> dict | None:
+    """One issue's essentials (agent '#KEY' references); None if unknown."""
+    try:
+        if is_live():
+            found = _live_search(f'key = "{key}"')
+            return found[0] if found else None
+        return dict(_demo_find(key))
+    except (KeyError, ValueError):
+        return None
+
+
 def closed_recently() -> list[dict]:
     """Tickets that reached a done status within the closed window —
     INCLUDING ones closed directly in Jira, never touched via QuestOps."""

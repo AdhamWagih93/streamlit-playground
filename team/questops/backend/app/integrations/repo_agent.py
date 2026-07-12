@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import AgentCommand, utcnow
+from . import jira
 from . import ollama as ollama_client
 from . import repo_scan
 from .repos import (RepoError, _repo_by_slot,
@@ -231,10 +232,31 @@ def _advance_demo(db: Session, sid: str) -> dict:
 
 
 # ------------------------------------------------------------- public API
+def _resolve_ticket_refs(message: str) -> str:
+    """'#DEVOPS-101' references get the ticket's context appended so the
+    agent knows what the user is talking about — no extra tool round-trip."""
+    keys = list(dict.fromkeys(
+        m.upper() for m in re.findall(r"#([A-Za-z][A-Za-z0-9]*-\d+)", message)))[:5]
+    lines = []
+    for key in keys:
+        try:
+            b = jira.issue_brief(key)
+        except Exception:  # noqa: BLE001 — Jira down: refs stay as plain text
+            b = None
+        if b:
+            desc = (b.get("description") or "").strip()
+            lines.append(f"- {b['key']} [{b['status']}] {b['summary']}"
+                         + (f" — {desc[:200]}" if desc else ""))
+    if not lines:
+        return message
+    return message + "\n\n(Referenced Jira tickets:\n" + "\n".join(lines) + ")"
+
+
 def start(db: Session, slot: int, username: str, message: str,
           history: list[dict] | None, allow_write: bool) -> dict:
     repo, _ = _repo_dir(slot)
     _prune_sessions()
+    message = _resolve_ticket_refs(message)
     sid = uuid.uuid4().hex[:24]
     sess = {"slot": slot, "repo_name": repo["name"], "username": username,
             "allow_write": allow_write, "at": time.time(), "rounds": 0,
@@ -298,7 +320,9 @@ def start(db: Session, slot: int, username: str, message: str,
         "it runs — keep calls few and purposeful; a denied call means don't retry "
         "it. Always inspect real files before answering; cite file paths. "
         "The user may reference repository paths with an '@' prefix "
-        "(e.g. @src/main.py) — treat them as plain paths. "
+        "(e.g. @src/main.py) — treat them as plain paths — and Jira tickets "
+        "with '#' (e.g. #DEVOPS-101); referenced tickets' context is appended "
+        "to the message. "
         + ("Write access is ENABLED via the write_file tool (local workspace "
            "only, reviewed as diffs)." if allow_write else
            "Write access is DISABLED: propose changes as snippets instead.")
