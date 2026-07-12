@@ -12,6 +12,7 @@ write tools exist only when the user flips 'enable write actions' on the page,
 and even then edits stay in the local workspace — never committed or pushed."""
 
 import json
+import re
 import shlex
 import subprocess
 import time
