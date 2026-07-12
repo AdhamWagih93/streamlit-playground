@@ -72,6 +72,12 @@ def discard(slot: int, user: User = Depends(current_user)):
     return {"ok": True}
 
 
+@router.get("/{slot}/files")
+def list_paths(slot: int, user: User = Depends(current_user)):
+    """Flat path list for the agent chat's '@' autocomplete."""
+    return {"paths": _wrap(repos.list_paths, slot, user.username)}
+
+
 @router.get("/{slot}/tree")
 def tree(slot: int, path: str = "", user: User = Depends(current_user)):
     return _wrap(repos.tree, slot, path, user.username)

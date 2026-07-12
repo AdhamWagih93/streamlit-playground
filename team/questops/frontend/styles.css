@@ -383,6 +383,19 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .agent-cmd:first-of-type { border-top: none; }
 .agent-cmd code { flex: 1; min-width: 200px; word-break: break-all; }
 .agent-cmd-write { background: rgba(239,95,102,.06); border-radius: 6px; }
+.agent-input-wrap { position: relative; flex: 1; min-width: 0; }
+.agent-input-wrap input { width: 100%; }
+.agent-ac {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 70;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  max-height: 240px; overflow-y: auto; box-shadow: 0 -10px 30px rgba(0,0,0,.35);
+}
+.ac-item {
+  padding: 6px 12px; cursor: pointer; font: 500 12px var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ac-item:hover { background: var(--panel); }
+.ac-item.active { background: var(--amber-soft); color: var(--amber); }
 .agent-step { border-top: 1px dashed var(--line); padding: 8px 10px; }
 .agent-step b { color: var(--cyan); font: 600 11.5px var(--mono); margin-right: 6px; }
 .agent-step pre { font: 400 11px var(--mono); background: var(--bg); padding: 8px;

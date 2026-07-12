@@ -1405,9 +1405,12 @@ function agentPanelHtml(cur, logData) {
         ${ag.busy ? `<div class="ai-msg ai-bot">✦ working…</div>` : ""}
       </div>
       <form class="ai-form agent-form" id="agent-form">
-        <input id="agent-input" autocomplete="off"
-          placeholder="${ag.pending.length ? "approve or deny the proposed commands first" : "e.g. what does this service do? is the Dockerfile production-ready?"}"
-          ${ag.busy || ag.pending.length ? "disabled" : ""}>
+        <div class="agent-input-wrap">
+          <div id="agent-ac" class="agent-ac hidden"></div>
+          <input id="agent-input" autocomplete="off"
+            placeholder="${ag.pending.length ? "approve or deny the proposed commands first" : "ask about this repo — type @ to reference files/folders"}"
+            ${ag.busy || ag.pending.length ? "disabled" : ""}>
+        </div>
         <button class="btn btn-primary" ${ag.busy || ag.pending.length ? "disabled" : ""}>➤</button>
       </form>
       ${audit}
@@ -1623,6 +1626,71 @@ async function renderRepos() {
     view().querySelectorAll("[data-agent-deny]").forEach((b) =>
       b.onclick = () => decide([parseInt(b.dataset.agentDeny, 10)], false));
     on("agent-approve-all", () => decide(ag.pending.map((p) => p.id), true));
+
+    // ---- '@' path autocomplete over the member's workspace ----
+    const acInput = document.getElementById("agent-input");
+    const acBox = document.getElementById("agent-ac");
+    let acList = [], acIdx = 0, acStart = -1;
+
+    const pathsFor = async () => {
+      state.repoPaths = state.repoPaths || {};
+      const c = state.repoPaths[cur.slot];
+      if (c && Date.now() - c.at < 120000) return c.paths;
+      const r = await api(`/api/repos/${cur.slot}/files`).catch(() => ({ paths: [] }));
+      state.repoPaths[cur.slot] = { at: Date.now(), paths: r.paths || [] };
+      return state.repoPaths[cur.slot].paths;
+    };
+    const closeAc = () => { acBox.classList.add("hidden"); acList = []; acStart = -1; };
+    const renderAc = () => {
+      acBox.innerHTML = acList.map((p, i) => `
+        <div class="ac-item ${i === acIdx ? "active" : ""}" data-ac="${i}">
+          ${p.type === "dir" ? "📁" : "📄"} ${esc(p.path)}${p.type === "dir" ? "/" : ""}</div>`).join("");
+      acBox.classList.remove("hidden");
+      acBox.querySelectorAll("[data-ac]").forEach((el) =>
+        el.onmousedown = (e) => { e.preventDefault(); pickAc(parseInt(el.dataset.ac, 10)); });
+      const active = acBox.querySelector(".ac-item.active");
+      if (active) active.scrollIntoView({ block: "nearest" });
+    };
+    const updateAc = async () => {
+      const pos = acInput.selectionStart;
+      const upto = acInput.value.slice(0, pos);
+      const at = upto.lastIndexOf("@");
+      if (at === -1) return closeAc();
+      const q = upto.slice(at + 1);
+      if (/\s/.test(q)) return closeAc();
+      const ql = q.toLowerCase();
+      const paths = await pathsFor();
+      acList = paths.filter((p) => p.path.toLowerCase().includes(ql))
+        .sort((a, b) => {
+          const ap = a.path.toLowerCase().startsWith(ql) ? 0 : 1;
+          const bp = b.path.toLowerCase().startsWith(ql) ? 0 : 1;
+          return ap - bp || a.path.length - b.path.length;
+        }).slice(0, 8);
+      acIdx = 0; acStart = at;
+      acList.length ? renderAc() : closeAc();
+    };
+    const pickAc = (i) => {
+      const p = acList[i];
+      if (!p || acStart < 0) return;
+      const pos = acInput.selectionStart;
+      // keep the '@' marker; a trailing '/' on folders keeps the drill-down going
+      const insert = `@${p.path}${p.type === "dir" ? "/" : " "}`;
+      acInput.value = acInput.value.slice(0, acStart) + insert + acInput.value.slice(pos);
+      const np = acStart + insert.length;
+      acInput.setSelectionRange(np, np);
+      closeAc();
+      acInput.focus();
+      if (p.type === "dir") updateAc();
+    };
+    acInput.addEventListener("input", updateAc);
+    acInput.addEventListener("keydown", (e) => {
+      if (acBox.classList.contains("hidden")) return;
+      if (e.key === "ArrowDown") { e.preventDefault(); acIdx = (acIdx + 1) % acList.length; renderAc(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); acIdx = (acIdx - 1 + acList.length) % acList.length; renderAc(); }
+      else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickAc(acIdx); }
+      else if (e.key === "Escape") { e.preventDefault(); closeAc(); }
+    });
+    acInput.addEventListener("blur", () => setTimeout(closeAc, 150));
 
     agentForm.onsubmit = async (e) => {
       e.preventDefault();

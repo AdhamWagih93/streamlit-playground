@@ -297,6 +297,8 @@ def start(db: Session, slot: int, username: str, message: str,
         "EVERY tool call you make is shown to a human who must approve it before "
         "it runs — keep calls few and purposeful; a denied call means don't retry "
         "it. Always inspect real files before answering; cite file paths. "
+        "The user may reference repository paths with an '@' prefix "
+        "(e.g. @src/main.py) — treat them as plain paths. "
         + ("Write access is ENABLED via the write_file tool (local workspace "
            "only, reviewed as diffs)." if allow_write else
            "Write access is DISABLED: propose changes as snippets instead.")

@@ -476,6 +476,37 @@ def history(slot: int, username: str | None = None, path: str = "",
     return {"commits": commits, "path": path}
 
 
+_PATHS_SKIP = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist",
+               "build", "target", ".terraform", "vendor", ".idea", ".vscode"}
+
+
+def list_paths(slot: int, username: str | None = None,
+               limit: int = 4000) -> list[dict]:
+    """Flat file/folder list of the member's workspace — feeds the agent
+    chat's '@' path autocomplete."""
+    root = _workspace(_repo_by_slot(slot), username)
+    out: list[dict] = []
+    stack = [root]
+    while stack and len(out) < limit:
+        d = stack.pop()
+        try:
+            children = sorted(d.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for p in children:
+            if len(out) >= limit:
+                break
+            if p.name in _PATHS_SKIP:  # note: .git is a FILE inside a worktree
+                continue
+            if p.is_dir():
+                out.append({"path": str(p.relative_to(root)), "type": "dir"})
+                stack.append(p)
+            else:
+                out.append({"path": str(p.relative_to(root)), "type": "file"})
+    out.sort(key=lambda e: e["path"].lower())
+    return out
+
+
 MAX_DIFF_BYTES = 60_000
 
 
