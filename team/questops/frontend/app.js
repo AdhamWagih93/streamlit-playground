@@ -552,9 +552,14 @@ async function advanceIssue(key, current, assignee) {
   transitionIssue(key, next, assignee);
 }
 
+const BOARD_FILTERS = [["all", "All issues"], ["mine", "My issues"], ["unassigned", "Unassigned"]];
+
 async function renderBoard() {
   const data = await api("/api/board");
   BOARD_STATUSES = data.columns.map((c) => c.name);
+  const filt = state.boardFilter || "all";
+  const keep = (i) => filt === "mine" ? i.assignee === state.me.username
+    : filt === "unassigned" ? !i.assignee : true;
 
   const cardHtml = (i) => `
         <div class="card" draggable="true" data-key="${esc(i.key)}" data-assignee="${esc(i.assignee || "")}">
@@ -577,26 +582,39 @@ async function renderBoard() {
 
   // cards cluster under their longest-common-prefix group; loners go last
   const colHtml = (col) => {
+    const shown = col.issues.filter(keep);
     const byGroup = {};
-    col.issues.forEach((i) => { const g = i.group || ""; (byGroup[g] = byGroup[g] || []).push(i); });
+    shown.forEach((i) => { const g = i.group || ""; (byGroup[g] = byGroup[g] || []).push(i); });
     const names = Object.keys(byGroup).sort((a, b) =>
       a === "" ? 1 : b === "" ? -1 : a.localeCompare(b));
     const body = names.map((g) =>
       (g ? `<div class="group-head">▾ ${esc(g)}<span>${byGroup[g].length}</span></div>`
          : (names.length > 1 ? `<div class="group-head group-other">other<span>${byGroup[g].length}</span></div>` : ""))
-      + byGroup[g].map(cardHtml).join("")).join("");
+      + byGroup[g].map(cardHtml).join("")).join("")
+      || `<div class="empty" style="padding:24px 8px">nothing ${filt === "mine" ? "assigned to you" : "unassigned"} here</div>`;
     return `
     <div class="col" data-col="${esc(col.name)}">
-      <div class="col-head"><span>${esc(col.label || col.name)}</span><span>${col.issues.length}</span></div>
+      <div class="col-head"><span>${esc(col.label || col.name)}</span>
+        <span>${shown.length}${shown.length !== col.issues.length ? ` / ${col.issues.length}` : ""}</span></div>
       ${body}
     </div>`;
   };
   const cols = data.columns.map(colHtml).join("");
 
+  const filterChips = BOARD_FILTERS.map(([v, label]) =>
+    `<button class="btn btn-sm ${v === filt ? "btn-primary" : ""}" data-bfilter="${v}">${label}</button>`).join("");
+
   view().innerHTML = `
     <div class="view-head"><h1>BOARD</h1>
-      <span class="sub">Jira project ${esc(data.project)} · ${data.source} · drag cards to transition</span></div>
+      <span class="sub">Jira project ${esc(data.project)} · ${data.source} · drag cards to transition</span>
+      <span class="spacer"></span>
+      <div class="filter-row">${filterChips}</div></div>
     <div class="board">${cols}</div>`;
+
+  view().querySelectorAll("[data-bfilter]").forEach((b) => b.onclick = () => {
+    state.boardFilter = b.dataset.bfilter;
+    renderBoard();
+  });
 
   view().querySelectorAll(".card").forEach((card) => {
     card.addEventListener("dragstart", (e) =>
