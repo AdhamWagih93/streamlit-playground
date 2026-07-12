@@ -50,9 +50,14 @@ def remove_repo(slot: int, user: User = Depends(current_user),
     return {"ok": True}
 
 
+class CloneBody(BaseModel):
+    branch: str = ""  # empty = the remote's default branch
+
+
 @router.post("/{slot}/clone")
-def clone(slot: int, user: User = Depends(current_user)):
-    _wrap(repos.clone, slot)
+def clone(slot: int, body: CloneBody | None = None,
+          user: User = Depends(current_user)):
+    _wrap(repos.clone, slot, (body.branch if body else ""))
     return {"ok": True}
 
 

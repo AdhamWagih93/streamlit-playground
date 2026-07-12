@@ -342,17 +342,24 @@ def _seed_demo_repo(repo: dict, repo_dir: Path) -> None:
         pass  # git missing: page still works, just without status/diff
 
 
-def clone(slot: int) -> None:
+def clone(slot: int, branch: str = "") -> None:
+    branch = (branch or "").strip()
+    if branch and (branch.startswith("-")
+                   or not re.fullmatch(r"[\w\-./]{1,200}", branch)):
+        raise RepoError(f"invalid branch name: '{branch}'")
     repo = _repo_by_slot(slot)
     repo_dir = _dir_for(repo)
     if repo_dir.exists():
         raise RepoError("already cloned — use pull to update")
     if settings.demo_mode:
         _seed_demo_repo(repo, repo_dir)
+        if branch:  # demo parity: show the requested branch in the UI
+            _git(repo_dir, "checkout", "-b", branch, ok_fail=True)
         return
+    branch_args = ["--branch", branch] if branch else []
     attempts = []
     for label, extra, url in _cred_candidates(repo["url"]):
-        p = subprocess.run(["git", *extra, "clone", url, str(repo_dir)],
+        p = subprocess.run(["git", *extra, "clone", *branch_args, url, str(repo_dir)],
                            env=_GIT_ENV, capture_output=True, text=True, timeout=600)
         if p.returncode == 0:
             _WORKING["label"] = label
@@ -376,7 +383,12 @@ def pull(slot: int, username: str | None = None) -> str:
         raise RepoError("not cloned yet")
     out = ""
     if not settings.demo_mode:
-        out = _scrub(_git_authed(base, repo, "pull", "--ff-only", "{URL}")).strip()
+        # pull the CHECKED-OUT branch explicitly — a bare `git pull <url>`
+        # pulls the remote's default branch, wrong for branch-pinned clones
+        current = _git(base, "rev-parse", "--abbrev-ref", "HEAD", ok_fail=True).strip()
+        branch_arg = [current] if current and current != "HEAD" else []
+        out = _scrub(_git_authed(base, repo, "pull", "--ff-only", "{URL}",
+                                 *branch_arg)).strip()
     if username:
         wt = _ensure_worktree(repo, username)
         base_head = _git(base, "rev-parse", "HEAD").strip()

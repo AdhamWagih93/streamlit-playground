@@ -1446,6 +1446,10 @@ async function renderRepos() {
       <div class="panel" style="text-align:center;padding:40px">
         <p style="color:var(--dim);margin-bottom:6px">${esc(cur.url)}</p>
         <p style="color:var(--faint);font-size:12px;margin-bottom:18px">not cloned yet</p>
+        <div class="repo-bar" style="justify-content:center;margin-bottom:14px">
+          <input id="repo-branch" placeholder="branch (empty = default branch)"
+            style="width:260px" spellcheck="false">
+        </div>
         <button class="btn btn-primary" id="repo-clone">⬇ Clone repository</button>
         <button class="btn btn-danger" id="repo-remove">🗑 Remove</button>
       </div>`;
@@ -1537,9 +1541,12 @@ async function renderRepos() {
   });
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on("repo-clone", async () => {
-    try { await api(`/api/repos/${cur.slot}/clone`, { method: "POST" });
-          toast(`⛁ ${esc(cur.name)} cloned`, "toast-xp"); renderRepos(); }
-    catch (e) { oops(e); }
+    const branch = ($("#repo-branch") ? $("#repo-branch").value : "").trim();
+    try {
+      await api(`/api/repos/${cur.slot}/clone`, { method: "POST", body: { branch } });
+      toast(`⛁ ${esc(cur.name)} cloned${branch ? ` · ${esc(branch)}` : ""}`, "toast-xp");
+      renderRepos();
+    } catch (e) { oops(e); }
   });
   on("repo-pull", () => syncWorkspace(cur.slot));
   wireRemoteSync();
