@@ -17,12 +17,21 @@ def is_live() -> bool:
     return bool(settings.es_url and settings.es_api_key and not settings.demo_mode)
 
 
-def _search(index: str, body: dict) -> list[dict]:
+def _search_hits(index: str, body: dict) -> tuple[list[dict], int]:
+    """(docs, true total matching the query) — the total makes truncation
+    visible instead of silent."""
     r = requests.post(f"{settings.es_url}/{index}/_search", json=body,
                       headers={"Authorization": f"ApiKey {settings.es_api_key}"},
-                      timeout=20, verify=settings.es_verify_ssl)
+                      timeout=30, verify=settings.es_verify_ssl)
     r.raise_for_status()
-    return [h["_source"] for h in r.json().get("hits", {}).get("hits", [])]
+    hits = r.json().get("hits", {})
+    total = hits.get("total", {})
+    total_n = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
+    return [h["_source"] for h in hits.get("hits", [])], total_n
+
+
+def _search(index: str, body: dict) -> list[dict]:
+    return _search_hits(index, body)[0]
 
 
 # ---------------------------------------------------------------- KPI loader schedule
@@ -91,28 +100,33 @@ def _demo_errors() -> list[dict]:
 
 
 # ---------------------------------------------------------------- public API
-def kpi_recent(hours: int = 24, size: int = 200) -> tuple[list[dict], bool]:
-    """Returns (docs, window_applied). Tries the time window on @timestamp,
-    then builddate; if both come back empty, falls back to the newest
-    documents regardless of window so the panel is never silently blank."""
+def kpi_recent(hours: int = 168, size: int | None = None) -> tuple[list[dict], bool, int]:
+    """Returns (docs, window_applied, total_in_window) for the whole time
+    window — the past week by default, or the UI's time filter. Fetches up
+    to KPI_MAX_DOCS in one request (ES's max_result_window default) and
+    reports the TRUE window total so a truncated fetch is never silent.
+    Tries the window on @timestamp, then builddate; if both come back empty,
+    falls back to the newest documents so the panel is never blank."""
+    size = size or settings.kpi_max_docs
     if not is_live():
-        return (_demo_kpi(), True) if settings.demo_mode else ([], True)
+        docs = _demo_kpi() if settings.demo_mode else []
+        return docs, True, len(docs)
     for field in ("@timestamp", "builddate"):
         try:
-            docs = _search(settings.jenkins_kpi_index, {
-                "size": size,
+            docs, total = _search_hits(settings.jenkins_kpi_index, {
+                "size": size, "track_total_hits": True,
                 "query": {"range": {field: {"gte": f"now-{hours}h"}}},
                 "sort": [{field: {"order": "desc", "unmapped_type": "date"}}],
             })
         except requests.HTTPError:
             continue
         if docs:
-            return docs, True
-    docs = _search(settings.jenkins_kpi_index, {
-        "size": size, "query": {"match_all": {}},
+            return docs, True, total
+    docs, total = _search_hits(settings.jenkins_kpi_index, {
+        "size": size, "track_total_hits": True, "query": {"match_all": {}},
         "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
     })
-    return docs, False
+    return docs, False, total
 
 
 def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:

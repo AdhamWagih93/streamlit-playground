@@ -22,7 +22,8 @@ def _es_source() -> str:
 
 
 @router.get("/kpi")
-def kpi(hours: int = 24, user: User = Depends(current_user)):
+def kpi(hours: int = 168, user: User = Depends(current_user)):
+    """Default window: the past week; `hours` follows the UI time filter."""
     last_sync, next_sync = elastic.sync_times()
     now = elastic._now()
 
@@ -33,10 +34,10 @@ def kpi(hours: int = 24, user: User = Depends(current_user)):
     at_risk = [f for f in ci["failures"] if f["ago_min"] <= since_last_min]
 
     try:
-        recent, window_applied = elastic.kpi_recent(hours=hours)
+        recent, window_applied, total_in_window = elastic.kpi_recent(hours=hours)
         es_error = None
     except Exception as exc:  # noqa: BLE001 — surface ES problems in the panel
-        recent, window_applied, es_error = [], True, str(exc)[:300]
+        recent, window_applied, total_in_window, es_error = [], True, 0, str(exc)[:300]
     loaded_failures = [d for d in recent
                        if str(d.get("status", "")).upper() in _FAILED]
 
@@ -72,7 +73,9 @@ def kpi(hours: int = 24, user: User = Depends(current_user)):
         "hours": hours,
         "loaded": recent[:100],  # the actual KPI documents, newest first
         "loaded_failures": loaded_failures[:25],
-        "loaded_total": len(recent),
+        "loaded_total": total_in_window,   # TRUE count in the window
+        "fetched": len(recent),            # docs stats were computed over
+        "truncated": total_in_window > len(recent),
         "window_applied": window_applied,
         "es_error": es_error,
         "index": settings.jenkins_kpi_index,

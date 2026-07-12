@@ -27,6 +27,7 @@ data:
   JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}
   ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
   KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}
+  KPI_MAX_DOCS: {{ .Values.elasticsearch.kpiMaxDocs | quote }}
   ERROR_ANALYSIS_DAYS: {{ .Values.elasticsearch.errorAnalysisDays | quote }}
   TZ: {{ .Values.app_timezone | quote }}
   LDAP_URL: {{ .Values.ldap.url | quote }}

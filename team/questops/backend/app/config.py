@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     jenkins_kpi_index: str = "jenkins-kpi"
     error_analysis_index: str = "jenkins-error-analysis"
     kpi_sync_minutes: str = "5,35"   # minute marks each hour when the KPI loader runs
+    kpi_max_docs: int = 10000        # per-request fetch cap (ES max_result_window)
     error_analysis_days: int = 14
 
     # --- LDAP ---

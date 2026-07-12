@@ -734,7 +734,7 @@ async function renderDive() {
 
 async function renderCI() {
   if (state.dive) return renderDive();
-  const kpiHours = state.kpiHours || 24;
+  const kpiHours = state.kpiHours || 168;  // default: the past week
   const [data, kpi, errs] = await Promise.all([
     api("/api/ci"), api(`/api/kpi?hours=${kpiHours}`), api("/api/errors")]);
   const failures = data.failures.map((f) => `
@@ -843,6 +843,7 @@ async function renderCI() {
       <h2>📦 pipeline KPIs — ${esc(kpi.source)} · ${kpi.loaded_total} builds in window</h2>
       <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
       ${kpiWarn}
+      ${kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats are computed on the newest ${kpi.fetched} (raise KPI_MAX_DOCS to widen)</div>` : ""}
       ${kpiStats}
       <details class="filebox"><summary>📄 loaded records (showing ${kpi.loaded.length} of ${kpi.loaded_total})</summary>
         <div class="kpi-loaded" style="padding:4px 10px">${loadedRows}</div>
