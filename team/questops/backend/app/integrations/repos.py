@@ -79,7 +79,7 @@ def configured() -> list[dict]:
     finally:
         db.close()
     return [{"slot": r.id, "name": r.name, "url": r.url, "added_by": r.added_by,
-             "user": settings.ado_user, "password": settings.ado_password}
+             "user": settings.ado_user, "password": settings.ado_git_password}
             for r in rows]
 
 
@@ -126,7 +126,7 @@ def discover() -> list[dict]:
     try:
         r = requests.get(f"{settings.ado_url.rstrip('/')}/_apis/git/repositories",
                          params={"api-version": "6.0"},
-                         auth=(settings.ado_user, settings.ado_password),
+                         auth=(settings.ado_user, settings.ado_rest_password),
                          timeout=20)
     except requests.RequestException as exc:
         raise RepoError(f"ADO browse failed: {_scrub(str(exc))[:200]}")
@@ -134,8 +134,8 @@ def discover() -> list[dict]:
     # HTML sign-in page, which used to surface as a cryptic JSON parse error
     if r.status_code in (203, 302, 401, 403):
         raise RepoError(f"ADO browse failed: HTTP {r.status_code} — authentication "
-                        "rejected. Check ADO_USER / ADO_PASSWORD (has the PAT "
-                        "expired or been rotated?)")
+                        "rejected. The browse uses ADO_PAT (falling back to "
+                        "ADO_PASSWORD) — has the PAT expired or been rotated?")
     if not r.ok:
         raise RepoError(f"ADO browse failed: HTTP {r.status_code} {r.reason} — "
                         "is ADO_URL the collection root "
@@ -198,9 +198,14 @@ def _workspace(repo: dict, username: str | None) -> Path:
 
 
 def _scrub(text: str) -> str:
-    if settings.ado_password:
-        text = text.replace(settings.ado_password, "***")
-    return text
+    """Credentials must never reach the UI: mask every configured secret
+    (raw and percent-encoded) and strip any url userinfo (user:pass@host)
+    git may echo back."""
+    for secret in (settings.ado_password, settings.ado_pat):
+        if secret:
+            text = text.replace(secret, "***")
+            text = text.replace(quote(secret, safe=""), "***")
+    return re.sub(r"(https?://)[^/@\s]+@", r"\1", text)
 
 
 # never let git prompt for credentials: there is no terminal in the container,
@@ -208,8 +213,9 @@ def _scrub(text: str) -> str:
 # address". With prompts off, git fails fast with a message we can hint on.
 _GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 
-_AUTH_HINT = (" — git asked for credentials: check ADO_USER / ADO_PASSWORD "
-              "(PAT) in config (compose: QO_ADO_USER / QO_ADO_PASSWORD); "
+_AUTH_HINT = (" — git asked for credentials: check ADO_USER / ADO_PASSWORD in "
+              "config (compose: QO_ADO_USER / QO_ADO_PASSWORD). git cloning "
+              "uses the PASSWORD; the PAT (ADO_PAT) is for the ADO REST browse. "
               "QuestOps injects them into http(s) URLs per command")
 
 

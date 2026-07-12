@@ -56,6 +56,7 @@ services:
       ADO_URL: ${QO_ADO_URL:-}
       ADO_USER: ${QO_ADO_USER:-}
       ADO_PASSWORD: ${QO_ADO_PASSWORD:-}
+      ADO_PAT: ${QO_ADO_PAT:-}
       GIT_USER_NAME: ${QO_GIT_USER_NAME:-questops-bot}
       GIT_USER_EMAIL: ${QO_GIT_USER_EMAIL:-questops-bot@local}
     # podman-compose doesn't honor healthcheck conditions reliably;

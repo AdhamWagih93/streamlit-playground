@@ -77,11 +77,14 @@ class Settings(BaseSettings):
 
     # --- Repositories page ---
     # repos are DEFINED FROM THE UI (stored in the database); config carries
-    # only the Azure DevOps instance credentials used to browse/clone/pull
+    # only the Azure DevOps instance credentials. Some ADO setups want the
+    # PAT for the REST API but the real account password for git-over-http —
+    # so both are definable and each falls back to the other.
     repos_workdir: str = "./repos"
     ado_url: str = ""       # e.g. https://ado.mycorp.local/DefaultCollection
     ado_user: str = ""
-    ado_password: str = ""  # a PAT works as the basic-auth password
+    ado_password: str = ""  # used for GIT clone/pull/fetch
+    ado_pat: str = ""       # used for the ADO REST API (repository browse)
 
     # --- Git (repo actions) ---
     git_token: str = ""              # https token used for clone/push
@@ -123,5 +126,15 @@ class Settings(BaseSettings):
     @property
     def kpi_ignore_tokens(self) -> list[str]:
         return [t.lower() for t in self._csv(self.kpi_ignore)]
+
+    @property
+    def ado_git_password(self) -> str:
+        """git clone/pull/fetch credential: the password, PAT as fallback."""
+        return self.ado_password or self.ado_pat
+
+    @property
+    def ado_rest_password(self) -> str:
+        """ADO REST API credential: the PAT, password as fallback."""
+        return self.ado_pat or self.ado_password
 
 settings = Settings()

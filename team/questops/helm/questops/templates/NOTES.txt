@@ -16,5 +16,5 @@ Checks:
 
 WARNING: secrets are rendered inline from values. For production create a
 Secret with keys SECRET_KEY/DATABASE_URL/JIRA_PASSWORD/JENKINS_TOKEN/
-LDAP_BIND_PASSWORD/GIT_TOKEN/ADO_PASSWORD and set app.existingSecret.
+LDAP_BIND_PASSWORD/GIT_TOKEN/ADO_PASSWORD/ADO_PAT and set app.existingSecret.
 {{- end }}

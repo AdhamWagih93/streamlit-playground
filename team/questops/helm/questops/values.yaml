@@ -98,12 +98,14 @@ repositories:
     size: 5Gi
     storageClassName: ""
 
-# repositories are ADDED FROM THE UI; only the ADO instance creds live here
-# (browse + clone/pull; a PAT works as the password)
+# repositories are ADDED FROM THE UI; only the ADO instance creds live here.
+# git clone/pull uses user+password; the REST browse uses user+pat —
+# leave one empty and the other is used for both.
 ado:
   url: "https://ado.mycorp.local/DefaultCollection"
   user: "svc-questops"
   password: ""       # prefer app.existingSecret (key: ADO_PASSWORD)
+  pat: ""            # prefer app.existingSecret (key: ADO_PAT)
 
 database:
   # external Postgres DSN, e.g. postgresql+psycopg2://user:pass@host:5432/questops
