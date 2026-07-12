@@ -6,12 +6,17 @@
   <title>QuestOps — Team Alignment Deck</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
   <link rel="stylesheet" href="styles.css">
+  <script>/* apply the saved theme before first paint (no flash) */
+    document.documentElement.dataset.theme = localStorage.getItem("qo_theme")
+      || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  </script>
 </head>
 <body>
 
   <!-- ============ LOGIN ============ -->
   <div id="login-screen" class="login-screen hidden">
     <div class="login-card">
+      <button class="btn btn-ghost btn-sm theme-toggle-btn login-theme" title="light/dark mode">☀️</button>
       <div class="login-logo">QUEST<span>OPS</span></div>
       <div class="login-tag">the team alignment deck · ship together, level up together</div>
       <form id="login-form">
@@ -71,6 +76,7 @@
           <button id="quick-add" class="btn btn-primary btn-sm" title="add a ticket to the pool">+ Ticket</button>
           <span id="streak-chip" class="chip chip-streak" title="daily activity streak">🔥 0</span>
           <span id="mode-chip" class="chip chip-mode hidden">DEMO</span>
+          <button class="btn btn-ghost btn-sm theme-toggle-btn" title="light/dark mode">☀️</button>
         </div>
       </header>
       <main id="view"></main>

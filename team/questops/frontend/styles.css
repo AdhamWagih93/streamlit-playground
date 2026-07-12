@@ -556,6 +556,52 @@ a.ov-tile:hover { border-color: var(--amber); }
   font-size: 12.5px; cursor: pointer; }
 .qa-obj input { accent-color: var(--amber); }
 
+/* ---------- light theme (html[data-theme="light"]) ---------- */
+html[data-theme="light"] {
+  --bg: #eef1f6;
+  --bg-2: #e4e9f1;
+  --panel: #ffffff;
+  --panel-2: #f0f3f8;
+  --line: #d3dbe6;
+  --text: #1c2635;
+  --dim: #4d5d72;
+  --faint: #7a8798;
+  --amber: #b06e00;
+  --amber-soft: rgba(176, 110, 0, .10);
+  --cyan: #0e7f95;
+  --green: #178a55;
+  --red: #cc3a42;
+  --violet: #6a49c8;
+}
+html[data-theme="light"] body {
+  background-image:
+    radial-gradient(1100px 500px at 75% -10%, rgba(14,127,149,.06), transparent 60%),
+    radial-gradient(900px 420px at 10% 110%, rgba(176,110,0,.05), transparent 60%),
+    repeating-linear-gradient(0deg, transparent 0 39px, rgba(20,40,70,.03) 39px 40px),
+    repeating-linear-gradient(90deg, transparent 0 39px, rgba(20,40,70,.03) 39px 40px);
+}
+html[data-theme="light"] .topbar { background: rgba(255,255,255,.78); }
+html[data-theme="light"] .login-screen {
+  background: radial-gradient(800px 400px at 50% 0%, rgba(176,110,0,.08), transparent 65%), var(--bg);
+}
+html[data-theme="light"] .login-card { box-shadow: 0 30px 80px rgba(30,45,70,.18); }
+html[data-theme="light"] .btn-primary { background: #f5a300; border-color: #f5a300; }
+html[data-theme="light"] .btn-primary:hover { background: #ffb224; box-shadow: 0 0 18px rgba(245,163,0,.3); }
+html[data-theme="light"] .xp-fill { background: linear-gradient(90deg, #f5a300, #ffb224); box-shadow: none; }
+html[data-theme="light"] .lb-bar div { background: linear-gradient(90deg, #f5a300, #d18a00); }
+html[data-theme="light"] .kpi-count { text-shadow: none; }
+html[data-theme="light"] .toast { box-shadow: 0 12px 30px rgba(30,45,70,.25); }
+html[data-theme="light"] .toast-badge,
+html[data-theme="light"] .toast-level { background: var(--panel); }
+html[data-theme="light"] .lb-rank.r2 { color: #6b7c93; }
+html[data-theme="light"] .lb-rank.r3 { color: #a3671f; }
+html[data-theme="light"] .dot-red, html[data-theme="light"] .dot-amber { box-shadow: none; }
+html[data-theme="light"] .ai-drawer { box-shadow: -20px 0 60px rgba(30,45,70,.2); }
+html[data-theme="light"] .modal { box-shadow: 0 30px 80px rgba(30,45,70,.28); }
+html[data-theme="light"] .modal-back { background: rgba(40,55,80,.35); }
+.login-theme { position: absolute; top: 12px; right: 12px; }
+.login-card { position: relative; }
+
 /* ---------- toasts ---------- */
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
 .toast {

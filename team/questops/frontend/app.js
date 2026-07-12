@@ -75,6 +75,20 @@ function ago(iso) {
   return `${Math.round(min / 1440)}d ago`;
 }
 
+/* ---------------- theme ---------------- */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("qo_theme", t);
+  document.querySelectorAll(".theme-toggle-btn").forEach((b) => {
+    b.textContent = t === "light" ? "🌙" : "☀️";
+    b.title = t === "light" ? "switch to dark mode" : "switch to light mode";
+  });
+}
+document.querySelectorAll(".theme-toggle-btn").forEach((b) =>
+  b.addEventListener("click", () =>
+    applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light")));
+applyTheme(document.documentElement.dataset.theme || "dark");
+
 /* ---------------- toasts ---------------- */
 function toast(html, cls = "", ms = 3800) {
   const el = document.createElement("div");
