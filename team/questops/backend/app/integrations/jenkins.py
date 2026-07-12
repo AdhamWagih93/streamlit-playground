@@ -23,27 +23,29 @@ def is_live() -> bool:
 
 _DEMO_JOBS = [
     {"name": "payments-service/main", "result": "FAILURE", "building": False,
-     "ago_min": 18, "duration_min": 11, "number": 481},  # < 30m → 'at risk' in demo
+     "ago_min": 18, "duration_min": 11, "number": 481, "recent_builds": 14},  # < 30m → 'at risk' in demo
     {"name": "checkout-service/main", "result": "FAILURE", "building": False,
-     "ago_min": 130, "duration_min": 8, "number": 902},
+     "ago_min": 130, "duration_min": 8, "number": 902, "recent_builds": 11},
     {"name": "platform-terraform/apply", "result": "UNSTABLE", "building": False,
-     "ago_min": 300, "duration_min": 22, "number": 233},
+     "ago_min": 300, "duration_min": 22, "number": 233, "recent_builds": 4},
     # latest run green, but an EARLIER run in the window failed (another
     # project on the same pipeline) — must still show as a red pipeline
     {"name": "inventory-service/main", "result": "SUCCESS", "building": False,
-     "ago_min": 55, "duration_min": 9, "number": 764,
+     "ago_min": 55, "duration_min": 9, "number": 764, "recent_builds": 9,
      "recent_failures": [{"number": 762, "result": "FAILURE",
                           "ago_min": 180, "duration_min": 4}]},
     {"name": "data-warehouse/nightly-etl", "result": None, "building": True,
-     "ago_min": 95, "duration_min": None, "number": 1201, "avg_min": 38.0},   # 95m vs ~38m avg → stuck
+     "ago_min": 95, "duration_min": None, "number": 1201, "avg_min": 38.0,
+     "recent_builds": 7},   # 95m vs ~38m avg → stuck
     {"name": "monolith/regression-suite", "result": None, "building": True,
-     "ago_min": 61, "duration_min": None, "number": 3391, "avg_min": 52.0},   # within normal range
+     "ago_min": 61, "duration_min": None, "number": 3391, "avg_min": 52.0,
+     "recent_builds": 5},   # within normal range
     {"name": "auth-service/main", "result": "SUCCESS", "building": False,
-     "ago_min": 20, "duration_min": 6, "number": 512},
+     "ago_min": 20, "duration_min": 6, "number": 512, "recent_builds": 12},
     {"name": "DevOps_Test/sandbox-pipeline", "result": "FAILURE", "building": False,
      "ago_min": 10, "duration_min": 2, "number": 77},  # filtered out by JENKINS_IGNORE
     {"name": "notifications-service/main", "result": "SUCCESS", "building": False,
-     "ago_min": 400, "duration_min": 7, "number": 289},
+     "ago_min": 400, "duration_min": 7, "number": 289, "recent_builds": 3},
 ]
 
 
@@ -56,7 +58,8 @@ def _demo_overview() -> dict:
         url = f"#demo/jenkins/{j['name']}/{j['number']}"
         jobs.append({"name": j["name"], "result": j["result"], "building": j["building"],
                      "number": j["number"], "url": url,
-                     "started": started, "duration_min": j["duration_min"]})
+                     "started": started, "duration_min": j["duration_min"],
+                     "recent_builds": j.get("recent_builds", 0)})
         if j["building"] and _is_long_running(j["ago_min"], j.get("avg_min") or 0):
             long_running.append({"job": j["name"], "number": j["number"], "url": url,
                                  "running_min": j["ago_min"],
@@ -138,11 +141,16 @@ def _live_overview() -> dict:
         if any(tok in name.lower() for tok in settings.jenkins_ignore_tokens):
             continue
         last, completed = j.get("lastBuild") or {}, j.get("lastCompletedBuild") or {}
+        window_ms = settings.jenkins_failure_window_days * 24 * 60 * 60_000
         jobs.append({"name": name, "result": completed.get("result"),
                      "building": last.get("building", False),
                      "number": last.get("number"), "url": last.get("url") or j.get("url"),
                      "started": last.get("timestamp"),
-                     "duration_min": round((completed.get("duration") or 0) / 60_000, 1)})
+                     "duration_min": round((completed.get("duration") or 0) / 60_000, 1),
+                     # activity = builds inside the window (drives the top-10 view)
+                     "recent_builds": sum(1 for b in (j.get("builds") or [])
+                                          if b.get("timestamp")
+                                          and now - b["timestamp"] <= window_ms)})
         if last.get("building"):
             running_min = (now - last.get("timestamp", now)) / 60_000
             avg_min = _avg_duration_min(j.get("builds") or [])

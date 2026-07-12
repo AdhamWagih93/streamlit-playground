@@ -275,6 +275,8 @@ main#view { flex: 1; overflow-y: auto; padding: 26px 30px 60px; }
 @keyframes pulse { 50% { opacity: .4; } }
 .ci-job { font: 500 13px var(--mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ci-meta { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.ci-scroll { max-height: 300px; overflow-y: auto; }
+.panel-divider { margin-top: 16px !important; border-top: 1px solid var(--line); padding-top: 12px; }
 
 /* ---------- KPI window + error analysis ---------- */
 .kpi-panel { display: flex; gap: 24px; align-items: stretch; border-left: 3px solid var(--amber); }

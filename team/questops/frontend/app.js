@@ -792,12 +792,16 @@ async function renderCI() {
       ${l.claimed_by ? "" : `<button class="btn btn-sm" data-claim="${esc(l.job)}">Investigate +10</button>`}
     </div>`).join("") || `<div class="empty">nothing stuck</div>`;
 
-  const jobs = data.jobs.map((j) => {
+  // only the 10 most active jobs (builds inside the window) — the rest are noise
+  const topJobs = [...data.jobs]
+    .sort((a, b) => (b.recent_builds || 0) - (a.recent_builds || 0))
+    .slice(0, 10);
+  const jobs = topJobs.map((j) => {
     const dot = j.building ? "dot-amber" : j.result === "SUCCESS" ? "dot-green"
       : j.result ? "dot-red" : "dot-grey";
     return `<div class="ci-row"><span class="ci-dot ${dot}"></span>
       <span class="ci-job">${esc(j.name)}</span>
-      <span class="ci-meta">${j.building ? "building…" : esc(j.result || "—")}${j.duration_min ? ` · ${j.duration_min}m` : ""}</span>
+      <span class="ci-meta">${j.recent_builds ? `${j.recent_builds} builds · ` : ""}${j.building ? "building…" : esc(j.result || "—")}${j.duration_min ? ` · ${j.duration_min}m` : ""}</span>
       ${linkBtn(j.url)}</div>`;
   }).join("");
 
@@ -923,21 +927,26 @@ async function renderCI() {
         </details>
       </div>`).join("") || `<div class="empty">no analyzed errors for this filter</div>`;
 
+  // one-look layout: failures + their error analysis together on the left,
+  // long-running + top-10 most-active on the right; long lists scroll in place
   view().innerHTML = `
     <div class="view-head"><h1>PIPELINES</h1><span class="sub">Jenkins · ${data.source}</span></div>
     ${kpiPanel}
     ${loadedPanel}
     <div class="ci-grid">
-      <div>
-        <div class="panel" style="margin-bottom:18px"><h2>🔴 recent failures (last ${data.failure_window_days}d)
-          <span class="ov-more" style="color:var(--faint)">every failed run counts — not just the last</span></h2>${failures}</div>
-        <div class="panel"><h2>⏳ long-running (past their average)</h2>${longRunning}</div>
+      <div class="panel">
+        <h2>🔴 recent failures (last ${data.failure_window_days}d)
+          <span class="ov-more" style="color:var(--faint)">every failed run counts — not just the last</span></h2>
+        <div class="ci-scroll">${failures}</div>
+        <h2 class="panel-divider">🧬 error analysis — last ${errs.days}d · ${errs.source}</h2>
+        <div class="filter-row" style="margin-bottom:10px;flex-wrap:wrap">${flagChips}</div>
+        <div class="ci-scroll">${errRows}</div>
       </div>
-      <div class="panel"><h2>all jobs</h2>${jobs}</div>
-    </div>
-    <div class="panel" style="margin-top:18px"><h2>🧬 error analysis — last ${errs.days}d · ${errs.source}</h2>
-      <div class="filter-row" style="margin-bottom:12px;flex-wrap:wrap">${flagChips}</div>
-      ${errRows}</div>`;
+      <div>
+        <div class="panel" style="margin-bottom:18px"><h2>⏳ long-running (past their average)</h2>${longRunning}</div>
+        <div class="panel"><h2>⚡ most active jobs — top ${topJobs.length} of ${data.jobs.length}</h2>${jobs}</div>
+      </div>
+    </div>`;
 
   startKpiCountdown(kpi.seconds_remaining);
   view().querySelectorAll("[data-flag]").forEach((b) => b.onclick = () => {
