@@ -8,6 +8,7 @@ never overlap. Edits stay LOCAL — nothing is ever pushed from this page.
 Credentials are used only for browse/clone/fetch and are never written
 into .git/config."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -188,20 +189,42 @@ def _scrub(text: str) -> str:
     return text
 
 
+# never let git prompt for credentials: there is no terminal in the container,
+# so prompting surfaces as "could not read Username ... No such device or
+# address". With prompts off, git fails fast with a message we can hint on.
+_GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+
+_AUTH_HINT = (" — git asked for credentials: check ADO_USER / ADO_PASSWORD "
+              "(PAT) in config (compose: QO_ADO_USER / QO_ADO_PASSWORD); "
+              "QuestOps injects them into http(s) URLs per command")
+
+
+def _with_hint(msg: str) -> str:
+    if ("could not read Username" in msg or "could not read Password" in msg
+            or "Authentication failed" in msg or "terminal prompts disabled" in msg):
+        msg += _AUTH_HINT
+    return msg
+
+
 def _git(repo_dir: Path, *args: str, ok_fail: bool = False) -> str:
-    p = subprocess.run(["git", *args], cwd=repo_dir,
+    p = subprocess.run(["git", *args], cwd=repo_dir, env=_GIT_ENV,
                        capture_output=True, text=True, timeout=120)
     if p.returncode != 0 and not ok_fail:
-        raise RepoError(_scrub((p.stderr or p.stdout).strip())[:400])
+        raise RepoError(_with_hint(_scrub((p.stderr or p.stdout).strip())[:400]))
     return p.stdout
 
 
 def _authed(repo: dict) -> str:
+    """Inject the ADO creds into the URL for this one command. Handles both
+    http and https (on-prem ADO is often plain http) and URLs that already
+    embed a username (ADO's remoteUrl usually does: https://user@host/...)."""
     url = repo["url"]
-    if repo.get("user") and url.startswith("https://"):
-        cred = f"{quote(repo['user'], safe='')}:{quote(repo.get('password') or '', safe='')}"
-        return url.replace("https://", f"https://{cred}@", 1)
-    return url
+    m = re.match(r"^(https?://)(?:[^/@]+@)?(.+)$", url)
+    if not m or not repo.get("user"):
+        return url
+    scheme, rest = m.groups()
+    cred = f"{quote(repo['user'], safe='')}:{quote(repo.get('password') or '', safe='')}"
+    return f"{scheme}{cred}@{rest}"
 
 
 def _safe(repo_dir: Path, rel: str) -> Path:
@@ -243,10 +266,10 @@ def clone(slot: int) -> None:
         _seed_demo_repo(repo, repo_dir)
         return
     p = subprocess.run(["git", "clone", _authed(repo), str(repo_dir)],
-                       capture_output=True, text=True, timeout=600)
+                       env=_GIT_ENV, capture_output=True, text=True, timeout=600)
     if p.returncode != 0:
         shutil.rmtree(repo_dir, ignore_errors=True)
-        raise RepoError(_scrub((p.stderr or p.stdout).strip())[:400])
+        raise RepoError(_with_hint(_scrub((p.stderr or p.stdout).strip())[:400]))
     _git(repo_dir, "remote", "set-url", "origin", repo["url"])  # keep creds out
 
 
