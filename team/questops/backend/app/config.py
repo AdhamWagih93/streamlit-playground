@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     kpi_max_docs: int = 10000        # per-request fetch cap (ES max_result_window)
     error_analysis_days: int = 14
 
+    # --- Upgrade checker: outbound version lookups (endoflife.date / GitHub).
+    # These are the ONLY outbound-internet calls QuestOps makes; on hosts that
+    # reach the internet via a corporate proxy, set upgrades_proxy — internal
+    # Jira/Jenkins/ES/LDAP calls never use it.
+    upgrades_proxy: str = ""          # e.g. http://proxy.mycorp.local:8080
+    upgrades_verify_ssl: bool = True  # false if the proxy re-signs TLS
+    eol_api_base: str = "https://endoflife.date/api"   # or an internal mirror
+    github_api_base: str = "https://api.github.com"
+
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389
     ldap_bind_dn: str = ""           # service account for the user search

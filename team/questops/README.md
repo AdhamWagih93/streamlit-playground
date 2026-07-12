@@ -97,6 +97,7 @@ credentials. Live-mode behavior per integration is in `backend/app/integrations/
 | Elasticsearch | `ES_URL`, `ES_API_KEY`, `JENKINS_KPI_INDEX` (+ `KPI_SYNC_MINUTES`, `TZ` for the load countdown), `ERROR_ANALYSIS_INDEX`, `ERROR_ANALYSIS_DAYS` |
 | LDAP | `LDAP_URL`, service `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD`, `LDAP_BASE_DN`, `LDAP_REQUIRED_GROUP` (one team group: login + roster), `MEMBER_USERNAMES` (everyone else is approver) |
 | Repositories page | `ADO_URL`, `ADO_USER`, `ADO_PASSWORD` (PAT) — repos themselves are added from the UI |
+| Upgrade checker | `UPGRADES_PROXY` (corporate proxy for the *only* outbound-internet calls), `UPGRADES_VERIFY_SSL`, `EOL_API_BASE` / `GITHUB_API_BASE` (internal mirrors) |
 | Repo actions | `GIT_TOKEN` (https push), `GIT_USER_NAME`, `GIT_USER_EMAIL` |
 
 ## Deploy with Helm

@@ -37,6 +37,10 @@ services:
       ERROR_ANALYSIS_INDEX: ${QO_ERROR_ANALYSIS_INDEX:-jenkins-error-analysis}
       KPI_SYNC_MINUTES: ${QO_KPI_SYNC_MINUTES:-5,35}
       KPI_MAX_DOCS: ${QO_KPI_MAX_DOCS:-10000}
+      UPGRADES_PROXY: ${QO_UPGRADES_PROXY:-}
+      UPGRADES_VERIFY_SSL: ${QO_UPGRADES_VERIFY_SSL:-true}
+      EOL_API_BASE: ${QO_EOL_API_BASE:-https://endoflife.date/api}
+      GITHUB_API_BASE: ${QO_GITHUB_API_BASE:-https://api.github.com}
       ERROR_ANALYSIS_DAYS: ${QO_ERROR_ANALYSIS_DAYS:-14}
       TZ: ${QO_TZ:-UTC}
       LDAP_URL: ${QO_LDAP_URL:-}

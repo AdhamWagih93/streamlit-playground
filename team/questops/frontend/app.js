@@ -1603,6 +1603,10 @@ async function renderUpgrades(refresh) {
         checked ${ago(data.checked_at)}${data.cached ? " (cached)" : ""}${data.demo_versions ? " · demo versions" : ""}</span>
       <span class="spacer"></span>
       <button class="btn btn-sm" id="upg-refresh">↻ re-check now</button></div>
+    ${data.degraded ? `<div class="remote-banner remote-new" style="margin-bottom:14px">
+      <b>⚠ online version lookups are failing</b>
+      <div class="ci-meta">${esc(data.hint || "")} — bundled versions below may be stale; lookups retry automatically every 10 minutes</div>
+    </div>` : ""}
     ${rows || `<div class="empty">no tools to check</div>`}
     <div class="kpi-note" style="margin-top:12px">outdated tools feed the task pool:
       “＋ upgrade ticket” creates a prioritized Jira ticket (EOL → Highest, major → High, patch → Medium)</div>`;

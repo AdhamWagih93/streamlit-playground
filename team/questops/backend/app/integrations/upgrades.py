@@ -13,10 +13,37 @@ import requests
 
 from ..config import settings
 
-EOL_API = "https://endoflife.date/api/{product}.json"
 HTTP_TIMEOUT = 8
 CACHE_TTL = 6 * 3600
-_CACHE: dict = {"at": 0.0, "payload": None}
+CACHE_TTL_DEGRADED = 600  # failed lookups retry soon (self-heals after a proxy fix)
+_CACHE: dict = {"at": 0.0, "payload": None, "ttl": CACHE_TTL}
+
+PROXY_HINT = ("no direct internet? set UPGRADES_PROXY (QO_UPGRADES_PROXY) to your "
+              "corporate proxy, or point EOL_API_BASE at an internal mirror")
+
+
+def _lookup_get(url: str) -> dict | list:
+    """The ONLY outbound-internet call in QuestOps — honors the dedicated
+    proxy so internal Jira/Jenkins/ES traffic is never routed through it."""
+    proxies = ({"http": settings.upgrades_proxy, "https": settings.upgrades_proxy}
+               if settings.upgrades_proxy else None)
+    r = requests.get(url, timeout=HTTP_TIMEOUT, proxies=proxies,
+                     verify=settings.upgrades_verify_ssl,
+                     headers={"Accept": "application/json"})
+    r.raise_for_status()
+    return r.json()
+
+
+def _short_err(exc: Exception) -> str:
+    s = str(exc)
+    for marker, human in (("NameResolutionError", "DNS lookup failed"),
+                          ("NewConnectionError", "connection refused/blocked"),
+                          ("ConnectTimeoutError", "connect timeout"),
+                          ("ProxyError", "proxy error"),
+                          ("SSLError", "TLS error (proxy re-signing? set UPGRADES_VERIFY_SSL=false or trust the CA)")):
+        if marker in s:
+            return human
+    return s[:120]
 
 # offline fallback — approximate, from build time; the UI labels it stale
 BUNDLED = {
@@ -144,18 +171,13 @@ def _pick(cycles: list[dict]) -> dict:
 
 
 def _from_eol_api(product: str) -> tuple[dict, list[dict]]:
-    r = requests.get(EOL_API.format(product=product), timeout=HTTP_TIMEOUT,
-                     headers={"Accept": "application/json"})
-    r.raise_for_status()
-    cycles = r.json()
+    cycles = _lookup_get(f"{settings.eol_api_base.rstrip('/')}/{product}.json")
     return _pick(cycles), cycles
 
 
 def _from_github(repo: str) -> tuple[dict, list[dict]]:
-    r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest",
-                     timeout=HTTP_TIMEOUT)
-    r.raise_for_status()
-    tag = (r.json().get("tag_name") or "").lstrip("v")
+    data = _lookup_get(f"{settings.github_api_base.rstrip('/')}/repos/{repo}/releases/latest")
+    tag = (data.get("tag_name") or "").lstrip("v")
     return {"recommended": ".".join(tag.split(".")[:2]), "latest": tag,
             "lts": False, "eol": None}, []
 
@@ -201,7 +223,7 @@ TOOLS = [
 
 
 def check(force: bool = False) -> dict:
-    if not force and _CACHE["payload"] and time.time() - _CACHE["at"] < CACHE_TTL:
+    if not force and _CACHE["payload"] and time.time() - _CACHE["at"] < _CACHE["ttl"]:
         return {**_CACHE["payload"], "cached": True}
 
     rows = []
@@ -215,7 +237,7 @@ def check(force: bool = False) -> dict:
                 rec, cycles = _from_github(t["github"])
                 source = "GitHub releases"
         except Exception as exc:  # noqa: BLE001 — offline / API down
-            lookup_error = str(exc)[:120]
+            lookup_error = _short_err(exc)
             bundled = BUNDLED.get(t.get("product") or t.get("github", ""))
             if bundled:
                 rec = {**bundled, "eol": None}
@@ -233,8 +255,13 @@ def check(force: bool = False) -> dict:
 
     order = {"eol": 0, "upgrade": 1, "patch": 2, "unknown": 3, "ok": 4}
     rows.sort(key=lambda r: order.get(r["status"], 5))
+    degraded = any(r["lookup_error"] for r in rows)
     payload = {"rows": rows,
                "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-               "demo_versions": settings.demo_mode}
-    _CACHE.update(at=time.time(), payload=payload)
+               "demo_versions": settings.demo_mode,
+               "degraded": degraded,
+               "hint": PROXY_HINT if degraded else None}
+    # failed lookups get a short cache so a proxy fix takes effect quickly
+    _CACHE.update(at=time.time(), payload=payload,
+                  ttl=CACHE_TTL_DEGRADED if degraded else CACHE_TTL)
     return {**payload, "cached": False}

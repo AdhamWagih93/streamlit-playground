@@ -67,6 +67,14 @@ elasticsearch:
 
 app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)
 
+# upgrade checker — the only outbound-internet calls; behind a corporate
+# proxy set upgrades.proxy (internal integrations never use it)
+upgrades:
+  proxy: ""               # e.g. http://proxy.mycorp.local:8080
+  verifySsl: true         # false if the proxy re-signs TLS
+  eolApiBase: "https://endoflife.date/api"   # or an internal mirror
+  githubApiBase: "https://api.github.com"
+
 ldap:
   url: "ldaps://ldap.mycorp.local:636"
   bindDn: "CN=svc-questops,OU=Service Accounts,DC=mycorp,DC=local"
