@@ -3,6 +3,7 @@ error-analysis index (categorized failures + AI verdicts). API-key auth.
 Demo mode serves realistic fake documents."""
 
 import datetime as dt
+import re
 
 import requests
 
@@ -100,6 +101,48 @@ def _demo_errors() -> list[dict]:
 
 
 # ---------------------------------------------------------------- public API
+def _parse_es_date(val) -> dt.datetime | None:
+    """Best-effort doc-date parsing: ISO (any tz), epoch s/ms, and the usual
+    non-ISO loader formats. Needed because the index's date fields are not
+    always date-mapped — ES range queries silently match nothing then."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            ts = float(val)
+            if ts > 1e12:
+                ts /= 1000.0
+            return dt.datetime.utcfromtimestamp(ts)
+        except (ValueError, OverflowError, OSError):
+            return None
+    s = str(val).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return _parse_es_date(int(s))
+    try:
+        iso = re.sub(r"([+-])(\d{2})(\d{2})$", r"\1\2:\3", s.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(iso)
+        return (parsed.astimezone(dt.timezone.utc).replace(tzinfo=None)
+                if parsed.tzinfo else parsed)
+    except ValueError:
+        pass
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M:%S",
+                "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+                "%d.%m.%Y %H:%M:%S"):
+        try:
+            return dt.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _doc_when(doc: dict) -> dt.datetime | None:
+    """builddate first — it is when the build RAN; @timestamp is only when
+    the loader ingested it (re-ingested old builds have a recent one)."""
+    return _parse_es_date(doc.get("builddate")) or _parse_es_date(doc.get("@timestamp"))
+
+
 def _kpi_ignored(doc: dict) -> bool:
     """KPI_IGNORE: same substring semantics as JENKINS_IGNORE, own knob."""
     if not settings.kpi_ignore_tokens:
@@ -118,20 +161,23 @@ def _apply_kpi_ignore(docs: list[dict], total: int) -> tuple[list[dict], int, in
     return kept, max(total - ignored, len(kept)), ignored
 
 
-def kpi_recent(hours: int = 168,
-               size: int | None = None) -> tuple[list[dict], bool, int, int]:
-    """Returns (docs, window_applied, total_in_window, ignored) for the whole
-    time window — the past week by default, or the UI's time filter. Fetches
-    up to KPI_MAX_DOCS in one request and reports the TRUE window total so a
-    truncated fetch is never silent; KPI_IGNORE tokens filter out matching
-    job paths. Tries the window on @timestamp, then builddate; if both come
-    back empty, falls back to the newest documents so the panel is never blank."""
+def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
+    """Docs for the whole time window — the past week by default, or the UI's
+    time filter. The window is ALWAYS enforced client-side on parsed doc
+    dates (builddate first) even when the ES range query worked, because:
+    (a) non-date-mapped fields make ES ranges silently match nothing, and
+    (b) re-ingested old builds carry a fresh @timestamp but an old builddate.
+    Returns {docs, window_applied, window_source, total, ignored, fetch_truncated}."""
     size = size or settings.kpi_max_docs
     if not is_live():
         docs = _demo_kpi() if settings.demo_mode else []
         docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
-        return docs, True, total, ignored
-    for field in ("@timestamp", "builddate"):
+        return {"docs": docs, "window_applied": True, "window_source": "demo",
+                "total": total, "ignored": ignored, "fetch_truncated": False}
+
+    cutoff = dt.datetime.utcnow() - dt.timedelta(hours=hours)
+    raw, total_raw, source = [], 0, "none"
+    for field in ("builddate", "@timestamp"):  # builddate = when the build RAN
         try:
             docs, total = _search_hits(settings.jenkins_kpi_index, {
                 "size": size, "track_total_hits": True,
@@ -141,14 +187,36 @@ def kpi_recent(hours: int = 168,
         except requests.HTTPError:
             continue
         if docs:
-            docs, total, ignored = _apply_kpi_ignore(docs, total)
-            return docs, True, total, ignored
-    docs, total = _search_hits(settings.jenkins_kpi_index, {
-        "size": size, "track_total_hits": True, "query": {"match_all": {}},
-        "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
-    })
+            raw, total_raw, source = docs, total, "es"
+            break
+    if not raw:  # range matched nothing (likely text-mapped dates) — fetch newest
+        raw, total_raw = _search_hits(settings.jenkins_kpi_index, {
+            "size": size, "track_total_hits": True, "query": {"match_all": {}},
+            "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
+        })
+
+    dated = [(d, _doc_when(d)) for d in raw]
+    any_parsed = any(w is not None for _, w in dated)
+    if source == "es":
+        # trust ES's window, but still drop re-ingested old builds
+        kept = [(d, w) for d, w in dated if w is None or w >= cutoff]
+        window_applied = True
+        window_source = "es+client" if len(kept) < len(dated) else "es"
+    elif any_parsed:
+        kept = [(d, w) for d, w in dated if w is not None and w >= cutoff]
+        window_applied, window_source = True, "client"
+    else:  # no parseable dates at all — show newest, clearly flagged
+        kept, window_applied, window_source = dated, False, "none"
+
+    kept.sort(key=lambda t: t[1] or dt.datetime.min, reverse=True)
+    docs = [d for d, _ in kept]
+    dropped = len(raw) - len(docs)
+    total = max(total_raw - dropped, len(docs)) if source == "es" else len(docs)
+    fetch_truncated = total_raw > len(raw)  # the fetch cap hid part of the window
     docs, total, ignored = _apply_kpi_ignore(docs, total)
-    return docs, False, total, ignored
+    return {"docs": docs, "window_applied": window_applied,
+            "window_source": window_source, "total": total,
+            "ignored": ignored, "fetch_truncated": fetch_truncated}
 
 
 def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:

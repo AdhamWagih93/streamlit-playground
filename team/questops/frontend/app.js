@@ -853,9 +853,11 @@ async function renderCI() {
     </div>`).join("") || `<div class="empty">nothing loaded in this window</div>`;
   const kpiWarn = kpi.es_error
     ? `<div class="empty">⚠ Elasticsearch query failed on '${esc(kpi.index)}': ${esc(kpi.es_error)}</div>`
-    : (!kpi.window_applied
-      ? `<div class="kpi-note">⚠ the ${kpi.hours}h window matched nothing on @timestamp/builddate — showing the newest records in '${esc(kpi.index)}' instead</div>`
-      : "");
+    : !kpi.window_applied
+      ? `<div class="kpi-note">⚠ no parseable dates in '${esc(kpi.index)}' — the ${kpi.hours}h window could not be applied; showing the newest records</div>`
+      : kpi.window_source === "client"
+        ? `<div class="kpi-note">ℹ the index's date fields aren't date-mapped — the ${kpi.hours}h window is enforced on parsed builddate values instead</div>`
+        : "";
   const pctCls = (p) => p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad";
   const st = kpi.stats || { total: 0, pipelines: [] };
   // failing pipelines are front and centre WITH their links; fully-green ones
