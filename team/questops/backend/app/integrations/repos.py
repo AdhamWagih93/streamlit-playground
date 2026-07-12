@@ -8,6 +8,7 @@ never overlap. Edits stay LOCAL — nothing is ever pushed from this page.
 Credentials are used only for browse/clone/fetch and are never written
 into .git/config."""
 
+import base64
 import os
 import re
 import shutil
@@ -197,11 +198,20 @@ def _workspace(repo: dict, username: str | None) -> Path:
     return base
 
 
+def _b64(s: str) -> str:
+    return base64.b64encode(s.encode()).decode()
+
+
 def _scrub(text: str) -> str:
     """Credentials must never reach the UI: mask every configured secret
-    (raw and percent-encoded) and strip any url userinfo (user:pass@host)
-    git may echo back."""
-    for secret in (settings.ado_password, settings.ado_pat):
+    (raw, percent-encoded and base64 header forms) and strip any url
+    userinfo (user:pass@host) git may echo back."""
+    secrets = [settings.ado_password, settings.ado_pat]
+    if settings.ado_pat:
+        secrets.append(_b64(":" + settings.ado_pat))
+    if settings.ado_password:
+        secrets.append(_b64(f"{settings.ado_user}:{settings.ado_password}"))
+    for secret in secrets:
         if secret:
             text = text.replace(secret, "***")
             text = text.replace(quote(secret, safe=""), "***")
@@ -234,17 +244,72 @@ def _git(repo_dir: Path, *args: str, ok_fail: bool = False) -> str:
     return p.stdout
 
 
-def _authed(repo: dict) -> str:
-    """Inject the ADO creds into the URL for this one command. Handles both
-    http and https (on-prem ADO is often plain http) and URLs that already
-    embed a username (ADO's remoteUrl usually does: https://user@host/...)."""
-    url = repo["url"]
+def _inject(url: str, user: str, password: str) -> str:
+    """Put credentials into the URL for one command. Handles http and https
+    (on-prem ADO is often plain http) and URLs that already embed a username
+    (ADO's remoteUrl usually does: https://user@host/...)."""
     m = re.match(r"^(https?://)(?:[^/@]+@)?(.+)$", url)
-    if not m or not repo.get("user"):
+    if not m or not user:
         return url
     scheme, rest = m.groups()
-    cred = f"{quote(repo['user'], safe='')}:{quote(repo.get('password') or '', safe='')}"
-    return f"{scheme}{cred}@{rest}"
+    return f"{scheme}{quote(user, safe='')}:{quote(password or '', safe='')}@{rest}"
+
+
+# which credential strategy last worked — tried first on subsequent commands
+_WORKING = {"label": None}
+
+_AUTHISH = re.compile(r"Authentication failed|could not read (Username|Password)"
+                      r"|HTTP.*40[13]|401|403|access denied|terminal prompts disabled",
+                      re.IGNORECASE)
+
+_ONPREM_HINTS = (" — on-prem ADO hints: the git endpoint often accepts different "
+                 "auth than the REST API. Enable IIS Basic auth or use a PAT for "
+                 "git; domain accounts may need ADO_USER=DOMAIN\\user; verify the "
+                 "account has Code>Read on the repository")
+
+
+def _cred_candidates(url: str) -> list[tuple[str, list[str], str]]:
+    """(label, extra `git -c` args, url) strategies, most likely first.
+    Preemptive Basic headers matter on IIS/NTLM setups that never offer a
+    Basic challenge — git would otherwise pick NTLM/Negotiate and fail."""
+    user, pw, pat = settings.ado_user, settings.ado_password, settings.ado_pat
+    out: list[tuple[str, list[str], str]] = []
+    if pw:
+        out.append(("password-in-url", [], _inject(url, user, pw)))
+    if pat:
+        out.append(("pat-in-url", [], _inject(url, user or "pat", pat)))
+        out.append(("pat-basic-header",
+                    ["-c", f"http.extraHeader=Authorization: Basic {_b64(':' + pat)}"],
+                    url))
+    if pw and user:
+        out.append(("password-basic-header",
+                    ["-c", f"http.extraHeader=Authorization: Basic {_b64(f'{user}:{pw}')}"],
+                    url))
+    if not out:
+        out.append(("no-credentials", [], url))
+    if _WORKING["label"]:
+        out.sort(key=lambda c: c[0] != _WORKING["label"])
+    return out
+
+
+def _git_authed(cwd: Path, repo: dict, *args_template: str, timeout: int = 300) -> str:
+    """Run a git command that talks to the remote, trying every credential
+    strategy; '{URL}' in args is replaced per attempt. Non-auth failures
+    raise immediately; auth failures accumulate into one actionable error."""
+    attempts = []
+    for label, extra, url in _cred_candidates(repo["url"]):
+        argv = [a.replace("{URL}", url) for a in args_template]
+        p = subprocess.run(["git", *extra, *argv], cwd=cwd, env=_GIT_ENV,
+                           capture_output=True, text=True, timeout=timeout)
+        if p.returncode == 0:
+            _WORKING["label"] = label
+            return p.stdout
+        msg = _scrub((p.stderr or p.stdout).strip())
+        attempts.append(f"[{label}] {(msg.splitlines()[-1] if msg else 'failed')[:140]}")
+        if not _AUTHISH.search(msg):
+            raise RepoError(_with_hint(msg[:400]))
+    raise RepoError("git rejected every configured credential: "
+                    + " · ".join(attempts) + _ONPREM_HINTS)
 
 
 def _safe(repo_dir: Path, rel: str) -> Path:
@@ -285,12 +350,21 @@ def clone(slot: int) -> None:
     if settings.demo_mode:
         _seed_demo_repo(repo, repo_dir)
         return
-    p = subprocess.run(["git", "clone", _authed(repo), str(repo_dir)],
-                       env=_GIT_ENV, capture_output=True, text=True, timeout=600)
-    if p.returncode != 0:
-        shutil.rmtree(repo_dir, ignore_errors=True)
-        raise RepoError(_with_hint(_scrub((p.stderr or p.stdout).strip())[:400]))
-    _git(repo_dir, "remote", "set-url", "origin", repo["url"])  # keep creds out
+    attempts = []
+    for label, extra, url in _cred_candidates(repo["url"]):
+        p = subprocess.run(["git", *extra, "clone", url, str(repo_dir)],
+                           env=_GIT_ENV, capture_output=True, text=True, timeout=600)
+        if p.returncode == 0:
+            _WORKING["label"] = label
+            _git(repo_dir, "remote", "set-url", "origin", repo["url"])  # keep creds out
+            return
+        shutil.rmtree(repo_dir, ignore_errors=True)  # clean slate per attempt
+        msg = _scrub((p.stderr or p.stdout).strip())
+        attempts.append(f"[{label}] {(msg.splitlines()[-1] if msg else 'failed')[:140]}")
+        if not _AUTHISH.search(msg):
+            raise RepoError(_with_hint(msg[:400]))
+    raise RepoError("git rejected every configured credential: "
+                    + " · ".join(attempts) + _ONPREM_HINTS)
 
 
 def pull(slot: int, username: str | None = None) -> str:
@@ -302,7 +376,7 @@ def pull(slot: int, username: str | None = None) -> str:
         raise RepoError("not cloned yet")
     out = ""
     if not settings.demo_mode:
-        out = _scrub(_git(base, "pull", "--ff-only", _authed(repo))).strip()
+        out = _scrub(_git_authed(base, repo, "pull", "--ff-only", "{URL}")).strip()
     if username:
         wt = _ensure_worktree(repo, username)
         base_head = _git(base, "rev-parse", "HEAD").strip()
@@ -339,8 +413,9 @@ def remote_status(slot: int, username: str | None = None) -> dict:
         raise RepoError("not cloned yet")
     fetch_error = None
     if not settings.demo_mode and time.time() - _FETCH_AT.get(slot, 0) > _FETCH_TTL:
-        try:  # authed URL on the command line; origin's config stays cred-free
-            _git(base, "fetch", _authed(repo), "+refs/heads/*:refs/remotes/origin/*")
+        try:  # creds only on the command line; origin's config stays cred-free
+            _git_authed(base, repo, "fetch", "{URL}",
+                        "+refs/heads/*:refs/remotes/origin/*")
             _FETCH_AT[slot] = time.time()
         except RepoError as exc:
             fetch_error = _scrub(str(exc))[:200]
