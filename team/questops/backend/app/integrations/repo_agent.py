@@ -177,18 +177,44 @@ def _final(db: Session, sid: str, reply: str) -> dict:
 
 
 # ------------------------------------------------------------- engines
+def _content_text(resp) -> str:
+    """AIMessage.content may be a string or a list of content blocks."""
+    c = getattr(resp, "content", "") or ""
+    if isinstance(c, list):
+        c = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in c)
+    return str(c).strip()
+
+
+def _summarize_lc(sess: dict) -> str:
+    """Ollama tool-calling models often return an EMPTY final message after
+    tool results. Force a text answer: re-invoke WITHOUT tools bound and an
+    explicit instruction — an unbound model cannot reply with a tool call."""
+    try:
+        msgs = sess["messages"] + [(
+            "human",
+            "Based on the conversation and the tool results above, answer my "
+            "original question now in plain text. Summarize what the commands "
+            "showed and cite file paths. Do not call any tools.")]
+        return _content_text(sess["llm_plain"].invoke(msgs))
+    except Exception:  # noqa: BLE001 — the raw outputs are still shown
+        return ""
+
+
 def _advance_lc(db: Session, sid: str) -> dict:
     """One model turn: either a final answer, or a batch of PROPOSED calls.
     Resumption after the human decides happens via decide() -> _resume_lc."""
     sess = _SESSIONS[sid]
     if sess["rounds"] >= MAX_ROUNDS:
-        return _final(db, sid, "(stopped: too many tool rounds — narrow the question)")
+        return _final(db, sid, _summarize_lc(sess)
+                      or "(stopped: too many tool rounds — narrow the question)")
     resp = sess["llm"].invoke(sess["messages"])
     sess["messages"].append(resp)
     sess["rounds"] += 1
     calls = getattr(resp, "tool_calls", None) or []
     if not calls:
-        return _final(db, sid, resp.content or "(no answer)")
+        text = _content_text(resp) or _summarize_lc(sess)
+        return _final(db, sid, text or "(the model returned no text — its tool "
+                                       "outputs are in the steps below)")
     return _propose(db, sid, [(c["name"], c.get("args") or {}, c["id"]) for c in calls])
 
 
@@ -320,6 +346,8 @@ def start(db: Session, slot: int, username: str, message: str,
         "EVERY tool call you make is shown to a human who must approve it before "
         "it runs — keep calls few and purposeful; a denied call means don't retry "
         "it. Always inspect real files before answering; cite file paths. "
+        "After your tool calls have run, ALWAYS write a final plain-text answer "
+        "interpreting the results — never end on raw command output. "
         "The user may reference repository paths with an '@' prefix "
         "(e.g. @src/main.py) — treat them as plain paths — and Jira tickets "
         "with '#' (e.g. #DEVOPS-101); referenced tickets' context is appended "
@@ -329,9 +357,10 @@ def start(db: Session, slot: int, username: str, message: str,
            "Write access is DISABLED: propose changes as snippets instead.")
     )
     sess["engine"] = "langchain+ollama"
-    sess["llm"] = ChatOllama(base_url=settings.ollama_url,
-                             model=settings.ollama_model,
-                             temperature=0.2).bind_tools(tools)
+    llm = ChatOllama(base_url=settings.ollama_url,
+                     model=settings.ollama_model, temperature=0.2)
+    sess["llm"] = llm.bind_tools(tools)
+    sess["llm_plain"] = llm  # unbound: used to force a text answer
     msgs = [SystemMessage(content=system)]
     for m in (history or [])[-8:]:
         cls = HumanMessage if m.get("role") == "user" else AIMessage
