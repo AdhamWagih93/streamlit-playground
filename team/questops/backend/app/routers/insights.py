@@ -5,6 +5,8 @@
 /api/errors  — categorized Jenkins failures (TicketFlag / ErrorCode / AI verdicts)
 """
 
+import re
+
 from fastapi import APIRouter, Depends
 
 from ..auth import current_user
@@ -45,12 +47,19 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
     def _pct(ok: int, total: int) -> float:
         return round(ok / total * 100, 1) if total else 0.0
 
+    def _job_url(d: dict) -> str:
+        if d.get("joburl"):
+            return d["joburl"]
+        # derive from the build url by stripping the trailing build number
+        return re.sub(r"/\d+/?$", "/", d.get("buildurl") or "")
+
     by_job: dict[str, dict] = {}
     ok_total = 0
     for d in recent:
         job = d.get("jobpath") or d.get("jobname") or "?"
-        row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0})
+        row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0, "url": ""})
         row["total"] += 1
+        row["url"] = row["url"] or _job_url(d)
         if str(d.get("status", "")).upper() == "SUCCESS":
             row["success"] += 1
             ok_total += 1

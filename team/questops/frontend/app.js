@@ -854,6 +854,21 @@ async function renderCI() {
       : "");
   const pctCls = (p) => p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad";
   const st = kpi.stats || { total: 0, pipelines: [] };
+  // failing pipelines are front and centre WITH their links; fully-green ones
+  // collapse behind a stat box, viewable on demand
+  const failing = st.pipelines.filter((p) => p.success < p.total);
+  const green = st.pipelines.filter((p) => p.total > 0 && p.success === p.total);
+  const greenPct = st.pipelines.length ? Math.round((green.length / st.pipelines.length) * 100) : 0;
+  const pipeName = (p) => p.url && !p.url.startsWith("#")
+    ? `<a class="ci-job" href="${esc(p.url)}" target="_blank" rel="noopener" title="open ${esc(p.job)} in Jenkins">${esc(p.job)} ↗</a>`
+    : `<span class="ci-job" title="${esc(p.job)}">${esc(p.job)}</span>`;
+  const pipeRow = (p) => `
+    <div class="kpi-pipe">
+      ${pipeName(p)}
+      <span class="lb-bar"><div class="${pctCls(p.pct)}" style="width:${p.pct}%"></div></span>
+      <span class="kpi-pct ${pctCls(p.pct)}">${p.pct}%</span>
+      <span class="ci-meta">${p.success}/${p.total}</span>
+    </div>`;
   const kpiStats = st.total ? `
     <div class="kpi-stats">
       <div class="kpi-overall">
@@ -861,13 +876,14 @@ async function renderCI() {
         <span>overall success<br>${st.success}/${st.total} builds</span>
       </div>
       <div class="kpi-pipes">
-        ${st.pipelines.map((p) => `
-          <div class="kpi-pipe">
-            <span class="ci-job" title="${esc(p.job)}">${esc(p.job)}</span>
-            <span class="lb-bar"><div class="${pctCls(p.pct)}" style="width:${p.pct}%"></div></span>
-            <span class="kpi-pct ${pctCls(p.pct)}">${p.pct}%</span>
-            <span class="ci-meta">${p.success}/${p.total}</span>
-          </div>`).join("")}
+        ${failing.map(pipeRow).join("") || `<div class="empty">no failing pipelines in this window 🎉</div>`}
+        ${green.length ? `
+          <details class="green-group">
+            <summary><b>${green.length}</b> pipeline(s) fully green —
+              <b>${greenPct}%</b> of ${st.pipelines.length} pipelines
+              <span class="ci-meta">· click to view them</span></summary>
+            ${green.map(pipeRow).join("")}
+          </details>` : ""}
       </div>
     </div>` : "";
   const loadedPanel = `

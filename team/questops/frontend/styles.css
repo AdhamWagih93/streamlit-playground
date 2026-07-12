@@ -226,6 +226,16 @@ main#view { flex: 1; overflow-y: auto; padding: 26px 30px 60px; }
 .kpi-overall b { font: 700 32px var(--display); display: block; font-variant-numeric: tabular-nums; }
 .kpi-overall span { color: var(--faint); font-size: 11px; line-height: 1.4; }
 .kpi-pipes { flex: 1; min-width: 0; }
+.kpi-pipe a.ci-job { color: var(--cyan); }
+.kpi-pipe a.ci-job:hover { color: var(--amber); }
+.green-group {
+  margin-top: 10px; border: 1px solid rgba(67,200,132,.4); border-radius: 8px;
+  background: rgba(67,200,132,.06);
+}
+.green-group summary { cursor: pointer; padding: 10px 14px; font-size: 13px; }
+.green-group summary b { color: var(--green); font: 700 16px var(--display); }
+.green-group .kpi-pipe { padding: 3px 14px 3px 24px; }
+.green-group[open] { padding-bottom: 8px; }
 .kpi-pipe { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .kpi-pipe .ci-job { flex: 0 1 260px; }
 .kpi-pipe .lb-bar { flex: 1; }
