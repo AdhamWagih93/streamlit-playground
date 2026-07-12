@@ -19,7 +19,9 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
 - **Jira Data Center** — one project, PAT auth: board, transitions (drag & drop),
   comments, claim-a-ticket.
 - **Jenkins** — recent failures and long-running (possibly stuck) builds; "I'm on it"
-  claims; the fix bounty only pays out when Jenkins reports green.
+  claims; the fix bounty only pays out when Jenkins reports green. A red pipeline is
+  any job with a failed run **in the window** — a later green run (another project on
+  the same pipeline) never hides an earlier failure; those rows carry a "latest ✓" chip.
 - **Failure Dive** — 🔎 on any failure pulls the console log (error lines highlighted)
   and reads the job's config.xml to find the pipeline-from-SCM scriptPath, resolving
   the groovy source from your defined **Engine** repository (or whichever defined repo

@@ -73,9 +73,12 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
         mine = f.get("claimed_by") == user.username
         items.append({"source": "jenkins", "key": f["job"],
                       "title": f"{f['result']}: {f['job']} #{f['number']}",
-                      "subtitle": f"failed {f['ago_min']} min ago",
-                      "score": 78 + (10 if mine else 0),
-                      "why": "red build blocks the team" + (" — you claimed it" if mine else ""),
+                      "subtitle": f"failed {f['ago_min']} min ago"
+                                  + (" · latest run green" if f.get("latest_ok") else ""),
+                      "score": 78 + (10 if mine else 0) - (12 if f.get("latest_ok") else 0),
+                      "why": ("failed run in the window — check which project it hit"
+                              if f.get("latest_ok") else "red build blocks the team")
+                             + (" — you claimed it" if mine else ""),
                       "url": f["url"], "claimed": bool(f.get("claimed_by"))})
     for l in ci["long_running"]:
         avg = l.get("avg_min")

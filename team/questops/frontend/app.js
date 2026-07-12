@@ -742,6 +742,7 @@ async function renderCI() {
       <span class="ci-dot dot-red"></span>
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
       <span class="ci-meta">${esc(f.result)} · ${f.ago_min}m ago${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
+      ${f.latest_ok ? `<span class="chip chip-green" title="the pipeline's latest run succeeded — this failure is from an earlier run (e.g. another project on the same pipeline)">latest ✓</span>` : ""}
       ${linkBtn(f.url)}
       ${diveBtn(f.job, f.number)}
       ${f.claimed_by
@@ -776,6 +777,7 @@ async function renderCI() {
       <span class="ci-dot dot-red"></span>
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
       <span class="ci-meta">failed ${f.ago_min}m ago</span>
+      ${f.latest_ok ? `<span class="chip chip-green" title="latest run succeeded — earlier run failed">latest ✓</span>` : ""}
       ${linkBtn(f.url)}
       ${diveBtn(f.job, f.number)}
       ${f.claimed_by ? `<span class="chip">🛠 @${esc(f.claimed_by)}</span>`
@@ -877,7 +879,8 @@ async function renderCI() {
     ${loadedPanel}
     <div class="ci-grid">
       <div>
-        <div class="panel" style="margin-bottom:18px"><h2>🔴 recent failures (last ${data.failure_window_days}d)</h2>${failures}</div>
+        <div class="panel" style="margin-bottom:18px"><h2>🔴 recent failures (last ${data.failure_window_days}d)
+          <span class="ov-more" style="color:var(--faint)">every failed run counts — not just the last</span></h2>${failures}</div>
         <div class="panel"><h2>⏳ long-running (past their average)</h2>${longRunning}</div>
       </div>
       <div class="panel"><h2>all jobs</h2>${jobs}</div>

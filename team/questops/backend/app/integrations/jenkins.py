@@ -28,8 +28,12 @@ _DEMO_JOBS = [
      "ago_min": 130, "duration_min": 8, "number": 902},
     {"name": "platform-terraform/apply", "result": "UNSTABLE", "building": False,
      "ago_min": 300, "duration_min": 22, "number": 233},
+    # latest run green, but an EARLIER run in the window failed (another
+    # project on the same pipeline) — must still show as a red pipeline
     {"name": "inventory-service/main", "result": "SUCCESS", "building": False,
-     "ago_min": 55, "duration_min": 9, "number": 764},
+     "ago_min": 55, "duration_min": 9, "number": 764,
+     "recent_failures": [{"number": 762, "result": "FAILURE",
+                          "ago_min": 180, "duration_min": 4}]},
     {"name": "data-warehouse/nightly-etl", "result": None, "building": True,
      "ago_min": 95, "duration_min": None, "number": 1201, "avg_min": 38.0},   # 95m vs ~38m avg → stuck
     {"name": "monolith/regression-suite", "result": None, "building": True,
@@ -61,19 +65,31 @@ def _demo_overview() -> dict:
         elif j["result"] in ("FAILURE", "UNSTABLE"):
             failures.append({"job": j["name"], "number": j["number"], "url": url,
                              "result": j["result"], "ago_min": j["ago_min"],
-                             "duration_min": j["duration_min"],
+                             "duration_min": j["duration_min"], "latest_ok": False,
                              "claimed_by": CLAIMS.get(j["name"])})
+        for f in j.get("recent_failures", []):  # earlier failed runs in the window
+            if f["ago_min"] <= settings.jenkins_failure_window_days * 24 * 60:
+                failures.append({"job": j["name"], "number": f["number"],
+                                 "url": f"#demo/jenkins/{j['name']}/{f['number']}",
+                                 "result": f.get("result", "FAILURE"),
+                                 "ago_min": f["ago_min"],
+                                 "duration_min": f.get("duration_min"),
+                                 "latest_ok": j["result"] == "SUCCESS",
+                                 "claimed_by": CLAIMS.get(j["name"])})
+    failures.sort(key=lambda f: f["ago_min"])
     return {"failures": failures, "long_running": long_running,
             "failure_window_days": settings.jenkins_failure_window_days,
             "jobs": jobs, "source": "demo"}
 
 
 # leaf fields we need per runnable job; folders/multibranch expose 'jobs' instead.
-# builds{0,20} = recent history used to compute the job's average runtime.
+# builds{0,20} = recent history: average runtime AND the failure scan — a red
+# pipeline is any job with a failed run in the window, not just a red LAST run
+# (the same pipeline serves multiple projects, so later runs can mask failures).
 _LEAF = ("fullName,name,url,"
          "lastBuild[number,building,timestamp,duration,result,url],"
          "lastCompletedBuild[number,timestamp,duration,result,url],"
-         "builds[duration,result,building]{0,20}")
+         "builds[number,timestamp,duration,result,building,url]{0,20}")
 
 
 def _tree_query(depth: int = 5) -> str:
@@ -136,14 +152,24 @@ def _live_overview() -> dict:
                                      "running_min": int(running_min),
                                      "avg_min": avg_min,
                                      "claimed_by": CLAIMS.get(name)})
-        if completed.get("result") in ("FAILURE", "UNSTABLE"):
-            ago_min = int((now - completed.get("timestamp", now)) / 60_000)
-            if ago_min <= settings.jenkins_failure_window_days * 24 * 60:
-                failures.append({"job": name, "number": completed.get("number"),
-                                 "url": completed.get("url"),
-                                 "result": completed.get("result"), "ago_min": ago_min,
-                                 "duration_min": round((completed.get("duration") or 0) / 60_000, 1),
-                                 "claimed_by": CLAIMS.get(name)})
+        # EVERY failed run in the window counts, not just the last one —
+        # a later green run (often a different project on the same pipeline)
+        # must not hide an earlier failure
+        latest_ok = completed.get("result") == "SUCCESS"
+        window_min = settings.jenkins_failure_window_days * 24 * 60
+        for b in (j.get("builds") or []):
+            if b.get("building") or b.get("result") not in ("FAILURE", "UNSTABLE"):
+                continue
+            ago_min = int((now - b.get("timestamp", now)) / 60_000)
+            if ago_min > window_min:
+                continue
+            failures.append({"job": name, "number": b.get("number"),
+                             "url": b.get("url")
+                                    or f"{(j.get('url') or '').rstrip('/')}/{b.get('number')}/",
+                             "result": b.get("result"), "ago_min": ago_min,
+                             "duration_min": round((b.get("duration") or 0) / 60_000, 1),
+                             "latest_ok": latest_ok,
+                             "claimed_by": CLAIMS.get(name)})
     failures.sort(key=lambda f: f["ago_min"])
     return {"failures": failures, "long_running": long_running,
             "failure_window_days": settings.jenkins_failure_window_days,
@@ -255,15 +281,21 @@ def claim(job: str, username: str) -> None:
 
 
 def verify_fixed(job: str) -> bool:
-    """A 'fixed' claim only pays out if Jenkins agrees (live mode)."""
+    """A 'fixed' claim only pays out if Jenkins agrees (live mode).
+    'Fixed' means the job's LATEST completed run is green — past failures
+    stay listed in the window (they may belong to other projects), so mere
+    absence from the failure list can never be the test."""
     if not is_live():
         if not settings.demo_mode:
             return False  # unconfigured live mode: nothing to verify against
         for j in _DEMO_JOBS:
-            if j["name"] == job and j["result"] in ("FAILURE", "UNSTABLE"):
+            if j["name"] == job and (j["result"] in ("FAILURE", "UNSTABLE")
+                                     or j.get("recent_failures")):
                 j["result"] = "SUCCESS"
                 j["ago_min"] = 1
+                j["recent_failures"] = []
                 return True
         return False
     data = _live_overview()
-    return all(f["job"] != job for f in data["failures"])
+    entry = next((x for x in data["jobs"] if x["name"] == job), None)
+    return bool(entry and entry.get("result") == "SUCCESS")
