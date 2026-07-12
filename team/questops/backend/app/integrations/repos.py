@@ -128,10 +128,24 @@ def discover() -> list[dict]:
                          params={"api-version": "6.0"},
                          auth=(settings.ado_user, settings.ado_password),
                          timeout=20)
-        r.raise_for_status()
-        items = r.json().get("value", [])
-    except (requests.RequestException, ValueError) as exc:
+    except requests.RequestException as exc:
         raise RepoError(f"ADO browse failed: {_scrub(str(exc))[:200]}")
+    # ADO does NOT 401 on bad/expired PATs — it returns 203 (or 302) with an
+    # HTML sign-in page, which used to surface as a cryptic JSON parse error
+    if r.status_code in (203, 302, 401, 403):
+        raise RepoError(f"ADO browse failed: HTTP {r.status_code} — authentication "
+                        "rejected. Check ADO_USER / ADO_PASSWORD (has the PAT "
+                        "expired or been rotated?)")
+    if not r.ok:
+        raise RepoError(f"ADO browse failed: HTTP {r.status_code} {r.reason} — "
+                        "is ADO_URL the collection root "
+                        "(e.g. https://ado.mycorp.local/DefaultCollection)?")
+    try:
+        items = r.json().get("value", [])
+    except ValueError:
+        raise RepoError("ADO browse failed: ADO answered with a non-JSON page — "
+                        "usually an auth redirect (expired PAT?) or ADO_URL not "
+                        "pointing at the collection root")
     return sorted(({"name": i.get("name", ""),
                     "project": (i.get("project") or {}).get("name", ""),
                     "url": i.get("remoteUrl") or i.get("webUrl", "")}

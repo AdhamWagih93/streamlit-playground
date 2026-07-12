@@ -1194,7 +1194,8 @@ function historyPanelHtml(hist) {
 function repoAddHtml() {
   const d = state.repoDiscover;
   const list = !d ? `<div class="empty">browsing the ADO instance…</div>`
-    : d.error ? `<div class="empty">⚠ ${esc(d.error)}</div>`
+    : d.error ? `<div class="empty">⚠ ${esc(d.error)}<br>
+        <button class="btn btn-sm" id="repo-discover-retry" style="margin-top:8px">↻ retry</button></div>`
     : d.repos.map((r) => `
         <div class="ci-row"><span class="ci-job">⛁ ${esc(r.name)}</span>
           <span class="ci-meta">${esc(r.project)}</span>
@@ -1210,9 +1211,28 @@ function repoAddHtml() {
       </div>
       <div class="kpi-note" style="margin-top:6px">the name matters: the Failure Dive looks for your
         pipeline groovy sources in the repo named <b>Engine</b> (or the one matching the job's SCM URL)</div>
-      <h2 style="margin-top:14px">or pick from the ADO instance</h2>
+      <h2 style="margin-top:14px">or pick from the ADO instance
+        ${d && !d.error ? `<button class="btn btn-sm ov-more" id="repo-discover-refresh">↻ refresh</button>` : ""}</h2>
       <div class="kpi-loaded">${list}</div>
     </div>`;
+}
+
+// patch ONLY the add-panel node — never a full re-render, so a slow page
+// render can't clobber the discover results (and vice versa)
+function updateAddPanel() {
+  const slot = document.getElementById("repo-add-slot");
+  if (!slot) return;
+  slot.innerHTML = state.repoAddOpen ? repoAddHtml() : "";
+  wireAddPanel();
+}
+
+async function loadDiscover(force = false) {
+  if (state.repoDiscoverLoading || (state.repoDiscover && !force)) return;
+  state.repoDiscoverLoading = true;
+  try { state.repoDiscover = await api("/api/repos/discover"); }
+  catch (e) { state.repoDiscover = { error: e.message, repos: [] }; }
+  state.repoDiscoverLoading = false;
+  updateAddPanel();
 }
 
 async function addRepo(url, name) {
@@ -1225,25 +1245,32 @@ async function addRepo(url, name) {
   } catch (e) { oops(e); }
 }
 
-function wireRepoAdd() {
-  const t = document.getElementById("repo-add-toggle");
-  if (t) t.onclick = async () => {
-    state.repoAddOpen = !state.repoAddOpen;
-    if (state.repoAddOpen && !state.repoDiscover) {
-      renderRepos();  // paints the loading row while ADO is queried
-      try { state.repoDiscover = await api("/api/repos/discover"); }
-      catch (e) { state.repoDiscover = { error: e.message, repos: [] }; }
-    }
-    renderRepos();
-  };
+function wireAddPanel() {
   const submit = document.getElementById("repo-add-submit");
   if (submit) submit.onclick = () => {
     const url = $("#repo-new-url").value.trim(), name = $("#repo-new-name").value.trim();
     if (!name) return oops(new Error("repository name is required (e.g. Engine, UI, inventories, ocp-templates)"));
     addRepo(url, name);
   };
-  view().querySelectorAll("[data-adourl]").forEach((b) => b.onclick = () =>
+  const slot = document.getElementById("repo-add-slot");
+  (slot || view()).querySelectorAll("[data-adourl]").forEach((b) => b.onclick = () =>
     addRepo(b.dataset.adourl, b.dataset.adoname));
+  const retry = document.getElementById("repo-discover-retry");
+  if (retry) retry.onclick = () => { state.repoDiscover = null; updateAddPanel(); loadDiscover(true); };
+  const refresh = document.getElementById("repo-discover-refresh");
+  if (refresh) refresh.onclick = () => { state.repoDiscover = null; updateAddPanel(); loadDiscover(true); };
+}
+
+function wireRepoAdd() {
+  const t = document.getElementById("repo-add-toggle");
+  if (t) t.onclick = () => {
+    state.repoAddOpen = !state.repoAddOpen;
+    if (state.repoAddOpen && !state.repoDiscover) loadDiscover();
+    t.textContent = state.repoAddOpen ? "✕ close" : "+ Add repository";
+    t.classList.toggle("btn-primary", !state.repoAddOpen);
+    updateAddPanel();
+  };
+  wireAddPanel();
 }
 
 function scanPanelHtml(s) {
@@ -1364,7 +1391,7 @@ function agentPanelHtml(cur, logData) {
 
 async function renderRepos() {
   const data = await api("/api/repos");
-  const addPanel = state.repoAddOpen ? repoAddHtml() : "";
+  const addPanel = `<div id="repo-add-slot">${state.repoAddOpen ? repoAddHtml() : ""}</div>`;
   const headHtml = `
     <div class="view-head"><h1>REPOSITORIES</h1>
       <span class="sub">your personal workspace (@${esc(state.me.username)}) — teammates never overlap · server changes auto-watched · edits never pushed</span>
