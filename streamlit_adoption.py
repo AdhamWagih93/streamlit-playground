@@ -175,7 +175,13 @@ def load_all_time_data() -> pd.DataFrame:
         return df
 
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(LOCAL_TZ)
-    df["username"] = df["username"].astype(str).str.lower()
+    # fillna BEFORE astype: on newer pandas (string/Arrow dtypes) astype(str)
+    # PRESERVES missing values — a NA username then vanishes from groupby keys
+    # while still appearing in unique(), crashing strict .loc lookups later.
+    df["username"] = (
+        df["username"].fillna("unknown").astype(str).str.strip().str.lower()
+        .replace({"": "unknown", "none": "unknown", "nan": "unknown", "<na>": "unknown"})
+    )
     df["original_user"] = df.get("original_user", None)
     df["current_page"] = df.get("current_page", None)
     df["session_id"] = df.get(
@@ -366,10 +372,13 @@ has_last_year = not df[df["year"] == LAST_YEAR].empty
 
 
 def period_stats(pdf: pd.DataFrame, year: int) -> dict:
-    users = set(pdf["username"].unique())
+    users = set(pdf["username"].dropna().unique())
+    # reindex, not .loc: a username missing from first_seen (e.g. NA-key
+    # divergence between groupby and unique) counts as not-new instead of
+    # crashing the page with 'not in index'
     new_users = int(
         ((first_seen_year == year) & (first_seen_doy <= today_doy))
-        .loc[list(users)].sum()
+        .reindex(list(users), fill_value=False).sum()
     ) if users else 0
     return {
         "interactions": len(pdf),
@@ -662,7 +671,7 @@ with tab_adoption:
     user_month = df.groupby(["month", "username"]).size().reset_index(name="n")
     user_first_month = first_seen.dt.to_period("M").dt.to_timestamp()
     user_month["kind"] = [
-        "New" if user_first_month[u] == m else "Returning"
+        "New" if user_first_month.get(u) == m else "Returning"
         for m, u in zip(user_month["month"], user_month["username"])
     ]
     nvr = user_month.groupby(["month", "kind"])["username"].nunique().reset_index(name="users")
