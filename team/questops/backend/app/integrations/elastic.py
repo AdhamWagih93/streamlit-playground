@@ -35,6 +35,18 @@ def _search(index: str, body: dict) -> list[dict]:
     return _search_hits(index, body)[0]
 
 
+def _search_hits_relaxed(index: str, body: dict) -> tuple[list[dict], int]:
+    """Sorting on a text-mapped field 400s the whole query — retry WITHOUT
+    the sort (we order client-side on parsed dates anyway)."""
+    try:
+        return _search_hits(index, body)
+    except requests.HTTPError:
+        if "sort" not in body:
+            raise
+        stripped = {k: v for k, v in body.items() if k != "sort"}
+        return _search_hits(index, stripped)
+
+
 # ---------------------------------------------------------------- KPI loader schedule
 def sync_times() -> tuple[dt.datetime, dt.datetime]:
     """(last_sync, next_sync) based on the configured minute marks.
@@ -127,7 +139,9 @@ def _parse_es_date(val) -> dt.datetime | None:
                 if parsed.tzinfo else parsed)
     except ValueError:
         pass
-    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M:%S",
+    for fmt in ("%d-%b-%Y @ %I:%M:%S %p",   # 14-Jul-2026 @ 04:59:41 PM (Jenkins KPI loader)
+                "%d-%b-%Y %I:%M:%S %p", "%d-%b-%Y %H:%M:%S", "%d %b %Y %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M:%S",
                 "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%Y/%m/%d %H:%M:%S",
                 "%d.%m.%Y %H:%M:%S"):
         try:
@@ -175,11 +189,13 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
         return {"docs": docs, "window_applied": True, "window_source": "demo",
                 "total": total, "ignored": ignored, "fetch_truncated": False}
 
-    cutoff = dt.datetime.utcnow() - dt.timedelta(hours=hours)
+    # container-local now: the loader writes local-time strings and TZ is
+    # configured to match it (same clock the sync countdown uses)
+    cutoff = _now() - dt.timedelta(hours=hours)
     raw, total_raw, source = [], 0, "none"
     for field in ("builddate", "@timestamp"):  # builddate = when the build RAN
         try:
-            docs, total = _search_hits(settings.jenkins_kpi_index, {
+            docs, total = _search_hits_relaxed(settings.jenkins_kpi_index, {
                 "size": size, "track_total_hits": True,
                 "query": {"range": {field: {"gte": f"now-{hours}h"}}},
                 "sort": [{field: {"order": "desc", "unmapped_type": "date"}}],
@@ -190,7 +206,7 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
             raw, total_raw, source = docs, total, "es"
             break
     if not raw:  # range matched nothing (likely text-mapped dates) — fetch newest
-        raw, total_raw = _search_hits(settings.jenkins_kpi_index, {
+        raw, total_raw = _search_hits_relaxed(settings.jenkins_kpi_index, {
             "size": size, "track_total_hits": True, "query": {"match_all": {}},
             "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
         })
