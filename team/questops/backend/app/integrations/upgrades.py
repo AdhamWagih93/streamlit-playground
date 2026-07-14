@@ -6,8 +6,10 @@ it doesn't track), cached in-process for 6h. When the server has no internet
 a bundled snapshot is used and clearly labeled as possibly stale."""
 
 import datetime as dt
+import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -24,14 +26,31 @@ PROXY_HINT = ("no direct internet? set UPGRADES_PROXY (QO_UPGRADES_PROXY) to you
 
 def _lookup_get(url: str) -> dict | list:
     """The ONLY outbound-internet call in QuestOps — honors the dedicated
-    proxy so internal Jira/Jenkins/ES traffic is never routed through it."""
+    proxy so internal Jira/Jenkins/ES traffic is never routed through it.
+    Tight connect timeout: black-holing firewalls must fail fast."""
     proxies = ({"http": settings.upgrades_proxy, "https": settings.upgrades_proxy}
                if settings.upgrades_proxy else None)
-    r = requests.get(url, timeout=HTTP_TIMEOUT, proxies=proxies,
+    r = requests.get(url, timeout=(4, HTTP_TIMEOUT), proxies=proxies,
                      verify=settings.upgrades_verify_ssl,
                      headers={"Accept": "application/json"})
     r.raise_for_status()
     return r.json()
+
+
+def _mask_userinfo(url: str) -> str:
+    return re.sub(r"(https?://)[^/@\s]+@", r"\1***@", url or "")
+
+
+def lookup_config() -> dict:
+    """What the server ACTUALLY uses for lookups — shown in the UI so a
+    config value that never reached the container is spotted instantly."""
+    env_proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+                 or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or "")
+    return {"proxy": _mask_userinfo(settings.upgrades_proxy) or None,
+            "env_proxy": _mask_userinfo(env_proxy) or None,
+            "verify_ssl": settings.upgrades_verify_ssl,
+            "eol_api_base": settings.eol_api_base,
+            "github_api_base": settings.github_api_base}
 
 
 def _short_err(exc: Exception) -> str:
@@ -222,36 +241,44 @@ TOOLS = [
 ]
 
 
+def _check_tool(t: dict) -> dict:
+    """Detect + lookup for ONE tool — runs in a worker thread so five slow
+    lookups cost one timeout, not five stacked (the tab used to hang)."""
+    try:
+        current, detect_error = t["detect"]()
+    except Exception as exc:  # noqa: BLE001 — a broken detector never kills the tab
+        current, detect_error = None, str(exc)[:120]
+    rec, cycles, source, lookup_error = None, [], "endoflife.date", None
+    try:
+        if t.get("product"):
+            rec, cycles = _from_eol_api(t["product"])
+        else:
+            rec, cycles = _from_github(t["github"])
+            source = "GitHub releases"
+    except Exception as exc:  # noqa: BLE001 — offline / API down
+        lookup_error = _short_err(exc)
+        bundled = BUNDLED.get(t.get("product") or t.get("github", ""))
+        if bundled:
+            rec = {**bundled, "eol": None}
+            source = "bundled snapshot (offline — may be stale)"
+    return {
+        "key": t["key"], "name": t["name"], "icon": t["icon"],
+        "current": current, "detect_error": detect_error,
+        "recommended": rec["recommended"] if rec else None,
+        "latest": rec["latest"] if rec else None,
+        "lts": rec["lts"] if rec else False,
+        "eol_date": (rec or {}).get("eol") if isinstance((rec or {}).get("eol"), str) else None,
+        "status": _status(current, cycles, rec),
+        "source": source, "lookup_error": lookup_error, "page": t["page"],
+    }
+
+
 def check(force: bool = False) -> dict:
     if not force and _CACHE["payload"] and time.time() - _CACHE["at"] < _CACHE["ttl"]:
         return {**_CACHE["payload"], "cached": True}
 
-    rows = []
-    for t in TOOLS:
-        current, detect_error = t["detect"]()
-        rec, cycles, source, lookup_error = None, [], "endoflife.date", None
-        try:
-            if t.get("product"):
-                rec, cycles = _from_eol_api(t["product"])
-            else:
-                rec, cycles = _from_github(t["github"])
-                source = "GitHub releases"
-        except Exception as exc:  # noqa: BLE001 — offline / API down
-            lookup_error = _short_err(exc)
-            bundled = BUNDLED.get(t.get("product") or t.get("github", ""))
-            if bundled:
-                rec = {**bundled, "eol": None}
-                source = "bundled snapshot (offline — may be stale)"
-        rows.append({
-            "key": t["key"], "name": t["name"], "icon": t["icon"],
-            "current": current, "detect_error": detect_error,
-            "recommended": rec["recommended"] if rec else None,
-            "latest": rec["latest"] if rec else None,
-            "lts": rec["lts"] if rec else False,
-            "eol_date": (rec or {}).get("eol") if isinstance((rec or {}).get("eol"), str) else None,
-            "status": _status(current, cycles, rec),
-            "source": source, "lookup_error": lookup_error, "page": t["page"],
-        })
+    with ThreadPoolExecutor(max_workers=len(TOOLS)) as pool:
+        rows = list(pool.map(_check_tool, TOOLS))
 
     order = {"eol": 0, "upgrade": 1, "patch": 2, "unknown": 3, "ok": 4}
     rows.sort(key=lambda r: order.get(r["status"], 5))
@@ -260,7 +287,8 @@ def check(force: bool = False) -> dict:
                "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                "demo_versions": settings.demo_mode,
                "degraded": degraded,
-               "hint": PROXY_HINT if degraded else None}
+               "hint": PROXY_HINT if degraded else None,
+               "lookup_config": lookup_config()}
     # failed lookups get a short cache so a proxy fix takes effect quickly
     _CACHE.update(at=time.time(), payload=payload,
                   ttl=CACHE_TTL_DEGRADED if degraded else CACHE_TTL)
