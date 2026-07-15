@@ -132,10 +132,13 @@ def _score_project(an: dict):
     s -= min(max(an["distinct_acl_sets"] - 1, 0), 10) * 3    # up to -30
     s -= an["pct_admin"] * 0.3                               # up to -30
     tv = an.get("team_validation")
-    if tv and tv.get("ldap_resolved"):
-        if not tv["group_granted"]:
-            s -= 15                                          # team group not granted
-        s -= min(tv["non_team_count"], 5) * 6               # up to -30 out-of-team grants
+    if tv:
+        if not tv.get("ldap_resolved"):
+            s -= 15    # [TEAM] set but its LDAP group couldn't be resolved/validated
+        else:
+            if not tv["group_granted"]:
+                s -= 15                                      # team group not granted
+            s -= min(tv["non_team_count"], 5) * 6           # up to -30 out-of-team grants
     return max(0, min(100, round(s)))
 
 
@@ -193,20 +196,25 @@ def ado_projects(force: bool = False) -> dict:
             except Exception:  # noqa: BLE001 — one bad project must not fail the sweep
                 return []
 
-        def proj_teamcount(p):
+        # teams (id+name) per project — members fetched below only for
+        # projects that have a [TEAM] to validate (spares the instance)
+        def proj_teams(p):
             try:
-                return len(_ado.coll_get(p["coll"], f"/_apis/projects/{p['id']}/teams",
-                                         {"$top": 500}).get("value") or [])
+                return [{"id": t.get("id", ""), "name": t.get("name", "")}
+                        for t in _values(_ado.coll_get(
+                            p["coll"], f"/_apis/projects/{p['id']}/teams", {"$top": 500}))
+                        if t]
             except Exception:  # noqa: BLE001
-                return 0
+                return []
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             repo_lists = list(pool.map(proj_repos, projects))
-            team_counts = list(pool.map(proj_teamcount, projects))
-        for p, rl, tc in zip(projects, repo_lists, team_counts):
+            team_lists = list(pool.map(proj_teams, projects))
+        for p, rl, tl in zip(projects, repo_lists, team_lists):
             # SAME per-project cap as the detail expand → identical scores
-            p["repos"], p["teams"] = len(rl), tc
+            p["repos"], p["teams"] = len(rl), len(tl)
             p["_repolist"] = rl[:PROJECT_REPO_CAP]
+            p["_teamlist"] = tl
 
         # ONE flat, bounded ACL sweep across every (capped) repo of every
         # project so the collapsed view can show a hygiene SCORE without
@@ -240,16 +248,45 @@ def ado_projects(force: bool = False) -> dict:
         fully = {i for i, p in enumerate(projects)
                  if counts_in_sweep.get(i, 0) == len(p["_repolist"])}
 
-        # LDAP members for every [TEAM] referenced by a scored project, cached
-        teams_needed = {_team_from_desc(projects[i].get("description", ""))
-                        for i in fully}
-        teams_needed.discard("")
+        # only projects with a [TEAM] need LDAP + ADO-team-member fetches
+        team_projects = {i for i in fully
+                         if _team_from_desc(projects[i].get("description", ""))}
+
+        # LDAP members for every referenced [TEAM] group, cached
+        teams_needed = {_team_from_desc(projects[i]["description"])
+                        for i in team_projects}
         ldap_by_team: dict[str, list] = {}
         if teams_needed:
             with ThreadPoolExecutor(max_workers=POOL) as pool:
                 for t, mem in pool.map(lambda t: (t, ldap_group_members(t)),
                                        sorted(teams_needed)):
                     ldap_by_team[t] = mem
+
+        # ADO team MEMBERS for [TEAM] projects (the real grantees) — one flat
+        # bounded sweep so the badge validation matches the detail expand
+        team_member_pairs = [(i, t) for i in team_projects
+                             for t in projects[i]["_teamlist"]]
+        tm_capped = team_member_pairs[:PROJECT_SCORE_REPO_CAP]
+
+        def fetch_members(pair):
+            i, t = pair
+            p = projects[i]
+            try:
+                data = _ado.coll_get(
+                    p["coll"], f"/_apis/projects/{p['id']}/teams/{t['id']}/members",
+                    {"$top": 500})
+                mem = sorted({(m.get("identity") or m).get("displayName", "")
+                              for m in _values(data)
+                              if m and (m.get("identity") or m).get("displayName")
+                              and not _is_service_account((m.get("identity") or m).get("displayName", ""))})
+                return i, {"name": t["name"], "members": mem}
+            except Exception:  # noqa: BLE001
+                return i, {"name": t["name"], "members": []}
+
+        ado_teams_by_proj: dict[int, list] = {}
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            for i, team in pool.map(fetch_members, tm_capped):
+                ado_teams_by_proj.setdefault(i, []).append(team)
 
         # resolve identities PER PROJECT — identical to the detail path, so a
         # throttled global batch can't desync the badge from the expanded view
@@ -262,7 +299,8 @@ def ado_projects(force: bool = False) -> dict:
                 repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
                 desc = p.get("description", "")
                 mem = ldap_by_team.get(_team_from_desc(desc), [])
-                return i, _project_access_analysis(repos, [], desc, mem)
+                ado_teams = ado_teams_by_proj.get(i, [])
+                return i, _project_access_analysis(repos, ado_teams, desc, mem)
             except Exception:  # noqa: BLE001 — degrade this project to unscored
                 return i, None
 
@@ -276,6 +314,7 @@ def ado_projects(force: bool = False) -> dict:
                                    uniform=an["uniform"],
                                    pct_repo_specific=an["pct_repo_specific"],
                                    team=(tv or {}).get("team"),
+                                   team_ldap_resolved=(tv or {}).get("ldap_resolved"),
                                    team_ok=(tv is not None and tv["ldap_resolved"]
                                             and tv["group_granted"]
                                             and tv["non_team_count"] == 0),
@@ -286,10 +325,15 @@ def ado_projects(force: bool = False) -> dict:
                 p.update(score=None, grade="?", uniform=None,
                          pct_repo_specific=None, not_scored=True)
             p.pop("_repolist", None)
+            p.pop("_teamlist", None)
 
         projects.sort(key=lambda p: (p["coll"].lower(), p["name"].lower()))
+        ldap_failed = [{"project": p["name"], "coll": p["coll"], "team": p["team"]}
+                       for p in projects
+                       if p.get("team") and p.get("team_ldap_resolved") is False]
         return {"source": "live", "projects": projects, "collections": colls,
                 "collection_stats": _collection_rollup(projects, colls),
+                "ldap_failed_teams": ldap_failed,
                 "scored_repos": len(capped), "total_repos": len(pairs)}
     return _cached("ado:projects", force, build)
 
@@ -302,25 +346,27 @@ def _demo_ado_projects() -> dict:
          "description": "[platform-devs] Product delivery", "repos": 6, "teams": 3,
          "score": 62, "grade": "C", "uniform": False, "pct_repo_specific": 100,
          "team": "platform-devs", "team_ok": False, "team_group_granted": True,
-         "team_non_member_count": 1,
+         "team_non_member_count": 1, "team_ldap_resolved": True,
          "url": "https://ado.demo/DefaultCollection/Platform"},
         {"id": "p2", "coll": "DefaultCollection", "name": "Control",
          "description": "[control-owners] Team config repos", "repos": 2, "teams": 1,
          "score": 94, "grade": "A", "uniform": True, "pct_repo_specific": 50,
          "team": "control-owners", "team_ok": True, "team_group_granted": True,
-         "team_non_member_count": 0,
+         "team_non_member_count": 0, "team_ldap_resolved": True,
          "url": "https://ado.demo/DefaultCollection/Control"},
         {"id": "p3", "coll": "Research", "name": "Sandbox",
-         "description": "[research-team] Experiments", "repos": 1, "teams": 1,
-         "score": 78, "grade": "C", "uniform": True, "pct_repo_specific": 100,
-         "team": "research-team", "team_ok": False, "team_group_granted": False,
-         "team_non_member_count": 0,
+         "description": "[sandbox-team] Experiments", "repos": 1, "teams": 1,
+         "score": 63, "grade": "C", "uniform": True, "pct_repo_specific": 100,
+         "team": "sandbox-team", "team_ok": False, "team_group_granted": False,
+         "team_non_member_count": 0, "team_ldap_resolved": False,
          "url": "https://ado.demo/Research/Sandbox"},
     ]
     colls = ["DefaultCollection", "Research"]
+    ldap_failed = [{"project": p["name"], "coll": p["coll"], "team": p["team"]}
+                   for p in projects if p.get("team_ldap_resolved") is False]
     return {"source": "demo", "projects": projects, "collections": colls,
             "collection_stats": _collection_rollup(projects, colls),
-            "scored_repos": 9, "total_repos": 9}
+            "ldap_failed_teams": ldap_failed, "scored_repos": 9, "total_repos": 9}
 
 
 def _values(data) -> list:
@@ -348,7 +394,8 @@ def _resolve_identities(descriptors: list[str]) -> dict[str, str]:
 def _demo_project_access(project_id: str) -> dict:
     su = settings.ado_user or "svc-questops"
     teams = [{"name": "Platform Team",
-              "members": ["Alice Nasr", "Bob Farid", "Carol Adel", "Dave Samir"]},
+              "members": ["Alice Nasr", "Bob Farid", "Carol Adel", "Dave Samir",
+                          "Erin Zaki"]},  # Erin is NOT in the platform-devs LDAP group
              {"name": "Platform Admins", "members": ["Alice Nasr"]}]
     # a grant to the service account — MUST be filtered out of the output
     raw_repos = [
@@ -391,7 +438,7 @@ def _demo_project_access(project_id: str) -> dict:
                       "url": f"https://ado.demo/{coll}/{project_id}/_git/{r['name']}"})
     demo_desc = {"p1": "[platform-devs] Product delivery",
                  "p2": "[control-owners] Team config repos",
-                 "p3": "[research-team] Experiments"}.get(project_id, "")
+                 "p3": "[sandbox-team] Experiments"}.get(project_id, "")
     ldap_members = ldap_group_members(_team_from_desc(demo_desc))
     return {"source": "demo", "teams": teams, "repos": repos,
             "analysis": _project_access_analysis(repos, teams, demo_desc, ldap_members)}
@@ -517,42 +564,55 @@ def _norm_ident(s: str) -> str:
 
 
 def _team_validation(description: str, repos: list[dict],
-                     ldap_members: list[dict] | None) -> dict | None:
-    """Validate a project's access against its [TEAM] LDAP group:
-      - is the TEAM group itself granted (whole-group access)?
-      - is every individually-granted identity actually a TEAM member?"""
+                     ldap_members: list[dict] | None,
+                     ado_teams: list[dict] | None) -> dict | None:
+    """Validate a project's access against its [TEAM] LDAP group.
+
+    ADO grants access to TEAMS/GROUPS, so a repo ACL shows a group NAME, not
+    the people inside it. The real 'grantees' are the MEMBERS of the ADO
+    teams that hold access (plus any identity granted directly on a repo).
+    We check every such PERSON against the LDAP team membership."""
     team = _team_from_desc(description)
     if not team:
         return None
     members = ldap_members or []
-    member_keys = {_norm_ident(m["username"]) for m in members} | \
-                  {_norm_ident(m["display_name"]) for m in members}
+    member_keys = {_norm_ident(m["username"]) for m in members if m.get("username")} | \
+                  {_norm_ident(m["display_name"]) for m in members if m.get("display_name")}
     team_key = _norm_ident(team)
+    ado_teams = ado_teams or []
+    team_names = {_norm_ident(t.get("name", "")) for t in ado_teams}
 
-    granted = {}  # identity -> tier (highest)
-    order = {"admin": 3, "write": 2, "read": 1, "other": 0}
+    # people who effectively have access: ADO team members + any repo-ACL
+    # identity that isn't itself one of those teams or the team group
+    people: set[str] = set()
+    for t in ado_teams:
+        people.update(t.get("members") or [])
     for r in repos:
         for a in r["acls"]:
-            cur = granted.get(a["identity"])
-            if cur is None or order[a["tier"]] > order[cur]:
-                granted[a["identity"]] = a["tier"]
+            idn = _norm_ident(a["identity"])
+            if idn in team_names or (team_key and team_key in idn):
+                continue  # a group we already expanded / the team group itself
+            people.add(a["identity"])
 
-    group_granted = any(team_key in _norm_ident(i) or team_key == _norm_ident(i)
-                        for i in granted)
-    # identities that are neither the team group nor a team member
-    non_team = sorted(i for i in granted
-                      if team_key not in _norm_ident(i)
-                      and _norm_ident(i) not in member_keys)
+    non_team = sorted(p for p in people if _norm_ident(p) not in member_keys)
+    # whole-team access = the LDAP team is granted as a group somewhere
+    granted_names = {_norm_ident(a["identity"]) for r in repos for a in r["acls"]} | team_names
+    group_granted = bool(team_key) and any(
+        team_key == n or team_key in n for n in granted_names)
     return {"team": team, "group_granted": group_granted,
             "member_count": len(members),
             "ldap_resolved": bool(members),
-            "non_team_grants": non_team[:50],
+            "ldap_members": sorted(m.get("display_name") or m.get("username")
+                                   for m in members)[:500],
+            "granted_people": len(people),
+            "non_team_grants": non_team[:100],
             "non_team_count": len(non_team)}
 
 
 def _project_access_analysis(repos: list[dict], teams: list[dict],
                              description: str = "",
                              ldap_members: list[dict] | None = None) -> dict:
+    # `teams` (with members) doubles as the grantee source for team validation
     """Is access UNIFORM across the project or REPO-SPECIFIC? Plus the many
     percentages: repo-specific %, and the identity privilege mix."""
     total = len(repos)
@@ -585,7 +645,7 @@ def _project_access_analysis(repos: list[dict], teams: list[dict],
         "tier_pct": {t: _pct(counts[t], ids) for t in counts},
         "pct_admin": _pct(counts["admin"], ids),
     }
-    an["team_validation"] = _team_validation(description, repos, ldap_members)
+    an["team_validation"] = _team_validation(description, repos, ldap_members, teams)
     an["score"] = _score_project(an)
     an["grade"] = _grade(an["score"])
     return an

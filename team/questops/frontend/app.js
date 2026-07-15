@@ -2091,8 +2091,14 @@ function accAdoHtml(d) {
   const totRepos = d.projects.reduce((n, p) => n + (p.repos || 0), 0);
   const capNote = (d.total_repos && d.scored_repos < d.total_repos)
     ? ` · scored ${d.scored_repos}/${d.total_repos} repos (cap)` : "";
+  const failed = d.ldap_failed_teams || [];
+  const failBanner = failed.length ? `
+    <div class="remote-banner remote-new" style="margin-bottom:10px">
+      <b>⚠ ${failed.length} project team(s) failed LDAP validation — treated as team-not-set (−15 each)</b>
+      ${failed.map((f) => `<div class="ci-meta">• <b>${esc(f.project)}</b> (${esc(f.coll)}) → LDAP group <b>[${esc(f.team)}]</b> not found</div>`).join("")}
+    </div>` : "";
 
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote} — score = access hygiene (A best); collections collapsed, click to expand</div>`
+  return failBanner + `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote} — score = access hygiene (A best); collections collapsed, click to expand</div>`
     + colls.map((c) => {
       const s = stats[c] || { projects: byColl[c].length, teams: 0, repos: 0 };
       return `
@@ -2114,7 +2120,9 @@ function accAdoHtml(d) {
                     : p.uniform === false ? `<span class="chip chip-amber">repo-specific ${p.pct_repo_specific}%</span>` : ""}
                   ${p.team ? (p.team_ok
                     ? `<span class="chip chip-green" title="[${esc(p.team)}] fully granted, no out-of-team access">✓ team [${esc(p.team)}]</span>`
-                    : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
+                    : p.team_ldap_resolved === false
+                      ? `<span class="chip chip-red" title="LDAP group [${esc(p.team)}] not found — team not set (-15)">⚠ team [${esc(p.team)}] LDAP?</span>`
+                      : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
                 </span></summary>
@@ -2138,14 +2146,22 @@ function accAdoProjectHtml(d) {
     : "";
   const tv = an.team_validation;
   const teamPanel = tv ? `
-    <div class="acc-team ${tv.ldap_resolved && tv.group_granted && !tv.non_team_count ? "team-ok" : "team-bad"}">
-      <b>👥 team [${esc(tv.team)}]</b>
-      ${!tv.ldap_resolved ? '<span class="chip chip-amber">LDAP not resolved — validation skipped</span>' : `
+    <details class="acc-team ${tv.ldap_resolved && tv.group_granted && !tv.non_team_count ? "team-ok" : "team-bad"}">
+      <summary><b>👥 team [${esc(tv.team)}]</b>
+      ${!tv.ldap_resolved ? '<span class="chip chip-red">✗ LDAP group not found — team not set (−15)</span>' : `
         <span class="chip">${tv.member_count} LDAP member(s)</span>
         <span class="chip ${tv.group_granted ? "chip-green" : "chip-red"}">${tv.group_granted ? "✓ whole team granted" : "✗ team group NOT granted"}</span>
-        <span class="chip ${tv.non_team_count ? "chip-red" : "chip-green"}">${tv.non_team_count ? tv.non_team_count + " granted but NOT in team" : "✓ all grantees in team"}</span>`}
-      ${(tv.non_team_grants || []).length ? `<div class="ci-meta" style="margin-top:4px">out-of-team: ${tv.non_team_grants.map(esc).join(", ")}</div>` : ""}
-    </div>` : "";
+        <span class="chip ${tv.non_team_count ? "chip-red" : "chip-green"}">${tv.non_team_count ? tv.non_team_count + " granted but NOT in team" : "✓ all " + (tv.granted_people || 0) + " grantee(s) in team"}</span>`}
+      <span class="ci-meta"> · click to see members</span></summary>
+      <div style="padding:6px 4px">
+        ${(tv.non_team_grants || []).length ? `<div class="acc-h" style="color:var(--red)">⚠ granted but NOT in [${esc(tv.team)}] (${tv.non_team_count})</div>
+          <div class="acc-members">${tv.non_team_grants.map((m) => `<span class="chip chip-red">${esc(m)}</span>`).join(" ")}</div>` : ""}
+        <div class="acc-h" style="margin-top:8px">LDAP members of [${esc(tv.team)}] (${tv.member_count})</div>
+        ${(tv.ldap_members || []).length
+          ? `<div class="acc-members">${tv.ldap_members.map((m) => `<span class="chip">${esc(m)}</span>`).join(" ")}</div>`
+          : '<div class="ci-meta">none / LDAP not resolved</div>'}
+      </div>
+    </details>` : "";
   const analysisPanel = an.total_repos ? `
     <div class="acc-score-line">${scoreBadge(an.score, an.grade)}
       <span class="ci-meta">access-hygiene score — uniform access, low repo-specific sprawl, low admin concentration &amp; valid [TEAM] access score higher</span></div>
