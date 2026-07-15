@@ -87,46 +87,73 @@ def _short_http(exc: Exception) -> str:
 from . import ado as _ado
 
 
+def _excluded_accounts() -> set[str]:
+    """Service account + configured repo-creator/admin exclusions — all
+    ignored in repo ACL analysis so they don't skew repo-specific detection."""
+    out = set(settings.ado_access_exclude_list)
+    if settings.ado_user:
+        out.add(settings.ado_user.strip().lower())
+    return out
+
+
 def _is_service_account(identity: str, descriptor: str = "") -> bool:
-    """Access granted to QO_ADO_USER is ignored — it's the tool's own account,
-    not a real grant worth reviewing."""
-    su = (settings.ado_user or "").strip().lower()
-    if not su:
+    """True if this identity is the service account or a configured exclusion
+    (repo creators/admins). Matched against bare/domain/UPN forms."""
+    excl = _excluded_accounts()
+    if not excl:
         return False
-    hay = f"{identity} {descriptor}".lower()
-    # match the bare account and common domain / UPN forms
-    return (su == identity.strip().lower()
-            or su in re.split(r"[\\/@ ]", hay))
+    ident = identity.strip().lower()
+    tokens = set(re.split(r"[\\/@ ]", f"{ident} {descriptor}".lower()))
+    return any(e == ident or e in tokens for e in excl)
+
+
+PROJECT_SCORE_REPO_CAP = 2500  # bound the upfront ACL sweep for scoring
+
+
+def _grade(score) -> str:
+    if score is None:
+        return "?"
+    return ("A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60
+            else "D" if score >= 40 else "F")
+
+
+def _score_project(an: dict):
+    """0-100 access-hygiene score: uniform, low repo-specific sprawl and low
+    admin concentration score high. None when the project has no repos."""
+    if not an.get("total_repos"):
+        return None
+    s = 100.0
+    s -= an["pct_repo_specific"] * 0.4                       # up to -40
+    s -= min(max(an["distinct_acl_sets"] - 1, 0), 10) * 3    # up to -30
+    s -= an["pct_admin"] * 0.3                               # up to -30
+    return max(0, min(100, round(s)))
 
 
 def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
-    """Per-collection aggregates for the collapsible collection headers."""
+    """Per-collection aggregates + access-hygiene rollup for the (collapsed)
+    collection headers: how many projects are uniform vs repo-specific, and
+    an overall score (average of scored projects)."""
     out = []
     for c in colls:
         ps = [p for p in projects if p["coll"] == c]
-        out.append({"name": c, "projects": len(ps),
-                    "teams": sum(p.get("teams", 0) for p in ps),
-                    "repos": sum(p.get("repos", 0) for p in ps)})
+        scored = [p["score"] for p in ps if p.get("score") is not None]
+        with_repos = [p for p in ps if p.get("repos")]
+        uniform = sum(1 for p in with_repos if p.get("uniform"))
+        repo_specific = sum(1 for p in with_repos if p.get("uniform") is False)
+        out.append({
+            "name": c, "projects": len(ps),
+            "teams": sum(p.get("teams", 0) for p in ps),
+            "repos": sum(p.get("repos", 0) for p in ps),
+            "uniform_projects": uniform, "repo_specific_projects": repo_specific,
+            "score": round(sum(scored) / len(scored)) if scored else None,
+            "grade": _grade(round(sum(scored) / len(scored)) if scored else None)})
     return out
 
 
 def ado_projects(force: bool = False) -> dict:
     def build():
         if settings.demo_mode:
-            projects = [
-                {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
-                 "description": "Product delivery", "repos": 6, "teams": 3,
-                 "url": "https://ado.demo/DefaultCollection/Platform"},
-                {"id": "p2", "coll": "DefaultCollection", "name": "Control",
-                 "description": "Team config repos", "repos": 2, "teams": 1,
-                 "url": "https://ado.demo/DefaultCollection/Control"},
-                {"id": "p3", "coll": "Research", "name": "Sandbox",
-                 "description": "Experiments", "repos": 1, "teams": 1,
-                 "url": "https://ado.demo/Research/Sandbox"},
-            ]
-            colls = ["DefaultCollection", "Research"]
-            return {"source": "demo", "projects": projects, "collections": colls,
-                    "collection_stats": _collection_rollup(projects, colls)}
+            return _demo_ado_projects()
         if not settings.ado_url:
             return {"source": "not configured", "projects": [], "collections": [],
                     "collection_stats": []}
@@ -145,31 +172,96 @@ def ado_projects(force: bool = False) -> dict:
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             projects = [p for group in pool.map(coll_projects, colls) for p in group]
 
-        # per-project repo + team counts (2 cheap calls each, parallel) so the
-        # UI can show counts and % before anyone expands a project
-        def proj_counts(p):
-            repos = teams = 0
+        # repo lists (id+name) + team counts per project, in parallel
+        def proj_repos(p):
             try:
-                repos = len(_ado.coll_get(
-                    p["coll"], f"/{p['id']}/_apis/git/repositories").get("value", []))
+                return [{"id": r["id"], "name": r["name"]} for r in _ado.coll_get(
+                    p["coll"], f"/{p['id']}/_apis/git/repositories").get("value", [])]
             except requests.RequestException:
-                pass
+                return []
+
+        def proj_teamcount(p):
             try:
-                teams = len(_ado.coll_get(
-                    p["coll"], f"/_apis/projects/{p['id']}/teams",
-                    {"$top": 500}).get("value", []))
+                return len(_ado.coll_get(p["coll"], f"/_apis/projects/{p['id']}/teams",
+                                         {"$top": 500}).get("value", []))
             except requests.RequestException:
-                pass
-            return repos, teams
+                return 0
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:
-            for p, (repos, teams) in zip(projects, pool.map(proj_counts, projects)):
-                p["repos"], p["teams"] = repos, teams
+            repo_lists = list(pool.map(proj_repos, projects))
+            team_counts = list(pool.map(proj_teamcount, projects))
+        for p, rl, tc in zip(projects, repo_lists, team_counts):
+            p["repos"], p["teams"], p["_repolist"] = len(rl), tc, rl
+
+        # ONE flat, bounded ACL sweep across every repo of every project so the
+        # collapsed collection view can show a hygiene SCORE per project without
+        # expanding each. Capped to protect a huge instance.
+        pairs = [(i, r) for i, p in enumerate(projects) for r in p["_repolist"]]
+        capped = pairs[:PROJECT_SCORE_REPO_CAP]
+
+        def fetch_acl(pair):
+            i, r = pair
+            p = projects[i]
+            try:
+                acl = _ado.coll_get(
+                    p["coll"], f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
+                    {"token": f"repoV2/{p['id']}/{r['id']}"})
+                aces = {}
+                for e in acl.get("value", []):
+                    aces.update(e.get("acesDictionary", {}))
+                return i, r["name"], aces
+            except requests.RequestException:
+                return i, r["name"], {}
+
+        by_proj: dict[int, dict] = {}
+        all_desc: set[str] = set()
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            for i, rname, aces in pool.map(fetch_acl, capped):
+                by_proj.setdefault(i, {})[rname] = aces
+                all_desc.update(aces.keys())
+        names = _resolve_identities(sorted(all_desc))
+
+        scored_cap = {i for i, _ in capped}
+        for i, p in enumerate(projects):
+            if i in scored_cap:
+                repos = _build_repos(p["coll"], p["id"], p["_repolist"],
+                                     by_proj.get(i, {}), names)
+                an = _project_access_analysis(repos, [])
+                p.update(score=an["score"], grade=an["grade"], uniform=an["uniform"],
+                         pct_repo_specific=an["pct_repo_specific"])
+            else:
+                p.update(score=None, grade="?", uniform=None, pct_repo_specific=None,
+                         not_scored=True)
+            p.pop("_repolist", None)
 
         projects.sort(key=lambda p: (p["coll"].lower(), p["name"].lower()))
         return {"source": "live", "projects": projects, "collections": colls,
-                "collection_stats": _collection_rollup(projects, colls)}
+                "collection_stats": _collection_rollup(projects, colls),
+                "scored_repos": len(capped), "total_repos": len(pairs)}
     return _cached("ado:projects", force, build)
+
+
+def _demo_ado_projects() -> dict:
+    # p1 Platform: repo-specific (Engine/UI differ); p2 Control: uniform;
+    # p3 Sandbox: uniform — exercises the scoring + rollup
+    projects = [
+        {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
+         "description": "Product delivery", "repos": 6, "teams": 3,
+         "score": 62, "grade": "C", "uniform": False, "pct_repo_specific": 100,
+         "url": "https://ado.demo/DefaultCollection/Platform"},
+        {"id": "p2", "coll": "DefaultCollection", "name": "Control",
+         "description": "Team config repos", "repos": 2, "teams": 1,
+         "score": 94, "grade": "A", "uniform": True, "pct_repo_specific": 50,
+         "url": "https://ado.demo/DefaultCollection/Control"},
+        {"id": "p3", "coll": "Research", "name": "Sandbox",
+         "description": "Experiments", "repos": 1, "teams": 1,
+         "score": 100, "grade": "A", "uniform": True, "pct_repo_specific": 100,
+         "url": "https://ado.demo/Research/Sandbox"},
+    ]
+    colls = ["DefaultCollection", "Research"]
+    return {"source": "demo", "projects": projects, "collections": colls,
+            "collection_stats": _collection_rollup(projects, colls),
+            "scored_repos": 9, "total_repos": 9}
 
 
 def _resolve_identities(descriptors: list[str]) -> dict[str, str]:
@@ -296,23 +388,7 @@ def ado_project_access(collection: str, project_id: str,
                 raw_acls[name] = aces
                 descriptors.update(aces.keys())
         names = _resolve_identities(sorted(descriptors))
-        repos = []
-        for rp in repo_list:
-            acls = []
-            for desc, ace in (raw_acls.get(rp["name"]) or {}).items():
-                ident = names.get(desc) or desc[:60]
-                if _is_service_account(ident, desc):  # ignore QO_ADO_USER
-                    continue
-                allow = _decode_bits(ace.get("allow", 0))
-                deny = _decode_bits(ace.get("deny", 0))
-                if allow or deny:
-                    acls.append({"identity": ident, "allow": allow, "deny": deny,
-                                 "tier": _privilege_tier(allow)})
-            acls.sort(key=lambda a: a["identity"].lower())
-            repos.append({"name": rp["name"], "acls": acls,
-                          "signature": _acl_signature(acls),
-                          "url": _ado.repo_url(collection, project_id, rp["name"])})
-        repos.sort(key=lambda r: r["name"].lower())
+        repos = _build_repos(collection, project_id, repo_list, raw_acls, names)
         analysis = _project_access_analysis(repos, teams)
         return {"source": "live", "teams": teams, "repos": repos,
                 "analysis": analysis,
@@ -322,6 +398,30 @@ def ado_project_access(collection: str, project_id: str,
 
 def _acl_signature(acls: list[dict]) -> str:
     return "|".join(sorted(f"{a['identity']}:{a['tier']}" for a in acls))
+
+
+def _build_repos(collection: str, project_id: str, repo_list: list[dict],
+                 raw_acls: dict, names: dict) -> list[dict]:
+    """Repos with filtered/tiered/signed ACLs — the shared shape used by both
+    the project detail and the upfront scoring sweep."""
+    repos = []
+    for rp in repo_list:
+        acls = []
+        for desc, ace in (raw_acls.get(rp["name"]) or {}).items():
+            ident = names.get(desc) or desc[:60]
+            if _is_service_account(ident, desc):  # service acct + exclusions
+                continue
+            allow = _decode_bits(ace.get("allow", 0))
+            deny = _decode_bits(ace.get("deny", 0))
+            if allow or deny:
+                acls.append({"identity": ident, "allow": allow, "deny": deny,
+                             "tier": _privilege_tier(allow)})
+        acls.sort(key=lambda a: a["identity"].lower())
+        repos.append({"name": rp["name"], "acls": acls,
+                      "signature": _acl_signature(acls),
+                      "url": _ado.repo_url(collection, project_id, rp["name"])})
+    repos.sort(key=lambda r: r["name"].lower())
+    return repos
 
 
 def _project_access_analysis(repos: list[dict], teams: list[dict]) -> dict:
@@ -345,7 +445,7 @@ def _project_access_analysis(repos: list[dict], teams: list[dict]) -> dict:
     ids = len(tier_of)
     counts = {t: sum(1 for v in tier_of.values() if v == t)
               for t in ("admin", "write", "read", "other")}
-    return {
+    an = {
         "total_repos": total,
         "repos_with_explicit": len(with_acls),
         "pct_repo_specific": _pct(len(with_acls), total),
@@ -357,6 +457,9 @@ def _project_access_analysis(repos: list[dict], teams: list[dict]) -> dict:
         "tier_pct": {t: _pct(counts[t], ids) for t in counts},
         "pct_admin": _pct(counts["admin"], ids),
     }
+    an["score"] = _score_project(an)
+    an["grade"] = _grade(an["score"])
+    return an
 
 
 # ================================================================= Jira

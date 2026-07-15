@@ -106,6 +106,7 @@ ado:
   user: "svc-questops"
   password: ""       # prefer app.existingSecret (key: ADO_PASSWORD)
   pat: ""            # prefer app.existingSecret (key: ADO_PAT)
+  accessExclude: ""  # comma usernames excluded from repo-specific-access analysis
 
 database:
   # external Postgres DSN, e.g. postgresql+psycopg2://user:pass@host:5432/questops

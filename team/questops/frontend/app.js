@@ -2076,6 +2076,10 @@ const extLink = (url) => url && !url.startsWith("#")
   ? `<a class="acc-ext" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
 
 const miniBar = (pct, cls) => `<span class="mini-bar"><span class="${cls || ""}" style="width:${Math.min(pct, 100)}%"></span></span>`;
+const gradeCls = (g) => ({ A: "grade-a", B: "grade-a", C: "grade-c", D: "grade-f", F: "grade-f" }[g] || "grade-x");
+const scoreBadge = (score, grade) => score == null
+  ? `<span class="score-badge grade-x" title="not scored (repo cap reached — refresh or expand)">?</span>`
+  : `<span class="score-badge ${gradeCls(grade)}" title="access-hygiene score">${grade} · ${score}</span>`;
 
 function accAdoHtml(d) {
   if (!d.projects.length) return `<div class="empty">no projects (${srcLabel(d)})</div>`;
@@ -2085,41 +2089,38 @@ function accAdoHtml(d) {
   (d.collection_stats || []).forEach((s) => { stats[s.name] = s; });
   const colls = Object.keys(byColl).sort();
   const totRepos = d.projects.reduce((n, p) => n + (p.repos || 0), 0);
-  const totTeams = d.projects.reduce((n, p) => n + (p.teams || 0), 0);
+  const capNote = (d.total_repos && d.scored_repos < d.total_repos)
+    ? ` · scored ${d.scored_repos}/${d.total_repos} repos (cap)` : "";
 
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) · ${totTeams} team(s) across ${colls.length} collection(s) — expand a collection, then a project</div>`
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote} — score = access hygiene (A best); collections collapsed, click to expand</div>`
     + colls.map((c) => {
       const s = stats[c] || { projects: byColl[c].length, teams: 0, repos: 0 };
-      const projShare = _pctJs(s.projects, d.projects.length);
       return `
-      <details class="filebox acc-coll-det" open>
-        <summary>🗄 <b>${esc(c)}</b>
+      <details class="filebox acc-coll-det">
+        <summary>🗄 <b>${esc(c)}</b> ${scoreBadge(s.score, s.grade)}
           <span class="acc-coll-stats">
             <span class="chip chip-cyan">${s.projects} projects</span>
+            <span class="chip chip-green" title="all repos share one ACL set">${s.uniform_projects || 0} uniform</span>
+            <span class="chip chip-amber" title="repos have their own ACLs">${s.repo_specific_projects || 0} repo-specific</span>
             <span class="chip">${s.teams} teams</span>
             <span class="chip">${s.repos} repos</span>
-            <span class="ci-meta">${projShare}% of instance projects</span>
           </span></summary>
         <div class="acc-coll-body">
-          ${byColl[c].map((p) => {
-            const repoShare = _pctJs(p.repos || 0, s.repos || 0);
-            return `
+          ${byColl[c].map((p) => `
             <details class="filebox acc-proj" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
-              <summary>📁 <b>${esc(p.name)}</b> ${extLink(p.url)}
+              <summary>📁 <b>${esc(p.name)}</b> ${scoreBadge(p.score, p.grade)} ${extLink(p.url)}
                 <span class="acc-proj-stats">
+                  ${p.uniform === true ? '<span class="chip chip-green">uniform</span>'
+                    : p.uniform === false ? `<span class="chip chip-amber">repo-specific ${p.pct_repo_specific}%</span>` : ""}
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
-                  ${s.repos ? `<span class="ci-meta" title="share of this collection's repos">${miniBar(repoShare, "pct-good")} ${repoShare}%</span>` : ""}
                 </span></summary>
               <div class="acc-proj-body" id="acc-proj-${esc(p.coll)}-${esc(p.id)}"><div class="empty">loading…</div></div>
-            </details>`;
-          }).join("")}
+            </details>`).join("")}
         </div>
       </details>`;
     }).join("");
 }
-
-const _pctJs = (n, total) => total ? Math.round(n / total * 100) : 0;
 
 const TIER_CLS = { admin: "chip-red", write: "chip-amber", read: "chip-cyan", other: "" };
 
@@ -2133,6 +2134,8 @@ function accAdoProjectHtml(d) {
         : `<span class="chip chip-amber">repo-specific access</span>`)
     : "";
   const analysisPanel = an.total_repos ? `
+    <div class="acc-score-line">${scoreBadge(an.score, an.grade)}
+      <span class="ci-meta">access-hygiene score — uniform access, low repo-specific sprawl &amp; low admin concentration score higher</span></div>
     <div class="acc-analysis">
       <div class="stat-tile"><b>${an.members}</b><span>members</span></div>
       <div class="stat-tile"><b>${an.teams}</b><span>teams</span></div>

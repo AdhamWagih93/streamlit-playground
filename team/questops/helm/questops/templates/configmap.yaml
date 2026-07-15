@@ -46,3 +46,4 @@ data:
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}
   ADO_URL: {{ .Values.ado.url | quote }}
   ADO_USER: {{ .Values.ado.user | quote }}
+  ADO_ACCESS_EXCLUDE: {{ .Values.ado.accessExclude | quote }}

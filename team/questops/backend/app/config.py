@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     ado_user: str = ""
     ado_password: str = ""  # used for GIT clone/pull/fetch
     ado_pat: str = ""       # used for the ADO REST API (repository browse)
+    # usernames excluded from repo-specific-access analysis (repo creators /
+    # admins expected to hold access on every repo — like the service account)
+    ado_access_exclude: str = ""
 
     # --- Git (repo actions) ---
     git_token: str = ""              # https token used for clone/push
@@ -127,6 +130,10 @@ class Settings(BaseSettings):
     @property
     def kpi_ignore_tokens(self) -> list[str]:
         return [t.lower() for t in self._csv(self.kpi_ignore)]
+
+    @property
+    def ado_access_exclude_list(self) -> set[str]:
+        return {u.strip().lower() for u in self._csv(self.ado_access_exclude)}
 
     @property
     def ado_git_password(self) -> str:
