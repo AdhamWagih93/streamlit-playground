@@ -35,16 +35,20 @@ def _search(index: str, body: dict) -> list[dict]:
     return _search_hits(index, body)[0]
 
 
-def _search_hits_relaxed(index: str, body: dict) -> tuple[list[dict], int]:
-    """Sorting on a text-mapped field 400s the whole query — retry WITHOUT
-    the sort (we order client-side on parsed dates anyway)."""
+def _search_hits_relaxed(index: str, body: dict) -> tuple[list[dict], int, bool]:
+    """(docs, total, sorted_ok). Sorting on a text-mapped field 400s the
+    whole query — retry WITHOUT the sort. sorted_ok=False means the docs are
+    in ARBITRARY (usually insertion = oldest-first) order: an unsorted,
+    truncated fetch must never be trusted to contain the newest data."""
     try:
-        return _search_hits(index, body)
+        docs, total = _search_hits(index, body)
+        return docs, total, True
     except requests.HTTPError:
         if "sort" not in body:
             raise
         stripped = {k: v for k, v in body.items() if k != "sort"}
-        return _search_hits(index, stripped)
+        docs, total = _search_hits(index, stripped)
+        return docs, total, False
 
 
 # ---------------------------------------------------------------- KPI loader schedule
@@ -175,64 +179,114 @@ def _apply_kpi_ignore(docs: list[dict], total: int) -> tuple[list[dict], int, in
     return kept, max(total - ignored, len(kept)), ignored
 
 
+def _window_days(hours: int, now: dt.datetime, cap: int = 92) -> list[dt.datetime]:
+    days = min(int(hours // 24) + 2, cap)
+    return [now - dt.timedelta(days=i) for i in range(days)]
+
+
+def _kpi_query_tiers(hours: int, now: dt.datetime) -> list[tuple[str, dict, str]]:
+    """(name, query, sort_field) tiers, most precise first. Range works on
+    date-mapped fields; day-PHRASE queries window TEXT-mapped fields
+    ('14-Jul-2026' analyzes to adjacent terms); day-prefix WILDCARDS window
+    KEYWORD-mapped fields; match_all is the last resort."""
+    tiers: list[tuple[str, dict, str]] = []
+    for f in ("builddate", "@timestamp"):  # builddate = when the build RAN
+        tiers.append((f"range:{f}",
+                      {"range": {f: {"gte": f"now-{hours}h"}}}, f))
+    days = _window_days(hours, now)
+    if int(hours // 24) + 2 <= 92:  # day-enumeration only for sane windows
+        phrases = [d.strftime("%d-%b-%Y") for d in days]
+        for f in ("builddate", "@timestamp"):
+            tiers.append((f"day-phrase:{f}",
+                          {"bool": {"should": [{"match_phrase": {f: p}} for p in phrases],
+                                    "minimum_should_match": 1}}, f))
+        for f in ("builddate", "@timestamp"):
+            tiers.append((f"day-wildcard:{f}",
+                          {"bool": {"should": [{"wildcard": {f: {"value": p + "*"}}}
+                                               for p in phrases],
+                                    "minimum_should_match": 1}}, f))
+    tiers.append(("match_all", {"match_all": {}}, "@timestamp"))
+    return tiers
+
+
 def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     """Docs for the whole time window — the past week by default, or the UI's
-    time filter. The window is ALWAYS enforced client-side on parsed doc
-    dates (builddate first) even when the ES range query worked, because:
-    (a) non-date-mapped fields make ES ranges silently match nothing, and
-    (b) re-ingested old builds carry a fresh @timestamp but an old builddate.
-    Returns {docs, window_applied, window_source, total, ignored, fetch_truncated}."""
+    time filter. Walks query tiers until one yields in-window docs; the
+    window is ALWAYS re-checked client-side on parsed dates (builddate
+    first — re-ingested old builds carry a fresh @timestamp). An UNSORTED
+    truncated fetch (text-mapped sort failures return oldest-first) is never
+    allowed to conclude 'no recent data' — that's what zeroed the panel.
+    Returns {docs, window_applied, window_source, total, ignored,
+    fetch_truncated, debug}."""
     size = size or settings.kpi_max_docs
     if not is_live():
         docs = _demo_kpi() if settings.demo_mode else []
         docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
         return {"docs": docs, "window_applied": True, "window_source": "demo",
-                "total": total, "ignored": ignored, "fetch_truncated": False}
+                "total": total, "ignored": ignored, "fetch_truncated": False,
+                "debug": None}
 
     # container-local now: the loader writes local-time strings and TZ is
     # configured to match it (same clock the sync countdown uses)
-    cutoff = _now() - dt.timedelta(hours=hours)
-    raw, total_raw, source = [], 0, "none"
-    for field in ("builddate", "@timestamp"):  # builddate = when the build RAN
+    now = _now()
+    cutoff = now - dt.timedelta(hours=hours)
+    chosen, fallback, attempts = None, None, []
+    for name, query, sfield in _kpi_query_tiers(hours, now):
         try:
-            docs, total = _search_hits_relaxed(settings.jenkins_kpi_index, {
-                "size": size, "track_total_hits": True,
-                "query": {"range": {field: {"gte": f"now-{hours}h"}}},
-                "sort": [{field: {"order": "desc", "unmapped_type": "date"}}],
-            })
-        except requests.HTTPError:
+            raw, total_raw, sorted_ok = _search_hits_relaxed(
+                settings.jenkins_kpi_index,
+                {"size": size, "track_total_hits": True, "query": query,
+                 "sort": [{sfield: {"order": "desc", "unmapped_type": "date"}}]})
+        except requests.HTTPError as exc:
+            attempts.append(f"{name}: HTTP error {str(exc)[:60]}")
             continue
-        if docs:
-            raw, total_raw, source = docs, total, "es"
+        if not raw:
+            attempts.append(f"{name}: 0 hits")
+            continue
+        dated = [(d, _doc_when(d)) for d in raw]
+        any_parsed = any(w is not None for _, w in dated)
+        if any_parsed:
+            kept = [(d, w) for d, w in dated if w is not None and w >= cutoff]
+        elif name.startswith("range"):
+            kept = dated  # ES applied the window; dates unparseable client-side
+        else:
+            kept = []
+        attempts.append(f"{name}: {len(raw)} fetched (total {total_raw}, "
+                        f"sorted={sorted_ok}), {len(kept)} in window")
+        result = (name, raw, total_raw, sorted_ok, dated, kept, any_parsed)
+        if kept:
+            chosen = result
             break
-    if not raw:  # range matched nothing (likely text-mapped dates) — fetch newest
-        raw, total_raw = _search_hits_relaxed(settings.jenkins_kpi_index, {
-            "size": size, "track_total_hits": True, "query": {"match_all": {}},
-            "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
-        })
+        # 0 in window from a SORTED newest-first fetch is a legitimate
+        # conclusion; from an unsorted/truncated one it proves nothing
+        if any_parsed and sorted_ok and total_raw <= len(raw) and name != "match_all":
+            chosen = result
+            break
+        fallback = fallback or result
 
-    dated = [(d, _doc_when(d)) for d in raw]
-    any_parsed = any(w is not None for _, w in dated)
-    if source == "es":
-        # trust ES's window, but still drop re-ingested old builds
-        kept = [(d, w) for d, w in dated if w is None or w >= cutoff]
-        window_applied = True
-        window_source = "es+client" if len(kept) < len(dated) else "es"
-    elif any_parsed:
-        kept = [(d, w) for d, w in dated if w is not None and w >= cutoff]
-        window_applied, window_source = True, "client"
-    else:  # no parseable dates at all — show newest, clearly flagged
+    if chosen is None and fallback is None:  # nothing anywhere
+        return {"docs": [], "window_applied": True, "window_source": "none",
+                "total": 0, "ignored": 0, "fetch_truncated": False,
+                "debug": {"attempts": attempts, "sample": []}}
+
+    name, raw, total_raw, sorted_ok, dated, kept, any_parsed = chosen or fallback
+    if chosen is None and not any_parsed:
         kept, window_applied, window_source = dated, False, "none"
+    else:
+        window_applied = True
+        window_source = name if chosen else f"{name} (unconfirmed window)"
 
     kept.sort(key=lambda t: t[1] or dt.datetime.min, reverse=True)
     docs = [d for d, _ in kept]
-    dropped = len(raw) - len(docs)
-    total = max(total_raw - dropped, len(docs)) if source == "es" else len(docs)
-    fetch_truncated = total_raw > len(raw)  # the fetch cap hid part of the window
+    total = len(docs) if any_parsed else total_raw
+    fetch_truncated = total_raw > len(raw)
     docs, total, ignored = _apply_kpi_ignore(docs, total)
+    sample = [{"builddate": d.get("builddate"), "@timestamp": d.get("@timestamp"),
+               "parsed": w is not None} for d, w in dated[:3]]
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
-            "ignored": ignored, "fetch_truncated": fetch_truncated}
+            "ignored": ignored, "fetch_truncated": fetch_truncated,
+            "debug": {"attempts": attempts, "sample": sample}}
 
 
 def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:

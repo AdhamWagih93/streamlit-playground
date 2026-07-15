@@ -40,7 +40,7 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         es_error = None
     except Exception as exc:  # noqa: BLE001 — surface ES problems in the panel
         k = {"docs": [], "window_applied": True, "window_source": "error",
-             "total": 0, "ignored": 0, "fetch_truncated": False}
+             "total": 0, "ignored": 0, "fetch_truncated": False, "debug": None}
         es_error = str(exc)[:300]
     recent, window_applied, total_in_window, ignored = (
         k["docs"], k["window_applied"], k["total"], k["ignored"])
@@ -93,6 +93,7 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         "ignore_tokens": settings.kpi_ignore_tokens,
         "window_source": k["window_source"],
         "fetch_truncated": k["fetch_truncated"],
+        "diagnostics": k.get("debug"),
         "window_applied": window_applied,
         "es_error": es_error,
         "index": settings.jenkins_kpi_index,

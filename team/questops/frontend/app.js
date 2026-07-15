@@ -898,6 +898,14 @@ async function renderCI() {
       <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
       ${kpiWarn}
       ${kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats are computed on the newest ${kpi.fetched} (raise KPI_MAX_DOCS to widen)</div>` : ""}
+      ${!kpi.loaded_total && kpi.diagnostics ? `
+        <details class="filebox"><summary>🔎 why 0 builds? — query diagnostics</summary>
+          <div style="padding:8px 12px">
+            ${(kpi.diagnostics.attempts || []).map((a) => `<div class="ci-meta">• ${esc(a)}</div>`).join("")}
+            ${(kpi.diagnostics.sample || []).length ? `<div class="kpi-note" style="margin-top:6px">sample raw dates from the index:</div>` : ""}
+            ${(kpi.diagnostics.sample || []).map((s) => `<div class="ci-meta">• builddate=${esc(JSON.stringify(s.builddate))} · @timestamp=${esc(JSON.stringify(s["@timestamp"]))} · parseable: ${s.parsed ? "yes" : "NO"}</div>`).join("")}
+          </div>
+        </details>` : ""}
       ${kpi.ignored ? `<div class="kpi-note">🚫 ${kpi.ignored} build(s) excluded by KPI_IGNORE (${esc((kpi.ignore_tokens || []).join(", "))})</div>` : ""}
       ${kpiStats}
       <details class="filebox"><summary>📄 loaded records (showing ${kpi.loaded.length} of ${kpi.loaded_total})</summary>
