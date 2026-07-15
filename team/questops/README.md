@@ -44,6 +44,12 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   every proposal/decision/output is logged to the database (agent audit log on the
   page). Write tools (local workspace only) appear only when you flip "enable write
   actions" — and each write still needs its own approval.
+- **Dependency matrix** — static analysis of the Engine repo: pipelines (groovy
+  roots) → playbooks / roles (units, with their tasks) / scripts, following full
+  paths, filename tokens, `podman_run_script.sh` / `podman_run_playbook.sh` caller
+  arguments and ansible semantics (`roles:`, `include_role`, `import_playbook`,
+  role dependencies). Per-pipeline dependency trees, a **used vs unused** report
+  (cleanup candidates), a searchable node matrix, and ambiguous/dynamic-call notes.
 - **Upgrade checker** — detects the running version of each integration (Jenkins,
   Elasticsearch, Jira, PostgreSQL, Ollama) and compares it against the latest LTS /
   supported line (endoflife.date / GitHub releases); one click files a prioritized

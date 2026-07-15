@@ -436,6 +436,14 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 }
 .log-err { color: var(--red); font-weight: 600; background: rgba(239,95,102,.08); }
 
+/* ---------- dependencies ---------- */
+.dep-tree { font-size: 13px; }
+.dep-node > summary { cursor: pointer; padding: 3px 4px; border-radius: 6px; }
+.dep-node > summary:hover { background: var(--panel-2); }
+.dep-kids { margin-left: 18px; border-left: 1px dashed var(--line); padding-left: 10px; }
+.dep-leaf { padding: 3px 4px 3px 22px; }
+.dep-leaf code, .dep-node summary code { font-size: 12px; }
+
 /* ---------- upgrades ---------- */
 .upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
 .upg-row.upg-needs { border-left: 3px solid var(--red); }

@@ -51,17 +51,49 @@ DEMO_REPO_FILES = {
         "charts/app/templates/deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ .Release.Name }}\n",
     },
     "Engine": {
-        "README.md": "# Engine\n\nAll Jenkins pipeline definitions (groovy) live here.\n",
+        "README.md": "# Engine\n\nPipelines (groovy), playbooks+roles, and scripts.\n",
         "pipelines/payments-service.groovy":
             "pipeline {\n  agent { label 'java' }\n  stages {\n"
-            "    stage('Build') { steps { sh './gradlew assemble' } }\n"
+            "    stage('Build') { steps { sh './scripts/podman_run_script.sh build_java.sh payments' } }\n"
             "    stage('Unit Tests') { steps { sh './gradlew test' } }  "
             "// testcontainers: needs the docker daemon\n"
-            "    stage('Package') { steps { sh './gradlew jibDockerBuild' } }\n"
+            "    stage('Deploy') { steps { sh './scripts/podman_run_playbook.sh deploy/deploy_app.yml' } }\n"
             "  }\n}\n",
         "pipelines/checkout-service.groovy":
             "pipeline {\n  agent { label 'java' }\n  stages {\n"
-            "    stage('Build') { steps { sh './gradlew build' } }\n  }\n}\n",
+            "    stage('Build') { steps { sh './scripts/podman_run_script.sh build_java.sh checkout' } }\n"
+            "  }\n}\n",
+        # scripts — incl. the standard callers and one orphan
+        "scripts/podman_run_script.sh":
+            "#!/bin/bash\n# standard caller: runs a script inside the tool container\n"
+            "exec podman run --rm -v \"$PWD:/w\" tools bash \"/w/scripts/$1\" \"${@:2}\"\n",
+        "scripts/podman_run_playbook.sh":
+            "#!/bin/bash\n# standard caller: runs a playbook inside the tool container\n"
+            "exec podman run --rm -v \"$PWD:/w\" tools ansible-playbook \"/w/playbooks/$1\"\n",
+        "scripts/build_java.sh":
+            "#!/bin/bash\nsource scripts/common/setup_env.sh\n./gradlew build -Pservice=$1\n",
+        "scripts/common/setup_env.sh":
+            "#!/bin/bash\nexport JAVA_HOME=/opt/java\nexport GRADLE_OPTS=-Xmx2g\n",
+        "scripts/orphan_cleanup.sh":
+            "#!/bin/bash\n# nothing references this script\nrm -rf /tmp/old-workspaces\n",
+        "scripts/report.py":
+            "#!/usr/bin/env python3\n# nothing references this either\nprint('report')\n",
+        # playbooks — group 'deploy' with roles next to them, plus a legacy orphan
+        "playbooks/deploy/deploy_app.yml":
+            "---\n- hosts: app\n  roles:\n    - app_deploy\n"
+            "- import_playbook: restart_services.yml\n",
+        "playbooks/deploy/restart_services.yml":
+            "---\n- hosts: app\n  tasks:\n    - name: warm env\n"
+            "      shell: scripts/common/setup_env.sh && systemctl restart app\n",
+        "playbooks/deploy/roles/app_deploy/tasks/main.yml":
+            "---\n- include_role:\n    name: common_checks\n"
+            "- name: deploy artifact\n  copy: src=app.jar dest=/opt/app\n",
+        "playbooks/deploy/roles/common_checks/tasks/main.yml":
+            "---\n- name: check disk\n  shell: df -h\n",
+        "playbooks/deploy/roles/unused_role/tasks/main.yml":
+            "---\n- name: never referenced\n  debug: msg=unused\n",
+        "playbooks/legacy/old_migration.yml":
+            "---\n- hosts: db\n  tasks:\n    - shell: echo legacy migration\n",
     },
 }
 

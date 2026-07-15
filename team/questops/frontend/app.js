@@ -186,7 +186,7 @@ async function refreshMe() {
 /* ---------------- router ---------------- */
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
-                repos: renderRepos, upgrades: renderUpgrades,
+                repos: renderRepos, deps: renderDeps, upgrades: renderUpgrades,
                 team: renderTeam, me: renderProfile };
 
 function route() {
@@ -1756,6 +1756,158 @@ async function renderRepos() {
   view().querySelectorAll("[data-crumb]").forEach((el) => el.onclick = () => {
     state.repoPath = el.dataset.crumb; state.repoFile = null; renderRepos();
   });
+}
+
+/* ================= DEPENDENCIES ================= */
+const DEP_ICON = (n) => n.type === "pipeline" ? "⚙" : n.type === "playbook" ? "📜"
+  : n.type === "role" ? "🎭" : n.type === "caller" ? "🔁"
+  : n.path.endsWith(".py") ? "🐍" : "🐚";
+
+function depTree(map, id, seen) {
+  const n = map[id];
+  if (!n) return "";
+  if (seen.has(id))
+    return `<div class="dep-leaf ci-meta">↻ ${esc(n.path)} (cycle)</div>`;
+  const next = new Set(seen); next.add(id);
+  const kids = (n.out || []).map((c) => depTree(map, c, next)).join("");
+  const label = `${DEP_ICON(n)} <code>${esc(n.path)}</code>
+    ${n.type === "role" && n.files ? `<span class="ci-meta">${n.files.length} file(s)</span>` : ""}
+    ${n.used ? "" : '<span class="chip chip-red">unused</span>'}`;
+  return kids
+    ? `<details class="dep-node" open><summary>${label}</summary><div class="dep-kids">${kids}</div></details>`
+    : `<div class="dep-leaf">${label}</div>`;
+}
+
+async function renderDeps(refresh) {
+  const repoData = await api("/api/repos").catch(() => ({ repos: [] }));
+  if (!repoData.repos.length) {
+    view().innerHTML = `<div class="view-head"><h1>DEPENDENCIES</h1></div>
+      <div class="empty">no repositories defined — add your Engine repo on the
+      <a href="#/repos">Repositories page</a> first</div>`;
+    return;
+  }
+  if (!repoData.repos.some((r) => r.slot === state.depSlot)) {
+    const engine = repoData.repos.find((r) => r.name.toLowerCase() === "engine");
+    state.depSlot = (engine || repoData.repos[0]).slot;
+  }
+  const cur = repoData.repos.find((r) => r.slot === state.depSlot);
+  const chips = repoData.repos.map((r) => `
+    <button class="btn btn-sm ${r.slot === cur.slot ? "btn-primary" : ""}" data-dep-repo="${r.slot}">⛁ ${esc(r.name)}</button>`).join(" ");
+  const head = `
+    <div class="view-head"><h1>DEPENDENCIES</h1>
+      <span class="sub">pipelines → playbooks / roles / scripts · used vs unused</span>
+      <span class="spacer"></span>
+      <div class="filter-row">${chips}</div>
+      <button class="btn btn-sm" id="dep-refresh">↻ re-analyze</button></div>`;
+
+  if (!cur.cloned) {
+    view().innerHTML = head + `
+      <div class="empty">'${esc(cur.name)}' is not cloned yet —
+        clone it on the <a href="#/repos">Repositories page</a> to analyze it</div>`;
+    wireDeps(cur);
+    return;
+  }
+
+  view().innerHTML = head + `<div class="empty">analyzing ${esc(cur.name)}…</div>`;
+  let d;
+  try {
+    d = await api(`/api/deps?slot=${cur.slot}${refresh === true ? "&refresh=true" : ""}`);
+  } catch (e) {
+    view().innerHTML = head + `<div class="empty">⚠ ${esc(e.message)}</div>`;
+    wireDeps(cur);
+    return;
+  }
+  const map = {};
+  d.nodes.forEach((n) => { map[n.id] = n; });
+  if (!d.roots.some((r) => r === state.depRoot)) state.depRoot = d.roots[0];
+
+  const tiles = ["pipeline", "playbook", "role", "script", "caller"].map((t) => {
+    const s = d.stats[t] || { total: 0, used: 0 };
+    const unusedN = s.total - s.used;
+    return `<div class="stat-tile"><b class="${unusedN ? "pct-warn" : "pct-good"}">${s.used}/${s.total}</b>
+      <span>${t}s used</span>${unusedN ? `<small class="pct-bad">${unusedN} unused</small>` : ""}</div>`;
+  }).join("");
+
+  const rootList = d.roots.map((rid) => `
+    <div class="hist-row ${rid === state.depRoot ? "open" : ""}" data-dep-root="${esc(rid)}">
+      <span class="hist-subject">⚙ ${esc(map[rid].path.replace(/^pipelines\//, ""))}</span>
+      <span class="ci-meta">${(map[rid].out || []).length} direct deps</span>
+    </div>`).join("") || `<div class="empty">no pipelines found under pipelines/</div>`;
+
+  const unusedList = ["script", "playbook", "role"].flatMap((t) =>
+    (d.unused[t] || []).map((p) => `
+      <div class="ci-row"><span class="chip chip-red">${t}</span>
+        <code class="ci-job">${esc(p)}</code></div>`)).join("")
+    || `<div class="empty">✅ everything is reachable from the pipelines</div>`;
+
+  const notes = [
+    d.truncated ? `⚠ scanned the first ${d.files_scanned} files only` : "",
+    d.ambiguous.length ? `⚠ ${d.ambiguous.length} ambiguous reference(s) — same filename in several places (all candidates linked)` : "",
+    d.dynamic.length ? `ℹ ${d.dynamic.length} dynamic call(s) (variable arguments) could not be resolved statically` : "",
+  ].filter(Boolean).map((n) => `<div class="kpi-note">${n}</div>`).join("");
+
+  const q = (state.depQuery || "").toLowerCase();
+  const matrixRows = d.nodes
+    .filter((n) => !q || n.path.toLowerCase().includes(q) || n.type.includes(q)
+                 || (q === "unused" && !n.used) || (q === "used" && n.used))
+    .sort((a, b) => (a.used === b.used ? a.path.localeCompare(b.path) : a.used ? 1 : -1))
+    .slice(0, 300)
+    .map((n) => `
+      <div class="ci-row">
+        <span>${DEP_ICON(n)}</span>
+        <code class="ci-job">${esc(n.path)}</code>
+        <span class="chip">${esc(n.type)}</span>
+        <span class="ci-meta">→ ${n.out.length} · ← ${n.in_count}</span>
+        <span class="chip ${n.used ? "chip-green" : "chip-red"}">${n.used ? "used" : "unused"}</span>
+      </div>`).join("") || `<div class="empty">no matches</div>`;
+
+  view().innerHTML = head + `
+    ${notes}
+    <div class="stat-tiles">${tiles}</div>
+    <div class="ci-grid">
+      <div class="panel">
+        <h2>⚙ pipelines — pick one to trace</h2>
+        <div class="ci-scroll">${rootList}</div>
+        <h2 class="panel-divider">⛓ dependency tree — ${esc(state.depRoot ? map[state.depRoot].path : "")}</h2>
+        <div class="dep-tree">${state.depRoot ? depTree(map, state.depRoot, new Set()) : ""}</div>
+      </div>
+      <div>
+        <div class="panel" style="margin-bottom:18px">
+          <h2>🗑 unused files — candidates for cleanup</h2>
+          <div class="ci-scroll">${unusedList}</div></div>
+        <div class="panel"><h2>🔎 full matrix — ${d.nodes.length} nodes
+          <span class="ov-more">${d.cached ? "cached · " : ""}${d.files_scanned} files scanned</span></h2>
+          <div class="repo-bar" style="margin-bottom:8px">
+            <input id="dep-search" placeholder="filter by path / type / used / unused" value="${esc(state.depQuery || "")}" style="flex:1">
+          </div>
+          <div class="ci-scroll" style="max-height:420px">${matrixRows}</div></div>
+      </div>
+    </div>`;
+  wireDeps(cur);
+}
+
+function wireDeps(cur) {
+  view().querySelectorAll("[data-dep-repo]").forEach((b) => b.onclick = () => {
+    state.depSlot = parseInt(b.dataset.depRepo, 10);
+    state.depRoot = null;
+    renderDeps();
+  });
+  view().querySelectorAll("[data-dep-root]").forEach((el) => el.onclick = () => {
+    state.depRoot = el.dataset.depRoot;
+    renderDeps();
+  });
+  const r = document.getElementById("dep-refresh");
+  if (r) r.onclick = () => renderDeps(true);
+  const s = document.getElementById("dep-search");
+  if (s) {
+    s.oninput = () => {
+      state.depQuery = s.value;
+      clearTimeout(state._depT);
+      state._depT = setTimeout(() => renderDeps(), 250);
+    };
+    s.focus();
+    s.setSelectionRange(s.value.length, s.value.length);
+  }
 }
 
 /* ================= UPGRADES ================= */
