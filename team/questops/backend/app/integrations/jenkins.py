@@ -284,33 +284,51 @@ def job_definition(job: str) -> dict:
             "note": "no pipeline-from-SCM definition found in the job or its parents"}
 
 
+def all_job_names() -> list[str]:
+    """EVERY runnable job on the instance — JENKINS_IGNORE is deliberately
+    NOT applied: it filters the failure feed, but the dependency wiring
+    check must see excluded jobs too."""
+    if not is_live():
+        if settings.demo_mode:
+            return [j["name"] for j in _DEMO_JOBS]
+        return []
+    r = requests.get(f"{settings.jenkins_url}/api/json",
+                     params={"tree": _tree_query()}, auth=_auth(), timeout=30)
+    r.raise_for_status()
+    return [j.get("fullName") or j.get("name") or ""
+            for j in _flatten(r.json().get("jobs", []), [])]
+
+
 _SCRIPT_PATHS_CACHE: dict = {"at": 0.0, "data": None}
+
+
+def invalidate_script_paths() -> None:
+    _SCRIPT_PATHS_CACHE.update(at=0.0, data=None)
 
 
 def pipeline_script_paths(ttl: int = 300) -> dict[str, list[str]]:
     """scriptPath -> [job full names] across the whole Jenkins instance —
-    which repo pipeline files are ACTUALLY wired to jobs. Cached (each job
-    costs a config.xml fetch)."""
+    which repo pipeline files are ACTUALLY wired to jobs. Includes jobs
+    matching JENKINS_IGNORE (wiring is wiring). Cached (each job costs a
+    config.xml fetch)."""
     import time
     if (_SCRIPT_PATHS_CACHE["data"] is not None
             and time.time() - _SCRIPT_PATHS_CACHE["at"] < ttl):
         return _SCRIPT_PATHS_CACHE["data"]
     out: dict[str, list[str]] = {}
     if settings.demo_mode and not is_live():
-        for j in _DEMO_JOBS:
-            if any(tok in j["name"].lower() for tok in settings.jenkins_ignore_tokens):
-                continue
-            sp = f"pipelines/{j['name'].split('/')[0]}.groovy"
-            out.setdefault(sp, []).append(j["name"])
+        for name in all_job_names():
+            sp = f"pipelines/{name.split('/')[0]}.groovy"
+            out.setdefault(sp, []).append(name)
     elif is_live():
-        for j in overview()["jobs"]:
+        for name in all_job_names():
             try:
-                d = job_definition(j["name"])
+                d = job_definition(name)
             except Exception:  # noqa: BLE001 — one broken job never blocks the map
                 continue
             sp = (d.get("script_path") or "").lstrip("./")
             if sp:
-                out.setdefault(sp, []).append(j["name"])
+                out.setdefault(sp, []).append(name)
     _SCRIPT_PATHS_CACHE.update(at=time.time(), data=out)
     return out
 
