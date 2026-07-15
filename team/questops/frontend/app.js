@@ -189,13 +189,25 @@ const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard
                 repos: renderRepos, deps: renderDeps, access: renderAccess,
                 upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
 
+// bumped on every navigation; async renders capture it and bail if it
+// changed while they were awaiting — so a slow page (or a background poll)
+// can never paint over the page you navigated to.
+let NAV_EPOCH = 0;
+const navToken = () => NAV_EPOCH;
+const navStale = (tok) => tok !== NAV_EPOCH;
+
 function route() {
   const name = (location.hash.replace("#/", "") || "overview").split("?")[0];
-  state.view = VIEWS[name] ? name : "overview";
+  const next = VIEWS[name] ? name : "overview";
+  NAV_EPOCH++;
+  state.view = next;
   document.querySelectorAll("#nav a").forEach((a) =>
     a.classList.toggle("active", a.dataset.view === state.view));
+  const tok = navToken();
   view().innerHTML = `<div class="empty">loading…</div>`;
-  VIEWS[state.view]().catch((e) => { view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; });
+  VIEWS[state.view]().catch((e) => {
+    if (!navStale(tok)) view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+  });
 }
 window.addEventListener("hashchange", route);
 
@@ -209,6 +221,8 @@ setInterval(async () => {
   if (state.view !== "overview" || document.hidden || OV_BUSY || !state.me) return;
   try {
     const { cursor } = await api("/api/overview/cursor");
+    // re-check AFTER the await — the user may have navigated away meanwhile
+    if (state.view !== "overview" || document.hidden) return;
     if (cursor !== OV_CURSOR || Date.now() - OV_RENDERED > OV_STALE_MS)
       await renderOverview();
   } catch { /* transient — next tick retries */ }
@@ -222,8 +236,10 @@ async function renderOverview() {
 }
 
 async function renderOverviewInner() {
+  const tok = navToken();
   const [data, cur] = await Promise.all([
     api("/api/overview"), api("/api/overview/cursor").catch(() => null)]);
+  if (navStale(tok)) return;  // navigated away during the fetch — don't paint
   OV_CURSOR = cur ? cur.cursor : OV_CURSOR;
   OV_RENDERED = Date.now();
   const j = data.jira, ci = data.ci, kpi = data.kpi, team = data.team;
@@ -2004,16 +2020,40 @@ const permChips = (list, cls) => (list || []).map((p) =>
   `<span class="chip ${cls || ACC_PERM_CLS(p)}">${esc(p)}</span>`).join(" ");
 const srcLabel = (d) => `${esc(d.source)}${d.cached ? " · cached" : ""}`;
 
+const ACC_WHAT = {
+  ado: "querying Azure DevOps for projects",
+  jira: "reading Jira permission schemes & their project assignments",
+  jenkins: "scanning Jenkins job/folder configs for matrix RBAC",
+};
+
 async function accLoad(section, url, renderFn) {
   const box = document.getElementById(`acc-${section}`);
   if (!box) return;
+  const tok = navToken();
+  const t0 = Date.now();
+  box.innerHTML = `<div class="empty acc-loading">⏳ ${esc(ACC_WHAT[section])}…
+    <span class="acc-elapsed"></span></div>`;
+  // elapsed nudge so a slow source visibly explains itself, never a dead spinner
+  const timer = setInterval(() => {
+    const el = box.querySelector(".acc-elapsed");
+    if (!el) return clearInterval(timer);
+    const s = Math.round((Date.now() - t0) / 1000);
+    el.textContent = s >= 3 ? `(${s}s — large instances can take a moment)` : "";
+  }, 1000);
   try {
     const d = await api(url);
+    clearInterval(timer);
+    if (navStale(tok)) return;  // navigated away — don't paint a detached box
     box.innerHTML = renderFn(d);
   } catch (e) {
-    box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+    clearInterval(timer);
+    if (navStale(tok)) return;
+    box.innerHTML = `<div class="empty">⚠ couldn't load: ${esc(e.message)}
+      <button class="btn btn-sm" data-acc-retry="${section}">↻ retry</button></div>`;
   }
   wireAccess(section);
+  const rb = box.querySelector(`[data-acc-retry="${section}"]`);
+  if (rb) rb.onclick = () => accLoad(section, url, renderFn);
 }
 
 function accAdoHtml(d) {
@@ -2101,12 +2141,12 @@ async function renderAccess() {
     <div class="kpi-note" style="margin-bottom:12px">source systems are protected: results cache for 15 minutes,
       ADO project details load only when expanded, and Jenkins configs come from a shared cache</div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
-      <div id="acc-ado"><div class="empty">loading…</div></div></div>
+      <div id="acc-ado"></div></div>
     <div class="ci-grid">
       <div class="panel"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
-        <div id="acc-jira"><div class="empty">loading…</div></div></div>
+        <div id="acc-jira"></div></div>
       <div class="panel"><h2>⚙ Jenkins — matrix-based RBAC</h2>
-        <div id="acc-jenkins"><div class="empty">loading…</div></div></div>
+        <div id="acc-jenkins"></div></div>
     </div>`;
 
   const load = (refresh) => {
@@ -2116,13 +2156,7 @@ async function renderAccess() {
     accLoad("jenkins", `/api/access/jenkins${s}`, accJenkinsHtml);
   };
   load(false);
-  document.getElementById("acc-refresh").onclick = () => {
-    ["ado", "jira", "jenkins"].forEach((x) => {
-      const el = document.getElementById(`acc-${x}`);
-      if (el) el.innerHTML = `<div class="empty">refreshing…</div>`;
-    });
-    load(true);
-  };
+  document.getElementById("acc-refresh").onclick = () => load(true);
 }
 
 /* ================= UPGRADES ================= */

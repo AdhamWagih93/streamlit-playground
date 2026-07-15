@@ -15,6 +15,7 @@ descriptors are resolved in batches."""
 import re
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -22,6 +23,8 @@ from ..config import settings
 
 TTL = 900
 HTTP_TIMEOUT = 20
+HTTP_CONNECT = 5
+POOL = 12          # concurrent fetches against a source (bounded, not a flood)
 _CACHE: dict = {}
 
 # ADO Git repositories security namespace + its permission bits
@@ -55,7 +58,7 @@ def _ado_get(path: str, params: dict | None = None):
     r = requests.get(f"{settings.ado_url.rstrip('/')}{path}",
                      params={"api-version": "6.0", **(params or {})},
                      auth=(settings.ado_user, settings.ado_rest_password),
-                     timeout=HTTP_TIMEOUT)
+                     timeout=(HTTP_CONNECT, HTTP_TIMEOUT))
     r.raise_for_status()
     return r.json()
 
@@ -144,20 +147,25 @@ def ado_project_access(project_id: str, force: bool = False) -> dict:
             teams.append({"name": t.get("name", ""), "members": sorted(filter(None, members))})
 
         repos = []
-        repo_list = _ado_get(f"/{project_id}/_apis/git/repositories").get("value", [])
+        repo_list = _ado_get(f"/{project_id}/_apis/git/repositories").get("value", [])[:40]
         descriptors: set[str] = set()
         raw_acls: dict[str, dict] = {}
-        for rp in repo_list[:40]:
+
+        def fetch_acl(rp):
             try:
                 acl = _ado_get(f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
                                {"token": f"repoV2/{project_id}/{rp['id']}"})
                 aces = {}
                 for entry in acl.get("value", []):
                     aces.update(entry.get("acesDictionary", {}))
-                raw_acls[rp["name"]] = aces
-                descriptors.update(aces.keys())
+                return rp["name"], aces
             except requests.RequestException:
-                raw_acls[rp["name"]] = {}
+                return rp["name"], {}
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:  # parallel ACL reads
+            for name, aces in pool.map(fetch_acl, repo_list):
+                raw_acls[name] = aces
+                descriptors.update(aces.keys())
         names = _resolve_identities(sorted(descriptors))
         for rp in repo_list[:40]:
             acls = []
@@ -212,7 +220,7 @@ def jira_permission_schemes(force: bool = False) -> dict:
 
         def jget(path, params=None):
             r = requests.get(f"{base}{path}", params=params, auth=auth,
-                             timeout=HTTP_TIMEOUT)
+                             timeout=(HTTP_CONNECT, HTTP_TIMEOUT))
             r.raise_for_status()
             return r.json()
 
@@ -250,17 +258,22 @@ def jira_permission_schemes(force: bool = False) -> dict:
                              "permissions": sorted(set(v))}
                             for k, v in sorted(by_holder.items())]})
 
-        # scheme -> projects (capped walk; the expensive part, so bounded)
+        # scheme -> projects (bounded + parallel; the expensive part)
         try:
             projects = jget("/rest/api/2/project")[:80]
             by_id = {s["id"]: s for s in schemes}
-            for p in projects:
+
+            def proj_scheme(p):
                 try:
-                    ps = jget(f"/rest/api/2/project/{p['key']}/permissionscheme")
-                    if ps.get("id") in by_id:
-                        by_id[ps["id"]]["projects"].append(p["key"])
+                    return p["key"], jget(
+                        f"/rest/api/2/project/{p['key']}/permissionscheme").get("id")
                 except requests.RequestException:
-                    continue
+                    return p["key"], None
+
+            with ThreadPoolExecutor(max_workers=POOL) as pool:
+                for key, sid in pool.map(proj_scheme, projects):
+                    if sid in by_id:
+                        by_id[sid]["projects"].append(key)
         except requests.RequestException:
             pass
         return {"source": "live", "schemes": schemes}
@@ -326,21 +339,29 @@ def jenkins_matrix(force: bool = False) -> dict:
                     seen.add(p)
                     paths.append(p)
         capped = paths[:300]
-        items = []
-        for p in capped:
+        name_set = set(names)
+
+        def fetch_one(p: str):
             url = settings.jenkins_url + "".join(
                 f"/job/{requests.utils.quote(seg, safe='')}" for seg in p.split("/"))
             try:
-                r = requests.get(f"{url}/config.xml", auth=auth, timeout=15)
+                r = requests.get(f"{url}/config.xml", auth=auth,
+                                 timeout=(HTTP_CONNECT, 15))
                 if not r.ok:
-                    continue
+                    return None
                 entries = _parse_matrix_entries(r.text)
             except requests.RequestException:
-                continue
-            if entries:
-                is_folder = p not in names
-                items.append({"path": ("(folder) " if is_folder else "") + p,
-                              "entries": entries})
+                return None
+            if not entries:
+                return None
+            is_folder = p not in name_set
+            return {"path": ("(folder) " if is_folder else "") + p,
+                    "entries": entries}
+
+        # parallel, bounded — 300 sequential config.xml fetches was minutes
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            items = [x for x in pool.map(fetch_one, capped) if x]
+        items.sort(key=lambda x: x["path"].lower())
         note = (f"scanned the first {len(capped)} of {len(paths)} items"
                 if len(paths) > len(capped) else "")
         return {"source": "live", "items": items, "scanned": len(capped),
