@@ -186,8 +186,8 @@ async function refreshMe() {
 /* ---------------- router ---------------- */
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
-                repos: renderRepos, deps: renderDeps, upgrades: renderUpgrades,
-                team: renderTeam, me: renderProfile };
+                repos: renderRepos, deps: renderDeps, access: renderAccess,
+                upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
 
 function route() {
   const name = (location.hash.replace("#/", "") || "overview").split("?")[0];
@@ -1994,6 +1994,135 @@ function wireDeps(cur) {
   });
   const r = document.getElementById("dep-refresh");
   if (r) r.onclick = () => renderDeps(true);
+}
+
+/* ================= ACCESS MANAGEMENT ================= */
+const ACC_PERM_CLS = (p) => /Administer|Manage permissions|Force push|Delete|Configure/i.test(p)
+  ? "chip-red" : /Contribute|Edit|Create|Build|Transition|Resolve/i.test(p)
+  ? "chip-amber" : "chip-cyan";
+const permChips = (list, cls) => (list || []).map((p) =>
+  `<span class="chip ${cls || ACC_PERM_CLS(p)}">${esc(p)}</span>`).join(" ");
+const srcLabel = (d) => `${esc(d.source)}${d.cached ? " · cached" : ""}`;
+
+async function accLoad(section, url, renderFn) {
+  const box = document.getElementById(`acc-${section}`);
+  if (!box) return;
+  try {
+    const d = await api(url);
+    box.innerHTML = renderFn(d);
+  } catch (e) {
+    box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+  }
+  wireAccess(section);
+}
+
+function accAdoHtml(d) {
+  if (!d.projects.length) return `<div class="empty">no projects (${srcLabel(d)})</div>`;
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) — expand one to load its teams &amp; repo permissions</div>`
+    + d.projects.map((p) => `
+      <details class="filebox acc-proj" data-acc-proj="${esc(p.id)}">
+        <summary>📁 <b>${esc(p.name)}</b> <span class="ci-meta">${esc(p.description || "")}</span></summary>
+        <div class="acc-proj-body" id="acc-proj-${esc(p.id)}"><div class="empty">loading…</div></div>
+      </details>`).join("");
+}
+
+function accAdoProjectHtml(d) {
+  const teams = (d.teams || []).map((t) => `
+    <div class="ci-row"><span class="ci-job">👥 ${esc(t.name)}</span>
+      <span class="acc-members">${t.members.slice(0, 8).map((m) => `<span class="chip">${esc(m)}</span>`).join(" ")}
+      ${t.members.length > 8 ? `<span class="ci-meta">+${t.members.length - 8} more</span>` : ""}</span>
+    </div>`).join("") || `<div class="empty">no teams</div>`;
+  const repos = (d.repos || []).map((r) => `
+    <div class="acc-repo"><div class="ci-job" style="margin-bottom:4px">⛁ ${esc(r.name)}</div>
+      ${(r.acls || []).map((a) => `
+        <div class="acc-acl"><span class="acc-ident">${esc(a.identity)}</span>
+          ${permChips(a.allow)}
+          ${(a.deny || []).map((p) => `<span class="chip chip-red" style="text-decoration:line-through" title="denied">${esc(p)}</span>`).join(" ")}
+        </div>`).join("") || `<div class="ci-meta" style="padding:2px 8px">no explicit ACLs (inherited only)</div>`}
+    </div>`).join("") || `<div class="empty">no repositories</div>`;
+  return `<h4 class="acc-h">teams &amp; members</h4>${teams}
+    <h4 class="acc-h">repository permissions ${d.repo_cap_note ? '<span class="ci-meta">(first 40 repos)</span>' : ""}</h4>${repos}`;
+}
+
+function accJiraHtml(d) {
+  if (!d.schemes.length) return `<div class="empty">no permission schemes (${srcLabel(d)})</div>`;
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)</div>`
+    + d.schemes.map((s) => `
+      <details class="filebox">
+        <summary>🎫 <b>${esc(s.name)}</b>
+          ${(s.projects || []).map((p) => `<span class="chip chip-green">${esc(p)}</span>`).join(" ")
+            || '<span class="chip">unassigned</span>'}
+          <span class="ci-meta">${esc(s.description || "")}</span></summary>
+        <div style="padding:8px 12px">
+          ${s.holders.map((h) => `
+            <div class="acc-acl"><span class="acc-ident">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}</span>
+              ${permChips(h.permissions)}</div>`).join("")}
+        </div>
+      </details>`).join("");
+}
+
+function accJenkinsHtml(d) {
+  if (!d.items.length)
+    return `<div class="empty">no matrix-based entries found (${srcLabel(d)})${d.note ? " · " + esc(d.note) : ""}</div>`;
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.items.length} item(s) with explicit matrix entries${d.note ? " · " + esc(d.note) : ""}</div>`
+    + d.items.map((it) => `
+      <details class="filebox" open>
+        <summary>⚙ <b>${esc(it.path)}</b> <span class="ci-meta">${it.entries.length} principal(s)</span></summary>
+        <div style="padding:8px 12px">
+          ${it.entries.map((e) => `
+            <div class="acc-acl"><span class="acc-ident">${e.type === "group" ? "👥" : e.type === "user" ? "👤" : "❔"} ${esc(e.sid)}</span>
+              ${permChips(e.permissions)}</div>`).join("")}
+        </div>
+      </details>`).join("");
+}
+
+function wireAccess(section) {
+  if (section === "ado") {
+    view().querySelectorAll("[data-acc-proj]").forEach((det) => {
+      det.ontoggle = async () => {
+        if (!det.open || det.dataset.loaded) return;
+        det.dataset.loaded = "1";
+        const box = document.getElementById(`acc-proj-${det.dataset.accProj}`);
+        try {
+          const d = await api(`/api/access/ado/${encodeURIComponent(det.dataset.accProj)}`);
+          box.innerHTML = accAdoProjectHtml(d);
+        } catch (e) { box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; }
+      };
+    });
+  }
+}
+
+async function renderAccess() {
+  view().innerHTML = `
+    <div class="view-head"><h1>ACCESS MANAGEMENT</h1>
+      <span class="sub">who can do what — ADO projects &amp; repos · Jira permission schemes · Jenkins matrix RBAC</span>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="acc-refresh">↻ refresh all (bypasses caches)</button></div>
+    <div class="kpi-note" style="margin-bottom:12px">source systems are protected: results cache for 15 minutes,
+      ADO project details load only when expanded, and Jenkins configs come from a shared cache</div>
+    <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
+      <div id="acc-ado"><div class="empty">loading…</div></div></div>
+    <div class="ci-grid">
+      <div class="panel"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
+        <div id="acc-jira"><div class="empty">loading…</div></div></div>
+      <div class="panel"><h2>⚙ Jenkins — matrix-based RBAC</h2>
+        <div id="acc-jenkins"><div class="empty">loading…</div></div></div>
+    </div>`;
+
+  const load = (refresh) => {
+    const s = refresh ? "?refresh=true" : "";
+    accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
+    accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
+    accLoad("jenkins", `/api/access/jenkins${s}`, accJenkinsHtml);
+  };
+  load(false);
+  document.getElementById("acc-refresh").onclick = () => {
+    ["ado", "jira", "jenkins"].forEach((x) => {
+      const el = document.getElementById(`acc-${x}`);
+      if (el) el.innerHTML = `<div class="empty">refreshing…</div>`;
+    });
+    load(true);
+  };
 }
 
 /* ================= UPGRADES ================= */

@@ -50,6 +50,11 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   arguments and ansible semantics (`roles:`, `include_role`, `import_playbook`,
   role dependencies). Per-pipeline dependency trees, a **used vs unused** report
   (cleanup candidates), a searchable node matrix, and ambiguous/dynamic-call notes.
+- **Access Management** — one page for who-can-do-what: ADO per-project teams +
+  per-repository ACLs (allow/deny bitmasks decoded), Jira permission schemes with
+  their project assignments and per-holder grants, and Jenkins matrix-based RBAC
+  parsed from job/folder configs. Aggressively cached (15 min, lazy per-project
+  expansion, shared config cache) so source systems are never hammered.
 - **Upgrade checker** — detects the running version of each integration (Jenkins,
   Elasticsearch, Jira, PostgreSQL, Ollama) and compares it against the latest LTS /
   supported line (endoflife.date / GitHub releases); one click files a prioritized

@@ -445,6 +445,16 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .dep-leaf code, .dep-node summary code { font-size: 12px; }
 .dep-role-tasks { border-left-color: rgba(165,139,245,.5); }
 
+/* ---------- access management ---------- */
+.acc-h { font: 600 11px var(--mono); color: var(--faint); text-transform: uppercase;
+  letter-spacing: .08em; margin: 12px 0 6px; padding: 0 8px; }
+.acc-proj-body { padding: 4px 10px 10px; }
+.acc-repo { border-top: 1px solid var(--line); padding: 8px; }
+.acc-acl { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 4px 8px; }
+.acc-ident { font: 500 12px var(--mono); color: var(--text); min-width: 200px; }
+.acc-members { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.acc-members .chip { font-size: 10px; }
+
 /* ---------- upgrades ---------- */
 .upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
 .upg-row.upg-needs { border-left: 3px solid var(--red); }
