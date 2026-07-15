@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     jira_review_statuses: str = "Resolved"    # 'resolved' means awaiting review
     jira_reopened_statuses: str = "Reopened"  # shown in the first column, flagged as regression
     jira_closed_window_days: int = 30         # board shows only tickets closed this recently
+    # instance-level Jira groups shown + cross-checked in Access Management
+    jira_admin_group: str = "jira-administrators"
+    jira_users_group: str = "jira-users"      # membership = a real licensed Jira user
 
     # --- Jenkins ---
     jenkins_url: str = ""

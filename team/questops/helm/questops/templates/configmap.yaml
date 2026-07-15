@@ -10,6 +10,8 @@ data:
   OLLAMA_MODEL: {{ .Values.ai.ollamaModel | quote }}
   JIRA_BASE_URL: {{ .Values.jira.baseUrl | quote }}
   JIRA_PROJECT_KEY: {{ .Values.jira.projectKey | quote }}
+  JIRA_ADMIN_GROUP: {{ .Values.jira.adminGroup | default "jira-administrators" | quote }}
+  JIRA_USERS_GROUP: {{ .Values.jira.usersGroup | default "jira-users" | quote }}
   JIRA_USER: {{ .Values.jira.user | quote }}
   JIRA_BOARD_STATUSES: {{ .Values.jira.boardStatuses | quote }}
   JIRA_DONE_STATUSES: {{ .Values.jira.doneStatuses | quote }}

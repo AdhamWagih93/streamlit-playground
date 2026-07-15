@@ -23,12 +23,20 @@ def _auth():
 
 
 def get(path: str, params: dict | None = None):
-    """GET a path relative to the instance root (path starts with '/')."""
+    """GET a path relative to the instance root (path starts with '/').
+    ALWAYS returns a dict/list, never None: some ADO endpoints answer 200
+    with a `null` body (no ACL, empty result, deleted resource) or with a
+    non-JSON auth page — callers then did None.get() and crashed. Coerce
+    those to {} so `.get('value', [])` is always safe."""
     r = requests.get(f"{instance()}{path}",
                      params={"api-version": "6.0", **(params or {})},
                      auth=_auth(), timeout=HTTP_TIMEOUT)
     r.raise_for_status()
-    return r.json()
+    try:
+        data = r.json()
+    except ValueError:
+        return {}
+    return {} if data is None else data
 
 
 def collections(force: bool = False) -> list[str]:
@@ -41,7 +49,8 @@ def collections(force: bool = False) -> list[str]:
     names: list[str] = []
     try:
         data = get("/_apis/projectCollections", {"$top": 500})
-        names = sorted(c.get("name", "") for c in data.get("value", []) if c.get("name"))
+        names = sorted(c.get("name", "") for c in ((data or {}).get("value") or [])
+                       if c and c.get("name"))
     except requests.RequestException:
         names = []
     if not names:

@@ -2185,8 +2185,27 @@ function accJiraHtml(d) {
       <b>🚩 ${d.jirauser_grants.length} grant(s) to JIRAUSER-keyed users</b>
       ${d.jirauser_grants.map((g) => `<div class="ci-meta">• ${esc(g.holder)} in <b>${esc(g.scheme)}</b></div>`).join("")}
     </div>` : "";
+
+  const g = d.groups || {};
+  const groupsPanel = (g.admin_group || g.users_group) ? `
+    <details class="filebox" style="margin-bottom:8px">
+      <summary>👑 instance groups — <b>${esc(g.admin_group || "")}</b> (${(g.admins || []).length}) ·
+        <b>${esc(g.users_group || "")}</b> (${g.users_readable ? g.users_count + " members" : "not readable"})</summary>
+      <div style="padding:8px 12px">
+        <div class="acc-h">${esc(g.admin_group || "administrators")}</div>
+        ${(g.admins || []).map((a) => `<span class="chip chip-red">${esc(a)}</span>`).join(" ") || '<span class="ci-meta">none / not readable</span>'}
+        ${!g.users_readable ? `<div class="kpi-note">⚠ couldn't read ${esc(g.users_group || "jira-users")} membership — the non-member cross-check is skipped (account needs to browse the group)</div>` : ""}
+      </div>
+    </details>` : "";
+  const nonMembers = (d.non_member_grants || []);
+  const nonMemberBanner = nonMembers.length ? `
+    <div class="remote-banner remote-new" style="margin-bottom:10px">
+      <b>⚠ ${nonMembers.length} user(s) granted scheme access but NOT a ${esc(g.users_group || "jira-users")} member</b>
+      ${nonMembers.map((n) => `<div class="ci-meta">• <b>${esc(n.user)}</b> in ${esc(n.scheme)}${n.in_admins ? " (is a " + esc(g.admin_group || "admin") + ")" : ""}</div>`).join("")}
+    </div>` : "";
+
   return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}</div>`
-    + juBanner
+    + groupsPanel + nonMemberBanner + juBanner
     + d.schemes.map((s) => `
       <details class="filebox">
         <summary>🎫 <b>${esc(s.name)}</b> ${extLink(s.url)}
@@ -2197,8 +2216,9 @@ function accJiraHtml(d) {
           <span class="ci-meta">${esc(s.description || "")}</span></summary>
         <div style="padding:8px 12px">
           ${s.holders.map((h) => `
-            <div class="acc-acl"><span class="acc-ident ${h.flag ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
-              ${h.flag ? '<span class="chip chip-red" title="JIRAUSER-keyed user grant">🚩</span>' : ""}</span>
+            <div class="acc-acl"><span class="acc-ident ${h.flag || h.not_member ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
+              ${h.flag ? '<span class="chip chip-red" title="JIRAUSER-keyed user grant">🚩</span>' : ""}
+              ${h.not_member ? '<span class="chip chip-red" title="not a jira-users member">⚠ non-member</span>' : ""}</span>
               ${permChips(h.permissions)}</div>`).join("")}
         </div>
       </details>`).join("");

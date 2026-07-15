@@ -168,7 +168,7 @@ def ado_projects(force: bool = False) -> dict:
                 return [{"id": p["id"], "coll": coll, "name": p["name"],
                          "description": (p.get("description") or "")[:160],
                          "url": _ado.project_url(coll, p["name"])}
-                        for p in data.get("value", [])]
+                        for p in _values(data) if p]
             except requests.RequestException:
                 return []
 
@@ -178,17 +178,19 @@ def ado_projects(force: bool = False) -> dict:
         # repo lists (id+name) + team counts per project, in parallel
         def proj_repos(p):
             try:
-                rl = [{"id": r["id"], "name": r["name"]} for r in _ado.coll_get(
-                    p["coll"], f"/{p['id']}/_apis/git/repositories").get("value", [])]
+                rl = [{"id": r["id"], "name": r["name"]}
+                      for r in (_ado.coll_get(
+                          p["coll"], f"/{p['id']}/_apis/git/repositories").get("value") or [])
+                      if r.get("id") and r.get("name")]
                 return sorted(rl, key=lambda r: r["name"].lower())  # deterministic cap
-            except requests.RequestException:
+            except Exception:  # noqa: BLE001 — one bad project must not fail the sweep
                 return []
 
         def proj_teamcount(p):
             try:
                 return len(_ado.coll_get(p["coll"], f"/_apis/projects/{p['id']}/teams",
-                                         {"$top": 500}).get("value", []))
-            except requests.RequestException:
+                                         {"$top": 500}).get("value") or [])
+            except Exception:  # noqa: BLE001
                 return 0
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:
@@ -213,10 +215,10 @@ def ado_projects(force: bool = False) -> dict:
                     p["coll"], f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
                     {"token": f"repoV2/{p['id']}/{r['id']}"})
                 aces = {}
-                for e in acl.get("value", []):
-                    aces.update(e.get("acesDictionary", {}))
+                for e in (acl.get("value") or []):
+                    aces.update(e.get("acesDictionary") or {})
                 return i, r["name"], aces
-            except requests.RequestException:
+            except Exception:  # noqa: BLE001
                 return i, r["name"], {}
 
         by_proj: dict[int, dict] = {}
@@ -235,14 +237,20 @@ def ado_projects(force: bool = False) -> dict:
         # throttled global batch can't desync the badge from the expanded view
         def score_one(i):
             p = projects[i]
-            raw = by_proj.get(i, {})
-            descs = sorted({d for aces in raw.values() for d in aces})
-            names_i = _resolve_identities(descs)
-            repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
-            return i, _project_access_analysis(repos, [])
+            try:
+                raw = by_proj.get(i, {})
+                descs = sorted({d for aces in raw.values() for d in aces})
+                names_i = _resolve_identities(descs)
+                repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
+                return i, _project_access_analysis(repos, [])
+            except Exception:  # noqa: BLE001 — degrade this project to unscored
+                return i, None
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             for i, an in pool.map(score_one, sorted(fully)):
+                if an is None:
+                    fully.discard(i)
+                    continue
                 projects[i].update(score=an["score"], grade=an["grade"],
                                    uniform=an["uniform"],
                                    pct_repo_specific=an["pct_repo_specific"])
@@ -282,6 +290,11 @@ def _demo_ado_projects() -> dict:
             "scored_repos": 9, "total_repos": 9}
 
 
+def _values(data) -> list:
+    """The 'value' array from an ADO response, resilient to None / null."""
+    return (data or {}).get("value") or []
+
+
 def _resolve_identities(descriptors: list[str]) -> dict[str, str]:
     """descriptor -> display name, batched to spare the identity service."""
     out: dict[str, str] = {}
@@ -289,10 +302,11 @@ def _resolve_identities(descriptors: list[str]) -> dict[str, str]:
         batch = descriptors[i:i + 50]
         try:
             data = _ado.get("/_apis/identities", {"descriptors": ",".join(batch)})
-            for ident in data.get("value", []):
-                out[ident.get("descriptor", "")] = (
-                    ident.get("providerDisplayName")
-                    or ident.get("customDisplayName") or "")
+            for ident in _values(data):
+                if ident:
+                    out[ident.get("descriptor", "")] = (
+                        ident.get("providerDisplayName")
+                        or ident.get("customDisplayName") or "")
         except requests.RequestException:
             continue
     return out
@@ -362,7 +376,7 @@ def ado_project_access(collection: str, project_id: str,
         try:
             tdata = _ado.coll_get(collection, f"/_apis/projects/{project_id}/teams",
                                   {"$top": 100})
-            for t in tdata.get("value", []):
+            for t in _values(tdata):
                 members = []
                 try:
                     data = _ado.coll_get(
@@ -370,7 +384,7 @@ def ado_project_access(collection: str, project_id: str,
                         f"/_apis/projects/{project_id}/teams/{t['id']}/members",
                         {"$top": 200})
                     members = [(m.get("identity") or m).get("displayName", "")
-                               for m in data.get("value", [])]
+                               for m in _values(data) if m]
                 except requests.RequestException:
                     pass
                 teams.append({"name": t.get("name", ""),
@@ -383,8 +397,8 @@ def ado_project_access(collection: str, project_id: str,
         # expanded score matches the badge exactly
         try:
             repo_list = sorted(
-                _ado.coll_get(collection,
-                              f"/{project_id}/_apis/git/repositories").get("value", []),
+                (r for r in _values(_ado.coll_get(
+                    collection, f"/{project_id}/_apis/git/repositories")) if r),
                 key=lambda r: r.get("name", "").lower())[:PROJECT_REPO_CAP]
         except requests.RequestException as exc:
             errors.append(f"repositories: {_short_http(exc)}")
@@ -398,10 +412,10 @@ def ado_project_access(collection: str, project_id: str,
                     collection, f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
                     {"token": f"repoV2/{project_id}/{rp['id']}"})
                 aces = {}
-                for entry in acl.get("value", []):
-                    aces.update(entry.get("acesDictionary", {}))
+                for entry in _values(acl):
+                    aces.update(entry.get("acesDictionary") or {})
                 return rp["name"], aces
-            except requests.RequestException:
+            except Exception:  # noqa: BLE001
                 return rp["name"], {}
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:  # parallel ACL reads
@@ -531,15 +545,26 @@ def jira_permission_schemes(force: bool = False) -> dict:
                       "permissions": ["Browse Projects", "Administer Projects"]},
                  ]},
             ]
+            # a scheme also grants a user who is NOT a jira-users member
+            schemes[1]["holders"].append(
+                {"holder": "user ext_contractor", "type": "user",
+                 "permissions": ["Browse Projects"], "not_member": True})
             flagged = [{"scheme": s["name"], "holder": h["holder"]}
                        for s in schemes for h in s["holders"] if h.get("flag")]
+            groups = {"admin_group": "jira-administrators",
+                      "users_group": "jira-users",
+                      "admins": ["alice", "bob"], "users_count": 5}
+            non_members = [{"scheme": "Restricted Scheme", "user": "ext_contractor",
+                            "in_admins": False}]
             return {"source": "demo", "schemes": schemes,
                     "jirauser_grants": flagged, "project_count": 3,
+                    "groups": groups, "non_member_grants": non_members,
                     "all_projects": [{"key": "DEVOPS", "name": "Platform"},
                                      {"key": "PLAT", "name": "Control"},
                                      {"key": "SEC", "name": "Security"}]}
         if not (settings.jira_base_url and settings.jira_user):
-            return {"source": "not configured", "schemes": [], "jirauser_grants": []}
+            return {"source": "not configured", "schemes": [], "jirauser_grants": [],
+                    "groups": {}, "non_member_grants": []}
         auth = (settings.jira_user, settings.jira_password)
         base = settings.jira_base_url.rstrip("/")
 
@@ -556,9 +581,19 @@ def jira_permission_schemes(force: bool = False) -> dict:
         except requests.RequestException:
             pass
 
+        # instance-level groups: admins (shown) + jira-users (the membership
+        # test — being in it = a real licensed Jira user)
+        admin_members = _jira_group_members(jget, settings.jira_admin_group)
+        users_members = _jira_group_members(jget, settings.jira_users_group)
+        admin_keys = {m["key"].lower() for m in admin_members if m.get("key")} | \
+                     {m["name"].lower() for m in admin_members if m.get("name")}
+        users_keys = {m["key"].lower() for m in users_members if m.get("key")} | \
+                     {m["name"].lower() for m in users_members if m.get("name")}
+
         data = jget("/rest/api/2/permissionscheme", {"expand": "permissions"})
         schemes = []
         jirauser_grants = []
+        user_holders = []  # (scheme, label, param) for the membership cross-check
         for s in data.get("permissionSchemes", []):
             by_holder: dict[tuple, list[str]] = {}
             holder_meta: dict[tuple, dict] = {}
@@ -569,17 +604,33 @@ def jira_permission_schemes(force: bool = False) -> dict:
                 holder_meta[(label, htype)] = {"param": param}
             holders = []
             for k, v in sorted(by_holder.items()):
-                is_ju = k[1] == "user" and holder_meta[k]["param"].upper().startswith("JIRAUSER")
+                param = holder_meta[k]["param"]
+                is_ju = k[1] == "user" and param.upper().startswith("JIRAUSER")
+                not_member = (k[1] == "user" and users_keys
+                              and param.lower() not in users_keys)
                 holders.append({"holder": k[0], "type": k[1],
-                                "permissions": sorted(set(v)), "flag": is_ju})
+                                "permissions": sorted(set(v)), "flag": is_ju,
+                                "not_member": not_member})
                 if is_ju:
-                    jirauser_grants.append({"scheme": s.get("name", ""),
-                                            "holder": k[0]})
+                    jirauser_grants.append({"scheme": s.get("name", ""), "holder": k[0]})
+                if k[1] == "user":
+                    user_holders.append((s.get("name", ""), k[0], param))
             schemes.append({
                 "id": s.get("id"), "name": s.get("name", ""),
                 "description": (s.get("description") or "")[:200],
                 "url": f"{base}/secure/admin/EditPermissionScheme!default.jspa?schemeId={s.get('id')}",
                 "projects": [], "holders": holders})
+
+        # users granted in a scheme who are NOT jira-users members (can't
+        # actually log in / not a licensed member) — only meaningful if we
+        # could read the jira-users membership
+        non_member_grants = []
+        if users_keys:
+            for scheme_name, label, param in user_holders:
+                if param.lower() not in users_keys:
+                    non_member_grants.append({
+                        "scheme": scheme_name, "user": label.replace("user ", ""),
+                        "in_admins": param.lower() in admin_keys})
 
         # scheme -> projects: paginate ALL projects (the 'unassigned' bug came
         # from an 80-project cap) and resolve each project's scheme in parallel
@@ -599,11 +650,43 @@ def jira_permission_schemes(force: bool = False) -> dict:
                         {"key": p["key"], "url": f"{base}/browse/{p['key']}"})
         for s in schemes:
             s["projects"].sort(key=lambda x: x["key"])
+        groups = {
+            "admin_group": settings.jira_admin_group,
+            "users_group": settings.jira_users_group,
+            "admins": sorted({m.get("displayName") or m.get("name")
+                              for m in admin_members if (m.get("displayName") or m.get("name"))}),
+            "users_count": len(users_members),
+            "users_readable": bool(users_members)}
         return {"source": "live", "schemes": schemes,
                 "jirauser_grants": jirauser_grants,
+                "groups": groups, "non_member_grants": non_member_grants,
                 "project_count": len(projects), "projects_truncated": truncated,
                 "all_projects": projects}
     return _cached("jira:schemes", force, build)
+
+
+def _jira_group_members(jget, group: str, cap: int = 20000) -> list[dict]:
+    """Paginated members of a Jira group. Empty when the group is missing or
+    the account can't read it (then the membership cross-check is skipped)."""
+    if not group:
+        return []
+    out: list[dict] = []
+    start = 0
+    try:
+        while len(out) < cap:
+            page = jget("/rest/api/2/group/member",
+                        {"groupname": group, "startAt": start,
+                         "maxResults": 50, "includeInactiveUsers": "true"})
+            values = page.get("values", []) if isinstance(page, dict) else []
+            out.extend({"name": m.get("name", ""), "key": m.get("key", ""),
+                        "displayName": m.get("displayName", ""),
+                        "active": m.get("active", True)} for m in values)
+            if not values or (isinstance(page, dict) and page.get("isLast")):
+                break
+            start += len(values)
+    except requests.RequestException:
+        return out
+    return out
 
 
 def _jira_all_projects(jget) -> tuple[list[dict], bool]:
@@ -781,13 +864,13 @@ def access_summary(force: bool = False) -> dict:
                 repos = teams = 0
                 users: set[str] = set()
                 try:
-                    repos = len(_ado.coll_get(c, "/_apis/git/repositories").get("value", []))
+                    repos = len(_values(_ado.coll_get(c, "/_apis/git/repositories")))
                 except requests.RequestException:
                     pass
                 try:
                     td = _ado.coll_get(c, "/_apis/teams",
                                        {"$top": 1000, "api-version": "6.0-preview.3"})
-                    teams = len(td.get("value", []))
+                    teams = len(_values(td))
                 except requests.RequestException:
                     pass
                 return repos, teams, users
@@ -844,10 +927,11 @@ def _ado_named_users(colls: list[str], team_cap: int = 150) -> tuple[int, bool]:
     teams: list[tuple[str, str]] = []  # (collection, team_id)
     for c in colls:
         try:
-            for t in _ado.coll_get(c, "/_apis/teams",
-                                   {"$top": 1000, "api-version": "6.0-preview.3"}
-                                   ).get("value", []):
-                teams.append((c, t.get("id", ""), t.get("projectId", "")))
+            for t in _values(_ado.coll_get(
+                    c, "/_apis/teams",
+                    {"$top": 1000, "api-version": "6.0-preview.3"})):
+                if t:
+                    teams.append((c, t.get("id", ""), t.get("projectId", "")))
         except requests.RequestException:
             continue
     capped = teams[:team_cap]
@@ -859,7 +943,7 @@ def _ado_named_users(colls: list[str], team_cap: int = 150) -> tuple[int, bool]:
             data = _ado.coll_get(c, f"/_apis/projects/{pid}/teams/{tid}/members",
                                  {"$top": 500})
             return [(m.get("identity") or m).get("displayName", "")
-                    for m in data.get("value", [])]
+                    for m in _values(data) if m]
         except requests.RequestException:
             return []
 

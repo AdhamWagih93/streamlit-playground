@@ -38,6 +38,8 @@ ai:
 jira:
   baseUrl: "https://jira.mycorp.local"
   projectKey: "DEVOPS"
+  adminGroup: "jira-administrators"   # instance groups shown/cross-checked in Access
+  usersGroup: "jira-users"
   boardStatuses: "Open,In Progress,Resolved,Closed"
   doneStatuses: "Closed"
   reviewStatuses: "Resolved"
