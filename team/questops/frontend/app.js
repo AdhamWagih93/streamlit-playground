@@ -2112,6 +2112,9 @@ function accAdoHtml(d) {
                 <span class="acc-proj-stats">
                   ${p.uniform === true ? '<span class="chip chip-green">uniform</span>'
                     : p.uniform === false ? `<span class="chip chip-amber">repo-specific ${p.pct_repo_specific}%</span>` : ""}
+                  ${p.team ? (p.team_ok
+                    ? `<span class="chip chip-green" title="[${esc(p.team)}] fully granted, no out-of-team access">✓ team [${esc(p.team)}]</span>`
+                    : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
                 </span></summary>
@@ -2133,9 +2136,21 @@ function accAdoProjectHtml(d) {
         ? '<span class="chip chip-green">✓ uniform access</span>'
         : `<span class="chip chip-amber">repo-specific access</span>`)
     : "";
+  const tv = an.team_validation;
+  const teamPanel = tv ? `
+    <div class="acc-team ${tv.ldap_resolved && tv.group_granted && !tv.non_team_count ? "team-ok" : "team-bad"}">
+      <b>👥 team [${esc(tv.team)}]</b>
+      ${!tv.ldap_resolved ? '<span class="chip chip-amber">LDAP not resolved — validation skipped</span>' : `
+        <span class="chip">${tv.member_count} LDAP member(s)</span>
+        <span class="chip ${tv.group_granted ? "chip-green" : "chip-red"}">${tv.group_granted ? "✓ whole team granted" : "✗ team group NOT granted"}</span>
+        <span class="chip ${tv.non_team_count ? "chip-red" : "chip-green"}">${tv.non_team_count ? tv.non_team_count + " granted but NOT in team" : "✓ all grantees in team"}</span>`}
+      ${(tv.non_team_grants || []).length ? `<div class="ci-meta" style="margin-top:4px">out-of-team: ${tv.non_team_grants.map(esc).join(", ")}</div>` : ""}
+    </div>` : "";
   const analysisPanel = an.total_repos ? `
     <div class="acc-score-line">${scoreBadge(an.score, an.grade)}
-      <span class="ci-meta">access-hygiene score — uniform access, low repo-specific sprawl &amp; low admin concentration score higher</span></div>
+      <span class="ci-meta">access-hygiene score — uniform access, low repo-specific sprawl, low admin concentration &amp; valid [TEAM] access score higher</span></div>
+    ${teamPanel}` : "";
+  const restPanel = an.total_repos ? `
     <div class="acc-analysis">
       <div class="stat-tile"><b>${an.members}</b><span>members</span></div>
       <div class="stat-tile"><b>${an.teams}</b><span>teams</span></div>
@@ -2173,7 +2188,7 @@ function accAdoProjectHtml(d) {
     </div>`).join("") || `<div class="empty">no repositories</div>`;
   const errs = (d.errors || []).length
     ? `<div class="kpi-note" style="color:var(--red)">⚠ some ADO calls failed: ${d.errors.map(esc).join(" · ")}</div>` : "";
-  return `${errs}${analysisPanel}
+  return `${errs}${analysisPanel}${restPanel}
     <h4 class="acc-h">teams &amp; members</h4>${teams}
     <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account &amp; excluded grants hidden)${d.repo_cap_note ? " · first 200 repos" : ""}</span></h4>${repos}`;
 }
@@ -2187,14 +2202,23 @@ function accJiraHtml(d) {
     </div>` : "";
 
   const g = d.groups || {};
+  const memberList = (arr, cls) => (arr || []).length
+    ? `<div class="acc-members" style="margin-top:4px">${arr.map((a) => `<span class="chip ${cls || ""}">${esc(a)}</span>`).join(" ")}</div>`
+    : '<div class="ci-meta">none / not readable</div>';
   const groupsPanel = (g.admin_group || g.users_group) ? `
-    <details class="filebox" style="margin-bottom:8px">
-      <summary>👑 instance groups — <b>${esc(g.admin_group || "")}</b> (${(g.admins || []).length}) ·
-        <b>${esc(g.users_group || "")}</b> (${g.users_readable ? g.users_count + " members" : "not readable"})</summary>
+    <div class="stat-tiles" style="margin-bottom:8px">
+      <div class="stat-tile"><b class="${g.admins_count ? "pct-bad" : ""}">${g.admins_readable ? (g.admins_count ?? (g.admins||[]).length) : "?"}</b>
+        <span>${esc(g.admin_group || "administrators")}</span></div>
+      <div class="stat-tile"><b>${g.users_readable ? g.users_count : "?"}</b>
+        <span>${esc(g.users_group || "jira-users")}</span></div>
+    </div>
+    <details class="filebox" style="margin-bottom:8px" open>
+      <summary>👑 instance group membership</summary>
       <div style="padding:8px 12px">
-        <div class="acc-h">${esc(g.admin_group || "administrators")}</div>
-        ${(g.admins || []).map((a) => `<span class="chip chip-red">${esc(a)}</span>`).join(" ") || '<span class="ci-meta">none / not readable</span>'}
-        ${!g.users_readable ? `<div class="kpi-note">⚠ couldn't read ${esc(g.users_group || "jira-users")} membership — the non-member cross-check is skipped (account needs to browse the group)</div>` : ""}
+        <div class="acc-h">${esc(g.admin_group || "administrators")} — ${(g.admins||[]).length} shown</div>
+        ${memberList(g.admins, "chip-red")}
+        <div class="acc-h" style="margin-top:10px">${esc(g.users_group || "jira-users")} — ${g.users_readable ? (g.users_count + " total, " + (g.users||[]).length + " shown") : "not readable"}</div>
+        ${g.users_readable ? memberList(g.users, "") : `<div class="kpi-note">⚠ couldn't read ${esc(g.users_group || "jira-users")} membership — the non-member cross-check is skipped (the account needs permission to browse the group)</div>`}
       </div>
     </details>` : "";
   const nonMembers = (d.non_member_grants || []);

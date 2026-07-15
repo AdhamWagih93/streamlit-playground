@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
+from ..auth import ldap_group_members
 from ..config import settings
 
 TTL = 900
@@ -121,14 +122,20 @@ def _grade(score) -> str:
 
 
 def _score_project(an: dict):
-    """0-100 access-hygiene score: uniform, low repo-specific sprawl and low
-    admin concentration score high. None when the project has no repos."""
+    """0-100 access-hygiene score: uniform access, low repo-specific sprawl,
+    low admin concentration, and (when a [TEAM] is set) the team group being
+    granted with no out-of-team grantees, all score high. None = no repos."""
     if not an.get("total_repos"):
         return None
     s = 100.0
     s -= an["pct_repo_specific"] * 0.4                       # up to -40
     s -= min(max(an["distinct_acl_sets"] - 1, 0), 10) * 3    # up to -30
     s -= an["pct_admin"] * 0.3                               # up to -30
+    tv = an.get("team_validation")
+    if tv and tv.get("ldap_resolved"):
+        if not tv["group_granted"]:
+            s -= 15                                          # team group not granted
+        s -= min(tv["non_team_count"], 5) * 6               # up to -30 out-of-team grants
     return max(0, min(100, round(s)))
 
 
@@ -233,6 +240,17 @@ def ado_projects(force: bool = False) -> dict:
         fully = {i for i, p in enumerate(projects)
                  if counts_in_sweep.get(i, 0) == len(p["_repolist"])}
 
+        # LDAP members for every [TEAM] referenced by a scored project, cached
+        teams_needed = {_team_from_desc(projects[i].get("description", ""))
+                        for i in fully}
+        teams_needed.discard("")
+        ldap_by_team: dict[str, list] = {}
+        if teams_needed:
+            with ThreadPoolExecutor(max_workers=POOL) as pool:
+                for t, mem in pool.map(lambda t: (t, ldap_group_members(t)),
+                                       sorted(teams_needed)):
+                    ldap_by_team[t] = mem
+
         # resolve identities PER PROJECT — identical to the detail path, so a
         # throttled global batch can't desync the badge from the expanded view
         def score_one(i):
@@ -242,7 +260,9 @@ def ado_projects(force: bool = False) -> dict:
                 descs = sorted({d for aces in raw.values() for d in aces})
                 names_i = _resolve_identities(descs)
                 repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
-                return i, _project_access_analysis(repos, [])
+                desc = p.get("description", "")
+                mem = ldap_by_team.get(_team_from_desc(desc), [])
+                return i, _project_access_analysis(repos, [], desc, mem)
             except Exception:  # noqa: BLE001 — degrade this project to unscored
                 return i, None
 
@@ -251,9 +271,16 @@ def ado_projects(force: bool = False) -> dict:
                 if an is None:
                     fully.discard(i)
                     continue
+                tv = an.get("team_validation")
                 projects[i].update(score=an["score"], grade=an["grade"],
                                    uniform=an["uniform"],
-                                   pct_repo_specific=an["pct_repo_specific"])
+                                   pct_repo_specific=an["pct_repo_specific"],
+                                   team=(tv or {}).get("team"),
+                                   team_ok=(tv is not None and tv["ldap_resolved"]
+                                            and tv["group_granted"]
+                                            and tv["non_team_count"] == 0),
+                                   team_group_granted=(tv or {}).get("group_granted"),
+                                   team_non_member_count=(tv or {}).get("non_team_count"))
         for i, p in enumerate(projects):
             if i not in fully:
                 p.update(score=None, grade="?", uniform=None,
@@ -272,16 +299,22 @@ def _demo_ado_projects() -> dict:
     # p3 Sandbox: uniform — exercises the scoring + rollup
     projects = [
         {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
-         "description": "Product delivery", "repos": 6, "teams": 3,
+         "description": "[platform-devs] Product delivery", "repos": 6, "teams": 3,
          "score": 62, "grade": "C", "uniform": False, "pct_repo_specific": 100,
+         "team": "platform-devs", "team_ok": False, "team_group_granted": True,
+         "team_non_member_count": 1,
          "url": "https://ado.demo/DefaultCollection/Platform"},
         {"id": "p2", "coll": "DefaultCollection", "name": "Control",
-         "description": "Team config repos", "repos": 2, "teams": 1,
+         "description": "[control-owners] Team config repos", "repos": 2, "teams": 1,
          "score": 94, "grade": "A", "uniform": True, "pct_repo_specific": 50,
+         "team": "control-owners", "team_ok": True, "team_group_granted": True,
+         "team_non_member_count": 0,
          "url": "https://ado.demo/DefaultCollection/Control"},
         {"id": "p3", "coll": "Research", "name": "Sandbox",
-         "description": "Experiments", "repos": 1, "teams": 1,
-         "score": 100, "grade": "A", "uniform": True, "pct_repo_specific": 100,
+         "description": "[research-team] Experiments", "repos": 1, "teams": 1,
+         "score": 78, "grade": "C", "uniform": True, "pct_repo_specific": 100,
+         "team": "research-team", "team_ok": False, "team_group_granted": False,
+         "team_non_member_count": 0,
          "url": "https://ado.demo/Research/Sandbox"},
     ]
     colls = ["DefaultCollection", "Research"]
@@ -356,8 +389,12 @@ def _demo_project_access(project_id: str) -> dict:
         repos.append({"name": r["name"], "acls": acls,
                       "signature": _acl_signature(acls),
                       "url": f"https://ado.demo/{coll}/{project_id}/_git/{r['name']}"})
+    demo_desc = {"p1": "[platform-devs] Product delivery",
+                 "p2": "[control-owners] Team config repos",
+                 "p3": "[research-team] Experiments"}.get(project_id, "")
+    ldap_members = ldap_group_members(_team_from_desc(demo_desc))
     return {"source": "demo", "teams": teams, "repos": repos,
-            "analysis": _project_access_analysis(repos, teams)}
+            "analysis": _project_access_analysis(repos, teams, demo_desc, ldap_members)}
 
 
 def ado_project_access(collection: str, project_id: str,
@@ -424,7 +461,15 @@ def ado_project_access(collection: str, project_id: str,
                 descriptors.update(aces.keys())
         names = _resolve_identities(sorted(descriptors))
         repos = _build_repos(collection, project_id, repo_list, raw_acls, names)
-        analysis = _project_access_analysis(repos, teams)
+        # project description carries the [TEAM] LDAP group for validation
+        description = ""
+        try:
+            description = (_ado.coll_get(
+                collection, f"/_apis/projects/{project_id}") or {}).get("description") or ""
+        except requests.RequestException as exc:
+            errors.append(f"project: {_short_http(exc)}")
+        ldap_members = ldap_group_members(_team_from_desc(description))
+        analysis = _project_access_analysis(repos, teams, description, ldap_members)
         return {"source": "live", "teams": teams, "repos": repos,
                 "analysis": analysis,
                 "repo_cap_note": len(repo_list) >= PROJECT_REPO_CAP, "errors": errors}
@@ -459,7 +504,55 @@ def _build_repos(collection: str, project_id: str, repo_list: list[dict],
     return repos
 
 
-def _project_access_analysis(repos: list[dict], teams: list[dict]) -> dict:
+def _team_from_desc(description: str) -> str:
+    """The LDAP group in a '[TEAM] ...' project description."""
+    m = re.match(r"\s*\[([^\]]+)\]", description or "")
+    return m.group(1).strip() if m else ""
+
+
+def _norm_ident(s: str) -> str:
+    """Last path segment of an identity, normalized for member matching."""
+    s = re.split(r"[\\/]", (s or "").strip())[-1]
+    return re.sub(r"[\s_\-.]+", "", s.lower())
+
+
+def _team_validation(description: str, repos: list[dict],
+                     ldap_members: list[dict] | None) -> dict | None:
+    """Validate a project's access against its [TEAM] LDAP group:
+      - is the TEAM group itself granted (whole-group access)?
+      - is every individually-granted identity actually a TEAM member?"""
+    team = _team_from_desc(description)
+    if not team:
+        return None
+    members = ldap_members or []
+    member_keys = {_norm_ident(m["username"]) for m in members} | \
+                  {_norm_ident(m["display_name"]) for m in members}
+    team_key = _norm_ident(team)
+
+    granted = {}  # identity -> tier (highest)
+    order = {"admin": 3, "write": 2, "read": 1, "other": 0}
+    for r in repos:
+        for a in r["acls"]:
+            cur = granted.get(a["identity"])
+            if cur is None or order[a["tier"]] > order[cur]:
+                granted[a["identity"]] = a["tier"]
+
+    group_granted = any(team_key in _norm_ident(i) or team_key == _norm_ident(i)
+                        for i in granted)
+    # identities that are neither the team group nor a team member
+    non_team = sorted(i for i in granted
+                      if team_key not in _norm_ident(i)
+                      and _norm_ident(i) not in member_keys)
+    return {"team": team, "group_granted": group_granted,
+            "member_count": len(members),
+            "ldap_resolved": bool(members),
+            "non_team_grants": non_team[:50],
+            "non_team_count": len(non_team)}
+
+
+def _project_access_analysis(repos: list[dict], teams: list[dict],
+                             description: str = "",
+                             ldap_members: list[dict] | None = None) -> dict:
     """Is access UNIFORM across the project or REPO-SPECIFIC? Plus the many
     percentages: repo-specific %, and the identity privilege mix."""
     total = len(repos)
@@ -492,6 +585,7 @@ def _project_access_analysis(repos: list[dict], teams: list[dict]) -> dict:
         "tier_pct": {t: _pct(counts[t], ids) for t in counts},
         "pct_admin": _pct(counts["admin"], ids),
     }
+    an["team_validation"] = _team_validation(description, repos, ldap_members)
     an["score"] = _score_project(an)
     an["grade"] = _grade(an["score"])
     return an
@@ -553,7 +647,11 @@ def jira_permission_schemes(force: bool = False) -> dict:
                        for s in schemes for h in s["holders"] if h.get("flag")]
             groups = {"admin_group": "jira-administrators",
                       "users_group": "jira-users",
-                      "admins": ["alice", "bob"], "users_count": 5}
+                      "admins": ["Alice Nasr", "Bob Farid"], "admins_count": 2,
+                      "admins_readable": True,
+                      "users": ["Alice Nasr", "Bob Farid", "Carol Adel",
+                                "Dave Samir", "Erin Zaki"],
+                      "users_count": 5, "users_readable": True}
             non_members = [{"scheme": "Restricted Scheme", "user": "ext_contractor",
                             "in_admins": False}]
             return {"source": "demo", "schemes": schemes,
@@ -650,11 +748,16 @@ def jira_permission_schemes(force: bool = False) -> dict:
                         {"key": p["key"], "url": f"{base}/browse/{p['key']}"})
         for s in schemes:
             s["projects"].sort(key=lambda x: x["key"])
+        def _names(ms):
+            return sorted({(m.get("displayName") or m.get("name")) for m in ms
+                           if (m.get("displayName") or m.get("name"))})
         groups = {
             "admin_group": settings.jira_admin_group,
             "users_group": settings.jira_users_group,
-            "admins": sorted({m.get("displayName") or m.get("name")
-                              for m in admin_members if (m.get("displayName") or m.get("name"))}),
+            "admins": _names(admin_members),
+            "admins_count": len(admin_members),
+            "admins_readable": bool(admin_members),
+            "users": _names(users_members)[:500],
             "users_count": len(users_members),
             "users_readable": bool(users_members)}
         return {"source": "live", "schemes": schemes,

@@ -86,6 +86,68 @@ def list_group_members() -> list[dict]:
         conn.unbind()
 
 
+_LDAP_GROUP_CACHE: dict = {}  # cn -> {"at": ts, "members": [...]}
+_LDAP_GROUP_TTL = 3600
+
+# demo LDAP groups referenced by the demo ADO project descriptions ([TEAM])
+_DEMO_LDAP_GROUPS = {
+    "platform-devs": ["Alice Nasr", "Bob Farid", "Carol Adel", "Dave Samir"],
+    "control-owners": ["Alice Nasr", "Bob Farid"],
+    "research-team": ["Carol Adel"],
+}
+
+
+def ldap_group_members(cn: str) -> list[dict]:
+    """Members of an arbitrary LDAP group by its CN (used for ADO project
+    [TEAM] validation). Cached 1h; LDAP outages return the stale/empty set
+    rather than raising."""
+    import time
+    cn = (cn or "").strip()
+    if not cn:
+        return []
+    hit = _LDAP_GROUP_CACHE.get(cn.lower())
+    if hit and time.time() - hit["at"] < _LDAP_GROUP_TTL:
+        return hit["members"]
+    if settings.demo_mode:
+        members = [{"username": m.split()[0].lower(), "display_name": m}
+                   for m in _DEMO_LDAP_GROUPS.get(cn.lower(), [])]
+        _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": members}
+        return members
+    if not (settings.ldap_url and settings.ldap_bind_dn):
+        return []
+    try:
+        import ldap3
+        esc = ldap3.utils.conv.escape_filter_chars
+        server = ldap3.Server(settings.ldap_url, get_info=ldap3.NONE)
+        conn = ldap3.Connection(server, user=settings.ldap_bind_dn,
+                                password=settings.ldap_bind_password, auto_bind=True)
+        try:
+            # resolve the group's DN from its CN, then everyone memberOf it
+            conn.search(settings.ldap_base_dn,
+                        f"(&(|(objectClass=group)(objectClass=groupOfNames))(cn={esc(cn)}))",
+                        attributes=["distinguishedName"])
+            if not conn.entries:
+                members = []
+            else:
+                gdn = conn.entries[0].entry_dn
+                conn.search(settings.ldap_base_dn, f"(memberOf={esc(gdn)})",
+                            attributes=[settings.ldap_user_attr, "displayName"])
+                members = []
+                for e in conn.entries:
+                    uname = (str(getattr(e, settings.ldap_user_attr))
+                             if settings.ldap_user_attr in e else "")
+                    if uname:
+                        members.append({"username": uname.lower(),
+                                        "display_name": str(e.displayName)
+                                        if "displayName" in e else uname})
+        finally:
+            conn.unbind()
+    except Exception:  # noqa: BLE001 — LDAP down: don't break the access page
+        return hit["members"] if hit else []
+    _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": members}
+    return members
+
+
 _ROSTER_CACHE: dict = {"at": 0.0, "rows": []}
 _ROSTER_TTL = 600  # seconds
 
