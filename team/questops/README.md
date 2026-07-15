@@ -50,11 +50,14 @@ grind (tickets, red builds, reviews) into XP, quests, streaks and badges.
   arguments and ansible semantics (`roles:`, `include_role`, `import_playbook`,
   role dependencies). Per-pipeline dependency trees, a **used vs unused** report
   (cleanup candidates), a searchable node matrix, and ambiguous/dynamic-call notes.
-- **Access Management** — one page for who-can-do-what: ADO per-project teams +
-  per-repository ACLs (allow/deny bitmasks decoded), Jira permission schemes with
-  their project assignments and per-holder grants, and Jenkins matrix-based RBAC
-  parsed from job/folder configs. Aggressively cached (15 min, lazy per-project
-  expansion, shared config cache) so source systems are never hammered.
+- **Access Management** — one page for who-can-do-what across the WHOLE ADO instance
+  (all collections), Jira and Jenkins: ADO per-project teams + per-repository ACLs
+  (allow/deny bitmasks decoded; grants to the QuestOps service account hidden; deep
+  links to projects/repos), Jira permission schemes with every assigned project
+  (paginated over all projects — no cap), per-holder grants, JIRAUSER-keyed user
+  grants flagged, and links to each scheme and project, and Jenkins matrix-based
+  RBAC including the GLOBAL strategy (root config.xml) plus per-job/folder matrices.
+  Aggressively cached (15 min, lazy per-project expansion, bounded-parallel fetches).
 - **Upgrade checker** — detects the running version of each integration (Jenkins,
   Elasticsearch, Jira, PostgreSQL, Ollama) and compares it against the latest LTS /
   supported line (endoflife.date / GitHub releases); one click files a prioritized
@@ -109,7 +112,7 @@ credentials. Live-mode behavior per integration is in `backend/app/integrations/
 | Jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN`, `JENKINS_LONG_RUNNING_FACTOR`, `JENKINS_FAILURE_WINDOW_DAYS`, `JENKINS_IGNORE` |
 | Elasticsearch | `ES_URL`, `ES_API_KEY`, `JENKINS_KPI_INDEX` (+ `KPI_SYNC_MINUTES`, `TZ` for the load countdown), `ERROR_ANALYSIS_INDEX`, `ERROR_ANALYSIS_DAYS` |
 | LDAP | `LDAP_URL`, service `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD`, `LDAP_BASE_DN`, `LDAP_REQUIRED_GROUP` (one team group: login + roster), `MEMBER_USERNAMES` (everyone else is approver) |
-| Repositories page | `ADO_URL`, `ADO_USER`, `ADO_PASSWORD` (git clone/pull), `ADO_PAT` (REST browse; each falls back to the other) — repos themselves are added from the UI |
+| Repositories page | `ADO_URL` (ADO **instance** root — collections are enumerated), `ADO_USER`, `ADO_PASSWORD` (git clone/pull), `ADO_PAT` (REST browse; each falls back to the other) — repos added from the UI with a collection filter |
 | Upgrade checker | `UPGRADES_PROXY` (corporate proxy for the *only* outbound-internet calls), `UPGRADES_VERIFY_SSL`, `EOL_API_BASE` / `GITHUB_API_BASE` (internal mirrors) |
 | Repo actions | `GIT_TOKEN` (https push), `GIT_USER_NAME`, `GIT_USER_EMAIL` |
 

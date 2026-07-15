@@ -81,7 +81,8 @@ class Settings(BaseSettings):
     # PAT for the REST API but the real account password for git-over-http —
     # so both are definable and each falls back to the other.
     repos_workdir: str = "./repos"
-    ado_url: str = ""       # e.g. https://ado.mycorp.local/DefaultCollection
+    ado_url: str = ""       # the ADO INSTANCE root, e.g. https://ado.mycorp.local
+                            # (NOT a collection URL — collections are enumerated)
     ado_user: str = ""
     ado_password: str = ""  # used for GIT clone/pull/fetch
     ado_pat: str = ""       # used for the ADO REST API (repository browse)

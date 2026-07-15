@@ -22,10 +22,10 @@ def ado(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.ado_projects, refresh)
 
 
-@router.get("/ado/{project_id}")
-def ado_project(project_id: str, refresh: bool = False,
+@router.get("/ado/{collection}/{project_id}")
+def ado_project(collection: str, project_id: str, refresh: bool = False,
                 user: User = Depends(current_user)):
-    return _wrap(access.ado_project_access, project_id, refresh)
+    return _wrap(access.ado_project_access, collection, project_id, refresh)
 
 
 @router.get("/jira")

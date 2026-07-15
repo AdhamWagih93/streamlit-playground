@@ -102,7 +102,7 @@ repositories:
 # git clone/pull uses user+password; the REST browse uses user+pat —
 # leave one empty and the other is used for both.
 ado:
-  url: "https://ado.mycorp.local/DefaultCollection"
+  url: "https://ado.mycorp.local"   # INSTANCE root, not a collection
   user: "svc-questops"
   password: ""       # prefer app.existingSecret (key: ADO_PASSWORD)
   pat: ""            # prefer app.existingSecret (key: ADO_PAT)

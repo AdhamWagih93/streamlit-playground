@@ -456,6 +456,14 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .acc-members .chip { font-size: 10px; }
 .acc-loading { color: var(--amber); }
 .acc-elapsed { color: var(--faint); font-size: 11px; margin-left: 4px; }
+.acc-coll { margin-bottom: 10px; }
+.acc-coll-head { font: 600 11px var(--mono); color: var(--cyan); text-transform: uppercase;
+  letter-spacing: .06em; padding: 6px 4px 4px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.acc-ext { color: var(--cyan); margin: 0 4px; text-decoration: none; }
+.acc-ext:hover { color: var(--amber); }
+a.chip.chip-green { text-decoration: none; }
+a.chip.chip-green:hover { filter: brightness(1.3); }
+.acc-ident.acc-flag { color: var(--red); }
 
 /* ---------- upgrades ---------- */
 .upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }

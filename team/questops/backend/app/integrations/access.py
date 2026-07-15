@@ -54,29 +54,53 @@ def _decode_bits(mask: int) -> list[str]:
 
 
 # ================================================================= ADO
-def _ado_get(path: str, params: dict | None = None):
-    r = requests.get(f"{settings.ado_url.rstrip('/')}{path}",
-                     params={"api-version": "6.0", **(params or {})},
-                     auth=(settings.ado_user, settings.ado_rest_password),
-                     timeout=(HTTP_CONNECT, HTTP_TIMEOUT))
-    r.raise_for_status()
-    return r.json()
+from . import ado as _ado
+
+
+def _is_service_account(identity: str, descriptor: str = "") -> bool:
+    """Access granted to QO_ADO_USER is ignored — it's the tool's own account,
+    not a real grant worth reviewing."""
+    su = (settings.ado_user or "").strip().lower()
+    if not su:
+        return False
+    hay = f"{identity} {descriptor}".lower()
+    # match the bare account and common domain / UPN forms
+    return (su == identity.strip().lower()
+            or su in re.split(r"[\\/@ ]", hay))
 
 
 def ado_projects(force: bool = False) -> dict:
     def build():
         if settings.demo_mode:
             return {"source": "demo", "projects": [
-                {"id": "p1", "name": "Platform", "description": "Product delivery"},
-                {"id": "p2", "name": "Control", "description": "Team config repos"},
-            ]}
+                {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
+                 "description": "Product delivery",
+                 "url": "https://ado.demo/DefaultCollection/Platform"},
+                {"id": "p2", "coll": "DefaultCollection", "name": "Control",
+                 "description": "Team config repos",
+                 "url": "https://ado.demo/DefaultCollection/Control"},
+                {"id": "p3", "coll": "Research", "name": "Sandbox",
+                 "description": "Experiments",
+                 "url": "https://ado.demo/Research/Sandbox"},
+            ], "collections": ["DefaultCollection", "Research"]}
         if not settings.ado_url:
-            return {"source": "not configured", "projects": []}
-        data = _ado_get("/_apis/projects", {"$top": 200})
-        return {"source": "live", "projects": sorted(
-            ({"id": p["id"], "name": p["name"],
-              "description": (p.get("description") or "")[:160]}
-             for p in data.get("value", [])), key=lambda p: p["name"].lower())}
+            return {"source": "not configured", "projects": [], "collections": []}
+        colls = _ado.collections(force)
+
+        def coll_projects(coll):
+            try:
+                data = _ado.coll_get(coll, "/_apis/projects", {"$top": 500})
+                return [{"id": p["id"], "coll": coll, "name": p["name"],
+                         "description": (p.get("description") or "")[:160],
+                         "url": _ado.project_url(coll, p["name"])}
+                        for p in data.get("value", [])]
+            except requests.RequestException:
+                return []
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            projects = [p for group in pool.map(coll_projects, colls) for p in group]
+        projects.sort(key=lambda p: (p["coll"].lower(), p["name"].lower()))
+        return {"source": "live", "projects": projects, "collections": colls}
     return _cached("ado:projects", force, build)
 
 
@@ -86,8 +110,7 @@ def _resolve_identities(descriptors: list[str]) -> dict[str, str]:
     for i in range(0, len(descriptors), 50):
         batch = descriptors[i:i + 50]
         try:
-            data = _ado_get("/_apis/identities",
-                            {"descriptors": ",".join(batch)})
+            data = _ado.get("/_apis/identities", {"descriptors": ",".join(batch)})
             for ident in data.get("value", []):
                 out[ident.get("descriptor", "")] = (
                     ident.get("providerDisplayName")
@@ -98,16 +121,19 @@ def _resolve_identities(descriptors: list[str]) -> dict[str, str]:
 
 
 def _demo_project_access(project_id: str) -> dict:
+    su = settings.ado_user or "svc-questops"
     teams = [{"name": "Platform Team",
               "members": ["Alice Nasr", "Bob Farid", "Carol Adel", "Dave Samir"]},
              {"name": "Platform Admins", "members": ["Alice Nasr"]}]
-    repos = [
+    # a grant to the service account — MUST be filtered out of the output
+    raw_repos = [
         {"name": "Engine", "acls": [
             {"identity": "[Platform]\\Platform Team",
              "allow": ["Read", "Contribute", "Create branch", "Create tag"], "deny": []},
             {"identity": "[Platform]\\Platform Admins",
              "allow": ["Administer", "Read", "Contribute", "Force push",
                        "Edit policies", "Manage permissions"], "deny": []},
+            {"identity": su, "allow": ["Read", "Contribute"], "deny": []},
             {"identity": "[Platform]\\Contractors",
              "allow": ["Read"], "deny": ["Contribute", "Force push"]},
         ]},
@@ -116,45 +142,64 @@ def _demo_project_access(project_id: str) -> dict:
              "allow": ["Read", "Contribute"], "deny": []},
         ]},
     ]
+    coll = "DefaultCollection"
     if project_id == "p2":
         teams = [{"name": "Control Owners", "members": ["Alice Nasr", "Bob Farid"]}]
-        repos = [{"name": "team-configs", "acls": [
+        raw_repos = [{"name": "team-configs", "acls": [
             {"identity": "[Control]\\Control Owners",
              "allow": ["Administer", "Read", "Contribute"], "deny": []},
             {"identity": "[Control]\\Everyone", "allow": ["Read"], "deny": []},
         ]}]
+    elif project_id == "p3":
+        coll = "Research"
+        teams = [{"name": "Sandbox Team", "members": ["Carol Adel"]}]
+        raw_repos = [{"name": "prototypes", "acls": [
+            {"identity": "[Research]\\Sandbox Team",
+             "allow": ["Read", "Contribute"], "deny": []}]}]
+    repos = []
+    for r in raw_repos:
+        # demo has no real ADO_USER; filter against the injected demo account
+        acls = [a for a in r["acls"] if a["identity"].strip().lower() != su.strip().lower()]
+        repos.append({"name": r["name"], "acls": acls,
+                      "url": f"https://ado.demo/{coll}/{project_id}/_git/{r['name']}"})
     return {"source": "demo", "teams": teams, "repos": repos}
 
 
-def ado_project_access(project_id: str, force: bool = False) -> dict:
-    """Teams+members and per-repo ACLs for ONE project — fetched on expand."""
+def ado_project_access(collection: str, project_id: str,
+                       force: bool = False) -> dict:
+    """Teams+members and per-repo ACLs for ONE project — fetched on expand.
+    Access granted to QO_ADO_USER is filtered out."""
     def build():
         if settings.demo_mode:
             return _demo_project_access(project_id)
         if not settings.ado_url:
             return {"source": "not configured", "teams": [], "repos": []}
         teams = []
-        for t in _ado_get(f"/_apis/projects/{project_id}/teams",
-                          {"$top": 20}).get("value", []):
+        for t in _ado.coll_get(collection, f"/_apis/projects/{project_id}/teams",
+                               {"$top": 50}).get("value", []):
             members = []
             try:
-                data = _ado_get(f"/_apis/projects/{project_id}/teams/{t['id']}/members",
-                                {"$top": 50})
+                data = _ado.coll_get(
+                    collection,
+                    f"/_apis/projects/{project_id}/teams/{t['id']}/members",
+                    {"$top": 100})
                 members = [(m.get("identity") or m).get("displayName", "")
                            for m in data.get("value", [])]
             except requests.RequestException:
                 pass
-            teams.append({"name": t.get("name", ""), "members": sorted(filter(None, members))})
+            teams.append({"name": t.get("name", ""),
+                          "members": sorted(m for m in filter(None, members)
+                                            if not _is_service_account(m))})
 
-        repos = []
-        repo_list = _ado_get(f"/{project_id}/_apis/git/repositories").get("value", [])[:40]
+        repo_list = _ado.coll_get(collection, "/_apis/git/repositories").get("value", [])[:60]
         descriptors: set[str] = set()
         raw_acls: dict[str, dict] = {}
 
         def fetch_acl(rp):
             try:
-                acl = _ado_get(f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
-                               {"token": f"repoV2/{project_id}/{rp['id']}"})
+                acl = _ado.coll_get(
+                    collection, f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
+                    {"token": f"repoV2/{project_id}/{rp['id']}"})
                 aces = {}
                 for entry in acl.get("value", []):
                     aces.update(entry.get("acesDictionary", {}))
@@ -167,56 +212,82 @@ def ado_project_access(project_id: str, force: bool = False) -> dict:
                 raw_acls[name] = aces
                 descriptors.update(aces.keys())
         names = _resolve_identities(sorted(descriptors))
-        for rp in repo_list[:40]:
+        repos = []
+        for rp in repo_list:
             acls = []
             for desc, ace in (raw_acls.get(rp["name"]) or {}).items():
-                allow, deny = _decode_bits(ace.get("allow", 0)), _decode_bits(ace.get("deny", 0))
+                ident = names.get(desc) or desc[:60]
+                if _is_service_account(ident, desc):  # ignore QO_ADO_USER
+                    continue
+                allow = _decode_bits(ace.get("allow", 0))
+                deny = _decode_bits(ace.get("deny", 0))
                 if allow or deny:
-                    acls.append({"identity": names.get(desc) or desc[:60],
-                                 "allow": allow, "deny": deny})
+                    acls.append({"identity": ident, "allow": allow, "deny": deny})
             acls.sort(key=lambda a: a["identity"].lower())
-            repos.append({"name": rp["name"], "acls": acls})
+            repos.append({"name": rp["name"], "acls": acls,
+                          "url": _ado.repo_url(collection, project_id, rp["name"])})
         repos.sort(key=lambda r: r["name"].lower())
         return {"source": "live", "teams": teams, "repos": repos,
-                "repo_cap_note": len(repo_list) > 40}
-    return _cached(f"ado:project:{project_id}", force, build)
+                "repo_cap_note": len(repo_list) >= 60}
+    return _cached(f"ado:project:{collection}:{project_id}", force, build)
 
 
 # ================================================================= Jira
+JIRA_PROJECT_CAP = 5000  # safety bound; noted if exceeded
+
+
+def _jira_holder(holder: dict, role_names: dict) -> tuple[str, str, str]:
+    """(label, type, parameter). Jira DC user holders carry the internal
+    'JIRAUSER…' key — surfaced so it can be flagged."""
+    htype = holder.get("type", "?")
+    param = str(holder.get("parameter") or holder.get("value") or "")
+    if htype == "projectRole":
+        return f"role {role_names.get(param, param)}", htype, param
+    if htype == "group":
+        return f"group {param}", htype, param
+    if htype in ("user", "applicationRole"):
+        return f"user {param}" if htype == "user" else f"{htype} {param}", htype, param
+    return htype + (f" {param}" if param else ""), htype, param
+
+
 def jira_permission_schemes(force: bool = False) -> dict:
     def build():
         if settings.demo_mode:
-            return {"source": "demo", "schemes": [
+            base = "https://jira.demo"
+            def slink(sid): return f"{base}/secure/admin/EditPermissionScheme!default.jspa?schemeId={sid}"
+            def plink(k): return f"{base}/browse/{k}"
+            schemes = [
                 {"id": 1, "name": "Default Software Scheme",
                  "description": "Standard delivery-team permissions",
-                 "projects": ["DEVOPS", "PLAT"],
+                 "url": slink(1),
+                 "projects": [{"key": "DEVOPS", "url": plink("DEVOPS")},
+                              {"key": "PLAT", "url": plink("PLAT")}],
                  "holders": [
                      {"holder": "group devops-team", "type": "group",
                       "permissions": ["Browse Projects", "Create Issues",
-                                      "Edit Issues", "Add Comments",
-                                      "Transition Issues", "Resolve Issues"]},
+                                      "Edit Issues", "Transition Issues"]},
                      {"holder": "role Administrators", "type": "projectRole",
-                      "permissions": ["Administer Projects", "Delete Issues",
-                                      "Manage Sprints", "Edit All Comments"]},
-                     {"holder": "role Developers", "type": "projectRole",
-                      "permissions": ["Assignable User", "Close Issues",
-                                      "Schedule Issues", "Link Issues"]},
+                      "permissions": ["Administer Projects", "Delete Issues"]},
+                     {"holder": "user JIRAUSER10500", "type": "user", "flag": True,
+                      "permissions": ["Administer Projects", "Delete Issues"]},
                  ]},
                 {"id": 2, "name": "Restricted Scheme",
                  "description": "Read-mostly scheme for sensitive projects",
-                 "projects": ["SEC"],
+                 "url": slink(2),
+                 "projects": [{"key": "SEC", "url": plink("SEC")}],
                  "holders": [
                      {"holder": "group security-team", "type": "group",
-                      "permissions": ["Browse Projects", "Create Issues",
-                                      "Edit Issues", "Administer Projects"]},
-                     {"holder": "group devops-team", "type": "group",
-                      "permissions": ["Browse Projects"]},
+                      "permissions": ["Browse Projects", "Administer Projects"]},
                  ]},
-            ]}
+            ]
+            flagged = [{"scheme": s["name"], "holder": h["holder"]}
+                       for s in schemes for h in s["holders"] if h.get("flag")]
+            return {"source": "demo", "schemes": schemes,
+                    "jirauser_grants": flagged, "project_count": 3}
         if not (settings.jira_base_url and settings.jira_user):
-            return {"source": "not configured", "schemes": []}
+            return {"source": "not configured", "schemes": [], "jirauser_grants": []}
         auth = (settings.jira_user, settings.jira_password)
-        base = settings.jira_base_url
+        base = settings.jira_base_url.rstrip("/")
 
         def jget(path, params=None):
             r = requests.get(f"{base}{path}", params=params, auth=auth,
@@ -224,7 +295,6 @@ def jira_permission_schemes(force: bool = False) -> dict:
             r.raise_for_status()
             return r.json()
 
-        # global project-role id -> name (holder parameters reference ids)
         role_names = {}
         try:
             for role in jget("/rest/api/2/role"):
@@ -234,73 +304,103 @@ def jira_permission_schemes(force: bool = False) -> dict:
 
         data = jget("/rest/api/2/permissionscheme", {"expand": "permissions"})
         schemes = []
+        jirauser_grants = []
         for s in data.get("permissionSchemes", []):
             by_holder: dict[tuple, list[str]] = {}
+            holder_meta: dict[tuple, dict] = {}
             for perm in s.get("permissions", []):
-                holder = perm.get("holder") or {}
-                htype = holder.get("type", "?")
-                param = str(holder.get("parameter") or "")
-                if htype == "projectRole":
-                    label = f"role {role_names.get(param, param)}"
-                elif htype == "group":
-                    label = f"group {param}"
-                elif htype == "user":
-                    label = f"user {param}"
-                else:
-                    label = htype + (f" {param}" if param else "")
+                label, htype, param = _jira_holder(perm.get("holder") or {}, role_names)
                 pname = (perm.get("permission") or "").replace("_", " ").title()
                 by_holder.setdefault((label, htype), []).append(pname)
+                holder_meta[(label, htype)] = {"param": param}
+            holders = []
+            for k, v in sorted(by_holder.items()):
+                is_ju = k[1] == "user" and holder_meta[k]["param"].upper().startswith("JIRAUSER")
+                holders.append({"holder": k[0], "type": k[1],
+                                "permissions": sorted(set(v)), "flag": is_ju})
+                if is_ju:
+                    jirauser_grants.append({"scheme": s.get("name", ""),
+                                            "holder": k[0]})
             schemes.append({
                 "id": s.get("id"), "name": s.get("name", ""),
                 "description": (s.get("description") or "")[:200],
-                "projects": [],
-                "holders": [{"holder": k[0], "type": k[1],
-                             "permissions": sorted(set(v))}
-                            for k, v in sorted(by_holder.items())]})
+                "url": f"{base}/secure/admin/EditPermissionScheme!default.jspa?schemeId={s.get('id')}",
+                "projects": [], "holders": holders})
 
-        # scheme -> projects (bounded + parallel; the expensive part)
-        try:
-            projects = jget("/rest/api/2/project")[:80]
-            by_id = {s["id"]: s for s in schemes}
+        # scheme -> projects: paginate ALL projects (the 'unassigned' bug came
+        # from an 80-project cap) and resolve each project's scheme in parallel
+        by_id = {s["id"]: s for s in schemes}
+        projects, truncated = _jira_all_projects(jget)
 
-            def proj_scheme(p):
-                try:
-                    return p["key"], jget(
-                        f"/rest/api/2/project/{p['key']}/permissionscheme").get("id")
-                except requests.RequestException:
-                    return p["key"], None
+        def proj_scheme(p):
+            try:
+                return p, jget(f"/rest/api/2/project/{p['key']}/permissionscheme").get("id")
+            except requests.RequestException:
+                return p, None
 
-            with ThreadPoolExecutor(max_workers=POOL) as pool:
-                for key, sid in pool.map(proj_scheme, projects):
-                    if sid in by_id:
-                        by_id[sid]["projects"].append(key)
-        except requests.RequestException:
-            pass
-        return {"source": "live", "schemes": schemes}
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            for p, sid in pool.map(proj_scheme, projects):
+                if sid in by_id:
+                    by_id[sid]["projects"].append(
+                        {"key": p["key"], "url": f"{base}/browse/{p['key']}"})
+        for s in schemes:
+            s["projects"].sort(key=lambda x: x["key"])
+        return {"source": "live", "schemes": schemes,
+                "jirauser_grants": jirauser_grants,
+                "project_count": len(projects), "projects_truncated": truncated}
     return _cached("jira:schemes", force, build)
 
 
+def _jira_all_projects(jget) -> tuple[list[dict], bool]:
+    """Every project, paginated. Jira DC has thousands; the old single-call
+    /project cap of 80 is why assigned schemes showed 'unassigned'. Prefers
+    the paginated /project/search, falls back to the legacy full list."""
+    out: list[dict] = []
+    try:
+        start = 0
+        while len(out) < JIRA_PROJECT_CAP:
+            page = jget("/rest/api/2/project/search",
+                        {"startAt": start, "maxResults": 50})
+            values = page.get("values", [])
+            out.extend({"key": p["key"]} for p in values if p.get("key"))
+            if page.get("isLast") or not values:
+                return out, False
+            start += len(values)
+        return out, True
+    except requests.RequestException:
+        pass
+    # legacy Jira: /project returns them all in one shot
+    try:
+        allp = jget("/rest/api/2/project")
+        out = [{"key": p["key"]} for p in allp if p.get("key")]
+        return out[:JIRA_PROJECT_CAP], len(out) > JIRA_PROJECT_CAP
+    except requests.RequestException:
+        return [], False
+
+
 # ================================================================= Jenkins
-_PERM_RE = re.compile(r"<permission>([^<]+)</permission>")
+_PERM_RE = re.compile(r"<permission>\s*([^<]+?)\s*</permission>")
 
 
 def _parse_matrix_entries(xml_text: str) -> list[dict]:
-    """Matrix-auth <permission> entries. Forms seen in the wild:
-    'hudson.model.Item.Read:sid', 'USER:Item.Read:sid', 'GROUP:...:sid'."""
+    """Matrix-auth <permission> entries across plugin versions. Forms:
+    'hudson.model.Item.Read:sid' (legacy), 'USER:hudson.model.Item.Read:sid'
+    and 'GROUP:...:sid' (matrix-auth 2.x/3.x), and short ids like
+    'Overall/Read'. The type prefix and ambiguous-sid ':' are handled."""
     grants: dict[tuple, set] = {}
     for raw in _PERM_RE.findall(xml_text):
         parts = raw.split(":")
         sid_type = "unknown"
-        if parts[0] in ("USER", "GROUP") and len(parts) >= 3:
-            sid_type = parts[0].lower()
+        if parts and parts[0].upper() in ("USER", "GROUP", "EITHER") and len(parts) >= 3:
+            sid_type = "group" if parts[0].upper() == "GROUP" else (
+                "user" if parts[0].upper() == "USER" else "either")
             perm, sid = parts[1], ":".join(parts[2:])
         elif len(parts) >= 2:
             perm, sid = parts[0], ":".join(parts[1:])
         else:
             continue
-        # 'hudson.model.Item.Read' -> 'Item/Read'
-        bits = perm.split(".")
-        short = "/".join(bits[-2:]) if len(bits) >= 2 else perm
+        # 'hudson.model.Item.Read' -> 'Item/Read'; 'Overall/Read' kept as-is
+        short = "/".join(perm.split(".")[-2:]) if "." in perm else perm
         grants.setdefault((sid, sid_type), set()).add(short)
     return [{"sid": sid, "type": sid_type, "permissions": sorted(perms)}
             for (sid, sid_type), perms in sorted(grants.items())]
@@ -310,6 +410,12 @@ def jenkins_matrix(force: bool = False) -> dict:
     def build():
         if settings.demo_mode:
             return {"source": "demo", "items": [
+                {"path": "★ GLOBAL (instance-wide)", "entries": [
+                    {"sid": "authenticated", "type": "group",
+                     "permissions": ["Overall/Read"]},
+                    {"sid": "devops-admins", "type": "group",
+                     "permissions": ["Overall/Administer"]},
+                ]},
                 {"path": "(folder) payments-service", "entries": [
                     {"sid": "devops-team", "type": "group",
                      "permissions": ["Item/Build", "Item/Cancel", "Item/Read", "Item/Workspace"]},
@@ -319,14 +425,32 @@ def jenkins_matrix(force: bool = False) -> dict:
                 {"path": "platform-terraform/apply", "entries": [
                     {"sid": "platform-admins", "type": "group",
                      "permissions": ["Item/Build", "Item/Configure", "Item/Read"]},
-                    {"sid": "authenticated", "type": "group",
-                     "permissions": ["Item/Read"]},
                 ]},
-            ], "scanned": 2, "note": ""}
+            ], "scanned": 3, "note": "", "global_found": True}
         from . import jenkins as jk
         if not jk.is_live():
             return {"source": "not configured", "items": [], "scanned": 0, "note": ""}
         auth = (settings.jenkins_user, settings.jenkins_token) if settings.jenkins_user else None
+        items = []
+        note_parts = []
+
+        # GLOBAL strategy lives in the Jenkins ROOT config.xml — the most
+        # common place grants are defined, and why per-job scans found nothing
+        global_found = False
+        try:
+            rg = requests.get(f"{settings.jenkins_url}/config.xml", auth=auth,
+                              timeout=(HTTP_CONNECT, 15))
+            if rg.status_code in (401, 403):
+                note_parts.append("global grants need Overall/Administer (root config.xml was "
+                                  f"{rg.status_code}) — showing item-level only")
+            elif rg.ok:
+                gentries = _parse_matrix_entries(rg.text)
+                if gentries:
+                    items.append({"path": "★ GLOBAL (instance-wide)", "entries": gentries})
+                    global_found = True
+        except requests.RequestException:
+            pass
+
         names = jk.all_job_names()
         # jobs + every ancestor folder, deduped, bounded
         paths: list[str] = []
@@ -360,10 +484,15 @@ def jenkins_matrix(force: bool = False) -> dict:
 
         # parallel, bounded — 300 sequential config.xml fetches was minutes
         with ThreadPoolExecutor(max_workers=POOL) as pool:
-            items = [x for x in pool.map(fetch_one, capped) if x]
-        items.sort(key=lambda x: x["path"].lower())
-        note = (f"scanned the first {len(capped)} of {len(paths)} items"
-                if len(paths) > len(capped) else "")
+            item_results = [x for x in pool.map(fetch_one, capped) if x]
+        item_results.sort(key=lambda x: x["path"].lower())
+        items.extend(item_results)  # keep GLOBAL first
+        if len(paths) > len(capped):
+            note_parts.append(f"scanned the first {len(capped)} of {len(paths)} items")
+        if not items:
+            note_parts.append("no matrix entries found — if you use PROJECT-based matrix "
+                              "auth, grants are per-job/folder; if GLOBAL matrix, the account "
+                              "needs Overall/Administer to read the root config")
         return {"source": "live", "items": items, "scanned": len(capped),
-                "note": note}
+                "note": " · ".join(note_parts), "global_found": global_found}
     return _cached("jenkins:matrix", force, build)

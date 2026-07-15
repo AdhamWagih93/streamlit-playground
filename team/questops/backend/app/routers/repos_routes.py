@@ -38,9 +38,10 @@ def add_repo(body: AddRepoBody, user: User = Depends(current_user),
 
 
 @router.get("/discover")
-def discover(user: User = Depends(current_user)):
-    """Browse the configured ADO instance for repositories to add."""
-    return {"repos": _wrap(repos.discover)}
+def discover(collection: str = "", user: User = Depends(current_user)):
+    """Browse the configured ADO instance for repositories to add;
+    optional `collection` narrows the browse."""
+    return _wrap(repos.discover, collection)
 
 
 @router.delete("/{slot}")

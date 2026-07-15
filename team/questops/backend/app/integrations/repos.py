@@ -160,42 +160,59 @@ def remove_repo(db: Session, slot: int) -> None:
     shutil.rmtree(base, ignore_errors=True)
 
 
-def discover() -> list[dict]:
-    """Browse the ADO instance for repositories to add."""
+def discover(collection: str = "") -> dict:
+    """Browse the ADO instance for repositories to add. ADO_URL is the
+    INSTANCE root now, so we enumerate collections; an optional `collection`
+    filter narrows the browse (and the query — sparing the instance)."""
+    from . import ado as _ado
     if settings.demo_mode:
-        return [{"name": n, "project": "Platform",
-                 "url": f"https://git.example.local/platform/{n}.git"}
+        colls = ["DefaultCollection", "Research"]
+        rows = [{"name": n, "collection": "DefaultCollection", "project": "Platform",
+                 "url": f"https://ado.demo/DefaultCollection/Platform/_git/{n}"}
                 for n in DEMO_DISCOVERABLE]
+        rows += [{"name": "prototypes", "collection": "Research", "project": "Sandbox",
+                  "url": "https://ado.demo/Research/Sandbox/_git/prototypes"}]
+        if collection:
+            rows = [r for r in rows if r["collection"] == collection]
+        return {"collections": colls, "repos": rows}
     if not settings.ado_url:
-        raise RepoError("ADO_URL is not configured")
+        raise RepoError("ADO_URL is not configured (set it to your ADO INSTANCE root)")
     try:
-        r = requests.get(f"{settings.ado_url.rstrip('/')}/_apis/git/repositories",
-                         params={"api-version": "6.0"},
-                         auth=(settings.ado_user, settings.ado_rest_password),
-                         timeout=20)
+        all_colls = _ado.collections()
     except requests.RequestException as exc:
-        raise RepoError(f"ADO browse failed: {_scrub(str(exc))[:200]}")
-    # ADO does NOT 401 on bad/expired PATs — it returns 203 (or 302) with an
-    # HTML sign-in page, which used to surface as a cryptic JSON parse error
-    if r.status_code in (203, 302, 401, 403):
-        raise RepoError(f"ADO browse failed: HTTP {r.status_code} — authentication "
-                        "rejected. The browse uses ADO_PAT (falling back to "
-                        "ADO_PASSWORD) — has the PAT expired or been rotated?")
-    if not r.ok:
-        raise RepoError(f"ADO browse failed: HTTP {r.status_code} {r.reason} — "
-                        "is ADO_URL the collection root "
-                        "(e.g. https://ado.mycorp.local/DefaultCollection)?")
-    try:
-        items = r.json().get("value", [])
-    except ValueError:
-        raise RepoError("ADO browse failed: ADO answered with a non-JSON page — "
-                        "usually an auth redirect (expired PAT?) or ADO_URL not "
-                        "pointing at the collection root")
-    return sorted(({"name": i.get("name", ""),
-                    "project": (i.get("project") or {}).get("name", ""),
-                    "url": i.get("remoteUrl") or i.get("webUrl", "")}
-                   for i in items if not i.get("isDisabled")),
-                  key=lambda x: (x["project"].lower(), x["name"].lower()))
+        raise RepoError(f"ADO browse failed listing collections: {_scrub(str(exc))[:200]}")
+    target_colls = [collection] if collection else all_colls
+
+    def browse(coll: str) -> list[dict]:
+        prefix = f"/{coll}" if coll else ""
+        try:
+            r = requests.get(f"{_ado.instance()}{prefix}/_apis/git/repositories",
+                             params={"api-version": "6.0"},
+                             auth=(settings.ado_user, settings.ado_rest_password),
+                             timeout=20)
+        except requests.RequestException:
+            return []
+        if r.status_code in (203, 302, 401, 403):
+            raise RepoError(f"ADO browse failed: HTTP {r.status_code} — authentication "
+                            "rejected. The browse uses ADO_PAT (falling back to "
+                            "ADO_PASSWORD) — has the PAT expired or been rotated?")
+        if not r.ok:
+            return []
+        try:
+            items = r.json().get("value", [])
+        except ValueError:
+            raise RepoError("ADO browse failed: ADO answered with a non-JSON page — "
+                            "usually an auth redirect (expired PAT?) or ADO_URL not "
+                            "pointing at the INSTANCE root")
+        return [{"name": i.get("name", ""), "collection": coll,
+                 "project": (i.get("project") or {}).get("name", ""),
+                 "url": i.get("remoteUrl") or i.get("webUrl", "")}
+                for i in items if not i.get("isDisabled")]
+
+    rows = [r for coll in target_colls for r in browse(coll)]
+    rows.sort(key=lambda x: (x["collection"].lower(), x["project"].lower(),
+                             x["name"].lower()))
+    return {"collections": all_colls, "repos": rows}
 
 
 def _repo_by_slot(slot: int) -> dict:

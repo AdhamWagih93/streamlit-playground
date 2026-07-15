@@ -1244,14 +1244,20 @@ function historyPanelHtml(hist) {
 }
 function repoAddHtml() {
   const d = state.repoDiscover;
+  const collFilter = state.repoDiscoverColl || "";
+  const collChips = d && !d.error && (d.collections || []).length > 1 ? `
+    <div class="filter-row" style="margin:8px 0;flex-wrap:wrap">
+      <button class="btn btn-sm ${!collFilter ? "btn-primary" : ""}" data-disc-coll="">all collections</button>
+      ${d.collections.map((c) => `<button class="btn btn-sm ${collFilter === c ? "btn-primary" : ""}" data-disc-coll="${esc(c)}">🗄 ${esc(c)}</button>`).join(" ")}
+    </div>` : "";
   const list = !d ? `<div class="empty">browsing the ADO instance…</div>`
     : d.error ? `<div class="empty">⚠ ${esc(d.error)}<br>
         <button class="btn btn-sm" id="repo-discover-retry" style="margin-top:8px">↻ retry</button></div>`
-    : d.repos.map((r) => `
+    : (d.repos || []).map((r) => `
         <div class="ci-row"><span class="ci-job">⛁ ${esc(r.name)}</span>
-          <span class="ci-meta">${esc(r.project)}</span>
+          <span class="ci-meta">🗄 ${esc(r.collection)} · ${esc(r.project)}</span>
           <button class="btn btn-sm" data-adourl="${esc(r.url)}" data-adoname="${esc(r.name)}">+ add</button>
-        </div>`).join("") || `<div class="empty">no repositories found on the ADO instance</div>`;
+        </div>`).join("") || `<div class="empty">no repositories found${collFilter ? " in " + esc(collFilter) : " on the ADO instance"}</div>`;
   return `
     <div class="panel" style="margin-bottom:16px">
       <h2>add repository — cloned with the shared ADO credentials</h2>
@@ -1264,6 +1270,7 @@ function repoAddHtml() {
         pipeline groovy sources in the repo named <b>Engine</b> (or the one matching the job's SCM URL)</div>
       <h2 style="margin-top:14px">or pick from the ADO instance
         ${d && !d.error ? `<button class="btn btn-sm ov-more" id="repo-discover-refresh">↻ refresh</button>` : ""}</h2>
+      ${collChips}
       <div class="kpi-loaded">${list}</div>
     </div>`;
 }
@@ -1280,8 +1287,10 @@ function updateAddPanel() {
 async function loadDiscover(force = false) {
   if (state.repoDiscoverLoading || (state.repoDiscover && !force)) return;
   state.repoDiscoverLoading = true;
-  try { state.repoDiscover = await api("/api/repos/discover"); }
-  catch (e) { state.repoDiscover = { error: e.message, repos: [] }; }
+  const coll = state.repoDiscoverColl || "";
+  try {
+    state.repoDiscover = await api(`/api/repos/discover${coll ? "?collection=" + encodeURIComponent(coll) : ""}`);
+  } catch (e) { state.repoDiscover = { error: e.message, repos: [], collections: [] }; }
   state.repoDiscoverLoading = false;
   updateAddPanel();
 }
@@ -1310,6 +1319,12 @@ function wireAddPanel() {
   if (retry) retry.onclick = () => { state.repoDiscover = null; updateAddPanel(); loadDiscover(true); };
   const refresh = document.getElementById("repo-discover-refresh");
   if (refresh) refresh.onclick = () => { state.repoDiscover = null; updateAddPanel(); loadDiscover(true); };
+  (slot || view()).querySelectorAll("[data-disc-coll]").forEach((b) => b.onclick = () => {
+    state.repoDiscoverColl = b.dataset.discColl;
+    state.repoDiscover = null;  // re-browse narrowed to the collection (spares the instance)
+    updateAddPanel();
+    loadDiscover(true);
+  });
 }
 
 function wireRepoAdd() {
@@ -2056,14 +2071,24 @@ async function accLoad(section, url, renderFn) {
   if (rb) rb.onclick = () => accLoad(section, url, renderFn);
 }
 
+const extLink = (url) => url && !url.startsWith("#")
+  ? `<a class="acc-ext" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
+
 function accAdoHtml(d) {
   if (!d.projects.length) return `<div class="empty">no projects (${srcLabel(d)})</div>`;
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) — expand one to load its teams &amp; repo permissions</div>`
-    + d.projects.map((p) => `
-      <details class="filebox acc-proj" data-acc-proj="${esc(p.id)}">
-        <summary>📁 <b>${esc(p.name)}</b> <span class="ci-meta">${esc(p.description || "")}</span></summary>
-        <div class="acc-proj-body" id="acc-proj-${esc(p.id)}"><div class="empty">loading…</div></div>
-      </details>`).join("");
+  // group projects by collection — the whole instance, not one collection
+  const byColl = {};
+  d.projects.forEach((p) => { (byColl[p.coll] = byColl[p.coll] || []).push(p); });
+  const colls = Object.keys(byColl).sort();
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) across ${colls.length} collection(s) — expand a project for its teams &amp; repo permissions</div>`
+    + colls.map((c) => `
+      <div class="acc-coll"><div class="acc-coll-head">🗄 ${esc(c)}</div>
+        ${byColl[c].map((p) => `
+          <details class="filebox acc-proj" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
+            <summary>📁 <b>${esc(p.name)}</b> ${extLink(p.url)} <span class="ci-meta">${esc(p.description || "")}</span></summary>
+            <div class="acc-proj-body" id="acc-proj-${esc(p.coll)}-${esc(p.id)}"><div class="empty">loading…</div></div>
+          </details>`).join("")}
+      </div>`).join("");
 }
 
 function accAdoProjectHtml(d) {
@@ -2073,7 +2098,7 @@ function accAdoProjectHtml(d) {
       ${t.members.length > 8 ? `<span class="ci-meta">+${t.members.length - 8} more</span>` : ""}</span>
     </div>`).join("") || `<div class="empty">no teams</div>`;
   const repos = (d.repos || []).map((r) => `
-    <div class="acc-repo"><div class="ci-job" style="margin-bottom:4px">⛁ ${esc(r.name)}</div>
+    <div class="acc-repo"><div class="ci-job" style="margin-bottom:4px">⛁ ${esc(r.name)} ${extLink(r.url)}</div>
       ${(r.acls || []).map((a) => `
         <div class="acc-acl"><span class="acc-ident">${esc(a.identity)}</span>
           ${permChips(a.allow)}
@@ -2081,21 +2106,30 @@ function accAdoProjectHtml(d) {
         </div>`).join("") || `<div class="ci-meta" style="padding:2px 8px">no explicit ACLs (inherited only)</div>`}
     </div>`).join("") || `<div class="empty">no repositories</div>`;
   return `<h4 class="acc-h">teams &amp; members</h4>${teams}
-    <h4 class="acc-h">repository permissions ${d.repo_cap_note ? '<span class="ci-meta">(first 40 repos)</span>' : ""}</h4>${repos}`;
+    <h4 class="acc-h">repository permissions <span class="ci-meta">(grants to the QuestOps service account are hidden)${d.repo_cap_note ? " · first 60 repos" : ""}</span></h4>${repos}`;
 }
 
 function accJiraHtml(d) {
   if (!d.schemes.length) return `<div class="empty">no permission schemes (${srcLabel(d)})</div>`;
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)</div>`
+  const juBanner = (d.jirauser_grants || []).length ? `
+    <div class="remote-banner remote-new" style="margin-bottom:10px">
+      <b>🚩 ${d.jirauser_grants.length} grant(s) to JIRAUSER-keyed users</b>
+      ${d.jirauser_grants.map((g) => `<div class="ci-meta">• ${esc(g.holder)} in <b>${esc(g.scheme)}</b></div>`).join("")}
+    </div>` : "";
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}</div>`
+    + juBanner
     + d.schemes.map((s) => `
       <details class="filebox">
-        <summary>🎫 <b>${esc(s.name)}</b>
-          ${(s.projects || []).map((p) => `<span class="chip chip-green">${esc(p)}</span>`).join(" ")
-            || '<span class="chip">unassigned</span>'}
+        <summary>🎫 <b>${esc(s.name)}</b> ${extLink(s.url)}
+          ${(s.projects || []).length
+            ? s.projects.slice(0, 12).map((p) => `<a class="chip chip-green" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.key)}</a>`).join(" ")
+              + (s.projects.length > 12 ? `<span class="ci-meta">+${s.projects.length - 12} more</span>` : "")
+            : '<span class="chip">unassigned</span>'}
           <span class="ci-meta">${esc(s.description || "")}</span></summary>
         <div style="padding:8px 12px">
           ${s.holders.map((h) => `
-            <div class="acc-acl"><span class="acc-ident">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}</span>
+            <div class="acc-acl"><span class="acc-ident ${h.flag ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
+              ${h.flag ? '<span class="chip chip-red" title="JIRAUSER-keyed user grant">🚩</span>' : ""}</span>
               ${permChips(h.permissions)}</div>`).join("")}
         </div>
       </details>`).join("");
@@ -2103,11 +2137,11 @@ function accJiraHtml(d) {
 
 function accJenkinsHtml(d) {
   if (!d.items.length)
-    return `<div class="empty">no matrix-based entries found (${srcLabel(d)})${d.note ? " · " + esc(d.note) : ""}</div>`;
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.items.length} item(s) with explicit matrix entries${d.note ? " · " + esc(d.note) : ""}</div>`
+    return `<div class="empty">no matrix-based entries found (${srcLabel(d)})${d.note ? "<br><small>" + esc(d.note) + "</small>" : ""}</div>`;
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.items.length} scope(s) with matrix entries${d.note ? " · " + esc(d.note) : ""}</div>`
     + d.items.map((it) => `
-      <details class="filebox" open>
-        <summary>⚙ <b>${esc(it.path)}</b> <span class="ci-meta">${it.entries.length} principal(s)</span></summary>
+      <details class="filebox" ${it.path.startsWith("★") ? "open" : ""}>
+        <summary>${it.path.startsWith("★") ? "" : "⚙ "}<b>${esc(it.path)}</b> <span class="ci-meta">${it.entries.length} principal(s)</span></summary>
         <div style="padding:8px 12px">
           ${it.entries.map((e) => `
             <div class="acc-acl"><span class="acc-ident">${e.type === "group" ? "👥" : e.type === "user" ? "👤" : "❔"} ${esc(e.sid)}</span>
@@ -2122,11 +2156,12 @@ function wireAccess(section) {
       det.ontoggle = async () => {
         if (!det.open || det.dataset.loaded) return;
         det.dataset.loaded = "1";
-        const box = document.getElementById(`acc-proj-${det.dataset.accProj}`);
+        const coll = det.dataset.accColl, pid = det.dataset.accProj;
+        const box = document.getElementById(`acc-proj-${coll}-${pid}`);
         try {
-          const d = await api(`/api/access/ado/${encodeURIComponent(det.dataset.accProj)}`);
-          box.innerHTML = accAdoProjectHtml(d);
-        } catch (e) { box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; }
+          const d = await api(`/api/access/ado/${encodeURIComponent(coll)}/${encodeURIComponent(pid)}`);
+          if (box) box.innerHTML = accAdoProjectHtml(d);
+        } catch (e) { if (box) box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; }
       };
     });
   }
