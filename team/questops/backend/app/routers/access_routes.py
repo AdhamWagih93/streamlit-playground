@@ -17,6 +17,11 @@ def _wrap(fn, *args, **kwargs):
         raise HTTPException(502, str(exc)[:250])
 
 
+@router.get("/summary")
+def summary(refresh: bool = False, user: User = Depends(current_user)):
+    return _wrap(access.access_summary, refresh)
+
+
 @router.get("/ado")
 def ado(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.ado_projects, refresh)

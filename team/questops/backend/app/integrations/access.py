@@ -53,6 +53,16 @@ def _decode_bits(mask: int) -> list[str]:
     return [name for bit, name in ADO_GIT_BITS if mask & bit]
 
 
+def _short_http(exc: Exception) -> str:
+    """Compact 'HTTP 404 at /path' from a requests exception, for the UI."""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        url = str(getattr(resp, "url", "")).split("?")[0]
+        tail = "/" + url.split("/_apis/", 1)[1] if "/_apis/" in url else url[-60:]
+        return f"HTTP {resp.status_code} at …{tail}"
+    return str(exc)[:100]
+
+
 # ================================================================= ADO
 from . import ado as _ado
 
@@ -174,24 +184,37 @@ def ado_project_access(collection: str, project_id: str,
             return _demo_project_access(project_id)
         if not settings.ado_url:
             return {"source": "not configured", "teams": [], "repos": []}
-        teams = []
-        for t in _ado.coll_get(collection, f"/_apis/projects/{project_id}/teams",
-                               {"$top": 50}).get("value", []):
-            members = []
-            try:
-                data = _ado.coll_get(
-                    collection,
-                    f"/_apis/projects/{project_id}/teams/{t['id']}/members",
-                    {"$top": 100})
-                members = [(m.get("identity") or m).get("displayName", "")
-                           for m in data.get("value", [])]
-            except requests.RequestException:
-                pass
-            teams.append({"name": t.get("name", ""),
-                          "members": sorted(m for m in filter(None, members)
-                                            if not _is_service_account(m))})
+        errors = []  # per-call failures surface inline instead of blanking
 
-        repo_list = _ado.coll_get(collection, "/_apis/git/repositories").get("value", [])[:60]
+        # teams (project-scoped) — non-fatal
+        teams = []
+        try:
+            tdata = _ado.coll_get(collection, f"/_apis/projects/{project_id}/teams",
+                                  {"$top": 100})
+            for t in tdata.get("value", []):
+                members = []
+                try:
+                    data = _ado.coll_get(
+                        collection,
+                        f"/_apis/projects/{project_id}/teams/{t['id']}/members",
+                        {"$top": 200})
+                    members = [(m.get("identity") or m).get("displayName", "")
+                               for m in data.get("value", [])]
+                except requests.RequestException:
+                    pass
+                teams.append({"name": t.get("name", ""),
+                              "members": sorted(m for m in filter(None, members)
+                                                if not _is_service_account(m))})
+        except requests.RequestException as exc:
+            errors.append(f"teams: {_short_http(exc)}")
+
+        # repos — PROJECT-scoped (was collection-scoped, mixing other projects)
+        try:
+            repo_list = _ado.coll_get(
+                collection, f"/{project_id}/_apis/git/repositories").get("value", [])[:60]
+        except requests.RequestException as exc:
+            errors.append(f"repositories: {_short_http(exc)}")
+            repo_list = []
         descriptors: set[str] = set()
         raw_acls: dict[str, dict] = {}
 
@@ -228,7 +251,7 @@ def ado_project_access(collection: str, project_id: str,
                           "url": _ado.repo_url(collection, project_id, rp["name"])})
         repos.sort(key=lambda r: r["name"].lower())
         return {"source": "live", "teams": teams, "repos": repos,
-                "repo_cap_note": len(repo_list) >= 60}
+                "repo_cap_note": len(repo_list) >= 60, "errors": errors}
     return _cached(f"ado:project:{collection}:{project_id}", force, build)
 
 
@@ -283,7 +306,10 @@ def jira_permission_schemes(force: bool = False) -> dict:
             flagged = [{"scheme": s["name"], "holder": h["holder"]}
                        for s in schemes for h in s["holders"] if h.get("flag")]
             return {"source": "demo", "schemes": schemes,
-                    "jirauser_grants": flagged, "project_count": 3}
+                    "jirauser_grants": flagged, "project_count": 3,
+                    "all_projects": [{"key": "DEVOPS", "name": "Platform"},
+                                     {"key": "PLAT", "name": "Control"},
+                                     {"key": "SEC", "name": "Security"}]}
         if not (settings.jira_base_url and settings.jira_user):
             return {"source": "not configured", "schemes": [], "jirauser_grants": []}
         auth = (settings.jira_user, settings.jira_password)
@@ -347,14 +373,15 @@ def jira_permission_schemes(force: bool = False) -> dict:
             s["projects"].sort(key=lambda x: x["key"])
         return {"source": "live", "schemes": schemes,
                 "jirauser_grants": jirauser_grants,
-                "project_count": len(projects), "projects_truncated": truncated}
+                "project_count": len(projects), "projects_truncated": truncated,
+                "all_projects": projects}
     return _cached("jira:schemes", force, build)
 
 
 def _jira_all_projects(jget) -> tuple[list[dict], bool]:
-    """Every project, paginated. Jira DC has thousands; the old single-call
-    /project cap of 80 is why assigned schemes showed 'unassigned'. Prefers
-    the paginated /project/search, falls back to the legacy full list."""
+    """Every project (key + name), paginated. Jira DC has thousands; the old
+    single-call /project cap of 80 is why assigned schemes showed 'unassigned'.
+    Prefers the paginated /project/search, falls back to the legacy full list."""
     out: list[dict] = []
     try:
         start = 0
@@ -362,7 +389,8 @@ def _jira_all_projects(jget) -> tuple[list[dict], bool]:
             page = jget("/rest/api/2/project/search",
                         {"startAt": start, "maxResults": 50})
             values = page.get("values", [])
-            out.extend({"key": p["key"]} for p in values if p.get("key"))
+            out.extend({"key": p["key"], "name": p.get("name", "")}
+                       for p in values if p.get("key"))
             if page.get("isLast") or not values:
                 return out, False
             start += len(values)
@@ -372,7 +400,8 @@ def _jira_all_projects(jget) -> tuple[list[dict], bool]:
     # legacy Jira: /project returns them all in one shot
     try:
         allp = jget("/rest/api/2/project")
-        out = [{"key": p["key"]} for p in allp if p.get("key")]
+        out = [{"key": p["key"], "name": p.get("name", "")}
+               for p in allp if p.get("key")]
         return out[:JIRA_PROJECT_CAP], len(out) > JIRA_PROJECT_CAP
     except requests.RequestException:
         return [], False
@@ -496,3 +525,119 @@ def jenkins_matrix(force: bool = False) -> dict:
         return {"source": "live", "items": items, "scanned": len(capped),
                 "note": " · ".join(note_parts), "global_found": global_found}
     return _cached("jenkins:matrix", force, build)
+
+
+# ================================================================= Summary
+def _norm(s: str) -> str:
+    return re.sub(r"[\s_\-]+", "", (s or "").strip().lower())
+
+
+def access_summary(force: bool = False) -> dict:
+    """Per-track counts + ADO/Jira same-name detection. Cheap-exact counts
+    (one call per collection); named-users is a bounded best-effort."""
+    def build():
+        # ---- ADO: collections, projects, repos, teams, named users ----
+        ado_projects_data = ado_projects(force)
+        ado_names = sorted({p["name"] for p in ado_projects_data.get("projects", [])})
+        ado = {"source": ado_projects_data["source"],
+               "collections": len(ado_projects_data.get("collections", [])),
+               "projects": len(ado_names), "repos": 0, "teams": 0,
+               "named_users": 0, "approx_users": False}
+
+        if settings.demo_mode:
+            ado.update(repos=10, teams=4, named_users=4)
+        elif ado_projects_data["source"] == "live":
+            colls = ado_projects_data.get("collections", [])
+
+            def coll_counts(c):
+                repos = teams = 0
+                users: set[str] = set()
+                try:
+                    repos = len(_ado.coll_get(c, "/_apis/git/repositories").get("value", []))
+                except requests.RequestException:
+                    pass
+                try:
+                    td = _ado.coll_get(c, "/_apis/teams",
+                                       {"$top": 1000, "api-version": "6.0-preview.3"})
+                    teams = len(td.get("value", []))
+                except requests.RequestException:
+                    pass
+                return repos, teams, users
+
+            with ThreadPoolExecutor(max_workers=POOL) as pool:
+                for repos, teams, users in pool.map(coll_counts, colls):
+                    ado["repos"] += repos
+                    ado["teams"] += teams
+            # distinct named users across the instance (best-effort, bounded)
+            ado["named_users"], ado["approx_users"] = _ado_named_users(colls)
+
+        # ---- Jira: schemes, projects ----
+        jira_data = jira_permission_schemes(force)
+        jira_projects = jira_data.get("all_projects", [])
+        jira = {"source": jira_data["source"],
+                "schemes": len(jira_data.get("schemes", [])),
+                "projects": len(jira_projects),
+                "jirauser_grants": len(jira_data.get("jirauser_grants", []))}
+
+        # ---- Jenkins ----
+        jk_data = jenkins_matrix(force)
+        jenkins = {"source": jk_data["source"],
+                   "scopes": len(jk_data.get("items", [])),
+                   "global": bool(jk_data.get("global_found"))}
+
+        # ---- ADO vs Jira same-name detection ----
+        ado_norm = {_norm(n): n for n in ado_names}
+        jira_norm: dict[str, dict] = {}
+        for p in jira_projects:
+            for label in (p.get("name"), p.get("key")):
+                if label:
+                    jira_norm.setdefault(_norm(label), p)
+        both, ado_only = [], []
+        for k, name in sorted(ado_norm.items()):
+            match = jira_norm.get(k)
+            (both if match else ado_only).append(
+                {"ado": name, "jira": (match or {}).get("key")} if match else name)
+        matched_norms = {_norm(b["ado"]) for b in both} | {
+            _norm((jira_norm.get(_norm(b["ado"])) or {}).get("key", "")) for b in both}
+        jira_only = sorted({p.get("name") or p["key"] for p in jira_projects
+                            if _norm(p.get("name", "")) not in ado_norm
+                            and _norm(p.get("key", "")) not in ado_norm})
+        overlap = {"both": both, "both_count": len(both),
+                   "ado_only_count": len(ado_only), "ado_only": ado_only[:200],
+                   "jira_only_count": len(jira_only), "jira_only": jira_only[:200],
+                   "comparable": ado["source"] == jira["source"] != "not configured"}
+        return {"ado": ado, "jira": jira, "jenkins": jenkins, "overlap": overlap}
+    return _cached("access:summary", force, build)
+
+
+def _ado_named_users(colls: list[str], team_cap: int = 150) -> tuple[int, bool]:
+    """Distinct member display names across the instance's teams — bounded so
+    a huge instance doesn't fan out into thousands of member calls."""
+    teams: list[tuple[str, str]] = []  # (collection, team_id)
+    for c in colls:
+        try:
+            for t in _ado.coll_get(c, "/_apis/teams",
+                                   {"$top": 1000, "api-version": "6.0-preview.3"}
+                                   ).get("value", []):
+                teams.append((c, t.get("id", ""), t.get("projectId", "")))
+        except requests.RequestException:
+            continue
+    capped = teams[:team_cap]
+    users: set[str] = set()
+
+    def members(entry):
+        c, tid, pid = entry
+        try:
+            data = _ado.coll_get(c, f"/_apis/projects/{pid}/teams/{tid}/members",
+                                 {"$top": 500})
+            return [(m.get("identity") or m).get("displayName", "")
+                    for m in data.get("value", [])]
+        except requests.RequestException:
+            return []
+
+    with ThreadPoolExecutor(max_workers=POOL) as pool:
+        for names in pool.map(members, capped):
+            for n in names:
+                if n and not _is_service_account(n):
+                    users.add(n)
+    return len(users), len(teams) > team_cap

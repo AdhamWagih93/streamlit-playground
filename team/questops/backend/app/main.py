@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -17,6 +17,19 @@ for router in (auth_routes.router, work.router, game.router,
                repos_routes.router, overview.router, upgrades_routes.router,
                dive.router, deps.router, access_routes.router):
     app.include_router(router)
+
+
+@app.middleware("http")
+async def no_cache_spa(request: Request, call_next):
+    """Never let a browser/proxy serve a stale SPA — the #1 cause of 'I
+    deployed but the UI is old' (old app.js calling old routes). ETag-based
+    revalidation stays cheap (304s), assets just can't be used blindly."""
+    resp = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/api/") and (
+            path in ("/", "") or path.endswith((".html", ".js", ".css"))):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
 
 
 @app.get("/api/health")

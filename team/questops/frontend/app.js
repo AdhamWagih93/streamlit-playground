@@ -2036,9 +2036,10 @@ const permChips = (list, cls) => (list || []).map((p) =>
 const srcLabel = (d) => `${esc(d.source)}${d.cached ? " · cached" : ""}`;
 
 const ACC_WHAT = {
+  summary: "tallying projects, repos, teams & cross-system overlap",
   ado: "querying Azure DevOps for projects",
   jira: "reading Jira permission schemes & their project assignments",
-  jenkins: "scanning Jenkins job/folder configs for matrix RBAC",
+  jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
 };
 
 async function accLoad(section, url, renderFn) {
@@ -2105,7 +2106,9 @@ function accAdoProjectHtml(d) {
           ${(a.deny || []).map((p) => `<span class="chip chip-red" style="text-decoration:line-through" title="denied">${esc(p)}</span>`).join(" ")}
         </div>`).join("") || `<div class="ci-meta" style="padding:2px 8px">no explicit ACLs (inherited only)</div>`}
     </div>`).join("") || `<div class="empty">no repositories</div>`;
-  return `<h4 class="acc-h">teams &amp; members</h4>${teams}
+  const errs = (d.errors || []).length
+    ? `<div class="kpi-note" style="color:var(--red)">⚠ some ADO calls failed: ${d.errors.map(esc).join(" · ")}</div>` : "";
+  return `${errs}<h4 class="acc-h">teams &amp; members</h4>${teams}
     <h4 class="acc-h">repository permissions <span class="ci-meta">(grants to the QuestOps service account are hidden)${d.repo_cap_note ? " · first 60 repos" : ""}</span></h4>${repos}`;
 }
 
@@ -2167,14 +2170,43 @@ function wireAccess(section) {
   }
 }
 
+function accSummaryHtml(d) {
+  const a = d.ado, j = d.jira, k = d.jenkins, o = d.overlap;
+  const tile = (v, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${v}</b><span>${label}</span></div>`;
+  const tiles = [
+    tile(a.collections, "ADO collections"),
+    tile(a.projects, "ADO projects"),
+    tile(a.repos, "ADO repos"),
+    tile(a.teams, "ADO teams"),
+    tile(a.named_users + (a.approx_users ? "+" : ""), "ADO named users"),
+    tile(j.schemes, "Jira permission schemes"),
+    tile(j.projects, "Jira projects"),
+    tile(j.jirauser_grants, "JIRAUSER grants", j.jirauser_grants ? "pct-bad" : ""),
+    tile(k.scopes, "Jenkins RBAC scopes", k.scopes ? "" : "pct-warn"),
+  ].join("");
+  const ov = o.comparable ? `
+    <div class="acc-overlap">
+      <div class="stat-tile"><b class="pct-good">${o.both_count}</b><span>in BOTH ADO &amp; Jira (same name)</span></div>
+      <div class="stat-tile"><b>${o.ado_only_count}</b><span>ADO only</span></div>
+      <div class="stat-tile"><b>${o.jira_only_count}</b><span>Jira only</span></div>
+    </div>
+    ${o.both_count ? `<details class="filebox"><summary>🔗 ${o.both_count} project(s) in both systems</summary>
+      <div style="padding:8px 12px">${o.both.map((b) => `<div class="ci-row"><span class="ci-job">${esc(b.ado)}</span>
+        <span class="ci-meta">ADO ↔ Jira ${esc(b.jira || "")}</span></div>`).join("")}</div></details>` : ""}`
+    : `<div class="kpi-note">ADO/Jira name comparison needs both sources configured</div>`;
+  return `<div class="stat-tiles">${tiles}</div>${ov}`;
+}
+
 async function renderAccess() {
   view().innerHTML = `
     <div class="view-head"><h1>ACCESS MANAGEMENT</h1>
-      <span class="sub">who can do what — ADO projects &amp; repos · Jira permission schemes · Jenkins matrix RBAC</span>
+      <span class="sub">who can do what — ADO · Jira · Jenkins</span>
       <span class="spacer"></span>
       <button class="btn btn-sm" id="acc-refresh">↻ refresh all (bypasses caches)</button></div>
     <div class="kpi-note" style="margin-bottom:12px">source systems are protected: results cache for 15 minutes,
-      ADO project details load only when expanded, and Jenkins configs come from a shared cache</div>
+      ADO project details load only when expanded, and fetches are bounded-parallel</div>
+    <div class="panel" style="margin-bottom:18px"><h2>📊 at a glance</h2>
+      <div id="acc-summary"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
     <div class="ci-grid">
@@ -2186,6 +2218,7 @@ async function renderAccess() {
 
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
+    accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
     accLoad("jenkins", `/api/access/jenkins${s}`, accJenkinsHtml);
