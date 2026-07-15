@@ -1823,14 +1823,26 @@ async function renderDeps(refresh) {
 
   const tiles = ["pipeline", "playbook", "role", "script", "caller"].map((t) => {
     const s = d.stats[t] || { total: 0, used: 0 };
+    if (t === "pipeline" && d.jenkins && d.jenkins.available) {
+      const nw = (d.jenkins.not_wired || []).length;
+      return `<div class="stat-tile"><b class="${nw ? "pct-warn" : "pct-good"}">${d.jenkins.wired}/${s.total}</b>
+        <span>pipelines wired to Jenkins</span>${nw ? `<small class="pct-bad">${nw} not in Jenkins</small>` : ""}</div>`;
+    }
     const unusedN = s.total - s.used;
     return `<div class="stat-tile"><b class="${unusedN ? "pct-warn" : "pct-good"}">${s.used}/${s.total}</b>
       <span>${t}s used</span>${unusedN ? `<small class="pct-bad">${unusedN} unused</small>` : ""}</div>`;
   }).join("");
 
+  const jenkinsChip = (n) => {
+    if (!d.jenkins || !d.jenkins.available || n.type !== "pipeline") return "";
+    return n.jenkins_jobs && n.jenkins_jobs.length
+      ? `<span class="chip chip-green" title="${esc(n.jenkins_jobs.join(", "))}">⚙ ${n.jenkins_jobs.length} job(s)</span>`
+      : `<span class="chip chip-red" title="no Jenkins job's scriptPath points at this file">not in Jenkins</span>`;
+  };
   const rootList = d.roots.map((rid) => `
     <div class="hist-row ${rid === state.depRoot ? "open" : ""}" data-dep-root="${esc(rid)}">
       <span class="hist-subject">⚙ ${esc(map[rid].path.replace(/^pipelines\//, ""))}</span>
+      ${jenkinsChip(map[rid])}
       <span class="ci-meta">${(map[rid].out || []).length} direct deps</span>
     </div>`).join("") || `<div class="empty">no pipelines found under pipelines/</div>`;
 
@@ -1839,6 +1851,21 @@ async function renderDeps(refresh) {
       <div class="ci-row"><span class="chip chip-red">${t}</span>
         <code class="ci-job">${esc(p)}</code></div>`)).join("")
     || `<div class="empty">✅ everything is reachable from the pipelines</div>`;
+
+  const jk = d.jenkins || { available: false };
+  const jenkinsPanel = !jk.available
+    ? `<div class="kpi-note">ℹ Jenkins cross-reference unavailable — configure Jenkins to see which pipeline files are wired to real jobs</div>`
+    : `
+      ${(jk.not_wired || []).length ? `
+        <h2 class="panel-divider">⚠ pipeline files NO Jenkins job uses</h2>
+        ${jk.not_wired.map((p) => `<div class="ci-row"><span class="chip chip-red">not wired</span><code class="ci-job">${esc(p)}</code></div>`).join("")}` : ""}
+      ${(jk.missing || []).length ? `
+        <h2 class="panel-divider">⚠ Jenkins jobs pointing at files MISSING from this repo</h2>
+        ${jk.missing.map((m) => `<div class="ci-row"><span class="chip chip-amber">missing</span>
+          <code class="ci-job">${esc(m.path)}</code>
+          <span class="ci-meta" title="${esc(m.jobs.join(", "))}">${m.jobs.length} job(s)</span></div>`).join("")}` : ""}
+      ${!(jk.not_wired || []).length && !(jk.missing || []).length
+        ? `<div class="empty" style="padding:8px">✅ every pipeline file maps to a Jenkins job and vice versa</div>` : ""}`;
 
   const notes = [
     d.truncated ? `⚠ scanned the first ${d.files_scanned} files only` : "",
@@ -1874,7 +1901,8 @@ async function renderDeps(refresh) {
       <div>
         <div class="panel" style="margin-bottom:18px">
           <h2>🗑 unused files — candidates for cleanup</h2>
-          <div class="ci-scroll">${unusedList}</div></div>
+          <div class="ci-scroll">${unusedList}</div>
+          ${jenkinsPanel}</div>
         <div class="panel"><h2>🔎 full matrix — ${d.nodes.length} nodes
           <span class="ov-more">${d.cached ? "cached · " : ""}${d.files_scanned} files scanned</span></h2>
           <div class="repo-bar" style="margin-bottom:8px">

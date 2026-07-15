@@ -90,7 +90,13 @@ def analyze(slot: int, username: str | None = None) -> dict:
             continue
         file_count += 1
         top = parts[0]
-        if top == "pipelines" and (p.suffix == ".groovy" or "jenkinsfile" in p.name.lower()):
+        if top == "pipelines":
+            # ANY file under pipelines/ is a pipeline — they carry arbitrary
+            # names, not .groovy/Jenkinsfile — except docs/assets
+            if (p.name.startswith(".")
+                    or p.suffix.lower() in {".md", ".txt", ".png", ".jpg",
+                                            ".jpeg", ".svg", ".gif"}):
+                continue
             nodes[rel] = {"id": rel, "type": "pipeline", "path": rel, "out": set()}
         elif top == "playbooks" and "roles" in parts:
             ri = parts.index("roles")
@@ -218,9 +224,22 @@ def analyze(slot: int, username: str | None = None) -> dict:
         for ref in n["out"]:
             in_counts[ref] += 1
 
+    # ------------------------------------------------ Jenkins cross-reference
+    # which pipeline FILES are actually wired to jobs on the Jenkins instance
+    try:
+        from . import jenkins
+        script_paths = jenkins.pipeline_script_paths()
+    except Exception:  # noqa: BLE001 — Jenkins down: matrix still works
+        script_paths = {}
+    jenkins_missing = sorted(
+        ({"path": sp, "jobs": sorted(jobs)}
+         for sp, jobs in script_paths.items() if sp not in by_path),
+        key=lambda x: x["path"])
+
     # ---------------------------------------------------------- payload
     out_nodes = []
     for nid, n in nodes.items():
+        jobs = script_paths.get(n["path"], []) if n["type"] == "pipeline" else None
         out_nodes.append({
             "id": nid, "type": n["type"], "path": n["path"],
             "name": n.get("name") or Path(n["path"]).name,
@@ -229,6 +248,7 @@ def analyze(slot: int, username: str | None = None) -> dict:
             "out": sorted(n["out"]),
             "in_count": in_counts[nid],
             "used": nid in used,
+            "jenkins_jobs": sorted(jobs) if jobs is not None else None,
         })
     unused = {
         t: sorted(x["path"] for x in out_nodes if x["type"] == t and not x["used"])
@@ -239,9 +259,17 @@ def analyze(slot: int, username: str | None = None) -> dict:
         of_type = [x for x in out_nodes if x["type"] == t]
         stats[t] = {"total": len(of_type),
                     "used": sum(1 for x in of_type if x["used"])}
+    pipelines = [x for x in out_nodes if x["type"] == "pipeline"]
+    jenkins_info = {
+        "available": bool(script_paths),
+        "wired": sum(1 for x in pipelines if x["jenkins_jobs"]),
+        "not_wired": sorted(x["path"] for x in pipelines if not x["jenkins_jobs"])
+        if script_paths else [],
+        "missing": jenkins_missing,
+    }
     return {"repo": {"slot": repo["slot"], "name": repo["name"]},
             "nodes": out_nodes, "roots": sorted(roots),
-            "unused": unused, "stats": stats,
+            "unused": unused, "stats": stats, "jenkins": jenkins_info,
             "ambiguous": ambiguous[:50], "dynamic": dynamic[:50],
             "files_scanned": file_count,
             "truncated": file_count >= MAX_FILES}

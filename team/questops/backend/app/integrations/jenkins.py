@@ -284,6 +284,37 @@ def job_definition(job: str) -> dict:
             "note": "no pipeline-from-SCM definition found in the job or its parents"}
 
 
+_SCRIPT_PATHS_CACHE: dict = {"at": 0.0, "data": None}
+
+
+def pipeline_script_paths(ttl: int = 300) -> dict[str, list[str]]:
+    """scriptPath -> [job full names] across the whole Jenkins instance —
+    which repo pipeline files are ACTUALLY wired to jobs. Cached (each job
+    costs a config.xml fetch)."""
+    import time
+    if (_SCRIPT_PATHS_CACHE["data"] is not None
+            and time.time() - _SCRIPT_PATHS_CACHE["at"] < ttl):
+        return _SCRIPT_PATHS_CACHE["data"]
+    out: dict[str, list[str]] = {}
+    if settings.demo_mode and not is_live():
+        for j in _DEMO_JOBS:
+            if any(tok in j["name"].lower() for tok in settings.jenkins_ignore_tokens):
+                continue
+            sp = f"pipelines/{j['name'].split('/')[0]}.groovy"
+            out.setdefault(sp, []).append(j["name"])
+    elif is_live():
+        for j in overview()["jobs"]:
+            try:
+                d = job_definition(j["name"])
+            except Exception:  # noqa: BLE001 — one broken job never blocks the map
+                continue
+            sp = (d.get("script_path") or "").lstrip("./")
+            if sp:
+                out.setdefault(sp, []).append(j["name"])
+    _SCRIPT_PATHS_CACHE.update(at=time.time(), data=out)
+    return out
+
+
 def claim(job: str, username: str) -> None:
     CLAIMS[job] = username
 

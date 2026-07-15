@@ -63,6 +63,10 @@ DEMO_REPO_FILES = {
             "pipeline {\n  agent { label 'java' }\n  stages {\n"
             "    stage('Build') { steps { sh './scripts/podman_run_script.sh build_java.sh checkout' } }\n"
             "  }\n}\n",
+        # arbitrary name, no extension — and no Jenkins job points at it
+        "pipelines/nightly/db-maintenance":
+            "pipeline {\n  agent any\n  stages {\n"
+            "    stage('Vacuum') { steps { sh 'echo vacuum' } }\n  }\n}\n",
         # scripts — incl. the standard callers and one orphan
         "scripts/podman_run_script.sh":
             "#!/bin/bash\n# standard caller: runs a script inside the tool container\n"
