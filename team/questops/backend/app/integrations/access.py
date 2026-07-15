@@ -53,6 +53,26 @@ def _decode_bits(mask: int) -> list[str]:
     return [name for bit, name in ADO_GIT_BITS if mask & bit]
 
 
+_ADMIN_PERMS = {"Administer", "Manage permissions", "Edit policies", "Delete repository"}
+_WRITE_PERMS = {"Contribute", "Force push", "Create branch", "Create tag",
+                "Contribute to PRs", "Bypass policies (PR)", "Bypass policies (push)"}
+
+
+def _privilege_tier(allow: list[str]) -> str:
+    a = set(allow)
+    if a & _ADMIN_PERMS:
+        return "admin"
+    if a & _WRITE_PERMS:
+        return "write"
+    if "Read" in a:
+        return "read"
+    return "other"
+
+
+def _pct(n: int, total: int) -> int:
+    return round(n / total * 100) if total else 0
+
+
 def _short_http(exc: Exception) -> str:
     """Compact 'HTTP 404 at /path' from a requests exception, for the UI."""
     resp = getattr(exc, "response", None)
@@ -79,22 +99,37 @@ def _is_service_account(identity: str, descriptor: str = "") -> bool:
             or su in re.split(r"[\\/@ ]", hay))
 
 
+def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
+    """Per-collection aggregates for the collapsible collection headers."""
+    out = []
+    for c in colls:
+        ps = [p for p in projects if p["coll"] == c]
+        out.append({"name": c, "projects": len(ps),
+                    "teams": sum(p.get("teams", 0) for p in ps),
+                    "repos": sum(p.get("repos", 0) for p in ps)})
+    return out
+
+
 def ado_projects(force: bool = False) -> dict:
     def build():
         if settings.demo_mode:
-            return {"source": "demo", "projects": [
+            projects = [
                 {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
-                 "description": "Product delivery",
+                 "description": "Product delivery", "repos": 6, "teams": 3,
                  "url": "https://ado.demo/DefaultCollection/Platform"},
                 {"id": "p2", "coll": "DefaultCollection", "name": "Control",
-                 "description": "Team config repos",
+                 "description": "Team config repos", "repos": 2, "teams": 1,
                  "url": "https://ado.demo/DefaultCollection/Control"},
                 {"id": "p3", "coll": "Research", "name": "Sandbox",
-                 "description": "Experiments",
+                 "description": "Experiments", "repos": 1, "teams": 1,
                  "url": "https://ado.demo/Research/Sandbox"},
-            ], "collections": ["DefaultCollection", "Research"]}
+            ]
+            colls = ["DefaultCollection", "Research"]
+            return {"source": "demo", "projects": projects, "collections": colls,
+                    "collection_stats": _collection_rollup(projects, colls)}
         if not settings.ado_url:
-            return {"source": "not configured", "projects": [], "collections": []}
+            return {"source": "not configured", "projects": [], "collections": [],
+                    "collection_stats": []}
         colls = _ado.collections(force)
 
         def coll_projects(coll):
@@ -109,8 +144,31 @@ def ado_projects(force: bool = False) -> dict:
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             projects = [p for group in pool.map(coll_projects, colls) for p in group]
+
+        # per-project repo + team counts (2 cheap calls each, parallel) so the
+        # UI can show counts and % before anyone expands a project
+        def proj_counts(p):
+            repos = teams = 0
+            try:
+                repos = len(_ado.coll_get(
+                    p["coll"], f"/{p['id']}/_apis/git/repositories").get("value", []))
+            except requests.RequestException:
+                pass
+            try:
+                teams = len(_ado.coll_get(
+                    p["coll"], f"/_apis/projects/{p['id']}/teams",
+                    {"$top": 500}).get("value", []))
+            except requests.RequestException:
+                pass
+            return repos, teams
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            for p, (repos, teams) in zip(projects, pool.map(proj_counts, projects)):
+                p["repos"], p["teams"] = repos, teams
+
         projects.sort(key=lambda p: (p["coll"].lower(), p["name"].lower()))
-        return {"source": "live", "projects": projects, "collections": colls}
+        return {"source": "live", "projects": projects, "collections": colls,
+                "collection_stats": _collection_rollup(projects, colls)}
     return _cached("ado:projects", force, build)
 
 
@@ -169,10 +227,13 @@ def _demo_project_access(project_id: str) -> dict:
     repos = []
     for r in raw_repos:
         # demo has no real ADO_USER; filter against the injected demo account
-        acls = [a for a in r["acls"] if a["identity"].strip().lower() != su.strip().lower()]
+        acls = [dict(a, tier=_privilege_tier(a["allow"]))
+                for a in r["acls"] if a["identity"].strip().lower() != su.strip().lower()]
         repos.append({"name": r["name"], "acls": acls,
+                      "signature": _acl_signature(acls),
                       "url": f"https://ado.demo/{coll}/{project_id}/_git/{r['name']}"})
-    return {"source": "demo", "teams": teams, "repos": repos}
+    return {"source": "demo", "teams": teams, "repos": repos,
+            "analysis": _project_access_analysis(repos, teams)}
 
 
 def ado_project_access(collection: str, project_id: str,
@@ -245,14 +306,57 @@ def ado_project_access(collection: str, project_id: str,
                 allow = _decode_bits(ace.get("allow", 0))
                 deny = _decode_bits(ace.get("deny", 0))
                 if allow or deny:
-                    acls.append({"identity": ident, "allow": allow, "deny": deny})
+                    acls.append({"identity": ident, "allow": allow, "deny": deny,
+                                 "tier": _privilege_tier(allow)})
             acls.sort(key=lambda a: a["identity"].lower())
             repos.append({"name": rp["name"], "acls": acls,
+                          "signature": _acl_signature(acls),
                           "url": _ado.repo_url(collection, project_id, rp["name"])})
         repos.sort(key=lambda r: r["name"].lower())
+        analysis = _project_access_analysis(repos, teams)
         return {"source": "live", "teams": teams, "repos": repos,
+                "analysis": analysis,
                 "repo_cap_note": len(repo_list) >= 60, "errors": errors}
     return _cached(f"ado:project:{collection}:{project_id}", force, build)
+
+
+def _acl_signature(acls: list[dict]) -> str:
+    return "|".join(sorted(f"{a['identity']}:{a['tier']}" for a in acls))
+
+
+def _project_access_analysis(repos: list[dict], teams: list[dict]) -> dict:
+    """Is access UNIFORM across the project or REPO-SPECIFIC? Plus the many
+    percentages: repo-specific %, and the identity privilege mix."""
+    total = len(repos)
+    with_acls = [r for r in repos if r["acls"]]
+    sigs = {r["signature"] for r in with_acls}
+    # uniform = every repo that has explicit ACLs shares one identical ACL set
+    uniform = len(sigs) <= 1
+    members = sum(len(t["members"]) for t in teams)
+
+    # distinct identities and their HIGHEST privilege tier across the project
+    tier_of: dict[str, str] = {}
+    order = {"admin": 3, "write": 2, "read": 1, "other": 0}
+    for r in repos:
+        for a in r["acls"]:
+            cur = tier_of.get(a["identity"])
+            if cur is None or order[a["tier"]] > order[cur]:
+                tier_of[a["identity"]] = a["tier"]
+    ids = len(tier_of)
+    counts = {t: sum(1 for v in tier_of.values() if v == t)
+              for t in ("admin", "write", "read", "other")}
+    return {
+        "total_repos": total,
+        "repos_with_explicit": len(with_acls),
+        "pct_repo_specific": _pct(len(with_acls), total),
+        "uniform": uniform,
+        "distinct_acl_sets": len(sigs),
+        "teams": len(teams), "members": members,
+        "distinct_identities": ids,
+        "tier_counts": counts,
+        "tier_pct": {t: _pct(counts[t], ids) for t in counts},
+        "pct_admin": _pct(counts["admin"], ids),
+    }
 
 
 # ================================================================= Jira

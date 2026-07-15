@@ -2075,41 +2075,104 @@ async function accLoad(section, url, renderFn) {
 const extLink = (url) => url && !url.startsWith("#")
   ? `<a class="acc-ext" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
 
+const miniBar = (pct, cls) => `<span class="mini-bar"><span class="${cls || ""}" style="width:${Math.min(pct, 100)}%"></span></span>`;
+
 function accAdoHtml(d) {
   if (!d.projects.length) return `<div class="empty">no projects (${srcLabel(d)})</div>`;
-  // group projects by collection — the whole instance, not one collection
   const byColl = {};
   d.projects.forEach((p) => { (byColl[p.coll] = byColl[p.coll] || []).push(p); });
+  const stats = {};
+  (d.collection_stats || []).forEach((s) => { stats[s.name] = s; });
   const colls = Object.keys(byColl).sort();
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) across ${colls.length} collection(s) — expand a project for its teams &amp; repo permissions</div>`
-    + colls.map((c) => `
-      <div class="acc-coll"><div class="acc-coll-head">🗄 ${esc(c)}</div>
-        ${byColl[c].map((p) => `
-          <details class="filebox acc-proj" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
-            <summary>📁 <b>${esc(p.name)}</b> ${extLink(p.url)} <span class="ci-meta">${esc(p.description || "")}</span></summary>
-            <div class="acc-proj-body" id="acc-proj-${esc(p.coll)}-${esc(p.id)}"><div class="empty">loading…</div></div>
-          </details>`).join("")}
-      </div>`).join("");
+  const totRepos = d.projects.reduce((n, p) => n + (p.repos || 0), 0);
+  const totTeams = d.projects.reduce((n, p) => n + (p.teams || 0), 0);
+
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) · ${totTeams} team(s) across ${colls.length} collection(s) — expand a collection, then a project</div>`
+    + colls.map((c) => {
+      const s = stats[c] || { projects: byColl[c].length, teams: 0, repos: 0 };
+      const projShare = _pctJs(s.projects, d.projects.length);
+      return `
+      <details class="filebox acc-coll-det" open>
+        <summary>🗄 <b>${esc(c)}</b>
+          <span class="acc-coll-stats">
+            <span class="chip chip-cyan">${s.projects} projects</span>
+            <span class="chip">${s.teams} teams</span>
+            <span class="chip">${s.repos} repos</span>
+            <span class="ci-meta">${projShare}% of instance projects</span>
+          </span></summary>
+        <div class="acc-coll-body">
+          ${byColl[c].map((p) => {
+            const repoShare = _pctJs(p.repos || 0, s.repos || 0);
+            return `
+            <details class="filebox acc-proj" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
+              <summary>📁 <b>${esc(p.name)}</b> ${extLink(p.url)}
+                <span class="acc-proj-stats">
+                  <span class="chip">${p.teams || 0} teams</span>
+                  <span class="chip">${p.repos || 0} repos</span>
+                  ${s.repos ? `<span class="ci-meta" title="share of this collection's repos">${miniBar(repoShare, "pct-good")} ${repoShare}%</span>` : ""}
+                </span></summary>
+              <div class="acc-proj-body" id="acc-proj-${esc(p.coll)}-${esc(p.id)}"><div class="empty">loading…</div></div>
+            </details>`;
+          }).join("")}
+        </div>
+      </details>`;
+    }).join("");
 }
 
+const _pctJs = (n, total) => total ? Math.round(n / total * 100) : 0;
+
+const TIER_CLS = { admin: "chip-red", write: "chip-amber", read: "chip-cyan", other: "" };
+
 function accAdoProjectHtml(d) {
+  const an = d.analysis || {};
+  // ---- access summary + the many percentages ----
+  const tp = an.tier_pct || {};
+  const uniformBadge = an.total_repos
+    ? (an.uniform
+        ? '<span class="chip chip-green">✓ uniform access</span>'
+        : `<span class="chip chip-amber">repo-specific access</span>`)
+    : "";
+  const analysisPanel = an.total_repos ? `
+    <div class="acc-analysis">
+      <div class="stat-tile"><b>${an.members}</b><span>members</span></div>
+      <div class="stat-tile"><b>${an.teams}</b><span>teams</span></div>
+      <div class="stat-tile"><b>${an.total_repos}</b><span>repos</span></div>
+      <div class="stat-tile"><b class="${an.pct_repo_specific ? "pct-warn" : "pct-good"}">${an.pct_repo_specific}%</b>
+        <span>repos with their OWN ACLs</span><small>${an.repos_with_explicit}/${an.total_repos} · ${an.distinct_acl_sets} distinct set(s)</small></div>
+      <div class="stat-tile"><b class="${an.pct_admin ? "pct-bad" : "pct-good"}">${an.pct_admin}%</b>
+        <span>identities with admin</span><small>${(an.tier_counts||{}).admin||0}/${an.distinct_identities}</small></div>
+    </div>
+    <div class="acc-tiers">
+      ${uniformBadge}
+      <span class="acc-tier-bar">
+        <span class="chip-red" style="width:${tp.admin||0}%" title="admin ${tp.admin||0}%"></span>
+        <span class="chip-amber" style="width:${tp.write||0}%" title="write ${tp.write||0}%"></span>
+        <span class="chip-cyan" style="width:${tp.read||0}%" title="read ${tp.read||0}%"></span>
+        <span class="tier-other" style="width:${tp.other||0}%" title="other ${tp.other||0}%"></span>
+      </span>
+      <span class="ci-meta">of ${an.distinct_identities} identities: ${tp.admin||0}% admin · ${tp.write||0}% write · ${tp.read||0}% read</span>
+    </div>` : "";
+
   const teams = (d.teams || []).map((t) => `
     <div class="ci-row"><span class="ci-job">👥 ${esc(t.name)}</span>
+      <span class="ci-meta">${t.members.length} member(s)</span>
       <span class="acc-members">${t.members.slice(0, 8).map((m) => `<span class="chip">${esc(m)}</span>`).join(" ")}
       ${t.members.length > 8 ? `<span class="ci-meta">+${t.members.length - 8} more</span>` : ""}</span>
     </div>`).join("") || `<div class="empty">no teams</div>`;
   const repos = (d.repos || []).map((r) => `
-    <div class="acc-repo"><div class="ci-job" style="margin-bottom:4px">⛁ ${esc(r.name)} ${extLink(r.url)}</div>
+    <div class="acc-repo"><div class="ci-job" style="margin-bottom:4px">⛁ ${esc(r.name)}
+      ${(r.acls || []).length ? `<span class="chip chip-amber">${r.acls.length} explicit</span>` : '<span class="chip chip-green">inherited</span>'} ${extLink(r.url)}</div>
       ${(r.acls || []).map((a) => `
-        <div class="acc-acl"><span class="acc-ident">${esc(a.identity)}</span>
+        <div class="acc-acl"><span class="acc-ident"><span class="chip ${TIER_CLS[a.tier] || ""}" title="privilege tier">${esc(a.tier)}</span> ${esc(a.identity)}</span>
           ${permChips(a.allow)}
           ${(a.deny || []).map((p) => `<span class="chip chip-red" style="text-decoration:line-through" title="denied">${esc(p)}</span>`).join(" ")}
-        </div>`).join("") || `<div class="ci-meta" style="padding:2px 8px">no explicit ACLs (inherited only)</div>`}
+        </div>`).join("") || `<div class="ci-meta" style="padding:2px 8px">no explicit ACLs (inherited from project defaults)</div>`}
     </div>`).join("") || `<div class="empty">no repositories</div>`;
   const errs = (d.errors || []).length
     ? `<div class="kpi-note" style="color:var(--red)">⚠ some ADO calls failed: ${d.errors.map(esc).join(" · ")}</div>` : "";
-  return `${errs}<h4 class="acc-h">teams &amp; members</h4>${teams}
-    <h4 class="acc-h">repository permissions <span class="ci-meta">(grants to the QuestOps service account are hidden)${d.repo_cap_note ? " · first 60 repos" : ""}</span></h4>${repos}`;
+  return `${errs}${analysisPanel}
+    <h4 class="acc-h">teams &amp; members</h4>${teams}
+    <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account grants hidden)${d.repo_cap_note ? " · first 60 repos" : ""}</span></h4>${repos}`;
 }
 
 function accJiraHtml(d) {
@@ -2171,7 +2234,7 @@ function wireAccess(section) {
 }
 
 function accSummaryHtml(d) {
-  const a = d.ado, j = d.jira, k = d.jenkins, o = d.overlap;
+  const a = d.ado, j = d.jira, o = d.overlap;
   const tile = (v, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${v}</b><span>${label}</span></div>`;
   const tiles = [
     tile(a.collections, "ADO collections"),
@@ -2182,7 +2245,6 @@ function accSummaryHtml(d) {
     tile(j.schemes, "Jira permission schemes"),
     tile(j.projects, "Jira projects"),
     tile(j.jirauser_grants, "JIRAUSER grants", j.jirauser_grants ? "pct-bad" : ""),
-    tile(k.scopes, "Jenkins RBAC scopes", k.scopes ? "" : "pct-warn"),
   ].join("");
   const ov = o.comparable ? `
     <div class="acc-overlap">
@@ -2209,19 +2271,14 @@ async function renderAccess() {
       <div id="acc-summary"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
-    <div class="ci-grid">
-      <div class="panel"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
-        <div id="acc-jira"></div></div>
-      <div class="panel"><h2>⚙ Jenkins — matrix-based RBAC</h2>
-        <div id="acc-jenkins"></div></div>
-    </div>`;
+    <div class="panel"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
+      <div id="acc-jira"></div></div>`;
 
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
-    accLoad("jenkins", `/api/access/jenkins${s}`, accJenkinsHtml);
   };
   load(false);
   document.getElementById("acc-refresh").onclick = () => load(true);

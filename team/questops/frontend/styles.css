@@ -466,6 +466,25 @@ a.chip.chip-green:hover { filter: brightness(1.3); }
 .acc-ident.acc-flag { color: var(--red); }
 .acc-overlap { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
 .acc-overlap .stat-tile { flex: 1; min-width: 150px; }
+.acc-coll-det > summary { padding: 8px 12px; }
+.acc-coll-stats { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-left: 8px; }
+.acc-coll-body { padding: 4px 10px 10px; }
+.acc-proj-stats { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-left: 8px; }
+.mini-bar { display: inline-block; width: 46px; height: 7px; border-radius: 4px;
+  background: var(--bg-2); border: 1px solid var(--line); vertical-align: middle; overflow: hidden; }
+.mini-bar > span { display: block; height: 100%; background: var(--amber); }
+.mini-bar > span.pct-good { background: var(--green); }
+.acc-analysis { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.acc-analysis .stat-tile { flex: 1; min-width: 120px; }
+.acc-analysis .stat-tile small { display: block; color: var(--faint); font-size: 10px; }
+.acc-tiers { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 10px; }
+.acc-tier-bar { display: inline-flex; width: 220px; height: 12px; border-radius: 6px;
+  overflow: hidden; border: 1px solid var(--line); background: var(--bg-2); }
+.acc-tier-bar > span { height: 100%; }
+.acc-tier-bar .chip-red { background: var(--red); }
+.acc-tier-bar .chip-amber { background: var(--amber); }
+.acc-tier-bar .chip-cyan { background: var(--cyan); }
+.acc-tier-bar .tier-other { background: var(--faint); }
 
 /* ---------- upgrades ---------- */
 .upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
