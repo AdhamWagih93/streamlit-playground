@@ -107,7 +107,10 @@ def _is_service_account(identity: str, descriptor: str = "") -> bool:
     return any(e == ident or e in tokens for e in excl)
 
 
-PROJECT_SCORE_REPO_CAP = 2500  # bound the upfront ACL sweep for scoring
+PROJECT_SCORE_REPO_CAP = 2500  # bound the upfront ACL sweep (whole instance)
+# per-project repo cap applied IDENTICALLY in the list-sweep and the detail
+# expand, so the badge score and the expanded score are always the same set
+PROJECT_REPO_CAP = 200
 
 
 def _grade(score) -> str:
@@ -175,8 +178,9 @@ def ado_projects(force: bool = False) -> dict:
         # repo lists (id+name) + team counts per project, in parallel
         def proj_repos(p):
             try:
-                return [{"id": r["id"], "name": r["name"]} for r in _ado.coll_get(
+                rl = [{"id": r["id"], "name": r["name"]} for r in _ado.coll_get(
                     p["coll"], f"/{p['id']}/_apis/git/repositories").get("value", [])]
+                return sorted(rl, key=lambda r: r["name"].lower())  # deterministic cap
             except requests.RequestException:
                 return []
 
@@ -191,11 +195,13 @@ def ado_projects(force: bool = False) -> dict:
             repo_lists = list(pool.map(proj_repos, projects))
             team_counts = list(pool.map(proj_teamcount, projects))
         for p, rl, tc in zip(projects, repo_lists, team_counts):
-            p["repos"], p["teams"], p["_repolist"] = len(rl), tc, rl
+            # SAME per-project cap as the detail expand → identical scores
+            p["repos"], p["teams"] = len(rl), tc
+            p["_repolist"] = rl[:PROJECT_REPO_CAP]
 
-        # ONE flat, bounded ACL sweep across every repo of every project so the
-        # collapsed collection view can show a hygiene SCORE per project without
-        # expanding each. Capped to protect a huge instance.
+        # ONE flat, bounded ACL sweep across every (capped) repo of every
+        # project so the collapsed view can show a hygiene SCORE without
+        # expanding each. Whole-instance cap protects a huge instance.
         pairs = [(i, r) for i, p in enumerate(projects) for r in p["_repolist"]]
         capped = pairs[:PROJECT_SCORE_REPO_CAP]
 
@@ -214,24 +220,36 @@ def ado_projects(force: bool = False) -> dict:
                 return i, r["name"], {}
 
         by_proj: dict[int, dict] = {}
-        all_desc: set[str] = set()
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             for i, rname, aces in pool.map(fetch_acl, capped):
                 by_proj.setdefault(i, {})[rname] = aces
-                all_desc.update(aces.keys())
-        names = _resolve_identities(sorted(all_desc))
 
-        scored_cap = {i for i, _ in capped}
+        # fully-swept projects only (all their repos got ACLs); others -> '?'
+        counts_in_sweep: dict[int, int] = {}
+        for i, _ in capped:
+            counts_in_sweep[i] = counts_in_sweep.get(i, 0) + 1
+        fully = {i for i, p in enumerate(projects)
+                 if counts_in_sweep.get(i, 0) == len(p["_repolist"])}
+
+        # resolve identities PER PROJECT — identical to the detail path, so a
+        # throttled global batch can't desync the badge from the expanded view
+        def score_one(i):
+            p = projects[i]
+            raw = by_proj.get(i, {})
+            descs = sorted({d for aces in raw.values() for d in aces})
+            names_i = _resolve_identities(descs)
+            repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
+            return i, _project_access_analysis(repos, [])
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            for i, an in pool.map(score_one, sorted(fully)):
+                projects[i].update(score=an["score"], grade=an["grade"],
+                                   uniform=an["uniform"],
+                                   pct_repo_specific=an["pct_repo_specific"])
         for i, p in enumerate(projects):
-            if i in scored_cap:
-                repos = _build_repos(p["coll"], p["id"], p["_repolist"],
-                                     by_proj.get(i, {}), names)
-                an = _project_access_analysis(repos, [])
-                p.update(score=an["score"], grade=an["grade"], uniform=an["uniform"],
-                         pct_repo_specific=an["pct_repo_specific"])
-            else:
-                p.update(score=None, grade="?", uniform=None, pct_repo_specific=None,
-                         not_scored=True)
+            if i not in fully:
+                p.update(score=None, grade="?", uniform=None,
+                         pct_repo_specific=None, not_scored=True)
             p.pop("_repolist", None)
 
         projects.sort(key=lambda p: (p["coll"].lower(), p["name"].lower()))
@@ -361,10 +379,13 @@ def ado_project_access(collection: str, project_id: str,
         except requests.RequestException as exc:
             errors.append(f"teams: {_short_http(exc)}")
 
-        # repos — PROJECT-scoped (was collection-scoped, mixing other projects)
+        # repos — PROJECT-scoped, capped the SAME as the list-sweep so the
+        # expanded score matches the badge exactly
         try:
-            repo_list = _ado.coll_get(
-                collection, f"/{project_id}/_apis/git/repositories").get("value", [])[:60]
+            repo_list = sorted(
+                _ado.coll_get(collection,
+                              f"/{project_id}/_apis/git/repositories").get("value", []),
+                key=lambda r: r.get("name", "").lower())[:PROJECT_REPO_CAP]
         except requests.RequestException as exc:
             errors.append(f"repositories: {_short_http(exc)}")
             repo_list = []
@@ -392,7 +413,7 @@ def ado_project_access(collection: str, project_id: str,
         analysis = _project_access_analysis(repos, teams)
         return {"source": "live", "teams": teams, "repos": repos,
                 "analysis": analysis,
-                "repo_cap_note": len(repo_list) >= 60, "errors": errors}
+                "repo_cap_note": len(repo_list) >= PROJECT_REPO_CAP, "errors": errors}
     return _cached(f"ado:project:{collection}:{project_id}", force, build)
 
 

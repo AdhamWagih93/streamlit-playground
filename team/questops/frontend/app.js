@@ -2175,7 +2175,7 @@ function accAdoProjectHtml(d) {
     ? `<div class="kpi-note" style="color:var(--red)">⚠ some ADO calls failed: ${d.errors.map(esc).join(" · ")}</div>` : "";
   return `${errs}${analysisPanel}
     <h4 class="acc-h">teams &amp; members</h4>${teams}
-    <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account grants hidden)${d.repo_cap_note ? " · first 60 repos" : ""}</span></h4>${repos}`;
+    <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account &amp; excluded grants hidden)${d.repo_cap_note ? " · first 200 repos" : ""}</span></h4>${repos}`;
 }
 
 function accJiraHtml(d) {
