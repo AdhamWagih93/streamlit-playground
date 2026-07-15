@@ -582,23 +582,37 @@ def _team_validation(description: str, repos: list[dict],
     ado_teams = ado_teams or []
     team_names = {_norm_ident(t.get("name", "")) for t in ado_teams}
 
+    def _is_team_group(name_norm: str) -> bool:
+        # the LDAP team granted as a group — the ADO identity's last segment
+        # is the group name (e.g. [Proj]\Digital_Innovation -> Digital_Innovation)
+        return bool(team_key) and (team_key == name_norm or team_key in name_norm)
+
     # people who effectively have access: ADO team members + any repo-ACL
-    # identity that isn't itself one of those teams or the team group
+    # identity — EXCLUDING the [TEAM] group itself in whatever form it's
+    # granted (direct repo ACL, an ADO team named for it, or nested as a
+    # member of an ADO team). Any of those forms means the whole team is
+    # granted, so it must not be counted as an out-of-team person.
+    group_granted = False
     people: set[str] = set()
     for t in ado_teams:
-        people.update(t.get("members") or [])
+        if _is_team_group(_norm_ident(t.get("name", ""))):
+            group_granted = True
+        for m in (t.get("members") or []):
+            if _is_team_group(_norm_ident(m)):
+                group_granted = True   # the LDAP group nested inside the team
+                continue
+            people.add(m)
     for r in repos:
         for a in r["acls"]:
             idn = _norm_ident(a["identity"])
-            if idn in team_names or (team_key and team_key in idn):
-                continue  # a group we already expanded / the team group itself
+            if _is_team_group(idn):
+                group_granted = True   # the LDAP group granted on the repo directly
+                continue
+            if idn in team_names:
+                continue               # an ADO team already expanded into people
             people.add(a["identity"])
 
     non_team = sorted(p for p in people if _norm_ident(p) not in member_keys)
-    # whole-team access = the LDAP team is granted as a group somewhere
-    granted_names = {_norm_ident(a["identity"]) for r in repos for a in r["acls"]} | team_names
-    group_granted = bool(team_key) and any(
-        team_key == n or team_key in n for n in granted_names)
     return {"team": team, "group_granted": group_granted,
             "member_count": len(members),
             "ldap_resolved": bool(members),
