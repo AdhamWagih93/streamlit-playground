@@ -2108,6 +2108,7 @@ function accAdoHtml(d) {
             <span class="chip chip-cyan">${s.projects} projects</span>
             <span class="chip chip-green" title="all repos share one ACL set">${s.uniform_projects || 0} uniform</span>
             <span class="chip chip-amber" title="repos have their own ACLs">${s.repo_specific_projects || 0} repo-specific</span>
+            <span class="chip" title="distinct members across the collection">${s.members ?? 0} members</span>
             <span class="chip">${s.teams} teams</span>
             <span class="chip">${s.repos} repos</span>
           </span></summary>
@@ -2118,11 +2119,16 @@ function accAdoHtml(d) {
                 <span class="acc-proj-stats">
                   ${p.uniform === true ? '<span class="chip chip-green">uniform</span>'
                     : p.uniform === false ? `<span class="chip chip-amber">repo-specific ${p.pct_repo_specific}%</span>` : ""}
-                  ${p.team ? (p.team_ok
+                  ${p.team ? (p.team_unassigned
+                    ? (p.team_ok
+                        ? `<span class="chip chip-green" title="unassigned project with no access — healthy">✓ unassigned (no access)</span>`
+                        : `<span class="chip chip-red" title="unassigned project but ${p.team_non_member_count} identit(y/ies) have access">⚠ unassigned — ${p.team_non_member_count} with access</span>`)
+                    : p.team_ok
                     ? `<span class="chip chip-green" title="[${esc(p.team)}] fully granted, no out-of-team access">✓ team [${esc(p.team)}]</span>`
                     : p.team_ldap_resolved === false
                       ? `<span class="chip chip-red" title="LDAP group [${esc(p.team)}] not found — team not set (-15)">⚠ team [${esc(p.team)}] LDAP?</span>`
                       : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
+                  <span class="chip" title="distinct members with access">${p.members ?? 0} members</span>
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
                 </span></summary>
@@ -2145,8 +2151,15 @@ function accAdoProjectHtml(d) {
         : `<span class="chip chip-amber">repo-specific access</span>`)
     : "";
   const tv = an.team_validation;
-  const teamPanel = tv ? `
-    <details class="acc-team ${tv.ldap_resolved && tv.group_granted && !tv.non_team_count ? "team-ok" : "team-bad"}">
+  const teamHealthy = tv && (tv.unassigned ? tv.non_team_count === 0
+    : tv.ldap_resolved && tv.group_granted && !tv.non_team_count);
+  const teamPanel = tv ? (tv.unassigned ? `
+    <div class="acc-team ${teamHealthy ? "team-ok" : "team-bad"}">
+      <b>🚫 [UnAssigned] project</b>
+      <span class="chip ${teamHealthy ? "chip-green" : "chip-red"}">${teamHealthy ? "✓ healthy — no identities have access" : "✗ " + tv.non_team_count + " identit(y/ies) have access (should be none)"}</span>
+      ${(tv.non_team_grants || []).length ? `<div class="ci-meta" style="flex-basis:100%;margin-top:4px">with access: ${tv.non_team_grants.map(esc).join(", ")}</div>` : ""}
+    </div>` : `
+    <details class="acc-team ${teamHealthy ? "team-ok" : "team-bad"}">
       <summary><b>👥 team [${esc(tv.team)}]</b>
       ${!tv.ldap_resolved ? '<span class="chip chip-red">✗ LDAP group not found — team not set (−15)</span>' : `
         <span class="chip">${tv.member_count} LDAP member(s)</span>
@@ -2161,7 +2174,7 @@ function accAdoProjectHtml(d) {
           ? `<div class="acc-members">${tv.ldap_members.map((m) => `<span class="chip">${esc(m)}</span>`).join(" ")}</div>`
           : '<div class="ci-meta">none / LDAP not resolved</div>'}
       </div>
-    </details>` : "";
+    </details>`) : "";
   const analysisPanel = an.total_repos ? `
     <div class="acc-score-line">${scoreBadge(an.score, an.grade)}
       <span class="ci-meta">access-hygiene score — uniform access, low repo-specific sprawl, low admin concentration &amp; valid [TEAM] access score higher</span></div>

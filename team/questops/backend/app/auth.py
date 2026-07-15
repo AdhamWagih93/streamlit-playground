@@ -113,39 +113,52 @@ def ldap_group_members(cn: str) -> list[dict]:
                    for m in _DEMO_LDAP_GROUPS.get(cn.lower(), [])]
         _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": members}
         return members
-    if not (settings.ldap_url and settings.ldap_bind_dn):
+    servers = settings.ldap_servers
+    if not servers:
         return []
+    # try each configured LDAP server; the group may live in any directory
+    for srv in servers:
+        if not (srv["url"] and srv["bind_dn"]):
+            continue
+        found = _ldap_group_on_server(srv, cn)
+        if found is not None:  # None = group not on this server; [] = empty group
+            _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": found}
+            return found
+    # group not found on any server (or all unreachable) — keep stale if any
+    return hit["members"] if hit else []
+
+
+def _ldap_group_on_server(srv: dict, cn: str) -> list[dict] | None:
+    """Members of group `cn` on one LDAP server. None if the group doesn't
+    exist there (so the caller tries the next server); [] for an empty group."""
     try:
         import ldap3
         esc = ldap3.utils.conv.escape_filter_chars
-        server = ldap3.Server(settings.ldap_url, get_info=ldap3.NONE)
-        conn = ldap3.Connection(server, user=settings.ldap_bind_dn,
-                                password=settings.ldap_bind_password, auto_bind=True)
+        server = ldap3.Server(srv["url"], get_info=ldap3.NONE)
+        conn = ldap3.Connection(server, user=srv["bind_dn"],
+                                password=srv["bind_password"], auto_bind=True)
         try:
-            # resolve the group's DN from its CN, then everyone memberOf it
-            conn.search(settings.ldap_base_dn,
+            conn.search(srv["base_dn"],
                         f"(&(|(objectClass=group)(objectClass=groupOfNames))(cn={esc(cn)}))",
                         attributes=["distinguishedName"])
             if not conn.entries:
-                members = []
-            else:
-                gdn = conn.entries[0].entry_dn
-                conn.search(settings.ldap_base_dn, f"(memberOf={esc(gdn)})",
-                            attributes=[settings.ldap_user_attr, "displayName"])
-                members = []
-                for e in conn.entries:
-                    uname = (str(getattr(e, settings.ldap_user_attr))
-                             if settings.ldap_user_attr in e else "")
-                    if uname:
-                        members.append({"username": uname.lower(),
-                                        "display_name": str(e.displayName)
-                                        if "displayName" in e else uname})
+                return None  # not on this server — try the next
+            gdn = conn.entries[0].entry_dn
+            attr = srv["user_attr"]
+            conn.search(srv["base_dn"], f"(memberOf={esc(gdn)})",
+                        attributes=[attr, "displayName"])
+            members = []
+            for e in conn.entries:
+                uname = str(getattr(e, attr)) if attr in e else ""
+                if uname:
+                    members.append({"username": uname.lower(),
+                                    "display_name": str(e.displayName)
+                                    if "displayName" in e else uname})
+            return members
         finally:
             conn.unbind()
-    except Exception:  # noqa: BLE001 — LDAP down: don't break the access page
-        return hit["members"] if hit else []
-    _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": members}
-    return members
+    except Exception:  # noqa: BLE001 — this server unreachable; try the next
+        return None
 
 
 _ROSTER_CACHE: dict = {"at": 0.0, "rows": []}

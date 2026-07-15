@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # role is decided per username: everyone in the group is an APPROVER unless
     # listed here (comma-separated usernames -> plain member)
     member_usernames: str = ""
+    # additional LDAP servers for group lookups (some groups live in another
+    # directory). JSON array of objects; each may set url/bind_dn/bind_password/
+    # base_dn/user_attr — missing fields fall back to the primary above. e.g.
+    # [{"url":"ldaps://dc2:636","bind_dn":"...","bind_password":"...","base_dn":"..."}]
+    ldap_extra_servers: str = ""
 
     # --- Repositories page ---
     # repos are DEFINED FROM THE UI (stored in the database); config carries
@@ -137,6 +142,28 @@ class Settings(BaseSettings):
     @property
     def ado_access_exclude_list(self) -> set[str]:
         return {u.strip().lower() for u in self._csv(self.ado_access_exclude)}
+
+    @property
+    def ldap_servers(self) -> list[dict]:
+        """All LDAP servers to try for group lookups: the primary, then any
+        extras. Each extra inherits unset fields from the primary."""
+        import json
+        primary = {"url": self.ldap_url, "bind_dn": self.ldap_bind_dn,
+                   "bind_password": self.ldap_bind_password,
+                   "base_dn": self.ldap_base_dn, "user_attr": self.ldap_user_attr}
+        servers = [primary] if self.ldap_url else []
+        if self.ldap_extra_servers.strip():
+            try:
+                for s in json.loads(self.ldap_extra_servers):
+                    servers.append({
+                        "url": s.get("url") or self.ldap_url,
+                        "bind_dn": s.get("bind_dn") or self.ldap_bind_dn,
+                        "bind_password": s.get("bind_password", self.ldap_bind_password),
+                        "base_dn": s.get("base_dn") or self.ldap_base_dn,
+                        "user_attr": s.get("user_attr") or self.ldap_user_attr})
+            except (ValueError, AttributeError, TypeError):
+                pass
+        return servers
 
     @property
     def ado_git_password(self) -> str:
