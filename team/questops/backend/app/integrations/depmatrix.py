@@ -18,7 +18,9 @@ Reference extraction is static and layered:
                            import_playbook, role meta dependencies
 Reachability starts at the pipelines: everything not reached is UNUSED."""
 
+import posixpath
 import re
+import shlex
 from pathlib import Path
 
 from .repos import RepoError, _repo_by_slot, _workspace
@@ -34,8 +36,39 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__"}
 
 _PATH_RE = re.compile(r"(?:pipelines|playbooks|scripts)/[\w\-./]+")
 _TOKEN_RE = re.compile(r"[\w\-.]*\w\.(?:sh|py|yml|yaml|groovy)\b")
-_CALLER_RE = re.compile(
-    r"podman_run_(script|playbook)\.sh['\"]?\s+['\"]?(\$?[\w\-./{}]+)")
+# full invocation line after the caller name — parsed by the REAL conventions:
+#   podman_run_script.sh   <env> <script_category> <script_name> <container> <args>
+#   podman_run_playbook.sh <env> <inventory> <playbook_name> <path> <container> <args>
+# env must be 'prd' — anything else raises a flag
+_CALL_LINE_RE = re.compile(r"podman_run_(script|playbook)\.sh\s+([^\n;|&]+)")
+
+
+def _split_call_args(argstr: str) -> list[str]:
+    try:
+        toks = shlex.split(argstr)
+    except ValueError:
+        toks = argstr.split()
+    return [t.strip("'\"`") for t in toks if t.strip("'\"`")]
+
+
+def _parse_caller_calls(text: str) -> list[dict]:
+    calls = []
+    for kind, argstr in _CALL_LINE_RE.findall(text):
+        toks = _split_call_args(argstr)
+        call: dict = {"kind": kind, "raw": argstr.strip()[:160]}
+        if kind == "script" and len(toks) >= 3:
+            call.update(env=toks[0], category=toks[1], name=toks[2],
+                        container=toks[3] if len(toks) > 3 else None,
+                        args=toks[4] if len(toks) > 4 else None)
+        elif kind == "playbook" and len(toks) >= 4:
+            call.update(env=toks[0], inventory=toks[1], name=toks[2],
+                        path=toks[3],
+                        container=toks[4] if len(toks) > 4 else None,
+                        args=toks[5] if len(toks) > 5 else None)
+        else:  # short/legacy form — resolve any file-looking token
+            call.update(env=None, legacy=True, toks=toks)
+        calls.append(call)
+    return calls
 _IMPORT_PLAYBOOK_RE = re.compile(r"import_playbook:\s*['\"]?([\w\-./]+)")
 _INCLUDE_TASKS_RE = re.compile(r"(?:include_tasks|import_tasks):\s*['\"]?([\w\-./]+\.ya?ml)")
 _INCLUDE_TASKS_FILE_RE = re.compile(
@@ -201,16 +234,41 @@ def analyze(slot: int, username: str | None = None) -> dict:
             ambiguous.append({"src": src, "token": f"role {name}", "candidates": picked})
         return picked
 
-    def resolve_caller_arg(src: str, kind: str, arg: str) -> list[str]:
-        if "$" in arg or "{" in arg:
-            dynamic.append({"src": src, "arg": arg})
-            return []
-        prefix = "scripts" if kind == "script" else "playbooks"
-        for candidate in (arg, f"{prefix}/{arg}"):
-            hit = resolve_path(candidate)
+    env_flags: list[dict] = []
+
+    def _resolve_call(src: str, call: dict) -> str | None:
+        """Resolve one caller invocation to its target node using the real
+        parameter conventions; falls back to legacy token resolution."""
+        if call.get("legacy"):
+            for t in call.get("toks", []):
+                if "$" in t or "{" in t:
+                    continue
+                hit = (resolve_path(t) or resolve_path(f"scripts/{t}")
+                       or resolve_path(f"playbooks/{t}"))
+                if not hit and re.search(r"\.\w+$", t):
+                    hits = resolve_token(src, Path(t).name)
+                    hit = hits[0] if hits else None
+                if hit:
+                    return hit
+            return None
+        name = call.get("name") or ""
+        sub = (call.get("category") if call["kind"] == "script"
+               else call.get("path")) or ""
+        if any("$" in v or "{" in v for v in (name, sub)):
+            dynamic.append({"src": src, "arg": call["raw"]})
+            return None
+        prefix = "scripts" if call["kind"] == "script" else "playbooks"
+        sub = sub.strip("/")
+        names = [name] if "." in name else (
+            [name] if call["kind"] == "script" else [name + ".yml", name + ".yaml", name])
+        for nm in names:
+            cand = posixpath.normpath(
+                "/".join(x for x in (prefix, sub if sub not in (".", "") else "", nm) if x))
+            hit = resolve_path(cand)
             if hit:
-                return [hit]
-        return resolve_token(src, Path(arg).name)
+                return hit
+        hits = resolve_token(src, Path(name).name)
+        return hits[0] if hits else None
 
     # ---------------------------------------------------------- extraction
     def node_text(n: dict) -> str:
@@ -229,8 +287,19 @@ def analyze(slot: int, username: str | None = None) -> dict:
                 refs.add(hit)
         for token in set(_TOKEN_RE.findall(text)):
             refs.update(resolve_token(nid, token))
-        for kind, arg in _CALLER_RE.findall(text):
-            refs.update(resolve_caller_arg(nid, kind, arg))
+        node_calls = []
+        for call in _parse_caller_calls(text):
+            target = _resolve_call(nid, call)
+            if target:
+                refs.add(target)
+                call["target"] = target
+            env = call.get("env")
+            if env and "$" not in env and env.lower() != "prd":
+                env_flags.append({"src": nid, "env": env,
+                                  "target": target, "raw": call["raw"]})
+            call.pop("toks", None)
+            node_calls.append(call)
+        n["calls"] = node_calls
         if n["type"] in ("playbook", "role"):
             for name in _roles_block_names(text, "roles"):
                 refs.update(resolve_role(nid, name))
@@ -291,6 +360,7 @@ def analyze(slot: int, username: str | None = None) -> dict:
             "used": nid in used,
             "jenkins_jobs": sorted(jobs) if jobs is not None else None,
             "internals": n.get("internals"),
+            "calls": n.get("calls") or [],
         })
     unused = {
         t: sorted(x["path"] for x in out_nodes if x["type"] == t and not x["used"])
@@ -320,6 +390,7 @@ def analyze(slot: int, username: str | None = None) -> dict:
             "nodes": out_nodes, "roots": sorted(roots),
             "unused": unused, "stats": stats, "jenkins": jenkins_info,
             "orphan_task_files": orphan_task_files,
+            "env_flags": env_flags[:100],
             "ambiguous": ambiguous[:50], "dynamic": dynamic[:50],
             "files_scanned": file_count,
             "truncated": file_count >= MAX_FILES}

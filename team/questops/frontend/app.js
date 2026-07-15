@@ -1785,15 +1785,26 @@ function roleInternalsHtml(n) {
   return `<div class="dep-kids dep-role-tasks">${chain}${orphans}</div>`;
 }
 
-function depTree(map, id, seen) {
+function callMetaHtml(parent, childId) {
+  const c = (parent && parent.calls || []).find((x) => x.target === childId);
+  if (!c) return "";
+  const bits = [];
+  if (c.env) bits.push(`<span class="chip ${c.env.toLowerCase() === "prd" ? "chip-green" : "chip-red"}" title="caller environment argument">env ${esc(c.env)}</span>`);
+  if (c.inventory) bits.push(`<span class="chip" title="ansible inventory">inv ${esc(c.inventory)}</span>`);
+  if (c.container) bits.push(`<span class="chip" title="container">ctr ${esc(c.container)}</span>`);
+  if (c.args) bits.push(`<span class="ci-meta" title="${esc(c.args)}">+args</span>`);
+  return bits.join(" ");
+}
+
+function depTree(map, id, seen, meta) {
   const n = map[id];
   if (!n) return "";
   if (seen.has(id))
     return `<div class="dep-leaf ci-meta">↻ ${esc(n.path)} (cycle)</div>`;
   const next = new Set(seen); next.add(id);
-  const kids = (n.out || []).map((c) => depTree(map, c, next)).join("")
+  const kids = (n.out || []).map((c) => depTree(map, c, next, callMetaHtml(n, c))).join("")
     + (n.type === "role" ? roleInternalsHtml(n) : "");
-  const label = `${DEP_ICON(n)} <code>${esc(n.path)}</code>
+  const label = `${DEP_ICON(n)} <code>${esc(n.path)}</code> ${meta || ""}
     ${n.type === "role" && n.files ? `<span class="ci-meta">${n.files.length} file(s)</span>` : ""}
     ${n.used ? "" : '<span class="chip chip-red">unused</span>'}`;
   return kids
@@ -1880,6 +1891,15 @@ async function renderDeps(refresh) {
     .join("")
     || `<div class="empty">✅ everything is reachable from the pipelines</div>`;
 
+  const envFlags = (d.env_flags || []).map((f) => `
+    <div class="ci-row"><span class="chip chip-red">env ${esc(f.env)}</span>
+      <code class="ci-job" title="${esc(f.raw)}">${esc(f.src.replace(/^role:/, ""))}</code>
+      ${f.target ? `<span class="ci-meta">→ ${esc(f.target.replace(/^role:/, ""))}</span>` : ""}
+    </div>`).join("");
+  const envPanel = envFlags ? `
+    <h2 class="panel-divider">🚩 non-prd caller invocations — should be prd</h2>
+    ${envFlags}` : "";
+
   const jk = d.jenkins || { available: false };
   const jenkinsPanel = !jk.available
     ? `<div class="kpi-note">ℹ Jenkins cross-reference unavailable — configure Jenkins to see which pipeline files are wired to real jobs</div>`
@@ -1932,6 +1952,7 @@ async function renderDeps(refresh) {
         <div class="panel" style="margin-bottom:18px">
           <h2>🗑 unused files — candidates for cleanup</h2>
           <div class="ci-scroll">${unusedList}</div>
+          ${envPanel}
           ${jenkinsPanel}</div>
         <div class="panel"><h2>🔎 full matrix — ${d.nodes.length} nodes
           <span class="ov-more">${d.cached ? "cached · " : ""}${d.files_scanned} files scanned</span></h2>

@@ -52,21 +52,25 @@ DEMO_REPO_FILES = {
     },
     "Engine": {
         "README.md": "# Engine\n\nPipelines (groovy), playbooks+roles, and scripts.\n",
+        # real caller conventions:
+        # podman_run_script.sh   <env> <category> <script> <container> <args>
+        # podman_run_playbook.sh <env> <inventory> <playbook> <path> <container> <args>
         "pipelines/payments-service.groovy":
             "pipeline {\n  agent { label 'java' }\n  stages {\n"
-            "    stage('Build') { steps { sh './scripts/podman_run_script.sh build_java.sh payments' } }\n"
+            "    stage('Build') { steps { sh './scripts/podman_run_script.sh prd java build_java.sh tools-java \"-Pservice=payments\"' } }\n"
             "    stage('Unit Tests') { steps { sh './gradlew test' } }  "
             "// testcontainers: needs the docker daemon\n"
-            "    stage('Deploy') { steps { sh './scripts/podman_run_playbook.sh deploy/deploy_app.yml' } }\n"
+            "    stage('Deploy') { steps { sh './scripts/podman_run_playbook.sh prd prod_inventory deploy_app.yml deploy tools-ansible \"-e app=payments\"' } }\n"
             "  }\n}\n",
         "pipelines/checkout-service.groovy":
             "pipeline {\n  agent { label 'java' }\n  stages {\n"
-            "    stage('Build') { steps { sh './scripts/podman_run_script.sh build_java.sh checkout' } }\n"
+            "    stage('Build') { steps { sh './scripts/podman_run_script.sh prd java build_java.sh tools-java \"-Pservice=checkout\"' } }\n"
             "  }\n}\n",
-        # arbitrary name, no extension — and no Jenkins job points at it
+        # arbitrary name, no extension, not wired to Jenkins — and calling
+        # with env=dev, which must raise a flag
         "pipelines/nightly/db-maintenance":
             "pipeline {\n  agent any\n  stages {\n"
-            "    stage('Vacuum') { steps { sh 'echo vacuum' } }\n  }\n}\n",
+            "    stage('Vacuum') { steps { sh './scripts/podman_run_script.sh dev java build_java.sh tools-java' } }\n  }\n}\n",
         # scripts — incl. the standard callers and one orphan
         "scripts/podman_run_script.sh":
             "#!/bin/bash\n# standard caller: runs a script inside the tool container\n"
@@ -74,8 +78,8 @@ DEMO_REPO_FILES = {
         "scripts/podman_run_playbook.sh":
             "#!/bin/bash\n# standard caller: runs a playbook inside the tool container\n"
             "exec podman run --rm -v \"$PWD:/w\" tools ansible-playbook \"/w/playbooks/$1\"\n",
-        "scripts/build_java.sh":
-            "#!/bin/bash\nsource scripts/common/setup_env.sh\n./gradlew build -Pservice=$1\n",
+        "scripts/java/build_java.sh":
+            "#!/bin/bash\nsource scripts/common/setup_env.sh\n./gradlew build \"$@\"\n",
         "scripts/common/setup_env.sh":
             "#!/bin/bash\nexport JAVA_HOME=/opt/java\nexport GRADLE_OPTS=-Xmx2g\n",
         "scripts/orphan_cleanup.sh":
