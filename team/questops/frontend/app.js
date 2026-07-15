@@ -1763,13 +1763,36 @@ const DEP_ICON = (n) => n.type === "pipeline" ? "⚙" : n.type === "playbook" ? 
   : n.type === "role" ? "🎭" : n.type === "caller" ? "🔁"
   : n.path.endsWith(".py") ? "🐍" : "🐚";
 
+function roleTaskTree(n, file, seen) {
+  const short = file.split("/tasks/")[1] || file;
+  const kids = (n.internals.includes[file] || [])
+    .filter((f) => !seen.has(f))
+    .map((f) => { seen.add(f); return roleTaskTree(n, f, seen); }).join("");
+  const label = `📄 <code>${esc(short)}</code>`;
+  return kids
+    ? `<details class="dep-node" open><summary>${label}</summary><div class="dep-kids">${kids}</div></details>`
+    : `<div class="dep-leaf">${label}</div>`;
+}
+
+function roleInternalsHtml(n) {
+  const it = n.internals;
+  if (!it || !it.entry) return "";
+  const seen = new Set([it.entry]);
+  const chain = roleTaskTree(n, it.entry, seen);
+  const orphans = (it.orphan_tasks || []).map((f) => `
+    <div class="dep-leaf">📄 <code>${esc(f.split("/tasks/")[1] || f)}</code>
+      <span class="chip chip-red" title="not reachable from this role's tasks/main.yml">not included</span></div>`).join("");
+  return `<div class="dep-kids dep-role-tasks">${chain}${orphans}</div>`;
+}
+
 function depTree(map, id, seen) {
   const n = map[id];
   if (!n) return "";
   if (seen.has(id))
     return `<div class="dep-leaf ci-meta">↻ ${esc(n.path)} (cycle)</div>`;
   const next = new Set(seen); next.add(id);
-  const kids = (n.out || []).map((c) => depTree(map, c, next)).join("");
+  const kids = (n.out || []).map((c) => depTree(map, c, next)).join("")
+    + (n.type === "role" ? roleInternalsHtml(n) : "");
   const label = `${DEP_ICON(n)} <code>${esc(n.path)}</code>
     ${n.type === "role" && n.files ? `<span class="ci-meta">${n.files.length} file(s)</span>` : ""}
     ${n.used ? "" : '<span class="chip chip-red">unused</span>'}`;
@@ -1849,7 +1872,12 @@ async function renderDeps(refresh) {
   const unusedList = ["script", "playbook", "role"].flatMap((t) =>
     (d.unused[t] || []).map((p) => `
       <div class="ci-row"><span class="chip chip-red">${t}</span>
-        <code class="ci-job">${esc(p)}</code></div>`)).join("")
+        <code class="ci-job">${esc(p)}</code></div>`))
+    .concat((d.orphan_task_files || []).map((o) => `
+      <div class="ci-row"><span class="chip chip-red">role task</span>
+        <code class="ci-job">${esc(o.file)}</code>
+        <span class="ci-meta" title="${esc(o.role)}">not included from main.yml</span></div>`))
+    .join("")
     || `<div class="empty">✅ everything is reachable from the pipelines</div>`;
 
   const jk = d.jenkins || { available: false };
@@ -1873,20 +1901,22 @@ async function renderDeps(refresh) {
     d.dynamic.length ? `ℹ ${d.dynamic.length} dynamic call(s) (variable arguments) could not be resolved statically` : "",
   ].filter(Boolean).map((n) => `<div class="kpi-note">${n}</div>`).join("");
 
-  const q = (state.depQuery || "").toLowerCase();
-  const matrixRows = d.nodes
-    .filter((n) => !q || n.path.toLowerCase().includes(q) || n.type.includes(q)
-                 || (q === "unused" && !n.used) || (q === "used" && n.used))
-    .sort((a, b) => (a.used === b.used ? a.path.localeCompare(b.path) : a.used ? 1 : -1))
-    .slice(0, 300)
-    .map((n) => `
-      <div class="ci-row">
-        <span>${DEP_ICON(n)}</span>
-        <code class="ci-job">${esc(n.path)}</code>
-        <span class="chip">${esc(n.type)}</span>
-        <span class="ci-meta">→ ${n.out.length} · ← ${n.in_count}</span>
-        <span class="chip ${n.used ? "chip-green" : "chip-red"}">${n.used ? "used" : "unused"}</span>
-      </div>`).join("") || `<div class="empty">no matches</div>`;
+  const matrixRowsHtml = (query) => {
+    const q = (query || "").toLowerCase();
+    return d.nodes
+      .filter((n) => !q || n.path.toLowerCase().includes(q) || n.type.includes(q)
+                   || (q === "unused" && !n.used) || (q === "used" && n.used))
+      .sort((a, b) => (a.used === b.used ? a.path.localeCompare(b.path) : a.used ? 1 : -1))
+      .slice(0, 300)
+      .map((n) => `
+        <div class="ci-row">
+          <span>${DEP_ICON(n)}</span>
+          <code class="ci-job">${esc(n.path)}</code>
+          <span class="chip">${esc(n.type)}</span>
+          <span class="ci-meta">→ ${n.out.length} · ← ${n.in_count}</span>
+          <span class="chip ${n.used ? "chip-green" : "chip-red"}">${n.used ? "used" : "unused"}</span>
+        </div>`).join("") || `<div class="empty">no matches</div>`;
+  };
 
   view().innerHTML = head + `
     ${notes}
@@ -1895,8 +1925,8 @@ async function renderDeps(refresh) {
       <div class="panel">
         <h2>⚙ pipelines — pick one to trace</h2>
         <div class="ci-scroll">${rootList}</div>
-        <h2 class="panel-divider">⛓ dependency tree — ${esc(state.depRoot ? map[state.depRoot].path : "")}</h2>
-        <div class="dep-tree">${state.depRoot ? depTree(map, state.depRoot, new Set()) : ""}</div>
+        <h2 class="panel-divider">⛓ dependency tree — <span id="dep-tree-title">${esc(state.depRoot ? map[state.depRoot].path : "")}</span></h2>
+        <div class="dep-tree" id="dep-tree-box">${state.depRoot ? depTree(map, state.depRoot, new Set()) : ""}</div>
       </div>
       <div>
         <div class="panel" style="margin-bottom:18px">
@@ -1908,34 +1938,41 @@ async function renderDeps(refresh) {
           <div class="repo-bar" style="margin-bottom:8px">
             <input id="dep-search" placeholder="filter by path / type / used / unused" value="${esc(state.depQuery || "")}" style="flex:1">
           </div>
-          <div class="ci-scroll" style="max-height:420px">${matrixRows}</div></div>
+          <div class="ci-scroll" style="max-height:420px" id="dep-matrix-rows">${matrixRowsHtml(state.depQuery)}</div></div>
       </div>
     </div>`;
   wireDeps(cur);
+
+  // in-place interactions — no full re-render, no flash, no focus loss
+  view().querySelectorAll("[data-dep-root]").forEach((el) => el.onclick = () => {
+    state.depRoot = el.dataset.depRoot;
+    view().querySelectorAll("[data-dep-root]").forEach((row) =>
+      row.classList.toggle("open", row === el));
+    const title = document.getElementById("dep-tree-title");
+    const box = document.getElementById("dep-tree-box");
+    if (title) title.textContent = map[state.depRoot].path;
+    if (box) box.innerHTML = depTree(map, state.depRoot, new Set());
+  });
+  const s = document.getElementById("dep-search");
+  if (s) s.oninput = () => {
+    state.depQuery = s.value;
+    clearTimeout(state._depT);
+    state._depT = setTimeout(() => {
+      const rows = document.getElementById("dep-matrix-rows");
+      if (rows) rows.innerHTML = matrixRowsHtml(state.depQuery);
+    }, 120);
+  };
 }
 
 function wireDeps(cur) {
+  // only repo switch and re-analyze do a full render (they change the data)
   view().querySelectorAll("[data-dep-repo]").forEach((b) => b.onclick = () => {
     state.depSlot = parseInt(b.dataset.depRepo, 10);
     state.depRoot = null;
     renderDeps();
   });
-  view().querySelectorAll("[data-dep-root]").forEach((el) => el.onclick = () => {
-    state.depRoot = el.dataset.depRoot;
-    renderDeps();
-  });
   const r = document.getElementById("dep-refresh");
   if (r) r.onclick = () => renderDeps(true);
-  const s = document.getElementById("dep-search");
-  if (s) {
-    s.oninput = () => {
-      state.depQuery = s.value;
-      clearTimeout(state._depT);
-      state._depT = setTimeout(() => renderDeps(), 250);
-    };
-    s.focus();
-    s.setSelectionRange(s.value.length, s.value.length);
-  }
 }
 
 /* ================= UPGRADES ================= */

@@ -91,7 +91,11 @@ DEMO_REPO_FILES = {
             "      shell: scripts/common/setup_env.sh && systemctl restart app\n",
         "playbooks/deploy/roles/app_deploy/tasks/main.yml":
             "---\n- include_role:\n    name: common_checks\n"
-            "- name: deploy artifact\n  copy: src=app.jar dest=/opt/app\n",
+            "- include_tasks: deploy_steps.yml\n",
+        "playbooks/deploy/roles/app_deploy/tasks/deploy_steps.yml":
+            "---\n- name: deploy artifact\n  copy: src=app.jar dest=/opt/app\n",
+        "playbooks/deploy/roles/app_deploy/tasks/old_steps.yml":
+            "---\n- name: legacy steps nobody includes\n  debug: msg=old\n",
         "playbooks/deploy/roles/common_checks/tasks/main.yml":
             "---\n- name: check disk\n  shell: df -h\n",
         "playbooks/deploy/roles/unused_role/tasks/main.yml":

@@ -37,6 +37,9 @@ _TOKEN_RE = re.compile(r"[\w\-.]*\w\.(?:sh|py|yml|yaml|groovy)\b")
 _CALLER_RE = re.compile(
     r"podman_run_(script|playbook)\.sh['\"]?\s+['\"]?(\$?[\w\-./{}]+)")
 _IMPORT_PLAYBOOK_RE = re.compile(r"import_playbook:\s*['\"]?([\w\-./]+)")
+_INCLUDE_TASKS_RE = re.compile(r"(?:include_tasks|import_tasks):\s*['\"]?([\w\-./]+\.ya?ml)")
+_INCLUDE_TASKS_FILE_RE = re.compile(
+    r"(?:include_tasks|import_tasks):\s*\n(?:[^\n]*\n)?\s*file:\s*['\"]?([\w\-./]+)")
 _INCLUDE_ROLE_RE = re.compile(
     r"(?:include_role|import_role)\b[^\n]*\n(?:[^\n]*\n)?\s*name:\s*['\"]?([\w\-.]+)"
     r"|(?:include_role|import_role):\s*['\"]?([\w\-.]+)")
@@ -91,6 +94,10 @@ def analyze(slot: int, username: str | None = None) -> dict:
         file_count += 1
         top = parts[0]
         if top == "pipelines":
+            # Archived pipelines are retired on purpose — not nodes, not
+            # roots, and never noise in the not-wired report
+            if any(seg.lower() == "archived" for seg in parts[1:-1]):
+                continue
             # ANY file under pipelines/ is a pipeline — they carry arbitrary
             # names, not .groovy/Jenkinsfile — except docs/assets
             if (p.name.startswith(".")
@@ -111,12 +118,46 @@ def analyze(slot: int, username: str | None = None) -> dict:
             ntype = "caller" if p.name in CALLERS else "script"
             nodes[rel] = {"id": rel, "type": ntype, "path": rel, "out": set()}
 
+    def _role_internals(rel_files: list[str]) -> dict | None:
+        """The role's OWN task graph: tasks/main.yml is the entry point;
+        include_tasks/import_tasks chains from it; anything under tasks/
+        it never reaches is an orphan."""
+        tasks = [f for f in rel_files
+                 if "/tasks/" in f and f.endswith((".yml", ".yaml"))]
+        if not tasks:
+            return None
+        by_name = {Path(f).name: f for f in tasks}
+        includes: dict[str, list[str]] = {}
+        for f in tasks:
+            text = _read(root / f)
+            refs = set()
+            for m in (_INCLUDE_TASKS_RE.findall(text)
+                      + _INCLUDE_TASKS_FILE_RE.findall(text)):
+                hit = by_name.get(Path(m.strip("'\"")).name)
+                if hit and hit != f:
+                    refs.add(hit)
+            includes[f] = sorted(refs)
+        entry = next((f for f in tasks
+                      if Path(f).name in ("main.yml", "main.yaml")), None)
+        reached: set[str] = set()
+        stack = [entry] if entry else []
+        while stack:
+            cur = stack.pop()
+            if cur in reached:
+                continue
+            reached.add(cur)
+            stack.extend(includes.get(cur, []))
+        return {"entry": entry, "tasks": sorted(tasks), "includes": includes,
+                "orphan_tasks": sorted(set(tasks) - reached) if entry else []}
+
     for role_id, files in role_files.items():
         role_path = role_id[len("role:"):]
+        rel_files = sorted(str(f.relative_to(root)) for f in files)
         nodes[role_id] = {"id": role_id, "type": "role", "path": role_path,
                           "name": Path(role_path).name,
                           "group": Path(role_path).parts[1] if len(Path(role_path).parts) > 1 else "",
-                          "files": sorted(str(f.relative_to(root)) for f in files),
+                          "files": rel_files,
+                          "internals": _role_internals(rel_files),
                           "out": set()}
 
     # lookup indexes ----------------------------------------------------
@@ -249,6 +290,7 @@ def analyze(slot: int, username: str | None = None) -> dict:
             "in_count": in_counts[nid],
             "used": nid in used,
             "jenkins_jobs": sorted(jobs) if jobs is not None else None,
+            "internals": n.get("internals"),
         })
     unused = {
         t: sorted(x["path"] for x in out_nodes if x["type"] == t and not x["used"])
@@ -267,9 +309,17 @@ def analyze(slot: int, username: str | None = None) -> dict:
         if script_paths else [],
         "missing": jenkins_missing,
     }
+    # task ymls inside USED roles that the role's main.yml chain never includes
+    orphan_task_files = sorted(
+        ({"role": n["path"], "file": f}
+         for nid, n in nodes.items()
+         if n["type"] == "role" and nid in used and n.get("internals")
+         for f in n["internals"]["orphan_tasks"]),
+        key=lambda x: x["file"])
     return {"repo": {"slot": repo["slot"], "name": repo["name"]},
             "nodes": out_nodes, "roots": sorted(roots),
             "unused": unused, "stats": stats, "jenkins": jenkins_info,
+            "orphan_task_files": orphan_task_files,
             "ambiguous": ambiguous[:50], "dynamic": dynamic[:50],
             "files_scanned": file_count,
             "truncated": file_count >= MAX_FILES}
