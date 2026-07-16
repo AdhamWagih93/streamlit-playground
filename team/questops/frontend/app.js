@@ -2037,10 +2037,24 @@ const srcLabel = (d) => `${esc(d.source)}${d.cached ? " · cached" : ""}`;
 
 const ACC_WHAT = {
   summary: "tallying projects, repos, teams & cross-system overlap",
+  ldap: "checking configured LDAP servers",
   ado: "querying Azure DevOps for projects",
   jira: "reading Jira permission schemes & their project assignments",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
 };
+
+function accLdapHtml(d) {
+  if (!(d.servers || []).length)
+    return `<div class="empty">${esc(d.note || "no LDAP servers configured")}</div>`;
+  return d.servers.map((s) => `
+    <div class="ci-row">
+      <span class="ci-dot ${s.healthy ? "dot-green" : "dot-red"}"></span>
+      <code class="ci-job">${esc(s.url)}</code>
+      ${s.primary ? '<span class="chip chip-cyan">primary</span>' : '<span class="chip">extra</span>'}
+      <span class="chip ${s.healthy ? "chip-green" : "chip-red"}">${s.healthy ? "✓ reachable" : "✗ " + esc(s.note)}</span>
+      ${s.healthy ? `<span class="ci-meta">${esc(s.note)}</span>` : ""}
+    </div>`).join("");
+}
 
 async function accLoad(section, url, renderFn) {
   const box = document.getElementById(`acc-${section}`);
@@ -2124,10 +2138,12 @@ function accAdoHtml(d) {
   const capNote = (d.total_repos && d.scored_repos < d.total_repos)
     ? ` · scored ${d.scored_repos}/${d.total_repos} repos (cap)` : "";
   const failed = d.ldap_failed_teams || [];
+  const failProjects = failed.reduce((n, f) => n + (f.count || 0), 0);
   const failBanner = failed.length ? `
     <div class="remote-banner remote-new" style="margin-bottom:10px">
-      <b>⚠ ${failed.length} project team(s) failed LDAP validation — treated as team-not-set (−15 each)</b>
-      ${failed.map((f) => `<div class="ci-meta">• <b>${esc(f.project)}</b> (${esc(f.coll)}) → LDAP group <b>[${esc(f.team)}]</b> not found</div>`).join("")}
+      <b>⚠ ${failed.length} LDAP group(s) not found — ${failProjects} project(s) affected (team-not-set, −15 each)</b>
+      ${failed.map((f) => `<div class="ci-meta" style="margin-top:3px">• group <b>[${esc(f.team)}]</b> not in LDAP — used by ${f.count} project(s):
+        ${f.projects.map((p) => `${esc(p.project)} <span class="ci-meta">(${esc(p.coll)})</span>`).join(", ")}</div>`).join("")}
     </div>` : "";
 
   return failBanner + `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote} — score = access hygiene (A best); collections collapsed, click to expand</div>`
@@ -2161,7 +2177,11 @@ function accAdoHtml(d) {
                     : p.team_ldap_resolved === false
                       ? `<span class="chip chip-red" title="LDAP group [${esc(p.team)}] not found — team not set (-15)">⚠ team [${esc(p.team)}] LDAP?</span>`
                       : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
-                  <span class="chip" title="distinct members with access">${p.members ?? 0} members</span>
+                  ${(p.members ?? 0) === 0
+                    ? (p.team_unassigned
+                        ? '<span class="chip chip-green" title="no members — expected for an unassigned project">0 members</span>'
+                        : '<span class="chip chip-red" title="no members have access to this project">⚠ 0 members</span>')
+                    : `<span class="chip" title="distinct members with access">${p.members} members</span>`}
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
                 </span></summary>
@@ -2378,6 +2398,8 @@ async function renderAccess() {
       ADO project details load only when expanded, and fetches are bounded-parallel</div>
     <div class="panel" style="margin-bottom:18px"><h2>📊 at a glance</h2>
       <div id="acc-summary"></div></div>
+    <div class="panel" style="margin-bottom:18px"><h2>🔐 LDAP servers</h2>
+      <div id="acc-ldap"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
     <div class="panel"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
@@ -2386,6 +2408,7 @@ async function renderAccess() {
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
+    accLoad("ldap", `/api/access/ldap${s}`, accLdapHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
   };

@@ -22,6 +22,11 @@ def summary(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.access_summary, refresh)
 
 
+@router.get("/ldap")
+def ldap(refresh: bool = False, user: User = Depends(current_user)):
+    return _wrap(access.ldap_health, refresh)
+
+
 @router.get("/ado")
 def ado(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.ado_projects, refresh)

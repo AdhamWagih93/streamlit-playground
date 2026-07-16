@@ -97,64 +97,98 @@ _DEMO_LDAP_GROUPS = {
 }
 
 
-def ldap_group_members(cn: str) -> list[dict]:
-    """Members of an arbitrary LDAP group by its CN (used for ADO project
-    [TEAM] validation). Cached 1h; LDAP outages return the stale/empty set
-    rather than raising."""
+def ldap_group_members(cn: str) -> dict:
+    """Resolve an LDAP group by CN across all configured servers. Returns
+    {"found": bool, "members": [{username, display_name}]}. 'found' is True
+    even when the group has zero members — distinct from 'group not found on
+    any server', so a real-but-empty group is NOT mistaken for missing.
+    Cached 1h; LDAP outages return the stale/empty result rather than raising."""
     import time
     cn = (cn or "").strip()
     if not cn:
-        return []
+        return {"found": False, "members": []}
     hit = _LDAP_GROUP_CACHE.get(cn.lower())
     if hit and time.time() - hit["at"] < _LDAP_GROUP_TTL:
-        return hit["members"]
+        return hit["value"]
     if settings.demo_mode:
-        members = [{"username": m.split()[0].lower(), "display_name": m}
-                   for m in _DEMO_LDAP_GROUPS.get(cn.lower(), [])]
-        _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": members}
-        return members
-    servers = settings.ldap_servers
-    if not servers:
-        return []
+        raw = _DEMO_LDAP_GROUPS.get(cn.lower())
+        value = {"found": raw is not None,
+                 "members": [{"username": m.split()[0].lower(), "display_name": m}
+                             for m in (raw or [])]}
+        _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "value": value}
+        return value
     # try each configured LDAP server; the group may live in any directory
-    for srv in servers:
+    for srv in settings.ldap_servers:
         if not (srv["url"] and srv["bind_dn"]):
             continue
-        found = _ldap_group_on_server(srv, cn)
-        if found is not None:  # None = group not on this server; [] = empty group
-            _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "members": found}
-            return found
-    # group not found on any server (or all unreachable) — keep stale if any
-    return hit["members"] if hit else []
+        res = _ldap_group_on_server(srv, cn)
+        if res is not None:  # found on this server (even if empty)
+            _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "value": res}
+            return res
+    return hit["value"] if hit else {"found": False, "members": []}
 
 
-def _ldap_group_on_server(srv: dict, cn: str) -> list[dict] | None:
-    """Members of group `cn` on one LDAP server. None if the group doesn't
-    exist there (so the caller tries the next server); [] for an empty group."""
+# group object classes across AD / OpenLDAP / RFC2307
+_LDAP_GROUP_CLASSES = ("group", "groupOfNames", "groupOfUniqueNames",
+                       "groupOfMembers", "posixGroup")
+
+
+def _rdn_value(dn: str) -> tuple[str, str]:
+    """(attr, value) of a DN's leading RDN, e.g. 'CN=John Doe,...' -> ('cn','John Doe')."""
+    rdn = str(dn).split(",")[0]
+    k, _, v = rdn.partition("=")
+    return k.strip().lower(), v.strip()
+
+
+def _ldap_group_on_server(srv: dict, cn: str) -> dict | None:
+    """{"found": True, "members": [...]} if group `cn` exists on this server,
+    else None (caller tries the next). Members resolved robustly: the memberOf
+    back-link (AD), then the group's own member / uniqueMember / memberUid
+    attributes (OpenLDAP / posix), since not every directory maintains memberOf."""
     try:
         import ldap3
         esc = ldap3.utils.conv.escape_filter_chars
+        attr = srv["user_attr"]
         server = ldap3.Server(srv["url"], get_info=ldap3.NONE)
         conn = ldap3.Connection(server, user=srv["bind_dn"],
                                 password=srv["bind_password"], auto_bind=True)
         try:
-            conn.search(srv["base_dn"],
-                        f"(&(|(objectClass=group)(objectClass=groupOfNames))(cn={esc(cn)}))",
-                        attributes=["distinguishedName"])
+            oc = "".join(f"(objectClass={c})" for c in _LDAP_GROUP_CLASSES)
+            conn.search(srv["base_dn"], f"(&(cn={esc(cn)})(|{oc}))",
+                        attributes=["member", "uniqueMember", "memberUid"])
             if not conn.entries:
                 return None  # not on this server — try the next
-            gdn = conn.entries[0].entry_dn
-            attr = srv["user_attr"]
+            grp = conn.entries[0]
+            gdn = grp.entry_dn
+            members: dict[str, dict] = {}
+
+            def add(username: str, display: str):
+                key = (username or display).lower()
+                if key and key not in members:
+                    members[key] = {"username": (username or "").lower(),
+                                    "display_name": display or username}
+
+            # 1) back-link: users whose memberOf points at the group (AD)
             conn.search(srv["base_dn"], f"(memberOf={esc(gdn)})",
                         attributes=[attr, "displayName"])
-            members = []
             for e in conn.entries:
                 uname = str(getattr(e, attr)) if attr in e else ""
                 if uname:
-                    members.append({"username": uname.lower(),
-                                    "display_name": str(e.displayName)
-                                    if "displayName" in e else uname})
-            return members
+                    add(uname, str(e.displayName) if "displayName" in e else uname)
+            # 2) posixGroup: memberUid holds usernames directly
+            if "memberUid" in grp:
+                for uid in grp.memberUid.values:
+                    add(str(uid), str(uid))
+            # 3) groupOfNames / groupOfUniqueNames: member/uniqueMember are DNs
+            dns = []
+            for a in ("member", "uniqueMember"):
+                if a in grp:
+                    dns += list(getattr(grp, a).values)
+            for mdn in dns[:5000]:
+                k, v = _rdn_value(mdn)
+                if v:
+                    add(v if k in ("uid", "samaccountname") else "", v)
+            return {"found": True, "members": list(members.values())}
         finally:
             conn.unbind()
     except Exception:  # noqa: BLE001 — this server unreachable; try the next

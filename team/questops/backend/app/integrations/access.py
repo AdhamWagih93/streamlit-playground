@@ -333,9 +333,9 @@ def ado_projects(force: bool = False) -> dict:
                 names_i = _resolve_identities(descs)
                 repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
                 desc = p.get("description", "")
-                mem = ldap_by_team.get(_team_from_desc(desc), [])
+                ldap_info = ldap_by_team.get(_team_from_desc(desc))
                 ado_teams = ado_teams_by_proj.get(i, [])
-                return i, _project_access_analysis(repos, ado_teams, desc, mem)
+                return i, _project_access_analysis(repos, ado_teams, desc, ldap_info)
             except Exception:  # noqa: BLE001 — degrade this project to unscored
                 return i, None
 
@@ -364,16 +364,29 @@ def ado_projects(force: bool = False) -> dict:
             p.pop("_teamlist", None)
 
         projects.sort(key=lambda p: (p["coll"].lower(), p["name"].lower()))
-        ldap_failed = [{"project": p["name"], "coll": p["coll"], "team": p["team"]}
-                       for p in projects
-                       if p.get("team") and p.get("team_ldap_resolved") is False]
         stats = _collection_rollup(projects, colls)  # uses _memberset (distinct)
         for p in projects:
             p.pop("_memberset", None)
         return {"source": "live", "projects": projects, "collections": colls,
-                "collection_stats": stats, "ldap_failed_teams": ldap_failed,
+                "collection_stats": stats,
+                "ldap_failed_teams": _group_ldap_failures(projects),
                 "scored_repos": len(capped), "total_repos": len(pairs)}
     return _cached("ado:projects", force, build)
+
+
+def _group_ldap_failures(projects: list[dict]) -> list[dict]:
+    """Failed LDAP-group validations grouped by UNIQUE team first, then the
+    projects using it — so a group missing from LDAP is reported once, with
+    all affected projects under it."""
+    by_team: dict[str, list] = {}
+    for p in projects:
+        if p.get("team") and not p.get("team_unassigned") \
+                and p.get("team_ldap_resolved") is False:
+            by_team.setdefault(p["team"], []).append(
+                {"project": p["name"], "coll": p["coll"]})
+    return [{"team": t, "count": len(ps),
+             "projects": sorted(ps, key=lambda x: (x["coll"], x["project"]))}
+            for t, ps in sorted(by_team.items())]
 
 
 def _demo_ado_projects() -> dict:
@@ -412,14 +425,13 @@ def _demo_ado_projects() -> dict:
          "url": "https://ado.demo/Research/Attic"},
     ]
     colls = ["DefaultCollection", "Research"]
-    ldap_failed = [{"project": p["name"], "coll": p["coll"], "team": p["team"]}
-                   for p in projects if p.get("team_ldap_resolved") is False]
     stats = _collection_rollup(projects, colls)
+    failed = _group_ldap_failures(projects)
     for p in projects:
         p.pop("_memberset", None)
     return {"source": "demo", "projects": projects, "collections": colls,
             "collection_stats": stats,
-            "ldap_failed_teams": ldap_failed, "scored_repos": 9, "total_repos": 9}
+            "ldap_failed_teams": failed, "scored_repos": 9, "total_repos": 9}
 
 
 def _values(data) -> list:
@@ -622,18 +634,24 @@ def _norm_ident(s: str) -> str:
 
 
 def _team_validation(description: str, repos: list[dict],
-                     ldap_members: list[dict] | None,
+                     ldap_info: dict | None,
                      ado_teams: list[dict] | None) -> dict | None:
     """Validate a project's access against its [TEAM] LDAP group.
 
     ADO grants access to TEAMS/GROUPS, so a repo ACL shows a group NAME, not
     the people inside it. The real 'grantees' are the MEMBERS of the ADO
     teams that hold access (plus any identity granted directly on a repo).
-    We check every such PERSON against the LDAP team membership."""
+    We check every such PERSON against the LDAP team membership.
+
+    `ldap_info` = {"found": bool, "members": [...]} — 'found' (the group
+    exists on some server) drives ldap_resolved, NOT whether it has members,
+    so a real-but-empty group isn't reported as missing."""
     team = _team_from_desc(description)
     if not team:
         return None
-    members = ldap_members or []
+    ldap_info = ldap_info or {}
+    members = ldap_info.get("members") or []
+    ldap_found = bool(ldap_info.get("found"))
     member_keys = {_norm_ident(m["username"]) for m in members if m.get("username")} | \
                   {_norm_ident(m["display_name"]) for m in members if m.get("display_name")}
     team_key = _norm_ident(team)
@@ -686,10 +704,13 @@ def _team_validation(description: str, repos: list[dict],
                 continue               # an ADO team already expanded into people
             people.add(a["identity"])
 
-    non_team = sorted(p for p in people if _norm_ident(p) not in member_keys)
+    # when the group exists but has no resolvable members, don't false-flag
+    # every grantee — only flag out-of-team people when we have a member list
+    non_team = (sorted(p for p in people if _norm_ident(p) not in member_keys)
+                if member_keys else [])
     return {"team": team, "group_granted": group_granted,
             "member_count": len(members),
-            "ldap_resolved": bool(members),
+            "ldap_resolved": ldap_found,            # group FOUND, not "has members"
             "ldap_members": sorted(m.get("display_name") or m.get("username")
                                    for m in members)[:500],
             "granted_people": len(people),
@@ -699,7 +720,7 @@ def _team_validation(description: str, repos: list[dict],
 
 def _project_access_analysis(repos: list[dict], teams: list[dict],
                              description: str = "",
-                             ldap_members: list[dict] | None = None) -> dict:
+                             ldap_info: dict | None = None) -> dict:
     # `teams` (with members) doubles as the grantee source for team validation
     """Is access UNIFORM across the project or REPO-SPECIFIC? Plus the many
     percentages: repo-specific %, and the identity privilege mix."""
@@ -733,7 +754,7 @@ def _project_access_analysis(repos: list[dict], teams: list[dict],
         "tier_pct": {t: _pct(counts[t], ids) for t in counts},
         "pct_admin": _pct(counts["admin"], ids),
     }
-    an["team_validation"] = _team_validation(description, repos, ldap_members, teams)
+    an["team_validation"] = _team_validation(description, repos, ldap_info, teams)
     an["score"] = _score_project(an)
     an["grade"] = _grade(an["score"])
     return an
@@ -1087,6 +1108,58 @@ def jenkins_matrix(force: bool = False) -> dict:
         return {"source": "live", "items": items, "scanned": len(capped),
                 "note": " · ".join(note_parts), "global_found": global_found}
     return _cached("jenkins:matrix", force, build)
+
+
+# ================================================================= LDAP health
+def _mask_url(url: str) -> str:
+    return re.sub(r"(ldaps?://)[^/@\s]+@", r"\1***@", url or "")
+
+
+def ldap_health(force: bool = False) -> dict:
+    """Configured LDAP servers (URLs only, creds masked) + a bind health check
+    per server — surfaced on the Access page so a dead directory is visible."""
+    def build():
+        if settings.demo_mode:
+            return {"servers": [
+                {"url": "ldaps://ldap.demo:636", "primary": True,
+                 "healthy": True, "note": "bind ok"},
+                {"url": "ldaps://dc2.demo:636", "primary": False,
+                 "healthy": False, "note": "connection refused"}]}
+        servers = settings.ldap_servers
+        if not servers:
+            return {"servers": [], "note": "no LDAP servers configured"}
+
+        def check(idx_srv):
+            idx, srv = idx_srv
+            row = {"url": _mask_url(srv["url"]), "primary": idx == 0,
+                   "healthy": False, "note": ""}
+            if not srv["url"]:
+                row["note"] = "no URL"
+                return row
+            try:
+                import ldap3
+                server = ldap3.Server(srv["url"], get_info=ldap3.NONE,
+                                      connect_timeout=6)
+                conn = ldap3.Connection(server, user=srv["bind_dn"] or None,
+                                        password=srv["bind_password"] or None,
+                                        receive_timeout=6)
+                if conn.bind():
+                    row["healthy"], row["note"] = True, "bind ok"
+                    conn.unbind()
+                else:
+                    row["note"] = f"bind failed: {str(conn.result.get('description', 'error'))[:60]}"
+            except Exception as exc:  # noqa: BLE001
+                s = str(exc).lower()
+                row["note"] = ("host not found" if "resolution" in s or "not known" in s
+                               else "connection refused" if "refused" in s
+                               else "timed out" if "timeout" in s or "timed out" in s
+                               else str(exc)[:80])
+            return row
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            rows = list(pool.map(check, list(enumerate(servers))))
+        return {"servers": rows}
+    return _cached("ldap:health", force, build)
 
 
 # ================================================================= Summary
