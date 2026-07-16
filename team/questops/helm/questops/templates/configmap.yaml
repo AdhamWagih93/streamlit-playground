@@ -41,7 +41,6 @@ data:
   LDAP_BIND_DN: {{ .Values.ldap.bindDn | quote }}
   LDAP_BASE_DN: {{ .Values.ldap.baseDn | quote }}
   LDAP_USER_ATTR: {{ .Values.ldap.userAttr | quote }}
-  LDAP_EXTRA_SERVERS: {{ .Values.ldap.extraServers | default "" | quote }}
   LDAP_REQUIRED_GROUP: {{ .Values.ldap.requiredGroup | quote }}
   MEMBER_USERNAMES: {{ .Values.ldap.memberUsernames | quote }}
   GIT_USER_NAME: {{ .Values.git.userName | quote }}

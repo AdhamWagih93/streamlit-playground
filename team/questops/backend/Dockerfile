@@ -1,7 +1,11 @@
 # Build from the questops/ directory:  docker build -f backend/Dockerfile .
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends git curl \
+# git+curl for repo ops; bash + ldap-utils so the Engine repo's
+# scripts/Tools/LDAP/getTeamMember.sh (which sources .prd and runs ldapsearch)
+# works for team-member resolution
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl bash ldap-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -454,6 +454,9 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .acc-ident { font: 500 12px var(--mono); color: var(--text); min-width: 200px; }
 .acc-members { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .acc-members .chip { font-size: 10px; }
+.acc-subhead { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 10px 0 4px; }
+.acc-subhead:first-child { margin-top: 0; }
 .acc-loading { color: var(--amber); }
 .acc-elapsed { color: var(--faint); font-size: 11px; margin-left: 4px; }
 .acc-coll { margin-bottom: 10px; }

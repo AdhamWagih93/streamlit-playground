@@ -2,6 +2,9 @@
 Sessions are short-lived HS256 JWTs."""
 
 import datetime as dt
+import os
+import re
+import subprocess
 
 import jwt
 from fastapi import Depends, Header, HTTPException
@@ -86,7 +89,7 @@ def list_group_members() -> list[dict]:
         conn.unbind()
 
 
-_LDAP_GROUP_CACHE: dict = {}  # cn -> {"at": ts, "members": [...]}
+_LDAP_GROUP_CACHE: dict = {}  # cn -> {"at": ts, "value": {...}}
 _LDAP_GROUP_TTL = 3600
 
 # demo LDAP groups referenced by the demo ADO project descriptions ([TEAM])
@@ -96,103 +99,131 @@ _DEMO_LDAP_GROUPS = {
     "research-team": ["Carol Adel"],
 }
 
+# [TEAM] members are resolved by running an asset the user's cloned Engine repo
+# ships: scripts/Tools/LDAP/getTeamMember.sh <team> prints that team's members.
+# The script sources a .prd profile via `. $HOME/.prd`; .prd lives at the Engine
+# repo ROOT, so we invoke the script with HOME pointed at the repo root — that
+# makes `$HOME/.prd` resolve to <engine>/.prd inside the QuestOps container.
+_TEAM_SCRIPT_REL = "scripts/Tools/LDAP/getTeamMember.sh"
+_TEAM_SCRIPT_TIMEOUT = 60
+
+
+def _engine_dir():
+    """The cloned Engine repo's server copy (a Path), or None when the repo is
+    not defined on the Repositories page or has not been cloned yet."""
+    from .integrations import repos
+    try:
+        engine = next((r for r in repos.configured()
+                       if (r.get("name") or "").lower() == "engine"), None)
+        if not engine:
+            return None
+        d = repos._dir_for(engine)
+        return d if d.exists() else None
+    except Exception:  # noqa: BLE001 — resolution never breaks the caller
+        return None
+
+
+def team_source_status() -> dict:
+    """Health of the [TEAM]-resolution mechanism (the Engine repo's
+    getTeamMember.sh + the .prd profile it sources) for the Access page."""
+    row = {"mechanism": "engine-script", "script": _TEAM_SCRIPT_REL,
+           "engine_cloned": False, "script_present": False, "prd_present": False,
+           "healthy": False, "note": ""}
+    if settings.demo_mode:
+        return {**row, "engine_cloned": True, "script_present": True,
+                "prd_present": True, "healthy": True, "note": "demo groups"}
+    d = _engine_dir()
+    if d is None:
+        row["note"] = "Engine repo not defined / not cloned (Repositories page)"
+        return row
+    row["engine_cloned"] = True
+    row["script_present"] = (d / _TEAM_SCRIPT_REL).exists()
+    row["prd_present"] = (d / ".prd").exists()
+    if not row["script_present"]:
+        row["note"] = f"{_TEAM_SCRIPT_REL} missing in the Engine repo"
+    elif not row["prd_present"]:
+        row["note"] = ".prd profile missing at the Engine repo root ($HOME/.prd)"
+    else:
+        row["healthy"], row["note"] = True, "script + .prd present"
+    return row
+
+
+def _parse_team_members(out: str) -> list[dict]:
+    """getTeamMember.sh prints one member per line. Accept a bare username/name
+    or 'username<delim>Display Name' (comma/tab/pipe/semicolon delimited) and
+    set BOTH username and display_name, so matching against ADO grantees works
+    whether ADO surfaces the login or the display name."""
+    members: list[dict] = []
+    seen: set[str] = set()
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in re.split(r"[,\t|;]", line) if p.strip()]
+        if not parts:
+            continue
+        uname, disp = parts[0], (parts[1] if len(parts) > 1 else parts[0])
+        key = uname.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        members.append({"username": uname.lower(), "display_name": disp})
+    return members
+
+
+def _resolve_team_via_script(cn: str) -> dict:
+    """Run the Engine repo's getTeamMember.sh for team `cn`. 'found' is True on
+    a clean (exit 0) run — even for an empty team — and False when the team
+    can't be resolved (Engine/script absent or a non-zero exit)."""
+    d = _engine_dir()
+    if d is None:
+        return {"found": False, "members": [], "note": "Engine repo not cloned"}
+    script = d / _TEAM_SCRIPT_REL
+    if not script.exists():
+        return {"found": False, "members": [], "note": f"{_TEAM_SCRIPT_REL} missing"}
+    # HOME -> Engine repo root so the script's `. $HOME/.prd` sources <engine>/.prd
+    env = {**os.environ, "HOME": str(d)}
+    try:
+        p = subprocess.run(["bash", str(script), cn], cwd=str(d), env=env,
+                           capture_output=True, text=True,
+                           timeout=_TEAM_SCRIPT_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {"found": False, "members": [], "note": f"script error: {str(exc)[:80]}"}
+    if p.returncode != 0:
+        tail = (p.stderr or p.stdout or "").strip().splitlines()
+        return {"found": False, "members": [],
+                "note": f"exit {p.returncode}: {(tail[-1] if tail else '')[:100]}"}
+    return {"found": True, "members": _parse_team_members(p.stdout)}
+
 
 def ldap_group_members(cn: str) -> dict:
-    """Resolve an LDAP group by CN across all configured servers. Returns
-    {"found": bool, "members": [{username, display_name}]}. 'found' is True
-    even when the group has zero members — distinct from 'group not found on
-    any server', so a real-but-empty group is NOT mistaken for missing.
-    Cached 1h; LDAP outages return the stale/empty result rather than raising."""
+    """Resolve a project's [TEAM] group to its members. Returns
+    {"found": bool, "members": [{username, display_name}]}. In live mode this
+    runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMember.sh <team>;
+    'found' is True on a clean run (even for an empty team — distinct from an
+    unresolvable one), which the caller uses to drive ldap_resolved. Cached 1h;
+    a resolution failure keeps any previous good result rather than raising."""
     import time
     cn = (cn or "").strip()
-    if not cn:
+    if not cn or "\n" in cn or "\x00" in cn:
         return {"found": False, "members": []}
-    hit = _LDAP_GROUP_CACHE.get(cn.lower())
+    if cn.lower() == "unassigned":     # not a real group; the caller special-cases it
+        return {"found": True, "members": []}
+    key = cn.lower()
+    hit = _LDAP_GROUP_CACHE.get(key)
     if hit and time.time() - hit["at"] < _LDAP_GROUP_TTL:
         return hit["value"]
     if settings.demo_mode:
-        raw = _DEMO_LDAP_GROUPS.get(cn.lower())
+        raw = _DEMO_LDAP_GROUPS.get(key)
         value = {"found": raw is not None,
                  "members": [{"username": m.split()[0].lower(), "display_name": m}
                              for m in (raw or [])]}
-        _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "value": value}
-        return value
-    # try each configured LDAP server; the group may live in any directory
-    for srv in settings.ldap_servers:
-        if not (srv["url"] and srv["bind_dn"]):
-            continue
-        res = _ldap_group_on_server(srv, cn)
-        if res is not None:  # found on this server (even if empty)
-            _LDAP_GROUP_CACHE[cn.lower()] = {"at": time.time(), "value": res}
-            return res
-    return hit["value"] if hit else {"found": False, "members": []}
-
-
-# group object classes across AD / OpenLDAP / RFC2307
-_LDAP_GROUP_CLASSES = ("group", "groupOfNames", "groupOfUniqueNames",
-                       "groupOfMembers", "posixGroup")
-
-
-def _rdn_value(dn: str) -> tuple[str, str]:
-    """(attr, value) of a DN's leading RDN, e.g. 'CN=John Doe,...' -> ('cn','John Doe')."""
-    rdn = str(dn).split(",")[0]
-    k, _, v = rdn.partition("=")
-    return k.strip().lower(), v.strip()
-
-
-def _ldap_group_on_server(srv: dict, cn: str) -> dict | None:
-    """{"found": True, "members": [...]} if group `cn` exists on this server,
-    else None (caller tries the next). Members resolved robustly: the memberOf
-    back-link (AD), then the group's own member / uniqueMember / memberUid
-    attributes (OpenLDAP / posix), since not every directory maintains memberOf."""
-    try:
-        import ldap3
-        esc = ldap3.utils.conv.escape_filter_chars
-        attr = srv["user_attr"]
-        server = ldap3.Server(srv["url"], get_info=ldap3.NONE)
-        conn = ldap3.Connection(server, user=srv["bind_dn"],
-                                password=srv["bind_password"], auto_bind=True)
-        try:
-            oc = "".join(f"(objectClass={c})" for c in _LDAP_GROUP_CLASSES)
-            conn.search(srv["base_dn"], f"(&(cn={esc(cn)})(|{oc}))",
-                        attributes=["member", "uniqueMember", "memberUid"])
-            if not conn.entries:
-                return None  # not on this server — try the next
-            grp = conn.entries[0]
-            gdn = grp.entry_dn
-            members: dict[str, dict] = {}
-
-            def add(username: str, display: str):
-                key = (username or display).lower()
-                if key and key not in members:
-                    members[key] = {"username": (username or "").lower(),
-                                    "display_name": display or username}
-
-            # 1) back-link: users whose memberOf points at the group (AD)
-            conn.search(srv["base_dn"], f"(memberOf={esc(gdn)})",
-                        attributes=[attr, "displayName"])
-            for e in conn.entries:
-                uname = str(getattr(e, attr)) if attr in e else ""
-                if uname:
-                    add(uname, str(e.displayName) if "displayName" in e else uname)
-            # 2) posixGroup: memberUid holds usernames directly
-            if "memberUid" in grp:
-                for uid in grp.memberUid.values:
-                    add(str(uid), str(uid))
-            # 3) groupOfNames / groupOfUniqueNames: member/uniqueMember are DNs
-            dns = []
-            for a in ("member", "uniqueMember"):
-                if a in grp:
-                    dns += list(getattr(grp, a).values)
-            for mdn in dns[:5000]:
-                k, v = _rdn_value(mdn)
-                if v:
-                    add(v if k in ("uid", "samaccountname") else "", v)
-            return {"found": True, "members": list(members.values())}
-        finally:
-            conn.unbind()
-    except Exception:  # noqa: BLE001 — this server unreachable; try the next
-        return None
+    else:
+        value = _resolve_team_via_script(cn)
+        if not value.get("found") and hit:  # keep the stale-but-good result
+            return hit["value"]
+    _LDAP_GROUP_CACHE[key] = {"at": time.time(), "value": value}
+    return value
 
 
 _ROSTER_CACHE: dict = {"at": 0.0, "rows": []}

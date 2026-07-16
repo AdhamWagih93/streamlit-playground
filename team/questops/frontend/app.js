@@ -2037,23 +2037,44 @@ const srcLabel = (d) => `${esc(d.source)}${d.cached ? " · cached" : ""}`;
 
 const ACC_WHAT = {
   summary: "tallying projects, repos, teams & cross-system overlap",
-  ldap: "checking configured LDAP servers",
+  ldap: "checking the login LDAP + the [TEAM] resolver",
   ado: "querying Azure DevOps for projects",
   jira: "reading Jira permission schemes & their project assignments",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
 };
 
+function accTeamSourceHtml(ts) {
+  if (!ts) return "";
+  const chips = [
+    ["Engine cloned", ts.engine_cloned],
+    ["getTeamMember.sh", ts.script_present],
+    [".prd profile", ts.prd_present],
+  ].map(([label, ok]) =>
+    `<span class="chip ${ok ? "chip-green" : "chip-red"}">${ok ? "✓" : "✗"} ${esc(label)}</span>`
+  ).join(" ");
+  return `
+    <div class="acc-subhead">[TEAM] member resolver</div>
+    <div class="ci-row">
+      <span class="ci-dot ${ts.healthy ? "dot-green" : "dot-red"}"></span>
+      <code class="ci-job">${esc(ts.script || "getTeamMember.sh")}</code>
+      ${chips}
+      <span class="ci-meta">${esc(ts.note || "")}</span>
+    </div>`;
+}
+
 function accLdapHtml(d) {
+  const teamSrc = accTeamSourceHtml(d.team_source);
   if (!(d.servers || []).length)
-    return `<div class="empty">${esc(d.note || "no LDAP servers configured")}</div>`;
-  return d.servers.map((s) => `
+    return `<div class="empty">${esc(d.note || "no login LDAP configured")}</div>${teamSrc}`;
+  const servers = d.servers.map((s) => `
     <div class="ci-row">
       <span class="ci-dot ${s.healthy ? "dot-green" : "dot-red"}"></span>
       <code class="ci-job">${esc(s.url)}</code>
-      ${s.primary ? '<span class="chip chip-cyan">primary</span>' : '<span class="chip">extra</span>'}
+      <span class="chip chip-cyan">login</span>
       <span class="chip ${s.healthy ? "chip-green" : "chip-red"}">${s.healthy ? "✓ reachable" : "✗ " + esc(s.note)}</span>
       ${s.healthy ? `<span class="ci-meta">${esc(s.note)}</span>` : ""}
     </div>`).join("");
+  return `<div class="acc-subhead">login directory</div>${servers}${teamSrc}`;
 }
 
 async function accLoad(section, url, renderFn) {

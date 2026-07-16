@@ -52,6 +52,24 @@ DEMO_REPO_FILES = {
     },
     "Engine": {
         "README.md": "# Engine\n\nPipelines (groovy), playbooks+roles, and scripts.\n",
+        # sourced by the Tools/LDAP scripts (and, in prod, by many others); lives
+        # at the repo ROOT so it is reachable as $HOME/.prd when the script runs
+        # with HOME pointed here. Sets the LDAP endpoint + bind creds.
+        ".prd": "# prod profile — sourced as `. $HOME/.prd`\n"
+                "export LDAP_HOST=ldaps://ldap.mycorp.local:636\n"
+                "export LDAP_BASE=OU=Groups,DC=mycorp,DC=local\n"
+                "export LDAP_BIND_DN=CN=svc-ldap,OU=Service Accounts,DC=mycorp,DC=local\n"
+                "export LDAP_BIND_PW=__set_in_real_env__\n",
+        # QuestOps runs this for Access Management [TEAM] validation:
+        #   getTeamMember.sh <team>  ->  one member per line
+        "scripts/Tools/LDAP/getTeamMember.sh":
+            "#!/bin/bash\n# Print the members of an LDAP team group, one per line.\n"
+            "set -euo pipefail\n"
+            ". $HOME/.prd   # LDAP_HOST / LDAP_BASE / LDAP_BIND_DN / LDAP_BIND_PW\n"
+            "TEAM=\"${1:?usage: getTeamMember.sh <team>}\"\n"
+            "ldapsearch -x -LLL -H \"$LDAP_HOST\" -D \"$LDAP_BIND_DN\" -w \"$LDAP_BIND_PW\" \\\n"
+            "  -b \"$LDAP_BASE\" \"(cn=$TEAM)\" member \\\n"
+            "  | sed -n 's/^member: CN=\\([^,]*\\).*/\\1/p'\n",
         # real caller conventions:
         # podman_run_script.sh   <env> <category> <script> <container> <args>
         # podman_run_playbook.sh <env> <inventory> <playbook> <path> <container> <args>

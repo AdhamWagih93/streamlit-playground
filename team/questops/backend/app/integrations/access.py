@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-from ..auth import ldap_group_members
+from ..auth import ldap_group_members, team_source_status
 from ..config import settings
 
 TTL = 900
@@ -1116,18 +1116,21 @@ def _mask_url(url: str) -> str:
 
 
 def ldap_health(force: bool = False) -> dict:
-    """Configured LDAP servers (URLs only, creds masked) + a bind health check
-    per server — surfaced on the Access page so a dead directory is visible."""
+    """The login LDAP directory (URL only, creds masked) + a bind health check,
+    plus the [TEAM]-resolution source status (the Engine repo's getTeamMember.sh
+    + its .prd profile) — so a dead login directory or a missing resolver asset
+    is visible on the Access page."""
     def build():
+        team_source = team_source_status()
         if settings.demo_mode:
             return {"servers": [
                 {"url": "ldaps://ldap.demo:636", "primary": True,
-                 "healthy": True, "note": "bind ok"},
-                {"url": "ldaps://dc2.demo:636", "primary": False,
-                 "healthy": False, "note": "connection refused"}]}
+                 "healthy": True, "note": "bind ok (login)"}],
+                "team_source": team_source}
         servers = settings.ldap_servers
         if not servers:
-            return {"servers": [], "note": "no LDAP servers configured"}
+            return {"servers": [], "note": "no login LDAP configured",
+                    "team_source": team_source}
 
         def check(idx_srv):
             idx, srv = idx_srv
@@ -1158,7 +1161,7 @@ def ldap_health(force: bool = False) -> dict:
 
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             rows = list(pool.map(check, list(enumerate(servers))))
-        return {"servers": rows}
+        return {"servers": rows, "team_source": team_source}
     return _cached("ldap:health", force, build)
 
 

@@ -84,7 +84,8 @@ ldap:
   bindPassword: ""   # prefer app.existingSecret
   baseDn: "OU=Users,DC=mycorp,DC=local"
   userAttr: "sAMAccountName"
-  extraServers: ""   # JSON array of extra LDAP servers for group lookups
+  # these gate LOGIN only; [TEAM] members are resolved by the Engine repo's
+  # scripts/Tools/LDAP/getTeamMember.sh (see auth.ldap_group_members)
   requiredGroup: "CN=devops-team,OU=Groups,DC=mycorp,DC=local"
   # everyone in the group is an approver EXCEPT these usernames (comma-separated)
   memberUsernames: ""
