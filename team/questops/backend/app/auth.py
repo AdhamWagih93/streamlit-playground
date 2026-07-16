@@ -148,17 +148,35 @@ def team_source_status() -> dict:
     return row
 
 
+# LDIF attribute prefixes a raw ldapsearch dump emits before the useful value
+_LDIF_ATTR = re.compile(r"^(?:dn|member|uniquemember|memberuid|cn|uid|"
+                        r"samaccountname|displayname|name)\s*:\s*(.+)$", re.I)
+
+
 def _parse_team_members(out: str) -> list[dict]:
-    """getTeamMembers.sh prints one member per line. Accept a bare username/name
-    or 'username<delim>Display Name' (comma/tab/pipe/semicolon delimited) and
-    set BOTH username and display_name, so matching against ADO grantees works
-    whether ADO surfaces the login or the display name."""
+    """getTeamMembers.sh prints one member per line. Tolerant of the common
+    shapes such a script emits so an output-format quirk doesn't silently yield
+    zero members:
+      - a bare username or display name           -> jdoe / John Doe
+      - 'username<delim>Display Name'              -> jdoe,John Doe (,/tab/|/;)
+      - a raw LDIF line                            -> member: CN=John Doe,OU=...
+      - a full or partial DN                       -> CN=John Doe,OU=... / uid=jdoe
+    Both username and display_name are set, so matching against ADO grantees
+    works whether ADO surfaces the login or the display name."""
     members: list[dict] = []
     seen: set[str] = set()
     for line in out.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        m = _LDIF_ATTR.match(line)              # strip an "attr: " LDIF prefix
+        if m:
+            line = m.group(1).strip()
+        # a DN (CN=John Doe,OU=...) or single RDN (uid=jdoe): take the RDN value
+        if re.match(r"^[A-Za-z][\w-]*=", line):
+            head = line.split(",", 1)[0]
+            if "=" in head:
+                line = head.split("=", 1)[1].strip()
         parts = [p.strip() for p in re.split(r"[,\t|;]", line) if p.strip()]
         if not parts:
             continue
@@ -171,29 +189,83 @@ def _parse_team_members(out: str) -> list[dict]:
     return members
 
 
-def _resolve_team_via_script(cn: str) -> dict:
-    """Run the Engine repo's getTeamMembers.sh for team `cn`. 'found' is True on
-    a clean (exit 0) run — even for an empty team — and False when the team
-    can't be resolved (Engine/script absent or a non-zero exit)."""
+def _run_team_script(cn: str) -> dict:
+    """Low-level: run getTeamMembers.sh <cn> once and return the RAW result
+    {ok, returncode, stdout, stderr, error}. 'ok' means the script actually ran
+    (regardless of exit code); 'error' is set only when it could not run at all
+    (Engine/script missing, timeout, spawn failure). Shared by the resolver and
+    the on-page health probe so both execute the script identically."""
+    import time
     d = _engine_dir()
     if d is None:
-        return {"found": False, "members": [], "note": "Engine repo not cloned"}
+        return {"ok": False, "error": "Engine repo not defined / not cloned"}
     script = d / _TEAM_SCRIPT_REL
     if not script.exists():
-        return {"found": False, "members": [], "note": f"{_TEAM_SCRIPT_REL} missing"}
+        return {"ok": False, "error": f"{_TEAM_SCRIPT_REL} missing in the Engine repo"}
     # HOME -> Engine repo root so the script's `. $HOME/.prd` sources <engine>/.prd
     env = {**os.environ, "HOME": str(d)}
+    t0 = time.time()
     try:
         p = subprocess.run(["bash", str(script), cn], cwd=str(d), env=env,
                            capture_output=True, text=True,
                            timeout=_TEAM_SCRIPT_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as exc:
-        return {"found": False, "members": [], "note": f"script error: {str(exc)[:80]}"}
-    if p.returncode != 0:
-        tail = (p.stderr or p.stdout or "").strip().splitlines()
+        return {"ok": False, "error": f"script error: {str(exc)[:120]}"}
+    return {"ok": True, "returncode": p.returncode, "stdout": p.stdout,
+            "stderr": p.stderr, "duration_ms": int((time.time() - t0) * 1000)}
+
+
+def _resolve_team_via_script(cn: str) -> dict:
+    """Run the Engine repo's getTeamMembers.sh for team `cn`. 'found' is True on
+    a clean (exit 0) run — even for an empty team — and False when the team
+    can't be resolved (Engine/script absent or a non-zero exit)."""
+    r = _run_team_script(cn)
+    if not r["ok"]:
+        return {"found": False, "members": [], "note": r["error"]}
+    if r["returncode"] != 0:
+        tail = (r["stderr"] or r["stdout"] or "").strip().splitlines()
         return {"found": False, "members": [],
-                "note": f"exit {p.returncode}: {(tail[-1] if tail else '')[:100]}"}
-    return {"found": True, "members": _parse_team_members(p.stdout)}
+                "note": f"exit {r['returncode']}: {(tail[-1] if tail else '')[:100]}"}
+    return {"found": True, "members": _parse_team_members(r["stdout"])}
+
+
+_PROBE_CAP = 6000  # cap raw stdout/stderr echoed to the page
+
+
+def probe_team_resolver(cn: str) -> dict:
+    """On-page health probe: run getTeamMembers.sh <team> and return the RAW
+    stdout/stderr/exit code alongside what QuestOps PARSED, so a mismatch
+    between the script's output format and the parser is visible at a glance."""
+    cn = (cn or "").strip()
+    out = {"team": cn, "ran": False, "returncode": None, "duration_ms": None,
+           "stdout": "", "stderr": "", "members": [], "parsed_count": 0,
+           "note": "", "demo": bool(settings.demo_mode)}
+    if not cn:
+        out["note"] = "enter a team name to test"
+        return out
+    if "\n" in cn or "\x00" in cn:
+        out["note"] = "invalid team name"
+        return out
+    if settings.demo_mode:
+        v = ldap_group_members(cn)
+        out.update(ran=True, returncode=0, members=v["members"],
+                   parsed_count=len(v["members"]),
+                   stdout="\n".join(m["display_name"] for m in v["members"]),
+                   note="demo mode — seeded groups, the script is not executed")
+        return out
+    r = _run_team_script(cn)
+    if not r["ok"]:
+        out["note"] = r["error"]
+        return out
+    members = _parse_team_members(r["stdout"])
+    out.update(ran=True, returncode=r["returncode"], duration_ms=r["duration_ms"],
+               stdout=r["stdout"][:_PROBE_CAP], stderr=r["stderr"][:_PROBE_CAP],
+               members=members, parsed_count=len(members),
+               note=("ok" if r["returncode"] == 0 else f"non-zero exit {r['returncode']}"))
+    if r["returncode"] == 0 and not members:
+        out["note"] = ("script ran but QuestOps parsed 0 members — check the raw "
+                       "output below; members must be one per line")
+    return out
 
 
 def ldap_group_members(cn: str) -> dict:

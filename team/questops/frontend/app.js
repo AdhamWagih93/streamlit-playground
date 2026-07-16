@@ -2062,10 +2062,40 @@ function accTeamSourceHtml(ts) {
     </div>`;
 }
 
+// live test of the [TEAM] resolver: type a team, run getTeamMembers.sh, see it
+const accProbeHtml = () => `
+  <div class="ldap-probe">
+    <input id="ldap-probe-team" placeholder="team name, e.g. Digital_Innovation" />
+    <button class="btn btn-sm" id="ldap-probe-run">▶ Test resolver</button>
+    <div id="ldap-probe-out" class="ldap-probe-out"></div>
+  </div>`;
+
+function accProbeResultHtml(r) {
+  const ok = r.ran && r.returncode === 0 && r.parsed_count > 0;
+  const dot = r.ran && r.returncode === 0
+    ? (r.parsed_count > 0 ? "chip-green" : "chip-amber") : "chip-red";
+  const head = !r.ran
+    ? `<span class="chip chip-red">✗ ${esc(r.note)}</span>`
+    : `<span class="chip ${dot}">${ok ? "✓" : r.returncode === 0 ? "!" : "✗"} exit ${r.returncode}</span>
+       <span class="chip">${r.parsed_count} member${r.parsed_count === 1 ? "" : "s"} parsed</span>
+       ${r.duration_ms != null ? `<span class="ci-meta">${r.duration_ms} ms</span>` : ""}
+       ${r.demo ? '<span class="chip chip-cyan">demo</span>' : ""}`;
+  const note = r.note && r.ran ? `<div class="ci-meta">${esc(r.note)}</div>` : "";
+  const members = (r.members || []).length
+    ? `<div class="acc-members">${r.members.map((m) =>
+        `<span class="chip" title="${esc(m.username)}">${esc(m.display_name || m.username)}</span>`).join(" ")}</div>`
+    : "";
+  const block = (label, txt) => txt
+    ? `<div class="probe-io"><div class="ci-meta">${label}</div><pre>${esc(txt)}</pre></div>` : "";
+  return `<div class="probe-head">${head}</div>${note}${members}
+    ${block("raw stdout", r.stdout)}${block("raw stderr", r.stderr)}`;
+}
+
 function accLdapHtml(d) {
   const teamSrc = accTeamSourceHtml(d.team_source);
+  const probe = accProbeHtml();
   if (!(d.servers || []).length)
-    return `<div class="empty">${esc(d.note || "no login LDAP configured")}</div>${teamSrc}`;
+    return `<div class="empty">${esc(d.note || "no login LDAP configured")}</div>${teamSrc}${probe}`;
   const servers = d.servers.map((s) => `
     <div class="ci-row">
       <span class="ci-dot ${s.healthy ? "dot-green" : "dot-red"}"></span>
@@ -2074,7 +2104,7 @@ function accLdapHtml(d) {
       <span class="chip ${s.healthy ? "chip-green" : "chip-red"}">${s.healthy ? "✓ reachable" : "✗ " + esc(s.note)}</span>
       ${s.healthy ? `<span class="ci-meta">${esc(s.note)}</span>` : ""}
     </div>`).join("");
-  return `<div class="acc-subhead">login directory</div>${servers}${teamSrc}`;
+  return `<div class="acc-subhead">login directory</div>${servers}${teamSrc}${probe}`;
 }
 
 async function accLoad(section, url, renderFn) {
@@ -2367,6 +2397,27 @@ function accJenkinsHtml(d) {
 }
 
 function wireAccess(section) {
+  if (section === "ldap") {
+    const inp = document.getElementById("ldap-probe-team");
+    const btn = document.getElementById("ldap-probe-run");
+    const out = document.getElementById("ldap-probe-out");
+    if (btn && inp && out) {
+      const run = async () => {
+        const team = inp.value.trim();
+        if (!team) { inp.focus(); return; }
+        btn.disabled = true;
+        out.innerHTML = `<div class="ci-meta">⏳ running getTeamMembers.sh ${esc(team)}…</div>`;
+        try {
+          const r = await api(`/api/access/ldap/test?team=${encodeURIComponent(team)}`);
+          out.innerHTML = accProbeResultHtml(r);
+        } catch (e) {
+          out.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+        } finally { btn.disabled = false; }
+      };
+      btn.onclick = run;
+      inp.onkeydown = (e) => { if (e.key === "Enter") run(); };
+    }
+  }
   if (section === "ado") {
     view().querySelectorAll("[data-acc-proj]").forEach((det) => {
       det.ontoggle = async () => {

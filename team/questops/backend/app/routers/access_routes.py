@@ -27,6 +27,14 @@ def ldap(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.ldap_health, refresh)
 
 
+@router.get("/ldap/test")
+def ldap_test(team: str = "", user: User = Depends(current_user)):
+    """Live health probe: run the Engine repo's getTeamMembers.sh <team> and
+    return its raw output + parsed members (used from the Access page)."""
+    from ..auth import probe_team_resolver
+    return _wrap(probe_team_resolver, team)
+
+
 @router.get("/ado")
 def ado(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.ado_projects, refresh)
