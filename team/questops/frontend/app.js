@@ -2103,8 +2103,8 @@ function collStatsPanel(s) {
   const bar = (label, pctVal, sub, goodCls) => `
     <div class="cstat">
       <div class="cstat-top"><span>${label}</span><b class="${goodCls}">${pctVal}%</b></div>
-      <span class="lb-bar"><div class="${goodCls}" style="width:${pctVal}%"></div></span>
-      <span class="ci-meta">${sub}</span>
+      <div class="cstat-bar"><div class="${goodCls}" style="width:${pctVal}%"></div></div>
+      <div class="ci-meta">${sub}</div>
     </div>`;
   const cls = (p) => p >= 80 ? "pct-good" : p >= 50 ? "pct-warn" : "pct-bad";
   return `
