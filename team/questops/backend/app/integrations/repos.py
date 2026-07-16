@@ -61,12 +61,12 @@ DEMO_REPO_FILES = {
                 "export LDAP_BIND_DN=CN=svc-ldap,OU=Service Accounts,DC=mycorp,DC=local\n"
                 "export LDAP_BIND_PW=__set_in_real_env__\n",
         # QuestOps runs this for Access Management [TEAM] validation:
-        #   getTeamMember.sh <team>  ->  one member per line
-        "scripts/Tools/LDAP/getTeamMember.sh":
+        #   getTeamMembers.sh <team>  ->  one member per line
+        "scripts/Tools/LDAP/getTeamMembers.sh":
             "#!/bin/bash\n# Print the members of an LDAP team group, one per line.\n"
             "set -euo pipefail\n"
             ". $HOME/.prd   # LDAP_HOST / LDAP_BASE / LDAP_BIND_DN / LDAP_BIND_PW\n"
-            "TEAM=\"${1:?usage: getTeamMember.sh <team>}\"\n"
+            "TEAM=\"${1:?usage: getTeamMembers.sh <team>}\"\n"
             "ldapsearch -x -LLL -H \"$LDAP_HOST\" -D \"$LDAP_BIND_DN\" -w \"$LDAP_BIND_PW\" \\\n"
             "  -b \"$LDAP_BASE\" \"(cn=$TEAM)\" member \\\n"
             "  | sed -n 's/^member: CN=\\([^,]*\\).*/\\1/p'\n",

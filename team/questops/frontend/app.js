@@ -2047,7 +2047,7 @@ function accTeamSourceHtml(ts) {
   if (!ts) return "";
   const chips = [
     ["Engine cloned", ts.engine_cloned],
-    ["getTeamMember.sh", ts.script_present],
+    ["getTeamMembers.sh", ts.script_present],
     [".prd profile", ts.prd_present],
   ].map(([label, ok]) =>
     `<span class="chip ${ok ? "chip-green" : "chip-red"}">${ok ? "✓" : "✗"} ${esc(label)}</span>`
@@ -2056,7 +2056,7 @@ function accTeamSourceHtml(ts) {
     <div class="acc-subhead">[TEAM] member resolver</div>
     <div class="ci-row">
       <span class="ci-dot ${ts.healthy ? "dot-green" : "dot-red"}"></span>
-      <code class="ci-job">${esc(ts.script || "getTeamMember.sh")}</code>
+      <code class="ci-job">${esc(ts.script || "getTeamMembers.sh")}</code>
       ${chips}
       <span class="ci-meta">${esc(ts.note || "")}</span>
     </div>`;
