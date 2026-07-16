@@ -168,6 +168,12 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
         extra_member_projects = sum(1 for p in ps if (p.get("team_non_member_count") or 0) > 0)
         ldap_failed = sum(1 for p in ps if p.get("team") and not p.get("team_unassigned")
                           and p.get("team_ldap_resolved") is False)
+        # PR-reviewer governance: of the projects that HAVE repos, how many
+        # define a PR-reviewer group, split by project-level vs repo-level scope
+        pr_scored = [p for p in with_repos if p.get("score") is not None]
+        pr_defined = [p for p in pr_scored if p.get("pr_present")]
+        pr_project_level = sum(1 for p in pr_defined if p.get("pr_scope") == "project")
+        pr_repo_level = sum(1 for p in pr_defined if p.get("pr_scope") == "repo")
         out.append({
             "name": c, "projects": len(ps),
             "teams": sum(p.get("teams", 0) for p in ps),
@@ -182,6 +188,11 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
             "unassigned_unhealthy": len(unassigned) - unassigned_healthy,
             "extra_member_projects": extra_member_projects,
             "ldap_failed_projects": ldap_failed,
+            "pr_scored_projects": len(pr_scored),
+            "pr_defined_projects": len(pr_defined),
+            "pr_project_level": pr_project_level,
+            "pr_repo_level": pr_repo_level,
+            "pr_missing_projects": len(pr_scored) - len(pr_defined),
             "score": round(sum(scored) / len(scored)) if scored else None,
             "grade": _grade(round(sum(scored) / len(scored)) if scored else None)})
     return out
@@ -323,19 +334,44 @@ def ado_projects(force: bool = False) -> dict:
             projects[i]["members"] = len(mset)
             projects[i]["_memberset"] = mset
 
+        # PROJECT-level Git ACL (token repoV2/{projectId}, no repo id) per scored
+        # project — lets us tell a project-wide PR-reviewer grant from a
+        # repo-specific one. One bounded parallel pass.
+        def fetch_proj_acl(i):
+            p = projects[i]
+            try:
+                acl = _ado.coll_get(
+                    p["coll"], f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
+                    {"token": f"repoV2/{p['id']}"})
+                aces = {}
+                for e in _values(acl):
+                    aces.update(e.get("acesDictionary") or {})
+                return i, aces
+            except Exception:  # noqa: BLE001
+                return i, {}
+
+        proj_acl_by_proj: dict[int, dict] = {}
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            for i, aces in pool.map(fetch_proj_acl, sorted(fully)):
+                proj_acl_by_proj[i] = aces
+
         # resolve identities PER PROJECT — identical to the detail path, so a
         # throttled global batch can't desync the badge from the expanded view
         def score_one(i):
             p = projects[i]
             try:
                 raw = by_proj.get(i, {})
-                descs = sorted({d for aces in raw.values() for d in aces})
+                proj_aces = proj_acl_by_proj.get(i, {})
+                # resolve repo-level AND project-level identities together
+                descs = sorted({d for aces in raw.values() for d in aces} | set(proj_aces))
                 names_i = _resolve_identities(descs)
                 repos = _build_repos(p["coll"], p["id"], p["_repolist"], raw, names_i)
                 desc = p.get("description", "")
                 ldap_info = ldap_by_team.get(_team_from_desc(desc))
                 ado_teams = ado_teams_by_proj.get(i, [])
-                return i, _project_access_analysis(repos, ado_teams, desc, ldap_info)
+                pr_ctx = _build_pr_ctx(raw, proj_aces, names_i)
+                return i, _project_access_analysis(repos, ado_teams, desc,
+                                                   ldap_info, pr_ctx)
             except Exception:  # noqa: BLE001 — degrade this project to unscored
                 return i, None
 
@@ -355,7 +391,10 @@ def ado_projects(force: bool = False) -> dict:
                                             and tv["group_granted"]
                                             and tv["non_team_count"] == 0),
                                    team_group_granted=(tv or {}).get("group_granted"),
-                                   team_non_member_count=(tv or {}).get("non_team_count"))
+                                   team_non_member_count=(tv or {}).get("non_team_count"),
+                                   pr_groups=an["pr_groups"], pr_present=an["pr_present"],
+                                   pr_scope=an["pr_scope"],
+                                   pr_member_count=an["pr_member_count"])
         for i, p in enumerate(projects):
             if i not in fully:
                 p.update(score=None, grade="?", uniform=None,
@@ -400,6 +439,8 @@ def _demo_ado_projects() -> dict:
          "score": 62, "grade": "C", "uniform": False, "pct_repo_specific": 100,
          "team": "platform-devs", "team_ok": False, "team_group_granted": True,
          "team_non_member_count": 1, "team_ldap_resolved": True,
+         "pr_present": True, "pr_scope": "project", "pr_member_count": 3,
+         "pr_groups": [{"name": "PR Approvers", "scope": "project", "members": 3}],
          "url": "https://ado.demo/DefaultCollection/Platform"},
         {"id": "p2", "coll": "DefaultCollection", "name": "Control",
          "description": "[control-owners] Team config repos", "repos": 2, "teams": 1,
@@ -407,6 +448,8 @@ def _demo_ado_projects() -> dict:
          "score": 94, "grade": "A", "uniform": True, "pct_repo_specific": 50,
          "team": "control-owners", "team_ok": True, "team_group_granted": True,
          "team_non_member_count": 0, "team_ldap_resolved": True,
+         "pr_present": True, "pr_scope": "repo", "pr_member_count": 2,
+         "pr_groups": [{"name": "PR", "scope": "repo", "members": 2}],
          "url": "https://ado.demo/DefaultCollection/Control"},
         {"id": "p3", "coll": "Research", "name": "Sandbox",
          "description": "[sandbox-team] Experiments", "repos": 1, "teams": 1,
@@ -414,6 +457,7 @@ def _demo_ado_projects() -> dict:
          "score": 63, "grade": "C", "uniform": True, "pct_repo_specific": 100,
          "team": "sandbox-team", "team_ok": False, "team_group_granted": False,
          "team_non_member_count": 0, "team_ldap_resolved": False,
+         "pr_present": False, "pr_scope": None, "pr_member_count": 0, "pr_groups": [],
          "url": "https://ado.demo/Research/Sandbox"},
         {"id": "p4", "coll": "Research", "name": "Attic",
          "description": "[UnAssigned] retired area", "repos": 1, "teams": 0,
@@ -485,6 +529,8 @@ def _demo_project_access(project_id: str) -> dict:
         raw_repos = [{"name": "team-configs", "acls": [
             {"identity": "[Control]\\Control Owners",
              "allow": ["Administer", "Read", "Contribute"], "deny": []},
+            {"identity": "[Control]\\PR",  # repo-level PR reviewers
+             "allow": ["Read", "Contribute to PRs"], "deny": []},
             {"identity": "[Control]\\Everyone", "allow": ["Read"], "deny": []},
         ]}]
     elif project_id == "p3":
@@ -510,8 +556,14 @@ def _demo_project_access(project_id: str) -> dict:
                  "p3": "[sandbox-team] Experiments",
                  "p4": "[UnAssigned] retired area"}.get(project_id, "")
     ldap_members = ldap_group_members(_team_from_desc(demo_desc))
+    # p1: project-level PR Approvers (3); p2: repo-level PR (2, from the ACL above)
+    pr_ctx = {"p1": {"project_acl_names": ["[Platform]\\PR Approvers"],
+                     "counts_by_name": {"prapprovers": 3}},
+              "p2": {"project_acl_names": [], "counts_by_name": {"pr": 2}}
+              }.get(project_id, {})
     return {"source": "demo", "teams": teams, "repos": repos,
-            "analysis": _project_access_analysis(repos, teams, demo_desc, ldap_members)}
+            "analysis": _project_access_analysis(repos, teams, demo_desc,
+                                                 ldap_members, pr_ctx)}
 
 
 def ado_project_access(collection: str, project_id: str,
@@ -576,6 +628,18 @@ def ado_project_access(collection: str, project_id: str,
             for name, aces in pool.map(fetch_acl, repo_list):
                 raw_acls[name] = aces
                 descriptors.update(aces.keys())
+        # PROJECT-level Git ACL (no repo id) — distinguishes a project-wide
+        # PR-reviewer grant from a repo-specific one
+        proj_aces: dict = {}
+        try:
+            pacl = _ado.coll_get(
+                collection, f"/_apis/accesscontrollists/{ADO_GIT_NAMESPACE}",
+                {"token": f"repoV2/{project_id}"})
+            for entry in _values(pacl):
+                proj_aces.update(entry.get("acesDictionary") or {})
+            descriptors.update(proj_aces.keys())
+        except requests.RequestException as exc:
+            errors.append(f"project acl: {_short_http(exc)}")
         names = _resolve_identities(sorted(descriptors))
         repos = _build_repos(collection, project_id, repo_list, raw_acls, names)
         # project description carries the [TEAM] LDAP group for validation
@@ -586,7 +650,9 @@ def ado_project_access(collection: str, project_id: str,
         except requests.RequestException as exc:
             errors.append(f"project: {_short_http(exc)}")
         ldap_members = ldap_group_members(_team_from_desc(description))
-        analysis = _project_access_analysis(repos, teams, description, ldap_members)
+        pr_ctx = _build_pr_ctx(raw_acls, proj_aces, names)
+        analysis = _project_access_analysis(repos, teams, description,
+                                            ldap_members, pr_ctx)
         return {"source": "live", "teams": teams, "repos": repos,
                 "analysis": analysis,
                 "repo_cap_note": len(repo_list) >= PROJECT_REPO_CAP, "errors": errors}
@@ -631,6 +697,87 @@ def _norm_ident(s: str) -> str:
     """Last path segment of an identity, normalized for member matching."""
     s = re.split(r"[\\/]", (s or "").strip())[-1]
     return re.sub(r"[\s_\-.]+", "", s.lower())
+
+
+# PR-reviewer groups: an ADO team/group whose name marks it as pull-request
+# approvers/reviewers — "PR", "PR Approvers", "PR Reviewers", "Pull Request
+# Approvers/Reviewers" (case/separator-insensitive; _norm_ident strips those).
+_PR_GROUP_RE = re.compile(r"^(?:pr|pullrequest)(?:approvers?|reviewers?)?$")
+
+
+def _is_pr_group(name: str) -> bool:
+    return bool(_PR_GROUP_RE.fullmatch(_norm_ident(name)))
+
+
+def _group_member_counts(descriptors: list[str]) -> dict[str, int]:
+    """descriptor -> EXPANDED member count, for security groups referenced in
+    ACLs (used to size PR-reviewer groups that aren't ADO teams). Batched;
+    best-effort — a descriptor missing from the result just has no count."""
+    out: dict[str, int] = {}
+    for i in range(0, len(descriptors), 50):
+        batch = descriptors[i:i + 50]
+        try:
+            data = _ado.get("/_apis/identities",
+                            {"descriptors": ",".join(batch),
+                             "queryMembership": "Expanded"})
+            for ident in _values(data):
+                if ident and ident.get("descriptor"):
+                    out[ident["descriptor"]] = len(ident.get("members") or [])
+        except requests.RequestException:
+            continue
+    return out
+
+
+def _build_pr_ctx(repo_aces_by_repo: dict, proj_aces: dict,
+                  names: dict) -> dict:
+    """Assemble the PR-group context for _project_access_analysis from resolved
+    ACLs: the PROJECT-level identity names, plus a name->member-count map (only
+    PR-group descriptors get sized, sparing the identity service)."""
+    project_acl_names = [names.get(d, d) for d in proj_aces]
+    pr_desc: set[str] = set()
+    for aces in repo_aces_by_repo.values():
+        pr_desc.update(d for d in aces if _is_pr_group(names.get(d, d)))
+    pr_desc.update(d for d in proj_aces if _is_pr_group(names.get(d, d)))
+    counts_by_desc = _group_member_counts(sorted(pr_desc)) if pr_desc else {}
+    counts_by_name: dict[str, int] = {}
+    for d, cnt in counts_by_desc.items():
+        nm = _norm_ident(names.get(d, d))
+        counts_by_name[nm] = max(counts_by_name.get(nm, 0), cnt)
+    return {"project_acl_names": project_acl_names, "counts_by_name": counts_by_name}
+
+
+def _pr_groups(repos: list[dict], ado_teams: list[dict] | None,
+               project_acl_names, counts_by_name: dict[str, int]) -> list[dict]:
+    """PR-reviewer groups for a project, each {name, scope, members}. scope is
+    'project' when the group is an ADO team or granted on the PROJECT-level Git
+    token (so it applies to every repo), else 'repo' (granted only on specific
+    repositories). members is exact for teams, else the group's expanded count
+    (None when it couldn't be sized)."""
+    found: dict[str, dict] = {}
+
+    def put(name: str, scope: str, members):
+        k = _norm_ident(name)
+        short = re.split(r"[\\/]", (name or "").strip())[-1]
+        cur = found.get(k)
+        if cur is None:
+            found[k] = {"name": short, "scope": scope, "members": members}
+            return
+        if scope == "project":        # project-level supersedes a repo-level sighting
+            cur["scope"] = "project"
+        if cur.get("members") is None and members is not None:
+            cur["members"] = members
+
+    for t in (ado_teams or []):       # ADO teams are project-scoped; members known
+        if _is_pr_group(t.get("name", "")):
+            put(t["name"], "project", len(t.get("members") or []))
+    for name in (project_acl_names or []):
+        if _is_pr_group(name):
+            put(name, "project", counts_by_name.get(_norm_ident(name)))
+    for r in repos:
+        for a in r["acls"]:
+            if _is_pr_group(a["identity"]):
+                put(a["identity"], "repo", counts_by_name.get(_norm_ident(a["identity"])))
+    return sorted(found.values(), key=lambda g: g["name"].lower())
 
 
 def _team_validation(description: str, repos: list[dict],
@@ -720,10 +867,13 @@ def _team_validation(description: str, repos: list[dict],
 
 def _project_access_analysis(repos: list[dict], teams: list[dict],
                              description: str = "",
-                             ldap_info: dict | None = None) -> dict:
+                             ldap_info: dict | None = None,
+                             pr_ctx: dict | None = None) -> dict:
     # `teams` (with members) doubles as the grantee source for team validation
     """Is access UNIFORM across the project or REPO-SPECIFIC? Plus the many
-    percentages: repo-specific %, and the identity privilege mix."""
+    percentages: repo-specific %, and the identity privilege mix. `pr_ctx`
+    (optional) carries {project_acl_names, counts_by_name} for PR-reviewer
+    group detection."""
     total = len(repos)
     with_acls = [r for r in repos if r["acls"]]
     sigs = {r["signature"] for r in with_acls}
@@ -755,6 +905,15 @@ def _project_access_analysis(repos: list[dict], teams: list[dict],
         "pct_admin": _pct(counts["admin"], ids),
     }
     an["team_validation"] = _team_validation(description, repos, ldap_info, teams)
+    # PR-reviewer groups (repo- vs project-level) + their member counts
+    pr_ctx = pr_ctx or {}
+    pr = _pr_groups(repos, teams, pr_ctx.get("project_acl_names") or [],
+                    pr_ctx.get("counts_by_name") or {})
+    an["pr_groups"] = pr
+    an["pr_present"] = bool(pr)
+    an["pr_scope"] = ("project" if any(g["scope"] == "project" for g in pr)
+                      else "repo" if pr else None)
+    an["pr_member_count"] = sum((g["members"] or 0) for g in pr)
     an["score"] = _score_project(an)
     an["grade"] = _grade(an["score"])
     return an

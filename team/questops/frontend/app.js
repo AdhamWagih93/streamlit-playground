@@ -2151,6 +2151,8 @@ function collStatsPanel(s) {
   const wholePct = pct(s.whole_team_projects || 0, teamDef);
   const unassigned = s.unassigned_projects || 0;
   const healthyPct = pct(s.unassigned_healthy || 0, unassigned);
+  const prScored = s.pr_scored_projects || 0;
+  const prDefinedPct = pct(s.pr_defined_projects || 0, prScored);
   const bar = (label, pctVal, sub, goodCls) => `
     <div class="cstat">
       <div class="cstat-top"><span>${label}</span><b class="${goodCls}">${pctVal}%</b></div>
@@ -2166,6 +2168,8 @@ function collStatsPanel(s) {
           `${s.whole_team_projects} whole-team · ${s.per_member_projects} per-member (of ${teamDef} team-defined)`, cls(wholePct)) : ""}
       ${unassigned ? bar("healthy unassigned vs unhealthy", healthyPct,
           `${s.unassigned_healthy} healthy · ${s.unassigned_unhealthy} unhealthy (of ${unassigned} unassigned)`, cls(healthyPct)) : ""}
+      ${prScored ? bar("PR reviewers defined", prDefinedPct,
+          `${s.pr_project_level || 0} project-level · ${s.pr_repo_level || 0} repo-level · ${s.pr_missing_projects || 0} missing (of ${prScored})`, cls(prDefinedPct)) : ""}
       <div class="cstat">
         <div class="cstat-top"><span>projects with out-of-team members</span>
           <b class="${(s.extra_member_projects || 0) ? "pct-bad" : "pct-good"}">${s.extra_member_projects || 0}</b></div>
@@ -2208,6 +2212,8 @@ function accAdoHtml(d) {
             <span class="chip chip-green" title="all repos share one ACL set">${s.uniform_projects || 0} uniform</span>
             <span class="chip chip-amber" title="repos have their own ACLs">${s.repo_specific_projects || 0} repo-specific</span>
             <span class="chip" title="distinct members across the collection">${s.members ?? 0} members</span>
+            ${(s.pr_defined_projects || 0) || (s.pr_scored_projects || 0)
+              ? `<span class="chip ${s.pr_missing_projects ? "chip-amber" : "chip-green"}" title="projects defining a PR-reviewer group">🔀 ${s.pr_defined_projects || 0}/${s.pr_scored_projects || 0} w/ PR</span>` : ""}
             <span class="chip">${s.teams} teams</span>
             <span class="chip">${s.repos} repos</span>
           </span></summary>
@@ -2228,6 +2234,9 @@ function accAdoHtml(d) {
                     : p.team_ldap_resolved === false
                       ? `<span class="chip chip-red" title="LDAP group [${esc(p.team)}] not found — team not set (-15)">⚠ team [${esc(p.team)}] LDAP?</span>`
                       : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
+                  ${p.pr_present
+                    ? `<span class="chip ${p.pr_scope === "project" ? "chip-cyan" : "chip-amber"}" title="PR reviewers (${p.pr_scope}-level)${(p.pr_groups || []).length ? ": " + p.pr_groups.map((g) => g.name + (g.members != null ? " (" + g.members + ")" : "")).join(", ") : ""}">🔀 PR ${p.pr_member_count ?? 0} · ${p.pr_scope === "project" ? "project" : "repo"}</span>`
+                    : ""}
                   ${(p.members ?? 0) === 0
                     ? (p.team_unassigned
                         ? '<span class="chip chip-green" title="no members — expected for an unassigned project">0 members</span>'
@@ -2279,10 +2288,18 @@ function accAdoProjectHtml(d) {
           : '<div class="ci-meta">none / LDAP not resolved</div>'}
       </div>
     </details>`) : "";
+  const pr = an.pr_groups || [];
+  const prPanel = an.total_repos ? (pr.length ? `
+    <div class="acc-pr">
+      <b>🔀 PR reviewers</b>
+      ${pr.map((g) => `<span class="chip ${g.scope === "project" ? "chip-cyan" : "chip-amber"}" title="${g.scope === "project" ? "granted project-wide (team or project-level ACL)" : "granted on specific repositories"}">${esc(g.name)} · ${g.members != null ? g.members + " member(s)" : "size ?"} · ${g.scope}-level</span>`).join(" ")}
+    </div>` : `
+    <div class="acc-pr acc-pr-none"><b>🔀 PR reviewers</b>
+      <span class="chip">none detected (no PR / PR Approvers group)</span></div>`) : "";
   const analysisPanel = an.total_repos ? `
     <div class="acc-score-line">${scoreBadge(an.score, an.grade)}
       <span class="ci-meta">access-hygiene score — uniform access, low repo-specific sprawl, low admin concentration &amp; valid [TEAM] access score higher</span></div>
-    ${teamPanel}` : "";
+    ${teamPanel}${prPanel}` : "";
   const restPanel = an.total_repos ? `
     <div class="acc-analysis">
       <div class="stat-tile"><b>${an.members}</b><span>members</span></div>
