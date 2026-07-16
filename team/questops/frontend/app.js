@@ -2331,7 +2331,7 @@ function accJiraHtml(d) {
   const juBanner = (d.jirauser_grants || []).length ? `
     <div class="remote-banner remote-new" style="margin-bottom:10px">
       <b>🚩 ${d.jirauser_grants.length} grant(s) to JIRAUSER-keyed users</b>
-      ${d.jirauser_grants.map((g) => `<div class="ci-meta">• ${esc(g.holder)} in <b>${esc(g.scheme)}</b></div>`).join("")}
+      ${d.jirauser_grants.map((g) => `<div class="ci-meta">• ${esc(g.holder)}${g.key && g.display_name ? ` <code>${esc(g.key)}</code>` : ""} in <b>${esc(g.scheme)}</b></div>`).join("")}
     </div>` : "";
 
   const g = d.groups || {};
@@ -2374,6 +2374,7 @@ function accJiraHtml(d) {
         <div style="padding:8px 12px">
           ${s.holders.map((h) => `
             <div class="acc-acl"><span class="acc-ident ${h.flag || h.not_member ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
+              ${h.key && h.display_name ? `<code class="acc-userkey" title="internal Jira user key">${esc(h.key)}</code>` : ""}
               ${h.flag ? '<span class="chip chip-red" title="JIRAUSER-keyed user grant">🚩</span>' : ""}
               ${h.not_member ? '<span class="chip chip-red" title="not a jira-users member">⚠ non-member</span>' : ""}</span>
               ${permChips(h.permissions)}</div>`).join("")}

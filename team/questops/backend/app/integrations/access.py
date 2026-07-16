@@ -778,6 +778,43 @@ def _jira_holder(holder: dict, role_names: dict) -> tuple[str, str, str]:
     return htype + (f" {param}" if param else ""), htype, param
 
 
+_JIRA_USER_LOOKUP_CAP = 300  # bound direct /user lookups for keys not in a group
+
+
+def _make_jira_user_resolver(jget, index: dict):
+    """param (user key or username, lowercased) -> human display name. Resolves
+    from the pre-built group index first (jira-users + jira-administrators
+    memberships, free — already fetched), then a BOUNDED direct
+    /rest/api/2/user lookup for keys granted directly but in no group (the
+    flagged JIRAUSER grants). Misses memoize as '' so each key is tried once."""
+    cache = dict(index)
+    budget = [_JIRA_USER_LOOKUP_CAP]
+
+    def resolve(param: str) -> str:
+        if not param:
+            return ""
+        k = param.lower()
+        if k in cache:
+            return cache[k]
+        name = ""
+        if budget[0] > 0:
+            budget[0] -= 1
+            # Jira DC: JIRAUSER-keyed accounts resolve by `key`, older/local
+            # accounts by `username` — try both.
+            for q in ({"key": param}, {"username": param}):
+                try:
+                    u = jget("/rest/api/2/user", q)
+                    name = (u.get("displayName") or u.get("name") or "").strip()
+                    if name:
+                        break
+                except requests.RequestException:
+                    continue
+        cache[k] = name
+        return name
+
+    return resolve
+
+
 def jira_permission_schemes(force: bool = False) -> dict:
     def build():
         if settings.demo_mode:
@@ -796,7 +833,8 @@ def jira_permission_schemes(force: bool = False) -> dict:
                                       "Edit Issues", "Transition Issues"]},
                      {"holder": "role Administrators", "type": "projectRole",
                       "permissions": ["Administer Projects", "Delete Issues"]},
-                     {"holder": "user JIRAUSER10500", "type": "user", "flag": True,
+                     {"holder": "user Priya Raman", "type": "user", "flag": True,
+                      "key": "JIRAUSER10500", "display_name": "Priya Raman",
                       "permissions": ["Administer Projects", "Delete Issues"]},
                  ]},
                 {"id": 2, "name": "Restricted Scheme",
@@ -811,8 +849,10 @@ def jira_permission_schemes(force: bool = False) -> dict:
             # a scheme also grants a user who is NOT a jira-users member
             schemes[1]["holders"].append(
                 {"holder": "user ext_contractor", "type": "user",
+                 "key": "ext_contractor", "display_name": "",
                  "permissions": ["Browse Projects"], "not_member": True})
-            flagged = [{"scheme": s["name"], "holder": h["holder"]}
+            flagged = [{"scheme": s["name"], "holder": h["holder"],
+                        "key": h.get("key", ""), "display_name": h.get("display_name", "")}
                        for s in schemes for h in s["holders"] if h.get("flag")]
             groups = {"admin_group": "jira-administrators",
                       "users_group": "jira-users",
@@ -822,6 +862,7 @@ def jira_permission_schemes(force: bool = False) -> dict:
                                 "Dave Samir", "Erin Zaki"],
                       "users_count": 5, "users_readable": True}
             non_members = [{"scheme": "Restricted Scheme", "user": "ext_contractor",
+                            "key": "ext_contractor", "display_name": "",
                             "in_admins": False}]
             return {"source": "demo", "schemes": schemes,
                     "jirauser_grants": flagged, "project_count": 3,
@@ -856,6 +897,17 @@ def jira_permission_schemes(force: bool = False) -> dict:
                      {m["name"].lower() for m in admin_members if m.get("name")}
         users_keys = {m["key"].lower() for m in users_members if m.get("key")} | \
                      {m["name"].lower() for m in users_members if m.get("name")}
+        # key / username -> display name, from the two group memberships we just
+        # read; the resolver falls back to a direct /user lookup for the rest.
+        user_index: dict[str, str] = {}
+        for m in (*users_members, *admin_members):
+            disp = (m.get("displayName") or m.get("name") or "").strip()
+            if not disp:
+                continue
+            for kk in (m.get("key"), m.get("name")):
+                if kk:
+                    user_index.setdefault(kk.lower(), disp)
+        resolve_user = _make_jira_user_resolver(jget, user_index)
 
         data = jget("/rest/api/2/permissionscheme", {"expand": "permissions"})
         schemes = []
@@ -872,16 +924,24 @@ def jira_permission_schemes(force: bool = False) -> dict:
             holders = []
             for k, v in sorted(by_holder.items()):
                 param = holder_meta[k]["param"]
-                is_ju = k[1] == "user" and param.upper().startswith("JIRAUSER")
-                not_member = (k[1] == "user" and users_keys
+                is_user = k[1] == "user"
+                is_ju = is_user and param.upper().startswith("JIRAUSER")
+                not_member = (is_user and users_keys
                               and param.lower() not in users_keys)
-                holders.append({"holder": k[0], "type": k[1],
+                # map the internal user key/username to a real name
+                display = resolve_user(param) if is_user else ""
+                label = f"user {display}" if (is_user and display) else k[0]
+                holders.append({"holder": label, "type": k[1],
+                                "key": param if is_user else "",
+                                "display_name": display,
                                 "permissions": sorted(set(v)), "flag": is_ju,
                                 "not_member": not_member})
                 if is_ju:
-                    jirauser_grants.append({"scheme": s.get("name", ""), "holder": k[0]})
-                if k[1] == "user":
-                    user_holders.append((s.get("name", ""), k[0], param))
+                    jirauser_grants.append({"scheme": s.get("name", ""),
+                                            "holder": label, "key": param,
+                                            "display_name": display})
+                if is_user:
+                    user_holders.append((s.get("name", ""), label, param, display))
             schemes.append({
                 "id": s.get("id"), "name": s.get("name", ""),
                 "description": (s.get("description") or "")[:200],
@@ -893,10 +953,11 @@ def jira_permission_schemes(force: bool = False) -> dict:
         # could read the jira-users membership
         non_member_grants = []
         if users_keys:
-            for scheme_name, label, param in user_holders:
+            for scheme_name, label, param, display in user_holders:
                 if param.lower() not in users_keys:
                     non_member_grants.append({
-                        "scheme": scheme_name, "user": label.replace("user ", ""),
+                        "scheme": scheme_name, "user": display or param,
+                        "key": param, "display_name": display,
                         "in_admins": param.lower() in admin_keys})
 
         # scheme -> projects: paginate ALL projects (the 'unassigned' bug came

@@ -452,6 +452,8 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .acc-repo { border-top: 1px solid var(--line); padding: 8px; }
 .acc-acl { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 4px 8px; }
 .acc-ident { font: 500 12px var(--mono); color: var(--text); min-width: 200px; }
+.acc-userkey { font-size: 10px; color: var(--muted); background: var(--bg-2);
+  padding: 0 5px; opacity: .8; }
 .acc-members { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .acc-members .chip { font-size: 10px; }
 .acc-subhead { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
