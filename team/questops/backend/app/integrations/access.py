@@ -159,12 +159,29 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
         member_sets = [p.get("_memberset") for p in ps if p.get("_memberset") is not None]
         distinct_members = (len(set().union(*member_sets)) if member_sets
                             else sum(p.get("members", 0) for p in ps))
+        # team-governance breakdown
+        team_defined = [p for p in ps if p.get("team") and not p.get("team_unassigned")
+                        and p.get("team_ldap_resolved")]
+        whole_team = sum(1 for p in team_defined if p.get("team_group_granted"))
+        unassigned = [p for p in ps if p.get("team_unassigned")]
+        unassigned_healthy = sum(1 for p in unassigned if p.get("team_ok"))
+        extra_member_projects = sum(1 for p in ps if (p.get("team_non_member_count") or 0) > 0)
+        ldap_failed = sum(1 for p in ps if p.get("team") and not p.get("team_unassigned")
+                          and p.get("team_ldap_resolved") is False)
         out.append({
             "name": c, "projects": len(ps),
             "teams": sum(p.get("teams", 0) for p in ps),
             "repos": sum(p.get("repos", 0) for p in ps),
             "members": distinct_members,
             "uniform_projects": uniform, "repo_specific_projects": repo_specific,
+            "team_defined_projects": len(team_defined),
+            "whole_team_projects": whole_team,
+            "per_member_projects": len(team_defined) - whole_team,
+            "unassigned_projects": len(unassigned),
+            "unassigned_healthy": unassigned_healthy,
+            "unassigned_unhealthy": len(unassigned) - unassigned_healthy,
+            "extra_member_projects": extra_member_projects,
+            "ldap_failed_projects": ldap_failed,
             "score": round(sum(scored) / len(scored)) if scored else None,
             "grade": _grade(round(sum(scored) / len(scored)) if scored else None)})
     return out

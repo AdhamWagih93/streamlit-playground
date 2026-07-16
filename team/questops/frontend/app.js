@@ -2076,6 +2076,38 @@ const extLink = (url) => url && !url.startsWith("#")
   ? `<a class="acc-ext" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
 
 const miniBar = (pct, cls) => `<span class="mini-bar"><span class="${cls || ""}" style="width:${Math.min(pct, 100)}%"></span></span>`;
+
+// high-level governance stats shown when a collection is expanded
+function collStatsPanel(s) {
+  const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
+  const scored = (s.uniform_projects || 0) + (s.repo_specific_projects || 0);
+  const uniPct = pct(s.uniform_projects || 0, scored);
+  const teamDef = s.team_defined_projects || 0;
+  const wholePct = pct(s.whole_team_projects || 0, teamDef);
+  const unassigned = s.unassigned_projects || 0;
+  const healthyPct = pct(s.unassigned_healthy || 0, unassigned);
+  const bar = (label, pctVal, sub, goodCls) => `
+    <div class="cstat">
+      <div class="cstat-top"><span>${label}</span><b class="${goodCls}">${pctVal}%</b></div>
+      <span class="lb-bar"><div class="${goodCls}" style="width:${pctVal}%"></div></span>
+      <span class="ci-meta">${sub}</span>
+    </div>`;
+  const cls = (p) => p >= 80 ? "pct-good" : p >= 50 ? "pct-warn" : "pct-bad";
+  return `
+    <div class="coll-stats">
+      ${scored ? bar("uniform vs repo-level access", uniPct,
+          `${s.uniform_projects} uniform · ${s.repo_specific_projects} repo-specific`, cls(uniPct)) : ""}
+      ${teamDef ? bar("whole-team granted vs per-member", wholePct,
+          `${s.whole_team_projects} whole-team · ${s.per_member_projects} per-member (of ${teamDef} team-defined)`, cls(wholePct)) : ""}
+      ${unassigned ? bar("healthy unassigned vs unhealthy", healthyPct,
+          `${s.unassigned_healthy} healthy · ${s.unassigned_unhealthy} unhealthy (of ${unassigned} unassigned)`, cls(healthyPct)) : ""}
+      <div class="cstat">
+        <div class="cstat-top"><span>projects with out-of-team members</span>
+          <b class="${(s.extra_member_projects || 0) ? "pct-bad" : "pct-good"}">${s.extra_member_projects || 0}</b></div>
+        <span class="ci-meta">granted members not in the [TEAM] group${(s.ldap_failed_projects || 0) ? ` · ${s.ldap_failed_projects} team(s) failed LDAP` : ""}</span>
+      </div>
+    </div>`;
+}
 const gradeCls = (g) => ({ A: "grade-a", B: "grade-a", C: "grade-c", D: "grade-f", F: "grade-f" }[g] || "grade-x");
 const scoreBadge = (score, grade) => score == null
   ? `<span class="score-badge grade-x" title="not scored (repo cap reached — refresh or expand)">?</span>`
@@ -2113,6 +2145,7 @@ function accAdoHtml(d) {
             <span class="chip">${s.repos} repos</span>
           </span></summary>
         <div class="acc-coll-body">
+          ${collStatsPanel(s)}
           ${byColl[c].map((p) => `
             <details class="filebox acc-proj" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
               <summary>📁 <b>${esc(p.name)}</b> ${scoreBadge(p.score, p.grade)} ${extLink(p.url)}
