@@ -18,10 +18,16 @@
   --green: #43c884;
   --red: #ef5f66;
   --violet: #a58bf5;
+  --muted: #8fa0b5;         /* dim text alias used by a few components */
+  --line-hi: #33465f;       /* brighter border on hover/emphasis */
   --display: "Chakra Petch", "IBM Plex Sans", sans-serif;
   --body: "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
   --r: 10px;
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.14);
+  --shadow-md: 0 8px 22px -8px rgba(0,0,0,.55);
+  --shadow-lg: 0 30px 80px rgba(0,0,0,.5);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -696,6 +702,11 @@ html[data-theme="light"] {
   --green: #178a55;
   --red: #cc3a42;
   --violet: #6a49c8;
+  --muted: #6a7889;
+  --line-hi: #b3c0d1;
+  --shadow-sm: 0 1px 2px rgba(30,45,70,.08), 0 1px 3px rgba(30,45,70,.06);
+  --shadow-md: 0 8px 22px -8px rgba(30,45,70,.20);
+  --shadow-lg: 0 30px 80px rgba(30,45,70,.18);
 }
 html[data-theme="light"] body {
   background-image:
@@ -749,3 +760,82 @@ html[data-theme="light"] .modal-back { background: rgba(40,55,80,.35); }
 .md ul { margin: 4px 0 4px 18px; }
 .md p { margin: 4px 0; }
 .md strong { color: var(--amber); }
+
+/* ============================================================
+   UI/UX polish — depth, motion & focus. Additive layer: enhances
+   the existing components without changing any layout.
+   ============================================================ */
+
+/* one shared, calm transition on the interactive surfaces */
+.btn, .chip, #nav a, .stat-tile, .focus-item, .quest-card, .card,
+.scan-card, .badge-tile, .preset-chip, .tree-item, .hist-row, .lb-row,
+details.filebox, .acc-team, .acc-pr, a.ov-tile, .score-badge, .score-pill,
+summary {
+  transition: border-color .18s var(--ease), background-color .18s var(--ease),
+    box-shadow .18s var(--ease), transform .18s var(--ease), color .18s var(--ease),
+    filter .15s var(--ease);
+}
+
+/* elevation for the card-like surfaces */
+.panel, .focus-item, .quest-card, .stat-tile, .scan-card, .badge-tile,
+.kpi-overall, .card { box-shadow: var(--shadow-sm); }
+
+/* hover lift — surfaces gently rise and brighten their edge */
+.focus-item:hover, .quest-card:hover, .scan-card:hover, .card:hover,
+.stat-tile:hover, a.ov-tile:hover {
+  transform: translateY(-2px); box-shadow: var(--shadow-md);
+  border-color: var(--line-hi);
+}
+details.filebox:hover { border-color: var(--line-hi); }
+
+/* buttons: subtle lift then a crisp press */
+.btn:hover, .btn-primary:hover { transform: translateY(-1px); }
+.btn:active, .btn-primary:active { transform: translateY(0); }
+
+/* nav: active accent bar + a hair of motion on hover */
+#nav a { position: relative; }
+#nav a:hover { transform: translateX(2px); }
+#nav a.active:hover { transform: none; }
+#nav a.active::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--amber);
+}
+
+/* numerals line up as they animate/update */
+.stat-tile b, .kpi-overall b, .cstat-top b, .score-pill, .lb-xp, .lb-rank,
+.upg-ver b { font-variant-numeric: tabular-nums; }
+
+/* depth under the sticky topbar */
+.topbar { box-shadow: 0 1px 0 var(--line), 0 8px 22px -14px rgba(0,0,0,.65); }
+
+/* score badges pop a touch when you hover their row */
+.acc-proj > summary:hover .score-badge,
+.acc-coll-det > summary:hover .score-badge,
+.focus-item:hover .score-pill { filter: brightness(1.14); }
+
+/* login card carries a bit more presence */
+.login-card { box-shadow: var(--shadow-lg); }
+
+/* calmer disclosure carets + a soft text-selection tint */
+summary::marker { color: var(--faint); }
+::selection { background: rgba(255,178,36,.26); color: var(--text); }
+html[data-theme="light"] ::selection { background: rgba(176,110,0,.22); }
+::-webkit-scrollbar-thumb:hover { background: var(--line-hi); }
+
+/* accessible keyboard focus ring — keyboard only, mouse clicks unaffected.
+   Text fields keep their existing amber-border treatment (no double ring). */
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
+.btn:focus-visible, .chip:focus-visible, #nav a:focus-visible,
+button:focus-visible { outline-offset: 3px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
+/* a soft focus glow on text fields, complementing the amber border */
+input:not([type="checkbox"]):not([type="radio"]):focus,
+textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
+
+/* honour reduced-motion: keep the UI static for those who ask for it */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important; scroll-behavior: auto !important;
+  }
+}
