@@ -2596,7 +2596,7 @@ async function renderUpgrades(refresh) {
       ${data.lookup_config ? `<div class="ci-meta" style="margin-top:4px">server lookup config —
         proxy: <b>${esc(data.lookup_config.proxy || "none")}</b>${data.lookup_config.env_proxy ? ` · container env proxy: <b>${esc(data.lookup_config.env_proxy)}</b>` : ""}
         · verify_ssl: <b>${data.lookup_config.verify_ssl}</b>
-        · base: <b>${esc(data.lookup_config.eol_api_base)}</b>
+        · sources: <b>${esc(data.lookup_config.sources)}</b>
         &nbsp;(if the proxy you set isn't shown here, the env var never reached the container — check QO_UPGRADES_PROXY and restart)</div>` : ""}
     </div>` : ""}
     ${rows || `<div class="empty">no tools to check</div>`}

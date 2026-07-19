@@ -42,8 +42,9 @@ services:
       KPI_IGNORE: ${QO_KPI_IGNORE:-}
       UPGRADES_PROXY: ${QO_UPGRADES_PROXY:-}
       UPGRADES_VERIFY_SSL: ${QO_UPGRADES_VERIFY_SSL:-true}
-      EOL_API_BASE: ${QO_EOL_API_BASE:-https://endoflife.date/api}
+      DOCKERHUB_API_BASE: ${QO_DOCKERHUB_API_BASE:-https://hub.docker.com/v2}
       GITHUB_API_BASE: ${QO_GITHUB_API_BASE:-https://api.github.com}
+      ARTIFACTHUB_API_BASE: ${QO_ARTIFACTHUB_API_BASE:-https://artifacthub.io/api/v1}
       ERROR_ANALYSIS_DAYS: ${QO_ERROR_ANALYSIS_DAYS:-14}
       TZ: ${QO_TZ:-UTC}
       LDAP_URL: ${QO_LDAP_URL:-}

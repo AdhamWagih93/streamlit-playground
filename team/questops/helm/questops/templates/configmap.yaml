@@ -33,8 +33,9 @@ data:
   KPI_IGNORE: {{ .Values.elasticsearch.kpiIgnore | quote }}
   UPGRADES_PROXY: {{ .Values.upgrades.proxy | quote }}
   UPGRADES_VERIFY_SSL: {{ .Values.upgrades.verifySsl | quote }}
-  EOL_API_BASE: {{ .Values.upgrades.eolApiBase | quote }}
+  DOCKERHUB_API_BASE: {{ .Values.upgrades.dockerhubApiBase | quote }}
   GITHUB_API_BASE: {{ .Values.upgrades.githubApiBase | quote }}
+  ARTIFACTHUB_API_BASE: {{ .Values.upgrades.artifacthubApiBase | quote }}
   ERROR_ANALYSIS_DAYS: {{ .Values.elasticsearch.errorAnalysisDays | quote }}
   TZ: {{ .Values.app_timezone | quote }}
   LDAP_URL: {{ .Values.ldap.url | quote }}

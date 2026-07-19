@@ -58,14 +58,18 @@ class Settings(BaseSettings):
     kpi_ignore: str = ""
     error_analysis_days: int = 14
 
-    # --- Upgrade checker: outbound version lookups (endoflife.date / GitHub).
-    # These are the ONLY outbound-internet calls QuestOps makes; on hosts that
-    # reach the internet via a corporate proxy, set upgrades_proxy — internal
-    # Jira/Jenkins/ES/LDAP calls never use it.
+    # --- Upgrade checker: outbound version lookups (Docker Hub / GitHub /
+    # Artifact Hub). These are the ONLY outbound-internet calls QuestOps makes;
+    # on hosts that reach the internet via a corporate proxy, set upgrades_proxy
+    # — internal Jira/Jenkins/ES/LDAP calls never use it.
     upgrades_proxy: str = ""          # e.g. http://proxy.mycorp.local:8080
     upgrades_verify_ssl: bool = True  # false if the proxy re-signs TLS
-    eol_api_base: str = "https://endoflife.date/api"   # or an internal mirror
+    # latest-version sources (endoflife.date is NOT used — often unreachable):
+    # Docker Hub tags, GitHub releases/tags, Artifact Hub package versions.
+    # Point any at an internal mirror if the public host is blocked.
+    dockerhub_api_base: str = "https://hub.docker.com/v2"
     github_api_base: str = "https://api.github.com"
+    artifacthub_api_base: str = "https://artifacthub.io/api/v1"
 
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389

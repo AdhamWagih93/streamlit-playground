@@ -1,9 +1,10 @@
 """Upgrade checker: detect the running version of each integrated tool and
-compare it against the latest LTS / supported line.
+compare it against the latest released version.
 
-Latest-version data comes from endoflife.date (and GitHub releases for tools
-it doesn't track), cached in-process for 6h. When the server has no internet
-a bundled snapshot is used and clearly labeled as possibly stale."""
+Latest-version data comes from Docker Hub image tags, GitHub releases/tags, and
+Artifact Hub package versions (endoflife.date is intentionally NOT used — it is
+unreachable in some regions). Cached in-process for 6h. When the server has no
+internet a bundled snapshot is used and clearly labeled as possibly stale."""
 
 import datetime as dt
 import os
@@ -21,7 +22,8 @@ CACHE_TTL_DEGRADED = 600  # failed lookups retry soon (self-heals after a proxy 
 _CACHE: dict = {"at": 0.0, "payload": None, "ttl": CACHE_TTL}
 
 PROXY_HINT = ("no direct internet? set UPGRADES_PROXY (QO_UPGRADES_PROXY) to your "
-              "corporate proxy, or point EOL_API_BASE at an internal mirror")
+              "corporate proxy, or point DOCKERHUB_API_BASE / GITHUB_API_BASE / "
+              "ARTIFACTHUB_API_BASE at internal mirrors")
 
 
 def _lookup_get(url: str) -> dict | list:
@@ -49,8 +51,8 @@ def lookup_config() -> dict:
     return {"proxy": _mask_userinfo(settings.upgrades_proxy) or None,
             "env_proxy": _mask_userinfo(env_proxy) or None,
             "verify_ssl": settings.upgrades_verify_ssl,
-            "eol_api_base": settings.eol_api_base,
-            "github_api_base": settings.github_api_base}
+            "sources": (f"{settings.dockerhub_api_base} · {settings.github_api_base} "
+                        f"· {settings.artifacthub_api_base}")}
 
 
 def _short_err(exc: Exception) -> str:
@@ -64,13 +66,14 @@ def _short_err(exc: Exception) -> str:
             return human
     return s[:120]
 
-# offline fallback — approximate, from build time; the UI labels it stale
+# offline fallback — approximate, from build time; the UI labels it stale.
+# Keyed by tool key (see TOOLS).
 BUNDLED = {
     "jenkins": {"recommended": "2.516", "latest": "2.516.3", "lts": True},
     "elasticsearch": {"recommended": "9.1", "latest": "9.1.3", "lts": False},
-    "jira-software": {"recommended": "10.3", "latest": "10.3.6", "lts": True},
+    "jira": {"recommended": "10.3", "latest": "10.3.6", "lts": True},
     "postgresql": {"recommended": "17", "latest": "17.6", "lts": False},
-    "ollama/ollama": {"recommended": "0.11", "latest": "0.11.10", "lts": False},
+    "ollama": {"recommended": "0.11", "latest": "0.11.10", "lts": False},
 }
 
 # demo currents chosen to exercise every status color in the UI
@@ -164,56 +167,85 @@ def _ollama_version() -> tuple[str | None, str | None]:
 
 
 # ------------------------------------------------------------- latest online
-def _eol_passed(cycle: dict) -> bool:
-    eol = cycle.get("eol")
-    if eol is True:
-        return True
-    if isinstance(eol, str):
-        try:
-            return dt.date.fromisoformat(eol) < dt.date.today()
-        except ValueError:
-            return False
-    return False
+def _major_minor(v: str) -> str:
+    """First two numeric components of a version, e.g. '10.3.6' -> '10.3'."""
+    nums = [p for p in re.split(r"[.\-+_]", (v or "").strip())
+            if p and p[0].isdigit()][:2]
+    return ".".join(nums) if nums else (v or "")
 
 
-def _pick(cycles: list[dict]) -> dict:
-    """Newest LTS line when the product marks LTS; else newest supported line."""
-    def key(c):
-        return _ver(str(c.get("cycle", "")))
-    lts = [c for c in cycles if c.get("lts")]  # bool True or 'became LTS' date
-    pool = [c for c in lts if not _eol_passed(c)] or lts \
-        or [c for c in cycles if not _eol_passed(c)] or cycles
-    best = max(pool, key=key)
-    return {"recommended": str(best.get("cycle", "")),
-            "latest": str(best.get("latest") or ""),
-            "lts": bool(lts), "eol": best.get("eol")}
+def _semver_tags(tags: list[str], suffix: str | None = None) -> list[tuple]:
+    """[(version_tuple, version_str)] for tags that are a plain dotted version
+    (major.minor[.patch]), optionally requiring an exact suffix like '-lts'.
+    Rejects qualified tags (alpine/rc/jdk/latest/…), so only real releases win."""
+    pat = (re.compile(rf"^(\d+(?:\.\d+)+){re.escape(suffix)}$") if suffix
+           else re.compile(r"^v?(\d+(?:\.\d+)+)$"))
+    out = []
+    for t in tags:
+        m = pat.match((t or "").strip())
+        if m:
+            out.append((_ver(m.group(1)), m.group(1)))
+    return out
 
 
-def _from_eol_api(product: str) -> tuple[dict, list[dict]]:
-    cycles = _lookup_get(f"{settings.eol_api_base.rstrip('/')}/{product}.json")
-    return _pick(cycles), cycles
+def _rec_from(latest: str, lts: bool = False) -> dict:
+    return {"recommended": _major_minor(latest), "latest": latest,
+            "lts": lts, "eol": None}
 
 
-def _from_github(repo: str) -> tuple[dict, list[dict]]:
-    data = _lookup_get(f"{settings.github_api_base.rstrip('/')}/repos/{repo}/releases/latest")
-    tag = (data.get("tag_name") or "").lstrip("v")
-    return {"recommended": ".".join(tag.split(".")[:2]), "latest": tag,
-            "lts": False, "eol": None}, []
+def _from_dockerhub(repo: str, suffix: str | None = None) -> dict:
+    """Highest version among a Docker Hub image's tags. `suffix` (e.g. '-lts')
+    restricts to that release line. `repo` is namespace/name ('library/postgres',
+    'jenkins/jenkins', 'atlassian/jira-software')."""
+    data = _lookup_get(f"{settings.dockerhub_api_base.rstrip('/')}"
+                       f"/repositories/{repo}/tags?page_size=100&ordering=last_updated")
+    tags = [t.get("name", "") for t in (data.get("results") or [])]
+    vers = _semver_tags(tags, suffix)
+    if not vers:
+        raise ValueError(f"no version tags on Docker Hub for {repo}")
+    return _rec_from(max(vers)[1], lts=bool(suffix))
+
+
+def _from_github(repo: str) -> dict:
+    """Latest GitHub release (falling back to the highest semver tag)."""
+    base = settings.github_api_base.rstrip("/")
+    tag = ""
+    try:
+        data = _lookup_get(f"{base}/repos/{repo}/releases/latest")
+        tag = (data.get("tag_name") or "").lstrip("v")
+    except Exception:  # noqa: BLE001 — repo may publish tags but no 'releases'
+        tag = ""
+    if not tag:
+        tags = _lookup_get(f"{base}/repos/{repo}/tags?per_page=100")
+        vers = _semver_tags([t.get("name", "") for t in (tags or [])])
+        if not vers:
+            raise ValueError(f"no releases/tags on GitHub for {repo}")
+        tag = max(vers)[1]
+    return _rec_from(tag)
+
+
+def _from_artifacthub(repo: str, package: str) -> dict:
+    """App version of an Artifact Hub Helm package (repo/package)."""
+    data = _lookup_get(f"{settings.artifacthub_api_base.rstrip('/')}"
+                       f"/packages/helm/{repo}/{package}")
+    ver = (data.get("app_version") or data.get("version") or "").lstrip("v")
+    if not ver:
+        raise ValueError(f"no version from Artifact Hub for {repo}/{package}")
+    return _rec_from(ver)
+
+
+_SOURCES = {"dockerhub": ("Docker Hub", lambda s: _from_dockerhub(s["repo"], s.get("suffix"))),
+            "github": ("GitHub releases", lambda s: _from_github(s["repo"])),
+            "artifacthub": ("Artifact Hub", lambda s: _from_artifacthub(s["repo"], s["package"]))}
 
 
 # ------------------------------------------------------------- status verdict
-def _status(current: str | None, cycles: list[dict], rec: dict | None) -> str:
+def _status(current: str | None, rec: dict | None) -> str:
+    """Compare the running version to the latest released line: behind a whole
+    release line -> 'upgrade'; only behind on the patch -> 'patch'; else 'ok'."""
     if not current or not rec:
         return "unknown"
     cv = _ver(current)
-    mine = None
-    for c in cycles or []:
-        cyc = _ver(str(c.get("cycle", "")))
-        if cv[:len(cyc)] == cyc and (mine is None
-                                     or cyc > _ver(str(mine.get("cycle", "")))):
-            mine = c
-    if mine is not None and _eol_passed(mine):
-        return "eol"
     rv = _ver(rec["recommended"])
     if rv > cv[:len(rv)]:
         return "upgrade"
@@ -223,20 +255,20 @@ def _status(current: str | None, cycles: list[dict], rec: dict | None) -> str:
 
 
 TOOLS = [
-    {"key": "jenkins", "name": "Jenkins", "icon": "⚙",
-     "product": "jenkins", "detect": _jenkins_version,
-     "page": "https://endoflife.date/jenkins"},
-    {"key": "elasticsearch", "name": "Elasticsearch", "icon": "🔍",
-     "product": "elasticsearch", "detect": _es_version,
-     "page": "https://endoflife.date/elasticsearch"},
-    {"key": "jira", "name": "Jira Data Center", "icon": "🎫",
-     "product": "jira-software", "detect": _jira_version,
-     "page": "https://endoflife.date/jira-software"},
-    {"key": "postgresql", "name": "PostgreSQL", "icon": "🐘",
-     "product": "postgresql", "detect": _pg_version,
-     "page": "https://endoflife.date/postgresql"},
-    {"key": "ollama", "name": "Ollama", "icon": "✦",
-     "product": None, "github": "ollama/ollama", "detect": _ollama_version,
+    {"key": "jenkins", "name": "Jenkins", "icon": "⚙", "detect": _jenkins_version,
+     "source": {"type": "dockerhub", "repo": "jenkins/jenkins", "suffix": "-lts"},
+     "page": "https://hub.docker.com/r/jenkins/jenkins/tags"},
+    {"key": "elasticsearch", "name": "Elasticsearch", "icon": "🔍", "detect": _es_version,
+     "source": {"type": "github", "repo": "elastic/elasticsearch"},
+     "page": "https://github.com/elastic/elasticsearch/releases"},
+    {"key": "jira", "name": "Jira Data Center", "icon": "🎫", "detect": _jira_version,
+     "source": {"type": "dockerhub", "repo": "atlassian/jira-software"},
+     "page": "https://hub.docker.com/r/atlassian/jira-software/tags"},
+    {"key": "postgresql", "name": "PostgreSQL", "icon": "🐘", "detect": _pg_version,
+     "source": {"type": "dockerhub", "repo": "library/postgres"},
+     "page": "https://hub.docker.com/_/postgres/tags"},
+    {"key": "ollama", "name": "Ollama", "icon": "✦", "detect": _ollama_version,
+     "source": {"type": "github", "repo": "ollama/ollama"},
      "page": "https://github.com/ollama/ollama/releases"},
 ]
 
@@ -248,16 +280,13 @@ def _check_tool(t: dict) -> dict:
         current, detect_error = t["detect"]()
     except Exception as exc:  # noqa: BLE001 — a broken detector never kills the tab
         current, detect_error = None, str(exc)[:120]
-    rec, cycles, source, lookup_error = None, [], "endoflife.date", None
+    rec, source, lookup_error = None, "", None
+    label, fetch = _SOURCES[t["source"]["type"]]
     try:
-        if t.get("product"):
-            rec, cycles = _from_eol_api(t["product"])
-        else:
-            rec, cycles = _from_github(t["github"])
-            source = "GitHub releases"
-    except Exception as exc:  # noqa: BLE001 — offline / API down
+        rec, source = fetch(t["source"]), label
+    except Exception as exc:  # noqa: BLE001 — offline / API down / blocked
         lookup_error = _short_err(exc)
-        bundled = BUNDLED.get(t.get("product") or t.get("github", ""))
+        bundled = BUNDLED.get(t["key"])
         if bundled:
             rec = {**bundled, "eol": None}
             source = "bundled snapshot (offline — may be stale)"
@@ -267,8 +296,8 @@ def _check_tool(t: dict) -> dict:
         "recommended": rec["recommended"] if rec else None,
         "latest": rec["latest"] if rec else None,
         "lts": rec["lts"] if rec else False,
-        "eol_date": (rec or {}).get("eol") if isinstance((rec or {}).get("eol"), str) else None,
-        "status": _status(current, cycles, rec),
+        "eol_date": None,
+        "status": _status(current, rec),
         "source": source, "lookup_error": lookup_error, "page": t["page"],
     }
 

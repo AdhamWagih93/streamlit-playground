@@ -71,12 +71,15 @@ elasticsearch:
 app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)
 
 # upgrade checker — the only outbound-internet calls; behind a corporate
-# proxy set upgrades.proxy (internal integrations never use it)
+# proxy set upgrades.proxy (internal integrations never use it). Latest
+# versions come from Docker Hub / GitHub / Artifact Hub (not endoflife.date);
+# point any base at an internal mirror if the public host is blocked.
 upgrades:
   proxy: ""               # e.g. http://proxy.mycorp.local:8080
   verifySsl: true         # false if the proxy re-signs TLS
-  eolApiBase: "https://endoflife.date/api"   # or an internal mirror
+  dockerhubApiBase: "https://hub.docker.com/v2"
   githubApiBase: "https://api.github.com"
+  artifacthubApiBase: "https://artifacthub.io/api/v1"
 
 ldap:
   url: "ldaps://ldap.mycorp.local:636"
