@@ -780,6 +780,30 @@ async function renderDive() {
   };
 }
 
+function renderScmGroups(d) {
+  if (!(d.groups || []).length && !(d.no_scm || []).length)
+    return `<div class="empty">no pipelines found (${esc(d.source)})</div>`;
+  const pipeRow = (p) => `
+    <div class="scm-row">
+      <span class="scm-job">${esc(p.job)}</span>
+      ${p.scm_url
+        ? `<a class="scm-url" href="${esc(p.scm_url)}" target="_blank" rel="noopener" title="${esc(p.scm_url)}">${esc(p.scm_url)}</a>`
+        : `<span class="scm-url ci-meta">— inline Jenkinsfile —</span>`}
+    </div>`;
+  const groups = (d.groups || []).map((g) => `
+    <details class="filebox" open>
+      <summary>🌐 <b>${esc(g.host)}</b> <span class="chip chip-cyan">${g.count} pipeline(s)</span></summary>
+      <div class="scm-list">${g.pipelines.map(pipeRow).join("")}</div>
+    </details>`).join("");
+  const noScm = (d.no_scm || []).length ? `
+    <details class="filebox">
+      <summary>📄 <b>${d.no_scm.length}</b> pipeline(s) with no pipeline-from-SCM definition
+        <span class="ci-meta">· inline Jenkinsfile / freestyle</span></summary>
+      <div class="scm-list">${d.no_scm.map(pipeRow).join("")}</div>
+    </details>` : "";
+  return `<div class="ci-meta" style="margin:2px 0 10px">${d.host_count} SCM host(s) · ${d.total} pipeline(s) · ${esc(d.source)}</div>${groups}${noScm}`;
+}
+
 async function renderCI() {
   if (state.dive) return renderDive();
   const kpiHours = state.kpiHours || 168;  // default: the past week
@@ -972,7 +996,26 @@ async function renderCI() {
         <div class="panel" style="margin-bottom:18px"><h2>⏳ long-running (past their average)</h2>${longRunning}</div>
         <div class="panel"><h2>⚡ most active jobs — top ${topJobs.length} of ${data.jobs.length}</h2>${jobs}</div>
       </div>
-    </div>`;
+    </div>
+    <details class="panel scm-panel" id="scm-panel" style="margin-top:18px">
+      <summary class="scm-sum">🔗 <b>pipelines by SCM host</b>
+        <span class="ci-meta">· each pipeline's Git remote, grouped by hostname · reads each job's config.xml</span></summary>
+      <div id="scm-body" style="margin-top:10px"><div class="empty">expand to load…</div></div>
+    </details>`;
+
+  const scmDet = document.getElementById("scm-panel");
+  if (scmDet) scmDet.ontoggle = async () => {
+    if (!scmDet.open || scmDet.dataset.loaded) return;
+    scmDet.dataset.loaded = "1";
+    const body = document.getElementById("scm-body");
+    body.innerHTML = `<div class="empty acc-loading">⏳ reading each pipeline's config.xml…</div>`;
+    try {
+      body.innerHTML = renderScmGroups(await api("/api/ci/scm"));
+    } catch (e) {
+      scmDet.dataset.loaded = "";
+      body.innerHTML = `<div class="empty">⚠ couldn't load: ${esc(e.message)}</div>`;
+    }
+  };
 
   startKpiCountdown(kpi.seconds_remaining);
   view().querySelectorAll("[data-flag]").forEach((b) => b.onclick = () => {

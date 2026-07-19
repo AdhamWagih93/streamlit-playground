@@ -248,6 +248,13 @@ def ci(user: User = Depends(current_user)):
     return jenkins.overview()
 
 
+@router.get("/ci/scm")
+def ci_scm(user: User = Depends(current_user)):
+    """Every pipeline's SCM URL, grouped by SCM hostname. Loaded on demand from
+    the Pipelines page (each job costs a config.xml read; result cached)."""
+    return jenkins.pipeline_scm_groups()
+
+
 class JobBody(BaseModel):
     job: str
 

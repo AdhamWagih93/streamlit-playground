@@ -4,6 +4,8 @@ Live mode reads the root api/json tree; demo mode keeps a small mutable
 job table so 'claim' / 'fixed' flows are exercisable offline."""
 
 import datetime as dt
+import re
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -248,6 +250,20 @@ def console_log(job: str, number: int) -> str:
     return text
 
 
+# demo: pipelines wired to a few different SCM hosts so the by-host grouping is
+# visible offline (one has no SCM — an inline Jenkinsfile)
+_DEMO_SCM = {
+    "payments-service/main": "https://ado.corp.local/DefaultCollection/Platform/_git/payments-service",
+    "checkout-service/main": "https://ado.corp.local/DefaultCollection/Platform/_git/checkout-service",
+    "monolith/regression-suite": "https://ado.corp.local/DefaultCollection/Legacy/_git/monolith",
+    "platform-terraform/apply": "https://github.corp.local/platform/terraform.git",
+    "data-warehouse/nightly-etl": "https://github.corp.local/data/warehouse.git",
+    "auth-service/main": "https://github.corp.local/platform/auth-service.git",
+    "inventory-service/main": "git@bitbucket.corp.local:inv/inventory-service.git",
+    "notifications-service/main": "",  # inline Jenkinsfile — no pipeline-from-SCM
+}
+
+
 def job_definition(job: str) -> dict:
     """Where this job's pipeline lives: scriptPath + SCM url from config.xml
     (pipeline-from-SCM). For multibranch branch jobs the definition sits on
@@ -255,7 +271,7 @@ def job_definition(job: str) -> dict:
     if not is_live():
         if settings.demo_mode:
             return {"script_path": f"pipelines/{job.split('/')[0]}.groovy",
-                    "scm_url": "https://git.example.local/platform/Engine.git",
+                    "scm_url": _DEMO_SCM.get(job, "https://git.example.local/platform/Engine.git"),
                     "source": "demo"}
         raise ValueError("Jenkins is not configured")
     import xml.etree.ElementTree as ET
@@ -331,6 +347,83 @@ def pipeline_script_paths(ttl: int = 300) -> dict[str, list[str]]:
                 out.setdefault(sp, []).append(name)
     _SCRIPT_PATHS_CACHE.update(at=time.time(), data=out)
     return out
+
+
+def _scm_host(url: str) -> str:
+    """Hostname of a git remote across the forms Jenkins stores: https/http/ssh
+    URLs, scp-style git@host:group/repo.git, and bare host/path."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    m = re.match(r"^[\w.+-]+@([^:/]+):", url)          # scp-like: git@host:path
+    if m:
+        return m.group(1).lower()
+    m = re.match(r"^[a-zA-Z][\w+.-]*://(?:[^@/]+@)?([^:/]+)", url)  # scheme://[user@]host
+    if m:
+        return m.group(1).lower()
+    m = re.match(r"^([^:/]+)/", url)                   # bare host/path
+    return m.group(1).lower() if m else ""
+
+
+_SCM_INDEX_CACHE: dict = {"at": 0.0, "data": None}
+
+
+def invalidate_scm_index() -> None:
+    _SCM_INDEX_CACHE.update(at=0.0, data=None)
+
+
+def pipeline_scm_index(ttl: int = 300) -> dict[str, dict]:
+    """job full name -> {scm_url, scm_host, defined_on} for every pipeline
+    (JENKINS_IGNORE applied, matching the failure feed). Each job costs a
+    config.xml fetch, so this is parallelized and cached."""
+    import time
+    if (_SCM_INDEX_CACHE["data"] is not None
+            and time.time() - _SCM_INDEX_CACHE["at"] < ttl):
+        return _SCM_INDEX_CACHE["data"]
+    names = [n for n in all_job_names()
+             if not any(tok in n.lower() for tok in settings.jenkins_ignore_tokens)]
+
+    def one(name):
+        try:
+            d = job_definition(name)
+        except Exception:  # noqa: BLE001 — one broken job never blocks the map
+            d = {}
+        url = (d.get("scm_url") or "").strip()
+        return name, {"scm_url": url, "scm_host": _scm_host(url),
+                      "defined_on": d.get("defined_on") or ""}
+
+    out: dict[str, dict] = {}
+    if names:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for name, info in pool.map(one, names):
+                out[name] = info
+    _SCM_INDEX_CACHE.update(at=time.time(), data=out)
+    return out
+
+
+def pipeline_scm_groups() -> dict:
+    """Every pipeline with its SCM URL, grouped by SCM hostname (largest group
+    first). Pipelines with no pipeline-from-SCM definition list separately."""
+    if not (is_live() or settings.demo_mode):
+        return {"groups": [], "no_scm": [], "total": 0, "host_count": 0,
+                "source": "not configured"}
+    idx = pipeline_scm_index()
+    groups: dict[str, list] = {}
+    no_scm: list[dict] = []
+    for job in sorted(idx):
+        info = idx[job]
+        if info["scm_url"]:
+            host = info["scm_host"] or "(unknown host)"
+            groups.setdefault(host, []).append(
+                {"job": job, "scm_url": info["scm_url"],
+                 "defined_on": info["defined_on"]})
+        else:
+            no_scm.append({"job": job})
+    out = [{"host": h, "count": len(v), "pipelines": v} for h, v in groups.items()]
+    out.sort(key=lambda g: (-g["count"], g["host"]))
+    return {"groups": out, "no_scm": no_scm, "total": len(idx),
+            "host_count": len(out),
+            "source": "live" if is_live() else "demo"}
 
 
 def claim(job: str, username: str) -> None:
