@@ -51,3 +51,4 @@ data:
   ADO_URL: {{ .Values.ado.url | quote }}
   ADO_USER: {{ .Values.ado.user | quote }}
   ADO_ACCESS_EXCLUDE: {{ .Values.ado.accessExclude | quote }}
+  GITEA_VERIFY_SSL: {{ .Values.gitea.verifySsl | quote }}

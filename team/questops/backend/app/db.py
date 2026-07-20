@@ -65,6 +65,26 @@ class Repository(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class GiteaTarget(Base):
+    """A self-hosted Gitea instance that receives ONE ADO collection during the
+    ADO->Gitea migration. Configured from the Access page (one instance per
+    collection). The token is stored to talk to the Gitea API and is never
+    returned to the UI (masked)."""
+
+    __tablename__ = "gitea_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    collection: Mapped[str] = mapped_column(String(200), unique=True)  # ADO collection
+    url: Mapped[str] = mapped_column(String(500))                      # https://gitea.host
+    token: Mapped[str] = mapped_column(String(200), default="")        # API token
+    # how an ADO project maps to a Gitea org name:
+    #   "project"            -> <project>
+    #   "collection_project" -> <collection>-<project>
+    org_strategy: Mapped[str] = mapped_column(String(40), default="project")
+    added_by: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class AgentCommand(Base):
     """Every command/action the repo agent proposes. Nothing executes until a
     human approves; the row is the permanent audit log either way."""

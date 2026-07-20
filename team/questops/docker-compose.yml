@@ -62,6 +62,7 @@ services:
       ADO_PASSWORD: ${QO_ADO_PASSWORD:-}
       ADO_PAT: ${QO_ADO_PAT:-}
       ADO_ACCESS_EXCLUDE: ${QO_ADO_ACCESS_EXCLUDE:-}
+      GITEA_VERIFY_SSL: ${QO_GITEA_VERIFY_SSL:-true}
       GIT_USER_NAME: ${QO_GIT_USER_NAME:-questops-bot}
       GIT_USER_EMAIL: ${QO_GIT_USER_EMAIL:-questops-bot@local}
     # podman-compose doesn't honor healthcheck conditions reliably;

@@ -2552,6 +2552,178 @@ function accSummaryHtml(d) {
   return `<div class="stat-tiles">${tiles}</div>${ov}`;
 }
 
+// ---- ADO -> Gitea migration ----
+const MIG_CHIP = {
+  create: '<span class="chip chip-amber">＋ create</span>',
+  exists: '<span class="chip chip-green">✓ exists</span>',
+  migrate: '<span class="chip chip-cyan">⇪ migrate</span>',
+  grant: '<span class="chip chip-amber">＋ grant</span>',
+};
+const migChip = (a) => MIG_CHIP[a] || `<span class="chip">${esc(a || "")}</span>`;
+const PERM_CHIP = { admin: "chip-red", write: "chip-amber", read: "chip-cyan" };
+
+function migOrgCard(o) {
+  const repos = o.repos.map((r) => `<div class="mig-line">${migChip(r.action)}
+    <code>${esc(r.name)}</code> → <code>${esc(r.gitea_repo)}</code></div>`).join("")
+    || '<div class="ci-meta">no repos</div>';
+  const teams = o.teams.map((t) => `<div class="mig-line">${migChip(t.action)}
+    <code>${esc(t.gitea_team)}</code>
+    <span class="chip ${PERM_CHIP[t.permission] || ""}">${esc(t.permission)}</span>
+    <span class="chip">${esc(t.source)}</span>
+    <span class="ci-meta">${t.members && t.members.length
+      ? t.members.slice(0, 6).map((m) => m.gitea_user + (m.verify ? "⚠" : "")).join(", ")
+        + (t.members.length > 6 ? ` +${t.members.length - 6}` : "")
+      : (t.member_count != null ? t.member_count + " member(s)" : "—")}</span></div>`).join("")
+    || '<div class="ci-meta">no teams</div>';
+  const access = [
+    ...o.collaborators.map((c) => `<div class="mig-line">${migChip("grant")}
+      <span title="repo-level access">👤 ${esc(c.gitea_user)}${c.verify ? " ⚠" : ""}</span>
+      <span class="chip ${PERM_CHIP[c.permission] || ""}">${esc(c.permission)}</span>
+      <span class="ci-meta">on ${esc(c.repo)}</span></div>`),
+    ...o.protections.map((p) => `<div class="mig-line"><span class="chip chip-amber">＋ protect</span>
+      🔀 <code>${esc(p.repo)}</code>@${esc(p.branch)}
+      <span class="ci-meta">≥${p.required_approvals} approval · team ${esc(p.team)} · ${esc(p.scope || "")}</span></div>`),
+  ].join("") || '<div class="ci-meta">no repo-level access or PR protections</div>';
+  return `<div class="mig-org">
+    <div class="mig-org-head">🏛 <b>${esc(o.org)}</b> ${migChip(o.org_action)}
+      <span class="ci-meta">${o.repos.length} repos · ${o.teams.length} teams · ${o.collaborators.length} collaborators · ${o.protections.length} protections</span></div>
+    <div class="mig-cols">
+      <div><div class="mig-col-h">repositories</div>${repos}</div>
+      <div><div class="mig-col-h">teams (access)</div>${teams}</div>
+      <div><div class="mig-col-h">repo-level + PR reviewers</div>${access}</div>
+    </div></div>`;
+}
+
+function accMigrationHtml(d, tconf) {
+  const s = d.summary || {};
+  const colls = tconf.collections || [];
+  const byColl = {}; (tconf.targets || []).forEach((t) => { byColl[t.collection] = t; });
+  const targetRow = colls.map((c) => {
+    const t = byColl[c];
+    return t
+      ? `<div class="mig-target"><span class="chip chip-cyan">${esc(c)}</span> →
+          <code>${esc(t.url)}</code> <span class="chip">${t.org_strategy === "collection_project" ? "org=coll-project" : "org=project"}</span>
+          ${t.has_token ? "" : '<span class="chip chip-red">no token</span>'}
+          <button class="btn btn-sm" data-mig-edit="${esc(c)}" data-mig-url="${esc(t.url)}" data-mig-strat="${esc(t.org_strategy)}">edit</button>
+          <button class="btn btn-sm btn-danger" data-mig-del="${t.id}">✕</button></div>`
+      : `<div class="mig-target mig-unconf"><span class="chip">${esc(c)}</span>
+          <span class="ci-meta">no Gitea target — this collection won't migrate</span>
+          <button class="btn btn-sm" data-mig-edit="${esc(c)}">＋ configure</button></div>`;
+  }).join("");
+  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const tiles = `<div class="stat-tiles" style="margin:12px 0">
+    ${tile(s.orgs_create || 0, "orgs to create", (s.orgs_create ? "pct-warn" : "pct-good"))}
+    ${tile(s.repos_migrate || 0, "repos to migrate", "pct-good")}
+    ${tile(s.teams_create || 0, "teams to create")}
+    ${tile(s.collaborators || 0, "repo-level grants")}
+    ${tile(s.protections || 0, "PR protections")}
+    ${tile(s.verify_users || 0, "users to verify", (s.verify_users ? "pct-bad" : "pct-good"))}</div>`;
+  const targetCards = (d.targets || []).map((t) => {
+    const st = t.state || {};
+    const health = st.reachable
+      ? `<span class="chip chip-green">✓ gitea ${esc(st.version || "?")}</span>`
+      : `<span class="chip chip-red">✗ ${esc(st.error || "unreachable")}</span>`;
+    return `<details class="filebox mig-target-card" open>
+      <summary>🎯 <b>${esc(t.collection)}</b> → <code>${esc(t.gitea_url)}</code> ${health}
+        <span class="ci-meta">current Gitea: ${st.org_count || 0} orgs · ${st.repo_count || 0} repos · ${st.team_count || 0} teams · ${t.projects} project(s) to map</span></summary>
+      <div class="mig-body">${t.orgs.map(migOrgCard).join("")}</div>
+    </details>`;
+  }).join("") || '<div class="empty">no configured collections to plan — add a Gitea target above</div>';
+  const unconf = (d.unconfigured || []).length
+    ? `<div class="kpi-note">⚠ ${d.unconfigured.length} collection(s) have no Gitea target and will be skipped: ${d.unconfigured.map((u) => `${esc(u.collection)} (${u.projects} proj)`).join(", ")}</div>` : "";
+  return `
+    <div class="ci-meta" style="margin-bottom:6px">maps ADO <b>collection→Gitea instance</b>, <b>project→org</b>, <b>repo→repo</b>; teams, repo-level access &amp; PR reviewers replicated · source: ${esc(d.source)}${d.cached ? " · cached" : ""}</div>
+    <div class="mig-targets">${targetRow}
+      <details class="filebox" id="mig-form-box"><summary>＋ add / update a Gitea target (one per collection)</summary>
+        <div class="mig-form">
+          <select id="mig-coll">${colls.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+          <input id="mig-url" placeholder="https://gitea.host">
+          <input id="mig-token" type="password" placeholder="Gitea API token (repo+org+admin)">
+          <select id="mig-strategy"><option value="project">org = project name</option><option value="collection_project">org = collection-project</option></select>
+          <button class="btn btn-sm btn-primary" id="mig-save">save target</button>
+          <span id="mig-form-msg" class="ci-meta"></span>
+        </div></details></div>
+    ${tiles}${unconf}
+    <div class="mig-actions">
+      <button class="btn btn-sm" id="mig-replan">↻ re-plan (dry run)</button>
+      <button class="btn btn-sm" id="mig-dry">▶ dry-run execute</button>
+      <button class="btn btn-sm btn-danger" id="mig-run">🚀 migrate for real</button>
+      <span class="ci-meta">dry run is read-only; a real migration writes to Gitea and needs the approver role</span>
+    </div>
+    <div id="mig-result"></div>
+    ${targetCards}`;
+}
+
+function migResultHtml(r) {
+  const head = `<div class="mig-run-head">${r.dry_run ? "🧪 dry run" : "🚀 live migration"}${r.demo ? " · demo (not executed)" : ""} —
+    <b class="pct-good">${r.ok} ok</b>${r.errors ? ` · <b class="pct-bad">${r.errors} error(s)</b>` : ""} of ${r.total} step(s)${r.collection ? ` · ${esc(r.collection)}` : ""}</div>`;
+  const rows = r.steps.map((s) => `<div class="mig-line">
+    <span class="chip ${s.status === "ok" ? "chip-green" : "chip-red"}">${s.status === "ok" ? "✓" : "✗"}</span>
+    <span class="chip">${esc(s.action)}</span> <code>${esc(s.ref)}</code>
+    <span class="ci-meta">${esc(s.note || "")}</span></div>`).join("");
+  return `<div class="mig-run">${head}<div class="mig-run-log">${rows}</div></div>`;
+}
+
+async function loadMigration(refresh) {
+  const box = document.getElementById("acc-migration");
+  if (!box) return;
+  box.innerHTML = `<div class="empty acc-loading">⏳ planning the ADO → Gitea migration (reads each Gitea instance)…</div>`;
+  try {
+    const [plan, tconf] = await Promise.all([
+      api(`/api/access/migration/plan${refresh ? "?refresh=true" : ""}`),
+      api("/api/access/migration/targets"),
+    ]);
+    box.innerHTML = accMigrationHtml(plan, tconf);
+    wireMigration(tconf);
+  } catch (e) {
+    box.innerHTML = `<div class="empty">⚠ couldn't plan: ${esc(e.message)}
+      <button class="btn btn-sm" id="mig-retry">↻ retry</button></div>`;
+    const rb = document.getElementById("mig-retry");
+    if (rb) rb.onclick = () => loadMigration(refresh);
+  }
+}
+
+function wireMigration(tconf) {
+  const $$ = (id) => document.getElementById(id);
+  view().querySelectorAll("[data-mig-edit]").forEach((b) => b.onclick = () => {
+    $$("mig-form-box").open = true;
+    $$("mig-coll").value = b.dataset.migEdit;
+    if (b.dataset.migUrl) $$("mig-url").value = b.dataset.migUrl;
+    if (b.dataset.migStrat) $$("mig-strategy").value = b.dataset.migStrat;
+    $$("mig-token").focus();
+  });
+  view().querySelectorAll("[data-mig-del]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Remove this Gitea target? (does not touch Gitea itself)")) return;
+    try { await api(`/api/access/migration/targets/${b.dataset.migDel}`, { method: "DELETE" }); loadMigration(true); }
+    catch (e) { toast("⚠ " + e.message, "toast-err"); }
+  });
+  const save = $$("mig-save");
+  if (save) save.onclick = async () => {
+    const body = { collection: $$("mig-coll").value, url: $$("mig-url").value.trim(),
+      token: $$("mig-token").value, org_strategy: $$("mig-strategy").value };
+    if (!body.url) { $$("mig-form-msg").textContent = "Gitea URL is required"; return; }
+    save.disabled = true; $$("mig-form-msg").textContent = "saving…";
+    try { await api("/api/access/migration/targets", { method: "POST", body }); loadMigration(true); }
+    catch (e) { $$("mig-form-msg").textContent = "⚠ " + e.message; save.disabled = false; }
+  };
+  const replan = $$("mig-replan"); if (replan) replan.onclick = () => loadMigration(true);
+  const runExec = async (dry) => {
+    const btn = dry ? $$("mig-dry") : $$("mig-run");
+    if (!dry && !confirm("Run the REAL migration now? This creates orgs/repos/teams and pushes source into Gitea.")) return;
+    btn.disabled = true;
+    $$("mig-result").innerHTML = `<div class="empty acc-loading">⏳ ${dry ? "simulating" : "migrating"}…</div>`;
+    try {
+      const r = await api("/api/access/migration/execute", { method: "POST",
+        body: { dry_run: dry, confirm: !dry } });
+      $$("mig-result").innerHTML = migResultHtml(r);
+      if (!dry) loadMigration(true);
+    } catch (e) { $$("mig-result").innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; }
+    finally { btn.disabled = false; }
+  };
+  const dry = $$("mig-dry"); if (dry) dry.onclick = () => runExec(true);
+  const run = $$("mig-run"); if (run) run.onclick = () => runExec(false);
+}
+
 async function renderAccess() {
   view().innerHTML = `
     <div class="view-head"><h1>ACCESS MANAGEMENT</h1>
@@ -2566,8 +2738,10 @@ async function renderAccess() {
       <div id="acc-ldap"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
-    <div class="panel"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
-      <div id="acc-jira"></div></div>`;
+    <div class="panel" style="margin-bottom:18px"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
+      <div id="acc-jira"></div></div>
+    <div class="panel"><h2>🚚 ADO → Gitea migration <span class="ci-meta">clone code, structure &amp; access to self-hosted Gitea</span></h2>
+      <div id="acc-migration"></div></div>`;
 
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
@@ -2575,6 +2749,7 @@ async function renderAccess() {
     accLoad("ldap", `/api/access/ldap${s}`, accLdapHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
+    loadMigration(refresh);
   };
   load(false);
   document.getElementById("acc-refresh").onclick = () => load(true);

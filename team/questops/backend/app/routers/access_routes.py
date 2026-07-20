@@ -2,10 +2,12 @@
 everything cached in the integration layer so refreshes are explicit."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from ..auth import current_user
-from ..db import User
-from ..integrations import access
+from ..auth import current_user, require_approver
+from ..db import User, get_db
+from ..integrations import access, migration
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
@@ -54,3 +56,58 @@ def jira_schemes(refresh: bool = False, user: User = Depends(current_user)):
 @router.get("/jenkins")
 def jenkins(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.jenkins_matrix, refresh)
+
+
+# ===================================================== ADO -> Gitea migration
+@router.get("/migration/targets")
+def migration_targets(user: User = Depends(current_user)):
+    ado = _wrap(access.ado_projects, False)
+    return {"targets": [migration.target_public(t) for t in migration.targets()],
+            "collections": ado.get("collections", [])}
+
+
+class TargetBody(BaseModel):
+    collection: str
+    url: str
+    token: str = ""
+    org_strategy: str = "project"
+
+
+@router.post("/migration/targets")
+def migration_add_target(body: TargetBody, user: User = Depends(require_approver),
+                         db: Session = Depends(get_db)):
+    try:
+        out = migration.add_target(db, body.collection, body.url, body.token,
+                                   body.org_strategy, user.username)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    migration.invalidate()
+    return out
+
+
+@router.delete("/migration/targets/{target_id}")
+def migration_remove_target(target_id: int, user: User = Depends(require_approver),
+                            db: Session = Depends(get_db)):
+    migration.remove_target(db, target_id)
+    migration.invalidate()
+    return {"removed": target_id}
+
+
+@router.get("/migration/plan")
+def migration_plan(refresh: bool = False, user: User = Depends(current_user)):
+    return _wrap(migration.plan, refresh)
+
+
+class ExecuteBody(BaseModel):
+    collection: str | None = None
+    dry_run: bool = True
+    confirm: bool = False
+
+
+@router.post("/migration/execute")
+def migration_execute(body: ExecuteBody, user: User = Depends(require_approver)):
+    # a real (non-dry-run) migration writes to an external system — require an
+    # explicit confirm on top of the approver role
+    if not body.dry_run and not body.confirm:
+        raise HTTPException(400, "a live migration requires confirm=true")
+    return _wrap(migration.execute, body.collection, body.dry_run)

@@ -116,6 +116,11 @@ ado:
   pat: ""            # prefer app.existingSecret (key: ADO_PAT)
   accessExclude: ""  # comma usernames excluded from repo-specific-access analysis
 
+# ADO -> Gitea migration: Gitea targets are configured from the UI (one per
+# collection); only the TLS-verify knob lives here
+gitea:
+  verifySsl: true    # false for self-signed Gitea certificates
+
 database:
   # external Postgres DSN, e.g. postgresql+psycopg2://user:pass@host:5432/questops
   url: ""

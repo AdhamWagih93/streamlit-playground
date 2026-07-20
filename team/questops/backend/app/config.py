@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     # admins expected to hold access on every repo — like the service account)
     ado_access_exclude: str = ""
 
+    # --- ADO -> Gitea migration ---
+    # Gitea targets are DEFINED FROM THE UI (one instance per ADO collection,
+    # stored in the database). These are just transport knobs.
+    gitea_verify_ssl: bool = True    # false for self-signed Gitea TLS
+
     # --- Git (repo actions) ---
     git_token: str = ""              # https token used for clone/push
     git_user_name: str = "questops-bot"
