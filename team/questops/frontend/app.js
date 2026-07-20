@@ -899,7 +899,7 @@ async function renderCI() {
     return u === "SUCCESS" ? "dot-green" : u.startsWith("FAIL") || u === "UNSTABLE" || u === "ABORTED"
       ? "dot-red" : "dot-grey";
   };
-  const hourChips = [6, 24, 72, 168].map((h) =>
+  const hourChips = [6, 24, 72, 168, 336, 720, 2160].map((h) =>
     `<button class="btn btn-sm ${h === kpiHours ? "btn-primary" : ""}" data-hours="${h}">${h < 48 ? h + "h" : h / 24 + "d"}</button>`).join(" ");
   const loadedRows = kpi.loaded.map((d) => `
     <div class="ci-row">
@@ -965,6 +965,9 @@ async function renderCI() {
           </div>
         </details>` : ""}
       ${kpi.ignored ? `<div class="kpi-note">🚫 ${kpi.ignored} build(s) excluded by KPI_IGNORE (${esc((kpi.ignore_tokens || []).join(", "))})</div>` : ""}
+      ${!kpi.loaded_total && kpi.newest_at ? `<div class="remote-banner remote-new" style="margin:6px 0">
+        <b>⏳ no builds in the last ${kpiHours < 48 ? kpiHours + "h" : kpiHours / 24 + "d"}</b>
+        <div class="ci-meta">the newest build in <code>${esc(kpi.index)}</code> ran <b>${ago(kpi.newest_at)}</b> — pick a wider window above to see it</div></div>` : ""}
       ${kpiStats}
       <details class="filebox"><summary>📄 loaded records (showing ${kpi.loaded.length} of ${kpi.loaded_total})</summary>
         <div class="kpi-loaded" style="padding:4px 10px">${loadedRows}</div>

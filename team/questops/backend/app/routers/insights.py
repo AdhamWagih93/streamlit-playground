@@ -92,6 +92,7 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         "ignored": ignored,                # docs excluded by KPI_IGNORE
         "ignore_tokens": settings.kpi_ignore_tokens,
         "window_source": k["window_source"],
+        "newest_at": k.get("newest_at"),
         "fetch_truncated": k["fetch_truncated"],
         "diagnostics": k.get("debug"),
         "window_applied": window_applied,

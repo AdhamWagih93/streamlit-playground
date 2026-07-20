@@ -252,7 +252,7 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
         docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
         return {"docs": docs, "window_applied": True, "window_source": "demo",
                 "total": total, "ignored": ignored, "fetch_truncated": False,
-                "debug": None}
+                "newest_at": None, "debug": None}
 
     # container-local now: the loader writes local-time strings and TZ is
     # configured to match it (same clock the sync countdown uses)
@@ -273,12 +273,16 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
         if not raw:
             attempts.append(f"{name}: 0 hits")
             continue
-        dated = [(d, _doc_when(d)) for d in raw]
+        # window value from the tier's OWN field: a range:@timestamp tier must
+        # be judged on @timestamp, not silently overruled by a stale builddate
+        # (re-ingested builds keep an old builddate) — that used to zero the
+        # panel even when @timestamp was fresh.
+        dated = [(d, _parse_es_date(d.get(sfield)) or _doc_when(d)) for d in raw]
         any_parsed = any(w is not None for _, w in dated)
-        if any_parsed:
+        if name.startswith("range"):
+            kept = dated  # ES already applied the window on a date-mapped field
+        elif any_parsed:
             kept = [(d, w) for d, w in dated if w is not None and w >= cutoff]
-        elif name.startswith("range"):
-            kept = dated  # ES applied the window; dates unparseable client-side
         else:
             kept = []
         attempts.append(f"{name}: {len(raw)} fetched (total {total_raw}, "
@@ -297,7 +301,7 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     if chosen is None and fallback is None:  # nothing anywhere
         return {"docs": [], "window_applied": True, "window_source": "none",
                 "total": 0, "ignored": 0, "fetch_truncated": False,
-                "debug": {"attempts": attempts, "sample": []}}
+                "newest_at": None, "debug": {"attempts": attempts, "sample": []}}
 
     name, raw, total_raw, sorted_ok, dated, kept, any_parsed = chosen or fallback
     if chosen is None and not any_parsed:
@@ -308,14 +312,20 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
 
     kept.sort(key=lambda t: t[1] or dt.datetime.min, reverse=True)
     docs = [d for d, _ in kept]
-    total = len(docs) if any_parsed else total_raw
+    # for a range tier ES already counted the window authoritatively
+    total = total_raw if name.startswith("range") else (len(docs) if any_parsed else total_raw)
     fetch_truncated = total_raw > len(raw)
     docs, total, ignored = _apply_kpi_ignore(docs, total)
     sample = [{"builddate": d.get("builddate"), "@timestamp": d.get("@timestamp"),
                "parsed": w is not None} for d, w in dated[:3]]
+    # newest build actually in the index (build-time first) — lets the UI say
+    # "no builds in the last Xh; newest is Yd ago — widen the window"
+    build_times = [b for b in (_doc_when(d) for d in raw) if b is not None]
+    newest_at = max(build_times).isoformat() if build_times else None
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
             "ignored": ignored, "fetch_truncated": fetch_truncated,
+            "newest_at": newest_at,
             "debug": {"attempts": attempts, "sample": sample}}
 
 
