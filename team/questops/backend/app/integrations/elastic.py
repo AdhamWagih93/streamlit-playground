@@ -18,13 +18,41 @@ def is_live() -> bool:
     return bool(settings.es_url and settings.es_api_key and not settings.demo_mode)
 
 
+def _es_reason(resp) -> str:
+    """The human-readable reason Elasticsearch put in a 4xx/5xx body — the part
+    that actually explains a 400 (e.g. 'Text fields are not optimised for
+    sorting', 'failed to parse date field [now-168h]'). raise_for_status only
+    gives the status line + URL, so we dig the reason out ourselves."""
+    try:
+        err = (resp.json() or {}).get("error")
+    except ValueError:
+        return (resp.text or "").strip()[:200]
+    if isinstance(err, str):
+        return err[:200]
+    if isinstance(err, dict):
+        root = err.get("root_cause") or []
+        if root and isinstance(root, list) and isinstance(root[0], dict) and root[0].get("reason"):
+            return str(root[0]["reason"])[:200]
+        if err.get("reason"):
+            return str(err["reason"])[:200]
+    return ""
+
+
 def _search_hits(index: str, body: dict) -> tuple[list[dict], int]:
     """(docs, true total matching the query) — the total makes truncation
     visible instead of silent."""
     r = requests.post(f"{settings.es_url}/{index}/_search", json=body,
                       headers={"Authorization": f"ApiKey {settings.es_api_key}"},
                       timeout=30, verify=settings.es_verify_ssl)
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        # attach ES's own explanation — otherwise a 400 is an opaque status line
+        reason = _es_reason(r)
+        if reason:
+            raise requests.HTTPError(f"{exc} — Elasticsearch: {reason}",
+                                     response=r) from None
+        raise
     hits = r.json().get("hits", {})
     total = hits.get("total", {})
     total_n = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
@@ -238,7 +266,9 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
                 {"size": size, "track_total_hits": True, "query": query,
                  "sort": [{sfield: {"order": "desc", "unmapped_type": "date"}}]})
         except requests.HTTPError as exc:
-            attempts.append(f"{name}: HTTP error {str(exc)[:60]}")
+            # keep the FULL message (URL + ES reason) — a 60-char cut used to
+            # chop it mid-port and read like a wrong port (":8383" -> ":8")
+            attempts.append(f"{name}: HTTP error {str(exc)[:280]}")
             continue
         if not raw:
             attempts.append(f"{name}: 0 hits")
