@@ -30,11 +30,11 @@ PW = os.environ.get("LOCALDEV_PG_PASSWORD", "devops")
 
 # (username, display, email, company, title, team_cns…)
 MEMBERS = [
-    ("alice.dev", "Alice Dev", "alice.dev@acme.local",  "ACME",   "Senior Engineer",   ["DEVJAVA"]),
-    ("bob.dev",   "Bob Dev",   "bob.dev@acme.local",    "ACME",   "Engineer",          ["DEVJAVA"]),
+    ("alice.dev", "Alice Dev", "alice.dev@acme.local",  "Acme",   "Senior Engineer",   ["DEVJAVA"]),
+    ("bob.dev",   "Bob Dev",   "bob.dev@acme.local",    "acme",   "Engineer",          ["DEVJAVA"]),
     ("carol.qc",  "Carol QC",  "carol.qc@acme.local",   "ACME",   "QA Engineer",       ["QCJAVA"]),
     ("dan.net",   "Dan Net",   "dan.net@globex.local",  "GLOBEX", "Engineer",          ["DEVDOTNET"]),
-    ("nina.net",  "Nina Net",  "nina.net@globex.local", "GLOBEX", "QA Engineer",       ["QCNET"]),
+    ("nina.net",  "Nina Net",  "nina.net@globex.local", "Globex", "QA Engineer",       ["QCNET"]),
     ("eve.ops",   "Eve Ops",   "eve.ops@acme.local",    "ACME",   "Operations Lead",   ["OPS"]),
     ("omar.ops",  "Omar Ops",  "omar.ops@globex.local", "GLOBEX", "SRE",               ["OPS"]),
 ]

@@ -28,6 +28,7 @@ Performance notes
 from __future__ import annotations
 
 import base64
+import functools
 import html
 import json
 import os
@@ -11654,7 +11655,34 @@ body:has([data-testid="stSidebar"][aria-expanded="true"])
 
 </style>
 """
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+@functools.lru_cache(maxsize=4)
+def _minify_css(css: str) -> str:
+    """Conservative CSS minifier: strip comments, indentation and blank lines,
+    and join lines whose boundary is already a token break. The page's CSS is
+    ~350 KB re-shipped to the browser on EVERY rerun — this cuts the payload
+    (and the browser's style re-parse) by ~40% without touching anything inside
+    quoted strings. lru_cache makes the per-rerun cost a single dict hit even
+    though the module (and this call) re-executes on each interaction."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    _buf: list[str] = []
+    for _ln in css.splitlines():
+        _ln = _ln.strip()
+        if not _ln:
+            continue
+        if _buf and _buf[-1][-1] not in "{};,>":
+            _buf.append(" ")
+        _buf.append(_ln)
+    return "".join(_buf)
+
+
+# st.html skips the frontend markdown pipeline entirely (Streamlit ≥1.32) —
+# parsing 350 KB of CSS through the markdown renderer on every rerun was pure
+# jank. Fall back to markdown for older Streamlit.
+_CSS_MIN = _minify_css(CUSTOM_CSS)
+if hasattr(st, "html"):
+    st.html(_CSS_MIN)
+else:
+    st.markdown(_CSS_MIN, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -12142,32 +12170,92 @@ def composite_terms(
 # raises TypeError.  All callers go through ``parse_dt`` which always returns
 # a tz-aware UTC Timestamp or None.
 
+def _ts_to_utc(ts: "pd.Timestamp") -> "pd.Timestamp":
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+@functools.lru_cache(maxsize=32768)
+def _parse_dt_str(s: str) -> "pd.Timestamp | None":
+    """String-parsing core of :func:`parse_dt`, MEMOISED process-wide.
+
+    Date strings repeat massively across rows and reruns (every table row /
+    chip / popover parses the same handful of ES dates), and a single
+    ``pd.to_datetime`` miss chain costs ~0.25 ms — on a 1000-row fleet that was
+    seconds per rerun. Timestamps are immutable, so sharing the cached object
+    is safe. An ISO-8601 fast path (``datetime.fromisoformat``, ~50× cheaper
+    than pandas) covers the canonical ES formats before any pandas call."""
+    # ── All-digit string → epoch-s / epoch-ms ────────────────────────────────
+    if s.lstrip("-").isdigit():
+        n = int(s)
+        unit = "s" if abs(n) < 1e11 else "ms"
+        try:
+            return pd.Timestamp(n, unit=unit, tz="UTC")
+        except Exception:
+            pass
+
+    # ── ISO-8601 fast path (incl. trailing 'Z') ──────────────────────────────
+    _iso = s[:-1] + "+00:00" if s.endswith("Z") else s
+    try:
+        return _ts_to_utc(pd.Timestamp(datetime.fromisoformat(_iso)))
+    except Exception:
+        pass
+
+    # ── pd.to_datetime with utc=True (tz-aware strings) ──────────────────────
+    try:
+        return _ts_to_utc(pd.to_datetime(s, utc=True))
+    except Exception:
+        pass
+
+    # ── pd.to_datetime without utc flag, then localise ───────────────────────
+    try:
+        return _ts_to_utc(pd.to_datetime(s))
+    except Exception:
+        pass
+
+    # ── Strip trailing Z and retry (some older ES mappings) ──────────────────
+    if s.endswith("Z"):
+        try:
+            return _ts_to_utc(pd.to_datetime(s[:-1]))
+        except Exception:
+            pass
+
+    # ── Common non-ISO strptime patterns ─────────────────────────────────────
+    for _fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f%z",   # with ms + tz offset
+        "%Y-%m-%dT%H:%M:%S%z",       # no ms + tz offset
+        "%Y-%m-%d %H:%M:%S",         # space-separated naive
+        "%d/%m/%Y %H:%M:%S",         # DD/MM/YYYY
+        "%m/%d/%Y %H:%M:%S",         # MM/DD/YYYY
+        "%d-%b-%Y %H:%M:%S",         # DD-Mon-YYYY
+    ):
+        try:
+            return _ts_to_utc(pd.Timestamp(datetime.strptime(s, _fmt)))
+        except Exception:
+            pass
+
+    # ── dateutil catch-all — handles almost any human-readable format ────────
+    try:
+        from dateutil import parser as _dup  # type: ignore[import]
+        return _ts_to_utc(pd.Timestamp(_dup.parse(s)))
+    except Exception:
+        pass
+
+    return None
+
+
 def parse_dt(value: Any) -> "pd.Timestamp | None":
     """Parse a date value from Elasticsearch into a tz-aware UTC Timestamp.
 
-    Tries multiple strategies in order so that every common ES date format
-    succeeds rather than silently returning None:
-
-    1. Numeric (int/float) → epoch-milliseconds.  If the value looks like
-       epoch-seconds (≤ 13 digits, < 1e11) we also try that unit.
-    2. All-digit string → same epoch-ms / epoch-s logic.
-    3. String with pd.to_datetime(utc=True) — works for tz-aware ISO strings.
-    4. String with pd.to_datetime() (no utc flag) then manual tz_localize /
-       tz_convert — handles naive ISO strings that pandas 2.x rejects with
-       utc=True.
-    5. Explicit ISO 8601 stripping of the trailing 'Z' for environments where
-       pandas still chokes on that suffix.
-    """
+    Numeric values are epoch-ms (or epoch-s when small enough); strings go
+    through the memoised multi-strategy parser :func:`_parse_dt_str` (ISO fast
+    path → pandas → strptime patterns → dateutil). Returns None on failure."""
     if value is None:
         return None
 
-    def _to_utc(ts: "pd.Timestamp") -> "pd.Timestamp":
-        if ts.tzinfo is None:
-            return ts.tz_localize("UTC")
-        return ts.tz_convert("UTC")
-
-    # ── 1. Numeric ────────────────────────────────────────────────────────────
-    if isinstance(value, (int, float)):
+    # ── Numeric ──────────────────────────────────────────────────────────────
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         n = float(value)
         # Epoch-seconds if small enough (before year 5138 in ms = 1e11 ms)
         unit = "s" if n < 1e11 else "ms"
@@ -12179,59 +12267,7 @@ def parse_dt(value: Any) -> "pd.Timestamp | None":
     s = str(value).strip()
     if not s or s.lower() in ("none", "null", "nan", "-"):
         return None
-
-    # ── 2. All-digit string ───────────────────────────────────────────────────
-    if s.lstrip("-").isdigit():
-        n = int(s)
-        unit = "s" if abs(n) < 1e11 else "ms"
-        try:
-            return pd.Timestamp(n, unit=unit, tz="UTC")
-        except Exception:
-            pass
-
-    # ── 3. pd.to_datetime with utc=True (tz-aware strings, e.g. "…Z") ────────
-    try:
-        return _to_utc(pd.to_datetime(s, utc=True))
-    except Exception:
-        pass
-
-    # ── 4. pd.to_datetime without utc flag, then localise ────────────────────
-    try:
-        return _to_utc(pd.to_datetime(s))
-    except Exception:
-        pass
-
-    # ── 5. Strip trailing Z and retry (some older ES mappings) ───────────────
-    if s.endswith("Z"):
-        try:
-            ts = pd.to_datetime(s[:-1])
-            return _to_utc(ts)
-        except Exception:
-            pass
-
-    # ── 6. Try common non-ISO strptime patterns ───────────────────────────────
-    for _fmt in (
-        "%Y-%m-%dT%H:%M:%S.%f%z",   # with ms + tz offset
-        "%Y-%m-%dT%H:%M:%S%z",       # no ms + tz offset
-        "%Y-%m-%d %H:%M:%S",         # space-separated naive
-        "%d/%m/%Y %H:%M:%S",         # DD/MM/YYYY
-        "%m/%d/%Y %H:%M:%S",         # MM/DD/YYYY
-        "%d-%b-%Y %H:%M:%S",         # DD-Mon-YYYY
-    ):
-        try:
-            from datetime import datetime as _dt
-            return _to_utc(pd.Timestamp(_dt.strptime(s, _fmt)))
-        except Exception:
-            pass
-
-    # ── 7. dateutil catch-all — handles almost any human-readable format ──────
-    try:
-        from dateutil import parser as _dup  # type: ignore[import]
-        return _to_utc(pd.Timestamp(_dup.parse(s)))
-    except Exception:
-        pass
-
-    return None
+    return _parse_dt_str(s)
 
 
 def fmt_dt(value: Any, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -18236,11 +18272,16 @@ def _render_teams_and_members_view() -> None:
                     # Group members by Company — admins asked for this
                     # cut explicitly. Unknown/missing company members
                     # fall into a trailing "— no company —" bucket.
+                    # Merged CASE-INSENSITIVELY (my-company / My-Company /
+                    # My-company are ONE company); first-seen casing displays.
                     _members_by_company: dict[str, list[dict]] = {}
+                    _co_display: dict[str, str] = {}
                     for _m in _members:
                         _co = (_m.get("ldap_company") or "").strip()
-                        _key = _co or "— no company —"
-                        _members_by_company.setdefault(_key, []).append(_m)
+                        _ck = _co.lower() or "— no company —"
+                        _co_display.setdefault(_ck, _co or "— no company —")
+                        _members_by_company.setdefault(
+                            _co_display[_ck], []).append(_m)
 
                     def _co_sort_key(item):
                         # Real companies first (alphabetically); the
@@ -18353,10 +18394,15 @@ def _render_teams_and_members_view() -> None:
         _others = sorted(_r)
         return _others[0] if _others else "__unknown__"
 
+    # Matrix keys are merged CASE-INSENSITIVELY across teams — two teams whose
+    # majority spellings differ only in case (my-company vs My-Company) must
+    # land in the SAME column. First-seen casing wins for display.
     _matrix: dict[str, dict[str, list[str]]] = {}
     _co_count: dict[str, int] = {}
+    _mx_display: dict[str, str] = {}
     for _t in _filtered_teams:
-        _co = _tm_team_company(_t)
+        _tco = _tm_team_company(_t)
+        _co = _mx_display.setdefault(_tco.lower(), _tco)
         _bk = _tm_role_bucket(_t)
         _matrix.setdefault(_co, {}).setdefault(_bk, []).append(_t)
         _co_count[_co] = _co_count.get(_co, 0) + 1
@@ -23620,14 +23666,32 @@ def _git_set_author(repo_path: str, username: str, email: str) -> None:
 def _inventory_head_sha() -> str:
     """Current HEAD of the cloned inventories repo ("" if not checked out).
     Used as the cache key for git-derived creation dates so a pull refreshes
-    them."""
-    repo = INVENTORY_REPO_PATH
-    if not os.path.isdir(os.path.join(repo, ".git")):
-        return ""
+    them.
+
+    Reads ``.git/HEAD`` (+ its ref / packed-refs) directly instead of spawning
+    ``git rev-parse`` — this runs on EVERY rerun, and a subprocess costs
+    10-30 ms on WSL vs ~0.1 ms for the file reads."""
+    git_dir = os.path.join(INVENTORY_REPO_PATH, ".git")
     try:
-        r = _run_git("rev-parse", "HEAD", cwd=repo, inject_auth=False)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception:
+        with open(os.path.join(git_dir, "HEAD"), encoding="utf-8") as fh:
+            head = fh.read().strip()
+        if not head.startswith("ref: "):
+            return head            # detached HEAD — the sha itself
+        ref = head[5:].strip()
+        ref_path = os.path.join(git_dir, *ref.split("/"))
+        if os.path.isfile(ref_path):
+            with open(ref_path, encoding="utf-8") as fh:
+                return fh.read().strip()
+        packed = os.path.join(git_dir, "packed-refs")
+        if os.path.isfile(packed):
+            with open(packed, encoding="utf-8") as fh:
+                for _ln in fh:
+                    _ln = _ln.strip()
+                    if _ln and not _ln.startswith(("#", "^")) \
+                            and _ln.endswith(" " + ref):
+                        return _ln.split(" ", 1)[0]
+        return ""
+    except OSError:
         return ""
 
 

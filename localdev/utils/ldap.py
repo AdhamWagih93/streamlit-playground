@@ -21,15 +21,15 @@ from __future__ import annotations
 # sAMAccountName -> directory record (display / email / company / title / teams)
 _MEMBERS = {
     "alice.dev": {"display": "Alice Dev", "email": "alice.dev@acme.local",
-                  "company": "ACME", "title": "Senior Engineer", "teams": ["DEVJAVA"]},
+                  "company": "Acme", "title": "Senior Engineer", "teams": ["DEVJAVA"]},
     "bob.dev":   {"display": "Bob Dev", "email": "bob.dev@acme.local",
-                  "company": "ACME", "title": "Engineer", "teams": ["DEVJAVA"]},
+                  "company": "acme", "title": "Engineer", "teams": ["DEVJAVA"]},
     "carol.qc":  {"display": "Carol QC", "email": "carol.qc@acme.local",
                   "company": "ACME", "title": "QA Engineer", "teams": ["QCJAVA"]},
     "dan.net":   {"display": "Dan Net", "email": "dan.net@globex.local",
                   "company": "GLOBEX", "title": "Engineer", "teams": ["DEVDOTNET"]},
     "nina.net":  {"display": "Nina Net", "email": "nina.net@globex.local",
-                  "company": "GLOBEX", "title": "QA Engineer", "teams": ["QCNET"]},
+                  "company": "Globex", "title": "QA Engineer", "teams": ["QCNET"]},
     "eve.ops":   {"display": "Eve Ops", "email": "eve.ops@acme.local",
                   "company": "ACME", "title": "Operations Lead", "teams": ["OPS"]},
     "omar.ops":  {"display": "Omar Ops", "email": "omar.ops@globex.local",
