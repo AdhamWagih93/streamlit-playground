@@ -961,6 +961,13 @@ async function renderCI() {
           <div style="padding:8px 12px">
             ${kpi.diagnostics.date_like_fields ? `<div class="kpi-note">windowing on <b>${esc((kpi.diagnostics.configured_date_fields || []).join(", ") || "—")}</b> (QO_KPI_DATE_FIELDS)${kpi.diagnostics.server_now ? ` · server now <b>${esc(kpi.diagnostics.server_now)}</b>` : ""}</div>
             <div class="ci-meta" style="margin:2px 0 6px">date-like fields in your docs: <b>${esc((kpi.diagnostics.date_like_fields || []).join(", ") || "none found")}</b>${(kpi.diagnostics.date_like_fields || []).length ? " — if the real build time is one of these and isn't listed above, set QO_KPI_DATE_FIELDS to it" : ""}</div>` : ""}
+            ${(kpi.diagnostics.indices || []).length ? `
+              <div class="kpi-note" style="margin-top:8px">indices matching <code>${esc((kpi.diagnostics.configured_index || "").replace(/[*]+$/, ""))}*</code> — QuestOps reads only <code>${esc(kpi.diagnostics.configured_index || "")}</code>; if fresh builds are in a dated/rolled-over sibling below, set <b>QO_JENKINS_KPI_INDEX</b> to a pattern like <code>${esc((kpi.diagnostics.configured_index || "").replace(/[*]+$/, ""))}*</code>:</div>
+              ${kpi.diagnostics.indices.map((ix) => {
+                const fresh = ix.newest && (Date.now() - new Date(ix.newest).getTime()) < 86400e3 * 14;
+                const read = ix.index === kpi.diagnostics.configured_index;
+                return `<div class="ci-meta">${fresh ? "🟢" : "•"} <code>${esc(ix.index)}</code> — ${esc(String(ix.docs ?? "?"))} docs${ix.newest ? ` · newest ${ago(ix.newest)}` : " · no dated builds"}${read ? " · <b>← currently read</b>" : ""}</div>`;
+              }).join("")}` : ""}
             ${(kpi.diagnostics.attempts || []).map((a) => `<div class="ci-meta">• ${esc(a)}</div>`).join("")}
             ${(kpi.diagnostics.sample || []).length ? `<div class="kpi-note" style="margin-top:6px">sample raw dates from the index:</div>` : ""}
             ${(kpi.diagnostics.sample || []).map((s) => `<div class="ci-meta">• builddate=${esc(JSON.stringify(s.builddate))} · @timestamp=${esc(JSON.stringify(s["@timestamp"]))} · parseable: ${s.parsed ? "yes" : "NO"}</div>`).join("")}

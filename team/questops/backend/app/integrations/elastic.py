@@ -63,6 +63,44 @@ def _search(index: str, body: dict) -> list[dict]:
     return _search_hits(index, body)[0]
 
 
+def _sibling_indices(index: str) -> list[dict]:
+    """[{index, docs, newest}] for every concrete index matching {name}* — so
+    when the configured index is one OLD index, its recent dated/rolled-over
+    siblings (where the fresh builds actually live) are revealed. Best-effort."""
+    base = index.split(",")[0].rstrip("*")
+    if not base:
+        return []
+    try:
+        r = requests.get(f"{settings.es_url}/_cat/indices/{base}*",
+                         params={"format": "json", "h": "index,docs.count", "s": "index"},
+                         headers={"Authorization": f"ApiKey {settings.es_api_key}"},
+                         timeout=15, verify=settings.es_verify_ssl)
+        r.raise_for_status()
+        rows = r.json() if isinstance(r.json(), list) else []
+    except (requests.RequestException, ValueError):
+        return []
+    out = []
+    for it in rows[:60]:
+        name = it.get("index", "")
+        if not name:
+            continue
+        newest = None
+        try:  # newest build in THIS index, on the configured date field(s)
+            for f in settings.kpi_date_field_list:
+                hits, _ = _search_hits(name, {"size": 1, "_source": [f],
+                                              "query": {"exists": {"field": f}},
+                                              "sort": [{f: {"order": "desc"}}]})
+                if hits:
+                    w = _parse_es_date(hits[0].get(f))
+                    if w:
+                        newest = w.isoformat()
+                        break
+        except requests.RequestException:
+            pass
+        out.append({"index": name, "docs": it.get("docs.count"), "newest": newest})
+    return out
+
+
 def _search_hits_relaxed(index: str, body: dict) -> tuple[list[dict], int, bool]:
     """(docs, total, sorted_ok). Sorting on a text-mapped field 400s the
     whole query — retry WITHOUT the sort. sorted_ok=False means the docs are
@@ -322,6 +360,8 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
                 "debug": {"attempts": attempts, "sample": [],
                           "doc_fields": seen_fields, "date_like_fields": [],
                           "configured_date_fields": settings.kpi_date_field_list,
+                          "configured_index": settings.jenkins_kpi_index,
+                          "indices": _sibling_indices(settings.jenkins_kpi_index),
                           "server_now": now.isoformat()}}
 
     name, raw, total_raw, sorted_ok, dated, kept, any_parsed = chosen or fallback
@@ -350,6 +390,9 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
         w = _parse_es_date(v)
         return w is not None and w.year >= 2000
     date_like = sorted(k for k, v in (raw[0] if raw else {}).items() if _is_datey(v))
+    # when the window came up empty, list sibling indices — the fresh builds
+    # are usually in a dated/rolled-over index, not the exact configured name
+    siblings = _sibling_indices(settings.jenkins_kpi_index) if not docs else []
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
             "ignored": ignored, "fetch_truncated": fetch_truncated,
@@ -357,6 +400,8 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
             "debug": {"attempts": attempts, "sample": sample,
                       "doc_fields": seen_fields, "date_like_fields": date_like,
                       "configured_date_fields": settings.kpi_date_field_list,
+                      "configured_index": settings.jenkins_kpi_index,
+                      "indices": siblings,
                       "server_now": now.isoformat()}}
 
 
