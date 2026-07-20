@@ -4,7 +4,9 @@ Sessions are short-lived HS256 JWTs."""
 import datetime as dt
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 
 import jwt
 from fastapi import Depends, Header, HTTPException
@@ -101,9 +103,11 @@ _DEMO_LDAP_GROUPS = {
 
 # [TEAM] members are resolved by running an asset the user's cloned Engine repo
 # ships: scripts/Tools/LDAP/getTeamMembers.sh <team> prints that team's members.
-# The script sources a .prd profile via `. $HOME/.prd`; .prd lives at the Engine
-# repo ROOT, so we invoke the script with HOME pointed at the repo root — that
-# makes `$HOME/.prd` resolve to <engine>/.prd inside the QuestOps container.
+# The script (a) sources a .prd profile via `. $HOME/.prd` — where .prd is the
+# file at the Engine repo ROOT, expected under the runner's REAL $HOME — and
+# (b) does work relative to the current directory, so it must run from INSIDE
+# the Engine repo. So we copy <engine>/.prd to $HOME/.prd and run with cwd set
+# to the repo (leaving $HOME untouched).
 _TEAM_SCRIPT_REL = "scripts/Tools/LDAP/getTeamMembers.sh"
 _TEAM_SCRIPT_TIMEOUT = 60
 
@@ -142,7 +146,7 @@ def team_source_status() -> dict:
     if not row["script_present"]:
         row["note"] = f"{_TEAM_SCRIPT_REL} missing in the Engine repo"
     elif not row["prd_present"]:
-        row["note"] = ".prd profile missing at the Engine repo root ($HOME/.prd)"
+        row["note"] = ".prd profile missing at the Engine repo root (copied to $HOME/.prd at run time)"
     else:
         row["healthy"], row["note"] = True, "script + .prd present"
     return row
@@ -202,17 +206,41 @@ def _run_team_script(cn: str) -> dict:
     script = d / _TEAM_SCRIPT_REL
     if not script.exists():
         return {"ok": False, "error": f"{_TEAM_SCRIPT_REL} missing in the Engine repo"}
-    # HOME -> Engine repo root so the script's `. $HOME/.prd` sources <engine>/.prd
-    env = {**os.environ, "HOME": str(d)}
+    # the script does `. $HOME/.prd`, expecting the Engine repo's root .prd under
+    # the runner's real $HOME — place it there (atomically: team resolution runs
+    # in parallel threads, so a half-written .prd must never be sourced).
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    prd_src = d / ".prd"
+    if prd_src.exists():
+        err = _install_prd(prd_src, home)
+        if err:
+            return {"ok": False, "error": err}
     t0 = time.time()
     try:
-        p = subprocess.run(["bash", str(script), cn], cwd=str(d), env=env,
+        # run from INSIDE the Engine repo (cwd), with the real $HOME intact so
+        # `. $HOME/.prd` resolves to the copy we just placed
+        p = subprocess.run(["bash", str(script), cn], cwd=str(d),
                            capture_output=True, text=True,
                            timeout=_TEAM_SCRIPT_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return {"ok": False, "error": f"script error: {str(exc)[:120]}"}
     return {"ok": True, "returncode": p.returncode, "stdout": p.stdout,
             "stderr": p.stderr, "duration_ms": int((time.time() - t0) * 1000)}
+
+
+def _install_prd(prd_src, home: str) -> str | None:
+    """Copy the Engine repo's .prd to $HOME/.prd atomically (temp + rename on
+    the same filesystem). Returns an error string on failure, else None."""
+    dest = os.path.join(home, ".prd")
+    try:
+        os.makedirs(home, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=home, prefix=".prd.", suffix=".tmp")
+        os.close(fd)
+        shutil.copyfile(prd_src, tmp)
+        os.replace(tmp, dest)  # atomic — concurrent runners never see a partial file
+        return None
+    except OSError as exc:
+        return f"could not place .prd under $HOME ({home}): {str(exc)[:100]}"
 
 
 def _resolve_team_via_script(cn: str) -> dict:
