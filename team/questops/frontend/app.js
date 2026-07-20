@@ -66,13 +66,31 @@ function linkBtn(url, cls = "btn btn-sm btn-ghost") {
     ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
 }
 
+// a minutes count as a compact, human-readable duration: "45m", "2h 10m",
+// "3d 4h", "2mo 5d" (two units max — the leading one carries the meaning)
+function humanMins(min) {
+  min = Math.round(Number(min));
+  if (!Number.isFinite(min) || min < 0) return "";
+  if (min < 60) return `${min}m`;
+  if (min < 1440) { const h = Math.floor(min / 60), m = min % 60; return m ? `${h}h ${m}m` : `${h}h`; }
+  if (min < 1440 * 30) { const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60); return h ? `${d}d ${h}h` : `${d}d`; }
+  if (min < 1440 * 365) { const mo = Math.floor(min / (1440 * 30)), d = Math.floor((min % (1440 * 30)) / 1440); return d ? `${mo}mo ${d}d` : `${mo}mo`; }
+  const y = Math.floor(min / (1440 * 365)), mo = Math.floor((min % (1440 * 365)) / (1440 * 30));
+  return mo ? `${y}y ${mo}mo` : `${y}y`;
+}
+
+// "…ago" from a timestamp (ISO/Date) …
 function ago(iso) {
   if (!iso) return "";
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  if (min < 60 * 24) return `${Math.round(min / 60)}h ago`;
-  return `${Math.round(min / 1440)}d ago`;
+  if (!Number.isFinite(min)) return "";
+  return min < 1 ? "just now" : `${humanMins(min)} ago`;
+}
+
+// … or from a minutes count the backend already computed (pipeline ago_min etc.)
+function agoMins(min) {
+  if (min == null || !Number.isFinite(Number(min))) return "";
+  return min < 1 ? "just now" : `${humanMins(min)} ago`;
 }
 
 /* ---------------- theme ---------------- */
@@ -292,12 +310,12 @@ async function renderOverviewInner() {
     ...ci.top_failures.map((f) => `
       <div class="ci-row"><span class="ci-dot dot-red"></span>
         <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
-        <span class="ci-meta">failed ${f.ago_min}m ago${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
+        <span class="ci-meta">failed ${agoMins(f.ago_min)}${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
         ${linkBtn(f.url)}<a class="btn btn-sm" href="#/ci">act ▸</a></div>`),
     ...ci.stuck.map((l) => `
       <div class="ci-row"><span class="ci-dot dot-amber"></span>
         <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
-        <span class="ci-meta">running ${l.running_min}m${l.avg_min ? ` vs ~${l.avg_min}m avg` : ""}</span>
+        <span class="ci-meta">running ${humanMins(l.running_min)}${l.avg_min ? ` vs ~${humanMins(l.avg_min)} avg` : ""}</span>
         ${linkBtn(l.url)}<a class="btn btn-sm" href="#/ci">act ▸</a></div>`),
     data.approvals.pending ? `
       <div class="ci-row"><span class="ci-dot dot-amber"></span>
@@ -813,7 +831,7 @@ async function renderCI() {
     <div class="ci-row">
       <span class="ci-dot dot-red"></span>
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
-      <span class="ci-meta">${esc(f.result)} · ${f.ago_min}m ago${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
+      <span class="ci-meta">${esc(f.result)} · ${agoMins(f.ago_min)}${f.claimed_by ? ` · 🛠 @${esc(f.claimed_by)}` : ""}</span>
       ${f.latest_ok ? `<span class="chip chip-green" title="the pipeline's latest run succeeded — this failure is from an earlier run (e.g. another project on the same pipeline)">latest ✓</span>` : ""}
       ${linkBtn(f.url)}
       ${diveBtn(f.job, f.number)}
@@ -826,7 +844,7 @@ async function renderCI() {
     <div class="ci-row">
       <span class="ci-dot dot-amber"></span>
       <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
-      <span class="ci-meta">running ${l.running_min}m${l.avg_min ? ` · avg ${l.avg_min}m` : ""}${l.claimed_by ? ` · 👀 @${esc(l.claimed_by)}` : ""}</span>
+      <span class="ci-meta">running ${humanMins(l.running_min)}${l.avg_min ? ` · avg ${humanMins(l.avg_min)}` : ""}${l.claimed_by ? ` · 👀 @${esc(l.claimed_by)}` : ""}</span>
       ${linkBtn(l.url)}
       ${diveBtn(l.job, l.number)}
       ${l.claimed_by ? "" : `<button class="btn btn-sm" data-claim="${esc(l.job)}">Investigate +10</button>`}
@@ -841,7 +859,7 @@ async function renderCI() {
       : j.result ? "dot-red" : "dot-grey";
     return `<div class="ci-row"><span class="ci-dot ${dot}"></span>
       <span class="ci-job">${esc(j.name)}</span>
-      <span class="ci-meta">${j.recent_builds ? `${j.recent_builds} builds · ` : ""}${j.building ? "building…" : esc(j.result || "—")}${j.duration_min ? ` · ${j.duration_min}m` : ""}</span>
+      <span class="ci-meta">${j.recent_builds ? `${j.recent_builds} builds · ` : ""}${j.building ? "building…" : esc(j.result || "—")}${j.duration_min ? ` · ${humanMins(j.duration_min)}` : ""}</span>
       ${linkBtn(j.url)}</div>`;
   }).join("");
 
@@ -852,7 +870,7 @@ async function renderCI() {
     <div class="ci-row">
       <span class="ci-dot dot-red"></span>
       <span class="ci-job">${esc(f.job)} <small>#${f.number}</small></span>
-      <span class="ci-meta">failed ${f.ago_min}m ago</span>
+      <span class="ci-meta">failed ${agoMins(f.ago_min)}</span>
       ${f.latest_ok ? `<span class="chip chip-green" title="latest run succeeded — earlier run failed">latest ✓</span>` : ""}
       ${linkBtn(f.url)}
       ${diveBtn(f.job, f.number)}
