@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     error_analysis_index: str = "jenkins-error-analysis"
     kpi_sync_minutes: str = "5,35"   # minute marks each hour when the KPI loader runs
     kpi_max_docs: int = 10000        # per-request fetch cap (ES max_result_window)
+    # which document field(s) hold the build time, most-authoritative first.
+    # The KPI window is applied on these — set it if your index names the
+    # build timestamp differently (the diagnostics list the fields it found).
+    kpi_date_fields: str = "builddate,@timestamp"
     # comma-separated tokens; KPI docs whose jobpath/jobname contains one are
     # excluded from the KPI panel (stats, bars, loaded records) — the KPI
     # sibling of JENKINS_IGNORE, deliberately its own knob
@@ -140,6 +144,10 @@ class Settings(BaseSettings):
     @property
     def kpi_ignore_tokens(self) -> list[str]:
         return [t.lower() for t in self._csv(self.kpi_ignore)]
+
+    @property
+    def kpi_date_field_list(self) -> list[str]:
+        return self._csv(self.kpi_date_fields) or ["builddate", "@timestamp"]
 
     @property
     def ado_access_exclude_list(self) -> set[str]:

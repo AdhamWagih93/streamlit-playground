@@ -184,9 +184,13 @@ def _parse_es_date(val) -> dt.datetime | None:
 
 
 def _doc_when(doc: dict) -> dt.datetime | None:
-    """builddate first — it is when the build RAN; @timestamp is only when
-    the loader ingested it (re-ingested old builds have a recent one)."""
-    return _parse_es_date(doc.get("builddate")) or _parse_es_date(doc.get("@timestamp"))
+    """The build time, trying KPI_DATE_FIELDS in order (default: builddate —
+    when the build RAN — then @timestamp, the loader's ingest time)."""
+    for f in settings.kpi_date_field_list:
+        w = _parse_es_date(doc.get(f))
+        if w is not None:
+            return w
+    return None
 
 
 def _kpi_ignored(doc: dict) -> bool:
@@ -217,18 +221,19 @@ def _kpi_query_tiers(hours: int, now: dt.datetime) -> list[tuple[str, dict, str]
     date-mapped fields; day-PHRASE queries window TEXT-mapped fields
     ('14-Jul-2026' analyzes to adjacent terms); day-prefix WILDCARDS window
     KEYWORD-mapped fields; match_all is the last resort."""
+    fields = settings.kpi_date_field_list
     tiers: list[tuple[str, dict, str]] = []
-    for f in ("builddate", "@timestamp"):  # builddate = when the build RAN
+    for f in fields:  # first field = when the build RAN
         tiers.append((f"range:{f}",
                       {"range": {f: {"gte": f"now-{hours}h"}}}, f))
     days = _window_days(hours, now)
     if int(hours // 24) + 2 <= 92:  # day-enumeration only for sane windows
         phrases = [d.strftime("%d-%b-%Y") for d in days]
-        for f in ("builddate", "@timestamp"):
+        for f in fields:
             tiers.append((f"day-phrase:{f}",
                           {"bool": {"should": [{"match_phrase": {f: p}} for p in phrases],
                                     "minimum_should_match": 1}}, f))
-        for f in ("builddate", "@timestamp"):
+        for f in fields:
             tiers.append((f"day-wildcard:{f}",
                           {"bool": {"should": [{"wildcard": {f: {"value": p + "*"}}}
                                                for p in phrases],
@@ -259,7 +264,15 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     now = _now()
     cutoff = now - dt.timedelta(hours=hours)
     chosen, fallback, attempts = None, None, []
+    date_typed: set[str] = set()   # fields a range tier queried cleanly
+    seen_fields: list[str] = []     # top-level keys of a real doc (diagnostics)
     for name, query, sfield in _kpi_query_tiers(hours, now):
+        # the day-phrase/day-wildcard tiers exist for TEXT-mapped date fields;
+        # on a real date field they only 400 — skip them once range has shown
+        # the field is date-mapped (range covers it authoritatively).
+        if name.startswith(("day-phrase", "day-wildcard")) and sfield in date_typed:
+            attempts.append(f"{name}: skipped — {sfield} is date-mapped (range covers it)")
+            continue
         try:
             raw, total_raw, sorted_ok = _search_hits_relaxed(
                 settings.jenkins_kpi_index,
@@ -270,6 +283,10 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
             # chop it mid-port and read like a wrong port (":8383" -> ":8")
             attempts.append(f"{name}: HTTP error {str(exc)[:280]}")
             continue
+        if name.startswith("range"):
+            date_typed.add(sfield)  # range accepted date-math => field is a date
+        if raw and not seen_fields:
+            seen_fields = sorted(raw[0].keys())
         if not raw:
             attempts.append(f"{name}: 0 hits")
             continue
@@ -301,7 +318,11 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     if chosen is None and fallback is None:  # nothing anywhere
         return {"docs": [], "window_applied": True, "window_source": "none",
                 "total": 0, "ignored": 0, "fetch_truncated": False,
-                "newest_at": None, "debug": {"attempts": attempts, "sample": []}}
+                "newest_at": None,
+                "debug": {"attempts": attempts, "sample": [],
+                          "doc_fields": seen_fields, "date_like_fields": [],
+                          "configured_date_fields": settings.kpi_date_field_list,
+                          "server_now": now.isoformat()}}
 
     name, raw, total_raw, sorted_ok, dated, kept, any_parsed = chosen or fallback
     if chosen is None and not any_parsed:
@@ -322,11 +343,21 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     # "no builds in the last Xh; newest is Yd ago — widen the window"
     build_times = [b for b in (_doc_when(d) for d in raw) if b is not None]
     newest_at = max(build_times).isoformat() if build_times else None
+    # every field in a real doc whose value parses as a PLAUSIBLE date (year
+    # >= 2000, so small ints like buildnumber don't masquerade as 1970 epochs)
+    # — makes a mis-named build-time field obvious
+    def _is_datey(v):
+        w = _parse_es_date(v)
+        return w is not None and w.year >= 2000
+    date_like = sorted(k for k, v in (raw[0] if raw else {}).items() if _is_datey(v))
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
             "ignored": ignored, "fetch_truncated": fetch_truncated,
             "newest_at": newest_at,
-            "debug": {"attempts": attempts, "sample": sample}}
+            "debug": {"attempts": attempts, "sample": sample,
+                      "doc_fields": seen_fields, "date_like_fields": date_like,
+                      "configured_date_fields": settings.kpi_date_field_list,
+                      "server_now": now.isoformat()}}
 
 
 def error_analysis(days: int | None = None, size: int = 500) -> list[dict]:

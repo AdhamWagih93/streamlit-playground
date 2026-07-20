@@ -957,11 +957,14 @@ async function renderCI() {
       ${kpiWarn}
       ${kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats are computed on the newest ${kpi.fetched} (raise KPI_MAX_DOCS to widen)</div>` : ""}
       ${!kpi.loaded_total && kpi.diagnostics ? `
-        <details class="filebox"><summary>🔎 why 0 builds? — query diagnostics</summary>
+        <details class="filebox" open><summary>🔎 why 0 builds? — query diagnostics</summary>
           <div style="padding:8px 12px">
+            ${kpi.diagnostics.date_like_fields ? `<div class="kpi-note">windowing on <b>${esc((kpi.diagnostics.configured_date_fields || []).join(", ") || "—")}</b> (QO_KPI_DATE_FIELDS)${kpi.diagnostics.server_now ? ` · server now <b>${esc(kpi.diagnostics.server_now)}</b>` : ""}</div>
+            <div class="ci-meta" style="margin:2px 0 6px">date-like fields in your docs: <b>${esc((kpi.diagnostics.date_like_fields || []).join(", ") || "none found")}</b>${(kpi.diagnostics.date_like_fields || []).length ? " — if the real build time is one of these and isn't listed above, set QO_KPI_DATE_FIELDS to it" : ""}</div>` : ""}
             ${(kpi.diagnostics.attempts || []).map((a) => `<div class="ci-meta">• ${esc(a)}</div>`).join("")}
             ${(kpi.diagnostics.sample || []).length ? `<div class="kpi-note" style="margin-top:6px">sample raw dates from the index:</div>` : ""}
             ${(kpi.diagnostics.sample || []).map((s) => `<div class="ci-meta">• builddate=${esc(JSON.stringify(s.builddate))} · @timestamp=${esc(JSON.stringify(s["@timestamp"]))} · parseable: ${s.parsed ? "yes" : "NO"}</div>`).join("")}
+            ${(kpi.diagnostics.doc_fields || []).length ? `<details style="margin-top:6px"><summary class="ci-meta">all fields in a sample document (${kpi.diagnostics.doc_fields.length})</summary><div class="ci-meta" style="margin-top:4px">${esc(kpi.diagnostics.doc_fields.join(", "))}</div></details>` : ""}
           </div>
         </details>` : ""}
       ${kpi.ignored ? `<div class="kpi-note">🚫 ${kpi.ignored} build(s) excluded by KPI_IGNORE (${esc((kpi.ignore_tokens || []).join(", "))})</div>` : ""}
