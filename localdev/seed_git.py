@@ -216,6 +216,11 @@ def _seed_control() -> None:
         repo = os.path.join(GITSRV, "DevOps", "Control", "_git", team)
         _init_repo(repo)
         for env in ("dev", "qc", "prd"):
+            # api also carries an <image>-<environment> reference (per env) so
+            # the web-<env> service form resolves to the portal/web app.
+            _envform = (f"envform:\n  web_env: http://web-{env}:8080   "
+                        f"# <image>-<environment> service form\n"
+                        if app == "api" else "")
             _write(repo, f"{proj}/{env}_{app}/config.yml",
                    f"# {proj}/{env}_{app} — service config\n"
                    f"service:\n"
@@ -223,7 +228,7 @@ def _seed_control() -> None:
                    f"  port: 8080\n"
                    f"database:\n"
                    f"  url: postgresql://{proj}-db.acme.local:5432/{proj}\n"
-                   + _refs.get(app, ""))
+                   + _refs.get(app, "") + _envform)
         # ── Env-specific apps (exist in only ONE environment) so the
         #    "compare only common apps" mode has something to exclude. ──
         if team == "DEVJAVA":

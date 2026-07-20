@@ -6453,6 +6453,10 @@ div[data-testid="stPillsContainer"] button[data-selected="true"] {
     font-size: 0.68rem; color: var(--cc-text-dim); font-weight: 600;
 }
 .arch-leg-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.arch-leg-box { width: 12px; height: 9px; border-radius: 3px; display: inline-block;
+    border: 1.5px dashed; }
+.arch-leg code { font-family: var(--cc-mono); font-size: 0.62rem;
+    background: var(--cc-surface2); padding: 0 3px; border-radius: 3px; }
 .arch-err-row { font-family: var(--cc-mono); font-size: 0.7rem;
     color: var(--cc-amber); padding: 1px 0; }
 /* Common-apps-only comparison — which apps are excluded from each env */
@@ -16116,11 +16120,11 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
                 f'fillcolor="#f1f5f9" color="{_col}" fontsize=9 '
                 f'fontname="Helvetica"];')
 
-    # IP-grouped nodes — one per IP, every port + its type listed inside.
-    for _ip, _ports in _ip_ports.items():
+    # IP-grouped node strings — one per IP, every port + its type listed inside.
+    # Collected (not emitted yet) so they can live INSIDE the External box.
+    def _ip_node(_ip: str, _ports: dict) -> str:
         _eid = _arch_node_id("ip", _ip)
         _rep_ip = any((f"{_ip}:{_pt}" if _pt else _ip) in _rep for _pt in _ports)
-        # Representative colour = the first port's kind.
         _first = next(iter(_ports.values()))
         _col = _ARCH_KIND_COLOR.get(_first["kind"], "#94a3b8")
         _plines = "".join(
@@ -16129,29 +16133,38 @@ def _arch_build_dot(env: str, ed: dict, *, scope_keys: set | None = None,
                                      key=lambda kv: (kv[0] is None, kv[0])))
         _box = f'{_arch_dot_esc(_ip)}{_plines}'
         if _rep_ip:
-            L.append(f'{_eid} [label="{_box}" shape=box3d style="filled,bold" '
-                     f'fillcolor="#ffedd5" color="#ea580c" penwidth=2.2 '
-                     f'fontcolor="#9a3412" fontsize=9 fontname="Helvetica-Bold"];')
-        else:
-            L.append(f'{_eid} [label="{_box}" shape=box3d style="filled" '
-                     f'fillcolor="#f1f5f9" color="{_col}" fontsize=9 '
-                     f'fontname="Helvetica"];')
+            return (f'{_eid} [label="{_box}" shape=box3d style="filled,bold" '
+                    f'fillcolor="#ffedd5" color="#ea580c" penwidth=2.2 '
+                    f'fontcolor="#9a3412" fontsize=9 fontname="Helvetica-Bold"];')
+        return (f'{_eid} [label="{_box}" shape=box3d style="filled" '
+                f'fillcolor="#f1f5f9" color="{_col}" fontsize=9 '
+                f'fontname="Helvetica"];')
 
-    # Kubernetes/OCP in-cluster service DNS that didn't resolve to one of our
-    # apps → grouped into a single "Cluster Services" box.
+    # Endpoints that didn't resolve to an app split into TWO clearly-labelled
+    # groups: INTERNAL (Kubernetes/OCP in-cluster DNS, `*.svc.cluster.local`) vs
+    # EXTERNAL (everything else — public/other hosts + raw IPs).
     _cluster_ext = {l: m for l, m in _ext.items() if _CLUSTER_SUFFIX in l}
     _plain_ext = {l: m for l, m in _ext.items() if _CLUSTER_SUFFIX not in l}
     if _cluster_ext:
-        L.append('subgraph cluster_svc { label="Cluster Services"; '
+        L.append('subgraph cluster_internal { '
+                 'label="Cluster services · INTERNAL (*.svc.cluster.local)"; '
                  'style="rounded,dashed,filled"; fillcolor="#eef2ff"; '
-                 'color="#c7d2fe"; fontname="Helvetica-Bold"; fontsize=10; '
-                 'labeljust="l";')
+                 'color="#818cf8"; penwidth=1.6; fontname="Helvetica-Bold"; '
+                 'fontsize=10; fontcolor="#4338ca"; labeljust="l";')
         for _label, _m in _cluster_ext.items():
             L.append("  " + _ext_node(_label, _m["kind"], _m["type"],
                                       strip_cluster=True))
         L.append("}")
-    for _label, _m in _plain_ext.items():
-        L.append(_ext_node(_label, _m["kind"], _m["type"]))
+    if _plain_ext or _ip_ports:
+        L.append('subgraph cluster_external { label="External endpoints"; '
+                 'style="rounded,dashed,filled"; fillcolor="#fff7ed"; '
+                 'color="#fdba74"; penwidth=1.6; fontname="Helvetica-Bold"; '
+                 'fontsize=10; fontcolor="#9a3412"; labeljust="l";')
+        for _label, _m in _plain_ext.items():
+            L.append("  " + _ext_node(_label, _m["kind"], _m["type"]))
+        for _ip, _ports in _ip_ports.items():
+            L.append("  " + _ip_node(_ip, _ports))
+        L.append("}")
     for _src, _dst, _col, _elabel in sorted(_edges):
         if _elabel:
             # Subtle muted key-path label so the topology stays readable.
@@ -16202,6 +16215,14 @@ def _arch_legend_html() -> str:
         f'<span class="arch-leg"><span class="arch-leg-dot" '
         f'style="background:{_ARCH_KIND_COLOR[_k]}"></span>{_lbl}</span>'
         for _k, _lbl in _items)
+    # Internal (in-cluster) vs external endpoint grouping.
+    _chips += (
+        '<span class="arch-leg"><span class="arch-leg-box" '
+        'style="border-color:#818cf8;background:#eef2ff"></span>'
+        'Internal · <code>*.svc.cluster.local</code></span>'
+        '<span class="arch-leg"><span class="arch-leg-box" '
+        'style="border-color:#fdba74;background:#fff7ed"></span>'
+        'External endpoints</span>')
     return f'<div class="arch-legend">{_chips}</div>'
 
 
