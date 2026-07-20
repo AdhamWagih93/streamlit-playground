@@ -107,11 +107,25 @@ def main() -> int:
             page.wait_for_selector('[data-testid="stAppViewContainer"]',
                                    timeout=60000)
             _settle(page, 2500)
+            # Streamlit's tab DOM has drifted across versions (BaseWeb buttons
+            # → plain elements). ARIA role="tab" is the stable contract, with
+            # the old BaseWeb selector as a fallback for older versions.
+            def _find_tab(needle: str):
+                pat = re.compile(needle, re.I)
+                for loc in (page.get_by_role("tab", name=pat),
+                            page.locator('button[data-baseweb="tab"]',
+                                         has_text=pat)):
+                    el = loc.first
+                    if el.count() > 0:
+                        return el
+                return None
+
+            _n_tabs = page.get_by_role("tab").count()
+            print(f"  (page exposes {_n_tabs} role=tab elements)")
             for fname, needle in TABS:
                 try:
-                    tab = page.locator('button[data-baseweb="tab"]',
-                                       has_text=re.compile(needle, re.I)).first
-                    if tab.count() == 0:
+                    tab = _find_tab(needle)
+                    if tab is None:
                         print(f"  (skip {fname}: tab '{needle}' not present)")
                         continue
                     tab.scroll_into_view_if_needed()
