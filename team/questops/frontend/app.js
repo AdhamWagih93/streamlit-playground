@@ -2281,15 +2281,43 @@ const scoreBadge = (score, grade) => score == null
   ? `<span class="score-badge grade-x" title="not scored (repo cap reached — refresh or expand)">?</span>`
   : `<span class="score-badge ${gradeCls(grade)}" title="access-hygiene score">${grade} · ${score}</span>`;
 
+// filter predicate for one project against the ADO smart-filter state
+function adoMatch(p, f, dupNames) {
+  if (f.q && !(p.name || "").toLowerCase().includes(f.q.toLowerCase())) return false;
+  if (f.grade && f.grade !== "all") {
+    if (f.grade === "unscored") { if (p.grade && p.grade !== "?") return false; }
+    else if ((p.grade || "?") !== f.grade) return false;
+  }
+  if (f.pr === "with" && !p.pr_present) return false;
+  if (f.pr === "without" && p.pr_present) return false;
+  const assigned = p.team && !p.team_unassigned;
+  if (f.team === "whole" && !(assigned && p.team_group_granted)) return false;
+  if (f.team === "notwhole" && !(assigned && p.team_group_granted === false)) return false;
+  if (f.team === "ldapfail" && !(assigned && p.team_ldap_resolved === false)) return false;
+  if (f.team === "dupaccess" && !((p.team_duplicate_count || 0) > 0)) return false;
+  if (f.outteam === "yes" && !((p.team_non_member_count || 0) > 0)) return false;
+  if (f.outteam === "no" && ((p.team_non_member_count || 0) > 0)) return false;
+  if (f.unassigned === "correct" && !(p.team_unassigned && p.team_ok)) return false;
+  if (f.unassigned === "incorrect" && !(p.team_unassigned && !p.team_ok)) return false;
+  if (f.unassigned === "assigned" && p.team_unassigned) return false;
+  const isDup = !!dupNames[(p.name || "").toLowerCase()];
+  if (f.dup === "yes" && !isDup) return false;
+  if (f.dup === "no" && isDup) return false;
+  if (f.minrepos && (p.repos || 0) < Number(f.minrepos)) return false;
+  return true;
+}
+const ADO_FILTER_ACTIVE = (f) => f && (f.q || (f.grade && f.grade !== "all")
+  || (f.pr && f.pr !== "all") || (f.team && f.team !== "all") || (f.outteam && f.outteam !== "all")
+  || (f.unassigned && f.unassigned !== "all") || (f.dup && f.dup !== "all")
+  || f.minrepos || f.minprojects || (f.sort && f.sort !== "name"));
+
 function accAdoHtml(d) {
   if (!d.projects.length) return `<div class="empty">no projects (${srcLabel(d)})</div>`;
-  const byColl = {};
-  d.projects.forEach((p) => { (byColl[p.coll] = byColl[p.coll] || []).push(p); });
+  state.adoData = d;                       // kept so filters re-render without refetch
+  const f = state.adoFilter = state.adoFilter || {};
   const stats = {};
   (d.collection_stats || []).forEach((s) => { stats[s.name] = s; });
-  const colls = Object.keys(byColl).sort();
-  // project NAMES that appear in more than one collection — name (lowercased)
-  // -> sorted list of the collections that hold it
+  // project NAMES that appear in more than one collection
   const nameColls = {};
   d.projects.forEach((p) => {
     const k = (p.name || "").toLowerCase();
@@ -2304,26 +2332,73 @@ function accAdoHtml(d) {
       ? `<span class="chip chip-violet acc-dup" title="same project name also in: ${others.map(esc).join(", ")}">⧉ also in ${others.length} other collection${others.length > 1 ? "s" : ""}</span>`
       : "";
   };
+  // apply the smart filters, then group + sort the surviving projects
+  const filtering = ADO_FILTER_ACTIVE(f);
+  const shown = d.projects.filter((p) => adoMatch(p, f, dupNames));
+  const SORT = {
+    "score-asc": (a, b) => (a.score ?? 999) - (b.score ?? 999),
+    "score-desc": (a, b) => (b.score ?? -1) - (a.score ?? -1),
+    "repos-desc": (a, b) => (b.repos || 0) - (a.repos || 0),
+    "name": (a, b) => a.name.localeCompare(b.name),
+  };
+  const byColl = {};
+  shown.forEach((p) => { (byColl[p.coll] = byColl[p.coll] || []).push(p); });
+  Object.values(byColl).forEach((arr) => arr.sort(SORT[f.sort] || SORT.name));
+  let colls = Object.keys(byColl).sort();
+  if (f.minprojects) colls = colls.filter((c) => byColl[c].length >= Number(f.minprojects));
+  const shownCount = colls.reduce((n, c) => n + byColl[c].length, 0);
   const totRepos = d.projects.reduce((n, p) => n + (p.repos || 0), 0);
   const capNote = (d.total_repos && d.scored_repos < d.total_repos)
     ? ` · scored ${d.scored_repos}/${d.total_repos} repos (cap)` : "";
   const failed = d.ldap_failed_teams || [];
-  const failProjects = failed.reduce((n, f) => n + (f.count || 0), 0);
+  const failProjects = failed.reduce((n, x) => n + (x.count || 0), 0);
   const failBanner = failed.length ? `
     <div class="remote-banner remote-new" style="margin-bottom:10px">
       <b>⚠ ${failed.length} LDAP group(s) not found — ${failProjects} project(s) affected (team-not-set, −15 each)</b>
-      ${failed.map((f) => `<div class="ci-meta" style="margin-top:3px">• group <b>[${esc(f.team)}]</b> not in LDAP — used by ${f.count} project(s):
-        ${f.projects.map((p) => `${esc(p.project)} <span class="ci-meta">(${esc(p.coll)})</span>`).join(", ")}</div>`).join("")}
+      ${failed.map((x) => `<div class="ci-meta" style="margin-top:3px">• group <b>[${esc(x.team)}]</b> not in LDAP — used by ${x.count} project(s):
+        ${x.projects.map((p) => `${esc(p.project)} <span class="ci-meta">(${esc(p.coll)})</span>`).join(", ")}</div>`).join("")}
     </div>` : "";
 
-  return failBanner + `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote}${dupCount ? ` · <span class="acc-dup-note">⧉ ${dupCount} name(s) shared across collections</span>` : ""} — score = access hygiene (A best); collections collapsed, click to expand</div>`
-    + colls.map((c) => {
+  // duplicated REPOSITORY names across the whole instance
+  const dupRepos = d.duplicate_repos || [];
+  const dupRepoPanel = dupRepos.length ? `
+    <details class="filebox acc-duprepo" ${filtering ? "" : ""}>
+      <summary>⧉ <b>${d.duplicate_repo_count || dupRepos.length}</b> repository name(s) shared across projects/collections</summary>
+      <div style="padding:6px 12px">
+        ${dupRepos.map((r) => `<div class="acc-duprepo-row">
+          <code>${esc(r.name)}</code> <span class="chip chip-violet">×${r.count}</span>
+          <span class="ci-meta">${r.locations.map((l) => `${esc(l.project)} <span class="acc-dup-note">(${esc(l.coll)})</span>`).join(" · ")}</span>
+        </div>`).join("")}
+      </div>
+    </details>` : "";
+
+  // smart filter bar
+  const sel = (id, cur, opts) => `<select data-ado-filter="${id}">${opts.map(([v, label]) =>
+    `<option value="${v}" ${(cur || "all") === v ? "selected" : ""}>${label}</option>`).join("")}</select>`;
+  const filterBar = `
+    <div class="acc-filters">
+      <input id="ado-q" placeholder="🔎 project name…" value="${esc(f.q || "")}">
+      ${sel("grade", f.grade, [["all", "any grade"], ["A", "A"], ["B", "B"], ["C", "C"], ["D", "D"], ["F", "F"], ["unscored", "unscored"]])}
+      ${sel("pr", f.pr, [["all", "PR: any"], ["with", "with PR"], ["without", "without PR"]])}
+      ${sel("team", f.team, [["all", "team: any"], ["whole", "whole-team granted"], ["notwhole", "not whole-team"], ["dupaccess", "duplicate access"], ["ldapfail", "LDAP failed"]])}
+      ${sel("outteam", f.outteam, [["all", "out-of-team: any"], ["yes", "has out-of-team"], ["no", "none out-of-team"]])}
+      ${sel("unassigned", f.unassigned, [["all", "assign: any"], ["assigned", "assigned"], ["correct", "unassigned ✓"], ["incorrect", "unassigned ✗"]])}
+      ${sel("dup", f.dup, [["all", "name: any"], ["yes", "shared name"], ["no", "unique name"]])}
+      <input class="acc-filter-num" type="number" min="0" data-ado-filter="minrepos" placeholder="min repos" value="${esc(f.minrepos || "")}">
+      <input class="acc-filter-num" type="number" min="0" data-ado-filter="minprojects" placeholder="min proj/coll" value="${esc(f.minprojects || "")}">
+      ${sel("sort", f.sort || "name", [["name", "sort: name"], ["score-asc", "score ↑"], ["score-desc", "score ↓"], ["repos-desc", "repos ↓"]])}
+      ${filtering ? `<button class="btn btn-sm" id="ado-filter-clear">✕ clear</button>` : ""}
+    </div>`;
+
+  const summaryLine = `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${filtering ? `<b>${shownCount}</b> of ` : ""}${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length}${filtering ? "" : ""} collection(s)${capNote}${dupCount ? ` · <span class="acc-dup-note">⧉ ${dupCount} name(s) shared across collections</span>` : ""} — score = access hygiene (A best)${filtering ? " · filtered" : "; collections collapsed, click to expand"}</div>`;
+
+  const body = colls.length ? colls.map((c) => {
       const s = stats[c] || { projects: byColl[c].length, teams: 0, repos: 0 };
       return `
-      <details class="filebox acc-coll-det">
+      <details class="filebox acc-coll-det" ${filtering ? "open" : ""}>
         <summary>🗄 <b>${esc(c)}</b> ${scoreBadge(s.score, s.grade)}
           <span class="acc-coll-stats">
-            <span class="chip chip-cyan">${s.projects} projects</span>
+            <span class="chip chip-cyan">${filtering ? `${byColl[c].length} of ${s.projects}` : s.projects} projects</span>
             <span class="chip chip-green" title="all repos share one ACL set">${s.uniform_projects || 0} uniform</span>
             <span class="chip chip-amber" title="repos have their own ACLs">${s.repo_specific_projects || 0} repo-specific</span>
             <span class="chip" title="distinct members across the collection">${s.members ?? 0} members</span>
@@ -2369,7 +2444,10 @@ function accAdoHtml(d) {
             </details>`).join("")}
         </div>
       </details>`;
-    }).join("");
+    }).join("")
+    : `<div class="empty">no projects match the filters — <a href="javascript:void 0" id="ado-filter-clear2">clear filters</a></div>`;
+
+  return failBanner + dupRepoPanel + filterBar + summaryLine + body;
 }
 
 const TIER_CLS = { admin: "chip-red", write: "chip-amber", read: "chip-cyan", other: "" };
@@ -2630,7 +2708,40 @@ function wireAccess(section) {
         } catch (e) { if (box) box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; }
       };
     });
+    wireAdoFilters();
   }
+}
+
+// re-render the ADO section from the cached payload (filters change client-side)
+function rerenderAdo() {
+  const box = document.getElementById("acc-ado");
+  if (box && state.adoData) { box.innerHTML = accAdoHtml(state.adoData); wireAccess("ado"); }
+}
+
+function wireAdoFilters() {
+  const f = state.adoFilter = state.adoFilter || {};
+  view().querySelectorAll("[data-ado-filter]").forEach((el) => {
+    if (el.tagName === "SELECT") {
+      el.onchange = () => { f[el.dataset.adoFilter] = el.value; rerenderAdo(); };
+    } else {  // numeric inputs
+      el.onchange = () => { f[el.dataset.adoFilter] = el.value; rerenderAdo(); };
+    }
+  });
+  const q = document.getElementById("ado-q");
+  if (q) q.oninput = () => {
+    f.q = q.value;
+    clearTimeout(state._adoQT);
+    state._adoQT = setTimeout(() => {
+      rerenderAdo();
+      const nq = document.getElementById("ado-q");
+      if (nq) { nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }
+    }, 200);
+  };
+  const clear = () => { state.adoFilter = {}; rerenderAdo(); };
+  const cb = document.getElementById("ado-filter-clear");
+  if (cb) cb.onclick = clear;
+  const cb2 = document.getElementById("ado-filter-clear2");
+  if (cb2) cb2.onclick = clear;
 }
 
 function accSummaryHtml(d) {
@@ -2841,8 +2952,6 @@ async function renderAccess() {
       ADO project details load only when expanded, and fetches are bounded-parallel</div>
     <div class="panel" style="margin-bottom:18px"><h2>📊 at a glance</h2>
       <div id="acc-summary"></div></div>
-    <div class="panel" style="margin-bottom:18px"><h2>🔐 LDAP servers</h2>
-      <div id="acc-ldap"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
@@ -2855,7 +2964,6 @@ async function renderAccess() {
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
-    accLoad("ldap", `/api/access/ldap${s}`, accLdapHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
     accLoad("activity", `/api/access/jira/activity${s}`, accActivityHtml);

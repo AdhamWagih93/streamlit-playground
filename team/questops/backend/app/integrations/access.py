@@ -247,11 +247,22 @@ def ado_projects(force: bool = False) -> dict:
         with ThreadPoolExecutor(max_workers=POOL) as pool:
             repo_lists = list(pool.map(proj_repos, projects))
             team_lists = list(pool.map(proj_teams, projects))
+        # repo NAME occurrences across the WHOLE instance — to flag the same
+        # repo name living in more than one project/collection
+        repo_occ: dict[str, list] = {}
         for p, rl, tl in zip(projects, repo_lists, team_lists):
             # SAME per-project cap as the detail expand → identical scores
             p["repos"], p["teams"] = len(rl), len(tl)
             p["_repolist"] = rl[:PROJECT_REPO_CAP]
             p["_teamlist"] = tl
+            for r in rl:
+                repo_occ.setdefault(r["name"].lower(), []).append(
+                    {"name": r["name"], "project": p["name"], "coll": p["coll"]})
+        duplicate_repos = [
+            {"name": occ[0]["name"], "count": len(occ),
+             "locations": sorted(occ, key=lambda x: (x["coll"].lower(), x["project"].lower()))}
+            for occ in repo_occ.values() if len(occ) > 1]
+        duplicate_repos.sort(key=lambda d: (-d["count"], d["name"].lower()))
 
         # ONE flat, bounded ACL sweep across every (capped) repo of every
         # project so the collapsed view can show a hygiene SCORE without
@@ -412,6 +423,8 @@ def ado_projects(force: bool = False) -> dict:
         return {"source": "live", "projects": projects, "collections": colls,
                 "collection_stats": stats,
                 "ldap_failed_teams": _group_ldap_failures(projects),
+                "duplicate_repos": duplicate_repos[:200],
+                "duplicate_repo_count": len(duplicate_repos),
                 "scored_repos": len(capped), "total_repos": len(pairs)}
     return _cached("ado:projects", force, build)
 
@@ -486,9 +499,18 @@ def _demo_ado_projects() -> dict:
     failed = _group_ldap_failures(projects)
     for p in projects:
         p.pop("_memberset", None)
+    # 'prototypes' lives in both Research/Sandbox and Research/Platform; 'sandbox'
+    # in Research/Platform too — exercises the cross-instance duplicate-repo view
+    duplicate_repos = [
+        {"name": "prototypes", "count": 2, "locations": [
+            {"name": "prototypes", "project": "Platform", "coll": "Research"},
+            {"name": "prototypes", "project": "Sandbox", "coll": "Research"}]},
+    ]
     return {"source": "demo", "projects": projects, "collections": colls,
             "collection_stats": stats,
-            "ldap_failed_teams": failed, "scored_repos": 9, "total_repos": 9}
+            "ldap_failed_teams": failed,
+            "duplicate_repos": duplicate_repos, "duplicate_repo_count": len(duplicate_repos),
+            "scored_repos": 9, "total_repos": 9}
 
 
 def _values(data) -> list:
