@@ -2125,7 +2125,7 @@ function accTeamSourceHtml(ts) {
   if (!ts) return "";
   const chips = [
     ["Engine cloned", ts.engine_cloned],
-    ["getTeamMembers.sh", ts.script_present],
+    ["getTeamMembersCN.sh", ts.script_present],
     [".prd profile", ts.prd_present],
   ].map(([label, ok]) =>
     `<span class="chip ${ok ? "chip-green" : "chip-red"}">${ok ? "✓" : "✗"} ${esc(label)}</span>`
@@ -2134,13 +2134,13 @@ function accTeamSourceHtml(ts) {
     <div class="acc-subhead">[TEAM] member resolver</div>
     <div class="ci-row">
       <span class="ci-dot ${ts.healthy ? "dot-green" : "dot-red"}"></span>
-      <code class="ci-job">${esc(ts.script || "getTeamMembers.sh")}</code>
+      <code class="ci-job">${esc(ts.script || "getTeamMembersCN.sh")}</code>
       ${chips}
       <span class="ci-meta">${esc(ts.note || "")}</span>
     </div>`;
 }
 
-// live test of the [TEAM] resolver: type a team, run getTeamMembers.sh, see it
+// live test of the [TEAM] resolver: type a team, run getTeamMembersCN.sh, see it
 const accProbeHtml = () => `
   <div class="ldap-probe">
     <input id="ldap-probe-team" placeholder="team name, e.g. Digital_Innovation" />
@@ -2560,7 +2560,7 @@ function wireAccess(section) {
         const team = inp.value.trim();
         if (!team) { inp.focus(); return; }
         btn.disabled = true;
-        out.innerHTML = `<div class="ci-meta">⏳ running getTeamMembers.sh ${esc(team)}…</div>`;
+        out.innerHTML = `<div class="ci-meta">⏳ running getTeamMembersCN.sh ${esc(team)}…</div>`;
         try {
           const r = await api(`/api/access/ldap/test?team=${encodeURIComponent(team)}`);
           out.innerHTML = accProbeResultHtml(r);

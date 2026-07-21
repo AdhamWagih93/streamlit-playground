@@ -102,13 +102,13 @@ _DEMO_LDAP_GROUPS = {
 }
 
 # [TEAM] members are resolved by running an asset the user's cloned Engine repo
-# ships: scripts/Tools/LDAP/getTeamMembers.sh <team> prints that team's members.
+# ships: scripts/Tools/LDAP/getTeamMembersCN.sh <team> prints that team's members.
 # The script (a) sources a .prd profile via `. $HOME/.prd` — where .prd is the
 # file at the Engine repo ROOT, expected under the runner's REAL $HOME — and
 # (b) does work relative to the current directory, so it must run from INSIDE
 # the Engine repo. So we copy <engine>/.prd to $HOME/.prd and run with cwd set
 # to the repo (leaving $HOME untouched).
-_TEAM_SCRIPT_REL = "scripts/Tools/LDAP/getTeamMembers.sh"
+_TEAM_SCRIPT_REL = "scripts/Tools/LDAP/getTeamMembersCN.sh"
 _TEAM_SCRIPT_TIMEOUT = 60
 
 
@@ -129,7 +129,7 @@ def _engine_dir():
 
 def team_source_status() -> dict:
     """Health of the [TEAM]-resolution mechanism (the Engine repo's
-    getTeamMembers.sh + the .prd profile it sources) for the Access page."""
+    getTeamMembersCN.sh + the .prd profile it sources) for the Access page."""
     row = {"mechanism": "engine-script", "script": _TEAM_SCRIPT_REL,
            "engine_cloned": False, "script_present": False, "prd_present": False,
            "healthy": False, "note": ""}
@@ -158,7 +158,7 @@ _LDIF_ATTR = re.compile(r"^(?:dn|member|uniquemember|memberuid|cn|uid|"
 
 
 def _parse_team_members(out: str) -> list[dict]:
-    """getTeamMembers.sh prints one member per line. Tolerant of the common
+    """getTeamMembersCN.sh prints one member per line. Tolerant of the common
     shapes such a script emits so an output-format quirk doesn't silently yield
     zero members:
       - a bare username or display name           -> jdoe / John Doe
@@ -194,7 +194,7 @@ def _parse_team_members(out: str) -> list[dict]:
 
 
 def _run_team_script(cn: str) -> dict:
-    """Low-level: run getTeamMembers.sh <cn> once and return the RAW result
+    """Low-level: run getTeamMembersCN.sh <cn> once and return the RAW result
     {ok, returncode, stdout, stderr, error}. 'ok' means the script actually ran
     (regardless of exit code); 'error' is set only when it could not run at all
     (Engine/script missing, timeout, spawn failure). Shared by the resolver and
@@ -244,7 +244,7 @@ def _install_prd(prd_src, home: str) -> str | None:
 
 
 def _resolve_team_via_script(cn: str) -> dict:
-    """Run the Engine repo's getTeamMembers.sh for team `cn`. 'found' is True on
+    """Run the Engine repo's getTeamMembersCN.sh for team `cn`. 'found' is True on
     a clean (exit 0) run — even for an empty team — and False when the team
     can't be resolved (Engine/script absent or a non-zero exit)."""
     r = _run_team_script(cn)
@@ -261,7 +261,7 @@ _PROBE_CAP = 6000  # cap raw stdout/stderr echoed to the page
 
 
 def probe_team_resolver(cn: str) -> dict:
-    """On-page health probe: run getTeamMembers.sh <team> and return the RAW
+    """On-page health probe: run getTeamMembersCN.sh <team> and return the RAW
     stdout/stderr/exit code alongside what QuestOps PARSED, so a mismatch
     between the script's output format and the parser is visible at a glance."""
     cn = (cn or "").strip()
@@ -299,7 +299,7 @@ def probe_team_resolver(cn: str) -> dict:
 def ldap_group_members(cn: str) -> dict:
     """Resolve a project's [TEAM] group to its members. Returns
     {"found": bool, "members": [{username, display_name}]}. In live mode this
-    runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembers.sh <team>;
+    runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh <team>;
     'found' is True on a clean run (even for an empty team — distinct from an
     unresolvable one), which the caller uses to drive ldap_resolved. Cached 1h;
     a resolution failure keeps any previous good result rather than raising."""

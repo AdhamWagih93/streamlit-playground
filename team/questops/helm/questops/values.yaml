@@ -89,7 +89,7 @@ ldap:
   baseDn: "OU=Users,DC=mycorp,DC=local"
   userAttr: "sAMAccountName"
   # these gate LOGIN only; [TEAM] members are resolved by the Engine repo's
-  # scripts/Tools/LDAP/getTeamMembers.sh (see auth.ldap_group_members)
+  # scripts/Tools/LDAP/getTeamMembersCN.sh (see auth.ldap_group_members)
   requiredGroup: "CN=devops-team,OU=Groups,DC=mycorp,DC=local"
   # everyone in the group is an approver EXCEPT these usernames (comma-separated)
   memberUsernames: ""

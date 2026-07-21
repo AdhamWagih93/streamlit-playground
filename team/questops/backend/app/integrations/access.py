@@ -1540,7 +1540,7 @@ def _mask_url(url: str) -> str:
 
 def ldap_health(force: bool = False) -> dict:
     """The login LDAP directory (URL only, creds masked) + a bind health check,
-    plus the [TEAM]-resolution source status (the Engine repo's getTeamMembers.sh
+    plus the [TEAM]-resolution source status (the Engine repo's getTeamMembersCN.sh
     + its .prd profile) — so a dead login directory or a missing resolver asset
     is visible on the Access page."""
     def build():

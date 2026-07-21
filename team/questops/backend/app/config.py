@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # listed here (comma-separated usernames -> plain member)
     member_usernames: str = ""
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
-    # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembers.sh
+    # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.
 
     # --- Repositories page ---
@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     def ldap_servers(self) -> list[dict]:
         """The LDAP server(s) surfaced on the Access page's health check — just
         the primary (login) directory. [TEAM] group members are resolved out of
-        band via the Engine repo's getTeamMembers.sh, not by binding here."""
+        band via the Engine repo's getTeamMembersCN.sh, not by binding here."""
         primary = {"url": self.ldap_url, "bind_dn": self.ldap_bind_dn,
                    "bind_password": self.ldap_bind_password,
                    "base_dn": self.ldap_base_dn, "user_attr": self.ldap_user_attr}

@@ -2,7 +2,7 @@
 FROM python:3.12-slim
 
 # git+curl for repo ops; bash + ldap-utils + telnet so the Engine repo's
-# scripts/Tools/LDAP/getTeamMembers.sh (which sources .prd, runs ldapsearch and
+# scripts/Tools/LDAP/getTeamMembersCN.sh (which sources .prd, runs ldapsearch and
 # probes connectivity via telnet) works for team-member resolution
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git curl bash ldap-utils telnet \
