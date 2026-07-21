@@ -93,6 +93,7 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         "ignore_tokens": settings.kpi_ignore_tokens,
         "window_source": k["window_source"],
         "newest_at": k.get("newest_at"),
+        "index_expanded": k.get("index_expanded"),
         "fetch_truncated": k["fetch_truncated"],
         "diagnostics": k.get("debug"),
         "window_applied": window_applied,

@@ -189,6 +189,10 @@ def _parse_es_date(val) -> dt.datetime | None:
     always date-mapped — ES range queries silently match nothing then."""
     if val is None:
         return None
+    if isinstance(val, (list, tuple)):  # some _source / fields shapes wrap in arrays
+        val = val[0] if val else None
+        if val is None:
+            return None
     if isinstance(val, (int, float)):
         try:
             ts = float(val)
@@ -280,27 +284,17 @@ def _kpi_query_tiers(hours: int, now: dt.datetime) -> list[tuple[str, dict, str]
     return tiers
 
 
-def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
-    """Docs for the whole time window — the past week by default, or the UI's
-    time filter. Walks query tiers until one yields in-window docs; the
-    window is ALWAYS re-checked client-side on parsed dates (builddate
-    first — re-ingested old builds carry a fresh @timestamp). An UNSORTED
-    truncated fetch (text-mapped sort failures return oldest-first) is never
-    allowed to conclude 'no recent data' — that's what zeroed the panel.
-    Returns {docs, window_applied, window_source, total, ignored,
-    fetch_truncated, debug}."""
-    size = size or settings.kpi_max_docs
-    if not is_live():
-        docs = _demo_kpi() if settings.demo_mode else []
-        docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
-        return {"docs": docs, "window_applied": True, "window_source": "demo",
-                "total": total, "ignored": ignored, "fetch_truncated": False,
-                "newest_at": None, "debug": None}
+def _has_window_docs(res) -> bool:
+    """A tier result that actually found docs inside the window (res[5] = kept)."""
+    return res is not None and len(res[5]) > 0
 
-    # container-local now: the loader writes local-time strings and TZ is
-    # configured to match it (same clock the sync countdown uses)
-    now = _now()
-    cutoff = now - dt.timedelta(hours=hours)
+
+def _run_tiers(index: str, hours: int, size: int, now: dt.datetime,
+               cutoff: dt.datetime):
+    """Walk the query tiers against ONE index/pattern. Returns
+    (chosen, fallback, attempts, seen_fields); `chosen` is the first tier with
+    in-window docs (or a sorted-newest-first tier that legitimately concludes
+    '0 recent'), `fallback` the first non-empty tier otherwise."""
     chosen, fallback, attempts = None, None, []
     date_typed: set[str] = set()   # fields a range tier queried cleanly
     seen_fields: list[str] = []     # top-level keys of a real doc (diagnostics)
@@ -313,7 +307,7 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
             continue
         try:
             raw, total_raw, sorted_ok = _search_hits_relaxed(
-                settings.jenkins_kpi_index,
+                index,
                 {"size": size, "track_total_hits": True, "query": query,
                  "sort": [{sfield: {"order": "desc", "unmapped_type": "date"}}]})
         except requests.HTTPError as exc:
@@ -352,15 +346,63 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
             chosen = result
             break
         fallback = fallback or result
+    return chosen, fallback, attempts, seen_fields
+
+
+def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
+    """Docs for the whole time window — the past week by default, or the UI's
+    time filter. Walks query tiers until one yields in-window docs; the
+    window is ALWAYS re-checked client-side on parsed dates (builddate
+    first — re-ingested old builds carry a fresh @timestamp). An UNSORTED
+    truncated fetch (text-mapped sort failures return oldest-first) is never
+    allowed to conclude 'no recent data' — that's what zeroed the panel.
+    Returns {docs, window_applied, window_source, total, ignored,
+    fetch_truncated, debug}."""
+    size = size or settings.kpi_max_docs
+    if not is_live():
+        docs = _demo_kpi() if settings.demo_mode else []
+        docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
+        return {"docs": docs, "window_applied": True, "window_source": "demo",
+                "total": total, "ignored": ignored, "fetch_truncated": False,
+                "newest_at": None, "debug": None}
+
+    # container-local now: the loader writes local-time strings and TZ is
+    # configured to match it (same clock the sync countdown uses)
+    now = _now()
+    cutoff = now - dt.timedelta(hours=hours)
+
+    index = settings.jenkins_kpi_index
+    chosen, fallback, attempts, seen_fields = _run_tiers(index, hours, size, now, cutoff)
+    index_used, index_expanded = index, None
+
+    # AUTO-WIDEN: the exact configured index had no in-window builds. Fresh
+    # builds usually live in a dated/rolled-over sibling (e.g. '<name>-api',
+    # '<name>-2026.07'), not the exact name. If the config isn't already a
+    # pattern/list, transparently retry against '<name>*' — the date window
+    # filters out the stale exact index, so only the fresh siblings surface.
+    if not _has_window_docs(chosen) and "*" not in index and "," not in index:
+        wildcard = index + "*"
+        w_chosen, w_fallback, w_attempts, w_seen = _run_tiers(wildcard, hours, size, now, cutoff)
+        attempts.append(f"— exact index '{index}' had no in-window builds; "
+                        f"retried sibling pattern '{wildcard}' —")
+        attempts.extend("  " + a for a in w_attempts)
+        if _has_window_docs(w_chosen):
+            chosen, index_used, index_expanded = w_chosen, wildcard, wildcard
+            fallback = fallback or w_fallback
+            seen_fields = seen_fields or w_seen
+        else:
+            fallback = fallback or w_fallback
+            seen_fields = seen_fields or w_seen
 
     if chosen is None and fallback is None:  # nothing anywhere
         return {"docs": [], "window_applied": True, "window_source": "none",
                 "total": 0, "ignored": 0, "fetch_truncated": False,
-                "newest_at": None,
+                "newest_at": None, "index_expanded": index_expanded,
                 "debug": {"attempts": attempts, "sample": [],
                           "doc_fields": seen_fields, "date_like_fields": [],
                           "configured_date_fields": settings.kpi_date_field_list,
                           "configured_index": settings.jenkins_kpi_index,
+                          "index_used": index_used, "index_expanded": index_expanded,
                           "indices": _sibling_indices(settings.jenkins_kpi_index),
                           "server_now": now.isoformat()}}
 
@@ -396,11 +438,12 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
             "ignored": ignored, "fetch_truncated": fetch_truncated,
-            "newest_at": newest_at,
+            "newest_at": newest_at, "index_expanded": index_expanded,
             "debug": {"attempts": attempts, "sample": sample,
                       "doc_fields": seen_fields, "date_like_fields": date_like,
                       "configured_date_fields": settings.kpi_date_field_list,
                       "configured_index": settings.jenkins_kpi_index,
+                      "index_used": index_used, "index_expanded": index_expanded,
                       "indices": siblings,
                       "server_now": now.isoformat()}}
 

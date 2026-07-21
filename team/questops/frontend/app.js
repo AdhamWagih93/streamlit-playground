@@ -954,6 +954,9 @@ async function renderCI() {
     <div class="panel" style="margin-bottom:18px">
       <h2>📦 pipeline KPIs — ${esc(kpi.source)} · ${kpi.loaded_total} builds in window</h2>
       <div class="filter-row" style="margin-bottom:10px">${hourChips}</div>
+      ${kpi.index_expanded ? `<div class="remote-banner remote-new" style="margin:6px 0">
+        <b>ℹ auto-searched sibling indices</b>
+        <div class="ci-meta">the configured index had no recent builds, so QuestOps searched the pattern <code>${esc(kpi.index_expanded)}</code> and found your builds there. Set <b>QO_JENKINS_KPI_INDEX=${esc(kpi.index_expanded)}</b> to make it permanent.</div></div>` : ""}
       ${kpiWarn}
       ${kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats are computed on the newest ${kpi.fetched} (raise KPI_MAX_DOCS to widen)</div>` : ""}
       ${!kpi.loaded_total && kpi.diagnostics ? `
