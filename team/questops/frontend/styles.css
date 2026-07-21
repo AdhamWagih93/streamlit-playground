@@ -522,6 +522,11 @@ a.chip.chip-green:hover { filter: brightness(1.3); }
 .cstat-bar > div.pct-bad { background: var(--red); }
 .cstat .ci-meta { line-height: 1.35; }
 .acc-proj-stats { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-left: 8px; }
+/* a project whose name is shared across collections — subtle violet accent */
+.acc-proj-dup { border-left: 2px solid var(--violet); }
+.acc-proj-dup > summary { background: rgba(165,139,245,.05); }
+.acc-dup { font-size: 10px; }
+.acc-dup-note { color: var(--violet); }
 .mini-bar { display: inline-block; width: 46px; height: 7px; border-radius: 4px;
   background: var(--bg-2); border: 1px solid var(--line); vertical-align: middle; overflow: hidden; }
 .mini-bar > span { display: block; height: 100%; background: var(--amber); }

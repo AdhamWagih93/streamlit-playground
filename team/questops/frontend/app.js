@@ -2272,6 +2272,22 @@ function accAdoHtml(d) {
   const stats = {};
   (d.collection_stats || []).forEach((s) => { stats[s.name] = s; });
   const colls = Object.keys(byColl).sort();
+  // project NAMES that appear in more than one collection — name (lowercased)
+  // -> sorted list of the collections that hold it
+  const nameColls = {};
+  d.projects.forEach((p) => {
+    const k = (p.name || "").toLowerCase();
+    (nameColls[k] = nameColls[k] || new Set()).add(p.coll);
+  });
+  const dupNames = {};
+  Object.entries(nameColls).forEach(([k, set]) => { if (set.size > 1) dupNames[k] = [...set].sort(); });
+  const dupCount = Object.keys(dupNames).length;
+  const dupChip = (p) => {
+    const others = (dupNames[(p.name || "").toLowerCase()] || []).filter((c) => c !== p.coll);
+    return others.length
+      ? `<span class="chip chip-violet acc-dup" title="same project name also in: ${others.map(esc).join(", ")}">⧉ also in ${others.length} other collection${others.length > 1 ? "s" : ""}</span>`
+      : "";
+  };
   const totRepos = d.projects.reduce((n, p) => n + (p.repos || 0), 0);
   const capNote = (d.total_repos && d.scored_repos < d.total_repos)
     ? ` · scored ${d.scored_repos}/${d.total_repos} repos (cap)` : "";
@@ -2284,7 +2300,7 @@ function accAdoHtml(d) {
         ${f.projects.map((p) => `${esc(p.project)} <span class="ci-meta">(${esc(p.coll)})</span>`).join(", ")}</div>`).join("")}
     </div>` : "";
 
-  return failBanner + `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote} — score = access hygiene (A best); collections collapsed, click to expand</div>`
+  return failBanner + `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.projects.length} project(s) · ${totRepos} repo(s) across ${colls.length} collection(s)${capNote}${dupCount ? ` · <span class="acc-dup-note">⧉ ${dupCount} name(s) shared across collections</span>` : ""} — score = access hygiene (A best); collections collapsed, click to expand</div>`
     + colls.map((c) => {
       const s = stats[c] || { projects: byColl[c].length, teams: 0, repos: 0 };
       return `
@@ -2299,12 +2315,14 @@ function accAdoHtml(d) {
               ? `<span class="chip ${s.pr_missing_projects ? "chip-amber" : "chip-green"}" title="projects defining a PR-reviewer group">🔀 ${s.pr_defined_projects || 0}/${s.pr_scored_projects || 0} w/ PR</span>` : ""}
             <span class="chip">${s.teams} teams</span>
             <span class="chip">${s.repos} repos</span>
+            ${(() => { const n = byColl[c].filter((p) => dupNames[(p.name || "").toLowerCase()]).length;
+              return n ? `<span class="chip chip-violet" title="project names in this collection that also exist in another collection">⧉ ${n} shared name(s)</span>` : ""; })()}
           </span></summary>
         <div class="acc-coll-body">
           ${collStatsPanel(s)}
           ${byColl[c].map((p) => `
-            <details class="filebox acc-proj" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
-              <summary>📁 <b>${esc(p.name)}</b> ${scoreBadge(p.score, p.grade)} ${extLink(p.url)}
+            <details class="filebox acc-proj${dupNames[(p.name || "").toLowerCase()] ? " acc-proj-dup" : ""}" data-acc-coll="${esc(p.coll)}" data-acc-proj="${esc(p.id)}">
+              <summary>📁 <b>${esc(p.name)}</b> ${dupChip(p)} ${scoreBadge(p.score, p.grade)} ${extLink(p.url)}
                 <span class="acc-proj-stats">
                   ${p.uniform === true ? '<span class="chip chip-green">uniform</span>'
                     : p.uniform === false ? `<span class="chip chip-amber">repo-specific ${p.pct_repo_specific}%</span>` : ""}

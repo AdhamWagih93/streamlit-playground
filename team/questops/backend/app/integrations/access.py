@@ -470,6 +470,16 @@ def _demo_ado_projects() -> dict:
          "team_group_granted": True, "team_non_member_count": 0,
          "team_ldap_resolved": True,
          "url": "https://ado.demo/Research/Attic"},
+        # same NAME as the 'Platform' project in DefaultCollection — exercises
+        # the cross-collection duplicate-name highlight
+        {"id": "p5", "coll": "Research", "name": "Platform",
+         "description": "[research-team] Research platform sandbox", "repos": 1, "teams": 1,
+         "members": 1, "_memberset": {"Carol Adel"},
+         "score": 80, "grade": "B", "uniform": True, "pct_repo_specific": 0,
+         "team": "research-team", "team_ok": True, "team_group_granted": True,
+         "team_non_member_count": 0, "team_ldap_resolved": True,
+         "pr_present": False, "pr_scope": None, "pr_member_count": 0, "pr_groups": [],
+         "url": "https://ado.demo/Research/Platform"},
     ]
     colls = ["DefaultCollection", "Research"]
     stats = _collection_rollup(projects, colls)
@@ -550,6 +560,12 @@ def _demo_project_access(project_id: str) -> dict:
         coll = "Research"
         teams = []
         raw_repos = [{"name": "old-archive", "acls": []}]
+    elif project_id == "p5":  # 'Platform' in Research — a cross-collection name twin
+        coll = "Research"
+        teams = [{"name": "Research Team", "members": ["Carol Adel"]}]
+        raw_repos = [{"name": "sandbox", "acls": [
+            {"identity": "[Research]\\Research Team",
+             "allow": ["Read", "Contribute"], "deny": []}]}]
     repos = []
     for r in raw_repos:
         # demo has no real ADO_USER; filter against the injected demo account
@@ -561,7 +577,8 @@ def _demo_project_access(project_id: str) -> dict:
     demo_desc = {"p1": "[platform-devs] Product delivery",
                  "p2": "[control-owners] Team config repos",
                  "p3": "[sandbox-team] Experiments",
-                 "p4": "[UnAssigned] retired area"}.get(project_id, "")
+                 "p4": "[UnAssigned] retired area",
+                 "p5": "[research-team] Research platform sandbox"}.get(project_id, "")
     ldap_members = ldap_group_members(_team_from_desc(demo_desc))
     # p1: project-level PR Approvers (3); p2: repo-level PR (2, from the ACL above)
     pr_ctx = {"p1": {"project_acl_names": ["[Platform]\\PR Approvers"],
