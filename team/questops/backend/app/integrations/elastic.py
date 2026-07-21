@@ -471,9 +471,16 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     if not is_live():
         docs = _demo_kpi() if settings.demo_mode else []
         docs, total, ignored = _apply_kpi_ignore(docs, len(docs))
+        # synthetic previous-window stats so the comparison is visible in demo
+        demo_prev = ({"overall_pct": 42.0, "success": 5, "completed": 12, "total": 13,
+                      "running": 1, "by_job": {"payments-service/main": 100.0,
+                                               "checkout-service/main": 50.0,
+                                               "auth-service/main": 100.0,
+                                               "inventory-service/main": 80.0}}
+                     if settings.demo_mode else None)
         return {"docs": docs, "window_applied": True, "window_source": "demo",
                 "total": total, "ignored": ignored, "fetch_truncated": False,
-                "newest_at": None, "debug": None}
+                "newest_at": None, "agg_prev": demo_prev, "debug": None}
 
     # container-local now: the loader writes local-time strings and TZ is
     # configured to match it (same clock the sync countdown uses)
@@ -552,11 +559,27 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
             agg_stats = _kpi_agg_stats(index_used, win_query)
         except Exception:  # noqa: BLE001 — stats fall back to the fetched sample
             agg_stats = None
+    # SAME-LENGTH PREVIOUS window comparison: [now-2h, now-h). Needs a real date
+    # field (range tier) to shift the window; reuses the resolved index+field.
+    agg_prev = None
+    if agg_stats and name.startswith("range") and win_field:
+        prev_q = {"range": {win_field: {"gte": f"now-{2 * hours}h",
+                                        "lt": f"now-{hours}h"}}}
+        try:
+            pf = _kpi_agg_stats(index_used, prev_q)
+        except Exception:  # noqa: BLE001 — comparison is best-effort
+            pf = None
+        if pf:
+            agg_prev = {"overall_pct": pf["overall_pct"], "success": pf["success"],
+                        "completed": pf["completed"], "total": pf["total"],
+                        "running": pf["running"],
+                        "by_job": {p["job"]: p["pct"] for p in pf["pipelines"]
+                                   if p["completed"]}}
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
             "ignored": ignored, "fetch_truncated": fetch_truncated,
             "newest_at": newest_at, "index_expanded": index_expanded,
-            "agg_stats": agg_stats,
+            "agg_stats": agg_stats, "agg_prev": agg_prev,
             "debug": {"attempts": attempts, "sample": sample,
                       "doc_fields": seen_fields, "date_like_fields": date_like,
                       "configured_date_fields": settings.kpi_date_field_list,

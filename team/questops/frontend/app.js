@@ -940,19 +940,28 @@ async function renderCI() {
     : `<span class="ci-job" title="${esc(p.job)}">${esc(p.job)}</span>`;
   const runChip = (p) => (p.running || 0) > 0
     ? ` <span class="chip chip-cyan" title="in-progress builds, excluded from %">▶ ${p.running}</span>` : "";
+  // a signed pts-delta vs the previous same-length window
+  const winLabel = kpiHours < 48 ? kpiHours + "h" : kpiHours / 24 + "d";
+  const deltaEl = (d) => d == null ? ""
+    : `<span class="kpi-delta ${d > 0.05 ? "pct-good" : d < -0.05 ? "pct-bad" : "ci-meta"}" title="vs previous ${winLabel}">${d > 0.05 ? "▲" : d < -0.05 ? "▼" : "■"} ${Math.abs(d)} pts</span>`;
   const pipeRow = (p) => `
     <div class="kpi-pipe">
       ${pipeName(p)}
       <span class="lb-bar"><div class="${pctCls(p.pct)}" style="width:${p.pct}%"></div></span>
       <span class="kpi-pct ${pctCls(p.pct)}">${p.pct}%</span>
-      <span class="ci-meta">${p.success}/${compl(p)}${runChip(p)}</span>
+      <span class="ci-meta">${p.success}/${compl(p)}${runChip(p)}${p.delta != null ? " " + deltaEl(p.delta) : ""}</span>
     </div>`;
   const running = st.running || 0;
+  const cmp = st.prev
+    ? (st.prev.total
+        ? `<br><span class="kpi-cmp">vs prev ${winLabel}: ${st.prev.overall_pct}% ${deltaEl(st.overall_delta)}</span>`
+        : `<br><span class="kpi-cmp ci-meta">no builds in the prior ${winLabel}</span>`)
+    : "";
   const kpiStats = st.total ? `
     <div class="kpi-stats">
       <div class="kpi-overall">
         <b class="${pctCls(st.overall_pct)}">${st.overall_pct}%</b>
-        <span>overall success<br>${st.success}/${st.completed != null ? st.completed : st.total} completed${running ? `<br><span class="kpi-running">▶ ${running} running (excluded)</span>` : ""}</span>
+        <span>overall success<br>${st.success}/${st.completed != null ? st.completed : st.total} completed${cmp}${running ? `<br><span class="kpi-running">▶ ${running} running (excluded)</span>` : ""}</span>
       </div>
       <div class="kpi-pipes">
         ${failing.map(pipeRow).join("") || `<div class="empty">no failing pipelines in this window 🎉</div>`}

@@ -97,6 +97,19 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
                                 key=lambda r: (r["completed"] == 0, r["pct"], -r["total"])),
         }
         stats_exact = False
+    # same-length PREVIOUS window comparison — overall + per-pipeline deltas
+    prev = k.get("agg_prev")
+    if prev:
+        stats["prev"] = {"overall_pct": prev["overall_pct"], "completed": prev["completed"],
+                         "total": prev["total"], "running": prev.get("running", 0)}
+        stats["overall_delta"] = round(stats["overall_pct"] - prev["overall_pct"], 1)
+        prev_by_job = prev.get("by_job") or {}
+        for p in stats["pipelines"]:
+            pp = prev_by_job.get(p["job"])
+            if pp is not None:
+                p["prev_pct"] = pp
+                p["delta"] = round(p["pct"] - pp, 1)
+
     # the currently-RUNNING builds, shown separately (from the fetched sample —
     # running builds are the newest, so they surface even in a large window)
     running_builds = [d for d in recent if str(d.get("status", "")).upper() in _RUNNING]
