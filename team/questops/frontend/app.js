@@ -2592,24 +2592,11 @@ function accJiraHtml(d, act) {
     if (!u) return "";
     return `<span class="ci-meta acc-seen" title="last login · last activity">🕑 ${u.last_login ? "login " + ago(u.last_login) : "login N/A"} · ${(u.last_activity || {}).date ? "active " + ago(u.last_activity.date) : "no activity"}</span>`;
   };
-  const juBanner = (d.jirauser_grants || []).length ? `
-    <div class="remote-banner remote-new" style="margin-bottom:10px">
-      <b>🚩 ${d.jirauser_grants.length} JIRAUSER-keyed user(s) with direct grants</b>
-      ${d.jirauser_grants.map((u) => `
-        <div class="ju-user">
-          <div class="ju-user-h">👤 <b>${esc(u.display_name || u.key)}</b>
-            ${u.key ? `<code class="acc-userkey">${esc(u.key)}</code>` : ""}
-            <span class="ci-meta">${u.project_count} project(s) · ${(u.schemes || []).length} scheme(s)</span>
-            ${userSeen(u.key, u.display_name)}</div>
-          <div class="ju-projects">${(u.projects || []).length
-            ? u.projects.map(projChip).join(" ")
-            : `<span class="ci-meta">scheme(s) not assigned to any project: ${esc((u.schemes || []).join(", "))}</span>`}</div>
-        </div>`).join("")}
-    </div>` : "";
-
   const g = d.groups || {};
-  const memberList = (arr, cls) => (arr || []).length
-    ? `<div class="acc-members" style="margin-top:4px">${arr.map((a) => `<span class="chip ${cls || ""}">${esc(a)}</span>`).join(" ")}</div>`
+  // instance group membership, each member enriched with their last-seen
+  const memRow = (name, cls) => `<div class="jira-mem-row"><span class="chip ${cls || ""}">${esc(name)}</span>${userSeen(name)}</div>`;
+  const memList = (arr, cls) => (arr || []).length
+    ? `<div class="jira-mem-list">${arr.map((n) => memRow(n, cls)).join("")}</div>`
     : '<div class="ci-meta">none / not readable</div>';
   const groupsPanel = (g.admin_group || g.users_group) ? `
     <div class="stat-tiles" style="margin-bottom:8px">
@@ -2618,32 +2605,29 @@ function accJiraHtml(d, act) {
       <div class="stat-tile"><b>${g.users_readable ? g.users_count : "?"}</b>
         <span>${esc(g.users_group || "jira-users")}</span></div>
     </div>
-    <details class="filebox" style="margin-bottom:8px" open>
-      <summary>👑 instance group membership</summary>
+    <details class="filebox" style="margin-bottom:8px">
+      <summary>👑 instance group membership &amp; last-seen</summary>
       <div style="padding:8px 12px">
         <div class="acc-h">${esc(g.admin_group || "administrators")} — ${(g.admins||[]).length} shown</div>
-        ${memberList(g.admins, "chip-red")}
+        ${memList(g.admins, "chip-red")}
         <div class="acc-h" style="margin-top:10px">${esc(g.users_group || "jira-users")} — ${g.users_readable ? (g.users_count + " total, " + (g.users||[]).length + " shown") : "not readable"}</div>
-        ${g.users_readable ? memberList(g.users, "") : `<div class="kpi-note">⚠ couldn't read ${esc(g.users_group || "jira-users")} membership — the non-member cross-check is skipped (the account needs permission to browse the group)</div>`}
+        ${g.users_readable ? memList(g.users, "") : `<div class="kpi-note">⚠ couldn't read ${esc(g.users_group || "jira-users")} membership — the non-member cross-check is skipped (the account needs permission to browse the group)</div>`}
       </div>
     </details>` : "";
-  const nonMembers = (d.non_member_grants || []);
-  const nonMemberBanner = nonMembers.length ? `
-    <div class="remote-banner remote-new" style="margin-bottom:10px">
-      <b>⚠ ${nonMembers.length} user(s) granted scheme access but NOT a ${esc(g.users_group || "jira-users")} member</b>
-      ${nonMembers.map((n) => `<div class="ci-meta">• <b>${esc(n.user)}</b> in ${esc(n.scheme)}${n.in_admins ? " (is a " + esc(g.admin_group || "admin") + ")" : ""}</div>`).join("")}
+
+  // warnings SUMMARY — counts only; the offenders are highlighted inline in the
+  // permission schemes below, so projects/schemes are never re-listed here
+  const nonMembers = d.non_member_grants || [];
+  const juUsers = d.jirauser_grants || [];
+  const warn = (nonMembers.length || juUsers.length) ? `
+    <div class="jira-warn">
+      ${juUsers.length ? `<span class="chip chip-red">🚩 ${juUsers.length} direct JIRAUSER grantee(s)</span>` : ""}
+      ${nonMembers.length ? `<span class="chip chip-red">⚠ ${nonMembers.length} assigned but NOT ${esc(g.users_group || "jira-users")}</span>` : ""}
+      <span class="ci-meta">🔻 flagged in the schemes below</span>
     </div>` : "";
 
-  // full activity detail, merged into this panel (per-project dates + per-user
-  // last login/activity) — the valuable data from the old separate section
-  const activityPanel = act ? `
-    <details class="filebox" style="margin:8px 0">
-      <summary>🕑 activity &amp; last-seen — per-project dates · per-user last login/activity</summary>
-      <div style="padding:6px 12px">${accActivityHtml(act)}</div>
-    </details>` : "";
-
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}${act ? " · 🕑 dates from Jira activity" : ""}</div>`
-    + groupsPanel + nonMemberBanner + juBanner + activityPanel
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}${act ? " · 🕑 dates &amp; last-seen from Jira activity" : ""}</div>`
+    + groupsPanel + warn
     + d.schemes.map((s) => `
       <details class="filebox">
         <summary>🎫 <b>${esc(s.name)}</b> ${extLink(s.url)}
@@ -2653,13 +2637,15 @@ function accJiraHtml(d, act) {
             : '<span class="chip">unassigned</span>'}
           <span class="ci-meta">${esc(s.description || "")}</span></summary>
         <div style="padding:8px 12px">
-          ${s.holders.map((h) => `
-            <div class="acc-acl"><span class="acc-ident ${h.flag || h.not_member ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
+          ${s.holders.map((h) => {
+            const warnRow = h.flag || h.not_member;
+            return `<div class="acc-acl ${warnRow ? "acc-acl-warn" : ""}"><span class="acc-ident ${warnRow ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
               ${h.key && h.display_name ? `<code class="acc-userkey" title="internal Jira user key">${esc(h.key)}</code>` : ""}
-              ${h.flag ? '<span class="chip chip-red" title="JIRAUSER-keyed user grant">🚩</span>' : ""}
-              ${h.not_member ? '<span class="chip chip-red" title="not a jira-users member">⚠ non-member</span>' : ""}</span>
+              ${h.flag ? '<span class="chip chip-red" title="direct grant to a JIRAUSER-keyed user">🚩 direct grantee</span>' : ""}
+              ${h.not_member ? `<span class="chip chip-red" title="granted scheme access but not a ${esc(g.users_group || "jira-users")} member">⚠ not ${esc(g.users_group || "jira-users")}</span>` : ""}</span>
               ${h.type === "user" ? userSeen(h.key, (h.holder || "").replace(/^user /, "")) : ""}
-              ${permChips(h.permissions)}</div>`).join("")}
+              ${permChips(h.permissions)}</div>`;
+          }).join("")}
         </div>
       </details>`).join("");
 }
