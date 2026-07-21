@@ -253,7 +253,14 @@ def _apply_kpi_ignore(docs: list[dict], total: int) -> tuple[list[dict], int, in
     return kept, max(total - ignored, len(kept)), ignored
 
 
-def _window_days(hours: int, now: dt.datetime, cap: int = 92) -> list[dt.datetime]:
+# upper bound on the day-ENUMERATION fallback only (text-mapped date fields).
+# Date-mapped fields use range queries with no window ceiling, so this doesn't
+# limit how large a window you can request — it just bounds how many day-phrase
+# clauses the text-field fallback builds.
+_DAY_ENUM_CAP = 400
+
+
+def _window_days(hours: int, now: dt.datetime, cap: int = _DAY_ENUM_CAP) -> list[dt.datetime]:
     days = min(int(hours // 24) + 2, cap)
     return [now - dt.timedelta(days=i) for i in range(days)]
 
@@ -269,7 +276,7 @@ def _kpi_query_tiers(hours: int, now: dt.datetime) -> list[tuple[str, dict, str]
         tiers.append((f"range:{f}",
                       {"range": {f: {"gte": f"now-{hours}h"}}}, f))
     days = _window_days(hours, now)
-    if int(hours // 24) + 2 <= 92:  # day-enumeration only for sane windows
+    if int(hours // 24) + 2 <= _DAY_ENUM_CAP:  # bound the text-field day-enum fallback
         phrases = [d.strftime("%d-%b-%Y") for d in days]
         for f in fields:
             tiers.append((f"day-phrase:{f}",
@@ -336,7 +343,7 @@ def _run_tiers(index: str, hours: int, size: int, now: dt.datetime,
             kept = []
         attempts.append(f"{name}: {len(raw)} fetched (total {total_raw}, "
                         f"sorted={sorted_ok}), {len(kept)} in window")
-        result = (name, raw, total_raw, sorted_ok, dated, kept, any_parsed)
+        result = (name, raw, total_raw, sorted_ok, dated, kept, any_parsed, query, sfield)
         if kept:
             chosen = result
             break
@@ -347,6 +354,91 @@ def _run_tiers(index: str, hours: int, size: int, now: dt.datetime,
             break
         fallback = fallback or result
     return chosen, fallback, attempts, seen_fields
+
+
+def _es_search(index: str, body: dict) -> dict:
+    """POST _search and return the FULL parsed response (hits + aggregations),
+    with ES's own 4xx reason attached on error."""
+    r = requests.post(f"{settings.es_url}/{index}/_search", json=body,
+                      headers={"Authorization": f"ApiKey {settings.es_api_key}"},
+                      timeout=60, verify=settings.es_verify_ssl)
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        reason = _es_reason(r)
+        if reason:
+            raise requests.HTTPError(f"{exc} — Elasticsearch: {reason}",
+                                     response=r) from None
+        raise
+    return r.json()
+
+
+def _job_url_from_path(jobpath: str) -> str:
+    """Reconstruct a Jenkins folder/job URL from a jobpath (a/b/c) — used for
+    the per-pipeline links when stats come from aggregations (no doc joburl)."""
+    from urllib.parse import quote
+    if not settings.jenkins_url or not jobpath:
+        return ""
+    segs = [s for s in str(jobpath).split("/") if s]
+    return settings.jenkins_url.rstrip("/") + "".join(f"/job/{quote(s)}" for s in segs) + "/"
+
+
+KPI_PIPELINE_AGG_SIZE = 5000  # distinct pipelines an agg can return (>> real count)
+
+
+def _agg_val(node) -> str:
+    v = node
+    if isinstance(v, list):
+        v = v[0] if v else ""
+    return "" if v is None else str(v)
+
+
+def _kpi_agg_stats(index: str, query: dict) -> dict | None:
+    """EXACT success stats over the WHOLE window via aggregations — not limited
+    by the 10k document fetch cap. Terms-aggregates on the pipeline and counts
+    SUCCESS per bucket + overall. KPI_IGNORE is applied on the bucket keys.
+    Tries the .keyword sub-fields first (text fields aren't aggregatable),
+    falling back to the bare field. None if aggregations don't work."""
+    for status_f, job_f in (("status.keyword", "jobpath.keyword"),
+                            ("status", "jobpath")):
+        body = {"size": 0, "track_total_hits": True, "query": query,
+                "aggs": {
+                    "by_pipeline": {
+                        "terms": {"field": job_f, "size": KPI_PIPELINE_AGG_SIZE,
+                                  "order": {"_count": "desc"}},
+                        "aggs": {
+                            "ok": {"filter": {"term": {status_f: "SUCCESS"}}},
+                            "sample": {"top_hits": {"size": 1,
+                                                    "_source": ["joburl", "jobpath", "buildurl"]}}}},
+                    "ok": {"filter": {"term": {status_f: "SUCCESS"}}}}}
+        try:
+            data = _es_search(index, body)
+        except (requests.RequestException, ValueError):
+            continue
+        aggs = data.get("aggregations") or {}
+        bp = aggs.get("by_pipeline")
+        if not isinstance(bp, dict):
+            continue
+        buckets = bp.get("buckets") or []
+        kept, o_total, o_success = [], 0, 0
+        for b in buckets:
+            key = _agg_val(b.get("key", ""))
+            total = b.get("doc_count", 0) or 0
+            succ = ((b.get("ok") or {}).get("doc_count", 0)) or 0
+            if _kpi_ignored({"jobpath": key, "jobname": key.split("/")[-1]}):
+                continue
+            hits = (((b.get("sample") or {}).get("hits") or {}).get("hits") or [])
+            src = (hits[0].get("_source") if hits else {}) or {}
+            url = _agg_val(src.get("joburl")) or _job_url_from_path(key)
+            kept.append({"job": key, "total": total, "success": succ,
+                         "pct": round(succ / total * 100, 1) if total else 0.0, "url": url})
+            o_total += total
+            o_success += succ
+        kept.sort(key=lambda r: (r["pct"], -r["total"]))
+        return {"overall_pct": round(o_success / o_total * 100, 1) if o_total else 0.0,
+                "success": o_success, "total": o_total, "pipelines": kept,
+                "pipelines_truncated": (bp.get("sum_other_doc_count", 0) or 0) > 0}
+    return None
 
 
 def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
@@ -406,7 +498,7 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
                           "indices": _sibling_indices(settings.jenkins_kpi_index),
                           "server_now": now.isoformat()}}
 
-    name, raw, total_raw, sorted_ok, dated, kept, any_parsed = chosen or fallback
+    name, raw, total_raw, sorted_ok, dated, kept, any_parsed, win_query, win_field = chosen or fallback
     if chosen is None and not any_parsed:
         kept, window_applied, window_source = dated, False, "none"
     else:
@@ -435,10 +527,19 @@ def kpi_recent(hours: int = 168, size: int | None = None) -> dict:
     # when the window came up empty, list sibling indices — the fresh builds
     # are usually in a dated/rolled-over index, not the exact configured name
     siblings = _sibling_indices(settings.jenkins_kpi_index) if not docs else []
+    # EXACT stats over the WHOLE window via aggregations (unbounded by the 10k
+    # fetch) — only for a real windowed query (range/day tiers), never match_all
+    agg_stats = None
+    if docs and name.startswith(("range", "day")):
+        try:
+            agg_stats = _kpi_agg_stats(index_used, win_query)
+        except Exception:  # noqa: BLE001 — stats fall back to the fetched sample
+            agg_stats = None
     return {"docs": docs, "window_applied": window_applied,
             "window_source": window_source, "total": total,
             "ignored": ignored, "fetch_truncated": fetch_truncated,
             "newest_at": newest_at, "index_expanded": index_expanded,
+            "agg_stats": agg_stats,
             "debug": {"attempts": attempts, "sample": sample,
                       "doc_fields": seen_fields, "date_like_fields": date_like,
                       "configured_date_fields": settings.kpi_date_field_list,

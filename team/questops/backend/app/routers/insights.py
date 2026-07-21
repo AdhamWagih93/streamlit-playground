@@ -57,24 +57,36 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         # derive from the build url by stripping the trailing build number
         return re.sub(r"/\d+/?$", "/", d.get("buildurl") or "")
 
-    by_job: dict[str, dict] = {}
-    ok_total = 0
-    for d in recent:
-        job = d.get("jobpath") or d.get("jobname") or "?"
-        row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0, "url": ""})
-        row["total"] += 1
-        row["url"] = row["url"] or _job_url(d)
-        if str(d.get("status", "")).upper() == "SUCCESS":
-            row["success"] += 1
-            ok_total += 1
-    stats = {
-        "total": len(recent),
-        "success": ok_total,
-        "overall_pct": _pct(ok_total, len(recent)),
-        "pipelines": sorted(
-            ({**r, "pct": _pct(r["success"], r["total"])} for r in by_job.values()),
-            key=lambda r: (r["pct"], -r["total"])),
-    }
+    # PREFER exact aggregation stats (computed server-side over EVERY doc in the
+    # window, not just the fetched sample). Fall back to counting the fetched
+    # docs only when aggregations aren't available (demo / text-mapped fields).
+    agg = k.get("agg_stats")
+    if agg:
+        stats = {"total": agg["total"], "success": agg["success"],
+                 "overall_pct": agg["overall_pct"],
+                 "pipelines": agg["pipelines"],
+                 "pipelines_truncated": agg.get("pipelines_truncated", False)}
+        stats_exact = True
+    else:
+        by_job: dict[str, dict] = {}
+        ok_total = 0
+        for d in recent:
+            job = d.get("jobpath") or d.get("jobname") or "?"
+            row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0, "url": ""})
+            row["total"] += 1
+            row["url"] = row["url"] or _job_url(d)
+            if str(d.get("status", "")).upper() == "SUCCESS":
+                row["success"] += 1
+                ok_total += 1
+        stats = {
+            "total": len(recent),
+            "success": ok_total,
+            "overall_pct": _pct(ok_total, len(recent)),
+            "pipelines": sorted(
+                ({**r, "pct": _pct(r["success"], r["total"])} for r in by_job.values()),
+                key=lambda r: (r["pct"], -r["total"])),
+        }
+        stats_exact = False
 
     return {
         "stats": stats,
@@ -87,8 +99,10 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         "loaded": recent[:100],  # the actual KPI documents, newest first
         "loaded_failures": loaded_failures[:25],
         "loaded_total": total_in_window,   # TRUE count in the window
-        "fetched": len(recent),            # docs stats were computed over
+        "fetched": len(recent),            # docs in the fetched RECORDS sample
         "truncated": total_in_window > len(recent),
+        "stats_exact": stats_exact,        # stats over ALL docs (aggregation)?
+        "pipelines_truncated": stats.get("pipelines_truncated", False),
         "ignored": ignored,                # docs excluded by KPI_IGNORE
         "ignore_tokens": settings.kpi_ignore_tokens,
         "window_source": k["window_source"],

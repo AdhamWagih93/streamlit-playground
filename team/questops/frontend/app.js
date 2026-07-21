@@ -899,7 +899,7 @@ async function renderCI() {
     return u === "SUCCESS" ? "dot-green" : u.startsWith("FAIL") || u === "UNSTABLE" || u === "ABORTED"
       ? "dot-red" : "dot-grey";
   };
-  const hourChips = [6, 24, 72, 168, 336, 720, 2160].map((h) =>
+  const hourChips = [6, 24, 72, 168, 336, 720, 2160, 4320, 8760].map((h) =>
     `<button class="btn btn-sm ${h === kpiHours ? "btn-primary" : ""}" data-hours="${h}">${h < 48 ? h + "h" : h / 24 + "d"}</button>`).join(" ");
   const loadedRows = kpi.loaded.map((d) => `
     <div class="ci-row">
@@ -958,7 +958,9 @@ async function renderCI() {
         <b>ℹ auto-searched sibling indices</b>
         <div class="ci-meta">the configured index had no recent builds, so QuestOps searched the pattern <code>${esc(kpi.index_expanded)}</code> and found your builds there. Set <b>QO_JENKINS_KPI_INDEX=${esc(kpi.index_expanded)}</b> to make it permanent.</div></div>` : ""}
       ${kpiWarn}
-      ${kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats are computed on the newest ${kpi.fetched} (raise KPI_MAX_DOCS to widen)</div>` : ""}
+      ${kpi.stats_exact
+        ? `<div class="kpi-note">✓ success %s computed over <b>all ${kpi.loaded_total}</b> builds in the window (server-side aggregation)${kpi.pipelines_truncated ? ` · pipeline list capped at ${(kpi.stats.pipelines || []).length}` : ""}</div>`
+        : (kpi.truncated ? `<div class="kpi-note">⚠ the window holds ${kpi.loaded_total} builds — stats fell back to the newest ${kpi.fetched} (aggregation unavailable)</div>` : "")}
       ${!kpi.loaded_total && kpi.diagnostics ? `
         <details class="filebox" open><summary>🔎 why 0 builds? — query diagnostics</summary>
           <div style="padding:8px 12px">
