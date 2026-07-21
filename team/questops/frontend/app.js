@@ -2425,8 +2425,16 @@ function accJiraHtml(d) {
   if (!d.schemes.length) return `<div class="empty">no permission schemes (${srcLabel(d)})</div>`;
   const juBanner = (d.jirauser_grants || []).length ? `
     <div class="remote-banner remote-new" style="margin-bottom:10px">
-      <b>🚩 ${d.jirauser_grants.length} grant(s) to JIRAUSER-keyed users</b>
-      ${d.jirauser_grants.map((g) => `<div class="ci-meta">• ${esc(g.holder)}${g.key && g.display_name ? ` <code>${esc(g.key)}</code>` : ""} in <b>${esc(g.scheme)}</b></div>`).join("")}
+      <b>🚩 ${d.jirauser_grants.length} JIRAUSER-keyed user(s) with direct grants</b>
+      ${d.jirauser_grants.map((u) => `
+        <div class="ju-user">
+          <div class="ju-user-h">👤 <b>${esc(u.display_name || u.key)}</b>
+            ${u.key ? `<code class="acc-userkey">${esc(u.key)}</code>` : ""}
+            <span class="ci-meta">${u.project_count} project(s) · ${(u.schemes || []).length} scheme(s)</span></div>
+          <div class="ju-projects">${(u.projects || []).length
+            ? u.projects.map((p) => `<a class="chip chip-green" href="${esc(p.url)}" target="_blank" rel="noopener" title="via scheme: ${esc(p.scheme)}">${esc(p.key)}</a>`).join(" ")
+            : `<span class="ci-meta">scheme(s) not assigned to any project: ${esc((u.schemes || []).join(", "))}</span>`}</div>
+        </div>`).join("")}
     </div>` : "";
 
   const g = d.groups || {};
@@ -2591,7 +2599,7 @@ function accSummaryHtml(d) {
     tile(a.named_users + (a.approx_users ? "+" : ""), "ADO named users"),
     tile(j.schemes, "Jira permission schemes"),
     tile(j.projects, "Jira projects"),
-    tile(j.jirauser_grants, "JIRAUSER grants", j.jirauser_grants ? "pct-bad" : ""),
+    tile(j.jirauser_grants, "JIRAUSER users", j.jirauser_grants ? "pct-bad" : ""),
   ].join("");
   const ov = o.comparable ? `
     <div class="acc-overlap">

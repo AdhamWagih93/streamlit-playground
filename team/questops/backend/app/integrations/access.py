@@ -1010,9 +1010,24 @@ def jira_permission_schemes(force: bool = False) -> dict:
                 {"holder": "user ext_contractor", "type": "user",
                  "key": "ext_contractor", "display_name": "",
                  "permissions": ["Browse Projects"], "not_member": True})
-            flagged = [{"scheme": s["name"], "holder": h["holder"],
-                        "key": h.get("key", ""), "display_name": h.get("display_name", "")}
-                       for s in schemes for h in s["holders"] if h.get("flag")]
+            # grouped by user, then the projects they reach (via their scheme)
+            ju: dict[str, dict] = {}
+            for s in schemes:
+                for h in s["holders"]:
+                    if not h.get("flag"):
+                        continue
+                    u = ju.setdefault(h["key"].lower(), {
+                        "key": h.get("key", ""), "display_name": h.get("display_name", ""),
+                        "holder": h["holder"], "schemes": set(), "_projects": {}})
+                    u["schemes"].add(s["name"])
+                    for p in s.get("projects", []):
+                        u["_projects"].setdefault(p["key"],
+                                                  {"key": p["key"], "url": p["url"], "scheme": s["name"]})
+            flagged = [{"key": u["key"], "display_name": u["display_name"],
+                        "holder": u["holder"], "schemes": sorted(u["schemes"]),
+                        "projects": sorted(u["_projects"].values(), key=lambda p: p["key"]),
+                        "project_count": len(u["_projects"])}
+                       for u in ju.values()]
             groups = {"admin_group": "jira-administrators",
                       "users_group": "jira-users",
                       "admins": ["Alice Nasr", "Bob Farid"], "admins_count": 2,
@@ -1070,7 +1085,7 @@ def jira_permission_schemes(force: bool = False) -> dict:
 
         data = jget("/rest/api/2/permissionscheme", {"expand": "permissions"})
         schemes = []
-        jirauser_grants = []
+        jirauser_raw = []  # (key, display, holder, scheme_id, scheme_name) per grant
         user_holders = []  # (scheme, label, param) for the membership cross-check
         for s in data.get("permissionSchemes", []):
             by_holder: dict[tuple, list[str]] = {}
@@ -1096,9 +1111,8 @@ def jira_permission_schemes(force: bool = False) -> dict:
                                 "permissions": sorted(set(v)), "flag": is_ju,
                                 "not_member": not_member})
                 if is_ju:
-                    jirauser_grants.append({"scheme": s.get("name", ""),
-                                            "holder": label, "key": param,
-                                            "display_name": display})
+                    jirauser_raw.append((param, display, label,
+                                         s.get("id"), s.get("name", "")))
                 if is_user:
                     user_holders.append((s.get("name", ""), label, param, display))
             schemes.append({
@@ -1137,6 +1151,27 @@ def jira_permission_schemes(force: bool = False) -> dict:
                         {"key": p["key"], "url": f"{base}/browse/{p['key']}"})
         for s in schemes:
             s["projects"].sort(key=lambda x: x["key"])
+
+        # JIRAUSER-keyed grants grouped by USER first, then the PROJECTS that
+        # user reaches (via the scheme each grant is in). One row per user.
+        ju_by_user: dict[str, dict] = {}
+        for key, disp, holder, sid, sname in jirauser_raw:
+            u = ju_by_user.setdefault(key.lower(), {
+                "key": key, "display_name": disp, "holder": holder,
+                "schemes": set(), "_projects": {}})
+            u["schemes"].add(sname)
+            for p in by_id.get(sid, {}).get("projects", []):
+                u["_projects"].setdefault(p["key"],
+                                          {"key": p["key"], "url": p["url"], "scheme": sname})
+        jirauser_grants = []
+        for u in ju_by_user.values():
+            projs = sorted(u["_projects"].values(), key=lambda p: p["key"])
+            jirauser_grants.append({
+                "key": u["key"], "display_name": u["display_name"], "holder": u["holder"],
+                "schemes": sorted(u["schemes"]), "projects": projs,
+                "project_count": len(projs)})
+        jirauser_grants.sort(key=lambda x: (x["display_name"] or x["key"]).lower())
+
         def _names(ms):
             return sorted({(m.get("displayName") or m.get("name")) for m in ms
                            if (m.get("displayName") or m.get("name"))})
