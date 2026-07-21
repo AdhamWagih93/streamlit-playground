@@ -204,7 +204,7 @@ async function refreshMe() {
 /* ---------------- router ---------------- */
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
-                repos: renderRepos, deps: renderDeps, access: renderAccess,
+                repos: renderRepos, deps: renderRepos, access: renderAccess,
                 upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
 
 // bumped on every navigation; async renders capture it and bail if it
@@ -1586,6 +1586,9 @@ async function renderRepos() {
     state.repoPath = ""; state.repoFile = null;
   }
   const cur = data.repos.find((r) => r.slot === state.repoSlot);
+  // the dependency analysis is Engine-specific for now (other named repos —
+  // UI, inventories, ocp-templates, Tools — will get their own logic later)
+  const isEngine = (cur.name || "").toLowerCase() === "engine";
 
   const chips = data.repos.map((r) => `
     <button class="btn btn-sm ${r.slot === cur.slot ? "btn-primary" : ""}" data-repo="${r.slot}">
@@ -1616,6 +1619,21 @@ async function renderRepos() {
         }
       }
       scanHtml = scanPanelHtml(state.scanData);
+    }
+    // Engine-only dependency analysis, embedded on demand
+    let depsHtml = "";
+    if (isEngine && state.depsOpen) {
+      if (!state.depsData || state.depsData._slot !== cur.slot || state.depsRefresh) {
+        try {
+          state.depsData = { ...(await api(`/api/deps?slot=${cur.slot}${state.depsRefresh ? "&refresh=true" : ""}`)), _slot: cur.slot };
+        } catch (e) {
+          state.depsData = { _slot: cur.slot, error: e.message };
+        }
+        state.depsRefresh = false;
+      }
+      depsHtml = `<div class="deps-embed">${state.depsData.error
+        ? `<div class="panel"><div class="empty">⚠ ${esc(state.depsData.error)}</div></div>`
+        : depPanelHtml(state.depsData)}</div>`;
     }
     const histPath = state.historyScope === "file" && state.repoFile ? state.repoFile : "";
     const [treeData, fileData, diffData, agentLogData, remoteData, histData] = await Promise.all([
@@ -1663,6 +1681,7 @@ async function renderRepos() {
         <span class="ci-meta">${esc(cur.branch)} · ${esc(cur.last_commit)}
           ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
         <button class="btn btn-sm ${state.scanOpen ? "btn-primary" : ""}" id="repo-scan">🔬 Tech scan</button>
+        ${isEngine ? `<button class="btn btn-sm ${state.depsOpen ? "btn-primary" : ""}" id="repo-deps" title="pipelines → playbooks / roles / scripts">⛓ Dependencies</button>` : ""}
         <button class="btn btn-sm ${state.historyOpen ? "btn-primary" : ""}" id="repo-history">🕘 History</button>
         <button class="btn btn-sm" id="repo-pull" title="fetch the server copy and move your workspace to it">⟳ Sync</button>
         <button class="btn btn-sm btn-danger" id="repo-discard">Discard my edits</button>
@@ -1671,6 +1690,7 @@ async function renderRepos() {
       </div>
       <div id="remote-banner">${remoteBannerHtml(remoteData)}</div>
       ${scanHtml}
+      ${depsHtml}
       ${state.historyOpen ? historyPanelHtml(histData) : ""}
       <div class="repo-grid">
         <div class="panel tree-panel">${up}${items}</div>
@@ -1739,6 +1759,10 @@ async function renderRepos() {
   });
   on("repo-scan", () => { state.scanOpen = !state.scanOpen; renderRepos(); });
   on("repo-rescan", () => { state.scanData = null; renderRepos(); });
+  on("repo-deps", () => { state.depsOpen = !state.depsOpen; renderRepos(); });
+  on("dep-refresh", () => { state.depsRefresh = true; state.depRoot = null; renderRepos(); });
+  if (isEngine && state.depsOpen && state.depsData && !state.depsData.error)
+    wireDepPanel(state.depsData);
   on("repo-remove", async () => {
     if (!confirm(`Remove ${cur.name} from QuestOps?\n\nThe local workspace (including un-pushed edits) is deleted.\nThe remote repository is untouched.`)) return;
     try {
@@ -1951,45 +1975,27 @@ function depTree(map, id, seen, meta) {
     : `<div class="dep-leaf">${label}</div>`;
 }
 
-async function renderDeps(refresh) {
-  const repoData = await api("/api/repos").catch(() => ({ repos: [] }));
-  if (!repoData.repos.length) {
-    view().innerHTML = `<div class="view-head"><h1>DEPENDENCIES</h1></div>
-      <div class="empty">no repositories defined — add your Engine repo on the
-      <a href="#/repos">Repositories page</a> first</div>`;
-    return;
-  }
-  if (!repoData.repos.some((r) => r.slot === state.depSlot)) {
-    const engine = repoData.repos.find((r) => r.name.toLowerCase() === "engine");
-    state.depSlot = (engine || repoData.repos[0]).slot;
-  }
-  const cur = repoData.repos.find((r) => r.slot === state.depSlot);
-  const chips = repoData.repos.map((r) => `
-    <button class="btn btn-sm ${r.slot === cur.slot ? "btn-primary" : ""}" data-dep-repo="${r.slot}">⛁ ${esc(r.name)}</button>`).join(" ");
-  const head = `
-    <div class="view-head"><h1>DEPENDENCIES</h1>
-      <span class="sub">pipelines → playbooks / roles / scripts · used vs unused</span>
-      <span class="spacer"></span>
-      <div class="filter-row">${chips}</div>
-      <button class="btn btn-sm" id="dep-refresh">↻ re-analyze</button></div>`;
+// the full-instance dependency matrix rows (used vs unused), filtered
+function depMatrixRows(d, query) {
+  const q = (query || "").toLowerCase();
+  return d.nodes
+    .filter((n) => !q || n.path.toLowerCase().includes(q) || n.type.includes(q)
+                 || (q === "unused" && !n.used) || (q === "used" && n.used))
+    .sort((a, b) => (a.used === b.used ? a.path.localeCompare(b.path) : a.used ? 1 : -1))
+    .slice(0, 300)
+    .map((n) => `
+      <div class="ci-row">
+        <span>${DEP_ICON(n)}</span>
+        <code class="ci-job">${esc(n.path)}</code>
+        <span class="chip">${esc(n.type)}</span>
+        <span class="ci-meta">→ ${n.out.length} · ← ${n.in_count}</span>
+        <span class="chip ${n.used ? "chip-green" : "chip-red"}">${n.used ? "used" : "unused"}</span>
+      </div>`).join("") || `<div class="empty">no matches</div>`;
+}
 
-  if (!cur.cloned) {
-    view().innerHTML = head + `
-      <div class="empty">'${esc(cur.name)}' is not cloned yet —
-        clone it on the <a href="#/repos">Repositories page</a> to analyze it</div>`;
-    wireDeps(cur);
-    return;
-  }
-
-  view().innerHTML = head + `<div class="empty">analyzing ${esc(cur.name)}…</div>`;
-  let d;
-  try {
-    d = await api(`/api/deps?slot=${cur.slot}${refresh === true ? "&refresh=true" : ""}`);
-  } catch (e) {
-    view().innerHTML = head + `<div class="empty">⚠ ${esc(e.message)}</div>`;
-    wireDeps(cur);
-    return;
-  }
+// Dependency analysis panel — embedded in the Repositories page (Engine only).
+// Returns the inner HTML; call wireDepPanel(d) after inserting it.
+function depPanelHtml(d) {
   const map = {};
   d.nodes.forEach((n) => { map[n.id] = n; });
   if (!d.roots.some((r) => r === state.depRoot)) state.depRoot = d.roots[0];
@@ -2060,24 +2066,11 @@ async function renderDeps(refresh) {
     d.dynamic.length ? `ℹ ${d.dynamic.length} dynamic call(s) (variable arguments) could not be resolved statically` : "",
   ].filter(Boolean).map((n) => `<div class="kpi-note">${n}</div>`).join("");
 
-  const matrixRowsHtml = (query) => {
-    const q = (query || "").toLowerCase();
-    return d.nodes
-      .filter((n) => !q || n.path.toLowerCase().includes(q) || n.type.includes(q)
-                   || (q === "unused" && !n.used) || (q === "used" && n.used))
-      .sort((a, b) => (a.used === b.used ? a.path.localeCompare(b.path) : a.used ? 1 : -1))
-      .slice(0, 300)
-      .map((n) => `
-        <div class="ci-row">
-          <span>${DEP_ICON(n)}</span>
-          <code class="ci-job">${esc(n.path)}</code>
-          <span class="chip">${esc(n.type)}</span>
-          <span class="ci-meta">→ ${n.out.length} · ← ${n.in_count}</span>
-          <span class="chip ${n.used ? "chip-green" : "chip-red"}">${n.used ? "used" : "unused"}</span>
-        </div>`).join("") || `<div class="empty">no matches</div>`;
-  };
-
-  view().innerHTML = head + `
+  return `
+    <div class="deps-embed-head">
+      <h2 style="margin:0">⛓ dependencies <span class="ci-meta">pipelines → playbooks / roles / scripts · used vs unused</span></h2>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="dep-refresh">↻ re-analyze</button></div>
     ${notes}
     <div class="stat-tiles">${tiles}</div>
     <div class="ci-grid">
@@ -2098,11 +2091,14 @@ async function renderDeps(refresh) {
           <div class="repo-bar" style="margin-bottom:8px">
             <input id="dep-search" placeholder="filter by path / type / used / unused" value="${esc(state.depQuery || "")}" style="flex:1">
           </div>
-          <div class="ci-scroll" style="max-height:420px" id="dep-matrix-rows">${matrixRowsHtml(state.depQuery)}</div></div>
+          <div class="ci-scroll" style="max-height:420px" id="dep-matrix-rows">${depMatrixRows(d, state.depQuery)}</div></div>
       </div>
     </div>`;
-  wireDeps(cur);
+}
 
+function wireDepPanel(d) {
+  const map = {};
+  d.nodes.forEach((n) => { map[n.id] = n; });
   // in-place interactions — no full re-render, no flash, no focus loss
   view().querySelectorAll("[data-dep-root]").forEach((el) => el.onclick = () => {
     state.depRoot = el.dataset.depRoot;
@@ -2119,20 +2115,9 @@ async function renderDeps(refresh) {
     clearTimeout(state._depT);
     state._depT = setTimeout(() => {
       const rows = document.getElementById("dep-matrix-rows");
-      if (rows) rows.innerHTML = matrixRowsHtml(state.depQuery);
+      if (rows) rows.innerHTML = depMatrixRows(d, state.depQuery);
     }, 120);
   };
-}
-
-function wireDeps(cur) {
-  // only repo switch and re-analyze do a full render (they change the data)
-  view().querySelectorAll("[data-dep-repo]").forEach((b) => b.onclick = () => {
-    state.depSlot = parseInt(b.dataset.depRepo, 10);
-    state.depRoot = null;
-    renderDeps();
-  });
-  const r = document.getElementById("dep-refresh");
-  if (r) r.onclick = () => renderDeps(true);
 }
 
 /* ================= ACCESS MANAGEMENT ================= */

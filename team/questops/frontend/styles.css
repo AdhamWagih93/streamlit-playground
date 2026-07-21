@@ -467,6 +467,11 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
 .dep-leaf { padding: 3px 4px 3px 22px; }
 .dep-leaf code, .dep-node summary code { font-size: 12px; }
 .dep-role-tasks { border-left-color: rgba(165,139,245,.5); }
+/* dependency analysis embedded in the Repositories page (Engine only) */
+.deps-embed { margin-bottom: 16px; padding: 12px 14px 4px; border: 1px solid rgba(165,139,245,.35);
+  border-radius: var(--r); background: rgba(165,139,245,.04); }
+.deps-embed-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.deps-embed-head h2 { font: 600 13px var(--mono); color: var(--violet); text-transform: uppercase; letter-spacing: .08em; }
 
 /* ---------- access management ---------- */
 .acc-h { font: 600 11px var(--mono); color: var(--faint); text-transform: uppercase;
