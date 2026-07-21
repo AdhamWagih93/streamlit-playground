@@ -587,6 +587,8 @@ a.chip.chip-green:hover { filter: brightness(1.3); }
 .ju-user-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ju-projects { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 0 18px; }
 .ju-projects .chip { font-size: 10.5px; }
+.acc-chip-date { opacity: .7; font-size: 9.5px; }
+.acc-seen { margin-left: 6px; }
 
 /* ---------- Jira activity & last-seen ---------- */
 .actv-list { display: flex; flex-direction: column; margin-bottom: 8px; }
@@ -628,8 +630,11 @@ a.chip.chip-green:hover { filter: brightness(1.3); }
 .mig-line code { font-size: 11.5px; }
 .mig-run { border: 1px solid rgba(63,198,221,.35); border-radius: 8px; background: rgba(63,198,221,.05);
   padding: 10px 12px; margin: 4px 0 14px; }
-.mig-run-head { font-size: 13px; margin-bottom: 6px; }
-.mig-run-log { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; }
+.mig-run-head { font-size: 13px; margin-bottom: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.mig-run-log { max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.mig-run-org { border: 1px solid var(--line); border-radius: 6px; background: var(--bg-2); }
+.mig-run-org-h { padding: 5px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.mig-run-org .mig-line { padding: 3px 10px; }
 
 /* ---------- upgrades ---------- */
 .upg-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }

@@ -205,6 +205,7 @@ async function refreshMe() {
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
                 repos: renderRepos, deps: renderRepos, access: renderAccess,
+                migration: renderMigration,
                 upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
 
 // bumped on every navigation; async renders capture it and bail if it
@@ -2231,6 +2232,29 @@ async function accLoad(section, url, renderFn) {
   if (rb) rb.onclick = () => accLoad(section, url, renderFn);
 }
 
+// Jira: permission schemes + activity/last-seen in one unified panel
+async function loadJira(refresh) {
+  const box = document.getElementById("acc-jira");
+  if (!box) return;
+  const tok = navToken();
+  box.innerHTML = `<div class="empty acc-loading">⏳ ${esc(ACC_WHAT.jira)}…</div>`;
+  const s = refresh ? "?refresh=true" : "";
+  try {
+    const [schemes, activity] = await Promise.all([
+      api(`/api/access/jira${s}`),
+      api(`/api/access/jira/activity${s}`).catch(() => null),  // activity is optional
+    ]);
+    if (navStale(tok)) return;
+    box.innerHTML = accJiraHtml(schemes, activity);
+  } catch (e) {
+    if (navStale(tok)) return;
+    box.innerHTML = `<div class="empty">⚠ couldn't load: ${esc(e.message)}
+      <button class="btn btn-sm" id="acc-jira-retry">↻ retry</button></div>`;
+    const rb = document.getElementById("acc-jira-retry");
+    if (rb) rb.onclick = () => loadJira(refresh);
+  }
+}
+
 const extLink = (url) => url && !url.startsWith("#")
   ? `<a class="acc-ext" href="${esc(url)}" target="_blank" rel="noopener" title="open">↗</a>` : "";
 
@@ -2544,8 +2568,30 @@ function accAdoProjectHtml(d) {
     <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account &amp; excluded grants hidden)${d.repo_cap_note ? " · first 200 repos" : ""}</span></h4>${repos}`;
 }
 
-function accJiraHtml(d) {
+function accJiraHtml(d, act) {
   if (!d.schemes.length) return `<div class="empty">no permission schemes (${srcLabel(d)})</div>`;
+  // activity lookups (last-seen per user, last-opened/interaction per project)
+  const projByKey = {};
+  (act && act.projects || []).forEach((p) => { projByKey[p.key] = p; });
+  const userByName = {};
+  (act && act.users || []).forEach((u) => {
+    [u.name, u.key, u.display_name].forEach((k) => { if (k) userByName[k.toLowerCase()] = u; });
+  });
+  // a scheme/JIRAUSER project chip enriched with its last-opened date
+  const projChip = (p) => {
+    const a = projByKey[p.key];
+    const lo = a && a.last_opened, li = a && a.last_interaction;
+    const title = a
+      ? `last opened: ${lo ? lo.key + " on " + isoDay(lo.date) : "—"} · last interaction: ${li && li.date ? isoDay(li.date) : "—"}${p.scheme ? " · via scheme: " + p.scheme : ""}`
+      : (p.scheme ? "via scheme: " + p.scheme : "");
+    return `<a class="chip chip-green" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(title)}">${esc(p.key)}${lo && lo.date ? ` <span class="acc-chip-date">${esc(ago(lo.date))}</span>` : ""}</a>`;
+  };
+  // a user's last login / last activity, if we have it
+  const userSeen = (...keys) => {
+    const u = keys.map((k) => userByName[(k || "").toLowerCase()]).find(Boolean);
+    if (!u) return "";
+    return `<span class="ci-meta acc-seen" title="last login · last activity">🕑 ${u.last_login ? "login " + ago(u.last_login) : "login N/A"} · ${(u.last_activity || {}).date ? "active " + ago(u.last_activity.date) : "no activity"}</span>`;
+  };
   const juBanner = (d.jirauser_grants || []).length ? `
     <div class="remote-banner remote-new" style="margin-bottom:10px">
       <b>🚩 ${d.jirauser_grants.length} JIRAUSER-keyed user(s) with direct grants</b>
@@ -2553,9 +2599,10 @@ function accJiraHtml(d) {
         <div class="ju-user">
           <div class="ju-user-h">👤 <b>${esc(u.display_name || u.key)}</b>
             ${u.key ? `<code class="acc-userkey">${esc(u.key)}</code>` : ""}
-            <span class="ci-meta">${u.project_count} project(s) · ${(u.schemes || []).length} scheme(s)</span></div>
+            <span class="ci-meta">${u.project_count} project(s) · ${(u.schemes || []).length} scheme(s)</span>
+            ${userSeen(u.key, u.display_name)}</div>
           <div class="ju-projects">${(u.projects || []).length
-            ? u.projects.map((p) => `<a class="chip chip-green" href="${esc(p.url)}" target="_blank" rel="noopener" title="via scheme: ${esc(p.scheme)}">${esc(p.key)}</a>`).join(" ")
+            ? u.projects.map(projChip).join(" ")
             : `<span class="ci-meta">scheme(s) not assigned to any project: ${esc((u.schemes || []).join(", "))}</span>`}</div>
         </div>`).join("")}
     </div>` : "";
@@ -2587,13 +2634,21 @@ function accJiraHtml(d) {
       ${nonMembers.map((n) => `<div class="ci-meta">• <b>${esc(n.user)}</b> in ${esc(n.scheme)}${n.in_admins ? " (is a " + esc(g.admin_group || "admin") + ")" : ""}</div>`).join("")}
     </div>` : "";
 
-  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}</div>`
-    + groupsPanel + nonMemberBanner + juBanner
+  // full activity detail, merged into this panel (per-project dates + per-user
+  // last login/activity) — the valuable data from the old separate section
+  const activityPanel = act ? `
+    <details class="filebox" style="margin:8px 0">
+      <summary>🕑 activity &amp; last-seen — per-project dates · per-user last login/activity</summary>
+      <div style="padding:6px 12px">${accActivityHtml(act)}</div>
+    </details>` : "";
+
+  return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}${act ? " · 🕑 dates from Jira activity" : ""}</div>`
+    + groupsPanel + nonMemberBanner + juBanner + activityPanel
     + d.schemes.map((s) => `
       <details class="filebox">
         <summary>🎫 <b>${esc(s.name)}</b> ${extLink(s.url)}
           ${(s.projects || []).length
-            ? s.projects.slice(0, 12).map((p) => `<a class="chip chip-green" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.key)}</a>`).join(" ")
+            ? s.projects.slice(0, 12).map(projChip).join(" ")
               + (s.projects.length > 12 ? `<span class="ci-meta">+${s.projects.length - 12} more</span>` : "")
             : '<span class="chip">unassigned</span>'}
           <span class="ci-meta">${esc(s.description || "")}</span></summary>
@@ -2603,6 +2658,7 @@ function accJiraHtml(d) {
               ${h.key && h.display_name ? `<code class="acc-userkey" title="internal Jira user key">${esc(h.key)}</code>` : ""}
               ${h.flag ? '<span class="chip chip-red" title="JIRAUSER-keyed user grant">🚩</span>' : ""}
               ${h.not_member ? '<span class="chip chip-red" title="not a jira-users member">⚠ non-member</span>' : ""}</span>
+              ${h.type === "user" ? userSeen(h.key, (h.holder || "").replace(/^user /, "")) : ""}
               ${permChips(h.permissions)}</div>`).join("")}
         </div>
       </details>`).join("");
@@ -2850,7 +2906,7 @@ function accMigrationHtml(d, tconf) {
   const unconf = (d.unconfigured || []).length
     ? `<div class="kpi-note">⚠ ${d.unconfigured.length} collection(s) have no Gitea target and will be skipped: ${d.unconfigured.map((u) => `${esc(u.collection)} (${u.projects} proj)`).join(", ")}</div>` : "";
   return `
-    <div class="ci-meta" style="margin-bottom:6px">maps ADO <b>collection→Gitea instance</b>, <b>project→org</b>, <b>repo→repo</b>; teams, repo-level access &amp; PR reviewers replicated · source: ${esc(d.source)}${d.cached ? " · cached" : ""}</div>
+    <div class="ci-meta" style="margin-bottom:6px">Gitea targets (one per collection) · source: ${esc(d.source)}${d.cached ? " · cached" : ""}</div>
     <div class="mig-targets">${targetRow}
       <details class="filebox" id="mig-form-box"><summary>＋ add / update a Gitea target (one per collection)</summary>
         <div class="mig-form">
@@ -2863,27 +2919,64 @@ function accMigrationHtml(d, tconf) {
         </div></details></div>
     ${tiles}${unconf}
     <div class="mig-actions">
-      <button class="btn btn-sm" id="mig-replan">↻ re-plan (dry run)</button>
-      <button class="btn btn-sm" id="mig-dry">▶ dry-run execute</button>
+      <button class="btn btn-sm" id="mig-replan">↻ re-plan</button>
+      <button class="btn btn-sm btn-primary" id="mig-dry">▶ dry-run (preview)</button>
       <button class="btn btn-sm btn-danger" id="mig-run">🚀 migrate for real</button>
-      <span class="ci-meta">dry run is read-only; a real migration writes to Gitea and needs the approver role</span>
+      <span class="ci-meta">dry run shows every action without writing; migrate for real needs the approver role + confirm</span>
     </div>
-    <div id="mig-result"></div>
+    <div id="mig-result">${state.migResult ? migResultHtml(state.migResult) : ""}</div>
     ${targetCards}`;
 }
 
 function migResultHtml(r) {
-  const head = `<div class="mig-run-head">${r.dry_run ? "🧪 dry run" : "🚀 live migration"}${r.demo ? " · demo (not executed)" : ""} —
-    <b class="pct-good">${r.ok} ok</b>${r.errors ? ` · <b class="pct-bad">${r.errors} error(s)</b>` : ""} of ${r.total} step(s)${r.collection ? ` · ${esc(r.collection)}` : ""}</div>`;
-  const rows = r.steps.map((s) => `<div class="mig-line">
-    <span class="chip ${s.status === "ok" ? "chip-green" : "chip-red"}">${s.status === "ok" ? "✓" : "✗"}</span>
-    <span class="chip">${esc(s.action)}</span> <code>${esc(s.ref)}</code>
-    <span class="ci-meta">${esc(s.note || "")}</span></div>`).join("");
-  return `<div class="mig-run">${head}<div class="mig-run-log">${rows}</div></div>`;
+  const badge = r.dry_run ? '<span class="chip chip-cyan">🧪 dry run — preview only</span>'
+    : '<span class="chip chip-amber">🚀 live migration</span>';
+  const demoNote = r.demo ? ' <span class="chip">demo — not executed</span>' : "";
+  const head = `<div class="mig-run-head">${badge}${demoNote}
+    <b class="pct-good">${r.ok} action(s)</b>${(r.skip || 0) ? ` · <span class="ci-meta">${r.skip} already present / manual</span>` : ""}${(r.error || 0) ? ` · <b class="pct-bad">${r.error} error(s)</b>` : ""}
+    <span class="ci-meta">across ${r.targets_run || 0} target(s)${r.dry_run ? " — nothing written" : ""}</span></div>`;
+  if (r.note && !r.total)
+    return `<div class="mig-run">${head}<div class="kpi-note">ℹ ${esc(r.note)}</div></div>`;
+  // group by target → org so it reads like a migration transcript
+  const groups = {};
+  (r.steps || []).forEach((s) => {
+    const k = (s.target || "") + " " + (s.org || "");
+    (groups[k] = groups[k] || { target: s.target, org: s.org, steps: [] }).steps.push(s);
+  });
+  const STAT = { ok: "chip-green", skip: "chip", error: "chip-red" };
+  const ICON = { ok: "✓", skip: "•", error: "✗" };
+  const orgsHtml = Object.values(groups).map((gp) => `
+    <div class="mig-run-org">
+      <div class="mig-run-org-h">${gp.org ? `🏛 <b>${esc(gp.org)}</b>` : "—"}
+        <span class="ci-meta">${esc(gp.target || "")}</span></div>
+      ${gp.steps.map((s) => `<div class="mig-line">
+        <span class="chip ${STAT[s.status] || ""}">${ICON[s.status] || "?"}</span>
+        <span class="chip">${esc(s.action)}</span> <code>${esc(s.ref)}</code>
+        <span class="ci-meta">${esc(s.note || "")}</span></div>`).join("")}
+    </div>`).join("") || '<div class="empty">no steps</div>';
+  const hint = (!r.dry_run && !r.demo && r.ok)
+    ? '<div class="kpi-note">✅ done — click ↻ re-plan to refresh the current-Gitea-state view below</div>' : "";
+  const note = r.note ? `<div class="kpi-note">ℹ ${esc(r.note)}</div>` : "";
+  return `<div class="mig-run">${head}${note}${hint}<div class="mig-run-log">${orgsHtml}</div></div>`;
+}
+
+async function renderMigration() {
+  view().innerHTML = `
+    <div class="view-head"><h1>ADO → GITEA MIGRATION</h1>
+      <span class="sub">clone code, structure &amp; access to self-hosted Gitea</span>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="mig-replan-top">↻ re-plan</button></div>
+    <div class="kpi-note" style="margin-bottom:12px">maps ADO <b>collection → Gitea instance</b>,
+      <b>project → org</b>, <b>repo → repo</b>; teams, repo-level access &amp; PR reviewers replicated.
+      Dry run is read-only; a real migration writes to Gitea and needs the approver role.</div>
+    <div id="mig-root"><div class="empty acc-loading">⏳ planning…</div></div>`;
+  const tb = document.getElementById("mig-replan-top");
+  if (tb) tb.onclick = () => loadMigration(true);
+  loadMigration(false);
 }
 
 async function loadMigration(refresh) {
-  const box = document.getElementById("acc-migration");
+  const box = document.getElementById("mig-root");
   if (!box) return;
   box.innerHTML = `<div class="empty acc-loading">⏳ planning the ADO → Gitea migration (reads each Gitea instance)…</div>`;
   try {
@@ -2927,15 +3020,18 @@ function wireMigration(tconf) {
   const replan = $$("mig-replan"); if (replan) replan.onclick = () => loadMigration(true);
   const runExec = async (dry) => {
     const btn = dry ? $$("mig-dry") : $$("mig-run");
-    if (!dry && !confirm("Run the REAL migration now? This creates orgs/repos/teams and pushes source into Gitea.")) return;
+    if (!dry && !confirm("Run the REAL migration now?\n\nThis creates orgs/repos/teams and pushes source code into Gitea for every configured collection.")) return;
     btn.disabled = true;
-    $$("mig-result").innerHTML = `<div class="empty acc-loading">⏳ ${dry ? "simulating" : "migrating"}…</div>`;
+    const res = $$("mig-result");
+    res.innerHTML = `<div class="empty acc-loading">⏳ ${dry ? "simulating the migration (read-only)" : "migrating — creating orgs/repos/teams in Gitea"}…</div>`;
+    res.scrollIntoView({ behavior: "smooth", block: "nearest" });
     try {
       const r = await api("/api/access/migration/execute", { method: "POST",
         body: { dry_run: dry, confirm: !dry } });
-      $$("mig-result").innerHTML = migResultHtml(r);
-      if (!dry) loadMigration(true);
-    } catch (e) { $$("mig-result").innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; }
+      state.migResult = r;                       // persists across re-plans
+      res.innerHTML = migResultHtml(r);
+      if (!dry) toast(`🚀 migration: ${r.ok} action(s)${r.error ? `, ${r.error} error(s)` : ""}`, r.error ? "toast-err" : "toast-quest");
+    } catch (e) { res.innerHTML = `<div class="empty">⚠ migration failed: ${esc(e.message)}</div>`; }
     finally { btn.disabled = false; }
   };
   const dry = $$("mig-dry"); if (dry) dry.onclick = () => runExec(true);
@@ -2954,20 +3050,14 @@ async function renderAccess() {
       <div id="acc-summary"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
-    <div class="panel" style="margin-bottom:18px"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
-      <div id="acc-jira"></div></div>
-    <div class="panel" style="margin-bottom:18px"><h2>🕑 Jira — activity &amp; last-seen <span class="ci-meta">per-project dates · per-user last login/activity</span></h2>
-      <div id="acc-activity"></div></div>
-    <div class="panel"><h2>🚚 ADO → Gitea migration <span class="ci-meta">clone code, structure &amp; access to self-hosted Gitea</span></h2>
-      <div id="acc-migration"></div></div>`;
+    <div class="panel"><h2>🎫 Jira — permission schemes, assignments &amp; activity</h2>
+      <div id="acc-jira"></div></div>`;
 
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
-    accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
-    accLoad("activity", `/api/access/jira/activity${s}`, accActivityHtml);
-    loadMigration(refresh);
+    loadJira(refresh);
   };
   load(false);
   document.getElementById("acc-refresh").onclick = () => load(true);

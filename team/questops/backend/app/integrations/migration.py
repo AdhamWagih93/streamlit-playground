@@ -248,75 +248,115 @@ def invalidate() -> None:
 
 # ------------------------------------------------------------- execute
 def execute(collection: str | None = None, dry_run: bool = True) -> dict:
-    """Perform the migration (or simulate it when dry_run). Returns a per-action
-    log. Live execution is guarded by the route (approver-only + explicit)."""
+    """Perform the migration (or simulate it when dry_run). Returns the FULL
+    reconciliation — creates/migrations AND items already present or needing
+    manual attention — grouped by target/org, so it's always clear exactly what
+    happened (even when there is nothing to do). Live execution is guarded by
+    the route (approver-only + explicit)."""
     pln = plan(force=True)
     tgts = {t["collection"]: t for t in targets()}
-    steps, errors = [], 0
-    done_ok = 0
+    steps: list[dict] = []
+    counts = {"ok": 0, "skip": 0, "error": 0}
 
-    def log(action: str, ref: str, ok: bool, note: str = ""):
-        nonlocal errors, done_ok
-        steps.append({"action": action, "ref": ref,
-                      "status": "ok" if ok else "error", "note": note})
-        if ok:
-            done_ok += 1
-        else:
-            errors += 1
+    def log(action, ref, status, note="", org="", target=""):
+        steps.append({"action": action, "ref": ref, "status": status,
+                      "note": note, "org": org, "target": target})
+        counts[status] = counts.get(status, 0) + 1
 
-    for block in pln["targets"]:
+    planned = [b for b in pln["targets"] if not collection or b["collection"] == collection]
+    if not planned:
+        why = ("no Gitea targets are configured — add one per collection first"
+               if not pln["targets"] else
+               f"no Gitea target for collection '{collection}'")
+        return {"dry_run": dry_run, "collection": collection, "demo": settings.demo_mode,
+                "steps": [], "ok": 0, "skip": 0, "error": 0, "total": 0,
+                "targets_run": 0, "note": why}
+
+    for block in planned:
         coll = block["collection"]
-        if collection and coll != collection:
-            continue
         t = tgts.get(coll)
         if not t:
             continue
-        g = gitea.Gitea(t["url"], t["token"]) if not dry_run and not settings.demo_mode else None
+        live = not dry_run and not settings.demo_mode
+        g = None
+        if live:
+            if not block.get("state", {}).get("reachable"):
+                log("target-unreachable", f"{coll} → {_mask(t['url'])}", "error",
+                    block.get("state", {}).get("error") or "Gitea not reachable — check URL/token",
+                    target=coll)
+                continue
+            g = gitea.Gitea(t["url"], t["token"])
         for org in block["orgs"]:
             oname = org["org"]
             if org["org_action"] == "create":
                 _do(log, dry_run, "create-org", oname,
-                    lambda: g.create_org(oname, f"Migrated from ADO {coll}"))
+                    lambda g=g, oname=oname: g.create_org(oname, f"Migrated from ADO {coll}"),
+                    org=oname, target=coll)
+            else:
+                log("org-exists", oname, "skip", "org already in Gitea", org=oname, target=coll)
             for r in org["repos"]:
+                ref = f"{oname}/{r['gitea_repo']}"
                 if r["action"] == "migrate":
-                    _do(log, dry_run, "migrate-repo", f"{oname}/{r['gitea_repo']}",
-                        lambda r=r: g.migrate_repo(oname, r["gitea_repo"], r["source_url"],
-                                                   settings.ado_user, settings.ado_git_password))
+                    _do(log, dry_run, "migrate-repo", ref,
+                        lambda g=g, oname=oname, r=r: g.migrate_repo(
+                            oname, r["gitea_repo"], r["source_url"],
+                            settings.ado_user, settings.ado_git_password),
+                        org=oname, target=coll)
+                else:
+                    log("repo-exists", ref, "skip", "repo already in Gitea", org=oname, target=coll)
             team_ids = {}
             for tm in org["teams"]:
+                ref = f"{oname}/{tm['gitea_team']} ({tm['permission']})"
                 if tm["action"] == "create":
-                    def mk(tm=tm):
+                    def mk(g=g, oname=oname, tm=tm):
                         tid = g.create_team(oname, tm["gitea_team"], tm["permission"])
                         team_ids[tm["gitea_team"]] = tid
                         for m in tm["members"]:
                             if not m.get("verify"):
                                 g.add_team_member(tid, m["gitea_user"])
-                    _do(log, dry_run, "create-team",
-                        f"{oname}/{tm['gitea_team']} ({tm['permission']})", mk)
+                    n_add = sum(1 for m in tm["members"] if not m.get("verify"))
+                    n_verify = len(tm["members"]) - n_add
+                    note = f"+{n_add} member(s)" + (f", {n_verify} need manual verify" if n_verify else "")
+                    _do(log, dry_run, "create-team", ref, mk, note=note, org=oname, target=coll)
+                else:
+                    log("team-exists", ref, "skip", "team already in Gitea", org=oname, target=coll)
             for c in org["collaborators"]:
-                if not c.get("verify"):
-                    _do(log, dry_run, "add-collaborator",
-                        f"{c['gitea_user']}@{oname}/{c['repo']} ({c['permission']})",
-                        lambda c=c: g.add_collaborator(oname, c["repo"], c["gitea_user"],
-                                                       c["permission"]))
+                ref = f"{c['gitea_user']}@{oname}/{c['repo']} ({c['permission']})"
+                if c.get("verify"):
+                    log("collaborator-verify", ref, "skip",
+                        "display-name→username unverified — grant manually", org=oname, target=coll)
+                else:
+                    _do(log, dry_run, "add-collaborator", ref,
+                        lambda g=g, oname=oname, c=c: g.add_collaborator(
+                            oname, c["repo"], c["gitea_user"], c["permission"]),
+                        org=oname, target=coll)
             for pr in org["protections"]:
                 _do(log, dry_run, "branch-protection",
                     f"{oname}/{pr['repo']}@{pr['branch']} ≥{pr['required_approvals']} ({pr['team']})",
-                    lambda pr=pr: g.create_branch_protection(oname, pr["repo"], pr["branch"],
-                                                             pr["required_approvals"], pr["team"]))
+                    lambda g=g, oname=oname, pr=pr: g.create_branch_protection(
+                        oname, pr["repo"], pr["branch"], pr["required_approvals"], pr["team"]),
+                    org=oname, target=coll)
     if not dry_run:
         invalidate()
-    return {"dry_run": dry_run, "collection": collection, "steps": steps,
-            "ok": done_ok, "errors": errors, "total": len(steps),
-            "demo": settings.demo_mode}
+    note = ""
+    if counts["ok"] == 0 and counts["error"] == 0 and counts["skip"]:
+        note = "nothing to migrate — every org, repo and team already exists in Gitea"
+    return {"dry_run": dry_run, "collection": collection, "demo": settings.demo_mode,
+            "steps": steps, "ok": counts["ok"], "skip": counts["skip"],
+            "error": counts["error"], "total": len(steps),
+            "targets_run": len(planned), "note": note}
 
 
-def _do(log, dry_run: bool, action: str, ref: str, fn) -> None:
-    if dry_run or settings.demo_mode:
-        log(action, ref, True, "planned" if dry_run else "demo (not executed)")
+def _do(log, dry_run: bool, action: str, ref: str, fn,
+        note: str = "", org: str = "", target: str = "") -> None:
+    if dry_run:
+        log(action, ref, "ok", ("would run" + (f" · {note}" if note else "")), org=org, target=target)
+        return
+    if settings.demo_mode:
+        log(action, ref, "ok", "demo — not executed", org=org, target=target)
         return
     try:
         fn()
-        log(action, ref, True, "done")
+        log(action, ref, "ok", ("done" + (f" · {note}" if note else "")), org=org, target=target)
     except Exception as exc:  # noqa: BLE001 — record and continue the migration
-        log(action, ref, False, str(exc)[:200])
+        log(action, ref, "error", str(exc)[:200], org=org, target=target)
