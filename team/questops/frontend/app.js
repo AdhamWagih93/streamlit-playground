@@ -2253,6 +2253,11 @@ function collStatsPanel(s) {
           <b class="${(s.extra_member_projects || 0) ? "pct-bad" : "pct-good"}">${s.extra_member_projects || 0}</b></div>
         <span class="ci-meta">granted members not in the [TEAM] group${(s.ldap_failed_projects || 0) ? ` · ${s.ldap_failed_projects} team(s) failed LDAP` : ""}</span>
       </div>
+      <div class="cstat">
+        <div class="cstat-top"><span>projects with duplicate access</span>
+          <b class="${(s.duplicate_grant_projects || 0) ? "pct-warn" : "pct-good"}">${s.duplicate_grant_projects || 0}</b></div>
+        <span class="ci-meta">whole team granted + members also granted individually (redundant)</span>
+      </div>
     </div>`;
 }
 const gradeCls = (g) => ({ A: "grade-a", B: "grade-a", C: "grade-c", D: "grade-f", F: "grade-f" }[g] || "grade-x");
@@ -2312,6 +2317,9 @@ function accAdoHtml(d) {
                     : p.team_ldap_resolved === false
                       ? `<span class="chip chip-red" title="LDAP group [${esc(p.team)}] not found — team not set (-15)">⚠ team [${esc(p.team)}] LDAP?</span>`
                       : `<span class="chip chip-red" title="${p.team_group_granted === false ? "team group not granted" : ""}${p.team_non_member_count ? p.team_non_member_count + " out-of-team grant(s)" : ""}">⚠ team [${esc(p.team)}]${p.team_non_member_count ? " +" + p.team_non_member_count : ""}</span>`) : ""}
+                  ${(p.team_duplicate_count || 0) > 0
+                    ? `<span class="chip chip-amber" title="whole team granted, yet ${p.team_duplicate_count} member(s) also hold an individual grant — redundant">♻ ${p.team_duplicate_count} duplicate</span>`
+                    : ""}
                   ${p.pr_present
                     ? `<span class="chip ${p.pr_scope === "project" ? "chip-cyan" : "chip-amber"}" title="PR reviewers (${p.pr_scope}-level)${(p.pr_groups || []).length ? ": " + p.pr_groups.map((g) => g.name + (g.members != null ? " (" + g.members + ")" : "")).join(", ") : ""}">🔀 PR ${p.pr_member_count ?? 0} · ${p.pr_scope === "project" ? "project" : "repo"}</span>`
                     : ""}
@@ -2355,10 +2363,13 @@ function accAdoProjectHtml(d) {
       ${!tv.ldap_resolved ? '<span class="chip chip-red">✗ LDAP group not found — team not set (−15)</span>' : `
         <span class="chip">${tv.member_count} LDAP member(s)</span>
         <span class="chip ${tv.group_granted ? "chip-green" : "chip-red"}">${tv.group_granted ? "✓ whole team granted" : "✗ team group NOT granted"}</span>
-        <span class="chip ${tv.non_team_count ? "chip-red" : "chip-green"}">${tv.non_team_count ? tv.non_team_count + " granted but NOT in team" : "✓ all " + (tv.granted_people || 0) + " grantee(s) in team"}</span>`}
+        <span class="chip ${tv.non_team_count ? "chip-red" : "chip-green"}">${tv.non_team_count ? tv.non_team_count + " granted but NOT in team" : "✓ all " + (tv.granted_people || 0) + " grantee(s) in team"}</span>
+        ${(tv.duplicate_count || 0) > 0 ? `<span class="chip chip-amber" title="already covered by the whole-team grant">♻ ${tv.duplicate_count} redundant individual grant(s)</span>` : ""}`}
       <span class="ci-meta"> · click to see members</span></summary>
       <div style="padding:6px 4px">
-        ${(tv.non_team_grants || []).length ? `<div class="acc-h" style="color:var(--red)">⚠ granted but NOT in [${esc(tv.team)}] (${tv.non_team_count})</div>
+        ${(tv.duplicate_count || 0) > 0 ? `<div class="acc-h" style="color:var(--amber)">♻ duplicate — whole team granted, yet these members ALSO have an individual grant (${tv.duplicate_count})</div>
+          <div class="acc-members">${(tv.duplicate_grants || []).map((m) => `<span class="chip chip-amber">${esc(m)}</span>`).join(" ")}</div>` : ""}
+        ${(tv.non_team_grants || []).length ? `<div class="acc-h" style="color:var(--red);margin-top:8px">⚠ granted but NOT in [${esc(tv.team)}] (${tv.non_team_count})</div>
           <div class="acc-members">${tv.non_team_grants.map((m) => `<span class="chip chip-red">${esc(m)}</span>`).join(" ")}</div>` : ""}
         <div class="acc-h" style="margin-top:8px">LDAP members of [${esc(tv.team)}] (${tv.member_count})</div>
         ${(tv.ldap_members || []).length

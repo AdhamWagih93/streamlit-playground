@@ -166,6 +166,7 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
         unassigned = [p for p in ps if p.get("team_unassigned")]
         unassigned_healthy = sum(1 for p in unassigned if p.get("team_ok"))
         extra_member_projects = sum(1 for p in ps if (p.get("team_non_member_count") or 0) > 0)
+        dup_projects = sum(1 for p in ps if (p.get("team_duplicate_count") or 0) > 0)
         ldap_failed = sum(1 for p in ps if p.get("team") and not p.get("team_unassigned")
                           and p.get("team_ldap_resolved") is False)
         # PR-reviewer governance: of the projects that HAVE repos, how many
@@ -187,6 +188,7 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
             "unassigned_healthy": unassigned_healthy,
             "unassigned_unhealthy": len(unassigned) - unassigned_healthy,
             "extra_member_projects": extra_member_projects,
+            "duplicate_grant_projects": dup_projects,
             "ldap_failed_projects": ldap_failed,
             "pr_scored_projects": len(pr_scored),
             "pr_defined_projects": len(pr_defined),
@@ -392,6 +394,7 @@ def ado_projects(force: bool = False) -> dict:
                                             and tv["non_team_count"] == 0),
                                    team_group_granted=(tv or {}).get("group_granted"),
                                    team_non_member_count=(tv or {}).get("non_team_count"),
+                                   team_duplicate_count=(tv or {}).get("duplicate_count"),
                                    pr_groups=an["pr_groups"], pr_present=an["pr_present"],
                                    pr_scope=an["pr_scope"],
                                    pr_member_count=an["pr_member_count"])
@@ -438,7 +441,7 @@ def _demo_ado_projects() -> dict:
                                       "Dave Samir", "Erin Zaki"},
          "score": 62, "grade": "C", "uniform": False, "pct_repo_specific": 100,
          "team": "platform-devs", "team_ok": False, "team_group_granted": True,
-         "team_non_member_count": 1, "team_ldap_resolved": True,
+         "team_non_member_count": 1, "team_ldap_resolved": True, "team_duplicate_count": 4,
          "pr_present": True, "pr_scope": "project", "pr_member_count": 3,
          "pr_groups": [{"name": "PR Approvers", "scope": "project", "members": 3}],
          "url": "https://ado.demo/DefaultCollection/Platform"},
@@ -509,6 +512,10 @@ def _demo_project_access(project_id: str) -> dict:
     # a grant to the service account — MUST be filtered out of the output
     raw_repos = [
         {"name": "Engine", "acls": [
+            # the WHOLE [TEAM] LDAP group granted directly — so any individual
+            # grant to a member below is redundant/duplicate access
+            {"identity": "[Platform]\\platform-devs",
+             "allow": ["Read", "Contribute"], "deny": []},
             {"identity": "[Platform]\\Platform Team",
              "allow": ["Read", "Contribute", "Create branch", "Create tag"], "deny": []},
             {"identity": "[Platform]\\Platform Admins",
@@ -855,6 +862,12 @@ def _team_validation(description: str, repos: list[dict],
     # every grantee — only flag out-of-team people when we have a member list
     non_team = (sorted(p for p in people if _norm_ident(p) not in member_keys)
                 if member_keys else [])
+    # DUPLICATE / redundant access: the whole team is already granted as a group,
+    # yet these people (who ARE members of that team) ALSO hold an individual
+    # grant — access they'd have anyway. Only meaningful when the group is
+    # granted and we can resolve the team's members.
+    duplicate = (sorted(p for p in people if _norm_ident(p) in member_keys)
+                 if (group_granted and member_keys) else [])
     return {"team": team, "group_granted": group_granted,
             "member_count": len(members),
             "ldap_resolved": ldap_found,            # group FOUND, not "has members"
@@ -862,7 +875,9 @@ def _team_validation(description: str, repos: list[dict],
                                    for m in members)[:500],
             "granted_people": len(people),
             "non_team_grants": non_team[:100],
-            "non_team_count": len(non_team)}
+            "non_team_count": len(non_team),
+            "duplicate_grants": duplicate[:100],
+            "duplicate_count": len(duplicate)}
 
 
 def _project_access_analysis(repos: list[dict], teams: list[dict],
