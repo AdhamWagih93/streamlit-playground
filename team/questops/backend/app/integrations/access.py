@@ -248,13 +248,17 @@ def ado_projects(force: bool = False) -> dict:
             repo_lists = list(pool.map(proj_repos, projects))
             team_lists = list(pool.map(proj_teams, projects))
         # repo NAME occurrences across the WHOLE instance — to flag the same
-        # repo name living in more than one project/collection
+        # repo name living in more than one project/collection. Repos under
+        # *Test_Automation projects are excluded — those legitimately mirror
+        # names and shouldn't count as duplicates.
         repo_occ: dict[str, list] = {}
         for p, rl, tl in zip(projects, repo_lists, team_lists):
             # SAME per-project cap as the detail expand → identical scores
             p["repos"], p["teams"] = len(rl), len(tl)
             p["_repolist"] = rl[:PROJECT_REPO_CAP]
             p["_teamlist"] = tl
+            if (p.get("name") or "").lower().endswith("test_automation"):
+                continue  # ignore duplicate-repo detection for *Test_Automation
             for r in rl:
                 repo_occ.setdefault(r["name"].lower(), []).append(
                     {"name": r["name"], "project": p["name"], "coll": p["coll"]})
