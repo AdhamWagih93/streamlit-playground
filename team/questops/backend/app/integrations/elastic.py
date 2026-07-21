@@ -140,6 +140,7 @@ def _demo_kpi() -> list[dict]:
         ("auth-service/main", 512, "SUCCESS", 20, "SCM", "push by dave"),
         ("platform-terraform/apply", 233, "UNSTABLE", 300, "UPSTREAM", "platform-terraform/plan"),
         ("notifications-service/main", 289, "SUCCESS", 400, "SCM", "push by alice"),
+        ("data-warehouse/nightly-etl", 1201, "RUNNING", 8, "TIMER", "nightly"),  # in-progress
     ]
     return [{
         "@timestamp": (now - dt.timedelta(minutes=m)).isoformat(),
@@ -384,6 +385,9 @@ def _job_url_from_path(jobpath: str) -> str:
 
 
 KPI_PIPELINE_AGG_SIZE = 5000  # distinct pipelines an agg can return (>> real count)
+# in-progress states — NOT a pass/fail outcome, so excluded from success % and
+# reported separately
+KPI_RUNNING_STATUSES = ["RUNNING", "IN_PROGRESS", "BUILDING"]
 
 
 def _agg_val(node) -> str:
@@ -396,11 +400,14 @@ def _agg_val(node) -> str:
 def _kpi_agg_stats(index: str, query: dict) -> dict | None:
     """EXACT success stats over the WHOLE window via aggregations — not limited
     by the 10k document fetch cap. Terms-aggregates on the pipeline and counts
-    SUCCESS per bucket + overall. KPI_IGNORE is applied on the bucket keys.
-    Tries the .keyword sub-fields first (text fields aren't aggregatable),
-    falling back to the bare field. None if aggregations don't work."""
+    SUCCESS + RUNNING per bucket + overall. RUNNING (in-progress) builds are
+    NOT a pass/fail outcome, so success % is over COMPLETED builds (total −
+    running) and running is reported separately. KPI_IGNORE is applied on the
+    bucket keys. Tries the .keyword sub-fields first (text fields aren't
+    aggregatable), falling back to the bare field. None if aggs don't work."""
     for status_f, job_f in (("status.keyword", "jobpath.keyword"),
                             ("status", "jobpath")):
+        run_filter = {"terms": {status_f: KPI_RUNNING_STATUSES}}
         body = {"size": 0, "track_total_hits": True, "query": query,
                 "aggs": {
                     "by_pipeline": {
@@ -408,9 +415,11 @@ def _kpi_agg_stats(index: str, query: dict) -> dict | None:
                                   "order": {"_count": "desc"}},
                         "aggs": {
                             "ok": {"filter": {"term": {status_f: "SUCCESS"}}},
+                            "running": {"filter": run_filter},
                             "sample": {"top_hits": {"size": 1,
                                                     "_source": ["joburl", "jobpath", "buildurl"]}}}},
-                    "ok": {"filter": {"term": {status_f: "SUCCESS"}}}}}
+                    "ok": {"filter": {"term": {status_f: "SUCCESS"}}},
+                    "running": {"filter": run_filter}}}
         try:
             data = _es_search(index, body)
         except (requests.RequestException, ValueError):
@@ -420,23 +429,31 @@ def _kpi_agg_stats(index: str, query: dict) -> dict | None:
         if not isinstance(bp, dict):
             continue
         buckets = bp.get("buckets") or []
-        kept, o_total, o_success = [], 0, 0
+        kept, o_total, o_success, o_running = [], 0, 0, 0
         for b in buckets:
             key = _agg_val(b.get("key", ""))
             total = b.get("doc_count", 0) or 0
             succ = ((b.get("ok") or {}).get("doc_count", 0)) or 0
+            running = ((b.get("running") or {}).get("doc_count", 0)) or 0
             if _kpi_ignored({"jobpath": key, "jobname": key.split("/")[-1]}):
                 continue
+            completed = max(total - running, 0)
             hits = (((b.get("sample") or {}).get("hits") or {}).get("hits") or [])
             src = (hits[0].get("_source") if hits else {}) or {}
             url = _agg_val(src.get("joburl")) or _job_url_from_path(key)
             kept.append({"job": key, "total": total, "success": succ,
-                         "pct": round(succ / total * 100, 1) if total else 0.0, "url": url})
+                         "running": running, "completed": completed,
+                         "pct": round(succ / completed * 100, 1) if completed else 0.0,
+                         "url": url})
             o_total += total
             o_success += succ
-        kept.sort(key=lambda r: (r["pct"], -r["total"]))
-        return {"overall_pct": round(o_success / o_total * 100, 1) if o_total else 0.0,
-                "success": o_success, "total": o_total, "pipelines": kept,
+            o_running += running
+        # completed first (worst success first), all-running pipelines last
+        kept.sort(key=lambda r: (r["completed"] == 0, r["pct"], -r["total"]))
+        o_completed = max(o_total - o_running, 0)
+        return {"overall_pct": round(o_success / o_completed * 100, 1) if o_completed else 0.0,
+                "success": o_success, "total": o_total, "running": o_running,
+                "completed": o_completed, "pipelines": kept,
                 "pipelines_truncated": (bp.get("sum_other_doc_count", 0) or 0) > 0}
     return None
 

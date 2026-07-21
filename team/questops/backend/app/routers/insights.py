@@ -17,6 +17,7 @@ from ..integrations import elastic, jenkins
 router = APIRouter(prefix="/api", tags=["insights"])
 
 _FAILED = ("FAILURE", "FAILED", "UNSTABLE", "ABORTED")
+_RUNNING = ("RUNNING", "IN_PROGRESS", "BUILDING")
 
 
 def _es_source() -> str:
@@ -63,30 +64,42 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
     agg = k.get("agg_stats")
     if agg:
         stats = {"total": agg["total"], "success": agg["success"],
+                 "running": agg.get("running", 0), "completed": agg.get("completed", agg["total"]),
                  "overall_pct": agg["overall_pct"],
                  "pipelines": agg["pipelines"],
                  "pipelines_truncated": agg.get("pipelines_truncated", False)}
         stats_exact = True
     else:
         by_job: dict[str, dict] = {}
-        ok_total = 0
+        ok_total = run_total = 0
         for d in recent:
             job = d.get("jobpath") or d.get("jobname") or "?"
-            row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0, "url": ""})
+            row = by_job.setdefault(job, {"job": job, "total": 0, "success": 0,
+                                          "running": 0, "url": ""})
             row["total"] += 1
             row["url"] = row["url"] or _job_url(d)
-            if str(d.get("status", "")).upper() == "SUCCESS":
+            st = str(d.get("status", "")).upper()
+            if st == "SUCCESS":
                 row["success"] += 1
                 ok_total += 1
+            elif st in _RUNNING:
+                row["running"] += 1
+                run_total += 1
+        def _finish(r):
+            completed = max(r["total"] - r["running"], 0)
+            return {**r, "completed": completed, "pct": _pct(r["success"], completed)}
+        completed_total = max(len(recent) - run_total, 0)
         stats = {
-            "total": len(recent),
-            "success": ok_total,
-            "overall_pct": _pct(ok_total, len(recent)),
-            "pipelines": sorted(
-                ({**r, "pct": _pct(r["success"], r["total"])} for r in by_job.values()),
-                key=lambda r: (r["pct"], -r["total"])),
+            "total": len(recent), "success": ok_total,
+            "running": run_total, "completed": completed_total,
+            "overall_pct": _pct(ok_total, completed_total),
+            "pipelines": sorted((_finish(r) for r in by_job.values()),
+                                key=lambda r: (r["completed"] == 0, r["pct"], -r["total"])),
         }
         stats_exact = False
+    # the currently-RUNNING builds, shown separately (from the fetched sample —
+    # running builds are the newest, so they surface even in a large window)
+    running_builds = [d for d in recent if str(d.get("status", "")).upper() in _RUNNING]
 
     return {
         "stats": stats,
@@ -98,6 +111,7 @@ def kpi(hours: int = 168, user: User = Depends(current_user)):
         "hours": hours,
         "loaded": recent[:100],  # the actual KPI documents, newest first
         "loaded_failures": loaded_failures[:25],
+        "running_builds": running_builds[:25],   # in-progress, excluded from %
         "loaded_total": total_in_window,   # TRUE count in the window
         "fetched": len(recent),            # docs in the fetched RECORDS sample
         "truncated": total_in_window > len(recent),

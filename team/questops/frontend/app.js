@@ -909,6 +909,14 @@ async function renderCI() {
         · ${esc(d.triggertype || "?")}${d.triggeredby ? " by " + esc(d.triggeredby) : ""}</span>
       ${linkBtn(d.buildurl)}
     </div>`).join("") || `<div class="empty">nothing loaded in this window</div>`;
+  const runningRows = (kpi.running_builds || []).map((d) => `
+    <div class="ci-row">
+      <span class="ci-dot dot-amber"></span>
+      <span class="ci-job">${esc(d.jobpath || d.jobname)} <small>#${esc(d.buildnumber)}</small></span>
+      <span class="ci-meta">running · started ${ago(d.builddate || d["@timestamp"])}
+        · ${esc(d.triggertype || "?")}${d.triggeredby && d.triggeredby !== "null" ? " by " + esc(d.triggeredby) : ""}</span>
+      ${linkBtn(d.buildurl)}
+    </div>`).join("");
   const kpiWarn = kpi.es_error
     ? `<div class="empty">⚠ Elasticsearch query failed on '${esc(kpi.index)}': ${esc(kpi.es_error)}</div>`
     : !kpi.window_applied
@@ -918,29 +926,37 @@ async function renderCI() {
         : "";
   const pctCls = (p) => p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad";
   const st = kpi.stats || { total: 0, pipelines: [] };
+  // completed = total − running; success % is over COMPLETED builds only.
+  // 'compl' falls back to total for older payloads without the running split.
+  const compl = (p) => (p.completed != null ? p.completed : p.total);
   // failing pipelines are front and centre WITH their links; fully-green ones
-  // collapse behind a stat box, viewable on demand
-  const failing = st.pipelines.filter((p) => p.success < p.total);
-  const green = st.pipelines.filter((p) => p.total > 0 && p.success === p.total);
+  // collapse behind a stat box; pipelines with builds ONLY running show separately
+  const failing = st.pipelines.filter((p) => compl(p) > 0 && p.success < compl(p));
+  const green = st.pipelines.filter((p) => compl(p) > 0 && p.success === compl(p));
+  const runningOnly = st.pipelines.filter((p) => compl(p) === 0 && (p.running || 0) > 0);
   const greenPct = st.pipelines.length ? Math.round((green.length / st.pipelines.length) * 100) : 0;
   const pipeName = (p) => p.url && !p.url.startsWith("#")
     ? `<a class="ci-job" href="${esc(p.url)}" target="_blank" rel="noopener" title="open ${esc(p.job)} in Jenkins">${esc(p.job)} ↗</a>`
     : `<span class="ci-job" title="${esc(p.job)}">${esc(p.job)}</span>`;
+  const runChip = (p) => (p.running || 0) > 0
+    ? ` <span class="chip chip-cyan" title="in-progress builds, excluded from %">▶ ${p.running}</span>` : "";
   const pipeRow = (p) => `
     <div class="kpi-pipe">
       ${pipeName(p)}
       <span class="lb-bar"><div class="${pctCls(p.pct)}" style="width:${p.pct}%"></div></span>
       <span class="kpi-pct ${pctCls(p.pct)}">${p.pct}%</span>
-      <span class="ci-meta">${p.success}/${p.total}</span>
+      <span class="ci-meta">${p.success}/${compl(p)}${runChip(p)}</span>
     </div>`;
+  const running = st.running || 0;
   const kpiStats = st.total ? `
     <div class="kpi-stats">
       <div class="kpi-overall">
         <b class="${pctCls(st.overall_pct)}">${st.overall_pct}%</b>
-        <span>overall success<br>${st.success}/${st.total} builds</span>
+        <span>overall success<br>${st.success}/${st.completed != null ? st.completed : st.total} completed${running ? `<br><span class="kpi-running">▶ ${running} running (excluded)</span>` : ""}</span>
       </div>
       <div class="kpi-pipes">
         ${failing.map(pipeRow).join("") || `<div class="empty">no failing pipelines in this window 🎉</div>`}
+        ${runningOnly.length ? `<div class="ci-meta" style="margin-top:6px">▶ ${runningOnly.length} pipeline(s) with only in-progress builds: ${runningOnly.map((p) => esc(p.job.split("/").slice(-2).join("/"))).join(", ")}</div>` : ""}
         ${green.length ? `
           <details class="green-group">
             <summary><b>${green.length}</b> pipeline(s) fully green —
@@ -984,6 +1000,10 @@ async function renderCI() {
         <b>⏳ no builds in the last ${kpiHours < 48 ? kpiHours + "h" : kpiHours / 24 + "d"}</b>
         <div class="ci-meta">the newest build in <code>${esc(kpi.index)}</code> ran <b>${ago(kpi.newest_at)}</b> — pick a wider window above to see it</div></div>` : ""}
       ${kpiStats}
+      ${(kpi.stats && kpi.stats.running) ? `<details class="filebox" ${runningRows ? "" : ""}>
+        <summary>▶ ${kpi.stats.running} running build(s) — in progress, excluded from success %${runningRows && (kpi.running_builds || []).length < kpi.stats.running ? ` (showing ${(kpi.running_builds || []).length})` : ""}</summary>
+        <div class="kpi-loaded" style="padding:4px 10px">${runningRows || '<div class="ci-meta" style="padding:6px">running builds counted via aggregation; individual builds not in the fetched sample</div>'}</div>
+      </details>` : ""}
       <details class="filebox"><summary>📄 loaded records (showing ${kpi.loaded.length} of ${kpi.loaded_total})</summary>
         <div class="kpi-loaded" style="padding:4px 10px">${loadedRows}</div>
       </details>
