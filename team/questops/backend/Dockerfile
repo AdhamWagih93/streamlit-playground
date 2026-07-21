@@ -1,11 +1,11 @@
 # Build from the questops/ directory:  docker build -f backend/Dockerfile .
 FROM python:3.12-slim
 
-# git+curl for repo ops; bash + ldap-utils so the Engine repo's
-# scripts/Tools/LDAP/getTeamMember.sh (which sources .prd and runs ldapsearch)
-# works for team-member resolution
+# git+curl for repo ops; bash + ldap-utils + telnet so the Engine repo's
+# scripts/Tools/LDAP/getTeamMembers.sh (which sources .prd, runs ldapsearch and
+# probes connectivity via telnet) works for team-member resolution
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git curl bash ldap-utils \
+        git curl bash ldap-utils telnet \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
