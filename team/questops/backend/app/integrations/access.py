@@ -1210,6 +1210,174 @@ def _jira_all_projects(jget) -> tuple[list[dict], bool]:
         return [], False
 
 
+# ============================================ Jira activity & last-seen
+# each project/user costs 1-2 extra JQL calls, so this is its own lazily-loaded,
+# separately-cached section (bounded so a big instance isn't hammered)
+JIRA_ACTIVITY_PROJECT_CAP = 200
+JIRA_ACTIVITY_USER_CAP = 300
+
+
+def _jql_str(s: str) -> str:
+    """A JQL string literal — quote and escape, so a key/username can't break
+    out of the query."""
+    return '"' + str(s or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _jira_search_one(jget, jql: str, fields: str) -> dict | None:
+    """The single newest issue for a JQL (already ORDER BY-ed), or None."""
+    try:
+        r = jget("/rest/api/2/search",
+                 {"jql": jql, "maxResults": 1, "fields": fields, "validateQuery": "false"})
+        issues = r.get("issues", []) if isinstance(r, dict) else []
+        return issues[0] if issues else None
+    except requests.RequestException:
+        return None
+
+
+def _issue_date(issue: dict | None, field: str) -> dict | None:
+    if not issue:
+        return None
+    f = issue.get("fields") or {}
+    if not f.get(field):
+        return None
+    return {"key": issue.get("key"), "date": f.get(field), "summary": f.get("summary")}
+
+
+def _project_activity(jget, key: str) -> dict:
+    """Last ticket OPENED (newest created) and last INTERACTION (newest updated)
+    for one project — one bounded JQL search each."""
+    kq = _jql_str(key)
+    opened = _jira_search_one(jget, f"project = {kq} ORDER BY created DESC", "created,summary")
+    inter = _jira_search_one(jget, f"project = {kq} ORDER BY updated DESC", "updated,summary")
+    return {"last_opened": _issue_date(opened, "created"),
+            "last_interaction": _issue_date(inter, "updated")}
+
+
+def _user_last_login(jget, name: str, key: str) -> str | None:
+    """Best-effort TRUE last-login. Standard Jira REST doesn't expose it (Cloud
+    removed it; DC keeps it in admin/Crowd internals), but some instances/apps
+    surface a loginInfo/lastLoginTime on the user object — read it if present,
+    else None (the UI shows N/A)."""
+    for q in ({"username": name}, {"key": key}):
+        if not list(q.values())[0]:
+            continue
+        try:
+            u = jget("/rest/api/2/user", {**q, "expand": "loginInfo,lastLoginTime"})
+        except requests.RequestException:
+            continue
+        if not isinstance(u, dict):
+            continue
+        li = u.get("loginInfo") or {}
+        val = li.get("lastLoginTime") or li.get("previousLoginTime") or u.get("lastLoginTime")
+        if val:
+            return val
+    return None
+
+
+def _user_last_activity(jget, name: str) -> dict | None:
+    """ALWAYS-available proxy: the most recently updated issue the user reports
+    or is assigned — 'when were they last active on work'."""
+    if not name:
+        return None
+    jql = f"(reporter = {_jql_str(name)} OR assignee = {_jql_str(name)}) ORDER BY updated DESC"
+    return _issue_date(_jira_search_one(jget, jql, "updated,summary"), "updated")
+
+
+def _demo_jira_activity() -> dict:
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    def iso(days, hours=0):
+        return (now - _dt.timedelta(days=days, hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+    projects = [
+        {"key": "DEVOPS", "name": "Platform",
+         "last_opened": {"key": "DEVOPS-812", "date": iso(0, 3), "summary": "Pipeline flake on checkout"},
+         "last_interaction": {"key": "DEVOPS-807", "date": iso(0, 1), "summary": "Rotate git credentials"}},
+        {"key": "PLAT", "name": "Control",
+         "last_opened": {"key": "PLAT-45", "date": iso(6), "summary": "Add team-config repo"},
+         "last_interaction": {"key": "PLAT-44", "date": iso(2), "summary": "Review access policy"}},
+        {"key": "SEC", "name": "Security",
+         "last_opened": {"key": "SEC-9", "date": iso(140), "summary": "Quarterly access audit"},
+         "last_interaction": {"key": "SEC-9", "date": iso(95), "summary": "Quarterly access audit"}},
+    ]
+    users = [
+        {"name": "alice", "key": "JIRAUSER10001", "display_name": "Alice Nasr", "active": True,
+         "last_login": iso(0, 5), "last_activity": {"key": "DEVOPS-807", "date": iso(0, 1)}},
+        {"name": "bob", "key": "JIRAUSER10002", "display_name": "Bob Farid", "active": True,
+         "last_login": iso(1, 2), "last_activity": {"key": "DEVOPS-812", "date": iso(0, 3)}},
+        {"name": "carol", "key": "JIRAUSER10003", "display_name": "Carol Adel", "active": True,
+         "last_login": None, "last_activity": {"key": "PLAT-44", "date": iso(2)}},
+        {"name": "dave", "key": "JIRAUSER10004", "display_name": "Dave Samir", "active": True,
+         "last_login": iso(38), "last_activity": {"key": "SEC-9", "date": iso(95)}},
+        {"name": "erin", "key": "JIRAUSER10005", "display_name": "Erin Zaki", "active": False,
+         "last_login": None, "last_activity": None},
+    ]
+    return {"source": "demo", "projects": projects, "project_total": 3,
+            "projects_truncated": False, "users": users, "user_total": 5,
+            "users_truncated": False, "users_readable": True, "any_login": True}
+
+
+def _by_date_desc(rows: list[dict], getter) -> list[dict]:
+    def key(r):
+        d = getter(r)
+        return d or ""   # ISO strings sort lexicographically; None -> "" (last)
+    return sorted(rows, key=key, reverse=True)
+
+
+def jira_activity(force: bool = False) -> dict:
+    """Per-project last-opened / last-interaction dates and per-user last-login
+    (best-effort) + last-activity. Lazily loaded and separately cached because
+    each row costs extra JQL calls."""
+    def build():
+        if settings.demo_mode:
+            return _demo_jira_activity()
+        if not (settings.jira_base_url and settings.jira_user):
+            return {"source": "not configured", "projects": [], "users": [],
+                    "users_readable": False}
+        auth = (settings.jira_user, settings.jira_password)
+        base = settings.jira_base_url.rstrip("/")
+
+        def jget(path, params=None):
+            r = requests.get(f"{base}{path}", params=params, auth=auth,
+                             timeout=(HTTP_CONNECT, HTTP_TIMEOUT))
+            r.raise_for_status()
+            return r.json()
+
+        all_projects, ptrunc = _jira_all_projects(jget)
+        pcap = all_projects[:JIRA_ACTIVITY_PROJECT_CAP]
+
+        def do_proj(p):
+            return {"key": p["key"], "name": p.get("name", ""),
+                    "url": f"{base}/browse/{p['key']}", **_project_activity(jget, p["key"])}
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            prows = list(pool.map(do_proj, pcap))
+        prows = _by_date_desc(prows, lambda r: (r.get("last_interaction") or {}).get("date"))
+
+        users_members = _jira_group_members(jget, settings.jira_users_group)
+        ucap = users_members[:JIRA_ACTIVITY_USER_CAP]
+
+        def do_user(m):
+            name = m.get("name") or ""
+            return {"name": name, "key": m.get("key", ""),
+                    "display_name": m.get("displayName") or name,
+                    "active": m.get("active", True),
+                    "last_login": _user_last_login(jget, name, m.get("key", "")),
+                    "last_activity": _user_last_activity(jget, name)}
+
+        with ThreadPoolExecutor(max_workers=POOL) as pool:
+            urows = list(pool.map(do_user, ucap))
+        urows = _by_date_desc(urows, lambda r: (r.get("last_activity") or {}).get("date"))
+
+        return {"source": "live", "projects": prows,
+                "project_total": len(all_projects),
+                "projects_truncated": ptrunc or len(all_projects) > len(pcap),
+                "users": urows, "user_total": len(users_members),
+                "users_truncated": len(users_members) > len(ucap),
+                "users_readable": bool(users_members),
+                "any_login": any(u["last_login"] for u in urows)}
+    return _cached("jira:activity", force, build)
+
+
 # ================================================================= Jenkins
 _PERM_RE = re.compile(r"<permission>\s*([^<]+?)\s*</permission>")
 

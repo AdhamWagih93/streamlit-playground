@@ -53,6 +53,12 @@ def jira_schemes(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.jira_permission_schemes, refresh)
 
 
+@router.get("/jira/activity")
+def jira_activity(refresh: bool = False, user: User = Depends(current_user)):
+    """Per-project last-opened/last-interaction + per-user last-login/activity."""
+    return _wrap(access.jira_activity, refresh)
+
+
 @router.get("/jenkins")
 def jenkins(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.jenkins_matrix, refresh)

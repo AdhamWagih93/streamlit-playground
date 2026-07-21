@@ -2114,6 +2114,7 @@ const ACC_WHAT = {
   ldap: "checking the login LDAP + the [TEAM] resolver",
   ado: "querying Azure DevOps for projects",
   jira: "reading Jira permission schemes & their project assignments",
+  activity: "reading per-project dates & per-user last-login/activity (JQL per row)",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
 };
 
@@ -2473,6 +2474,56 @@ function accJiraHtml(d) {
       </details>`).join("");
 }
 
+// ---- Jira activity & last-seen ----
+const daysSince = (iso) => iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400e3) : null;
+const isoDay = (iso) => { try { return new Date(iso).toISOString().slice(0, 10); } catch { return iso || ""; } };
+const staleChip = (iso, warnDays = 90) => {
+  const d = daysSince(iso);
+  return (d != null && d >= warnDays)
+    ? `<span class="chip chip-amber" title="${d} days ago">stale · ${d >= 365 ? (d / 365).toFixed(1) + "y" : Math.round(d / 30) + "mo"}</span>` : "";
+};
+const jDate = (iso) => iso
+  ? `<span title="${esc(isoDay(iso))}">${esc(ago(iso))}</span>` : '<span class="ci-meta">—</span>';
+const jIssue = (o) => (o && o.date)
+  ? `<a class="ci-job" style="flex:none" title="${esc((o.summary || "") + " · " + isoDay(o.date))}">${esc(o.key)}</a> · ${jDate(o.date)}`
+  : '<span class="ci-meta">— none —</span>';
+
+function accActivityHtml(d) {
+  if (d.source === "not configured")
+    return `<div class="empty">Jira not configured</div>`;
+  const projects = (d.projects || []).map((p) => `
+    <div class="actv-row actv-proj">
+      <span class="actv-name"><a class="ci-job" href="${esc(p.url)}" target="_blank" rel="noopener" style="flex:none">${esc(p.key)}</a>
+        <span class="ci-meta">${esc(p.name)}</span></span>
+      <span class="actv-cell"><span class="actv-lbl">last opened</span> ${jIssue(p.last_opened)}</span>
+      <span class="actv-cell"><span class="actv-lbl">last interaction</span> ${jDate((p.last_interaction || {}).date)}
+        ${staleChip((p.last_interaction || {}).date)}</span>
+    </div>`).join("") || `<div class="empty">no projects</div>`;
+  const users = (d.users || []).map((u) => `
+    <div class="actv-row actv-user">
+      <span class="actv-name">${esc(u.display_name)} <small class="ci-meta">@${esc(u.name)}</small>
+        ${u.active === false ? '<span class="chip">inactive</span>' : ""}</span>
+      <span class="actv-cell"><span class="actv-lbl">last login</span>
+        ${u.last_login ? jDate(u.last_login) : '<span class="chip" title="Jira REST does not expose this user\'s last-login">N/A</span>'}</span>
+      <span class="actv-cell"><span class="actv-lbl">last activity</span> ${jIssue(u.last_activity)}
+        ${staleChip((u.last_activity || {}).date)}</span>
+    </div>`).join("") || `<div class="empty">no users / jira-users not readable</div>`;
+  const loginNote = (d.source === "live" && !d.any_login)
+    ? `<div class="kpi-note">ℹ your Jira's REST API doesn't expose per-user last-login (Cloud removed it; DC keeps it in admin/Crowd internals) — the login column shows <b>N/A</b>. “last activity” (most recent issue reported/assigned) is always available.</div>`
+    : "";
+  const pTrunc = d.projects_truncated
+    ? `<span class="ci-meta">· showing ${(d.projects || []).length} of ${d.project_total} (cap)</span>` : "";
+  const uTrunc = d.users_truncated
+    ? `<span class="ci-meta">· showing ${(d.users || []).length} of ${d.user_total} (cap)</span>` : "";
+  return `
+    <div class="ci-meta" style="margin-bottom:6px">${srcLabel(d)} — dates via JQL; stale = no interaction in 90d+</div>
+    ${loginNote}
+    <div class="acc-subhead">projects — last opened &amp; last interaction ${pTrunc}</div>
+    <div class="actv-list">${projects}</div>
+    <div class="acc-subhead">users — last login &amp; last activity ${uTrunc}</div>
+    <div class="actv-list">${users}</div>`;
+}
+
 function accJenkinsHtml(d) {
   if (!d.items.length)
     return `<div class="empty">no matrix-based entries found (${srcLabel(d)})${d.note ? "<br><small>" + esc(d.note) + "</small>" : ""}</div>`;
@@ -2740,6 +2791,8 @@ async function renderAccess() {
       <div id="acc-ado"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>🎫 Jira — permission schemes &amp; assignments</h2>
       <div id="acc-jira"></div></div>
+    <div class="panel" style="margin-bottom:18px"><h2>🕑 Jira — activity &amp; last-seen <span class="ci-meta">per-project dates · per-user last login/activity</span></h2>
+      <div id="acc-activity"></div></div>
     <div class="panel"><h2>🚚 ADO → Gitea migration <span class="ci-meta">clone code, structure &amp; access to self-hosted Gitea</span></h2>
       <div id="acc-migration"></div></div>`;
 
@@ -2749,6 +2802,7 @@ async function renderAccess() {
     accLoad("ldap", `/api/access/ldap${s}`, accLdapHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     accLoad("jira", `/api/access/jira${s}`, accJiraHtml);
+    accLoad("activity", `/api/access/jira/activity${s}`, accActivityHtml);
     loadMigration(refresh);
   };
   load(false);
