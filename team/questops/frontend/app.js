@@ -2593,11 +2593,29 @@ function accJiraHtml(d, act) {
     return `<span class="ci-meta acc-seen" title="last login · last activity">🕑 ${u.last_login ? "login " + ago(u.last_login) : "login N/A"} · ${(u.last_activity || {}).date ? "active " + ago(u.last_activity.date) : "no activity"}</span>`;
   };
   const g = d.groups || {};
-  // instance group membership, each member enriched with their last-seen
-  const memRow = (name, cls) => `<div class="jira-mem-row"><span class="chip ${cls || ""}">${esc(name)}</span>${userSeen(name)}</div>`;
+  // jira-users who are in NONE of the granted LDAP groups (from getTeamMembersCN.sh)
+  const noLdap = new Set((d.users_no_ldap_group || []).map((n) => (n || "").toLowerCase()));
+  const grantedGroups = d.granted_groups || [];
+  const groupsOutside = d.groups_outside_ldap || [];
+  // instance group membership, each member enriched with last-seen + LDAP flag
+  const memRow = (name, cls) => {
+    const flag = noLdap.has((name || "").toLowerCase())
+      ? '<span class="chip chip-red" title="not a member of any granted LDAP group">no LDAP group</span>' : "";
+    return `<div class="jira-mem-row"><span class="chip ${cls || ""}">${esc(name)}</span>${userSeen(name)}${flag}</div>`;
+  };
   const memList = (arr, cls) => (arr || []).length
     ? `<div class="jira-mem-list">${arr.map((n) => memRow(n, cls)).join("")}</div>`
     : '<div class="ci-meta">none / not readable</div>';
+  // the granted permission-scheme groups resolved to their LDAP members
+  const ldapGroupList = grantedGroups.length ? `
+    <div class="acc-h" style="margin-top:10px">granted groups → LDAP membership <span class="ci-meta">(via getTeamMembersCN.sh)</span></div>
+    <div class="jira-mem-list">${grantedGroups.map((gg) => `
+      <div class="jira-mem-row">
+        <span class="chip ${gg.ldap_resolved ? "chip-cyan" : "chip-red"}" title="${gg.ldap_resolved ? "resolves to an LDAP group" : "not an LDAP group — outside scope"}">${gg.ldap_resolved ? "👥" : "⚠"} ${esc(gg.name)}</span>
+        ${gg.ldap_resolved
+          ? `<span class="ci-meta">${gg.member_count} member(s)${(gg.members || []).length ? ": " + gg.members.slice(0, 8).map(esc).join(", ") + (gg.members.length > 8 ? ` +${gg.members.length - 8}` : "") : ""}</span>`
+          : '<span class="ci-meta">⚠ outside LDAP scope — cannot verify membership</span>'}
+      </div>`).join("")}</div>` : "";
   const groupsPanel = (g.admin_group || g.users_group) ? `
     <div class="stat-tiles" style="margin-bottom:8px">
       <div class="stat-tile"><b class="${g.admins_count ? "pct-bad" : ""}">${g.admins_readable ? (g.admins_count ?? (g.admins||[]).length) : "?"}</b>
@@ -2612,6 +2630,7 @@ function accJiraHtml(d, act) {
         ${memList(g.admins, "chip-red")}
         <div class="acc-h" style="margin-top:10px">${esc(g.users_group || "jira-users")} — ${g.users_readable ? (g.users_count + " total, " + (g.users||[]).length + " shown") : "not readable"}</div>
         ${g.users_readable ? memList(g.users, "") : `<div class="kpi-note">⚠ couldn't read ${esc(g.users_group || "jira-users")} membership — the non-member cross-check is skipped (the account needs permission to browse the group)</div>`}
+        ${ldapGroupList}
       </div>
     </details>` : "";
 
@@ -2619,11 +2638,14 @@ function accJiraHtml(d, act) {
   // permission schemes below, so projects/schemes are never re-listed here
   const nonMembers = d.non_member_grants || [];
   const juUsers = d.jirauser_grants || [];
-  const warn = (nonMembers.length || juUsers.length) ? `
+  const anyWarn = nonMembers.length || juUsers.length || groupsOutside.length || noLdap.size;
+  const warn = anyWarn ? `
     <div class="jira-warn">
       ${juUsers.length ? `<span class="chip chip-red">🚩 ${juUsers.length} direct JIRAUSER grantee(s)</span>` : ""}
       ${nonMembers.length ? `<span class="chip chip-red">⚠ ${nonMembers.length} assigned but NOT ${esc(g.users_group || "jira-users")}</span>` : ""}
-      <span class="ci-meta">🔻 flagged in the schemes below</span>
+      ${groupsOutside.length ? `<span class="chip chip-red" title="${esc(groupsOutside.join(", "))}">⚠ ${groupsOutside.length} granted group(s) OUTSIDE LDAP scope</span>` : ""}
+      ${noLdap.size ? `<span class="chip chip-red">⚠ ${noLdap.size} jira-user(s) in NO LDAP group</span>` : ""}
+      <span class="ci-meta">🔻 flagged inline below</span>
     </div>` : "";
 
   return `<div class="ci-meta" style="margin-bottom:8px">${srcLabel(d)} · ${d.schemes.length} scheme(s)${d.project_count != null ? ` · ${d.project_count} project(s) checked` : ""}${d.projects_truncated ? " (truncated)" : ""}${act ? " · 🕑 dates &amp; last-seen from Jira activity" : ""}</div>`
@@ -2638,11 +2660,15 @@ function accJiraHtml(d, act) {
           <span class="ci-meta">${esc(s.description || "")}</span></summary>
         <div style="padding:8px 12px">
           ${s.holders.map((h) => {
-            const warnRow = h.flag || h.not_member;
+            const groupOutside = h.type === "group" && h.ldap_resolved === false;
+            const warnRow = h.flag || h.not_member || groupOutside;
             return `<div class="acc-acl ${warnRow ? "acc-acl-warn" : ""}"><span class="acc-ident ${warnRow ? "acc-flag" : ""}">${h.type === "group" ? "👥" : h.type === "user" ? "👤" : "🎭"} ${esc(h.holder)}
               ${h.key && h.display_name ? `<code class="acc-userkey" title="internal Jira user key">${esc(h.key)}</code>` : ""}
               ${h.flag ? '<span class="chip chip-red" title="direct grant to a JIRAUSER-keyed user">🚩 direct grantee</span>' : ""}
-              ${h.not_member ? `<span class="chip chip-red" title="granted scheme access but not a ${esc(g.users_group || "jira-users")} member">⚠ not ${esc(g.users_group || "jira-users")}</span>` : ""}</span>
+              ${h.not_member ? `<span class="chip chip-red" title="granted scheme access but not a ${esc(g.users_group || "jira-users")} member">⚠ not ${esc(g.users_group || "jira-users")}</span>` : ""}
+              ${h.type === "group" ? (h.ldap_resolved
+                ? `<span class="chip chip-cyan" title="resolved via getTeamMembersCN.sh">👥 ${h.ldap_member_count} LDAP member(s)</span>`
+                : (h.ldap_resolved === false ? '<span class="chip chip-red" title="granted group does not resolve to any LDAP group">⚠ outside LDAP scope</span>' : "")) : ""}</span>
               ${h.type === "user" ? userSeen(h.key, (h.holder || "").replace(/^user /, "")) : ""}
               ${permChips(h.permissions)}</div>`;
           }).join("")}

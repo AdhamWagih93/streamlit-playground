@@ -1046,6 +1046,7 @@ def jira_permission_schemes(force: bool = False) -> dict:
                               {"key": "PLAT", "url": plink("PLAT")}],
                  "holders": [
                      {"holder": "group devops-team", "type": "group",
+                      "group_name": "devops-team", "ldap_resolved": True, "ldap_member_count": 4,
                       "permissions": ["Browse Projects", "Create Issues",
                                       "Edit Issues", "Transition Issues"]},
                      {"holder": "role Administrators", "type": "projectRole",
@@ -1060,6 +1061,7 @@ def jira_permission_schemes(force: bool = False) -> dict:
                  "projects": [{"key": "SEC", "url": plink("SEC")}],
                  "holders": [
                      {"holder": "group security-team", "type": "group",
+                      "group_name": "security-team", "ldap_resolved": False, "ldap_member_count": 0,
                       "permissions": ["Browse Projects", "Administer Projects"]},
                  ]},
             ]
@@ -1096,15 +1098,26 @@ def jira_permission_schemes(force: bool = False) -> dict:
             non_members = [{"scheme": "Restricted Scheme", "user": "ext_contractor",
                             "key": "ext_contractor", "display_name": "",
                             "in_admins": False}]
+            # devops-team resolves via getTeamMembersCN.sh; security-team is
+            # outside LDAP scope; Erin is in jira-users but no LDAP group
+            granted_groups = [
+                {"name": "devops-team", "ldap_resolved": True, "member_count": 4,
+                 "members": ["Alice Nasr", "Bob Farid", "Carol Adel", "Dave Samir"]},
+                {"name": "security-team", "ldap_resolved": False, "member_count": 0,
+                 "members": []}]
             return {"source": "demo", "schemes": schemes,
                     "jirauser_grants": flagged, "project_count": 3,
                     "groups": groups, "non_member_grants": non_members,
+                    "granted_groups": granted_groups,
+                    "groups_outside_ldap": ["security-team"],
+                    "users_no_ldap_group": ["Erin Zaki"],
                     "all_projects": [{"key": "DEVOPS", "name": "Platform"},
                                      {"key": "PLAT", "name": "Control"},
                                      {"key": "SEC", "name": "Security"}]}
         if not (settings.jira_base_url and settings.jira_user):
             return {"source": "not configured", "schemes": [], "jirauser_grants": [],
-                    "groups": {}, "non_member_grants": []}
+                    "groups": {}, "non_member_grants": [], "granted_groups": [],
+                    "groups_outside_ldap": [], "users_no_ldap_group": []}
         auth = (settings.jira_user, settings.jira_password)
         base = settings.jira_base_url.rstrip("/")
 
@@ -1145,6 +1158,8 @@ def jira_permission_schemes(force: bool = False) -> dict:
         schemes = []
         jirauser_raw = []  # (key, display, holder, scheme_id, scheme_name) per grant
         user_holders = []  # (scheme, label, param) for the membership cross-check
+        group_holders = []      # every group holder dict, to backfill LDAP info
+        granted_group_names: set[str] = set()   # unique granted group names
         for s in data.get("permissionSchemes", []):
             by_holder: dict[tuple, list[str]] = {}
             holder_meta: dict[tuple, dict] = {}
@@ -1157,17 +1172,23 @@ def jira_permission_schemes(force: bool = False) -> dict:
             for k, v in sorted(by_holder.items()):
                 param = holder_meta[k]["param"]
                 is_user = k[1] == "user"
+                is_group = k[1] == "group"
                 is_ju = is_user and param.upper().startswith("JIRAUSER")
                 not_member = (is_user and users_keys
                               and param.lower() not in users_keys)
                 # map the internal user key/username to a real name
                 display = resolve_user(param) if is_user else ""
                 label = f"user {display}" if (is_user and display) else k[0]
-                holders.append({"holder": label, "type": k[1],
-                                "key": param if is_user else "",
-                                "display_name": display,
-                                "permissions": sorted(set(v)), "flag": is_ju,
-                                "not_member": not_member})
+                holder = {"holder": label, "type": k[1],
+                          "key": param if is_user else "",
+                          "group_name": param if is_group else "",
+                          "display_name": display,
+                          "permissions": sorted(set(v)), "flag": is_ju,
+                          "not_member": not_member}
+                holders.append(holder)
+                if is_group and param:
+                    granted_group_names.add(param)
+                    group_holders.append(holder)
                 if is_ju:
                     jirauser_raw.append((param, display, label,
                                          s.get("id"), s.get("name", "")))
@@ -1178,6 +1199,49 @@ def jira_permission_schemes(force: bool = False) -> dict:
                 "description": (s.get("description") or "")[:200],
                 "url": f"{base}/secure/admin/EditPermissionScheme!default.jspa?schemeId={s.get('id')}",
                 "projects": [], "holders": holders})
+
+        # resolve EACH granted GROUP to its LDAP members via the Engine repo's
+        # getTeamMembersCN.sh (same resolver the ADO [TEAM] check uses). A group
+        # that doesn't resolve is OUTSIDE LDAP scope — an important finding.
+        ldap_by_group: dict[str, dict] = {}
+        if granted_group_names:
+            with ThreadPoolExecutor(max_workers=POOL) as pool:
+                for gname, info in pool.map(
+                        lambda gn: (gn, ldap_group_members(gn)), sorted(granted_group_names)):
+                    ldap_by_group[gname] = info
+        ldap_covered: set[str] = set()   # normalized identities in ANY granted LDAP group
+        granted_groups = []
+        groups_outside_ldap = []
+        for gname in sorted(granted_group_names):
+            info = ldap_by_group.get(gname) or {}
+            members = info.get("members") or []
+            resolved = bool(info.get("found"))
+            for m in members:
+                if m.get("username"):
+                    ldap_covered.add(_norm_ident(m["username"]))
+                if m.get("display_name"):
+                    ldap_covered.add(_norm_ident(m["display_name"]))
+            granted_groups.append({
+                "name": gname, "ldap_resolved": resolved,
+                "member_count": len(members),
+                "members": sorted(m.get("display_name") or m.get("username")
+                                  for m in members)[:500]})
+            if not resolved:
+                groups_outside_ldap.append(gname)
+        # backfill each group holder with its LDAP resolution
+        for h in group_holders:
+            info = ldap_by_group.get(h["group_name"]) or {}
+            h["ldap_resolved"] = bool(info.get("found"))
+            h["ldap_member_count"] = len(info.get("members") or [])
+        # jira-users members who are in NONE of the granted LDAP groups
+        users_no_ldap_group = []
+        if ldap_covered:
+            for m in users_members:
+                disp = m.get("displayName") or m.get("name") or ""
+                keys = {_norm_ident(m.get("name", "")), _norm_ident(disp)}
+                if not (keys & ldap_covered):
+                    users_no_ldap_group.append(disp or m.get("name", ""))
+            users_no_ldap_group = sorted(set(filter(None, users_no_ldap_group)))[:500]
 
         # users granted in a scheme who are NOT jira-users members (can't
         # actually log in / not a licensed member) — only meaningful if we
@@ -1245,6 +1309,9 @@ def jira_permission_schemes(force: bool = False) -> dict:
         return {"source": "live", "schemes": schemes,
                 "jirauser_grants": jirauser_grants,
                 "groups": groups, "non_member_grants": non_member_grants,
+                "granted_groups": granted_groups,
+                "groups_outside_ldap": groups_outside_ldap,
+                "users_no_ldap_group": users_no_ldap_group,
                 "project_count": len(projects), "projects_truncated": truncated,
                 "all_projects": projects}
     return _cached("jira:schemes", force, build)
