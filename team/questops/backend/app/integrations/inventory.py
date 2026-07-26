@@ -22,7 +22,10 @@ from ..config import settings
 _CACHE: dict = {"at": 0.0, "payload": None}
 _TTL = 300
 
-PRIMARY_ROLES = ("dev", "qc", "ops")   # dev_team / qc_team / ops_team
+# the primary per-environment teams: dev_team (development), qc_team (quality),
+# prd_team (== the ops team). uat_team and any other <role>_team are secondary.
+PRIMARY_ROLES = ("dev", "qc", "prd")
+ROLE_LABEL = {"dev": "dev", "qc": "qc", "prd": "prd/ops"}
 _TEAM_RE = re.compile(r"^([A-Za-z][\w-]*)_team$")
 # directories at the repo root that are not projects
 _SKIP_DIRS = {".git", ".github", "group_vars", "host_vars", "roles", "playbooks",
@@ -69,6 +72,38 @@ def _is_vault(text: str) -> bool:
     return text.lstrip().startswith("$ANSIBLE_VAULT")
 
 
+def _walk_inventory(node, envs: set, hosts: set) -> None:
+    """Walk an Ansible inventory tree collecting env prefixes and host names.
+    A group that directly holds `hosts` and is named `<env>_<app>` contributes
+    its `<env>` prefix (dev/qc/uat/prd); every host key is collected."""
+    if not isinstance(node, dict):
+        return
+    for hname in (node.get("hosts") or {}):
+        if hname:
+            hosts.add(str(hname))
+    children = node.get("children")
+    if isinstance(children, dict):
+        for gname, gnode in children.items():
+            if isinstance(gnode, dict) and (gnode.get("hosts")) and "_" in gname:
+                envs.add(gname.split("_", 1)[0])
+            _walk_inventory(gnode, envs, hosts)
+
+
+def _apps_inventory(pdir, apps: list[str]) -> tuple[set, set]:
+    """(envs, inventory-hosts) parsed from each <app>.yml inventory in a project."""
+    envs: set = set()
+    hosts: set = set()
+    for app in apps:
+        f = pdir / f"{app}.yml"
+        try:
+            data = _load_yaml(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        root = data.get("all", data) if isinstance(data, dict) else {}
+        _walk_inventory(root, envs, hosts)
+    return envs, hosts
+
+
 def _stringify(v) -> str:
     if isinstance(v, (dict, list)):
         return f"<{type(v).__name__}:{len(v)}>"
@@ -111,8 +146,8 @@ def _parse_project(pdir) -> dict:
         except OSError:
             pass
 
-    teams: dict = {}          # role -> team, primary roles (dev/qc/ops)
-    other_teams: dict = {}    # any other <role>_team
+    teams: dict = {}          # role -> team, primary roles (dev/qc/prd)
+    other_teams: dict = {}    # any other <role>_team (incl. uat_team)
     other_vars: dict = {}     # everything else in group_vars/all
     for k, v in all_vars.items():
         m = _TEAM_RE.match(k)
@@ -122,35 +157,18 @@ def _parse_project(pdir) -> dict:
         else:
             other_vars[k] = _stringify(v)
 
-    # group_vars/<app> and group_vars/<env>_<app> -> envs + per-app config presence
-    envs: set = set()
-    app_group_vars: set = set()
-    gv = pdir / "group_vars"
-    if gv.is_dir():
-        for f in gv.iterdir():
-            base = f.name[:-4] if f.name.endswith(".yml") else f.name
-            if base in ("all",):
-                continue
-            low = base.lower()
-            if low in app_set:
-                app_group_vars.add(base)
-                continue
-            # <env>_<app>
-            for a in apps:
-                if low.endswith("_" + a.lower()) and len(low) > len(a) + 1:
-                    envs.add(base[: -(len(a) + 1)])
-                    app_group_vars.add(base)
-                    break
+    # environments + inventory hosts come from the <app>.yml inventory trees
+    # (all.children.<app>.children.<env>_<app>.hosts.<host>)
+    envs, inv_hosts = _apps_inventory(pdir, apps)
 
-    # host_vars/<host>/{vars.yml, vault.yml}
-    hosts: list = []
+    # host_vars/<host>/{vars.yml, vault.yml} — flags per host
+    host_flags: dict = {}
     vault_files = 0
     hv = pdir / "host_vars"
     if hv.is_dir():
         for hdir in sorted(hv.iterdir()):
             if not hdir.is_dir():
                 continue
-            has_vars = (hdir / "vars.yml").is_file()
             vaulted = False
             vpath = hdir / "vault.yml"
             if vpath.is_file():
@@ -159,12 +177,18 @@ def _parse_project(pdir) -> dict:
                 except OSError:
                     vaulted = True
                 vault_files += 1
-            hosts.append({"host": hdir.name, "vars": has_vars, "vault": vaulted})
+            host_flags[hdir.name] = {"vars": (hdir / "vars.yml").is_file(), "vault": vaulted}
+
+    # the host list = inventory hosts ∪ host_vars dirs, with vars/vault flags
+    hosts = [{"host": h, "vars": host_flags.get(h, {}).get("vars", False),
+              "vault": host_flags.get(h, {}).get("vault", False)}
+             for h in sorted(inv_hosts | set(host_flags))]
 
     return {
         "name": name, "apps": apps, "app_count": len(apps),
         "teams": teams, "other_teams": other_teams,
-        "dev_team": teams.get("dev"), "qc_team": teams.get("qc"), "ops_team": teams.get("ops"),
+        "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
+        "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),  # prd_team == ops team
         "vars": other_vars, "var_count": len(other_vars),
         "envs": sorted(envs), "hosts": hosts, "host_count": len(hosts),
         "vault_files": vault_files,
@@ -204,7 +228,7 @@ def invalidate() -> None:
 def _summary(projects: list[dict]) -> dict:
     all_teams: dict = {}
     for p in projects:
-        for role in ("dev", "qc", "ops"):
+        for role in PRIMARY_ROLES:
             t = (p.get("teams") or {}).get(role)
             if t:
                 all_teams.setdefault(t, set()).add(f"{p['name']}:{role}")
@@ -226,32 +250,33 @@ def _summary(projects: list[dict]) -> dict:
 
 # ------------------------------------------------------------- demo
 def _demo() -> dict:
+    def proj(name, apps, teams, other, vars_, envs, hosts, vault):
+        return {"name": name, "apps": apps, "app_count": len(apps),
+                "teams": teams, "other_teams": other,
+                "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
+                "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),
+                "vars": vars_, "var_count": len(vars_), "envs": envs,
+                "hosts": hosts, "host_count": len(hosts), "vault_files": vault}
     projects = [
-        {"name": "Platform", "apps": ["payments", "checkout", "notifications"], "app_count": 3,
-         "teams": {"dev": "Platform_Devs", "qc": "Platform_QC", "ops": "SRE_Core"},
-         "other_teams": {"security": "AppSec"},
-         "dev_team": "Platform_Devs", "qc_team": "Platform_QC", "ops_team": "SRE_Core",
-         "vars": {"domain": "platform.corp.local", "region": "eu-west",
-                  "log_level": "info", "vault_addr": "<vault-encrypted>"},
-         "var_count": 4, "envs": ["dev", "qa", "prod"],
-         "hosts": [{"host": "plat-app-01", "vars": True, "vault": True},
-                   {"host": "plat-app-02", "vars": True, "vault": True}],
-         "host_count": 2, "vault_files": 2},
-        {"name": "Control", "apps": ["team-configs"], "app_count": 1,
-         "teams": {"dev": "Control_Owners", "qc": "Platform_QC"},   # ops_team missing
-         "other_teams": {},
-         "dev_team": "Control_Owners", "qc_team": "Platform_QC", "ops_team": None,
-         "vars": {"domain": "control.corp.local", "region": "eu-west"},
-         "var_count": 2, "envs": ["dev", "prod"],
-         "hosts": [{"host": "ctl-01", "vars": True, "vault": False}],
-         "host_count": 1, "vault_files": 0},
-        {"name": "Research", "apps": ["prototypes"], "app_count": 1,
-         "teams": {"dev": "Research_Team", "qc": "Research_Team", "ops": "SRE_Core"},
-         "other_teams": {"data": "DataEng"},
-         "dev_team": "Research_Team", "qc_team": "Research_Team", "ops_team": "SRE_Core",
-         "vars": {"domain": "research.corp.local", "experimental": "true"},
-         "var_count": 2, "envs": ["dev"],
-         "hosts": [{"host": "res-lab-01", "vars": True, "vault": True}],
-         "host_count": 1, "vault_files": 1},
+        proj("Platform", ["payments", "checkout", "notifications"],
+             {"dev": "Platform_Devs", "qc": "Platform_QC", "prd": "SRE_Core"},
+             {"uat": "Platform_UAT", "security": "AppSec"},
+             {"domain": "platform.corp.local", "region": "eu-west", "log_level": "info"},
+             ["dev", "qc", "uat", "prd"],
+             [{"host": "dev_ocp", "vars": True, "vault": False},
+              {"host": "qc_ocp", "vars": True, "vault": False},
+              {"host": "uat_ocp", "vars": True, "vault": True},
+              {"host": "prd_ocp", "vars": True, "vault": True},
+              {"host": "prd_dr_ocp", "vars": True, "vault": True}], 3),
+        proj("Control", ["team-configs"],
+             {"dev": "Control_Owners", "qc": "Platform_QC"},   # prd_team (ops) missing
+             {}, {"domain": "control.corp.local", "region": "eu-west"},
+             ["dev", "prd"],
+             [{"host": "dev_ocp", "vars": True, "vault": False},
+              {"host": "prd_ocp", "vars": True, "vault": False}], 0),
+        proj("Research", ["prototypes"],
+             {"dev": "Research_Team", "qc": "Research_Team", "prd": "SRE_Core"},
+             {"data": "DataEng"}, {"domain": "research.corp.local", "experimental": "true"},
+             ["dev"], [{"host": "dev_ocp", "vars": True, "vault": True}], 1),
     ]
     return {"source": "demo", "projects": projects, "summary": _summary(projects)}

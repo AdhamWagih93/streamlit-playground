@@ -2141,7 +2141,8 @@ function wireDepPanel(d) {
 }
 
 /* ---- inventories: per-project configuration view ---- */
-const INV_PRIMARY = ["dev", "qc", "ops"];
+const INV_PRIMARY = ["dev", "qc", "prd"];               // dev_team / qc_team / prd_team(ops)
+const INV_ROLE_LABEL = { dev: "dev", qc: "qc", prd: "prd/ops" };
 function invMatch(p, f) {
   const allTeams = [...Object.values(p.teams || {}), ...Object.values(p.other_teams || {})];
   if (f.q) {
@@ -2189,8 +2190,9 @@ function invPanelHtml(d) {
 
   const teamCell = (p, role) => {
     const t = (p.teams || {})[role];
-    return t ? `<span class="chip chip-green" title="${role}_team">${role}: ${esc(t)}</span>`
-      : `<span class="chip chip-red" title="${role}_team not defined">${role}: —</span>`;
+    const lbl = INV_ROLE_LABEL[role] || role;
+    return t ? `<span class="chip chip-green" title="${role}_team">${lbl}: ${esc(t)}</span>`
+      : `<span class="chip chip-red" title="${role}_team not defined">${lbl}: —</span>`;
   };
   const cards = shown.map((p) => `
     <details class="filebox inv-proj" ${filtering ? "open" : ""}>

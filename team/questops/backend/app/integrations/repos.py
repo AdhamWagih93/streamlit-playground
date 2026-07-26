@@ -128,27 +128,41 @@ DEMO_REPO_FILES = {
         # single plaintext line (the password, nothing else)
         ".vault_pass.txt": "demo-vault-password\n",
     },
-    # inventories: per-project apps + group_vars (teams) + host_vars
+    # inventories: per-project <app>.yml ansible inventories (env groups + hosts),
+    # group_vars/all (teams: dev_team/qc_team/prd_team) + host_vars
     "inventories": {
         "README.md": "# inventories\n\nAnsible inventories: apps, group_vars, host_vars per project.\n",
-        "Platform/payments.yml": "---\n- hosts: payments\n  roles:\n    - app_deploy\n",
-        "Platform/checkout.yml": "---\n- hosts: checkout\n  roles:\n    - app_deploy\n",
+        # <app>.yml is an ansible inventory: all.children.<app>.children.<env>_<app>.hosts
+        "Platform/payments.yml":
+            "all:\n  children:\n    payments:\n      children:\n"
+            "        dev_payments:\n          hosts:\n            dev_ocp:\n"
+            "        qc_payments:\n          hosts:\n            qc_ocp:\n"
+            "        uat_payments:\n          hosts:\n            uat_ocp:\n"
+            "        prd_payments:\n          hosts:\n            prd_ocp:\n            prd_dr_ocp:\n",
+        "Platform/checkout.yml":
+            "all:\n  children:\n    checkout:\n      children:\n"
+            "        dev_checkout:\n          hosts:\n            dev_ocp:\n"
+            "        prd_checkout:\n          hosts:\n            prd_ocp:\n",
         "Platform/group_vars/all/teams.yml":
-            "---\ndev_team: Platform_Devs\nqc_team: Platform_QC\nops_team: SRE_Core\n"
-            "security_team: AppSec\n",
+            "---\ndev_team: Platform_Devs\nqc_team: Platform_QC\nprd_team: SRE_Core\n"
+            "uat_team: Platform_UAT\nsecurity_team: AppSec\n",
         "Platform/group_vars/all/common.yml":
             "---\ndomain: platform.corp.local\nregion: eu-west\nlog_level: info\n",
-        "Platform/group_vars/payments": "---\nreplicas: 3\n",
-        "Platform/group_vars/prod_payments": "---\nreplicas: 6\n",
-        "Platform/host_vars/plat-app-01/vars.yml": "---\nansible_host: 10.0.0.11\n",
-        "Platform/host_vars/plat-app-01/vault.yml":
+        "Platform/group_vars/prd_payments/vars.yml": "---\nreplicas: 6\n",
+        "Platform/host_vars/prd_ocp/vars.yml": "---\nansible_host: 10.0.0.11\n",
+        "Platform/host_vars/prd_ocp/vault.yml":
             "$ANSIBLE_VAULT;1.1;AES256\n6162636465666768696a6b6c6d6e6f70\n",
-        "Control/team-configs.yml": "---\n- hosts: control\n  roles:\n    - app_deploy\n",
+        "Control/team-configs.yml":
+            "all:\n  children:\n    team-configs:\n      children:\n"
+            "        dev_team-configs:\n          hosts:\n            dev_ocp:\n"
+            "        prd_team-configs:\n          hosts:\n            prd_ocp:\n",
         "Control/group_vars/all/teams.yml":
-            "---\ndev_team: Control_Owners\nqc_team: Platform_QC\n",  # ops_team missing
-        "Research/prototypes.yml": "---\n- hosts: research\n  roles:\n    - app_deploy\n",
+            "---\ndev_team: Control_Owners\nqc_team: Platform_QC\n",  # prd_team (ops) missing
+        "Research/prototypes.yml":
+            "all:\n  children:\n    prototypes:\n      children:\n"
+            "        dev_prototypes:\n          hosts:\n            dev_ocp:\n",
         "Research/group_vars/all/teams.yml":
-            "---\ndev_team: Research_Team\nqc_team: Research_Team\nops_team: SRE_Core\n"
+            "---\ndev_team: Research_Team\nqc_team: Research_Team\nprd_team: SRE_Core\n"
             "data_team: DataEng\n",
     },
 }
