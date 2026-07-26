@@ -175,6 +175,11 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
         pr_defined = [p for p in pr_scored if p.get("pr_present")]
         pr_project_level = sum(1 for p in pr_defined if p.get("pr_scope") == "project")
         pr_repo_level = sum(1 for p in pr_defined if p.get("pr_scope") == "repo")
+        # inventory / pipeline coverage across the collection
+        inv_in = sum(1 for p in ps if p.get("in_inventory"))
+        inv_pipelines = sum(p.get("inv_pipelines", 0) for p in ps)
+        inv_pipelines_matched = sum(p.get("inv_pipelines_matched", 0) for p in ps)
+        inv_team_mismatch = sum(1 for p in ps if p.get("inv_team_match") is False)
         out.append({
             "name": c, "projects": len(ps),
             "teams": sum(p.get("teams", 0) for p in ps),
@@ -195,6 +200,10 @@ def _collection_rollup(projects: list[dict], colls: list[str]) -> list[dict]:
             "pr_project_level": pr_project_level,
             "pr_repo_level": pr_repo_level,
             "pr_missing_projects": len(pr_scored) - len(pr_defined),
+            "inventory_projects": inv_in,
+            "inventory_pipelines": inv_pipelines,
+            "inventory_pipelines_matched": inv_pipelines_matched,
+            "inventory_team_mismatch": inv_team_mismatch,
             "score": round(sum(scored) / len(scored)) if scored else None,
             "grade": _grade(round(sum(scored) / len(scored)) if scored else None)})
     return out
@@ -417,6 +426,11 @@ def ado_projects(force: bool = False) -> dict:
             if i not in fully:
                 p.update(score=None, grade="?", uniform=None,
                          pct_repo_specific=None, not_scored=True)
+
+        # join the inventories repo (presence, teams, pipeline coverage) BEFORE
+        # dropping the repo lists — pipeline matching needs the repo names
+        inv = _inventory_join(projects)
+        for p in projects:
             p.pop("_repolist", None)
             p.pop("_teamlist", None)
 
@@ -429,6 +443,7 @@ def ado_projects(force: bool = False) -> dict:
                 "ldap_failed_teams": _group_ldap_failures(projects),
                 "duplicate_repos": duplicate_repos[:200],
                 "duplicate_repo_count": len(duplicate_repos),
+                "inventory": inv,
                 "scored_repos": len(capped), "total_repos": len(pairs)}
     return _cached("ado:projects", force, build)
 
@@ -448,53 +463,75 @@ def _group_ldap_failures(projects: list[dict]) -> list[dict]:
             for t, ps in sorted(by_team.items())]
 
 
-def inventory_crosscheck(force: bool = False) -> dict:
-    """Cross-check ADO projects against the parsed inventories repo: which ADO
-    projects exist in the inventory (and vice-versa), and whether the inventory
-    dev_team matches the [TEAM] group that owns the ADO project."""
-    def build():
-        from . import inventory
-        ado = ado_projects()
-        inv = inventory.parse()
-        ado_projects_list = ado.get("projects", [])
-        inv_projects = inv.get("projects", [])
-        inv_by_name = {_norm_ident(p["name"]): p for p in inv_projects}
-        ado_names = {_norm_ident(p["name"]) for p in ado_projects_list}
+def _team_match(ado_team: str, inv_team: str) -> bool | None:
+    """True/False if both an ADO [TEAM] owner and an inventory team are present
+    and comparable; None when one side is missing (nothing to compare)."""
+    if not ado_team or not inv_team:
+        return None
+    a, b = _norm_ident(ado_team), _norm_ident(inv_team)
+    return bool(a and b and (a == b or a in b or b in a))
 
-        rows, in_inv, matches, mismatches = [], 0, 0, 0
-        for ap in ado_projects_list:
-            ip = inv_by_name.get(_norm_ident(ap["name"]))
-            row = {"project": ap["name"], "coll": ap["coll"],
-                   "ado_team": ap.get("team"), "in_inventory": ip is not None,
-                   "dev_team": None, "qc_team": None, "ops_team": None,
-                   "team_match": None}
-            if ip:
-                in_inv += 1
-                row.update(dev_team=ip.get("dev_team"), qc_team=ip.get("qc_team"),
-                           ops_team=ip.get("ops_team"))
-                # match the inventory dev_team against the ADO [TEAM] owner
-                if ap.get("team") and ip.get("dev_team") and not ap.get("team_unassigned"):
-                    a, b = _norm_ident(ap["team"]), _norm_ident(ip["dev_team"])
-                    row["team_match"] = bool(a and b and (a == b or a in b or b in a))
-                    matches += row["team_match"]
-                    mismatches += not row["team_match"]
-            rows.append(row)
-        rows.sort(key=lambda r: (r["in_inventory"], r["team_match"] is not False,
-                                 r["coll"].lower(), r["project"].lower()))
-        inventory_only = sorted(p["name"] for k, p in inv_by_name.items()
-                                if k not in ado_names)
-        return {"source": inv.get("source", "unknown"),
-                "inventory_source": inv.get("source"),
-                "note": inv.get("note"),
-                "rows": rows, "inventory_only": inventory_only,
-                "summary": {
-                    "ado_projects": len(ado_projects_list),
-                    "in_inventory": in_inv,
-                    "not_in_inventory": len(ado_projects_list) - in_inv,
-                    "inventory_projects": len(inv_projects),
-                    "inventory_only": len(inventory_only),
-                    "team_match": matches, "team_mismatch": mismatches}}
-    return _cached("access:inv-crosscheck", force, build)
+
+def _inventory_join(projects: list[dict]) -> dict:
+    """Enrich each ADO project in-place with inventory data (presence, teams,
+    dev_team↔owner match, and pipeline coverage: how many inventory apps —
+    whose `repository_name` names an ADO repo — actually resolve to a real repo
+    in the project). Returns an instance-level inventory summary + the inventory
+    projects that have no matching ADO project. Requires `_repolist`."""
+    from . import inventory
+    inv = inventory.parse()
+    inv_projects = inv.get("projects", [])
+    inv_by_name = {_norm_ident(p["name"]): p for p in inv_projects}
+    ado_norm = {_norm_ident(p["name"]) for p in projects}
+
+    in_inv = matches = mismatches = pipelines = pipelines_matched = 0
+    for p in projects:
+        ip = inv_by_name.get(_norm_ident(p["name"]))
+        p["in_inventory"] = ip is not None
+        p["inv_dev_team"] = p["inv_qc_team"] = p["inv_ops_team"] = None
+        p["inv_team_match"] = None
+        p["inv_pipelines"] = 0            # inventory apps that name an ADO repo
+        p["inv_pipelines_matched"] = 0    # …that resolve to a real repo here
+        p["inv_pipeline_repos"] = []      # the matched repo names (for display)
+        if not ip:
+            continue
+        in_inv += 1
+        p["inv_dev_team"] = ip.get("dev_team")
+        p["inv_qc_team"] = ip.get("qc_team")
+        p["inv_ops_team"] = ip.get("ops_team")
+        if not p.get("team_unassigned"):
+            m = _team_match(p.get("team"), ip.get("dev_team"))
+            p["inv_team_match"] = m
+            if m is True:
+                matches += 1
+            elif m is False:
+                mismatches += 1
+        inv_repos = {r.lower() for r in ip.get("repository_names", [])}
+        ado_repos = {r["name"].lower(): r["name"] for r in p.get("_repolist", [])}
+        matched = sorted(ado_repos[r] for r in inv_repos if r in ado_repos)
+        p["inv_pipelines"] = len(inv_repos)
+        p["inv_pipelines_matched"] = len(matched)
+        p["inv_pipeline_repos"] = matched[:50]
+        pipelines += len(inv_repos)
+        pipelines_matched += len(matched)
+
+    inventory_only = sorted(p["name"] for k, p in inv_by_name.items()
+                            if k not in ado_norm)
+    return {
+        "source": inv.get("source"), "note": inv.get("note"),
+        "inventory_only": inventory_only,
+        "summary": {
+            "ado_projects": len(projects),
+            "in_inventory": in_inv,
+            "not_in_inventory": len(projects) - in_inv,
+            "inventory_projects": len(inv_projects),
+            "inventory_only": len(inventory_only),
+            "team_match": matches, "team_mismatch": mismatches,
+            "apps": inv.get("summary", {}).get("apps", 0),
+            # canonical inventory pipeline count (deduped) vs the ADO-coverage
+            # tallies (which sum per project, so shared project names double up)
+            "pipelines_total": inv.get("summary", {}).get("pipelines", 0),
+            "pipelines": pipelines, "pipelines_matched": pipelines_matched}}
 
 
 def _demo_ado_projects() -> dict:
@@ -503,6 +540,10 @@ def _demo_ado_projects() -> dict:
     projects = [
         {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
          "description": "[platform-devs] Product delivery", "repos": 6, "teams": 3,
+         "_repolist": [{"id": "r1", "name": "payments-svc"},
+                       {"id": "r2", "name": "checkout-svc"},
+                       {"id": "r3", "name": "notify-svc"},
+                       {"id": "r4", "name": "legacy-batch"}],
          "members": 5, "_memberset": {"Alice Nasr", "Bob Farid", "Carol Adel",
                                       "Dave Samir", "Erin Zaki"},
          "score": 62, "grade": "C", "uniform": False, "pct_repo_specific": 100,
@@ -513,6 +554,8 @@ def _demo_ado_projects() -> dict:
          "url": "https://ado.demo/DefaultCollection/Platform"},
         {"id": "p2", "coll": "DefaultCollection", "name": "Control",
          "description": "[control-owners] Team config repos", "repos": 2, "teams": 1,
+         "_repolist": [{"id": "r5", "name": "team-configs"},
+                       {"id": "r6", "name": "control-utils"}],
          "members": 2, "_memberset": {"Alice Nasr", "Bob Farid"},
          "score": 94, "grade": "A", "uniform": True, "pct_repo_specific": 50,
          "team": "control-owners", "team_ok": True, "team_group_granted": True,
@@ -548,10 +591,12 @@ def _demo_ado_projects() -> dict:
          "url": "https://ado.demo/Research/Platform"},
     ]
     colls = ["DefaultCollection", "Research"]
+    inv = _inventory_join(projects)
     stats = _collection_rollup(projects, colls)
     failed = _group_ldap_failures(projects)
     for p in projects:
         p.pop("_memberset", None)
+        p.pop("_repolist", None)
     # 'prototypes' lives in both Research/Sandbox and Research/Platform; 'sandbox'
     # in Research/Platform too — exercises the cross-instance duplicate-repo view
     duplicate_repos = [
@@ -563,6 +608,7 @@ def _demo_ado_projects() -> dict:
             "collection_stats": stats,
             "ldap_failed_teams": failed,
             "duplicate_repos": duplicate_repos, "duplicate_repo_count": len(duplicate_repos),
+            "inventory": inv,
             "scored_repos": 9, "total_repos": 9}
 
 
@@ -1820,6 +1866,20 @@ def access_summary(force: bool = False) -> dict:
                    "scopes": len(jk_data.get("items", [])),
                    "global": bool(jk_data.get("global_found"))}
 
+        # ---- Inventory (from the joined ADO payload) ----
+        inv_join = ado_projects_data.get("inventory") or {}
+        inv_sum = inv_join.get("summary") or {}
+        inventory = {"source": inv_join.get("source") or "not cloned",
+                     "note": inv_join.get("note"),
+                     "projects": inv_sum.get("inventory_projects", 0),
+                     "apps": inv_sum.get("apps", 0),
+                     "pipelines": inv_sum.get("pipelines_total", 0),
+                     "pipelines_matched": inv_sum.get("pipelines_matched", 0),
+                     "in_inventory": inv_sum.get("in_inventory", 0),
+                     "not_in_inventory": inv_sum.get("not_in_inventory", 0),
+                     "inventory_only": inv_sum.get("inventory_only", 0),
+                     "team_mismatch": inv_sum.get("team_mismatch", 0)}
+
         # ---- ADO vs Jira same-name detection ----
         ado_norm = {_norm(n): n for n in ado_names}
         jira_norm: dict[str, dict] = {}
@@ -1841,7 +1901,8 @@ def access_summary(force: bool = False) -> dict:
                    "ado_only_count": len(ado_only), "ado_only": ado_only[:200],
                    "jira_only_count": len(jira_only), "jira_only": jira_only[:200],
                    "comparable": ado["source"] == jira["source"] != "not configured"}
-        return {"ado": ado, "jira": jira, "jenkins": jenkins, "overlap": overlap}
+        return {"ado": ado, "jira": jira, "jenkins": jenkins,
+                "inventory": inventory, "overlap": overlap}
     return _cached("access:summary", force, build)
 
 

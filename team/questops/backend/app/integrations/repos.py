@@ -148,6 +148,9 @@ DEMO_REPO_FILES = {
             "uat_team: Platform_UAT\nsecurity_team: AppSec\n",
         "Platform/group_vars/all/common.yml":
             "---\ndomain: platform.corp.local\nregion: eu-west\nlog_level: info\n",
+        # app-level group_vars carry repository_name — ties the app's pipeline to its ADO repo
+        "Platform/group_vars/payments/main.yml": "---\nrepository_name: payments-svc\n",
+        "Platform/group_vars/checkout/main.yml": "---\nrepository_name: checkout-svc\n",
         "Platform/group_vars/prd_payments/vars.yml": "---\nreplicas: 6\n",
         "Platform/host_vars/prd_ocp/vars.yml": "---\nansible_host: 10.0.0.11\n",
         "Platform/host_vars/prd_ocp/vault.yml":
@@ -158,6 +161,7 @@ DEMO_REPO_FILES = {
             "        prd_team-configs:\n          hosts:\n            prd_ocp:\n",
         "Control/group_vars/all/teams.yml":
             "---\ndev_team: Control_Owners\nqc_team: Platform_QC\n",  # prd_team (ops) missing
+        "Control/group_vars/team-configs/main.yml": "---\nrepository_name: team-configs\n",
         "Research/prototypes.yml":
             "all:\n  children:\n    prototypes:\n      children:\n"
             "        dev_prototypes:\n          hosts:\n            dev_ocp:\n",

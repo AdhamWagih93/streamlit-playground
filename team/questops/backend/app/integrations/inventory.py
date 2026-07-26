@@ -1,16 +1,18 @@
 """Parse the cloned `inventories` Ansible repo into a per-project config model.
 
 Layout (per project directory):
-  <project>/<app>.yml                      app definitions
-  <project>/group_vars/all/*.yml           project-wide vars (dev_team/qc_team/ops_team, …)
-  <project>/group_vars/<app>               app group vars
+  <project>/<app>.yml                      app inventory (envs/hosts)
+  <project>/group_vars/all/*.yml           project-wide vars (dev_team/qc_team/prd_team, …)
+  <project>/group_vars/<app>               app group vars (repository_name → ADO repo)
   <project>/group_vars/<env>_<app>         per-env app group vars
   <project>/host_vars/<host>/vars.yml      host vars (plaintext)
   <project>/host_vars/<host>/vault.yml     host secrets (ansible-vault — NOT decrypted)
 
-Team ownership (dev_team/qc_team/ops_team, and any other <role>_team) lives in
-the plaintext group_vars/all, so we read that directly. Vault files are detected
-and counted only — secrets are never decrypted into the UI."""
+Team ownership (dev_team/qc_team/prd_team [== ops], and any other <role>_team)
+lives in the plaintext group_vars/all. Each app's `repository_name` (in its
+group_vars/<app>) names the ADO repo hosting the app's pipeline, so the Access
+page can tie inventory pipelines to real ADO repos. Vault files are detected and
+counted only — secrets are never decrypted into the UI."""
 
 import re
 import time
@@ -110,6 +112,27 @@ def _stringify(v) -> str:
     return str(v)
 
 
+def _app_var(pdir, app: str, key: str):
+    """Look up a single app-level var (e.g. repository_name) from the app's
+    group_vars — `group_vars/<app>.yml`, `group_vars/<app>` (file), or the
+    files under `group_vars/<app>/`. Returns the stringified value or None."""
+    gv = pdir / "group_vars"
+    candidates = [gv / f"{app}.yml", gv / app]
+    d = gv / app
+    if d.is_dir():
+        candidates = [gv / f"{app}.yml"] + sorted(d.glob("*.yml"))
+    for c in candidates:
+        if not c.is_file():
+            continue
+        try:
+            data = _load_yaml(c.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if key in data and data[key] not in (None, ""):
+            return _stringify(data[key])
+    return None
+
+
 # ------------------------------------------------------------- repo location
 def _inventory_dir():
     from . import repos
@@ -157,6 +180,15 @@ def _parse_project(pdir) -> dict:
         else:
             other_vars[k] = _stringify(v)
 
+    # per-app config: repository_name ties each app's pipeline to its ADO repo
+    app_configs = []
+    repository_names = []
+    for app in apps:
+        rn = _app_var(pdir, app, "repository_name")
+        app_configs.append({"name": app, "repository_name": rn})
+        if rn:
+            repository_names.append(rn)
+
     # environments + inventory hosts come from the <app>.yml inventory trees
     # (all.children.<app>.children.<env>_<app>.hosts.<host>)
     envs, inv_hosts = _apps_inventory(pdir, apps)
@@ -186,6 +218,9 @@ def _parse_project(pdir) -> dict:
 
     return {
         "name": name, "apps": apps, "app_count": len(apps),
+        "app_configs": app_configs,               # [{name, repository_name}]
+        "repository_names": sorted(set(repository_names)),
+        "pipeline_count": len(repository_names),   # apps tying to an ADO repo
         "teams": teams, "other_teams": other_teams,
         "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
         "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),  # prd_team == ops team
@@ -238,6 +273,7 @@ def _summary(projects: list[dict]) -> dict:
     return {
         "projects": len(projects),
         "apps": sum(p["app_count"] for p in projects),
+        "pipelines": sum(p.get("pipeline_count", 0) for p in projects),
         "hosts": sum(p["host_count"] for p in projects),
         "vault_files": sum(p["vault_files"] for p in projects),
         "distinct_teams": len(all_teams),
@@ -250,15 +286,21 @@ def _summary(projects: list[dict]) -> dict:
 
 # ------------------------------------------------------------- demo
 def _demo() -> dict:
-    def proj(name, apps, teams, other, vars_, envs, hosts, vault):
+    def proj(name, app_repos, teams, other, vars_, envs, hosts, vault):
+        apps = [a for a, _ in app_repos]
+        app_configs = [{"name": a, "repository_name": r} for a, r in app_repos]
+        rns = [r for _, r in app_repos if r]
         return {"name": name, "apps": apps, "app_count": len(apps),
+                "app_configs": app_configs, "repository_names": sorted(set(rns)),
+                "pipeline_count": len(rns),
                 "teams": teams, "other_teams": other,
                 "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
                 "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),
                 "vars": vars_, "var_count": len(vars_), "envs": envs,
                 "hosts": hosts, "host_count": len(hosts), "vault_files": vault}
     projects = [
-        proj("Platform", ["payments", "checkout", "notifications"],
+        proj("Platform", [("payments", "payments-svc"), ("checkout", "checkout-svc"),
+                          ("notifications", "notify-svc")],
              {"dev": "Platform_Devs", "qc": "Platform_QC", "prd": "SRE_Core"},
              {"uat": "Platform_UAT", "security": "AppSec"},
              {"domain": "platform.corp.local", "region": "eu-west", "log_level": "info"},
@@ -268,13 +310,13 @@ def _demo() -> dict:
               {"host": "uat_ocp", "vars": True, "vault": True},
               {"host": "prd_ocp", "vars": True, "vault": True},
               {"host": "prd_dr_ocp", "vars": True, "vault": True}], 3),
-        proj("Control", ["team-configs"],
+        proj("Control", [("team-configs", "team-configs")],
              {"dev": "Control_Owners", "qc": "Platform_QC"},   # prd_team (ops) missing
              {}, {"domain": "control.corp.local", "region": "eu-west"},
              ["dev", "prd"],
              [{"host": "dev_ocp", "vars": True, "vault": False},
               {"host": "prd_ocp", "vars": True, "vault": False}], 0),
-        proj("Research", ["prototypes"],
+        proj("Research", [("prototypes", None)],
              {"dev": "Research_Team", "qc": "Research_Team", "prd": "SRE_Core"},
              {"data": "DataEng"}, {"domain": "research.corp.local", "experimental": "true"},
              ["dev"], [{"host": "dev_ocp", "vars": True, "vault": True}], 1),

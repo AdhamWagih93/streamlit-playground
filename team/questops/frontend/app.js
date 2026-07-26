@@ -2263,7 +2263,6 @@ const ACC_WHAT = {
   ado: "querying Azure DevOps for projects",
   jira: "reading Jira permission schemes & their project assignments",
   activity: "reading per-project dates & per-user last-login/activity (JQL per row)",
-  invcheck: "cross-checking ADO projects against the inventories repo",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
 };
 
@@ -2417,6 +2416,8 @@ function collStatsPanel(s) {
           `${s.unassigned_healthy} healthy · ${s.unassigned_unhealthy} unhealthy (of ${unassigned} unassigned)`, cls(healthyPct)) : ""}
       ${prScored ? bar("PR reviewers defined", prDefinedPct,
           `${s.pr_project_level || 0} project-level · ${s.pr_repo_level || 0} repo-level · ${s.pr_missing_projects || 0} missing (of ${prScored})`, cls(prDefinedPct)) : ""}
+      ${(s.inventory_pipelines || 0) ? bar("inventory pipelines tied to an ADO repo", pct(s.inventory_pipelines_matched || 0, s.inventory_pipelines || 0),
+          `${s.inventory_pipelines_matched || 0} matched · ${(s.inventory_pipelines || 0) - (s.inventory_pipelines_matched || 0)} unmatched (of ${s.inventory_pipelines} defined) · ${s.inventory_projects || 0} project(s) in inventory`, cls(pct(s.inventory_pipelines_matched || 0, s.inventory_pipelines || 0))) : ""}
       <div class="cstat">
         <div class="cstat-top"><span>projects with out-of-team members</span>
           <b class="${(s.extra_member_projects || 0) ? "pct-bad" : "pct-good"}">${s.extra_member_projects || 0}</b></div>
@@ -2456,12 +2457,17 @@ function adoMatch(p, f, dupNames) {
   const isDup = !!dupNames[(p.name || "").toLowerCase()];
   if (f.dup === "yes" && !isDup) return false;
   if (f.dup === "no" && isDup) return false;
+  if (f.inv === "in" && !p.in_inventory) return false;
+  if (f.inv === "out" && p.in_inventory) return false;
+  if (f.inv === "pipes" && !((p.inv_pipelines_matched || 0) > 0)) return false;
+  if (f.inv === "mismatch" && p.inv_team_match !== false) return false;
   if (f.minrepos && (p.repos || 0) < Number(f.minrepos)) return false;
   return true;
 }
 const ADO_FILTER_ACTIVE = (f) => f && (f.q || (f.grade && f.grade !== "all")
   || (f.pr && f.pr !== "all") || (f.team && f.team !== "all") || (f.outteam && f.outteam !== "all")
   || (f.unassigned && f.unassigned !== "all") || (f.dup && f.dup !== "all")
+  || (f.inv && f.inv !== "all")
   || f.minrepos || f.minprojects || (f.sort && f.sort !== "name"));
 
 function accAdoHtml(d) {
@@ -2484,6 +2490,21 @@ function accAdoHtml(d) {
     return others.length
       ? `<span class="chip chip-violet acc-dup" title="same project name also in: ${others.map(esc).join(", ")}">⧉ also in ${others.length} other collection${others.length > 1 ? "s" : ""}</span>`
       : "";
+  };
+  // inventory chips for one project: presence, dev_team↔owner match, pipelines
+  const invChips = (p) => {
+    if (!p.in_inventory)
+      return '<span class="chip chip-amber acc-inv-chip" title="no matching project in the inventories repo">🧭 not in inventory</span>';
+    const parts = ['<span class="chip chip-green acc-inv-chip" title="found in the inventories repo">🧭 in inventory</span>'];
+    if (p.inv_team_match === true)
+      parts.push(`<span class="chip chip-green" title="inventory dev_team [${esc(p.inv_dev_team || "")}] matches the ADO owner">✓ dev_team</span>`);
+    else if (p.inv_team_match === false)
+      parts.push(`<span class="chip chip-red" title="inventory dev_team [${esc(p.inv_dev_team || "—")}] ≠ ADO owner [${esc(p.team || "—")}]">⚠ dev_team ≠ owner</span>`);
+    if ((p.inv_pipelines || 0) > 0) {
+      const full = p.inv_pipelines_matched === p.inv_pipelines;
+      parts.push(`<span class="chip ${full ? "chip-cyan" : "chip-amber"}" title="inventory apps (repository_name) resolving to a real ADO repo${(p.inv_pipeline_repos || []).length ? ": " + p.inv_pipeline_repos.map(esc).join(", ") : ""}">🔧 ${p.inv_pipelines_matched || 0}/${p.inv_pipelines} pipelines</span>`);
+    }
+    return parts.join(" ");
   };
   // apply the smart filters, then group + sort the surviving projects
   const filtering = ADO_FILTER_ACTIVE(f);
@@ -2512,6 +2533,19 @@ function accAdoHtml(d) {
         ${x.projects.map((p) => `${esc(p.project)} <span class="ci-meta">(${esc(p.coll)})</span>`).join(", ")}</div>`).join("")}
     </div>` : "";
 
+  // inventory join — presence, dev_team match & pipeline coverage
+  const inv = d.inventory || {};
+  const invSum = inv.summary || {};
+  const invCloned = inv.source && inv.source !== "not cloned";
+  const invBanner = !invCloned
+    ? `<div class="kpi-note" style="margin-bottom:10px">🧭 clone the <code>inventories</code> repo on the Repositories page to tie each app's pipeline (<code>repository_name</code>) to its ADO repo${inv.note ? ` — ${esc(inv.note)}` : ""}</div>`
+    : `<div class="acc-inv-bar">
+        <span class="chip chip-green" title="ADO projects that exist in the inventories repo">🧭 ${invSum.in_inventory || 0}/${invSum.ado_projects || 0} projects in inventory</span>
+        <span class="chip ${invSum.pipelines_matched ? "chip-cyan" : ""}" title="inventory apps whose repository_name resolves to a real ADO repo">🔧 ${invSum.pipelines_matched || 0}/${invSum.pipelines_total || 0} pipelines tied to a repo</span>
+        ${invSum.team_mismatch ? `<span class="chip chip-red" title="inventory dev_team ≠ the ADO project owner">⚠ ${invSum.team_mismatch} dev_team mismatch</span>` : `<span class="chip chip-green">✓ dev_team matches owner</span>`}
+        ${(inv.inventory_only || []).length ? `<span class="chip chip-amber" title="inventory projects with no matching ADO project: ${inv.inventory_only.map(esc).join(", ")}">🧭 ${inv.inventory_only.length} inventory-only</span>` : ""}
+      </div>`;
+
   // duplicated REPOSITORY names across the whole instance
   const dupRepos = d.duplicate_repos || [];
   const dupRepoPanel = dupRepos.length ? `
@@ -2537,6 +2571,7 @@ function accAdoHtml(d) {
       ${sel("outteam", f.outteam, [["all", "out-of-team: any"], ["yes", "has out-of-team"], ["no", "none out-of-team"]])}
       ${sel("unassigned", f.unassigned, [["all", "assign: any"], ["assigned", "assigned"], ["correct", "unassigned ✓"], ["incorrect", "unassigned ✗"]])}
       ${sel("dup", f.dup, [["all", "name: any"], ["yes", "shared name"], ["no", "unique name"]])}
+      ${sel("inv", f.inv, [["all", "inventory: any"], ["in", "in inventory"], ["out", "not in inventory"], ["pipes", "has pipelines"], ["mismatch", "dev_team ≠ owner"]])}
       <input class="acc-filter-num" type="number" min="0" data-ado-filter="minrepos" placeholder="min repos" value="${esc(f.minrepos || "")}">
       <input class="acc-filter-num" type="number" min="0" data-ado-filter="minprojects" placeholder="min proj/coll" value="${esc(f.minprojects || "")}">
       ${sel("sort", f.sort || "name", [["name", "sort: name"], ["score-asc", "score ↑"], ["score-desc", "score ↓"], ["repos-desc", "repos ↓"]])}
@@ -2559,6 +2594,9 @@ function accAdoHtml(d) {
               ? `<span class="chip ${s.pr_missing_projects ? "chip-amber" : "chip-green"}" title="projects defining a PR-reviewer group">🔀 ${s.pr_defined_projects || 0}/${s.pr_scored_projects || 0} w/ PR</span>` : ""}
             <span class="chip">${s.teams} teams</span>
             <span class="chip">${s.repos} repos</span>
+            ${invCloned ? `<span class="chip chip-cyan" title="inventory apps (repository_name) tied to a real ADO repo in this collection">🔧 ${s.inventory_pipelines_matched || 0}/${s.inventory_pipelines || 0} pipelines</span>` : ""}
+            ${invCloned && (s.inventory_projects != null) ? `<span class="chip" title="projects in this collection found in the inventories repo">🧭 ${s.inventory_projects || 0} in inventory</span>` : ""}
+            ${(s.inventory_team_mismatch || 0) ? `<span class="chip chip-red" title="projects where inventory dev_team ≠ ADO owner">⚠ ${s.inventory_team_mismatch} dev_team ≠</span>` : ""}
             ${(() => { const n = byColl[c].filter((p) => dupNames[(p.name || "").toLowerCase()]).length;
               return n ? `<span class="chip chip-violet" title="project names in this collection that also exist in another collection">⧉ ${n} shared name(s)</span>` : ""; })()}
           </span></summary>
@@ -2592,6 +2630,7 @@ function accAdoHtml(d) {
                     : `<span class="chip" title="distinct members with access">${p.members} members</span>`}
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
+                  ${invChips(p)}
                 </span></summary>
               <div class="acc-proj-body" id="acc-proj-${esc(p.coll)}-${esc(p.id)}"><div class="empty">loading…</div></div>
             </details>`).join("")}
@@ -2600,7 +2639,7 @@ function accAdoHtml(d) {
     }).join("")
     : `<div class="empty">no projects match the filters — <a href="javascript:void 0" id="ado-filter-clear2">clear filters</a></div>`;
 
-  return failBanner + dupRepoPanel + filterBar + summaryLine + body;
+  return failBanner + invBanner + dupRepoPanel + filterBar + summaryLine + body;
 }
 
 const TIER_CLS = { admin: "chip-red", write: "chip-amber", read: "chip-cyan", other: "" };
@@ -2941,35 +2980,8 @@ function wireAdoFilters() {
   if (cb2) cb2.onclick = clear;
 }
 
-function accInvCrosscheckHtml(d) {
-  const s = d.summary || {};
-  if (d.inventory_source === "not cloned")
-    return `<div class="kpi-note">🧭 ${esc(d.note || "the inventories repo isn't cloned")} — clone it on the Repositories page to enable the cross-check</div>`;
-  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
-  const tiles = `<div class="stat-tiles" style="margin:6px 0 10px">
-    ${tile(s.in_inventory || 0, "ADO projects in inventory", "pct-good")}
-    ${tile(s.not_in_inventory || 0, "ADO projects NOT in inventory", (s.not_in_inventory ? "pct-warn" : "pct-good"))}
-    ${tile(s.inventory_only || 0, "inventory-only projects", (s.inventory_only ? "pct-warn" : ""))}
-    ${tile(s.team_match || 0, "dev_team matches owner", "pct-good")}
-    ${tile(s.team_mismatch || 0, "dev_team MISMATCH", (s.team_mismatch ? "pct-bad" : "pct-good"))}</div>`;
-  const rows = (d.rows || []).map((r) => `
-    <div class="ci-row">
-      <span class="ci-job">📁 ${esc(r.project)} <span class="ci-meta">(${esc(r.coll)})</span></span>
-      ${r.in_inventory ? '<span class="chip chip-green">✓ in inventory</span>'
-        : '<span class="chip chip-amber">✗ not in inventory</span>'}
-      ${r.in_inventory && r.ado_team ? `<span class="ci-meta">owner <b>[${esc(r.ado_team)}]</b> vs dev_team <b>${esc(r.dev_team || "—")}</b></span>
-        ${r.team_match === true ? '<span class="chip chip-green">✓ team match</span>'
-          : r.team_match === false ? '<span class="chip chip-red" title="inventory dev_team does not match the ADO project owner">✗ team mismatch</span>'
-          : '<span class="chip" title="ADO owner or dev_team not set">— n/a</span>'}` : ""}
-    </div>`).join("") || '<div class="empty">no ADO projects</div>';
-  const invOnly = (d.inventory_only || []).length
-    ? `<div class="kpi-note">🧭 ${d.inventory_only.length} inventory project(s) with no matching ADO project: ${d.inventory_only.map(esc).join(", ")}</div>` : "";
-  return `<div class="ci-meta" style="margin-bottom:6px">${s.ado_projects || 0} ADO project(s) · ${s.inventory_projects || 0} inventory project(s) · source ${esc(d.source)}</div>
-    ${tiles}${invOnly}<div class="ci-scroll" style="max-height:360px">${rows}</div>`;
-}
-
 function accSummaryHtml(d) {
-  const a = d.ado, j = d.jira, o = d.overlap;
+  const a = d.ado, j = d.jira, o = d.overlap, inv = d.inventory || {};
   const tile = (v, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${v}</b><span>${label}</span></div>`;
   const tiles = [
     tile(a.collections, "ADO collections"),
@@ -2981,6 +2993,23 @@ function accSummaryHtml(d) {
     tile(j.projects, "Jira projects"),
     tile(j.jirauser_grants, "JIRAUSER users", j.jirauser_grants ? "pct-bad" : ""),
   ].join("");
+  // inventory tiles — only meaningful once the inventories repo is cloned
+  const invCloned = inv.source && inv.source !== "not cloned";
+  const invTiles = invCloned ? `
+    <div class="acc-glance-inv">
+      <div class="acc-glance-h">🧭 inventories repo</div>
+      <div class="stat-tiles">
+        ${tile(inv.projects || 0, "inventory projects")}
+        ${tile(inv.apps || 0, "apps")}
+        ${tile(inv.pipelines || 0, "pipelines (repository_name)")}
+        ${tile(inv.pipelines_matched || 0, "pipelines tied to an ADO repo", (inv.pipelines_matched ? "pct-good" : ""))}
+        ${tile(inv.in_inventory || 0, "ADO projects in inventory")}
+        ${tile(inv.not_in_inventory || 0, "ADO projects NOT in inventory", (inv.not_in_inventory ? "pct-warn" : "pct-good"))}
+        ${tile(inv.inventory_only || 0, "inventory-only projects", (inv.inventory_only ? "pct-warn" : ""))}
+        ${tile(inv.team_mismatch || 0, "dev_team ≠ ADO owner", (inv.team_mismatch ? "pct-bad" : "pct-good"))}
+      </div>
+    </div>`
+    : `<div class="kpi-note" style="margin-top:8px">🧭 inventory stats appear once the <code>inventories</code> repo is cloned on the Repositories page${inv.note ? ` — ${esc(inv.note)}` : ""}</div>`;
   const ov = o.comparable ? `
     <div class="acc-overlap">
       <div class="stat-tile"><b class="pct-good">${o.both_count}</b><span>in BOTH ADO &amp; Jira (same name)</span></div>
@@ -2991,7 +3020,7 @@ function accSummaryHtml(d) {
       <div style="padding:8px 12px">${o.both.map((b) => `<div class="ci-row"><span class="ci-job">${esc(b.ado)}</span>
         <span class="ci-meta">ADO ↔ Jira ${esc(b.jira || "")}</span></div>`).join("")}</div></details>` : ""}`
     : `<div class="kpi-note">ADO/Jira name comparison needs both sources configured</div>`;
-  return `<div class="stat-tiles">${tiles}</div>${ov}`;
+  return `<div class="stat-tiles">${tiles}</div>${invTiles}${ov}`;
 }
 
 // ---- ADO -> Gitea migration ----
@@ -3216,10 +3245,8 @@ async function renderAccess() {
       ADO project details load only when expanded, and fetches are bounded-parallel</div>
     <div class="panel" style="margin-bottom:18px"><h2>📊 at a glance</h2>
       <div id="acc-summary"></div></div>
-    <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
+    <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects, repository permissions &amp; inventory pipelines</h2>
       <div id="acc-ado"></div></div>
-    <div class="panel" style="margin-bottom:18px"><h2>🧭 Inventory cross-check <span class="ci-meta">ADO projects vs inventories repo · dev_team vs owning team</span></h2>
-      <div id="acc-invcheck"></div></div>
     <div class="panel"><h2>🎫 Jira — permission schemes, assignments &amp; activity</h2>
       <div id="acc-jira"></div></div>`;
 
@@ -3227,7 +3254,6 @@ async function renderAccess() {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
-    accLoad("invcheck", `/api/access/inventory-crosscheck${s}`, accInvCrosscheckHtml);
     loadJira(refresh);
   };
   load(false);
