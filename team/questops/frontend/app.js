@@ -1587,9 +1587,9 @@ async function renderRepos() {
     state.repoPath = ""; state.repoFile = null;
   }
   const cur = data.repos.find((r) => r.slot === state.repoSlot);
-  // the dependency analysis is Engine-specific for now (other named repos —
-  // UI, inventories, ocp-templates, Tools — will get their own logic later)
+  // per-repo analysis: Engine → dependency matrix; inventories → config view
   const isEngine = (cur.name || "").toLowerCase() === "engine";
+  const isInventories = (cur.name || "").toLowerCase() === "inventories";
 
   const chips = data.repos.map((r) => `
     <button class="btn btn-sm ${r.slot === cur.slot ? "btn-primary" : ""}" data-repo="${r.slot}">
@@ -1635,6 +1635,19 @@ async function renderRepos() {
       depsHtml = `<div class="deps-embed">${state.depsData.error
         ? `<div class="panel"><div class="empty">⚠ ${esc(state.depsData.error)}</div></div>`
         : depPanelHtml(state.depsData)}</div>`;
+    }
+    // inventories: parsed per-project config view (teams, apps, envs, hosts, vars)
+    let invHtml = "";
+    if (isInventories && state.invOpen) {
+      if (!state.invData || state.invRefresh) {
+        try {
+          state.invData = await api(`/api/inventory${state.invRefresh ? "?refresh=true" : ""}`);
+        } catch (e) { state.invData = { error: e.message }; }
+        state.invRefresh = false;
+      }
+      invHtml = `<div class="deps-embed inv-embed" id="inv-embed">${state.invData.error
+        ? `<div class="panel"><div class="empty">⚠ ${esc(state.invData.error)}</div></div>`
+        : invPanelHtml(state.invData)}</div>`;
     }
     const histPath = state.historyScope === "file" && state.repoFile ? state.repoFile : "";
     const [treeData, fileData, diffData, agentLogData, remoteData, histData] = await Promise.all([
@@ -1683,6 +1696,7 @@ async function renderRepos() {
           ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
         <button class="btn btn-sm ${state.scanOpen ? "btn-primary" : ""}" id="repo-scan">🔬 Tech scan</button>
         ${isEngine ? `<button class="btn btn-sm ${state.depsOpen ? "btn-primary" : ""}" id="repo-deps" title="pipelines → playbooks / roles / scripts">⛓ Dependencies</button>` : ""}
+        ${isInventories ? `<button class="btn btn-sm ${state.invOpen ? "btn-primary" : ""}" id="repo-inv" title="per-project apps, teams, envs, hosts &amp; vars">🧭 Configurations</button>` : ""}
         <button class="btn btn-sm ${state.historyOpen ? "btn-primary" : ""}" id="repo-history">🕘 History</button>
         <button class="btn btn-sm" id="repo-pull" title="fetch the server copy and move your workspace to it">⟳ Sync</button>
         <button class="btn btn-sm btn-danger" id="repo-discard">Discard my edits</button>
@@ -1692,6 +1706,7 @@ async function renderRepos() {
       <div id="remote-banner">${remoteBannerHtml(remoteData)}</div>
       ${scanHtml}
       ${depsHtml}
+      ${invHtml}
       ${state.historyOpen ? historyPanelHtml(histData) : ""}
       <div class="repo-grid">
         <div class="panel tree-panel">${up}${items}</div>
@@ -1764,6 +1779,10 @@ async function renderRepos() {
   on("dep-refresh", () => { state.depsRefresh = true; state.depRoot = null; renderRepos(); });
   if (isEngine && state.depsOpen && state.depsData && !state.depsData.error)
     wireDepPanel(state.depsData);
+  on("repo-inv", () => { state.invOpen = !state.invOpen; renderRepos(); });
+  on("inv-refresh", () => { state.invRefresh = true; renderRepos(); });
+  if (isInventories && state.invOpen && state.invData && !state.invData.error)
+    wireInvPanel();
   on("repo-remove", async () => {
     if (!confirm(`Remove ${cur.name} from QuestOps?\n\nThe local workspace (including un-pushed edits) is deleted.\nThe remote repository is untouched.`)) return;
     try {
@@ -2119,6 +2138,113 @@ function wireDepPanel(d) {
       if (rows) rows.innerHTML = depMatrixRows(d, state.depQuery);
     }, 120);
   };
+}
+
+/* ---- inventories: per-project configuration view ---- */
+const INV_PRIMARY = ["dev", "qc", "ops"];
+function invMatch(p, f) {
+  const allTeams = [...Object.values(p.teams || {}), ...Object.values(p.other_teams || {})];
+  if (f.q) {
+    const hay = (p.name + " " + (p.apps || []).join(" ") + " " + allTeams.join(" ")
+      + " " + Object.keys(p.vars || {}).join(" ")).toLowerCase();
+    if (!hay.includes(f.q.toLowerCase())) return false;
+  }
+  if (f.team && f.team !== "all" && !allTeams.includes(f.team)) return false;
+  if (f.env && f.env !== "all" && !(p.envs || []).includes(f.env)) return false;
+  if (f.missing === "yes" && INV_PRIMARY.every((r) => (p.teams || {})[r])) return false;
+  return true;
+}
+
+function invPanelHtml(d) {
+  const s = d.summary || {};
+  const f = state.invFilter = state.invFilter || {};
+  const projects = d.projects || [];
+  const allTeams = [...new Set(projects.flatMap((p) =>
+    [...Object.values(p.teams || {}), ...Object.values(p.other_teams || {})]))].sort();
+  const allEnvs = [...new Set(projects.flatMap((p) => p.envs || []))].sort();
+  const filtering = !!(f.q || (f.team && f.team !== "all") || (f.env && f.env !== "all") || f.missing === "yes");
+  const shown = projects.filter((p) => invMatch(p, f));
+
+  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const tiles = `<div class="stat-tiles" style="margin:6px 0 12px">
+    ${tile(s.projects || 0, "projects")}
+    ${tile(s.apps || 0, "apps")}
+    ${tile(s.hosts || 0, "hosts")}
+    ${tile(s.vault_files || 0, "vault files")}
+    ${tile(s.distinct_teams || 0, "distinct teams")}
+    ${tile(s.missing_primary || 0, "missing a primary team", (s.missing_primary ? "pct-bad" : "pct-good"))}</div>`;
+  const teamOverview = (s.teams || []).length ? `
+    <details class="filebox" style="margin-bottom:8px"><summary>👥 teams across the inventory (${s.teams.length})</summary>
+      <div class="inv-chips" style="padding:8px 12px">${s.teams.map((t) =>
+        `<span class="chip chip-cyan" title="${t.usages} usage(s)">${esc(t.name)} · ${t.usages}</span>`).join(" ")}</div>
+    </details>` : "";
+  const sel = (id, cur, opts) => `<select data-inv-filter="${id}">${opts.map(([v, l]) =>
+    `<option value="${esc(v)}" ${(cur || "all") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  const filterBar = `<div class="acc-filters">
+    <input id="inv-q" placeholder="🔎 project / app / team / var…" value="${esc(f.q || "")}">
+    ${sel("team", f.team, [["all", "team: any"], ...allTeams.map((t) => [t, t])])}
+    ${sel("env", f.env, [["all", "env: any"], ...allEnvs.map((e) => [e, e])])}
+    ${sel("missing", f.missing, [["all", "primary teams: any"], ["yes", "missing a primary team"]])}
+    ${filtering ? '<button class="btn btn-sm" id="inv-filter-clear">✕ clear</button>' : ""}</div>`;
+
+  const teamCell = (p, role) => {
+    const t = (p.teams || {})[role];
+    return t ? `<span class="chip chip-green" title="${role}_team">${role}: ${esc(t)}</span>`
+      : `<span class="chip chip-red" title="${role}_team not defined">${role}: —</span>`;
+  };
+  const cards = shown.map((p) => `
+    <details class="filebox inv-proj" ${filtering ? "open" : ""}>
+      <summary>📁 <b>${esc(p.name)}</b>
+        <span class="inv-chips">${INV_PRIMARY.map((r) => teamCell(p, r)).join(" ")}
+          ${Object.entries(p.other_teams || {}).map(([r, t]) => `<span class="chip" title="${esc(r)}_team">${esc(r)}: ${esc(t)}</span>`).join(" ")}</span>
+        <span class="ci-meta">${p.app_count} app(s) · ${(p.envs || []).length} env(s) · ${p.host_count} host(s)${p.vault_files ? ` · 🔒 ${p.vault_files} vault` : ""}</span></summary>
+      <div style="padding:8px 12px">
+        <div class="acc-h">apps</div>
+        <div class="inv-chips">${(p.apps || []).map((a) => `<span class="chip">${esc(a)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}</div>
+        ${(p.envs || []).length ? `<div class="acc-h" style="margin-top:8px">environments</div>
+          <div class="inv-chips">${p.envs.map((e) => `<span class="chip chip-amber">${esc(e)}</span>`).join(" ")}</div>` : ""}
+        ${(p.hosts || []).length ? `<div class="acc-h" style="margin-top:8px">hosts</div>
+          ${p.hosts.map((h) => `<div class="ci-row"><span class="ci-job">🖥 ${esc(h.host)}</span>
+            ${h.vars ? '<span class="chip chip-green">vars</span>' : ""}
+            ${h.vault ? '<span class="chip chip-amber" title="ansible-vault — encrypted, not decrypted">🔒 vault</span>' : ""}</div>`).join("")}` : ""}
+        ${Object.keys(p.vars || {}).length ? `<details class="filebox" style="margin-top:8px">
+          <summary>⚙ project vars (group_vars/all) — ${Object.keys(p.vars).length}</summary>
+          <div style="padding:6px 12px">${Object.entries(p.vars).map(([k, v]) =>
+            `<div class="ci-row"><code class="ci-job">${esc(k)}</code> <span class="ci-meta">${esc(String(v))}</span></div>`).join("")}</div>
+          </details>` : ""}
+      </div>
+    </details>`).join("") || '<div class="empty">no projects match the filters</div>';
+
+  return `<div class="deps-embed-head"><h2 style="margin:0">🧭 inventory configurations
+      <span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""}${filtering ? ` · ${shown.length} of ${projects.length}` : ""}</span></h2>
+      <span class="spacer"></span><button class="btn btn-sm" id="inv-refresh">↻ re-analyze</button></div>
+    ${d.note ? `<div class="kpi-note">${esc(d.note)}</div>` : ""}
+    ${tiles}${teamOverview}${filterBar}${cards}`;
+}
+
+function rerenderInv() {
+  const box = document.getElementById("inv-embed");
+  if (box && state.invData && !state.invData.error) { box.innerHTML = invPanelHtml(state.invData); wireInvPanel(); }
+}
+
+function wireInvPanel() {
+  const f = state.invFilter = state.invFilter || {};
+  view().querySelectorAll("[data-inv-filter]").forEach((el) =>
+    el.onchange = () => { f[el.dataset.invFilter] = el.value; rerenderInv(); });
+  const q = document.getElementById("inv-q");
+  if (q) q.oninput = () => {
+    f.q = q.value;
+    clearTimeout(state._invT);
+    state._invT = setTimeout(() => {
+      rerenderInv();
+      const nq = document.getElementById("inv-q");
+      if (nq) { nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }
+    }, 200);
+  };
+  const cb = document.getElementById("inv-filter-clear");
+  if (cb) cb.onclick = () => { state.invFilter = {}; rerenderInv(); };
+  const rb = document.getElementById("inv-refresh");
+  if (rb) rb.onclick = () => { state.invRefresh = true; renderRepos(); };
 }
 
 /* ================= ACCESS MANAGEMENT ================= */

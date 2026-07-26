@@ -124,6 +124,32 @@ DEMO_REPO_FILES = {
             "---\n- name: never referenced\n  debug: msg=unused\n",
         "playbooks/legacy/old_migration.yml":
             "---\n- hosts: db\n  tasks:\n    - shell: echo legacy migration\n",
+        # ansible-vault password used by the inventories vault.yml files — a
+        # single plaintext line (the password, nothing else)
+        ".vault_pass.txt": "demo-vault-password\n",
+    },
+    # inventories: per-project apps + group_vars (teams) + host_vars
+    "inventories": {
+        "README.md": "# inventories\n\nAnsible inventories: apps, group_vars, host_vars per project.\n",
+        "Platform/payments.yml": "---\n- hosts: payments\n  roles:\n    - app_deploy\n",
+        "Platform/checkout.yml": "---\n- hosts: checkout\n  roles:\n    - app_deploy\n",
+        "Platform/group_vars/all/teams.yml":
+            "---\ndev_team: Platform_Devs\nqc_team: Platform_QC\nops_team: SRE_Core\n"
+            "security_team: AppSec\n",
+        "Platform/group_vars/all/common.yml":
+            "---\ndomain: platform.corp.local\nregion: eu-west\nlog_level: info\n",
+        "Platform/group_vars/payments": "---\nreplicas: 3\n",
+        "Platform/group_vars/prod_payments": "---\nreplicas: 6\n",
+        "Platform/host_vars/plat-app-01/vars.yml": "---\nansible_host: 10.0.0.11\n",
+        "Platform/host_vars/plat-app-01/vault.yml":
+            "$ANSIBLE_VAULT;1.1;AES256\n6162636465666768696a6b6c6d6e6f70\n",
+        "Control/team-configs.yml": "---\n- hosts: control\n  roles:\n    - app_deploy\n",
+        "Control/group_vars/all/teams.yml":
+            "---\ndev_team: Control_Owners\nqc_team: Platform_QC\n",  # ops_team missing
+        "Research/prototypes.yml": "---\n- hosts: research\n  roles:\n    - app_deploy\n",
+        "Research/group_vars/all/teams.yml":
+            "---\ndev_team: Research_Team\nqc_team: Research_Team\nops_team: SRE_Core\n"
+            "data_team: DataEng\n",
     },
 }
 
