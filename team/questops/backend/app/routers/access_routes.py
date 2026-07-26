@@ -59,6 +59,12 @@ def jira_activity(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.jira_activity, refresh)
 
 
+@router.get("/inventory-crosscheck")
+def inventory_crosscheck(refresh: bool = False, user: User = Depends(current_user)):
+    """ADO projects vs the inventories repo: presence + dev_team vs owner match."""
+    return _wrap(access.inventory_crosscheck, refresh)
+
+
 @router.get("/jenkins")
 def jenkins(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.jenkins_matrix, refresh)

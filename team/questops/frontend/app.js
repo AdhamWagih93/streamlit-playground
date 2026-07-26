@@ -2261,6 +2261,7 @@ const ACC_WHAT = {
   ado: "querying Azure DevOps for projects",
   jira: "reading Jira permission schemes & their project assignments",
   activity: "reading per-project dates & per-user last-login/activity (JQL per row)",
+  invcheck: "cross-checking ADO projects against the inventories repo",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
 };
 
@@ -2938,6 +2939,33 @@ function wireAdoFilters() {
   if (cb2) cb2.onclick = clear;
 }
 
+function accInvCrosscheckHtml(d) {
+  const s = d.summary || {};
+  if (d.inventory_source === "not cloned")
+    return `<div class="kpi-note">🧭 ${esc(d.note || "the inventories repo isn't cloned")} — clone it on the Repositories page to enable the cross-check</div>`;
+  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const tiles = `<div class="stat-tiles" style="margin:6px 0 10px">
+    ${tile(s.in_inventory || 0, "ADO projects in inventory", "pct-good")}
+    ${tile(s.not_in_inventory || 0, "ADO projects NOT in inventory", (s.not_in_inventory ? "pct-warn" : "pct-good"))}
+    ${tile(s.inventory_only || 0, "inventory-only projects", (s.inventory_only ? "pct-warn" : ""))}
+    ${tile(s.team_match || 0, "dev_team matches owner", "pct-good")}
+    ${tile(s.team_mismatch || 0, "dev_team MISMATCH", (s.team_mismatch ? "pct-bad" : "pct-good"))}</div>`;
+  const rows = (d.rows || []).map((r) => `
+    <div class="ci-row">
+      <span class="ci-job">📁 ${esc(r.project)} <span class="ci-meta">(${esc(r.coll)})</span></span>
+      ${r.in_inventory ? '<span class="chip chip-green">✓ in inventory</span>'
+        : '<span class="chip chip-amber">✗ not in inventory</span>'}
+      ${r.in_inventory && r.ado_team ? `<span class="ci-meta">owner <b>[${esc(r.ado_team)}]</b> vs dev_team <b>${esc(r.dev_team || "—")}</b></span>
+        ${r.team_match === true ? '<span class="chip chip-green">✓ team match</span>'
+          : r.team_match === false ? '<span class="chip chip-red" title="inventory dev_team does not match the ADO project owner">✗ team mismatch</span>'
+          : '<span class="chip" title="ADO owner or dev_team not set">— n/a</span>'}` : ""}
+    </div>`).join("") || '<div class="empty">no ADO projects</div>';
+  const invOnly = (d.inventory_only || []).length
+    ? `<div class="kpi-note">🧭 ${d.inventory_only.length} inventory project(s) with no matching ADO project: ${d.inventory_only.map(esc).join(", ")}</div>` : "";
+  return `<div class="ci-meta" style="margin-bottom:6px">${s.ado_projects || 0} ADO project(s) · ${s.inventory_projects || 0} inventory project(s) · source ${esc(d.source)}</div>
+    ${tiles}${invOnly}<div class="ci-scroll" style="max-height:360px">${rows}</div>`;
+}
+
 function accSummaryHtml(d) {
   const a = d.ado, j = d.jira, o = d.overlap;
   const tile = (v, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${v}</b><span>${label}</span></div>`;
@@ -3188,6 +3216,8 @@ async function renderAccess() {
       <div id="acc-summary"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects &amp; repository permissions</h2>
       <div id="acc-ado"></div></div>
+    <div class="panel" style="margin-bottom:18px"><h2>🧭 Inventory cross-check <span class="ci-meta">ADO projects vs inventories repo · dev_team vs owning team</span></h2>
+      <div id="acc-invcheck"></div></div>
     <div class="panel"><h2>🎫 Jira — permission schemes, assignments &amp; activity</h2>
       <div id="acc-jira"></div></div>`;
 
@@ -3195,6 +3225,7 @@ async function renderAccess() {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
+    accLoad("invcheck", `/api/access/inventory-crosscheck${s}`, accInvCrosscheckHtml);
     loadJira(refresh);
   };
   load(false);

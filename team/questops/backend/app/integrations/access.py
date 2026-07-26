@@ -448,6 +448,55 @@ def _group_ldap_failures(projects: list[dict]) -> list[dict]:
             for t, ps in sorted(by_team.items())]
 
 
+def inventory_crosscheck(force: bool = False) -> dict:
+    """Cross-check ADO projects against the parsed inventories repo: which ADO
+    projects exist in the inventory (and vice-versa), and whether the inventory
+    dev_team matches the [TEAM] group that owns the ADO project."""
+    def build():
+        from . import inventory
+        ado = ado_projects()
+        inv = inventory.parse()
+        ado_projects_list = ado.get("projects", [])
+        inv_projects = inv.get("projects", [])
+        inv_by_name = {_norm_ident(p["name"]): p for p in inv_projects}
+        ado_names = {_norm_ident(p["name"]) for p in ado_projects_list}
+
+        rows, in_inv, matches, mismatches = [], 0, 0, 0
+        for ap in ado_projects_list:
+            ip = inv_by_name.get(_norm_ident(ap["name"]))
+            row = {"project": ap["name"], "coll": ap["coll"],
+                   "ado_team": ap.get("team"), "in_inventory": ip is not None,
+                   "dev_team": None, "qc_team": None, "ops_team": None,
+                   "team_match": None}
+            if ip:
+                in_inv += 1
+                row.update(dev_team=ip.get("dev_team"), qc_team=ip.get("qc_team"),
+                           ops_team=ip.get("ops_team"))
+                # match the inventory dev_team against the ADO [TEAM] owner
+                if ap.get("team") and ip.get("dev_team") and not ap.get("team_unassigned"):
+                    a, b = _norm_ident(ap["team"]), _norm_ident(ip["dev_team"])
+                    row["team_match"] = bool(a and b and (a == b or a in b or b in a))
+                    matches += row["team_match"]
+                    mismatches += not row["team_match"]
+            rows.append(row)
+        rows.sort(key=lambda r: (r["in_inventory"], r["team_match"] is not False,
+                                 r["coll"].lower(), r["project"].lower()))
+        inventory_only = sorted(p["name"] for k, p in inv_by_name.items()
+                                if k not in ado_names)
+        return {"source": inv.get("source", "unknown"),
+                "inventory_source": inv.get("source"),
+                "note": inv.get("note"),
+                "rows": rows, "inventory_only": inventory_only,
+                "summary": {
+                    "ado_projects": len(ado_projects_list),
+                    "in_inventory": in_inv,
+                    "not_in_inventory": len(ado_projects_list) - in_inv,
+                    "inventory_projects": len(inv_projects),
+                    "inventory_only": len(inventory_only),
+                    "team_match": matches, "team_mismatch": mismatches}}
+    return _cached("access:inv-crosscheck", force, build)
+
+
 def _demo_ado_projects() -> dict:
     # p1 Platform: repo-specific (Engine/UI differ); p2 Control: uniform;
     # p3 Sandbox: uniform — exercises the scoring + rollup
