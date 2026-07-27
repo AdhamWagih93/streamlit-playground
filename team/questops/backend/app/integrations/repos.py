@@ -457,11 +457,26 @@ def _seed_demo_repo(repo: dict, repo_dir: Path) -> None:
         f = repo_dir / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
+    ident = ["-c", "user.email=demo@questops", "-c", "user.name=QuestOps Demo"]
     try:  # a real git history makes status/diff work in the demo too
         _git(repo_dir, "init")
         _git(repo_dir, "add", "-A")
-        _git(repo_dir, "-c", "user.email=demo@questops", "-c", "user.name=QuestOps Demo",
-             "commit", "-m", "seed demo repository")
+        _git(repo_dir, *ident, "commit", "-m", "seed demo repository")
+        # a diverging feature branch so the branch/compare view has a real delta
+        default = _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD", ok_fail=True).strip() or "master"
+        _git(repo_dir, "checkout", "-q", "-b", "feature/demo")
+        (repo_dir / "CHANGES.md").write_text(
+            "# Changes\n\n- add demo feature scaffolding\n- tweak configuration\n")
+        readme = repo_dir / "README.md"
+        if readme.exists():
+            readme.write_text(readme.read_text() + "\n## Feature work\n\nOn the feature/demo branch.\n")
+        _git(repo_dir, "add", "-A")
+        _git(repo_dir, *ident, "commit", "-m", "feature/demo: scaffolding + README note")
+        (repo_dir / "CHANGES.md").write_text(
+            "# Changes\n\n- add demo feature scaffolding\n- tweak configuration\n- second pass\n")
+        _git(repo_dir, "add", "-A")
+        _git(repo_dir, *ident, "commit", "-m", "feature/demo: second pass")
+        _git(repo_dir, "checkout", "-q", default)   # leave the default branch checked out
     except (RepoError, FileNotFoundError):
         pass  # git missing: page still works, just without status/diff
 
@@ -646,10 +661,137 @@ def commit_diff(slot: int, sha: str, username: str | None = None) -> str:
     return out
 
 
+# ---------------------------------------------------------------- branches
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def branches(slot: int, username: str | None = None) -> dict:
+    """Local + remote-tracking branches of the server copy, newest first, each
+    with its tip commit — feeds the branch/compare view."""
+    repo = _repo_by_slot(slot)
+    base = _dir_for(repo)
+    if not base.exists():
+        raise RepoError("not cloned yet")
+    cur = _git(base, "rev-parse", "--abbrev-ref", "HEAD", ok_fail=True).strip()
+    fmt = "%(refname:short)\x1f%(objectname:short)\x1f%(committerdate:unix)\x1f%(committerdate:relative)\x1f%(authorname)\x1f%(contents:subject)"
+
+    def collect(ref_ns: str, remote: bool) -> list[dict]:
+        out = _git(base, "for-each-ref", "--sort=-committerdate",
+                   f"--format={fmt}", ref_ns, ok_fail=True)
+        rows = []
+        for line in out.splitlines():
+            p = line.split("\x1f", 5)
+            if len(p) < 6 or p[0].endswith("/HEAD"):     # skip origin/HEAD pointer
+                continue
+            rows.append({"name": p[0], "sha": p[1], "at": int(p[2] or 0),
+                         "rel": p[3], "author": p[4], "subject": p[5],
+                         "remote": remote, "current": p[0] == cur})
+        return rows
+
+    local = collect("refs/heads", False)
+    remote = collect("refs/remotes", True)
+    branches_all = local + remote
+    return {"current": cur, "local": local, "remote": remote,
+            "branches": branches_all,
+            "local_count": len(local), "remote_count": len(remote),
+            "count": len(branches_all)}
+
+
+def branch_delta(slot: int, base_ref: str, compare_ref: str,
+                 username: str | None = None) -> dict:
+    """Delta between two branches: ahead/behind commit counts, the commits
+    unique to `compare` (base..compare), and a per-file added/deleted diffstat
+    (symmetric base...compare, like a compare view)."""
+    repo = _repo_by_slot(slot)
+    d = _dir_for(repo)
+    if not d.exists():
+        raise RepoError("not cloned yet")
+    if not (_REF_RE.match(base_ref or "") and _REF_RE.match(compare_ref or "")):
+        raise RepoError("invalid branch name")
+    known = {b["name"] for b in branches(slot, username)["branches"]}
+    for r in (base_ref, compare_ref):
+        if r not in known:
+            raise RepoError(f"unknown branch: {r}")
+
+    def count(rng: str) -> int:
+        try:
+            return int(_git(d, "rev-list", "--count", rng, ok_fail=True).strip() or 0)
+        except ValueError:
+            return 0
+
+    ahead = count(f"{base_ref}..{compare_ref}")     # commits only on compare
+    behind = count(f"{compare_ref}..{base_ref}")    # commits only on base
+
+    commits = []
+    for line in _git(d, "log", "--format=%h\x1f%an\x1f%cr\x1f%s",
+                     f"{base_ref}..{compare_ref}", "-n", "200", ok_fail=True).splitlines():
+        p = line.split("\x1f", 3)
+        if len(p) == 4:
+            commits.append({"short": p[0], "author": p[1], "rel": p[2], "subject": p[3]})
+
+    files, add_tot, del_tot, bin_ct = [], 0, 0, 0
+    for line in _git(d, "diff", "--numstat", f"{base_ref}...{compare_ref}",
+                     ok_fail=True).splitlines():
+        p = line.split("\t", 2)
+        if len(p) != 3:
+            continue
+        a, dele, path = p
+        binary = (a == "-" or dele == "-")
+        ai = 0 if binary else int(a or 0)
+        di = 0 if binary else int(dele or 0)
+        if binary:
+            bin_ct += 1
+        files.append({"path": path, "added": ai, "deleted": di, "binary": binary,
+                      "total": ai + di})
+        add_tot += ai
+        del_tot += di
+    files.sort(key=lambda f: (-f["total"], f["path"].lower()))
+    truncated = len(files) > 400
+    return {
+        "base": base_ref, "compare": compare_ref,
+        "ahead": ahead, "behind": behind,
+        "commits": commits, "commit_count": ahead,
+        "commits_shown": len(commits),
+        "files": files[:400], "file_count": len(files),
+        "additions": add_tot, "deletions": del_tot, "binary_files": bin_ct,
+        "identical": ahead == 0 and behind == 0 and not files,
+        "truncated": truncated,
+    }
+
+
 # ---------------------------------------------------------------- inspection
 def _dirty_paths(repo_dir: Path) -> list[str]:
     out = _git(repo_dir, "status", "--porcelain", ok_fail=True)
     return [line[3:].strip().strip('"') for line in out.splitlines() if line.strip()]
+
+
+def _human_size(n: int) -> str:
+    f = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if f < 1024 or unit == "TB":
+            return f"{int(f)} {unit}" if unit == "B" else f"{f:.1f} {unit}"
+        f /= 1024
+    return f"{f:.1f} TB"
+
+
+def _dir_size(path: Path) -> int:
+    """On-disk size of a repo's server copy (working tree + .git). Uses `du`
+    when available (fast, metadata-based), falling back to an os.walk sum."""
+    try:
+        p = subprocess.run(["du", "-sk", str(path)], capture_output=True,
+                           text=True, timeout=20)
+        if p.returncode == 0 and p.stdout.split():
+            return int(p.stdout.split()[0]) * 1024
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += (Path(root) / f).stat().st_size
+            except OSError:
+                pass
+    return total
 
 
 def list_repos(username: str | None = None) -> list[dict]:
@@ -658,12 +800,18 @@ def list_repos(username: str | None = None) -> list[dict]:
         base = _dir_for(repo)
         row = {"slot": repo["slot"], "name": repo["name"], "url": repo["url"],
                "cloned": base.exists(), "branch": "", "last_commit": "",
-               "dirty": 0}
+               "dirty": 0, "size": 0, "size_h": "", "branch_count": 0}
         if row["cloned"]:
             row["branch"] = _git(base, "rev-parse", "--abbrev-ref", "HEAD",
                                  ok_fail=True).strip()
             row["last_commit"] = _git(base, "log", "-1", "--format=%s · %an · %cr",
                                       ok_fail=True).strip()
+            row["size"] = _dir_size(base)
+            row["size_h"] = _human_size(row["size"])
+            row["branch_count"] = len([
+                b for b in _git(base, "for-each-ref", "--format=%(refname)",
+                                "refs/heads", "refs/remotes", ok_fail=True).splitlines()
+                if b.strip() and not b.strip().endswith("/HEAD")])
             if username:  # dirty = THIS member's local edits, in their worktree
                 wt = _worktree_root(repo) / _safe_user(username)
                 row["dirty"] = len(_dirty_paths(wt)) if wt.exists() else 0

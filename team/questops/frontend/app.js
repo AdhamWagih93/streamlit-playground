@@ -1567,6 +1567,135 @@ function agentPanelHtml(cur, logData) {
     </div>`;
 }
 
+/* ---- branches + delta viewer ---- */
+function branchOption(b, selected) {
+  const badge = b.current ? " ✱" : "";
+  return `<option value="${esc(b.name)}" ${b.name === selected ? "selected" : ""}>${esc(b.name)}${badge}</option>`;
+}
+
+function branchSelect(id, bdata, selected) {
+  const grp = (label, arr) => arr.length
+    ? `<optgroup label="${label}">${arr.map((b) => branchOption(b, selected)).join("")}</optgroup>` : "";
+  return `<select id="${id}" class="branch-sel">
+      ${grp("local", bdata.local || [])}${grp("remote", bdata.remote || [])}</select>`;
+}
+
+function branchesPanelHtml(bdata) {
+  if (!bdata || bdata.error)
+    return `<div class="panel branch-panel"><div class="empty">⚠ ${esc((bdata && bdata.error) || "could not read branches")}</div></div>`;
+  const list = (bdata.branches || []).map((b) => `
+    <div class="branch-item ${b.current ? "current" : ""}">
+      <span class="branch-name">${b.current ? "✱ " : ""}${esc(b.name)}</span>
+      ${b.remote ? '<span class="chip">remote</span>' : '<span class="chip chip-cyan">local</span>'}
+      <code class="branch-sha">${esc(b.sha)}</code>
+      <span class="branch-sub">${esc(b.subject)}</span>
+      <span class="ci-meta">${esc(b.author)} · ${esc(b.rel)}</span>
+    </div>`).join("") || '<div class="empty">no branches</div>';
+  return `
+    <div class="panel branch-panel">
+      <div class="branch-head">🌿 <b>${bdata.count}</b> branch${bdata.count === 1 ? "" : "es"}
+        <span class="ci-meta">${bdata.local_count} local · ${bdata.remote_count} remote · on <b>${esc(bdata.current)}</b></span></div>
+      <div class="branch-compare-bar">
+        <span class="branch-cap">base</span>
+        ${branchSelect("branch-base", bdata, state.branchBase)}
+        <button class="btn btn-sm branch-swap" id="branch-swap" title="swap base and compare">⇄</button>
+        <span class="branch-cap">compare</span>
+        ${branchSelect("branch-compare", bdata, state.branchCompare)}
+      </div>
+      <div id="branch-delta"><div class="rsearch-status">comparing…</div></div>
+      <details class="branch-list"><summary>all branches (${bdata.count})</summary>${list}</details>
+    </div>`;
+}
+
+function branchDeltaHtml(d) {
+  if (!d) return "";
+  if (d.error) return `<div class="rsearch-status rsearch-err">⚠ ${esc(d.error)}</div>`;
+  if (d.base === d.compare)
+    return `<div class="branch-identical">select two different branches to compare</div>`;
+  if (d.identical)
+    return `<div class="branch-identical">✓ <b>${esc(d.base)}</b> and <b>${esc(d.compare)}</b> are identical</div>`;
+
+  const diverge = `
+    <div class="bd-diverge">
+      <span class="bd-branch">${esc(d.base)}</span>
+      <span class="bd-arrows">
+        <span class="bd-behind ${d.behind ? "" : "zero"}" title="commits on ${esc(d.base)} not in ${esc(d.compare)}">← ${d.behind} behind</span>
+        <span class="bd-ahead ${d.ahead ? "" : "zero"}" title="commits on ${esc(d.compare)} not in ${esc(d.base)}">${d.ahead} ahead →</span>
+      </span>
+      <span class="bd-branch">${esc(d.compare)}</span>
+    </div>`;
+
+  const totChg = (d.additions + d.deletions) || 1;
+  const summary = `
+    <div class="bd-summary">
+      <span><b>${d.file_count}</b> file${d.file_count === 1 ? "" : "s"} changed</span>
+      <span class="bd-add">+${d.additions}</span>
+      <span class="bd-del">−${d.deletions}</span>
+      ${d.binary_files ? `<span class="ci-meta">${d.binary_files} binary</span>` : ""}
+      <span class="bd-propbar">
+        <span class="bd-prop-add" style="width:${(d.additions / totChg * 100).toFixed(1)}%"></span>
+        <span class="bd-prop-del" style="width:${(d.deletions / totChg * 100).toFixed(1)}%"></span>
+      </span>
+    </div>`;
+
+  const maxTot = Math.max(1, ...d.files.map((f) => f.total));
+  const files = d.files.map((f) => `
+    <div class="bd-file">
+      <code class="bd-path">${esc(f.path)}</code>
+      ${f.binary ? '<span class="chip">binary</span>'
+        : `<span class="bd-nums"><span class="bd-add">+${f.added}</span> <span class="bd-del">−${f.deleted}</span></span>
+           <span class="bd-bar">
+             <span class="bd-bar-add" style="width:${(f.added / maxTot * 100).toFixed(1)}%"></span>
+             <span class="bd-bar-del" style="width:${(f.deleted / maxTot * 100).toFixed(1)}%"></span>
+           </span>`}
+    </div>`).join("") || '<div class="ci-meta" style="padding:8px 2px">no file changes (commits only)</div>';
+
+  const commits = (d.commits || []).map((c) => `
+    <div class="bd-commit">
+      <code>${esc(c.short)}</code>
+      <span class="bd-csub">${esc(c.subject)}</span>
+      <span class="ci-meta">${esc(c.author)} · ${esc(c.rel)}</span>
+    </div>`).join("");
+  const commitBlock = d.commit_count ? `
+    <details class="bd-commits" open>
+      <summary>${d.commit_count} commit${d.commit_count === 1 ? "" : "s"} on <b>${esc(d.compare)}</b> not in <b>${esc(d.base)}</b>${d.commits_shown < d.commit_count ? ` (showing ${d.commits_shown})` : ""}</summary>
+      ${commits}
+    </details>` : "";
+
+  return `${diverge}${summary}
+    <div class="bd-files">${files}${d.truncated ? '<div class="rs-capped">…more files changed (capped at 400)</div>' : ""}</div>
+    ${commitBlock}`;
+}
+
+async function loadBranchDelta(slot) {
+  const base = state.branchBase, comp = state.branchCompare;
+  const box = document.getElementById("branch-delta");
+  if (!base || !comp) { if (box) box.innerHTML = '<div class="empty">pick two branches</div>'; return; }
+  if (box) box.innerHTML = '<div class="rsearch-status">comparing… <span class="rsearch-spin"></span></div>';
+  try {
+    const d = await api(`/api/repos/${slot}/branch-delta?base=${encodeURIComponent(base)}&compare=${encodeURIComponent(comp)}`);
+    state.branchDelta = d;
+    const box2 = document.getElementById("branch-delta");
+    if (box2) box2.innerHTML = branchDeltaHtml(d);
+  } catch (e) {
+    state.branchDelta = null;
+    const box2 = document.getElementById("branch-delta");
+    if (box2) box2.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`;
+  }
+}
+
+function wireBranchPanel(slot) {
+  const b = document.getElementById("branch-base");
+  const c = document.getElementById("branch-compare");
+  if (b) b.onchange = () => { state.branchBase = b.value; loadBranchDelta(slot); };
+  if (c) c.onchange = () => { state.branchCompare = c.value; loadBranchDelta(slot); };
+  const sw = document.getElementById("branch-swap");
+  if (sw) sw.onclick = () => {
+    const t = state.branchBase; state.branchBase = state.branchCompare; state.branchCompare = t;
+    state.branchDelta = null; renderRepos();
+  };
+}
+
 /* ---- global code search across all cloned repos ---- */
 function rsState() {
   return (state.repoSearch = state.repoSearch || {
@@ -1827,7 +1956,7 @@ async function renderRepos() {
         : invPanelHtml(state.invData)}</div>`;
     }
     const histPath = state.historyScope === "file" && state.repoFile ? state.repoFile : "";
-    const [treeData, fileData, diffData, agentLogData, remoteData, histData] = await Promise.all([
+    const [treeData, fileData, diffData, agentLogData, remoteData, histData, branchesData] = await Promise.all([
       api(`/api/repos/${cur.slot}/tree?path=${encodeURIComponent(state.repoPath || "")}`),
       state.repoFile ? api(`/api/repos/${cur.slot}/file?path=${encodeURIComponent(state.repoFile)}`).catch((e) => ({ error: e.message })) : null,
       state.repoFile ? api(`/api/repos/${cur.slot}/diff?path=${encodeURIComponent(state.repoFile)}`).catch(() => ({ diff: "" })) : null,
@@ -1835,8 +1964,19 @@ async function renderRepos() {
       api(`/api/repos/${cur.slot}/remote`).catch(() => null),
       state.historyOpen ? api(`/api/repos/${cur.slot}/history?path=${encodeURIComponent(histPath)}`)
         .catch((e) => ({ commits: [], error: e.message })) : null,
+      state.branchesOpen ? api(`/api/repos/${cur.slot}/branches`)
+        .catch((e) => ({ error: e.message, branches: [] })) : null,
     ]);
     state.agentLog = agentLogData;
+    // when the branches view is open, pick sane default base/compare per repo
+    if (state.branchesOpen && branchesData && !branchesData.error) {
+      if (state.branchSlot !== cur.slot) {
+        state.branchSlot = cur.slot;
+        state.branchBase = branchesData.current || (branchesData.branches[0] || {}).name || "";
+        state.branchCompare = (branchesData.branches.find((b) => b.name !== state.branchBase) || {}).name || "";
+        state.branchDelta = null;
+      }
+    }
 
     const segs = (state.repoPath || "").split("/").filter(Boolean);
     const crumbs = [`<a href="javascript:void 0" data-crumb="">${esc(cur.name)}</a>`]
@@ -1870,10 +2010,13 @@ async function renderRepos() {
         <span class="crumbs">${crumbs}</span>
         <span class="spacer"></span>
         <span class="ci-meta">${esc(cur.branch)} · ${esc(cur.last_commit)}
+          ${cur.size_h ? ` · <span title="on-disk size (working tree + .git)">💾 ${esc(cur.size_h)}</span>` : ""}
+          ${cur.branch_count ? ` · 🌿 ${cur.branch_count} branch${cur.branch_count === 1 ? "" : "es"}` : ""}
           ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
         <button class="btn btn-sm ${state.scanOpen ? "btn-primary" : ""}" id="repo-scan">🔬 Tech scan</button>
         ${isEngine ? `<button class="btn btn-sm ${state.depsOpen ? "btn-primary" : ""}" id="repo-deps" title="pipelines → playbooks / roles / scripts">⛓ Dependencies</button>` : ""}
         ${isInventories ? `<button class="btn btn-sm ${state.invOpen ? "btn-primary" : ""}" id="repo-inv" title="per-project apps, teams, envs, hosts &amp; vars">🧭 Configurations</button>` : ""}
+        <button class="btn btn-sm ${state.branchesOpen ? "btn-primary" : ""}" id="repo-branches" title="list branches and compare deltas">🌿 Branches</button>
         <button class="btn btn-sm ${state.historyOpen ? "btn-primary" : ""}" id="repo-history">🕘 History</button>
         <button class="btn btn-sm" id="repo-pull" title="fetch the server copy and move your workspace to it">⟳ Sync</button>
         <button class="btn btn-sm btn-danger" id="repo-discard">Discard my edits</button>
@@ -1884,6 +2027,7 @@ async function renderRepos() {
       ${scanHtml}
       ${depsHtml}
       ${invHtml}
+      ${state.branchesOpen ? branchesPanelHtml(branchesData) : ""}
       ${state.historyOpen ? historyPanelHtml(histData) : ""}
       <div class="repo-grid">
         <div class="panel tree-panel">${up}${items}</div>
@@ -1924,6 +2068,22 @@ async function renderRepos() {
     state.commitDiff = null;
     renderRepos();
   });
+  on("repo-branches", () => {
+    state.branchesOpen = !state.branchesOpen;
+    renderRepos();
+  });
+  if (cur.cloned && state.branchesOpen) {
+    wireBranchPanel(cur.slot);
+    // auto-load the delta for the current selection if not already shown
+    if (state.branchBase && state.branchCompare &&
+        (!state.branchDelta || state.branchDelta.base !== state.branchBase
+         || state.branchDelta.compare !== state.branchCompare)) {
+      loadBranchDelta(cur.slot);
+    } else if (state.branchDelta) {
+      const box = document.getElementById("branch-delta");
+      if (box) box.innerHTML = branchDeltaHtml(state.branchDelta);
+    }
+  }
   view().querySelectorAll("[data-commit]").forEach((el) => el.onclick = async () => {
     const sha = el.dataset.commit;
     if (state.commitDiff && state.commitDiff.sha === sha) {

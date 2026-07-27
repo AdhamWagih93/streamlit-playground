@@ -130,6 +130,19 @@ def commit_diff(slot: int, sha: str, user: User = Depends(current_user)):
     return {"sha": sha, "diff": _wrap(repos.commit_diff, slot, sha, user.username)}
 
 
+@router.get("/{slot}/branches")
+def branches(slot: int, user: User = Depends(current_user)):
+    """Local + remote branches of the repo, each with its tip commit."""
+    return _wrap(repos.branches, slot, user.username)
+
+
+@router.get("/{slot}/branch-delta")
+def branch_delta(slot: int, base: str, compare: str,
+                 user: User = Depends(current_user)):
+    """Ahead/behind + commit list + per-file diffstat between two branches."""
+    return _wrap(repos.branch_delta, slot, base, compare, user.username)
+
+
 @router.get("/{slot}/scan")
 def scan(slot: int, user: User = Depends(current_user)):
     """Deterministic technology detection + recommendations."""
