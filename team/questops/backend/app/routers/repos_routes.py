@@ -44,6 +44,14 @@ def discover(collection: str = "", user: User = Depends(current_user)):
     return _wrap(repos.discover, collection)
 
 
+@router.get("/search")
+def search(q: str, regex: bool = False, case_sensitive: bool = False,
+           whole_word: bool = False, slot: int | None = None,
+           path_glob: str = "", user: User = Depends(current_user)):
+    """Search a string/regex across every cloned repo (git grep, read-only)."""
+    return _wrap(repos.search, q, regex, case_sensitive, whole_word, slot, path_glob)
+
+
 @router.delete("/{slot}")
 def remove_repo(slot: int, user: User = Depends(current_user),
                 db: Session = Depends(get_db)):

@@ -1567,6 +1567,183 @@ function agentPanelHtml(cur, logData) {
     </div>`;
 }
 
+/* ---- global code search across all cloned repos ---- */
+function rsState() {
+  return (state.repoSearch = state.repoSearch || {
+    q: "", regex: false, caseSensitive: false, wholeWord: false,
+    glob: "", scope: "all", data: null, loading: false, open: false });
+}
+
+// build a highlighter for the current query; returns escaped HTML with <mark>
+function rsHighlighter(rs) {
+  const q = rs.q || "";
+  let re = null;
+  try {
+    const src = rs.regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const body = rs.wholeWord ? `\\b(?:${src})\\b` : src;
+    re = new RegExp(body, rs.caseSensitive ? "g" : "gi");
+  } catch { re = null; }
+  return (text) => {
+    if (!re) return esc(text);
+    let out = "", last = 0, m; re.lastIndex = 0;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index >= last) {
+        out += esc(text.slice(last, m.index)) + `<mark>${esc(m[0])}</mark>`;
+        last = m.index + m[0].length;
+      }
+      if (m.index === re.lastIndex) re.lastIndex++;   // zero-width guard
+    }
+    return out + esc(text.slice(last));
+  };
+}
+
+function repoSearchPanelHtml(repos, cur) {
+  const rs = rsState();
+  const opt = (key, label, title) =>
+    `<button type="button" class="rsopt ${rs[key] ? "on" : ""}" data-rsopt="${key}" title="${title}">${label}</button>`;
+  const scopeSel = `<select id="rsearch-scope" title="limit the search to one repository">
+      <option value="all" ${rs.scope === "all" ? "selected" : ""}>all cloned repos</option>
+      ${repos.filter((r) => r.cloned).map((r) =>
+        `<option value="${r.slot}" ${String(rs.scope) === String(r.slot) ? "selected" : ""}>${esc(r.name)} only</option>`).join("")}
+    </select>`;
+  return `
+    <div class="panel repo-search">
+      <form id="repo-search-form" class="rsearch-bar">
+        <span class="rsearch-icon">🔎</span>
+        <input id="rsearch-q" placeholder="search across all cloned repositories… (Enter to run)"
+          value="${esc(rs.q)}" spellcheck="false" autocomplete="off">
+        <div class="rsearch-opts">
+          ${opt("caseSensitive", "Aa", "Match case")}
+          ${opt("wholeWord", "\\b", "Whole word")}
+          ${opt("regex", ".*", "Regular expression (POSIX/extended)")}
+        </div>
+        <input id="rsearch-glob" class="rsearch-glob" placeholder="path filter · *.py"
+          value="${esc(rs.glob)}" spellcheck="false" autocomplete="off">
+        ${scopeSel}
+        <button class="btn btn-sm btn-primary" type="submit">Search</button>
+        ${rs.q || rs.data ? `<button class="btn btn-sm" type="button" id="rsearch-clear">✕ clear</button>` : ""}
+      </form>
+      <div id="repo-search-results">${repoSearchResultsHtml()}</div>
+    </div>`;
+}
+
+function repoSearchResultsHtml() {
+  const rs = rsState();
+  if (rs.loading) return `<div class="rsearch-status">🔎 searching… <span class="rsearch-spin"></span></div>`;
+  const d = rs.data;
+  if (!d) return "";
+  if (d.error) return `<div class="rsearch-status rsearch-err">⚠ ${esc(d.error)}</div>`;
+  const hl = rsHighlighter(rs);
+  const errs = (d.errors || []).length
+    ? `<div class="rsearch-status rsearch-err">⚠ ${d.errors.map((e) => `${esc(e.name)}: ${esc(e.error)}`).join(" · ")}</div>` : "";
+  const summary = `<div class="rsearch-summary">
+      ${d.total_matches
+        ? `<b>${d.total_matches}</b> match${d.total_matches === 1 ? "" : "es"} in <b>${d.total_files}</b> file${d.total_files === 1 ? "" : "s"} across <b>${d.matched_repos}</b> repo${d.matched_repos === 1 ? "" : "s"}`
+        : `<b>no matches</b> for “${esc(d.query)}”`}
+      <span class="ci-meta"> · searched ${d.repos_searched} cloned repo${d.repos_searched === 1 ? "" : "s"}${d.repos_not_cloned ? ` · ${d.repos_not_cloned} not cloned` : ""} · ${d.elapsed_ms}ms</span>
+    </div>`;
+  const repos = (d.repos || []).filter((r) => r.match_count);
+  const body = repos.map((r, ri) => {
+    const files = (r.files || []).map((f) => {
+      const rows = f.hits.map((h) =>
+        `<div class="rs-hit" data-rs-slot="${r.slot}" data-rs-path="${esc(f.path)}" data-rs-line="${h.line}" title="open ${esc(f.path)}:${h.line}">
+           <span class="rs-ln">${h.line}</span><code class="rs-code">${hl(h.text)}</code></div>`).join("");
+      const capped = f.hit_count >= 60 ? `<div class="rs-capped">…more matches in this file</div>` : "";
+      return `<details class="rs-file" open>
+          <summary><span class="rs-fpath">${esc(f.path)}</span><span class="rs-fcount">${f.hit_count}</span></summary>
+          ${rows}${capped}</details>`;
+    }).join("");
+    return `<details class="rs-repo" ${ri < 4 ? "open" : ""}>
+        <summary>⛁ <b>${esc(r.name)}</b>
+          <span class="chip chip-cyan">${r.match_count} match${r.match_count === 1 ? "" : "es"}</span>
+          <span class="chip">${r.file_count} file${r.file_count === 1 ? "" : "s"}</span>
+          ${r.truncated ? `<span class="chip chip-amber" title="results capped for this repo">truncated</span>` : ""}
+        </summary>
+        <div class="rs-files">${files}</div>
+      </details>`;
+  }).join("");
+  return errs + summary + (repos.length ? body : "");
+}
+
+async function runRepoSearch() {
+  const rs = rsState();
+  const box = document.getElementById("repo-search-results");
+  if (!rs.q || rs.q.trim().length < 2) {
+    rs.data = { error: "enter at least 2 characters to search" };
+    if (box) box.innerHTML = repoSearchResultsHtml();
+    return;
+  }
+  rs.loading = true;
+  if (box) box.innerHTML = repoSearchResultsHtml();
+  const qs = new URLSearchParams({ q: rs.q.trim() });
+  if (rs.regex) qs.set("regex", "true");
+  if (rs.caseSensitive) qs.set("case_sensitive", "true");
+  if (rs.wholeWord) qs.set("whole_word", "true");
+  if (rs.glob.trim()) qs.set("path_glob", rs.glob.trim());
+  if (rs.scope !== "all") qs.set("slot", rs.scope);
+  try {
+    rs.data = await api(`/api/repos/search?${qs.toString()}`);
+  } catch (e) {
+    rs.data = { error: e.message };
+  }
+  rs.loading = false;
+  const box2 = document.getElementById("repo-search-results");
+  if (box2) { box2.innerHTML = repoSearchResultsHtml(); wireRepoSearchHits(); }
+}
+
+function wireRepoSearchHits() {
+  view().querySelectorAll(".rs-hit").forEach((el) => el.onclick = () => {
+    const slot = parseInt(el.dataset.rsSlot, 10);
+    const path = el.dataset.rsPath;
+    state.repoSlot = slot;
+    state.repoPath = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    state.repoFile = path;
+    state.repoJumpLine = parseInt(el.dataset.rsLine, 10) || null;
+    renderRepos();
+  });
+}
+
+function wireRepoSearch() {
+  const rs = rsState();
+  const form = document.getElementById("repo-search-form");
+  if (!form) return;
+  const sync = () => {
+    const q = document.getElementById("rsearch-q"); if (q) rs.q = q.value;
+    const g = document.getElementById("rsearch-glob"); if (g) rs.glob = g.value;
+    const sc = document.getElementById("rsearch-scope"); if (sc) rs.scope = sc.value;
+  };
+  form.onsubmit = (e) => { e.preventDefault(); sync(); runRepoSearch(); };
+  view().querySelectorAll("[data-rsopt]").forEach((b) => b.onclick = () => {
+    rs[b.dataset.rsopt] = !rs[b.dataset.rsopt];
+    b.classList.toggle("on");
+    sync();
+    if (rs.q && rs.q.trim().length >= 2 && !rs.loading) runRepoSearch();  // live re-run
+  });
+  const clear = document.getElementById("rsearch-clear");
+  if (clear) clear.onclick = () => {
+    rs.q = ""; rs.glob = ""; rs.data = null;
+    const q = document.getElementById("rsearch-q"); if (q) q.value = "";
+    const g = document.getElementById("rsearch-glob"); if (g) g.value = "";
+    const box = document.getElementById("repo-search-results"); if (box) box.innerHTML = "";
+    const cb = document.getElementById("rsearch-clear"); if (cb) cb.remove();
+    if (q) q.focus();
+  };
+  wireRepoSearchHits();
+}
+
+// move a textarea caret to a 1-based line and scroll it into view
+function jumpEditorToLine(line) {
+  const ta = document.getElementById("repo-editor");
+  if (!ta || !line) return;
+  const lines = ta.value.split("\n");
+  const start = lines.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0);
+  const end = start + (lines[line - 1] || "").length;
+  ta.focus();
+  ta.setSelectionRange(start, end);
+  const lh = parseFloat(getComputedStyle(ta).lineHeight) || 18;
+  ta.scrollTop = Math.max(0, (line - 3) * lh);
+}
+
 async function renderRepos() {
   const data = await api("/api/repos");
   const addPanel = `<div id="repo-add-slot">${state.repoAddOpen ? repoAddHtml() : ""}</div>`;
@@ -1714,13 +1891,17 @@ async function renderRepos() {
       </div>`;
   }
 
+  const anyCloned = data.repos.some((r) => r.cloned);
   view().innerHTML = `
     ${headHtml}
     ${addPanel}
+    ${anyCloned ? repoSearchPanelHtml(data.repos, cur) : ""}
     <div class="filter-row" style="margin-bottom:16px;flex-wrap:wrap">${chips}</div>
     ${body}
     ${cur.cloned ? agentPanelHtml(cur, state.agentLog) : ""}`;
   wireRepoAdd();
+  if (anyCloned) wireRepoSearch();
+  if (state.repoJumpLine) { jumpEditorToLine(state.repoJumpLine); state.repoJumpLine = null; }
 
   view().querySelectorAll("[data-repo]").forEach((b) => b.onclick = () => {
     state.repoSlot = parseInt(b.dataset.repo, 10);

@@ -378,6 +378,66 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   background: var(--bg-2); color: var(--text); font: 400 13px var(--body);
 }
 .repo-bar input:focus { outline: none; border-color: var(--amber); }
+
+/* ---- global code search across all cloned repos ---- */
+.repo-search { margin-bottom: 16px; padding: 12px 14px; }
+.rsearch-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rsearch-icon { font-size: 15px; opacity: .8; }
+#rsearch-q { flex: 1; min-width: 240px; padding: 9px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+  font: 400 14px var(--body); }
+#rsearch-q:focus { outline: none; border-color: var(--amber); }
+.rsearch-glob { width: 130px; padding: 9px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+  font: 400 12px var(--mono); }
+.rsearch-glob:focus { outline: none; border-color: var(--amber); }
+#rsearch-scope { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font: 400 12px var(--body); }
+.rsearch-opts { display: inline-flex; gap: 4px; }
+.rsopt { min-width: 30px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--dim); font: 600 12px var(--mono); cursor: pointer;
+  transition: border-color .12s, color .12s; }
+.rsopt:hover { border-color: var(--line-hi); color: var(--text); }
+.rsopt.on { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+
+.rsearch-status { margin-top: 12px; font-size: 13px; color: var(--dim); display: flex;
+  align-items: center; gap: 8px; }
+.rsearch-err { color: var(--amber); }
+.rsearch-spin { width: 12px; height: 12px; border: 2px solid var(--line);
+  border-top-color: var(--amber); border-radius: 50%; display: inline-block;
+  animation: rsspin .7s linear infinite; }
+@keyframes rsspin { to { transform: rotate(360deg); } }
+.rsearch-summary { margin: 12px 2px 8px; font-size: 13px; color: var(--text);
+  padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+
+.rs-repo { margin-top: 8px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+  background: var(--bg-2); }
+.rs-repo > summary { list-style: none; cursor: pointer; padding: 9px 12px; display: flex;
+  align-items: center; gap: 8px; font-size: 13px; background: rgba(255,255,255,.015); }
+.rs-repo > summary::-webkit-details-marker { display: none; }
+.rs-repo > summary:hover { background: rgba(255,178,36,.05); }
+.rs-repo > summary .chip { font-size: 10px; }
+.rs-files { padding: 4px 8px 8px; }
+.rs-file { margin: 6px 0; border-left: 2px solid var(--line); }
+.rs-file > summary { list-style: none; cursor: pointer; padding: 4px 8px; display: flex;
+  align-items: center; gap: 8px; }
+.rs-file > summary::-webkit-details-marker { display: none; }
+.rs-file > summary:hover .rs-fpath { color: var(--amber); }
+.rs-fpath { font: 500 12px var(--mono); color: var(--cyan); word-break: break-all; }
+.rs-fcount { margin-left: auto; font-size: 10px; color: var(--faint);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+.rs-hit { display: flex; gap: 10px; align-items: baseline; padding: 2px 8px 2px 14px;
+  cursor: pointer; border-radius: 5px; }
+.rs-hit:hover { background: rgba(63,198,221,.08); }
+.rs-ln { flex: none; width: 42px; text-align: right; color: var(--faint);
+  font: 400 11px var(--mono); user-select: none; }
+.rs-code { background: none; padding: 0; font: 400 12px var(--mono); color: var(--dim);
+  white-space: pre; overflow-x: auto; }
+.rs-hit:hover .rs-code { color: var(--text); }
+.rs-code mark { background: rgba(255,178,36,.28); color: var(--amber); border-radius: 3px;
+  padding: 0 1px; font-weight: 600; }
+.rs-capped { padding: 3px 14px; font-size: 11px; color: var(--faint); font-style: italic; }
+
 .scan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .scan-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--bg-2); }
 .scan-head { font-size: 14px; margin-bottom: 6px; }

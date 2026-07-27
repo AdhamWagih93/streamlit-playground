@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
 
@@ -718,3 +719,108 @@ def diff(slot: int, rel: str = "", username: str | None = None) -> str:
     repo_dir = _workspace(_repo_by_slot(slot), username)
     args = ["diff"] + (["--", rel] if rel else [])
     return _git(repo_dir, *args, ok_fail=True)
+
+
+# ---------------------------------------------------------------- code search
+SEARCH_MIN_LEN = 2
+SEARCH_HITS_PER_FILE = 60       # cap lines shown per file
+SEARCH_FILES_PER_REPO = 300     # cap files listed per repo
+SEARCH_HITS_PER_REPO = 800      # cap total lines scanned into a repo's result
+SEARCH_LINE_CHARS = 400         # trim very long matched lines
+# `git grep -z -n` emits one record per line: path\0lineno\0content
+_SEARCH_LINE = re.compile(r"^(.*?)\x00(\d+)\x00(.*)$")
+
+
+def _search_one(repo: dict, argv: list[str]) -> dict:
+    """Run one `git grep` in a repo's server copy and shape its hits, grouped
+    by file. Distinguishes 'no matches' (exit 1) from a real error (exit ≥2)."""
+    row = {"slot": repo["slot"], "name": repo["name"], "url": repo["url"],
+           "cloned": False, "files": [], "match_count": 0, "file_count": 0,
+           "truncated": False, "error": None}
+    base = _dir_for(repo)
+    if not base.exists():
+        return row
+    row["cloned"] = True
+    try:
+        p = subprocess.run(["git", *argv], cwd=base, env=_GIT_ENV,
+                           capture_output=True, text=True, timeout=45)
+    except subprocess.TimeoutExpired:
+        row["error"] = "search timed out"
+        return row
+    if p.returncode >= 2:                       # 1 == no matches (not an error)
+        err = _scrub((p.stderr or p.stdout).strip())
+        row["error"] = (err.splitlines()[-1] if err else "search failed")[:160]
+        return row
+
+    by_file: dict[str, list] = {}
+    hits = 0
+    for line in p.stdout.splitlines():
+        m = _SEARCH_LINE.match(line)
+        if not m:
+            continue
+        path, lineno, text = m.group(1), int(m.group(2)), m.group(3)
+        hits += 1
+        if hits > SEARCH_HITS_PER_REPO:
+            row["truncated"] = True
+            break
+        fl = by_file.setdefault(path, [])
+        if len(fl) < SEARCH_HITS_PER_FILE:
+            fl.append({"line": lineno, "text": text[:SEARCH_LINE_CHARS]})
+        row["match_count"] += 1
+
+    row["file_count"] = len(by_file)
+    files = [{"path": path, "hits": h, "hit_count": len(h)}
+             for path, h in by_file.items()]
+    files.sort(key=lambda f: (-f["hit_count"], f["path"].lower()))
+    if len(files) > SEARCH_FILES_PER_REPO:
+        row["truncated"] = True
+        files = files[:SEARCH_FILES_PER_REPO]
+    row["files"] = files
+    return row
+
+
+def search(query: str, regex: bool = False, case_sensitive: bool = False,
+           whole_word: bool = False, slot: int | None = None,
+           path_glob: str = "") -> dict:
+    """Search a string/regex across every cloned repo's server copy via
+    `git grep` (tracked files, binaries skipped). Read-only; no worktree
+    needed since the server copy is always clean."""
+    q = (query or "").strip()
+    if len(q) < SEARCH_MIN_LEN:
+        raise RepoError(f"enter at least {SEARCH_MIN_LEN} characters to search")
+
+    targets = configured()
+    if slot is not None:
+        targets = [r for r in targets if r["slot"] == slot]
+
+    flags = ["grep", "-I", "--no-color", "-n", "-z", "--full-name"]
+    if not case_sensitive:
+        flags.append("-i")
+    if whole_word:
+        flags.append("-w")
+    if not regex:
+        flags.append("-F")                       # literal string
+    else:
+        flags.append("-E")                       # extended regex
+    argv = [*flags, "-e", q]
+    if path_glob.strip():
+        # limit to a pathspec (e.g. "*.py"); git treats it as a glob
+        argv += ["--", path_glob.strip()]
+
+    started = time.time()
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        rows = list(pool.map(lambda r: _search_one(r, argv), targets))
+
+    cloned = [r for r in rows if r["cloned"]]
+    return {
+        "query": q, "regex": regex, "case_sensitive": case_sensitive,
+        "whole_word": whole_word, "slot": slot, "path_glob": path_glob.strip(),
+        "repos": rows,
+        "repos_searched": len(cloned),
+        "repos_not_cloned": len(rows) - len(cloned),
+        "total_matches": sum(r["match_count"] for r in rows),
+        "total_files": sum(r["file_count"] for r in rows),
+        "matched_repos": sum(1 for r in cloned if r["match_count"]),
+        "errors": [{"name": r["name"], "error": r["error"]} for r in rows if r["error"]],
+        "elapsed_ms": round((time.time() - started) * 1000),
+    }
