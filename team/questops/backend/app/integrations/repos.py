@@ -178,6 +178,29 @@ DEMO_DISCOVERABLE = ["Engine", "UI", "inventories", "ocp-templates",
                      "notifications-service"]
 
 
+def _ado_location(url: str) -> tuple[str, str]:
+    """Derive (collection, project) from an ADO git URL by parsing the path
+    around the `_git` segment: …/<collection>/<project>/_git/<repo>. Falls back
+    to ('', '') when the URL doesn't follow the pattern (grouped as ungrouped)."""
+    from urllib.parse import unquote, urlparse
+    try:
+        parts = [unquote(p) for p in urlparse(url).path.split("/") if p]
+    except ValueError:
+        return "", ""
+    if "_git" in parts:
+        i = parts.index("_git")
+        project = parts[i - 1] if i >= 1 else ""
+        collection = parts[i - 2] if i >= 2 else ""
+        return collection, project
+    # no _git segment (plain git host): last part is the repo, the container
+    # before it is the project/group; a further parent (if any) is the collection
+    if len(parts) >= 2:
+        project = parts[-2]
+        collection = parts[-3] if len(parts) >= 3 else ""
+        return collection, project
+    return "", ""
+
+
 def configured() -> list[dict]:
     """The UI-defined repositories; every one clones with the ADO creds."""
     from ..db import Repository, SessionLocal
@@ -186,9 +209,13 @@ def configured() -> list[dict]:
         rows = db.query(Repository).order_by(Repository.id).all()
     finally:
         db.close()
-    return [{"slot": r.id, "name": r.name, "url": r.url, "added_by": r.added_by,
-             "user": settings.ado_user, "password": settings.ado_git_password}
-            for r in rows]
+    out = []
+    for r in rows:
+        coll, proj = _ado_location(r.url)
+        out.append({"slot": r.id, "name": r.name, "url": r.url, "added_by": r.added_by,
+                    "collection": coll, "project": proj,
+                    "user": settings.ado_user, "password": settings.ado_git_password})
+    return out
 
 
 def add_repo(db: Session, url: str, name: str, username: str) -> dict:
@@ -513,6 +540,32 @@ def clone(slot: int, branch: str = "") -> None:
                     + " · ".join(attempts) + _ONPREM_HINTS)
 
 
+def clone_project(collection: str, project: str, branch: str = "") -> dict:
+    """Clone every UI-defined repo of one ADO project that isn't cloned yet —
+    SEQUENTIALLY (one at a time), so a bulk action never fans out concurrent
+    clones at the ADO instance. Returns a per-repo outcome summary."""
+    coll = (collection or "").strip()
+    proj = (project or "").strip()
+    matches = [r for r in configured()
+               if r.get("collection", "") == coll and r.get("project", "") == proj]
+    if not matches:
+        raise RepoError("no defined repositories match that project")
+    cloned, skipped, errors = [], [], []
+    for repo in matches:
+        if _dir_for(repo).exists():
+            skipped.append(repo["name"])
+            continue
+        try:
+            clone(repo["slot"], branch)          # sequential = naturally throttled
+            cloned.append(repo["name"])
+        except RepoError as exc:
+            errors.append({"name": repo["name"], "error": str(exc)[:200]})
+    return {"collection": coll, "project": proj,
+            "requested": len(matches), "cloned": cloned, "skipped": skipped,
+            "errors": errors, "cloned_count": len(cloned),
+            "skipped_count": len(skipped), "error_count": len(errors)}
+
+
 def pull(slot: int, username: str | None = None) -> str:
     """Update the server copy from origin, then fast-forward the member's
     worktree to it (git refuses if their local edits would be clobbered)."""
@@ -799,6 +852,7 @@ def list_repos(username: str | None = None) -> list[dict]:
     for repo in configured():
         base = _dir_for(repo)
         row = {"slot": repo["slot"], "name": repo["name"], "url": repo["url"],
+               "collection": repo.get("collection", ""), "project": repo.get("project", ""),
                "cloned": base.exists(), "branch": "", "last_commit": "",
                "dirty": 0, "size": 0, "size_h": "", "branch_count": 0}
         if row["cloned"]:

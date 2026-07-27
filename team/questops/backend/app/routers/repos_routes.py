@@ -70,6 +70,18 @@ def clone(slot: int, body: CloneBody | None = None,
     return {"ok": True}
 
 
+class CloneProjectBody(BaseModel):
+    collection: str = ""
+    project: str
+    branch: str = ""
+
+
+@router.post("/clone-project")
+def clone_project(body: CloneProjectBody, user: User = Depends(current_user)):
+    """Clone all defined-but-uncloned repos of one project, sequentially."""
+    return _wrap(repos.clone_project, body.collection, body.project, body.branch)
+
+
 @router.post("/{slot}/pull")
 def pull(slot: int, user: User = Depends(current_user)):
     return {"output": _wrap(repos.pull, slot, user.username)}

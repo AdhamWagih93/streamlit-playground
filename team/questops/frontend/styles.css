@@ -438,6 +438,25 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   padding: 0 1px; font-weight: 600; }
 .rs-capped { padding: 3px 14px; font-size: 11px; color: var(--faint); font-style: italic; }
 
+/* ---- cloned repos grouped by collection → project ---- */
+.repo-groups { margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+.repo-coll { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); overflow: hidden; }
+.repo-coll > summary { list-style: none; cursor: pointer; padding: 9px 13px; font-size: 13.5px;
+  background: rgba(255,255,255,.015); }
+.repo-coll > summary::-webkit-details-marker { display: none; }
+.repo-coll > summary:hover { background: rgba(255,178,36,.05); }
+.repo-coll-body { padding: 6px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.repo-proj { border-left: 2px solid var(--line); padding: 4px 0 4px 12px; }
+.repo-proj-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 7px; }
+.repo-proj-name { font: 600 13px var(--body); color: var(--text); }
+.repo-proj-count { font-size: 11px; color: var(--amber); border: 1px solid rgba(255,178,36,.35);
+  border-radius: 999px; padding: 1px 9px; }
+.repo-proj-count.all { color: var(--green); border-color: rgba(63,206,141,.4); }
+.repo-clone-all { padding: 4px 10px; font-size: 11.5px; }
+.repo-proj-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.repo-chip.not-cloned { opacity: .68; border-style: dashed; }
+.repo-chip.not-cloned:hover { opacity: 1; }
+
 /* ---- branches + delta viewer ---- */
 .branch-panel { margin-bottom: 16px; }
 .branch-head { font-size: 14px; margin-bottom: 12px; }

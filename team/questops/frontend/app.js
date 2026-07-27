@@ -1567,6 +1567,53 @@ function agentPanelHtml(cur, logData) {
     </div>`;
 }
 
+/* ---- cloned repos grouped by collection → project, with bulk clone ---- */
+function repoGroupsHtml(repos, cur) {
+  const colls = {};
+  repos.forEach((r) => {
+    const c = r.collection || "";
+    const p = r.project || "(ungrouped)";
+    ((colls[c] = colls[c] || {})[p] = colls[c][p] || []).push(r);
+  });
+  const anyColl = Object.keys(colls).some((c) => c);
+  const chip = (r) => `
+    <button class="btn btn-sm repo-chip ${r.slot === cur.slot ? "btn-primary" : ""} ${r.cloned ? "" : "not-cloned"}"
+      data-repo="${r.slot}" title="${esc(r.url)}${r.cloned && r.size_h ? " · " + esc(r.size_h) : ""}">
+      ⛁ ${esc(r.name)}${r.dirty ? ` <span class="dirty-badge">${r.dirty}</span>` : ""}${r.cloned ? "" : " ⬇"}
+    </button>`;
+  const projBlock = (collName, projName, arr) => {
+    const total = arr.length;
+    const clonedN = arr.filter((r) => r.cloned).length;
+    const uncloned = total - clonedN;
+    const chips = arr.slice().sort((a, b) => a.name.localeCompare(b.name)).map(chip).join("");
+    return `
+      <div class="repo-proj">
+        <div class="repo-proj-head">
+          <span class="repo-proj-name">📁 ${esc(projName)}</span>
+          <span class="repo-proj-count ${clonedN === total ? "all" : ""}" title="cloned repositories in this project">${clonedN}/${total} cloned</span>
+          ${uncloned ? `<button class="btn btn-sm repo-clone-all" data-clone-coll="${esc(collName)}" data-clone-proj="${esc(projName)}"
+              title="clone the ${uncloned} un-cloned repo(s) in this project — one at a time, easy on ADO">⬇ Clone all (${uncloned})</button>` : ""}
+        </div>
+        <div class="repo-proj-chips">${chips}</div>
+      </div>`;
+  };
+  const sortedColls = Object.keys(colls).sort((a, b) => (a || "￿").localeCompare(b || "￿"));
+  return sortedColls.map((c) => {
+    const projs = colls[c];
+    const projNames = Object.keys(projs).sort();
+    const inner = projNames.map((p) => projBlock(c, p, projs[p])).join("");
+    if (!anyColl) return inner;                      // no collections → just project groups
+    const totalRepos = projNames.reduce((n, p) => n + projs[p].length, 0);
+    const clonedRepos = projNames.reduce((n, p) => n + projs[p].filter((r) => r.cloned).length, 0);
+    return `
+      <details class="repo-coll" open>
+        <summary>🗄 <b>${esc(c || "(no collection)")}</b>
+          <span class="ci-meta">${projNames.length} project${projNames.length === 1 ? "" : "s"} · ${clonedRepos}/${totalRepos} repos cloned</span></summary>
+        <div class="repo-coll-body">${inner}</div>
+      </details>`;
+  }).join("");
+}
+
 /* ---- branches + delta viewer ---- */
 function branchOption(b, selected) {
   const badge = b.current ? " ✱" : "";
@@ -1897,10 +1944,7 @@ async function renderRepos() {
   const isEngine = (cur.name || "").toLowerCase() === "engine";
   const isInventories = (cur.name || "").toLowerCase() === "inventories";
 
-  const chips = data.repos.map((r) => `
-    <button class="btn btn-sm ${r.slot === cur.slot ? "btn-primary" : ""}" data-repo="${r.slot}">
-      ⛁ ${esc(r.name)}${r.dirty ? ` <span class="dirty-badge">${r.dirty}</span>` : ""}${r.cloned ? "" : " ⬇"}
-    </button>`).join(" ");
+  const groupsHtml = repoGroupsHtml(data.repos, cur);
 
   let body;
   if (!cur.cloned) {
@@ -2040,7 +2084,7 @@ async function renderRepos() {
     ${headHtml}
     ${addPanel}
     ${anyCloned ? repoSearchPanelHtml(data.repos, cur) : ""}
-    <div class="filter-row" style="margin-bottom:16px;flex-wrap:wrap">${chips}</div>
+    <div class="repo-groups">${groupsHtml}</div>
     ${body}
     ${cur.cloned ? agentPanelHtml(cur, state.agentLog) : ""}`;
   wireRepoAdd();
@@ -2051,6 +2095,19 @@ async function renderRepos() {
     state.repoSlot = parseInt(b.dataset.repo, 10);
     state.repoPath = ""; state.repoFile = null;
     renderRepos();
+  });
+  view().querySelectorAll(".repo-clone-all").forEach((b) => b.onclick = async () => {
+    const collection = b.dataset.cloneColl, project = b.dataset.cloneProj;
+    b.disabled = true; b.textContent = "⏳ cloning…";
+    try {
+      const res = await api("/api/repos/clone-project", { method: "POST", body: { collection, project } });
+      const bits = [`${res.cloned_count} cloned`];
+      if (res.skipped_count) bits.push(`${res.skipped_count} already`);
+      if (res.error_count) bits.push(`${res.error_count} failed`);
+      toast(`⛁ ${esc(project)}: ${bits.join(" · ")}`, res.error_count ? "toast-err" : "toast-xp");
+      (res.errors || []).forEach((e) => oops(`${e.name}: ${e.error}`));
+      renderRepos();
+    } catch (e) { oops(e); b.disabled = false; b.textContent = "⬇ Clone all"; }
   });
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on("repo-clone", async () => {
