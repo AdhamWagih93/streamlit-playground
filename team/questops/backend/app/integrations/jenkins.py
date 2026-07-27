@@ -91,25 +91,50 @@ def _demo_overview() -> dict:
 # builds{0,20} = recent history: average runtime AND the failure scan — a red
 # pipeline is any job with a failed run in the window, not just a red LAST run
 # (the same pipeline serves multiple projects, so later runs can mask failures).
-_LEAF = ("fullName,name,url,"
+_LEAF = ("_class,fullName,name,url,"
          "lastBuild[number,building,timestamp,duration,result,url],"
          "lastCompletedBuild[number,timestamp,duration,result,url],"
          "builds[number,timestamp,duration,result,building,url]{0,20}")
 
 
-def _tree_query(depth: int = 5) -> str:
-    """Nested tree so jobs inside folders / multibranch pipelines are included."""
+def _tree_query(depth: int = 8) -> str:
+    """Nested tree so jobs inside folders / multibranch pipelines are included.
+    Depth must exceed the deepest folder nesting or those jobs are dropped."""
     tree = _LEAF
     for _ in range(depth):
         tree = f"{_LEAF},jobs[{tree}]"
     return f"jobs[{tree}]"
 
 
+# containers hold other jobs (folders, org folders, multibranch parents); their
+# _class carries one of these markers even at the tree-depth cutoff (where the
+# `jobs` field may be absent), so a deep folder is never mistaken for a job
+_CONTAINER_MARKERS = ("Folder", "MultiBranch", "OrganizationFolder")
+
+
+def _is_container(j: dict) -> bool:
+    cls = j.get("_class") or ""
+    return j.get("jobs") is not None or any(m in cls for m in _CONTAINER_MARKERS)
+
+
 def _flatten(items: list, out: list) -> list:
+    """Leaf jobs that have RUN (drives the failure/overview feed)."""
     for j in items or []:
         if j.get("jobs") is not None:  # folder or multibranch — descend
             _flatten(j["jobs"], out)
         if j.get("lastBuild") or j.get("lastCompletedBuild"):  # runnable job
+            out.append(j)
+    return out
+
+
+def _flatten_all(items: list, out: list) -> list:
+    """EVERY leaf job, including never-built ones — descends into containers,
+    appends anything that isn't a container. Used where the goal is a complete
+    pipeline inventory (SCM grouping, script-path wiring), not just failures."""
+    for j in items or []:
+        if _is_container(j):
+            _flatten_all(j.get("jobs") or [], out)
+        else:
             out.append(j)
     return out
 
@@ -301,9 +326,9 @@ def job_definition(job: str) -> dict:
 
 
 def all_job_names() -> list[str]:
-    """EVERY runnable job on the instance — JENKINS_IGNORE is deliberately
-    NOT applied: it filters the failure feed, but the dependency wiring
-    check must see excluded jobs too."""
+    """EVERY runnable job on the instance — including never-built pipelines, and
+    JENKINS_IGNORE is deliberately NOT applied: it filters the failure feed, but
+    the SCM grouping / script-path wiring / dependency check must see them all."""
     if not is_live():
         if settings.demo_mode:
             return [j["name"] for j in _DEMO_JOBS]
@@ -311,8 +336,9 @@ def all_job_names() -> list[str]:
     r = requests.get(f"{settings.jenkins_url}/api/json",
                      params={"tree": _tree_query()}, auth=_auth(), timeout=30)
     r.raise_for_status()
-    return [j.get("fullName") or j.get("name") or ""
-            for j in _flatten(r.json().get("jobs", []), [])]
+    names = [j.get("fullName") or j.get("name") or ""
+             for j in _flatten_all(r.json().get("jobs", []), [])]
+    return [n for n in names if n]
 
 
 _SCRIPT_PATHS_CACHE: dict = {"at": 0.0, "data": None}
