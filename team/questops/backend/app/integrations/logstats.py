@@ -31,7 +31,7 @@ from ..config import settings
 _CACHE: dict = {"at": 0.0, "payload": None}
 _TTL = 120
 
-_WEEK_RE = re.compile(r"-(\d{4})\.(\d{1,2})$")   # -yyyy.ww suffix
+_WEEK_RE = re.compile(r"-(\d+)\.(\d{1,3})$")   # -yyyy.ww suffix (year width validated)
 
 
 # ------------------------------------------------------------------ helpers
@@ -95,9 +95,14 @@ def _parse_index(name: str, known: dict) -> dict | None:
         return None
     rest = name[len(prefix) + 1:]
     week = None
+    bad_week = False
     m = _WEEK_RE.search(rest)
     if m:
-        week = f"{m.group(1)}.{int(m.group(2)):02d}"
+        yr, wk = m.group(1), int(m.group(2))
+        week = f"{yr}.{wk:02d}"
+        # an illogical year (not 4 digits / out of range) or week (>53) is a real
+        # naming bug — flag it instead of silently mis-parsing the suffix
+        bad_week = not (len(yr) == 4 and 2000 <= int(yr) <= 2100 and 1 <= wk <= 53)
         rest = rest[:m.start()]
     # rest == project-env-app-logtype (any part may contain '-')
     proj, n = _match_token(rest.lower(), known["projects"])
@@ -116,7 +121,7 @@ def _parse_index(name: str, known: dict) -> dict | None:
         return None
     logtype = rest[n:].lstrip("-") or "—"
     return {"prefix": prefix, "project": proj, "env": env.lower(), "app": app,
-            "logtype": logtype, "week": week}
+            "logtype": logtype, "week": week, "bad_week": bad_week}
 
 
 # ------------------------------------------------------------------ ES calls
@@ -186,36 +191,142 @@ def _connections() -> list[dict]:
 
 # ------------------------------------------------------------------ assemble
 def _blank_app(project: str, app: str) -> dict:
-    return {"project": project, "app": app, "index_list": [], "_last": []}
+    return {"project": project, "app": app, "index_list": []}
 
 
-def _finalize_app(rec: dict, stale_h: int) -> dict:
+# per-env health score deductions from 100 (higher = healthier)
+_PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20}
+# the issue keys used across scoring + the issue-type filter
+ISSUE_KEYS = ("no_logs", "stale", "timestamp", "bad_week", "clash", "unsupported")
+
+
+def _env_score(no_logs: bool, stale: bool, ts_bad: bool, bad_week: bool) -> int:
+    if no_logs:
+        return 0
+    s = 100 - (_PENALTY["stale"] if stale else 0) \
+        - (_PENALTY["timestamp"] if ts_bad else 0) \
+        - (_PENALTY["bad_week"] if bad_week else 0)
+    return max(s, 0)
+
+
+def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
+                  meta: dict | None) -> dict:
     idxs = rec.pop("index_list")
-    lasts = [x for x in rec.pop("_last", []) if x]
-    rec["indices"] = len(idxs)
-    rec["size_bytes"] = sum(i["size_bytes"] for i in idxs)
-    rec["size_h"] = _hsize(rec["size_bytes"])
-    rec["docs"] = sum(i["docs"] for i in idxs)
-    rec["envs"] = sorted({i["env"] for i in idxs if i.get("env")})
-    rec["logtypes"] = sorted({i["logtype"] for i in idxs if i.get("logtype")})
-    weeks = sorted({i["week"] for i in idxs if i.get("week")})
-    rec["weeks"] = len(weeks)
-    rec["week_span"] = [weeks[0], weeks[-1]] if weeks else None
-    rec["latest_week"] = weeks[-1] if weeks else None
-    rec["sources"] = sorted({i["source"] for i in idxs})
-    rec["last_logged"] = max(lasts) if lasts else None
-    rec["last_logged_age_h"] = _age_hours(rec["last_logged"])
-    # @timestamp health: is it a `date` in every one of this app's indices?
-    types: dict = {}
+    pname, app = rec["project"], rec["app"]
+    meta = meta or {}
+    status = meta.get("status")
+    if status is None and idxs:          # found in ES but not in inventory
+        status = "supported"
+    monitored = status in ("supported", "fallback")
+
+    def _ts_bad(indices):
+        types: dict = {}
+        for i in indices:
+            types.setdefault(i.get("ts_type") or "unmapped", []).append(i["index"])
+        return {t: v for t, v in types.items() if t != "date"}, types
+
+    by_env: dict = {}
     for i in idxs:
-        types.setdefault(i.get("ts_type") or "unmapped", []).append(i["index"])
-    bad = {t: v for t, v in types.items() if t != "date"}
-    rec["ts_types"] = {t: len(v) for t, v in types.items()}
-    rec["ts_bad_indices"] = sorted({x for v in bad.values() for x in v})[:25]
-    rec["no_logs"] = len(idxs) == 0
+        by_env.setdefault(i.get("env") or "?", []).append(i)
+
+    # env_stats covers every EXPECTED env (from inventory) ∪ envs seen in indices,
+    # so an env that simply isn't logging shows up as a "no logs" issue there
+    env_stats = []
+    for env in sorted(set(expected_envs or []) | set(by_env)):
+        eidx = by_env.get(env, [])
+        bad, _types = _ts_bad(eidx)
+        lasts = [x for x in last_map.get((pname, app, env), []) if x]
+        last = max(lasts) if lasts else None
+        age = _age_hours(last)
+        bad_week = sorted({i["index"] for i in eidx if i.get("bad_week")})
+        no_logs = len(eidx) == 0
+        stale = (not no_logs) and (age is None or age > stale_h)
+        ts_ok = (not no_logs) and not bad
+        issues = []
+        if not monitored:
+            score = None
+        elif no_logs:
+            issues, score = ["no_logs"], 0
+        else:
+            if stale:
+                issues.append("stale")
+            if not ts_ok:
+                issues.append("timestamp")
+            if bad_week:
+                issues.append("bad_week")
+            score = _env_score(no_logs, stale, not ts_ok, bool(bad_week))
+        env_stats.append({
+            "env": env, "indices": len(eidx),
+            "size_bytes": sum(i["size_bytes"] for i in eidx),
+            "size_h": _hsize(sum(i["size_bytes"] for i in eidx)),
+            "docs": sum(i["docs"] for i in eidx),
+            "logtypes": sorted({i["logtype"] for i in eidx if i.get("logtype")}),
+            "sources": sorted({i["source"] for i in eidx}),
+            "last_logged": last, "last_logged_age_h": age,
+            "no_logs": no_logs, "stale": stale, "ts_ok": ts_ok,
+            "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:10],
+            "bad_week_indices": bad_week[:10],
+            "issues": issues, "score": score})
+
+    # app-level aggregates
+    bad, types = _ts_bad(idxs)
+    weeks = sorted({i["week"] for i in idxs if i.get("week") and not i.get("bad_week")})
+    all_last = [s["last_logged"] for s in env_stats if s["last_logged"]]
+    rec.update({
+        "indices": len(idxs),
+        "size_bytes": sum(i["size_bytes"] for i in idxs),
+        "size_h": _hsize(sum(i["size_bytes"] for i in idxs)),
+        "docs": sum(i["docs"] for i in idxs),
+        "envs": sorted(by_env),
+        "expected_envs": sorted(set(expected_envs or [])),
+        "logtypes": sorted({i["logtype"] for i in idxs if i.get("logtype")}),
+        "weeks": len(weeks), "week_span": [weeks[0], weeks[-1]] if weeks else None,
+        "latest_week": weeks[-1] if weeks else None,
+        "sources": sorted({i["source"] for i in idxs}),
+        "last_logged": max(all_last) if all_last else None,
+        "ts_types": {t: len(v) for t, v in types.items()},
+        "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:25],
+        "bad_week_indices": sorted({i["index"] for i in idxs if i.get("bad_week")})[:25],
+        "monitored": monitored, "platform_status": status,
+        "env_stats": env_stats,
+        # meta / platform fields (were _apply_app_meta)
+        "prefix": meta.get("prefix"), "deploy_platform": meta.get("deploy_platform"),
+        "prefix_source": meta.get("source"),
+        "app_platform": meta.get("app_platform"),
+        "project_platform": meta.get("project_platform"),
+        "discrepancy": meta.get("discrepancy", False),
+    })
+    rec["last_logged_age_h"] = _age_hours(rec["last_logged"])
+    rec["no_logs"] = monitored and len(idxs) == 0
     rec["ts_ok"] = len(idxs) > 0 and not bad
-    rec["stale"] = (not rec["no_logs"] and (rec["last_logged_age_h"] is None
-                                            or rec["last_logged_age_h"] > stale_h))
+    rec["envs_stale"] = sum(1 for s in env_stats if s["stale"])
+    rec["envs_no_logs"] = sum(1 for s in env_stats if monitored and s["no_logs"])
+    rec["stale"] = rec["envs_stale"] > 0
+
+    # per-app issue set (drives the issue-type filter) + health score
+    issues = set()
+    if not monitored and status == "unsupported":
+        issues.add("unsupported")
+    if monitored and (len(idxs) == 0 or rec["envs_no_logs"]):
+        issues.add("no_logs")
+    if rec["envs_stale"]:
+        issues.add("stale")
+    if len(idxs) > 0 and bad:
+        issues.add("timestamp")
+    if rec["bad_week_indices"]:
+        issues.add("bad_week")
+    if rec["discrepancy"]:
+        issues.add("clash")
+    rec["issues"] = sorted(issues)
+    if not monitored:
+        rec["score"] = None
+    else:
+        env_scores = [s["score"] for s in env_stats if s["score"] is not None]
+        base = (sum(env_scores) / len(env_scores)) if env_scores else 0
+        if rec["discrepancy"]:
+            base -= 10                    # config-hygiene deduction
+        rec["score"] = max(int(round(base)), 0)
+
     rec["index_list"] = sorted(
         idxs, key=lambda x: (x.get("week") or "", x["index"]), reverse=True)[:60]
     return rec
@@ -240,114 +351,89 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
         else:
             unmatched.append({k: r[k] for k in ("index", "source", "size_bytes",
                                                 "docs", "health", "ts_type") if k in r})
-    for key, lasts in last_map.items():
-        if key in apps_model:
-            apps_model[key]["_last"].extend(lasts if isinstance(lasts, list) else [lasts])
-
-    # every inventory app gets a row, even with zero indices (→ no_logs)
-    projects_out = []
-    tot = {"indices": 0, "size_bytes": 0, "docs": 0}
-    n_no_logs = n_stale = n_ts_bad = n_apps = 0
     all_envs: set = set()
     all_logtypes: set = set()
-    n_no_platform = n_apps_no_platform = n_discrepancy = 0
 
-    def _apply_app_meta(a, pname):
-        am = app_meta.get((pname, a["app"])) or {}
-        a["prefix"] = am.get("prefix")
-        a["deploy_platform"] = am.get("deploy_platform")
-        a["prefix_source"] = am.get("source")
-        a["app_platform"] = am.get("app_platform")
-        a["project_platform"] = am.get("project_platform")
-        a["discrepancy"] = am.get("discrepancy", False)
+    def _mean(xs):
+        xs = [x for x in xs if x is not None]
+        return int(round(sum(xs) / len(xs))) if xs else None
 
+    def _proj_totals(rows):
+        return {
+            "apps": len(rows),
+            "indices": sum(a["indices"] for a in rows),
+            "size_bytes": sum(a["size_bytes"] for a in rows),
+            "size_h": _hsize(sum(a["size_bytes"] for a in rows)),
+            "docs": sum(a["docs"] for a in rows),
+            "no_logs": sum(1 for a in rows if "no_logs" in a["issues"]),
+            "ts_bad": sum(1 for a in rows if "timestamp" in a["issues"]),
+            "stale": sum(1 for a in rows if "stale" in a["issues"]),
+            "bad_week": sum(1 for a in rows if "bad_week" in a["issues"]),
+            "discrepancies": sum(1 for a in rows if "clash" in a["issues"]),
+            "unsupported": sum(1 for a in rows if "unsupported" in a["issues"]),
+        }
+
+    def _fin(rec, pname, expected_envs, not_in_inv=False):
+        a = _finalize_app(rec, stale_h, expected_envs, last_map,
+                          app_meta.get((pname, rec["app"])))
+        if not_in_inv:
+            a["not_in_inventory"] = True
+        all_envs.update(a["envs"])
+        all_logtypes.update(a["logtypes"])
+        return a
+
+    # score-first sort: worst (lowest score) leads; no-logs/unsupported after data
+    def _rank(a):
+        return (a["score"] is None, a["score"] if a["score"] is not None else 999,
+                -a["size_bytes"])
+
+    projects_out = []
     for p in projects:
         pname = p["name"]
         meta = proj_meta.get(pname, {})
-        rows = []
-        for app in p.get("apps", []):
-            rec = apps_model.pop((pname, app), None) or _blank_app(pname, app)
-            rows.append(_finalize_app(rec, stale_h))
-        # apps that exist in indices under this project but not in the inventory
+        rows = [_fin(apps_model.pop((pname, app), None) or _blank_app(pname, app),
+                     pname, p.get("envs", [])) for app in p.get("apps", [])]
         for (qp, qa) in [k for k in list(apps_model) if k[0] == pname]:
-            rows.append(_finalize_app(apps_model.pop((qp, qa)), stale_h))
-            rows[-1]["not_in_inventory"] = True
-        for a in rows:
-            _apply_app_meta(a, pname)
-            n_apps += 1
-            tot["indices"] += a["indices"]
-            tot["size_bytes"] += a["size_bytes"]
-            tot["docs"] += a["docs"]
-            all_envs.update(a["envs"])
-            all_logtypes.update(a["logtypes"])
-            n_no_logs += a["no_logs"]
-            n_stale += a["stale"]
-            n_ts_bad += (not a["ts_ok"] and not a["no_logs"])
-            n_apps_no_platform += (not a["prefix"])
-            n_discrepancy += bool(a["discrepancy"])
-        rows.sort(key=lambda a: (a["no_logs"], -a["size_bytes"]))
-        proj_no_prefix = bool(rows) and not any(a.get("prefix") for a in rows)
-        n_no_platform += proj_no_prefix
+            rows.append(_fin(apps_model.pop((qp, qa)), pname, [], not_in_inv=True))
+        rows.sort(key=_rank)
         projects_out.append({
-            "name": pname,
-            "deploy_platform": meta.get("deploy_platform"),
+            "name": pname, "deploy_platform": meta.get("deploy_platform"),
             "prefix": meta.get("prefix"),
-            "no_prefix": proj_no_prefix,
-            "apps": rows,
-            "totals": {
-                "apps": len(rows),
-                "indices": sum(a["indices"] for a in rows),
-                "size_bytes": sum(a["size_bytes"] for a in rows),
-                "size_h": _hsize(sum(a["size_bytes"] for a in rows)),
-                "docs": sum(a["docs"] for a in rows),
-                "no_logs": sum(a["no_logs"] for a in rows),
-                "ts_bad": sum(1 for a in rows if not a["ts_ok"] and not a["no_logs"]),
-                "stale": sum(a["stale"] for a in rows),
-                "discrepancies": sum(1 for a in rows if a.get("discrepancy")),
-                "no_platform": sum(1 for a in rows if not a.get("prefix")),
-            },
-        })
+            "no_prefix": bool(rows) and not any(a.get("prefix") for a in rows),
+            "score": _mean([a["score"] for a in rows]),
+            "apps": rows, "totals": _proj_totals(rows)})
 
-    # any leftover apps under projects NOT in the inventory list
-    leftover: dict = {}
-    for (pname, app), rec in apps_model.items():
-        leftover.setdefault(pname, []).append(_finalize_app(rec, stale_h))
-    for pname, rows in leftover.items():
-        for a in rows:
-            a["not_in_inventory"] = True
-            _apply_app_meta(a, pname)
-            n_apps += 1
-            tot["indices"] += a["indices"]
-            tot["size_bytes"] += a["size_bytes"]
-            tot["docs"] += a["docs"]
-            all_envs.update(a["envs"])
-            all_logtypes.update(a["logtypes"])
-            n_stale += a["stale"]
-            n_ts_bad += (not a["ts_ok"] and not a["no_logs"])
-        projects_out.append({"name": pname, "not_in_inventory": True, "apps": rows,
-                             "totals": {"apps": len(rows),
-                                        "indices": sum(a["indices"] for a in rows),
-                                        "size_bytes": sum(a["size_bytes"] for a in rows),
-                                        "size_h": _hsize(sum(a["size_bytes"] for a in rows)),
-                                        "docs": sum(a["docs"] for a in rows),
-                                        "no_logs": sum(a["no_logs"] for a in rows),
-                                        "ts_bad": sum(1 for a in rows if not a["ts_ok"] and not a["no_logs"]),
-                                        "stale": sum(a["stale"] for a in rows),
-                                        "discrepancies": 0, "no_platform": 0}})
+    for pname in sorted({k[0] for k in apps_model}):
+        rows = [_fin(apps_model.pop(k), pname, [], not_in_inv=True)
+                for k in [k for k in list(apps_model) if k[0] == pname]]
+        rows.sort(key=_rank)
+        projects_out.append({"name": pname, "not_in_inventory": True,
+                             "score": _mean([a["score"] for a in rows]),
+                             "apps": rows, "totals": _proj_totals(rows)})
 
     unmatched.sort(key=lambda u: -(u.get("size_bytes") or 0))
-    # the platform→prefix legend for the (effective) platforms actually in use
     legend = sorted({(m.get("deploy_platform"), m.get("prefix"))
                      for m in app_meta.values() if m.get("deploy_platform") and m.get("prefix")})
+    all_apps = [a for po in projects_out for a in po["apps"]]
+
+    def cnt(key):
+        return sum(1 for a in all_apps if key in a["issues"])
     summary = {
-        "projects": len(projects_out), "apps": n_apps,
-        "apps_no_logs": n_no_logs, "apps_stale": n_stale, "apps_ts_bad": n_ts_bad,
-        "projects_no_platform": n_no_platform, "apps_no_platform": n_apps_no_platform,
-        "discrepancies": n_discrepancy,
-        "indices": tot["indices"], "size_bytes": tot["size_bytes"],
-        "size_h": _hsize(tot["size_bytes"]), "docs": tot["docs"],
+        "projects": len(projects_out), "apps": len(all_apps),
+        "indices": sum(a["indices"] for a in all_apps),
+        "size_bytes": sum(a["size_bytes"] for a in all_apps),
+        "size_h": _hsize(sum(a["size_bytes"] for a in all_apps)),
+        "docs": sum(a["docs"] for a in all_apps),
         "envs": sorted(all_envs), "logtypes": sorted(all_logtypes),
         "unmatched": len(unmatched),
+        "overall_score": _mean([a["score"] for a in all_apps]),
+        "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
+        "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
+        "discrepancies": cnt("clash"), "apps_unsupported": cnt("unsupported"),
+        "apps_no_platform": sum(1 for a in all_apps if not a.get("prefix")),
+        "projects_no_platform": sum(1 for po in projects_out if po.get("no_prefix")),
+        "envs_stale": sum(a.get("envs_stale", 0) for a in all_apps),
+        "envs_no_logs": sum(a.get("envs_no_logs", 0) for a in all_apps),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
             "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
@@ -402,19 +488,20 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
                                 "prefix": _platform_prefix(proj_plat, pmap)}
         for app in p.get("apps", []):
             app_plat = _clean((avars.get(app) or {}).get("deploy_platform"))
-            eff_plat = app_plat or proj_plat
-            eff_pref = _platform_prefix(eff_plat, pmap)
-            if app_plat and _platform_prefix(app_plat, pmap):
-                source = "app"
-            elif proj_plat and _platform_prefix(proj_plat, pmap):
-                source = "project"
+            eff_plat = app_plat or proj_plat            # app group_vars win (Ansible)
+            src = "app" if app_plat else ("project" if proj_plat else None)
+            known = _platform_prefix(eff_plat, pmap)
+            if eff_plat and known:                      # a platform we monitor
+                prefix, status = known, "supported"
+            elif eff_plat:                              # a platform, but not one we map
+                prefix, status = None, "unsupported"
+            elif fallback:                              # no platform anywhere → fallback
+                prefix, status, src = fallback, "fallback", "fallback"
             else:
-                source = None
-            if not eff_pref and fallback:
-                eff_pref, source = fallback, "fallback"
+                prefix, status = None, "none"
             app_meta[(p["name"], app)] = {
-                "deploy_platform": eff_plat, "prefix": eff_pref, "source": source,
-                "app_platform": app_plat, "project_platform": proj_plat,
+                "deploy_platform": eff_plat, "prefix": prefix, "source": src,
+                "status": status, "app_platform": app_plat, "project_platform": proj_plat,
                 "discrepancy": bool(app_plat and proj_plat
                                     and app_plat.lower() != proj_plat.lower())}
     return app_meta, proj_meta
@@ -534,16 +621,17 @@ def _live() -> dict:
                     unexpected.add(p["env"])
                 elif conn["expect_envs"] is None and p["env"] in set(settings.log_prd_env_list):
                     unexpected.add(p["env"])
-                conn_groups.setdefault((p["project"], p["app"]), []).append(name)
+                conn_groups.setdefault((p["project"], p["app"], p["env"]), []).append(name)
             records.append(rec)
-        # newest @timestamp per app on this connection (one round trip)
+        # newest @timestamp per (app, ENV) on this connection (one round trip) —
+        # staleness must be judged per environment, not for the whole app
         try:
-            got = _msearch_max_ts(conn, [(f"{k[0]}\x00{k[1]}", v)
+            got = _msearch_max_ts(conn, [("\x00".join(k), v)
                                          for k, v in conn_groups.items()])
         except requests.RequestException:
             got = {}
         for k in conn_groups:
-            iso = got.get(f"{k[0]}\x00{k[1]}")
+            iso = got.get("\x00".join(k))
             if iso:
                 last_map.setdefault(k, []).append(iso)
         conn_status[kind] = {"label": conn["label"], "configured": True,
@@ -583,9 +671,11 @@ def _demo() -> dict:
     records: list = []
     last_map: dict = {}
     # scripted quirks for a good story
-    STALE = {("Platform", "notifications")}      # last log is old
-    NO_LOGS = {("Control", "team-configs")}      # inventory app with no indices at all
-    TS_BAD = {("Platform", "checkout")}          # @timestamp mapped as text in one env
+    NO_LOGS = {("Control", "team-configs")}          # app with no indices at all
+    TS_BAD = {("Platform", "checkout")}              # @timestamp = text in dev
+    STALE_ENV = {("Platform", "notifications", "prd")}  # stale in PRD only
+    MISSING_ENV = {("Platform", "payments", "qc")}   # payments not logging in qc
+    BAD_WEEK = {("Platform", "checkout", "prd")}     # an illogical 5-digit year index
 
     def env_conn(env):  # prd env served by prd connection, else non-prd
         return "prd" if env in set(settings.log_prd_env_list) else "nonprd"
@@ -596,13 +686,14 @@ def _demo() -> dict:
         for app in p.get("apps", []):
             key = (pname, app)
             prefix = (app_meta.get(key) or {}).get("prefix")   # per-app prefix
-            if key in NO_LOGS or not prefix:
+            if key in NO_LOGS or not prefix:      # unsupported/none platform → not checked
                 continue
             for env in envs:
+                if (pname, app, env) in MISSING_ENV:   # this env simply isn't logging
+                    continue
                 src = env_conn(env)
                 for wk in weeks:
                     for lt in logtypes:
-                        # smaller/rarer error indices; access+application every week
                         if lt == "error" and (hash((app, env, wk)) % 3):
                             continue
                         size = 40_000_000 + (hash((app, env, wk, lt)) % 900) * 1_000_000
@@ -614,13 +705,22 @@ def _demo() -> dict:
                                         "size_bytes": size, "docs": docs,
                                         "health": "green", "ts_type": ts_type,
                                         "prefix": prefix, "project": pname, "env": env,
-                                        "app": app, "logtype": lt, "week": wk})
-            # last-logged: fresh for most, days-old for the stale one
-            if key in STALE:
-                iso = (now - dt.timedelta(days=5, hours=3)).replace(microsecond=0).isoformat() + "Z"
-            else:
-                iso = (now - dt.timedelta(minutes=6 + hash(app) % 40)).replace(microsecond=0).isoformat() + "Z"
-            last_map.setdefault(key, []).append(iso)
+                                        "app": app, "logtype": lt, "week": wk,
+                                        "bad_week": False})
+                # an index with an illogical 5-digit year → bad_week issue
+                if (pname, app, env) in BAD_WEEK:
+                    records.append({"index": f"{prefix}-{pname}-{env}-{app}-application-2{weeks[-1]}",
+                                    "source": src, "size_bytes": 5_000_000, "docs": 3000,
+                                    "health": "yellow", "ts_type": "date", "prefix": prefix,
+                                    "project": pname, "env": env, "app": app,
+                                    "logtype": "application", "week": f"2{weeks[-1]}",
+                                    "bad_week": True})
+                # last-logged PER ENV: fresh, except the scripted stale env
+                if (pname, app, env) in STALE_ENV:
+                    iso = (now - dt.timedelta(days=6, hours=2)).replace(microsecond=0).isoformat() + "Z"
+                else:
+                    iso = (now - dt.timedelta(minutes=6 + hash((app, env)) % 40)).replace(microsecond=0).isoformat() + "Z"
+                last_map.setdefault((pname, app, env), []).append(iso)
     # a couple of stray indices that carry a valid prefix but don't map to any
     # known app/project (naming drift → surfaced in the "unmatched" section)
     for name in (f"oc-Platform-prd-legacy-batch-application-{weeks[-1]}",
@@ -638,6 +738,72 @@ def _demo() -> dict:
     }
     return _assemble(records, last_map, conn_status, projects, known, "demo",
                      app_meta, proj_meta, diag=diag)
+
+
+# ------------------------------------------------ @timestamp sample inspector
+def _looks_date(v) -> bool:
+    from .elastic import _parse_es_date
+    w = _parse_es_date(v)
+    return bool(w and w.year >= 2000)
+
+
+def _conn_by_kind(kind: str) -> dict | None:
+    for c in _connections():
+        if c["kind"] == kind:
+            return c
+    return None
+
+
+def _sample_ts(conn: dict, index: str, size: int) -> dict:
+    """A few docs' @timestamp from one index, each tagged whether the value
+    actually parses as a date — so a text-mapped index's offending values are
+    visible next to a healthy index's proper dates."""
+    if not conn or not conn["url"] or not conn["key"]:
+        return {"index": index, "error": "connection not configured", "docs": []}
+    ts_type = _ts_field_types(conn, index).get(index)
+    try:
+        data = _es_search(index, {"size": size, "_source": ["@timestamp"],
+                                  "query": {"exists": {"field": "@timestamp"}}})
+    except (requests.RequestException, ValueError) as exc:
+        return {"index": index, "ts_type": ts_type, "error": str(exc)[:200], "docs": []}
+    docs = []
+    for h in (data.get("hits", {}).get("hits", []) or []):
+        val = (h.get("_source") or {}).get("@timestamp")
+        docs.append({"id": h.get("_id"), "value": val, "is_date": _looks_date(val)})
+    return {"index": index, "ts_type": ts_type, "docs": docs,
+            "non_date": sum(1 for d in docs if not d["is_date"]), "sampled": len(docs)}
+
+
+def ts_samples(index: str, source: str = "prd", good: str = "",
+               good_source: str = "", size: int = 8) -> dict:
+    """Sample @timestamp values from a suspect index (and, for contrast, a
+    known-good sibling) to pinpoint what makes @timestamp not a proper date."""
+    if not (index or "").strip():
+        raise ValueError("index is required")
+    if settings.demo_mode:
+        return _demo_ts_samples(index, good)
+    out = {"index": _sample_ts(_conn_by_kind(source), index.strip(), size)}
+    if good.strip():
+        out["good"] = _sample_ts(_conn_by_kind(good_source or source), good.strip(), size)
+    return out
+
+
+def _demo_ts_samples(index: str, good: str) -> dict:
+    now = _now()
+    def good_docs(n):
+        return [{"id": f"doc-{i}", "value": (now - dt.timedelta(minutes=i * 7))
+                 .replace(microsecond=0).isoformat() + "Z", "is_date": True} for i in range(n)]
+    # the bad (text-mapped) index: a mix of valid strings and junk values
+    bad_vals = ["2026-08-05T10:12:03Z", "N/A", "2026-08-05 10:11", "-",
+                "pending", "2026-08-05T09:59:59Z", "null", "0000-00-00"]
+    bad = [{"id": f"doc-{i}", "value": v, "is_date": _looks_date(v)}
+           for i, v in enumerate(bad_vals)]
+    res = {"index": {"index": index, "ts_type": "text", "docs": bad,
+                     "non_date": sum(1 for d in bad if not d["is_date"]), "sampled": len(bad)}}
+    if good:
+        res["good"] = {"index": good, "ts_type": "date", "docs": good_docs(6),
+                       "non_date": 0, "sampled": 6}
+    return res
 
 
 # ------------------------------------------------------------------ public

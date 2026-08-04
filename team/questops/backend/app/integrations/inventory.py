@@ -415,7 +415,7 @@ def _demo() -> dict:
         # Platform: the reference story. payments vs checkout differ on timeout_s,
         # feature_flags and prd replica counts; prd_payments also overrides log_level.
         proj("Platform", [("payments", "payments-svc"), ("checkout", "checkout-svc"),
-                          ("notifications", "notify-svc")],
+                          ("notifications", "notify-svc"), ("legacy", None)],
              {"dev": "Platform_Devs", "qc": "Platform_QC", "prd": "SRE_Core"},
              {"uat": "Platform_UAT", "security": "AppSec"},
              {"domain": "platform.corp.local", "region": "eu-west", "log_level": "info"},
@@ -439,7 +439,10 @@ def _demo() -> dict:
                   "checkout": {"repository_name": "checkout-svc", "replicas": "2",
                                "timeout_s": "45", "feature_flags": "card"},
                   "notifications": {"repository_name": "notify-svc", "replicas": "2",
-                                    "channels": "email,sms"}},
+                                    "channels": "email,sms"},
+                  # deploy_platform not in the monitored set → shown but logs
+                  # aren't checked (still displays the app + its platform)
+                  "legacy": {"deploy_platform": "Mainframe"}},
               "env_app_vars": {
                   "dev_payments": {"replicas": "1", "debug": "true"},
                   "prd_payments": {"replicas": "6", "log_level": "warn"},
