@@ -223,11 +223,13 @@ def _finalize_app(rec: dict, stale_h: int) -> dict:
 
 def _assemble(records: list[dict], last_map: dict, conn_status: dict,
               projects: list[dict], known: dict, source: str,
-              proj_meta: dict, note: str = "", diag: dict | None = None) -> dict:
+              app_meta: dict, proj_meta: dict, note: str = "",
+              diag: dict | None = None) -> dict:
     """Shape raw per-index records (+ per-app last-logged map) into the payload.
     `records` matched rows carry project/app/env/logtype/week; unmatched rows
-    (unknown project/app) are collected separately. `proj_meta` gives each
-    project its deploy_platform + resolved prefix. Shared by live and demo."""
+    (unknown project/app) are collected separately. `app_meta` gives each
+    (project, app) its effective deploy_platform + prefix + clash flag;
+    `proj_meta` the project-global platform. Shared by live and demo."""
     stale_h = settings.log_stale_hours
     apps_model: dict = {}
     unmatched: list = []
@@ -248,7 +250,17 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
     n_no_logs = n_stale = n_ts_bad = n_apps = 0
     all_envs: set = set()
     all_logtypes: set = set()
-    n_no_platform = 0
+    n_no_platform = n_apps_no_platform = n_discrepancy = 0
+
+    def _apply_app_meta(a, pname):
+        am = app_meta.get((pname, a["app"])) or {}
+        a["prefix"] = am.get("prefix")
+        a["deploy_platform"] = am.get("deploy_platform")
+        a["prefix_source"] = am.get("source")
+        a["app_platform"] = am.get("app_platform")
+        a["project_platform"] = am.get("project_platform")
+        a["discrepancy"] = am.get("discrepancy", False)
+
     for p in projects:
         pname = p["name"]
         meta = proj_meta.get(pname, {})
@@ -261,8 +273,7 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             rows.append(_finalize_app(apps_model.pop((qp, qa)), stale_h))
             rows[-1]["not_in_inventory"] = True
         for a in rows:
-            a["prefix"] = meta.get("prefix")
-            a["deploy_platform"] = meta.get("deploy_platform")
+            _apply_app_meta(a, pname)
             n_apps += 1
             tot["indices"] += a["indices"]
             tot["size_bytes"] += a["size_bytes"]
@@ -272,14 +283,16 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             n_no_logs += a["no_logs"]
             n_stale += a["stale"]
             n_ts_bad += (not a["ts_ok"] and not a["no_logs"])
+            n_apps_no_platform += (not a["prefix"])
+            n_discrepancy += bool(a["discrepancy"])
         rows.sort(key=lambda a: (a["no_logs"], -a["size_bytes"]))
-        n_no_platform += (not meta.get("prefix"))
+        proj_no_prefix = bool(rows) and not any(a.get("prefix") for a in rows)
+        n_no_platform += proj_no_prefix
         projects_out.append({
             "name": pname,
             "deploy_platform": meta.get("deploy_platform"),
             "prefix": meta.get("prefix"),
-            "prefix_source": meta.get("source"),
-            "no_prefix": not meta.get("prefix"),
+            "no_prefix": proj_no_prefix,
             "apps": rows,
             "totals": {
                 "apps": len(rows),
@@ -290,6 +303,8 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
                 "no_logs": sum(a["no_logs"] for a in rows),
                 "ts_bad": sum(1 for a in rows if not a["ts_ok"] and not a["no_logs"]),
                 "stale": sum(a["stale"] for a in rows),
+                "discrepancies": sum(1 for a in rows if a.get("discrepancy")),
+                "no_platform": sum(1 for a in rows if not a.get("prefix")),
             },
         })
 
@@ -300,6 +315,7 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
     for pname, rows in leftover.items():
         for a in rows:
             a["not_in_inventory"] = True
+            _apply_app_meta(a, pname)
             n_apps += 1
             tot["indices"] += a["indices"]
             tot["size_bytes"] += a["size_bytes"]
@@ -316,23 +332,25 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
                                         "docs": sum(a["docs"] for a in rows),
                                         "no_logs": sum(a["no_logs"] for a in rows),
                                         "ts_bad": sum(1 for a in rows if not a["ts_ok"] and not a["no_logs"]),
-                                        "stale": sum(a["stale"] for a in rows)}})
+                                        "stale": sum(a["stale"] for a in rows),
+                                        "discrepancies": 0, "no_platform": 0}})
 
     unmatched.sort(key=lambda u: -(u.get("size_bytes") or 0))
-    # the platform→prefix legend for the platforms actually in use
+    # the platform→prefix legend for the (effective) platforms actually in use
     legend = sorted({(m.get("deploy_platform"), m.get("prefix"))
-                     for m in proj_meta.values() if m.get("deploy_platform") and m.get("prefix")})
+                     for m in app_meta.values() if m.get("deploy_platform") and m.get("prefix")})
     summary = {
         "projects": len(projects_out), "apps": n_apps,
         "apps_no_logs": n_no_logs, "apps_stale": n_stale, "apps_ts_bad": n_ts_bad,
-        "projects_no_platform": n_no_platform,
+        "projects_no_platform": n_no_platform, "apps_no_platform": n_apps_no_platform,
+        "discrepancies": n_discrepancy,
         "indices": tot["indices"], "size_bytes": tot["size_bytes"],
         "size_h": _hsize(tot["size_bytes"]), "docs": tot["docs"],
         "envs": sorted(all_envs), "logtypes": sorted(all_logtypes),
         "unmatched": len(unmatched),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
-            "prefixes": sorted({m["prefix"] for m in proj_meta.values() if m.get("prefix")}),
+            "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
             "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
             "connections": conn_status, "summary": summary,
             "projects": projects_out, "unmatched": unmatched[:50],
@@ -350,22 +368,56 @@ def _known(projects: list[dict], prefixes) -> dict:
     }
 
 
-def _project_prefixes(projects: list[dict]) -> dict:
-    """Per project: resolve its log index prefix from `deploy_platform` via the
-    configured map (OCP→oc, LinuxVM→vmlin, WindowsVM→vmwin), falling back to
-    LOG_INDEX_PREFIX when a project doesn't declare a platform. Returns
-    {project: {deploy_platform, prefix, source}} (source: platform|fallback|None)."""
+def _clean(v) -> str | None:
+    s = ("" if v is None else str(v)).strip()
+    return s or None
+
+
+def _platform_prefix(platform, pmap: dict) -> str | None:
+    p = _clean(platform)
+    return pmap.get(p.lower()) if p else None
+
+
+def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
+    """Resolve the log index prefix PER (project, app) from `deploy_platform`.
+
+    deploy_platform is read app-first: the app's own group_vars
+    (group_vars/<app>/*.yml incl. cicd.yml → `config.app_vars[app]`), falling
+    back to the project-wide group_vars/all (`config.project_vars`). The map is
+    OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin · K8s→k8s (+ LOG_PLATFORM_PREFIXES),
+    then LOG_INDEX_PREFIX as a last-resort fallback. Returns (app_meta, proj_meta):
+      app_meta[(project, app)] = {deploy_platform (effective), prefix, source
+        ('app'|'project'|'fallback'|None), app_platform, project_platform, discrepancy}
+      proj_meta[project] = {deploy_platform (project-global), prefix}."""
     pmap = settings.log_platform_prefix_map
-    fallback = (settings.log_index_prefix or "").strip()
-    out = {}
+    fallback = (settings.log_index_prefix or "").strip() or None
+    app_meta: dict = {}
+    proj_meta: dict = {}
     for p in projects:
-        plat = (p.get("deploy_platform") or "").strip()
-        pref = pmap.get(plat.lower()) if plat else None
-        source = "platform" if pref else None
-        if not pref and fallback:
-            pref, source = fallback, "fallback"
-        out[p["name"]] = {"deploy_platform": plat or None, "prefix": pref, "source": source}
-    return out
+        cfg = p.get("config") or {}
+        pvars = cfg.get("project_vars") or {}
+        avars = cfg.get("app_vars") or {}
+        proj_plat = _clean(pvars.get("deploy_platform") or p.get("deploy_platform"))
+        proj_meta[p["name"]] = {"deploy_platform": proj_plat,
+                                "prefix": _platform_prefix(proj_plat, pmap)}
+        for app in p.get("apps", []):
+            app_plat = _clean((avars.get(app) or {}).get("deploy_platform"))
+            eff_plat = app_plat or proj_plat
+            eff_pref = _platform_prefix(eff_plat, pmap)
+            if app_plat and _platform_prefix(app_plat, pmap):
+                source = "app"
+            elif proj_plat and _platform_prefix(proj_plat, pmap):
+                source = "project"
+            else:
+                source = None
+            if not eff_pref and fallback:
+                eff_pref, source = fallback, "fallback"
+            app_meta[(p["name"], app)] = {
+                "deploy_platform": eff_plat, "prefix": eff_pref, "source": source,
+                "app_platform": app_plat, "project_platform": proj_plat,
+                "discrepancy": bool(app_plat and proj_plat
+                                    and app_plat.lower() != proj_plat.lower())}
+    return app_meta, proj_meta
 
 
 # the user-facing knob names (host/compose env is QO_-prefixed; the container
@@ -389,10 +441,30 @@ def _ping(conn: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def _inventory_diag(inv: dict, projects: list[dict], proj_meta: dict,
-                    prefixes: list) -> dict:
+def _inventory_diag(inv: dict, projects: list[dict], app_meta: dict,
+                    proj_meta: dict, prefixes: list) -> dict:
     """What the page managed to parse out of the inventories repo — so a blank
-    page is debuggable (mirrors the Repositories inventory panel)."""
+    page is debuggable (mirrors the Repositories inventory panel). Includes the
+    per-project global deploy_platform, per-app overrides, project↔app clashes,
+    and any apps whose prefix couldn't be resolved."""
+    proj_rows = []
+    for p in projects:
+        pm = proj_meta.get(p["name"]) or {}
+        overrides, unresolved = [], []
+        for app in p.get("apps", []):
+            am = app_meta.get((p["name"], app)) or {}
+            if am.get("app_platform"):
+                overrides.append({"app": app, "platform": am["app_platform"],
+                                  "prefix": am.get("prefix"),
+                                  "discrepancy": am.get("discrepancy", False)})
+            if not am.get("prefix"):
+                unresolved.append(app)
+        proj_rows.append({
+            "project": p["name"],
+            "deploy_platform": pm.get("deploy_platform"),
+            "prefix": pm.get("prefix"),
+            "apps": len(p.get("apps", [])), "envs": p.get("envs", []),
+            "app_overrides": overrides, "unresolved_apps": unresolved})
     return {
         "inventory_source": inv.get("source"),
         "inventory_note": inv.get("note"),
@@ -401,13 +473,7 @@ def _inventory_diag(inv: dict, projects: list[dict], proj_meta: dict,
         "envs": sorted({e for p in projects for e in p.get("envs", [])}),
         "prefixes": list(prefixes),
         "platform_map": settings.log_platform_prefix_map,
-        "project_platforms": [
-            {"project": p["name"],
-             "deploy_platform": (proj_meta.get(p["name"]) or {}).get("deploy_platform"),
-             "prefix": (proj_meta.get(p["name"]) or {}).get("prefix"),
-             "prefix_source": (proj_meta.get(p["name"]) or {}).get("source"),
-             "apps": len(p.get("apps", [])), "envs": p.get("envs", [])}
-            for p in projects],
+        "project_platforms": proj_rows,
     }
 
 
@@ -416,9 +482,9 @@ def _live() -> dict:
     from . import inventory
     inv = inventory.parse()
     projects = inv.get("projects", [])
-    proj_meta = _project_prefixes(projects) if projects else {}
-    prefixes = sorted({m["prefix"] for m in proj_meta.values() if m["prefix"]})
-    diag = _inventory_diag(inv, projects, proj_meta, prefixes)
+    app_meta, proj_meta = _app_meta(projects) if projects else ({}, {})
+    prefixes = sorted({m["prefix"] for m in app_meta.values() if m["prefix"]})
+    diag = _inventory_diag(inv, projects, app_meta, proj_meta, prefixes)
     known = _known(projects, prefixes)
     pattern = ",".join(f"{p}-*" for p in prefixes)   # "" when nothing resolved yet
 
@@ -490,11 +556,11 @@ def _live() -> dict:
         note = (inv.get("note") or "the 'inventories' repo isn't cloned/parsed yet — "
                 "add & clone it on the Repositories page, then re-analyze.")
     elif not prefixes:
-        note = ("no log index prefix resolved: none of the parsed projects declare a "
-                "`deploy_platform` (OCP / LinuxVM / WindowsVM) and QO_LOG_INDEX_PREFIX "
-                "has no fallback. See the per-project detection below.")
+        note = ("no log index prefix resolved: no app or project declares a known "
+                "`deploy_platform` (OCP / LinuxVM / WindowsVM / K8s) and "
+                "QO_LOG_INDEX_PREFIX has no fallback. See the per-project/app detection below.")
     return _assemble(records, last_map, conn_status, projects, known, "live",
-                     proj_meta, note, diag)
+                     app_meta, proj_meta, note, diag)
 
 
 # ------------------------------------------------------------------ demo
@@ -507,10 +573,10 @@ def _demo() -> dict:
     from . import inventory
     inv = inventory.parse()
     projects = inv.get("projects", [])
-    proj_meta = _project_prefixes(projects)   # Platform→oc, Control→vmlin, Research→vmwin
-    prefixes = sorted({m["prefix"] for m in proj_meta.values() if m["prefix"]})
+    app_meta, proj_meta = _app_meta(projects)
+    prefixes = sorted({m["prefix"] for m in app_meta.values() if m["prefix"]})
     known = _known(projects, prefixes)
-    diag = _inventory_diag(inv, projects, proj_meta, prefixes)
+    diag = _inventory_diag(inv, projects, app_meta, proj_meta, prefixes)
     now = _now()
     weeks = [_iso_week(now - dt.timedelta(weeks=i)) for i in range(4)][::-1]  # oldest→newest
     logtypes = ["application", "access", "error"]
@@ -526,13 +592,11 @@ def _demo() -> dict:
 
     for p in projects:
         pname = p["name"]
-        prefix = (proj_meta.get(pname) or {}).get("prefix")
-        if not prefix:                           # no deploy_platform → no indices
-            continue
         envs = p.get("envs", []) or ["dev", "prd"]
         for app in p.get("apps", []):
             key = (pname, app)
-            if key in NO_LOGS:
+            prefix = (app_meta.get(key) or {}).get("prefix")   # per-app prefix
+            if key in NO_LOGS or not prefix:
                 continue
             for env in envs:
                 src = env_conn(env)
@@ -573,7 +637,7 @@ def _demo() -> dict:
                    "url": "https://es-nonprd.demo:9200"},
     }
     return _assemble(records, last_map, conn_status, projects, known, "demo",
-                     proj_meta, diag=diag)
+                     app_meta, proj_meta, diag=diag)
 
 
 # ------------------------------------------------------------------ public

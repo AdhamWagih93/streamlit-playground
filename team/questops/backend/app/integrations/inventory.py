@@ -431,8 +431,11 @@ def _demo() -> dict:
                                "region": "eu-west", "log_level": "info", "tls_enabled": "true",
                                "deploy_platform": "OCP"},
               "app_vars": {
+                  # app-specific deploy_platform (group_vars/payments/cicd.yml) —
+                  # K8s, which CLASHES with the project-global OCP → highlighted
                   "payments": {"repository_name": "payments-svc", "replicas": "2",
-                               "timeout_s": "30", "feature_flags": "wallet,card"},
+                               "timeout_s": "30", "feature_flags": "wallet,card",
+                               "deploy_platform": "K8s"},
                   "checkout": {"repository_name": "checkout-svc", "replicas": "2",
                                "timeout_s": "45", "feature_flags": "card"},
                   "notifications": {"repository_name": "notify-svc", "replicas": "2",

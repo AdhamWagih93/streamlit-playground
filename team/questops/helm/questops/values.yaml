@@ -74,9 +74,11 @@ elasticsearch:
   errorAnalysisDays: 14
 
 # Logging Health tab: ${index_prefix}-${project}-${env}-${app}-${logtype}-yyyy.ww
-# The prefix is derived per project from its inventory deploy_platform var.
+# The prefix is derived per APP from its inventory deploy_platform (app
+# group_vars, else project group_vars/all): OCP→oc LinuxVM→vmlin WindowsVM→vmwin
+# K8s→k8s (built in).
 logging:
-  platformPrefixes: "OCP:oc,LinuxVM:vmlin,WindowsVM:vmwin"  # deploy_platform:prefix
+  platformPrefixes: ""    # built-ins OCP/LinuxVM/WindowsVM/K8s always apply; add extras here
   indexPrefix: ""           # fallback prefix for projects with no deploy_platform
   prdEnvs: "prd"            # env token(s) served by the primary (prd) ES
   staleHours: 48            # newest-log age (h) that flags an app "stale"

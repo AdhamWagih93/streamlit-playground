@@ -3113,14 +3113,20 @@ function logDiagHtml(d) {
   const chips = (arr, cls) => (arr || []).length
     ? arr.map((x) => `<span class="chip ${cls || ""}">${esc(x)}</span>`).join(" ")
     : '<span class="ci-meta">none detected</span>';
-  const rows = (g.project_platforms || []).map((pp) => `
-    <div class="log-diag-row">
+  const rows = (g.project_platforms || []).map((pp) => {
+    const proj = pp.deploy_platform
+      ? `<span class="chip chip-cyan" title="project-global deploy_platform (group_vars/all)">project: ${esc(pp.deploy_platform)} → ${esc(pp.prefix || "?")}</span>`
+      : '<span class="chip" title="no project-wide deploy_platform (group_vars/all)">project: —</span>';
+    const over = (pp.app_overrides || []).map((o) =>
+      `<span class="chip ${o.discrepancy ? "chip-red" : "chip-cyan"}" title="app-specific deploy_platform (group_vars/${esc(o.app)})${o.discrepancy ? " — CLASHES with project global" : ""}">${esc(o.app)}: ${esc(o.platform)} → ${esc(o.prefix || "?")}${o.discrepancy ? " ⚠" : ""}</span>`).join(" ");
+    const unres = (pp.unresolved_apps || []).length
+      ? `<span class="chip chip-red" title="no deploy_platform resolved (app or project): ${esc((pp.unresolved_apps || []).join(", "))}">${pp.unresolved_apps.length} app(s) unresolved</span>` : "";
+    return `<div class="log-diag-row">
       <span class="ci-job">📁 ${esc(pp.project)}</span>
-      ${pp.deploy_platform
-        ? `<span class="chip chip-cyan" title="deploy_platform → prefix">${esc(pp.deploy_platform)} → ${esc(pp.prefix || "?")}</span>`
-        : '<span class="chip chip-red" title="no deploy_platform in group_vars/all — can\'t resolve a prefix">no deploy_platform</span>'}
+      ${proj} ${over} ${unres}
       <span class="ci-meta">${pp.apps} app(s) · envs ${(pp.envs || []).join(", ") || "—"}</span>
-    </div>`).join("") || '<div class="ci-meta">no projects parsed from inventories</div>';
+    </div>`;
+  }).join("") || '<div class="ci-meta">no projects parsed from inventories</div>';
   const logtypes = (d.summary || {}).logtypes || [];
   const issues = !(g.prefixes || []).length || !g.projects
     || Object.values(d.connections || {}).some((c) => c && (!c.configured || !c.reachable));
@@ -3153,17 +3159,37 @@ function logTsBadge(a) {
 
 function logAppMatch(a, f) {
   if (f.q) {
-    const hay = (a.app + " " + (a.envs || []).join(" ") + " " + (a.logtypes || []).join(" ")).toLowerCase();
+    const hay = (a.app + " " + (a.project || "") + " " + (a.deploy_platform || "") + " "
+      + (a.envs || []).join(" ") + " " + (a.logtypes || []).join(" ")).toLowerCase();
     if (!hay.includes(f.q.toLowerCase())) return false;
   }
+  if (f.project && f.project !== "all" && a.project !== f.project) return false;
+  if (f.platform && f.platform !== "all" && (a.deploy_platform || "—") !== f.platform) return false;
+  if (f.logtype && f.logtype !== "all" && !(a.logtypes || []).includes(f.logtype)) return false;
   if (f.env && f.env !== "all" && !(a.envs || []).includes(f.env)) return false;
-  if (f.issues && !(a.no_logs || a.stale || !a.ts_ok)) return false;
+  if (f.issues && !(a.no_logs || a.stale || !a.ts_ok || a.discrepancy)) return false;
   return true;
+}
+
+// useful sorts; no-logs apps always sink to the bottom so real data leads
+const LOG_SORTS = {
+  size: (a, b) => b.size_bytes - a.size_bytes,
+  updated: (a, b) => (b.last_logged || "").localeCompare(a.last_logged || ""),
+  docs: (a, b) => b.docs - a.docs,
+  indices: (a, b) => b.indices - a.indices,
+  name: (a, b) => a.app.localeCompare(b.app),
+};
+function logSortApps(apps, sort) {
+  const cmp = LOG_SORTS[sort] || LOG_SORTS.size;
+  return apps.slice().sort((a, b) => (a.no_logs - b.no_logs) || cmp(a, b));
 }
 
 function logAppRow(a) {
   const pre = a.prefix;
   const badges = [];
+  if (a.deploy_platform) badges.push(`<span class="chip chip-cyan" title="deploy_platform (source: ${esc(a.prefix_source || "?")}) → index prefix">${esc(a.deploy_platform)} → ${esc(a.prefix || "?")}</span>`);
+  else if (!a.no_logs) badges.push('<span class="chip chip-red" title="no deploy_platform resolved for this app">no platform</span>');
+  if (a.discrepancy) badges.push(`<span class="chip chip-red" title="app deploy_platform (${esc(a.app_platform)}) overrides the project global (${esc(a.project_platform)}) — using the app's">⚠ platform clash</span>`);
   if (a.stale && !a.no_logs) badges.push(`<span class="chip chip-amber" title="newest log ${logAgo(a.last_logged_age_h)}">stale</span>`);
   if (a.not_in_inventory) badges.push('<span class="chip chip-amber" title="indexed under this project but not in the inventory app list">drift</span>');
   const meta = a.no_logs
@@ -3191,6 +3217,7 @@ function logAppRow(a) {
         <div><span class="acc-h">weeks</span><div class="ci-meta">${a.weeks}${a.week_span ? ` · ${esc(a.week_span[0])} → ${esc(a.week_span[1])}` : ""}</div></div>
         <div><span class="acc-h">last logged</span><div class="ci-meta">${a.last_logged ? esc(a.last_logged) + " · " + logAgo(a.last_logged_age_h) : "—"}</div></div>
         <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
+        <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}${a.discrepancy ? ` · <span class="pct-bad">⚠ app overrides project ${esc(a.project_platform)}</span>` : ""}</div></div>
         <div><span class="acc-h">@timestamp</span><div class="ci-meta">${a.ts_ok ? "date in all indices ✓" : `⚠ ${(a.ts_bad_indices || []).length} index(es) not date-mapped`}</div></div>
       </div>
       ${!a.ts_ok && (a.ts_bad_indices || []).length ? `<div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in: ${a.ts_bad_indices.map((x) => `<code>${esc(x)}</code>`).join(", ")} — time-range queries silently return nothing on these.</div>` : ""}
@@ -3202,27 +3229,28 @@ function logAppRow(a) {
 }
 
 function logProjectCard(p, f) {
-  const apps = (p.apps || []).filter((a) => logAppMatch(a, f));
+  const apps = logSortApps((p.apps || []).filter((a) => logAppMatch(a, f)), f.sort);
   if (!apps.length) return "";
   const t = p.totals || {};
   const flag = (n, label, cls) => n ? ` · <span class="${cls}">${n} ${label}</span>` : "";
   const plat = p.deploy_platform
-    ? `<span class="chip chip-cyan" title="deploy_platform → index prefix">${esc(p.deploy_platform)} → ${esc(p.prefix || "?")}</span>`
-    : (p.no_prefix ? '<span class="chip chip-red" title="no deploy_platform in group_vars/all">no deploy_platform</span>' : "");
+    ? `<span class="chip chip-cyan" title="project-global deploy_platform → index prefix">${esc(p.deploy_platform)} → ${esc(p.prefix || "?")}</span>`
+    : (p.no_prefix ? '<span class="chip chip-red" title="no deploy_platform on any app or group_vars/all">no deploy_platform</span>' : "");
   const warn = p.no_prefix
-    ? `<div class="log-tsbad-note">⚠ project <b>${esc(p.name)}</b> declares no <code>deploy_platform</code> — can't resolve a log index prefix (OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin), so its apps can't be located.</div>`
+    ? `<div class="log-tsbad-note">⚠ project <b>${esc(p.name)}</b> resolves no <code>deploy_platform</code> on any app (group_vars/&lt;app&gt;) or project-wide (group_vars/all) — can't build a log index prefix (OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin · K8s→k8s), so its apps can't be located.</div>`
     : "";
   return `<details class="filebox log-proj" ${f._any ? "open" : ""}>
     <summary>📁 <b>${esc(p.name)}</b> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
-        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}</span></summary>
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.discrepancies, "clash", "pct-bad")}</span></summary>
     <div class="log-proj-body">${warn}${apps.map(logAppRow).join("")}</div></details>`;
 }
 
 function logContentHtml() {
   const d = state.logData;
   const f = state.logFilter;
-  f._any = !!(f.q || (f.env && f.env !== "all") || f.issues);
+  const on = (k) => f[k] && f[k] !== "all";
+  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || f.issues);
   const cards = (d.projects || []).map((p) => logProjectCard(p, f)).join("")
     || '<div class="empty">no apps match the filters</div>';
   const un = (d.unmatched || []).length ? `
@@ -3253,7 +3281,8 @@ async function renderLogging() {
   state.logRefresh = false;
   if (navStale(tok)) return;
   state.logData = d;
-  const f = state.logFilter = state.logFilter || { q: "", env: "all", issues: false };
+  const f = state.logFilter = state.logFilter
+    || { q: "", project: "all", platform: "all", logtype: "all", env: "all", sort: "size", issues: false };
   const s = d.summary || {};
 
   const legend = (d.platform_legend || []).map((x) =>
@@ -3284,15 +3313,24 @@ async function renderLogging() {
     ${tile(s.apps_no_logs || 0, "apps with no logs", s.apps_no_logs ? "pct-bad" : "pct-good")}
     ${tile(s.apps_stale || 0, `stale (>${d.stale_hours}h)`, s.apps_stale ? "pct-warn" : "pct-good")}
     ${tile(s.apps_ts_bad || 0, "@timestamp issues", s.apps_ts_bad ? "pct-bad" : "pct-good")}
-    ${s.projects_no_platform ? tile(s.projects_no_platform, "no deploy_platform", "pct-bad") : ""}
+    ${s.discrepancies ? tile(s.discrepancies, "platform clashes", "pct-bad") : ""}
+    ${s.apps_no_platform ? tile(s.apps_no_platform, "apps no platform", "pct-warn") : ""}
     ${s.unmatched ? tile(s.unmatched, "unmatched idx", "pct-warn") : ""}</div>`;
 
-  const envs = s.envs || [];
-  const envOpts = [["all", "env: any"], ...envs.map((e) => [e, e])];
+  const sel = (id, cur, opts) => `<select id="${id}">${opts.map(([v, l]) =>
+    `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  const projNames = (d.projects || []).map((p) => p.name);
+  const platforms = [...new Set((d.projects || []).flatMap((p) => (p.apps || [])
+    .map((a) => a.deploy_platform).filter(Boolean)))].sort();
   const filterBar = `<div class="acc-filters">
-    <input id="log-q" placeholder="🔎 app / env / logtype…" value="${esc(f.q || "")}">
-    <select id="log-env">${envOpts.map(([v, l]) => `<option value="${esc(v)}" ${f.env === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
-    <label class="log-issues"><input type="checkbox" id="log-issues" ${f.issues ? "checked" : ""}> issues only (no-logs · stale · @timestamp)</label>
+    <input id="log-q" placeholder="🔎 app / project / platform / env / logtype…" value="${esc(f.q || "")}">
+    ${sel("log-project", f.project || "all", [["all", "project: any"], ...projNames.map((p) => [p, p])])}
+    ${sel("log-platform", f.platform || "all", [["all", "platform: any"], ...platforms.map((p) => [p, p])])}
+    ${sel("log-logtype", f.logtype || "all", [["all", "type: any"], ...(s.logtypes || []).map((l) => [l, l])])}
+    ${sel("log-env", f.env || "all", [["all", "env: any"], ...(s.envs || []).map((e) => [e, e])])}
+    ${sel("log-sort", f.sort || "size", [["size", "↓ size"], ["updated", "↓ last updated"],
+      ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]])}
+    <label class="log-issues"><input type="checkbox" id="log-issues" ${f.issues ? "checked" : ""}> issues only</label>
     ${f._any ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
     <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""}</span></div>`;
 
@@ -3316,12 +3354,19 @@ function wireLogging() {
       if (nq) { nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }
     }, 200);
   };
-  const env = document.getElementById("log-env");
-  if (env) env.onchange = () => { f.env = env.value; rerenderLog(); };
+  [["log-project", "project"], ["log-platform", "platform"], ["log-logtype", "logtype"],
+   ["log-env", "env"], ["log-sort", "sort"]].forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (el) el.onchange = () => { f[key] = el.value; rerenderLog(); };
+  });
   const iss = document.getElementById("log-issues");
   if (iss) iss.onchange = () => { f.issues = iss.checked; rerenderLog(); };
   const cl = document.getElementById("log-clear");
-  if (cl) cl.onclick = () => { state.logFilter = { q: "", env: "all", issues: false }; renderLogging(); };
+  if (cl) cl.onclick = () => {
+    state.logFilter = { q: "", project: "all", platform: "all", logtype: "all",
+      env: "all", sort: f.sort || "size", issues: false };
+    renderLogging();
+  };
 }
 
 /* ================= ACCESS MANAGEMENT ================= */

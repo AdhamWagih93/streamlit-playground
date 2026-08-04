@@ -65,10 +65,11 @@ class Settings(BaseSettings):
     # A SEPARATE non-prd connection holds every OTHER environment's log indices
     # (dev / qc / uat / …). Leave it blank if you only monitor prd.
     #
-    # The ${index_prefix} is DERIVED PER PROJECT from that project's inventory
-    # `deploy_platform` var via this map. log_index_prefix below is only a
-    # FALLBACK for projects that don't declare a deploy_platform.
-    log_platform_prefixes: str = "OCP:oc,LinuxVM:vmlin,WindowsVM:vmwin"
+    # The ${index_prefix} is DERIVED PER APP from `deploy_platform` (app's
+    # group_vars/<app>/*.yml, else project group_vars/all). The built-in map is
+    # OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin · K8s→k8s (always applied);
+    # this setting only ADDS/overrides extra "Platform:prefix" pairs.
+    log_platform_prefixes: str = ""  # optional extra deploy_platform:prefix pairs
     log_index_prefix: str = ""       # fallback ${index_prefix} (no deploy_platform)
     log_prd_envs: str = "prd"        # env token(s) served by the primary (prd) ES
     log_stale_hours: int = 48        # an app with no new log later than this = stale
@@ -179,8 +180,9 @@ class Settings(BaseSettings):
 
     @property
     def log_platform_prefix_map(self) -> dict:
-        """deploy_platform (lower-cased) -> log index prefix."""
-        out = {}
+        """deploy_platform (lower-cased) -> log index prefix. The four built-ins
+        always apply; LOG_PLATFORM_PREFIXES only adds/overrides extra pairs."""
+        out = {"ocp": "oc", "linuxvm": "vmlin", "windowsvm": "vmwin", "k8s": "k8s"}
         for pair in self._csv(self.log_platform_prefixes):
             if ":" in pair:
                 k, v = pair.split(":", 1)
