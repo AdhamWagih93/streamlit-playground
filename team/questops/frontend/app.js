@@ -3122,7 +3122,7 @@ function logAppMatch(a, f) {
 }
 
 function logAppRow(a) {
-  const pre = state.logData.index_prefix;
+  const pre = a.prefix;
   const badges = [];
   if (a.stale && !a.no_logs) badges.push(`<span class="chip chip-amber" title="newest log ${logAgo(a.last_logged_age_h)}">stale</span>`);
   if (a.not_in_inventory) badges.push('<span class="chip chip-amber" title="indexed under this project but not in the inventory app list">drift</span>');
@@ -3142,7 +3142,9 @@ function logAppRow(a) {
     </div>`).join("") || '<div class="empty">no indices</div>';
   const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
   const body = a.no_logs
-    ? `<div class="empty">No log indices matched <code>${esc(pre)}-${esc(a.project)}-*-${esc(a.app)}-*</code> on either Elasticsearch connection.</div>`
+    ? (pre
+      ? `<div class="empty">No log indices matched <code>${esc(pre)}-${esc(a.project)}-*-${esc(a.app)}-*</code> on either Elasticsearch connection.</div>`
+      : `<div class="empty">No index prefix — project <b>${esc(a.project)}</b> has no <code>deploy_platform</code> (OCP / LinuxVM / WindowsVM), so its indices can't be located.</div>`)
     : `<div class="log-app-facts">
         <div><span class="acc-h">environments</span><div class="inv-chips">${chips(a.envs, "chip-amber")}</div></div>
         <div><span class="acc-h">logtypes</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
@@ -3164,11 +3166,17 @@ function logProjectCard(p, f) {
   if (!apps.length) return "";
   const t = p.totals || {};
   const flag = (n, label, cls) => n ? ` · <span class="${cls}">${n} ${label}</span>` : "";
+  const plat = p.deploy_platform
+    ? `<span class="chip chip-cyan" title="deploy_platform → index prefix">${esc(p.deploy_platform)} → ${esc(p.prefix || "?")}</span>`
+    : (p.no_prefix ? '<span class="chip chip-red" title="no deploy_platform in group_vars/all">no deploy_platform</span>' : "");
+  const warn = p.no_prefix
+    ? `<div class="log-tsbad-note">⚠ project <b>${esc(p.name)}</b> declares no <code>deploy_platform</code> — can't resolve a log index prefix (OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin), so its apps can't be located.</div>`
+    : "";
   return `<details class="filebox log-proj" ${f._any ? "open" : ""}>
-    <summary>📁 <b>${esc(p.name)}</b>${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
+    <summary>📁 <b>${esc(p.name)}</b> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
         flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}</span></summary>
-    <div class="log-proj-body">${apps.map(logAppRow).join("")}</div></details>`;
+    <div class="log-proj-body">${warn}${apps.map(logAppRow).join("")}</div></details>`;
 }
 
 function logContentHtml() {
@@ -3208,11 +3216,15 @@ async function renderLogging() {
   const f = state.logFilter = state.logFilter || { q: "", env: "all", issues: false };
   const s = d.summary || {};
 
+  const legend = (d.platform_legend || []).map((x) =>
+    `<span class="chip chip-cyan" title="deploy_platform ${esc(x.platform)} → index prefix ${esc(x.prefix)}">${esc(x.platform)} → <b>${esc(x.prefix)}</b></span>`).join(" ");
   const head = `<div class="view-head"><h1>LOGGING HEALTH</h1>
       <span class="sub">ELK index health, performance &amp; utilization across your projects &amp; apps
-        — pattern <code>${esc(d.index_prefix || "${index_prefix}")}-\${project}-\${env}-\${app}-\${logtype}-yyyy.ww</code></span>
+        — pattern <code>\${prefix}-\${project}-\${env}-\${app}-\${logtype}-yyyy.ww</code>,
+        prefix per project from <code>deploy_platform</code></span>
       <span class="spacer"></span>
       <button class="btn btn-sm" id="log-refresh">↻ re-analyze</button></div>
+    ${legend ? `<div class="log-legend"><span class="ci-meta">platform → prefix:</span> ${legend}</div>` : ""}
     ${logConnBar(d.connections)}`;
 
   if (d.note && !(d.projects || []).length) {
@@ -3231,6 +3243,7 @@ async function renderLogging() {
     ${tile(s.apps_no_logs || 0, "apps with no logs", s.apps_no_logs ? "pct-bad" : "pct-good")}
     ${tile(s.apps_stale || 0, `stale (>${d.stale_hours}h)`, s.apps_stale ? "pct-warn" : "pct-good")}
     ${tile(s.apps_ts_bad || 0, "@timestamp issues", s.apps_ts_bad ? "pct-bad" : "pct-good")}
+    ${s.projects_no_platform ? tile(s.projects_no_platform, "no deploy_platform", "pct-bad") : ""}
     ${s.unmatched ? tile(s.unmatched, "unmatched idx", "pct-warn") : ""}</div>`;
 
   const envs = s.envs || [];

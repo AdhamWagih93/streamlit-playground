@@ -64,7 +64,12 @@ class Settings(BaseSettings):
     # PRD-environment log indices — the same connection the Jenkins KPI uses.
     # A SEPARATE non-prd connection holds every OTHER environment's log indices
     # (dev / qc / uat / …). Leave it blank if you only monitor prd.
-    log_index_prefix: str = ""       # e.g. "logs" — the ${index_prefix}
+    #
+    # The ${index_prefix} is DERIVED PER PROJECT from that project's inventory
+    # `deploy_platform` var via this map. log_index_prefix below is only a
+    # FALLBACK for projects that don't declare a deploy_platform.
+    log_platform_prefixes: str = "OCP:oc,LinuxVM:vmlin,WindowsVM:vmwin"
+    log_index_prefix: str = ""       # fallback ${index_prefix} (no deploy_platform)
     log_prd_envs: str = "prd"        # env token(s) served by the primary (prd) ES
     log_stale_hours: int = 48        # an app with no new log later than this = stale
     es_nonprd_url: str = ""          # non-prd Elasticsearch (dev/qc/uat log indices)
@@ -171,6 +176,17 @@ class Settings(BaseSettings):
     @property
     def log_prd_env_list(self) -> list[str]:
         return [e.lower() for e in self._csv(self.log_prd_envs)] or ["prd"]
+
+    @property
+    def log_platform_prefix_map(self) -> dict:
+        """deploy_platform (lower-cased) -> log index prefix."""
+        out = {}
+        for pair in self._csv(self.log_platform_prefixes):
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                if k.strip() and v.strip():
+                    out[k.strip().lower()] = v.strip()
+        return out
 
     @property
     def ado_access_exclude_list(self) -> set[str]:

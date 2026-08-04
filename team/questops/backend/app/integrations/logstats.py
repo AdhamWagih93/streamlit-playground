@@ -82,14 +82,18 @@ def _match_token(low_rest: str, candidates: list[str]) -> tuple[str | None, int]
     return (best[0], len(best[1])) if best else (None, 0)
 
 
-def _parse_index(name: str, prefix: str, known: dict) -> dict | None:
-    """Split an index name into {project, env, app, logtype, week} using the
-    known project/app/env lists (so hyphenated components stay unambiguous).
-    Returns None when it doesn't resolve to a known project+app."""
-    head = prefix + "-"
-    if not name.startswith(head):
+def _parse_index(name: str, known: dict) -> dict | None:
+    """Split an index name into {prefix, project, env, app, logtype, week} using
+    the known prefix + project/app/env lists (so hyphenated components stay
+    unambiguous). Returns None when it doesn't resolve to a known project+app."""
+    prefix = None
+    for p in known["prefixes"]:                  # longest-first (vmlin/vmwin > oc)
+        if name.startswith(p + "-"):
+            prefix = p
+            break
+    if prefix is None:
         return None
-    rest = name[len(head):]
+    rest = name[len(prefix) + 1:]
     week = None
     m = _WEEK_RE.search(rest)
     if m:
@@ -111,7 +115,7 @@ def _parse_index(name: str, prefix: str, known: dict) -> dict | None:
     if app is None:
         return None
     logtype = rest[n:].lstrip("-") or "—"
-    return {"project": proj, "env": env.lower(), "app": app,
+    return {"prefix": prefix, "project": proj, "env": env.lower(), "app": app,
             "logtype": logtype, "week": week}
 
 
@@ -219,10 +223,11 @@ def _finalize_app(rec: dict, stale_h: int) -> dict:
 
 def _assemble(records: list[dict], last_map: dict, conn_status: dict,
               projects: list[dict], known: dict, source: str,
-              prefix: str, note: str = "") -> dict:
+              proj_meta: dict, note: str = "") -> dict:
     """Shape raw per-index records (+ per-app last-logged map) into the payload.
     `records` matched rows carry project/app/env/logtype/week; unmatched rows
-    (unknown project/app) are collected separately. Shared by live and demo."""
+    (unknown project/app) are collected separately. `proj_meta` gives each
+    project its deploy_platform + resolved prefix. Shared by live and demo."""
     stale_h = settings.log_stale_hours
     apps_model: dict = {}
     unmatched: list = []
@@ -243,8 +248,10 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
     n_no_logs = n_stale = n_ts_bad = n_apps = 0
     all_envs: set = set()
     all_logtypes: set = set()
+    n_no_platform = 0
     for p in projects:
         pname = p["name"]
+        meta = proj_meta.get(pname, {})
         rows = []
         for app in p.get("apps", []):
             rec = apps_model.pop((pname, app), None) or _blank_app(pname, app)
@@ -254,6 +261,8 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             rows.append(_finalize_app(apps_model.pop((qp, qa)), stale_h))
             rows[-1]["not_in_inventory"] = True
         for a in rows:
+            a["prefix"] = meta.get("prefix")
+            a["deploy_platform"] = meta.get("deploy_platform")
             n_apps += 1
             tot["indices"] += a["indices"]
             tot["size_bytes"] += a["size_bytes"]
@@ -264,8 +273,13 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             n_stale += a["stale"]
             n_ts_bad += (not a["ts_ok"] and not a["no_logs"])
         rows.sort(key=lambda a: (a["no_logs"], -a["size_bytes"]))
+        n_no_platform += (not meta.get("prefix"))
         projects_out.append({
             "name": pname,
+            "deploy_platform": meta.get("deploy_platform"),
+            "prefix": meta.get("prefix"),
+            "prefix_source": meta.get("source"),
+            "no_prefix": not meta.get("prefix"),
             "apps": rows,
             "totals": {
                 "apps": len(rows),
@@ -305,28 +319,52 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
                                         "stale": sum(a["stale"] for a in rows)}})
 
     unmatched.sort(key=lambda u: -(u.get("size_bytes") or 0))
+    # the platform→prefix legend for the platforms actually in use
+    legend = sorted({(m.get("deploy_platform"), m.get("prefix"))
+                     for m in proj_meta.values() if m.get("deploy_platform") and m.get("prefix")})
     summary = {
         "projects": len(projects_out), "apps": n_apps,
         "apps_no_logs": n_no_logs, "apps_stale": n_stale, "apps_ts_bad": n_ts_bad,
+        "projects_no_platform": n_no_platform,
         "indices": tot["indices"], "size_bytes": tot["size_bytes"],
         "size_h": _hsize(tot["size_bytes"]), "docs": tot["docs"],
         "envs": sorted(all_envs), "logtypes": sorted(all_logtypes),
         "unmatched": len(unmatched),
     }
-    return {"source": source, "index_prefix": prefix, "note": note,
-            "stale_hours": stale_h, "connections": conn_status,
-            "summary": summary, "projects": projects_out,
-            "unmatched": unmatched[:50]}
+    return {"source": source, "note": note, "stale_hours": stale_h,
+            "prefixes": sorted({m["prefix"] for m in proj_meta.values() if m.get("prefix")}),
+            "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
+            "connections": conn_status, "summary": summary,
+            "projects": projects_out, "unmatched": unmatched[:50]}
 
 
-def _known(projects: list[dict]) -> dict:
+def _known(projects: list[dict], prefixes) -> dict:
     return {
         "projects": [p["name"] for p in projects],
         "apps_by_project": {p["name"]: list(p.get("apps", [])) for p in projects},
         "apps": sorted({a for p in projects for a in p.get("apps", [])}),
         "envs": sorted({e for p in projects for e in p.get("envs", [])})
                 or ["dev", "qc", "uat", "prd"],
+        "prefixes": sorted(set(prefixes), key=len, reverse=True),
     }
+
+
+def _project_prefixes(projects: list[dict]) -> dict:
+    """Per project: resolve its log index prefix from `deploy_platform` via the
+    configured map (OCP→oc, LinuxVM→vmlin, WindowsVM→vmwin), falling back to
+    LOG_INDEX_PREFIX when a project doesn't declare a platform. Returns
+    {project: {deploy_platform, prefix, source}} (source: platform|fallback|None)."""
+    pmap = settings.log_platform_prefix_map
+    fallback = (settings.log_index_prefix or "").strip()
+    out = {}
+    for p in projects:
+        plat = (p.get("deploy_platform") or "").strip()
+        pref = pmap.get(plat.lower()) if plat else None
+        source = "platform" if pref else None
+        if not pref and fallback:
+            pref, source = fallback, "fallback"
+        out[p["name"]] = {"deploy_platform": plat or None, "prefix": pref, "source": source}
+    return out
 
 
 # ------------------------------------------------------------------ live
@@ -334,21 +372,23 @@ def _live() -> dict:
     from . import inventory
     inv = inventory.parse()
     projects = inv.get("projects", [])
-    prefix = (settings.log_index_prefix or "").strip()
-    conn_status: dict = {}
-    if not prefix:
-        return {"source": "live", "index_prefix": "",
-                "note": "LOG_INDEX_PREFIX is not set — set it to your log index "
-                        "prefix (the ${index_prefix} in the naming pattern) to "
-                        "enable the logging monitor.",
-                "connections": {}, "summary": {}, "projects": [], "unmatched": []}
     if not projects:
-        return {"source": "live", "index_prefix": prefix,
+        return {"source": "live", "prefixes": [], "platform_legend": [],
                 "note": inv.get("note") or "no inventory projects — the "
                         "'inventories' repo isn't cloned/parsed yet.",
                 "connections": {}, "summary": {}, "projects": [], "unmatched": []}
-    known = _known(projects)
+    proj_meta = _project_prefixes(projects)
+    prefixes = sorted({m["prefix"] for m in proj_meta.values() if m["prefix"]})
+    if not prefixes:
+        return {"source": "live", "prefixes": [], "platform_legend": [],
+                "note": "no log index prefix could be resolved — none of the "
+                        "inventory projects declare a `deploy_platform` (OCP / "
+                        "LinuxVM / WindowsVM) and QO_LOG_INDEX_PREFIX has no fallback.",
+                "connections": {}, "summary": {}, "projects": [], "unmatched": []}
+    known = _known(projects, prefixes)
+    pattern = ",".join(f"{p}-*" for p in prefixes)   # union across the platforms
 
+    conn_status: dict = {}
     records: list = []
     last_map: dict = {}
     for conn in _connections():
@@ -362,8 +402,8 @@ def _live() -> dict:
                                           "not configured — dev/qc/uat logs won't show")}
             continue
         try:
-            cats = _cat_indices(conn, f"{prefix}-*")
-            ts_types = _ts_field_types(conn, f"{prefix}-*")
+            cats = _cat_indices(conn, pattern)
+            ts_types = _ts_field_types(conn, pattern)
         except requests.RequestException as exc:
             conn_status[kind] = {"label": conn["label"], "configured": True,
                                  "reachable": False, "indices": 0, "url": conn["url"],
@@ -375,7 +415,7 @@ def _live() -> dict:
             name = row.get("index", "")
             if not name:
                 continue
-            p = _parse_index(name, prefix, known)
+            p = _parse_index(name, known)
             rec = {"index": name, "source": kind,
                    "size_bytes": int(row.get("store.size") or 0),
                    "docs": int(row.get("docs.count") or 0),
@@ -402,7 +442,7 @@ def _live() -> dict:
                              "reachable": True, "indices": len(cats), "url": conn["url"]}
         if unexpected:
             conn_status[kind]["unexpected_envs"] = sorted(unexpected)
-    return _assemble(records, last_map, conn_status, projects, known, "live", prefix)
+    return _assemble(records, last_map, conn_status, projects, known, "live", proj_meta)
 
 
 # ------------------------------------------------------------------ demo
@@ -414,10 +454,11 @@ def _iso_week(d: dt.datetime) -> str:
 def _demo() -> dict:
     from . import inventory
     projects = inventory.parse().get("projects", [])
-    known = _known(projects)
+    proj_meta = _project_prefixes(projects)   # Platform→oc, Control→vmlin, Research→vmwin
+    prefixes = sorted({m["prefix"] for m in proj_meta.values() if m["prefix"]})
+    known = _known(projects, prefixes)
     now = _now()
     weeks = [_iso_week(now - dt.timedelta(weeks=i)) for i in range(4)][::-1]  # oldest→newest
-    prefix = "logs"
     logtypes = ["application", "access", "error"]
     records: list = []
     last_map: dict = {}
@@ -431,12 +472,14 @@ def _demo() -> dict:
 
     for p in projects:
         pname = p["name"]
+        prefix = (proj_meta.get(pname) or {}).get("prefix")
+        if not prefix:                           # no deploy_platform → no indices
+            continue
         envs = p.get("envs", []) or ["dev", "prd"]
         for app in p.get("apps", []):
             key = (pname, app)
             if key in NO_LOGS:
                 continue
-            newest = None
             for env in envs:
                 src = env_conn(env)
                 for wk in weeks:
@@ -452,17 +495,18 @@ def _demo() -> dict:
                         records.append({"index": idx, "source": src,
                                         "size_bytes": size, "docs": docs,
                                         "health": "green", "ts_type": ts_type,
-                                        "project": pname, "env": env, "app": app,
-                                        "logtype": lt, "week": wk})
+                                        "prefix": prefix, "project": pname, "env": env,
+                                        "app": app, "logtype": lt, "week": wk})
             # last-logged: fresh for most, days-old for the stale one
             if key in STALE:
                 iso = (now - dt.timedelta(days=5, hours=3)).replace(microsecond=0).isoformat() + "Z"
             else:
                 iso = (now - dt.timedelta(minutes=6 + hash(app) % 40)).replace(microsecond=0).isoformat() + "Z"
             last_map.setdefault(key, []).append(iso)
-    # a couple of stray indices that don't map to any known app (naming drift)
-    for name in (f"{prefix}-Platform-prd-legacy-batch-application-{weeks[-1]}",
-                 f"{prefix}-Sandbox-dev-scratch-debug-{weeks[-1]}"):
+    # a couple of stray indices that carry a valid prefix but don't map to any
+    # known app/project (naming drift → surfaced in the "unmatched" section)
+    for name in (f"oc-Platform-prd-legacy-batch-application-{weeks[-1]}",
+                 f"vmwin-Sandbox-dev-scratch-debug-{weeks[-1]}"):
         records.append({"index": name, "source": "prd" if "-prd-" in name else "nonprd",
                         "size_bytes": 12_000_000, "docs": 8000, "health": "yellow",
                         "ts_type": "date"})
@@ -474,7 +518,7 @@ def _demo() -> dict:
                    "indices": sum(1 for r in records if r["source"] == "nonprd"),
                    "url": "https://es-nonprd.demo:9200"},
     }
-    return _assemble(records, last_map, conn_status, projects, known, "demo", prefix)
+    return _assemble(records, last_map, conn_status, projects, known, "demo", proj_meta)
 
 
 # ------------------------------------------------------------------ public

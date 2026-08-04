@@ -267,6 +267,14 @@ def _parse_project(pdir) -> dict:
         except OSError:
             pass
 
+    # deploy_platform (project-wide, in group_vars/all) — drives the log index
+    # prefix on the Logging Health page (OCP→oc, LinuxVM→vmlin, …)
+    deploy_platform = None
+    for k, v in all_vars.items():
+        if k.lower() == "deploy_platform" and v not in (None, ""):
+            deploy_platform = _stringify(v)
+            break
+
     teams: dict = {}          # role -> team, primary roles (dev/qc/prd)
     other_teams: dict = {}    # any other <role>_team (incl. uat_team)
     other_vars: dict = {}     # everything else in group_vars/all
@@ -325,6 +333,7 @@ def _parse_project(pdir) -> dict:
         "teams": teams, "other_teams": other_teams,
         "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
         "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),  # prd_team == ops team
+        "deploy_platform": deploy_platform,
         "vars": other_vars, "var_count": len(other_vars),
         "envs": sorted(envs), "hosts": hosts, "host_count": len(hosts),
         "vault_files": vault_files,
@@ -398,6 +407,7 @@ def _demo() -> dict:
                 "teams": teams, "other_teams": other,
                 "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
                 "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),
+                "deploy_platform": (config.get("project_vars") or {}).get("deploy_platform"),
                 "vars": vars_, "var_count": len(vars_), "envs": envs,
                 "hosts": hosts, "host_count": len(hosts), "vault_files": vault,
                 "config": config}
@@ -418,7 +428,8 @@ def _demo() -> dict:
              {"project_vars": {"dev_team": "Platform_Devs", "qc_team": "Platform_QC",
                                "prd_team": "SRE_Core", "uat_team": "Platform_UAT",
                                "security_team": "AppSec", "domain": "platform.corp.local",
-                               "region": "eu-west", "log_level": "info", "tls_enabled": "true"},
+                               "region": "eu-west", "log_level": "info", "tls_enabled": "true",
+                               "deploy_platform": "OCP"},
               "app_vars": {
                   "payments": {"repository_name": "payments-svc", "replicas": "2",
                                "timeout_s": "30", "feature_flags": "wallet,card"},
@@ -447,7 +458,7 @@ def _demo() -> dict:
               {"host": "prd_ocp", "vars": True, "vault": False}], 0,
              {"project_vars": {"dev_team": "Control_Owners", "qc_team": "Platform_QC",
                                "domain": "control.corp.local", "region": "eu-west",
-                               "log_level": "debug"},
+                               "log_level": "debug", "deploy_platform": "LinuxVM"},
               "app_vars": {"team-configs": {"repository_name": "team-configs",
                                             "replicas": "1", "timeout_s": "30"}},
               "env_app_vars": {"prd_team-configs": {"replicas": "2"}},
@@ -462,7 +473,7 @@ def _demo() -> dict:
              {"project_vars": {"dev_team": "Research_Team", "qc_team": "Research_Team",
                                "prd_team": "SRE_Core", "data_team": "DataEng",
                                "domain": "research.corp.local", "region": "us-east",
-                               "experimental": "true"},
+                               "experimental": "true", "deploy_platform": "WindowsVM"},
               "app_vars": {"prototypes": {"experimental": "true", "replicas": "1"}},
               "env_app_vars": {},
               "other_groups": {},
