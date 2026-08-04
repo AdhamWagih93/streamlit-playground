@@ -98,7 +98,6 @@ WFO_PER_MEMBER_FORTNIGHT = 4
 
 POLICY_MIN_RATE = 0.50
 ROTATION_SEED = 20260101
-GRID_MAX_COLS = 46
 
 SESSION_STATES_TABLE = os.environ.get("WFH_SESSION_STATES_TABLE", "session_states").strip()
 OFFICE_IP_PREFIX = os.environ.get("WFH_OFFICE_IP_PREFIX", "10.26").strip()
@@ -857,8 +856,10 @@ class Resolver:
         return ov or base
 
     def actual(self, member: str, d: date) -> Tuple[str | None, str | None]:
-        """(status, source). A member's own record wins (explicit, audited
-        correction); otherwise IP detection (on/after the cutover)."""
+        """(status, source). Precedence: the member's own record (explicit,
+        audited correction) → IP detection. On days before the detection start
+        the IP signal is still used as a best-effort *fallback* when it happens
+        to exist, tagged ``ip-early`` so views can flag the lower confidence."""
         iso = d.isoformat()
         man = self.manual.get(iso, {}).get(member)
         if man == "OFF":
@@ -867,10 +868,9 @@ class Resolver:
             return None, None
         if man:
             return man, "self"
-        if d >= self.cutover:
-            ipd = self.ip.get(iso, {}).get(member)
-            if ipd:
-                return ipd, "ip"
+        ipd = self.ip.get(iso, {}).get(member)
+        if ipd:
+            return ipd, ("ip" if d >= self.cutover else "ip-early")
         return None, None
 
     def cell(self, member: str, d: date) -> dict:
@@ -882,9 +882,18 @@ class Resolver:
                     "source": None, "overridden": overridden}
         actual, source = self.actual(member, d)
         if actual is None:
-            cat = "future" if d > self.today else "unknown"
-            return {"cat": cat, "note": None, "planned": planned, "actual": None,
-                    "source": None, "overridden": overridden}
+            if d > self.today:
+                return {"cat": "future", "note": None, "planned": planned,
+                        "actual": None, "source": None, "overridden": overridden}
+            if d.weekday() == 6:
+                # Mandated-WFH Sunday with no signal: assume Home rather than
+                # nagging for data — consistent with the attendance credit.
+                deviation = (planned is not None) and (planned != "WFH")
+                return {"cat": "home", "note": None, "planned": planned,
+                        "actual": "WFH", "source": "assumed",
+                        "deviation": deviation, "overridden": overridden}
+            return {"cat": "unknown", "note": None, "planned": planned,
+                    "actual": None, "source": None, "overridden": overridden}
         deviation = (planned is not None) and (actual != planned)
         return {"cat": "office" if actual == "WFO" else "home", "note": None,
                 "planned": planned, "actual": actual, "source": source,
@@ -1107,7 +1116,7 @@ def legend_html(plan_focus: bool = False) -> str:
         ("chip-home", "Home"),
         ("chip-dev", "Deviated from plan"),
         ("chip-breach", "Below 50% policy"),
-        ("chip-unknown", "Unknown / fill"),
+        ("chip-unknown", "? No data — fill in My Space"),
         ("chip-public", "Public holiday"),
         ("chip-off", "Personal day off"),
     ]
@@ -1132,15 +1141,19 @@ def cell_html(state: dict, member: str, d: date) -> str:
     if cat in ("unknown", "future"):
         cls = "c-unknown" if cat == "unknown" else "c-future"
         glyph = "?" if cat == "unknown" else ("O" if state.get("planned") == "WFO" else "H")
-        note = "no data" if cat == "unknown" else "upcoming"
+        note = ("no data — fill it in My Space → Fix my attendance"
+                if cat == "unknown" else "upcoming")
         return (f"<td class='hcell {cls}' title='{member} · {d:%a %d %b} · {note} · "
                 f"plan: {plan_lbl}{ov}'>{glyph}</td>")
     base = "c-office" if cat == "office" else "c-home"
     dev = " c-dev" if state.get("deviation") else ""
+    assumed = " c-assumed" if state.get("source") == "assumed" else ""
     glyph = "O" if cat == "office" else "H"
-    src = "IP" if state["source"] == "ip" else "self-reported"
+    src = {"ip": "IP", "ip-early": "IP · before detection start, low confidence",
+           "self": "self-reported",
+           "assumed": "assumed — WFH Sunday, no data needed"}.get(state["source"], "—")
     actual_lbl = "Office" if state["actual"] == "WFO" else "Home"
-    return (f"<td class='hcell {base}{dev}' title='{member} · {d:%a %d %b} · "
+    return (f"<td class='hcell {base}{dev}{assumed}' title='{member} · {d:%a %d %b} · "
             f"was {actual_lbl} ({src}) · plan: {plan_lbl}{ov}'>{glyph}</td>")
 
 
@@ -1148,10 +1161,6 @@ def render_day_grid(res: Resolver, members: List[str], days: List[date],
                     breach: Dict[str, bool] | None = None):
     breach = breach or {}
     grid_days = [d for d in days if is_workday(d)]  # Sundays included
-    truncated = False
-    if len(grid_days) > GRID_MAX_COLS:
-        grid_days = grid_days[-GRID_MAX_COLS:]
-        truncated = True
     if not grid_days:
         st.caption("No workdays in this range.")
         return
@@ -1171,8 +1180,6 @@ def render_day_grid(res: Resolver, members: List[str], days: List[date],
         f"<tbody>{''.join(rows)}</tbody></table></div>",
         unsafe_allow_html=True,
     )
-    if truncated:
-        st.caption(f"Showing the most recent {GRID_MAX_COLS} workdays of the range.")
 
 
 def bars_vs_policy(stats: Dict[str, dict], value_key: str = "rate",
@@ -1231,6 +1238,14 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
                 help="Days your actual differed from your effective plan.")
     k[3].metric("Missing days", f"{s['unknown_past']}",
                 help="Past office days with no data — fill them below.")
+
+    if s["unknown_past"]:
+        st.markdown(
+            f"<div class='fill-cta'>✍️ <b>{s['unknown_past']} day(s) have no data</b> "
+            "(the dashed <b>?</b> cells below) — they don't count in your attendance "
+            "score until you record them in <b>Fix my attendance</b> just under the grid.</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown(legend_html(), unsafe_allow_html=True)
     render_day_grid(res, [member], days, {member: breach_flag})
@@ -1558,6 +1573,10 @@ def _daily_detail_rows(res: Resolver, days: List[date],
             off = res.is_off(m, d)
             plan = res.planned(m, d)
             actual, source = res.actual(m, d)
+            if (actual is None and not off and d.weekday() == 6
+                    and d <= res.today):
+                # Mandated-WFH Sunday with no signal — assumed Home.
+                actual, source = "WFH", "assumed"
             rows.append({
                 "date": d.isoformat(),
                 "weekday": d.strftime("%a"),
@@ -1700,6 +1719,13 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
         render_day_grid(res, members, days,
                         {m: (stats[m]["rate"] is not None and not stats[m]["compliant"])
                          for m in members})
+        st.caption(
+            "Dashed ? cells have no data and are excluded from every percentage — "
+            "each member records those days themselves in My Space → Fix my attendance "
+            "(management can backfill via Team & Schedule). Sundays with no data show "
+            "as assumed Home. Days before the detection start fall back to the IP "
+            "signal where one exists (marked low-confidence in the tooltip)."
+        )
 
         d1, d2 = st.columns(2)
         d1.download_button(
@@ -1845,11 +1871,14 @@ def render_method(res: Resolver, can_edit: bool):
                 and default to <b>Home</b>, but a Sunday can be overridden (and Sunday attendance
                 is detected like any other day). During onboarding {NEW_JOINER} is planned in
                 office every office day through {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}.</li>
-            <li><b>Actual</b> — your own saved record wins (explicit, audit-stamped). Otherwise, on
-                days from <b>{res.cutover:%d %b %Y}</b>, IP detection from
-                <code>{SESSION_STATES_TABLE}</code>: in office when any session's
+            <li><b>Actual</b> — your own saved record wins (explicit, audit-stamped). Otherwise
+                IP detection from <code>{SESSION_STATES_TABLE}</code>: in office when any session's
                 <code>client_ip</code> starts with <code>{OFFICE_IP_PREFIX}</code>
-                (impersonated sessions excluded). Matched by short name: {umap}.</li>
+                (impersonated sessions excluded; matched case-insensitively by short name: {umap}).
+                Detection is authoritative from <b>{res.cutover:%d %b %Y}</b>; before that date an
+                IP signal is still used as a <i>low-confidence fallback</i> when it exists.
+                Sundays with no signal are <b>assumed Home</b>. Remaining days show as dashed
+                <b>?</b> — record them in My Space → Fix my attendance.</li>
             <li><b>Eligible office days</b> — Mon–Thu that aren't public holidays or days off
                 (from the holiday register <i>or</i> self-recorded as "Day off" in Fix my
                 attendance). Off-days never count toward the policy.</li>
@@ -2030,7 +2059,7 @@ def inject_css() -> None:
         .chip-dev {{ background:#fef3c7; color:#92600a; border-color:var(--dev); }}
         .chip-breach {{ background:#fee2e2; color:#b91c1c; border-color:var(--breach); }}
         .chip-override {{ background:#fff7e6; color:#92600a; border-color:#f0c36d; }}
-        .chip-unknown {{ background:#f1f5f9; color:#64748b; }}
+        .chip-unknown {{ background:#fdf6ec; color:#b45309; border-color:#e3cfa4; }}
         .chip-public {{ background:#ede9fe; color:#6d28d9; }}
         .chip-off {{ background:#e9edf2; color:#7c8ba1; }}
         .board-title {{ font-weight:800; color:var(--ink); margin:1rem 0 .35rem; font-size:.98rem; }}
@@ -2060,9 +2089,11 @@ def inject_css() -> None:
         .c-home {{ background:var(--home); }}
         .c-off {{ background:#e2e8f0; color:#64748b; }}
         .c-public {{ background:#ede9fe; color:#6d28d9; }}
-        .c-unknown {{ background:#f1f5f9; color:#94a3b8; }}
+        .c-unknown {{ background:#fdf6ec; color:#b45309; font-weight:800;
+                      border:2px dashed #e3cfa4; }}
         .c-future {{ background:#fbfdff; color:#b6c4d4; border-style:dashed; border-color:#dbe4ee; }}
         .c-dev {{ box-shadow:0 0 0 3px var(--dev) inset; }}
+        .c-assumed {{ opacity:.6; }}
         .vbox {{ border-radius:10px; padding:.55rem .8rem; font-size:.82rem; margin:.4rem 0; }}
         .vbox ul {{ margin:.25rem 0 0 1rem; padding:0; }}
         .vbox-err {{ background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; }}
@@ -2077,6 +2108,9 @@ def inject_css() -> None:
         .algo code {{ background:#eef2f7; padding:.02rem .3rem; border-radius:4px; color:#0b3c5d; font-size:.8rem; }}
         .algo-colours {{ margin-top:.5rem; font-size:.8rem; color:#475569; }}
         .filter-cap {{ color:var(--sub); font-size:.8rem; margin:.05rem 0 .5rem; font-weight:600; }}
+        .fill-cta {{ background:#fdf6ec; border:1px dashed #e3cfa4; color:#92600a;
+                     border-radius:10px; padding:.5rem .8rem; font-size:.84rem;
+                     margin:.5rem 0 .2rem 0; }}
         </style>
         """,
         unsafe_allow_html=True,
