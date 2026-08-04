@@ -105,9 +105,14 @@ MEMBER_TO_SESSION_USER: Dict[str, str] = {
     "Karam": "Karam_Mohamed",
     "Hesham": "Hesham_Mostafa",
     "Salma": "Salma_Adel",
-    "Zanaty": "Ahmed_Zanaty",
+    "Zanaty": "Ahmed_zanaty",  # note the lowercase z — as it appears in session_states
 }
 SESSION_USER_TO_MEMBER: Dict[str, str] = {v: k for k, v in MEMBER_TO_SESSION_USER.items()}
+# All session-username matching is case-insensitive: the platform is not
+# consistent about capitalisation (e.g. Ahmed_zanaty vs Ahmed_Zanaty).
+SESSION_USER_TO_MEMBER_CI: Dict[str, str] = {
+    v.lower(): k for k, v in MEMBER_TO_SESSION_USER.items()
+}
 
 POSTGRES_VAULT_PATH = os.environ.get("WFH_POSTGRES_VAULT_PATH", "postgres").strip()
 POSTGRES_CONNECT_TIMEOUT = 10
@@ -593,16 +598,16 @@ def load_personal_holidays() -> Dict[str, List[str]]:
 def load_ip_actuals(start: date, end: date) -> Dict[str, Dict[str, str]]:
     if not _pg_safe_ident(SESSION_STATES_TABLE):
         return {}
-    usernames = list(MEMBER_TO_SESSION_USER.values())
+    usernames = [u.lower() for u in MEMBER_TO_SESSION_USER.values()]
 
     def _q(cur):
         cur.execute(
             f"SELECT s.username, (s.timestamp)::date AS day, "
             f"COUNT(*) FILTER (WHERE s.client_ip LIKE %s) AS office_sessions "
             f"FROM {SESSION_STATES_TABLE} AS s "
-            f"WHERE s.username = ANY(%s) "
+            f"WHERE LOWER(s.username) = ANY(%s) "
             f"AND s.timestamp >= %s AND s.timestamp < %s "
-            f"AND (s.original_user IS NULL OR s.original_user = s.username) "
+            f"AND (s.original_user IS NULL OR LOWER(s.original_user) = LOWER(s.username)) "
             f"GROUP BY s.username, (s.timestamp)::date",
             (OFFICE_IP_PREFIX + "%", usernames, start, end + timedelta(days=1)),
         )
@@ -611,7 +616,7 @@ def load_ip_actuals(start: date, end: date) -> Dict[str, Dict[str, str]]:
     rows = _pg_read(_q)
     out: Dict[str, Dict[str, str]] = {}
     for username, day, office_sessions in rows or []:
-        member = SESSION_USER_TO_MEMBER.get(username)
+        member = SESSION_USER_TO_MEMBER_CI.get(str(username).lower())
         if not member:
             continue
         iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
@@ -712,8 +717,8 @@ def resolve_member(identity: str | None) -> str | None:
     if not identity:
         return None
     ident = str(identity).strip()
-    if ident in SESSION_USER_TO_MEMBER:
-        return SESSION_USER_TO_MEMBER[ident]
+    if ident.lower() in SESSION_USER_TO_MEMBER_CI:
+        return SESSION_USER_TO_MEMBER_CI[ident.lower()]
     low = ident.lower()
     for m in TEAM_MEMBERS:
         if m.lower() == low:
@@ -854,79 +859,110 @@ def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
 
 
 # =============================================================================
-# SMART DATE FILTER
+# SMART FILTER BAR (period + members)
 # =============================================================================
-PRESETS = ["This week", "Last 14 days", "This month", "Last 30 days", "Quarter", "Custom"]
+def _month_window(today: date, offset: int) -> Tuple[date, date]:
+    m0 = today.month - 1 + offset
+    y = today.year + m0 // 12
+    m = m0 % 12 + 1
+    start = date(y, m, 1)
+    nxt = date(y + (m == 12), (m % 12) + 1, 1)
+    return start, nxt - timedelta(days=1)
 
 
-def resolve_period(preset: str, offset: int, today: date, custom) -> Tuple[date, date]:
-    if preset == "This week":
-        base = sunday_of(today) + timedelta(days=7 * offset)
-        return base, base + timedelta(days=4)
-    if preset == "Last 14 days":
-        end = today + timedelta(days=14 * offset)
-        return end - timedelta(days=13), end
-    if preset == "This month":
-        m0 = today.month - 1 + offset
-        y = today.year + m0 // 12
-        m = m0 % 12 + 1
-        start = date(y, m, 1)
-        nxt = date(y + (m == 12), (m % 12) + 1, 1)
-        return start, nxt - timedelta(days=1)
-    if preset == "Last 30 days":
-        end = today + timedelta(days=30 * offset)
-        return end - timedelta(days=29), end
-    if preset == "Quarter":
-        q0 = (today.month - 1) // 3 + offset
-        y = today.year + q0 // 4
-        q = q0 % 4
-        start = date(y, q * 3 + 1, 1)
-        endm = q * 3 + 3
-        nxt = date(y + (endm == 12), (endm % 12) + 1, 1)
-        return start, nxt - timedelta(days=1)
-    if isinstance(custom, (tuple, list)) and len(custom) == 2 and all(isinstance(x, date) for x in custom):
-        a, b = custom
-        return (a, b) if a <= b else (b, a)
-    return today - timedelta(days=13), today
+def _quarter_window(today: date, offset: int) -> Tuple[date, date]:
+    q0 = (today.month - 1) // 3 + offset
+    y = today.year + q0 // 4
+    q = q0 % 4
+    start = date(y, q * 3 + 1, 1)
+    endm = q * 3 + 3
+    nxt = date(y + (endm == 12), (endm % 12) + 1, 1)
+    return start, nxt - timedelta(days=1)
 
 
-def render_period_filter(today: date, key: str = "hub") -> Tuple[date, date]:
-    fc = st.columns([2.2, 1, 1, 1, 3])
-    with fc[0]:
-        preset = st.selectbox("Period", PRESETS, index=1, key=f"{key}_preset")
-    if st.session_state.get(f"_{key}_last_preset") != preset:
-        st.session_state[f"{key}_offset"] = 0
-        st.session_state[f"_{key}_last_preset"] = preset
-    offset = st.session_state.get(f"{key}_offset", 0)
-    with fc[1]:
-        st.write("")
-        if st.button("◀ Prev", use_container_width=True, disabled=(preset == "Custom"), key=f"{key}_prev"):
+# Preset registry: label -> (navigable, resolver(today, offset, cutover) -> (start, end)).
+# Navigable presets step with ◀/▶; anchored ones (detection / YTD) don't.
+# Adding a new duration is one entry here — the UI picks it up automatically.
+PERIOD_PRESETS: Dict[str, Tuple[bool, object]] = {
+    "This week": (True, lambda t, o, c: (sunday_of(t) + timedelta(days=7 * o),
+                                         sunday_of(t) + timedelta(days=7 * o + 4))),
+    "14 days": (True, lambda t, o, c: (t + timedelta(days=14 * o - 13),
+                                       t + timedelta(days=14 * o))),
+    "Month": (True, lambda t, o, c: _month_window(t, o)),
+    "30 days": (True, lambda t, o, c: (t + timedelta(days=30 * o - 29),
+                                       t + timedelta(days=30 * o))),
+    "Quarter": (True, lambda t, o, c: _quarter_window(t, o)),
+    "Since detection": (False, lambda t, o, c: (min(c, t), t)),
+    "Year to date": (False, lambda t, o, c: (date(t.year, 1, 1), t)),
+    "Custom": (False, None),
+}
+DEFAULT_PRESET = "14 days"
+
+
+def resolve_period(preset: str, offset: int, today: date, custom,
+                   cutover: date | None = None) -> Tuple[date, date]:
+    cutover = cutover or DEFAULT_DETECTION_START
+    if preset == "Custom":
+        if (isinstance(custom, (tuple, list)) and len(custom) == 2
+                and all(isinstance(x, date) for x in custom)):
+            a, b = custom
+            return (a, b) if a <= b else (b, a)
+        return today - timedelta(days=13), today
+    navigable, fn = PERIOD_PRESETS.get(preset, PERIOD_PRESETS[DEFAULT_PRESET])
+    return fn(today, offset if navigable else 0, cutover)
+
+
+def render_filter_bar(today: date, cutover: date,
+                      key: str = "hub") -> Tuple[date, date, List[str]]:
+    """Period pills + prev/today/next stepping + member include/exclude.
+    Returns (start, end, selected_members)."""
+    with st.container():
+        preset = st.pills(
+            "Period", list(PERIOD_PRESETS.keys()), selection_mode="single",
+            default=DEFAULT_PRESET, key=f"{key}_preset",
+        ) or DEFAULT_PRESET
+        if st.session_state.get(f"_{key}_last_preset") != preset:
+            st.session_state[f"{key}_offset"] = 0
+            st.session_state[f"_{key}_last_preset"] = preset
+        offset = st.session_state.get(f"{key}_offset", 0)
+        navigable = PERIOD_PRESETS.get(preset, (False, None))[0]
+
+        nav = st.columns([1, 1, 1, 3.2, 3])
+        if nav[0].button("◀ Prev", use_container_width=True,
+                         disabled=not navigable, key=f"{key}_prev"):
             st.session_state[f"{key}_offset"] = offset - 1
             st.rerun()
-    with fc[2]:
-        st.write("")
-        if st.button("Today", use_container_width=True, disabled=(preset == "Custom"), key=f"{key}_today"):
+        if nav[1].button("Today", use_container_width=True,
+                         disabled=not navigable or offset == 0, key=f"{key}_today"):
             st.session_state[f"{key}_offset"] = 0
             st.rerun()
-    with fc[3]:
-        st.write("")
-        if st.button("Next ▶", use_container_width=True,
-                     disabled=(preset == "Custom" or offset >= 0), key=f"{key}_next"):
+        if nav[2].button("Next ▶", use_container_width=True,
+                         disabled=not navigable or offset >= 0, key=f"{key}_next"):
             st.session_state[f"{key}_offset"] = offset + 1
             st.rerun()
-    custom = None
-    if preset == "Custom":
-        with fc[4]:
-            custom = st.date_input(
-                "Custom range", value=(today - timedelta(days=13), today), key=f"{key}_custom",
-            )
-    start, end = resolve_period(preset, st.session_state.get(f"{key}_offset", 0), today, custom)
+        custom = None
+        if preset == "Custom":
+            with nav[3]:
+                custom = st.date_input(
+                    "Custom range", value=(today - timedelta(days=13), today),
+                    key=f"{key}_custom", label_visibility="collapsed",
+                )
+        members = st.pills(
+            "Members (empty = everyone)", TEAM_MEMBERS, selection_mode="multi",
+            default=TEAM_MEMBERS, key=f"{key}_members",
+        )
+        members = [m for m in (members or []) if m in TEAM_MEMBERS] or list(TEAM_MEMBERS)
+
+    start, end = resolve_period(preset, st.session_state.get(f"{key}_offset", 0),
+                                today, custom, cutover)
     n_office = sum(1 for d in workdays_between(start, end) if is_office_day(d))
+    scope = "everyone" if len(members) == len(TEAM_MEMBERS) else ", ".join(members)
     st.markdown(
-        f"<div class='filter-cap'>📅 {start:%a %d %b %Y} → {end:%a %d %b %Y} · {n_office} office days</div>",
+        f"<div class='filter-cap'>📅 {start:%a %d %b %Y} → {end:%a %d %b %Y} · "
+        f"{n_office} office days · 👥 {scope}</div>",
         unsafe_allow_html=True,
     )
-    return start, end
+    return start, end, members
 
 
 # =============================================================================
@@ -1018,7 +1054,7 @@ def render_day_grid(res: Resolver, members: List[str], days: List[date],
 
 def bars_vs_policy(stats: Dict[str, dict], value_key: str = "rate",
                    suffix: str = "office") -> None:
-    order = sorted(TEAM_MEMBERS, key=lambda m: (stats[m][value_key] is None,
+    order = sorted(stats.keys(), key=lambda m: (stats[m][value_key] is None,
                                                 -(stats[m][value_key] or 0)))
     bars = []
     for m in order:
@@ -1105,7 +1141,9 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date],
     if not editable:
         st.info("No past office days in the selected period.")
         return
-    editable = editable[-20:]  # keep the editor focused
+    # The editor covers the FULL selected period (past office days only) —
+    # long ranges scroll inside the fixed-height editor instead of truncating.
+    st.caption(f"{len(editable)} past office day(s) in the selected period.")
     recs = []
     for d in editable:
         iso = d.isoformat()
@@ -1131,6 +1169,7 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date],
                      "Day off excludes the day from the 50% policy."),
         },
         hide_index=True, num_rows="fixed", use_container_width=True,
+        height=min(520, 64 + 35 * len(recs)),
         key=f"fix_{key_prefix}_{member}",
     )
     save_label = "Save my attendance" if by == member else f"Save {member}'s attendance"
@@ -1198,18 +1237,18 @@ def _render_adjust_plan(res: Resolver, member: str, horizon_days: int = 21):
 # =============================================================================
 # SECTION: TEAM & SCHEDULE
 # =============================================================================
-def render_today_strip(res: Resolver):
+def render_today_strip(res: Resolver, members: List[str]):
     d = res.today
     while not is_office_day(d) or res.public.get(d.isoformat()):
         d += timedelta(days=1)
         if (d - res.today).days > 14:
             return
     label = "Today" if d == res.today else f"Next office day · {d:%a %d %b}"
-    planned_in = [m for m in TEAM_MEMBERS
+    planned_in = [m for m in members
                   if res.planned(m, d) == "WFO" and not res.is_off(m, d)]
-    detected_in = [m for m in TEAM_MEMBERS
+    detected_in = [m for m in members
                    if res.ip.get(d.isoformat(), {}).get(m) == "WFO"]
-    on_leave = [m for m in TEAM_MEMBERS if res.is_off(m, d)]
+    on_leave = [m for m in members if res.is_off(m, d)]
     pl = "".join(f"<span class='pill pill-plan'>{m}</span>" for m in planned_in) or \
          "<span class='pill-empty'>nobody planned</span>"
     dt = "".join(f"<span class='pill pill-live'>{m}</span>" for m in detected_in) or \
@@ -1247,14 +1286,15 @@ def _df_to_pattern(df: pd.DataFrame) -> List[Set[str]]:
     return pattern
 
 
-def render_schedule(res: Resolver, viewer: str | None, start: date, end: date):
-    render_today_strip(res)
+def render_schedule(res: Resolver, viewer: str | None, start: date, end: date,
+                    members: List[str]):
+    render_today_strip(res, members)
 
     st.markdown("<div class='board-title'>📆 Next two weeks — effective plan</div>",
                 unsafe_allow_html=True)
-    st.caption("Rotation + everyone's overrides + holidays. Orange ring = override.")
+    st.caption("Rotation + overrides + holidays for the filtered members. Orange ring = override.")
     horizon = workdays_between(sunday_of(res.today), sunday_of(res.today) + timedelta(days=13))
-    _render_plan_grid(res, horizon)
+    _render_plan_grid(res, horizon, members)
 
     st.markdown("<div class='board-title'>🔁 The repeating two-week rotation</div>",
                 unsafe_allow_html=True)
@@ -1333,14 +1373,14 @@ def render_schedule(res: Resolver, viewer: str | None, start: date, end: date):
             )
 
 
-def _render_plan_grid(res: Resolver, days: List[date]):
+def _render_plan_grid(res: Resolver, days: List[date], members: List[str] | None = None):
     office_days = [d for d in days if is_office_day(d)]
     header = "<th class='hhdr sticky'>Member</th>" + "".join(
         f"<th class='hhdr'><span>{d:%a}</span><span class='mini'>{d:%d %b}</span></th>"
         for d in office_days
     )
     rows = []
-    for m in TEAM_MEMBERS:
+    for m in (members or TEAM_MEMBERS):
         cells = []
         for d in office_days:
             off = res.is_off(m, d)
@@ -1433,12 +1473,13 @@ def _render_member_overrides_editor(res: Resolver, viewer: str):
 # =============================================================================
 # SECTION: REPORTS
 # =============================================================================
-def _daily_detail_rows(res: Resolver, days: List[date]) -> List[dict]:
+def _daily_detail_rows(res: Resolver, days: List[date],
+                       members: List[str] | None = None) -> List[dict]:
     rows = []
     for d in days:
         if not is_office_day(d):
             continue
-        for m in TEAM_MEMBERS:
+        for m in (members or TEAM_MEMBERS):
             off = res.is_off(m, d)
             plan = res.planned(m, d)
             actual, source = res.actual(m, d)
@@ -1457,7 +1498,8 @@ def _daily_detail_rows(res: Resolver, days: List[date]) -> List[dict]:
 
 def _detection_analysis(res: Resolver,
                         manual_meta: Dict[str, Dict[str, Tuple[str, str]]],
-                        days: List[date]) -> dict:
+                        days: List[date],
+                        members: List[str] | None = None) -> dict:
     """Compare every manual correction against what IP detection said.
 
     Only office days on/after the detection start (and not in the future) are
@@ -1476,7 +1518,7 @@ def _detection_analysis(res: Resolver,
         if not is_office_day(d) or d < res.cutover or d > res.today:
             continue
         iso = d.isoformat()
-        for m in TEAM_MEMBERS:
+        for m in (members or TEAM_MEMBERS):
             rec = manual_meta.get(iso, {}).get(m)
             if not rec:
                 continue
@@ -1521,9 +1563,11 @@ def _detection_analysis(res: Resolver,
     }
 
 
-def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
+def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
+                   members: List[str] | None = None):
+    members = members or list(TEAM_MEMBERS)
     days = workdays_between(start, end)
-    stats = {m: member_stats(res, m, days) for m in TEAM_MEMBERS}
+    stats = {m: member_stats(res, m, days) for m in members}
     period_tag = f"{start.isoformat()}_{end.isoformat()}"
 
     kind = st.radio(
@@ -1567,14 +1611,14 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             "Office rate": rate_pct(stats[m]["rate"]),
             "Policy (≥50%)": ("✅ met" if stats[m]["compliant"]
                               else "❌ below" if stats[m]["rate"] is not None else "— no data"),
-        } for m in TEAM_MEMBERS])
+        } for m in members])
         st.dataframe(summary, hide_index=True, use_container_width=True)
 
         st.markdown("<div class='board-title'>Day by day (actuals)</div>", unsafe_allow_html=True)
         st.markdown(legend_html(), unsafe_allow_html=True)
-        render_day_grid(res, TEAM_MEMBERS, days,
+        render_day_grid(res, members, days,
                         {m: (stats[m]["rate"] is not None and not stats[m]["compliant"])
-                         for m in TEAM_MEMBERS})
+                         for m in members})
 
         d1, d2 = st.columns(2)
         d1.download_button(
@@ -1582,7 +1626,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             file_name=f"attendance_summary_{period_tag}.csv", mime="text/csv",
             use_container_width=True,
         )
-        detail = pd.DataFrame(_daily_detail_rows(res, days))
+        detail = pd.DataFrame(_daily_detail_rows(res, days, members))
         d2.download_button(
             "⬇️ Export day-level detail (CSV)", detail.to_csv(index=False).encode(),
             file_name=f"attendance_detail_{period_tag}.csv", mime="text/csv",
@@ -1619,13 +1663,13 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             "Skipped office": stats[m]["dev_skipped"],
             "Unplanned office": stats[m]["dev_extra"],
             "Adherence": rate_pct(stats[m]["adherence"]),
-        } for m in TEAM_MEMBERS])
+        } for m in members])
         st.dataframe(summary, hide_index=True, use_container_width=True)
 
         st.markdown("<div class='board-title'>Day by day (deviations in orange)</div>",
                     unsafe_allow_html=True)
         st.markdown(legend_html(plan_focus=True), unsafe_allow_html=True)
-        render_day_grid(res, TEAM_MEMBERS, days)
+        render_day_grid(res, members, days)
 
         d1, d2 = st.columns(2)
         d1.download_button(
@@ -1633,7 +1677,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             file_name=f"plan_vs_actual_summary_{period_tag}.csv", mime="text/csv",
             use_container_width=True,
         )
-        detail = pd.DataFrame(_daily_detail_rows(res, days))
+        detail = pd.DataFrame(_daily_detail_rows(res, days, members))
         d2.download_button(
             "⬇️ Export day-level detail (CSV)", detail.to_csv(index=False).encode(),
             file_name=f"plan_vs_actual_detail_{period_tag}.csv", mime="text/csv",
@@ -1648,7 +1692,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             unsafe_allow_html=True,
         )
         manual_meta = load_manual_meta(start, min(end, res.today))
-        ana = _detection_analysis(res, manual_meta, days)
+        ana = _detection_analysis(res, manual_meta, days, members)
 
         k = st.columns(4)
         k[0].metric("Corrections reviewed", f"{ana['reviewed']}",
@@ -1898,12 +1942,13 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    start, end = render_period_filter(today)
+    # The cutover feeds the "Since detection" preset, so it loads first.
+    cutover = get_detection_start()
+    start, end, members = render_filter_bar(today, cutover)
 
     # Load everything once per render. The plan horizon needs future overrides
     # too, so overrides load across both the report period and the next month.
     rotation = load_rotation()
-    cutover = get_detection_start()
     public = load_public_holidays()
     holidays = load_personal_holidays()
     ip = load_ip_actuals(start, min(end, today))
@@ -1922,11 +1967,11 @@ def main() -> None:
             st.info("Sign in with your account to see your personal attendance, "
                     "fix past days, and adjust your plan.", icon="👤")
             st.markdown(legend_html(), unsafe_allow_html=True)
-            render_day_grid(res, TEAM_MEMBERS, workdays_between(start, end))
+            render_day_grid(res, members, workdays_between(start, end))
     with tabs[1]:
-        render_schedule(res, viewer, start, end)
+        render_schedule(res, viewer, start, end, members)
     with tabs[2]:
-        render_reports(res, start, end, viewer)
+        render_reports(res, start, end, viewer, members)
     with tabs[3]:
         render_method(res, is_mgmt(viewer))
 

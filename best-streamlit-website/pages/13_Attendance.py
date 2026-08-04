@@ -86,7 +86,7 @@ MEMBER_TO_SESSION_USER: Dict[str, str] = {
     "Karam": "Karam_Mohamed",
     "Hesham": "Hesham_Mostafa",
     "Salma": "Salma_Adel",
-    "Zanaty": "Ahmed_Zanaty",
+    "Zanaty": "Ahmed_zanaty",
 }
 SESSION_USER_TO_MEMBER: Dict[str, str] = {v: k for k, v in MEMBER_TO_SESSION_USER.items()}
 
