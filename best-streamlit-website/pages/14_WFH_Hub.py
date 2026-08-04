@@ -11,12 +11,16 @@ Merges the WFH Schedule (rotation building/editing) and Team Attendance
   - *Management report*: actual WFO/WFH per member, regardless of plan
     (CSV export, summary + day level).
   - *Team report*: plan vs actual, deviation-focused (CSV export).
+  - *Detection quality*: every manual correction compared against what IP
+    detection said — missed-office / ghost-office / day-off-activity buckets
+    feed the detection-enhancement backlog (CSV export).
 * **Method & Settings** — the measurement algorithm, IP-detection start date.
 
 Data sources (all in the same vault-credentialed Postgres as the platform):
     wfh_rotation           the repeating 2-week pattern (10 Sun–Thu slots)
     wfh_plan_overrides     per-day, per-member plan deviations from rotation
-    wfh_manual_attendance  self-reported actuals (fills/corrects IP gaps)
+    wfh_manual_attendance  self-reported actuals: WFO/WFH/OFF (fills/corrects
+                           IP gaps; OFF = self-recorded day off)
     wfh_settings           key/value settings (ip_detection_start)
     wfh_personal_holidays  / wfh_public_holidays  (read-only here)
     session_states         shared platform table → IP-based presence
@@ -615,7 +619,8 @@ def load_ip_actuals(start: date, end: date) -> Dict[str, Dict[str, str]]:
     return out
 
 
-def _load_day_member_status(table: str, start: date, end: date) -> Dict[str, Dict[str, str]]:
+def _load_day_member_status(table: str, start: date, end: date,
+                            allow_off: bool = False) -> Dict[str, Dict[str, str]]:
     def _q(cur):
         cur.execute(
             f"SELECT day, member, status FROM {table} WHERE day >= %s AND day <= %s",
@@ -627,13 +632,43 @@ def _load_day_member_status(table: str, start: date, end: date) -> Dict[str, Dic
     out: Dict[str, Dict[str, str]] = {}
     for d, m, sv in rows or []:
         iso = d.isoformat() if hasattr(d, "isoformat") else str(d)
-        if m in TEAM_MEMBERS:
-            out.setdefault(iso, {})[m] = "WFO" if sv == "WFO" else "WFH"
+        if m not in TEAM_MEMBERS:
+            continue
+        if sv == "WFO":
+            status = "WFO"
+        elif allow_off and sv == "OFF":
+            status = "OFF"
+        else:
+            status = "WFH"
+        out.setdefault(iso, {})[m] = status
     return out
 
 
 def load_manual(start: date, end: date) -> Dict[str, Dict[str, str]]:
-    return _load_day_member_status(WFH_MANUAL_TABLE, start, end)
+    # Manual records may also be 'OFF' — a self-reported day off.
+    return _load_day_member_status(WFH_MANUAL_TABLE, start, end, allow_off=True)
+
+
+def load_manual_meta(start: date, end: date) -> Dict[str, Dict[str, Tuple[str, str]]]:
+    """Manual records with audit info: {iso: {member: (status, updated_by)}}.
+    Used by the detection-quality report to attribute corrections."""
+    def _q(cur):
+        cur.execute(
+            f"SELECT day, member, status, updated_by FROM {WFH_MANUAL_TABLE} "
+            f"WHERE day >= %s AND day <= %s",
+            (start, end),
+        )
+        return cur.fetchall()
+
+    rows = _pg_read(_q)
+    out: Dict[str, Dict[str, Tuple[str, str]]] = {}
+    for d, m, sv, by in rows or []:
+        iso = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        if m not in TEAM_MEMBERS:
+            continue
+        status = sv if sv in ("WFO", "WFH", "OFF") else "WFH"
+        out.setdefault(iso, {})[m] = (status, (by or "").strip() or "unknown")
+    return out
 
 
 def load_overrides(start: date, end: date) -> Dict[str, Dict[str, str]]:
@@ -642,7 +677,8 @@ def load_overrides(start: date, end: date) -> Dict[str, Dict[str, str]]:
 
 def _save_day_member_entries(table: str, member: str, entries: Dict[str, str | None],
                              by: str, label: str) -> bool:
-    """entries: {iso: 'WFO'|'WFH'|None}; None deletes the row."""
+    """entries: {iso: 'WFO'|'WFH'|'OFF'|None}; None deletes the row.
+    ('OFF' is only meaningful for the manual-attendance table.)"""
     ups = [(date.fromisoformat(iso), member, v, by) for iso, v in entries.items() if v]
     dels = [(date.fromisoformat(iso), member) for iso, v in entries.items() if not v]
 
@@ -704,12 +740,22 @@ class Resolver:
         self.cutover = cutover
         self.today = today
 
-    def is_off(self, member: str, d: date) -> str | None:
+    def off_external(self, member: str, d: date) -> str | None:
+        """Off for a reason outside the member's own record (holiday registers)."""
         iso = d.isoformat()
         if self.public.get(iso):
             return "Public holiday"
         if member in self.holidays.get(iso, []):
             return "Day off"
+        return None
+
+    def is_off(self, member: str, d: date) -> str | None:
+        ext = self.off_external(member, d)
+        if ext:
+            return ext
+        # Self-reported day off recorded via "Fix my attendance".
+        if self.manual.get(d.isoformat(), {}).get(member) == "OFF":
+            return "Day off (self-reported)"
         return None
 
     def rotation_default(self, member: str, d: date) -> str | None:
@@ -736,6 +782,10 @@ class Resolver:
         correction); otherwise IP detection (on/after the cutover)."""
         iso = d.isoformat()
         man = self.manual.get(iso, {}).get(member)
+        if man == "OFF":
+            # A self-reported day off is handled by is_off(); it is not a
+            # WFO/WFH signal and IP must not override it.
+            return None, None
         if man:
             return man, "self"
         if d >= self.cutover:
@@ -1032,15 +1082,25 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
         _render_adjust_plan(res, member)
 
 
-def _render_fix_attendance(res: Resolver, member: str, days: List[date]):
-    st.markdown("<div class='board-title'>✍️ Fix my attendance</div>", unsafe_allow_html=True)
+def _render_fix_attendance(res: Resolver, member: str, days: List[date],
+                           by: str | None = None, key_prefix: str = "my",
+                           title: str = "✍️ Fix my attendance"):
+    """Attendance-history editor for ``member``. ``by`` is the audit identity
+    stamped on saved rows (defaults to the member themselves); management
+    passes its own identity when editing someone else's history."""
+    by = by or member
+    st.markdown(f"<div class='board-title'>{title}</div>", unsafe_allow_html=True)
     st.caption(
-        "Record where you actually were — for days before IP detection, or to "
-        "correct a wrong detection. Your record wins and is audit-stamped."
+        "Record the real status — Office, Home, or a Day off — for days before "
+        "IP detection, or to correct a wrong detection. Saved records win over "
+        "detection and are audit-stamped. Day-off days don't count toward the "
+        "50% policy."
     )
+    # Public holidays / registered leave stay out of the editor, but a day the
+    # member marked off *here* stays editable so it can be reverted.
     editable = [
         d for d in days
-        if is_office_day(d) and d <= res.today and not res.is_off(member, d)
+        if is_office_day(d) and d <= res.today and not res.off_external(member, d)
     ]
     if not editable:
         st.info("No past office days in the selected period.")
@@ -1056,7 +1116,7 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date]):
             "_iso": iso,
             "Plan": {"WFO": "Office", "WFH": "Home", None: "—"}[res.planned(member, d)],
             "Detected": {"WFO": "Office", "WFH": "Home", None: "—"}[ipd],
-            "My record": {"WFO": "Office", "WFH": "Home", None: "—"}[mine],
+            "My record": {"WFO": "Office", "WFH": "Home", "OFF": "Day off", None: "—"}[mine],
         })
     df = pd.DataFrame(recs)
     edited = st.data_editor(
@@ -1066,20 +1126,22 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date]):
             "Plan": st.column_config.TextColumn(disabled=True, help="Your effective plan"),
             "Detected": st.column_config.TextColumn(disabled=True, help="IP-based detection"),
             "My record": st.column_config.SelectboxColumn(
-                options=["—", "Office", "Home"], default="—",
-                help="Your own record — overrides detection when set."),
+                options=["—", "Office", "Home", "Day off"], default="—",
+                help="Your own record — overrides detection when set. "
+                     "Day off excludes the day from the 50% policy."),
         },
         hide_index=True, num_rows="fixed", use_container_width=True,
-        key=f"fix_{member}",
+        key=f"fix_{key_prefix}_{member}",
     )
-    if st.button("Save my attendance", type="primary", key=f"fix_save_{member}"):
+    save_label = "Save my attendance" if by == member else f"Save {member}'s attendance"
+    if st.button(save_label, type="primary", key=f"fix_save_{key_prefix}_{member}"):
         entries: Dict[str, str | None] = {}
         for i, row in edited.iterrows():
             v = str(row["My record"])
-            entries[df.iloc[i]["_iso"]] = (
-                "WFO" if v == "Office" else "WFH" if v == "Home" else None
-            )
-        if save_manual_entries(member, entries, by=member):
+            entries[df.iloc[i]["_iso"]] = {
+                "Office": "WFO", "Home": "WFH", "Day off": "OFF",
+            }.get(v)
+        if save_manual_entries(member, entries, by=by):
             st.success("Attendance saved.")
             st.rerun()
 
@@ -1185,7 +1247,7 @@ def _df_to_pattern(df: pd.DataFrame) -> List[Set[str]]:
     return pattern
 
 
-def render_schedule(res: Resolver, viewer: str | None):
+def render_schedule(res: Resolver, viewer: str | None, start: date, end: date):
     render_today_strip(res)
 
     st.markdown("<div class='board-title'>📆 Next two weeks — effective plan</div>",
@@ -1258,6 +1320,17 @@ def render_schedule(res: Resolver, viewer: str | None):
     if can_edit:
         with st.expander("🛠 Management: edit a member's plan overrides"):
             _render_member_overrides_editor(res, viewer)
+        with st.expander("🗂 Management: edit a member's attendance history"):
+            st.caption(
+                "Correct any member's past records over the selected period — "
+                "same rules as self-editing; every save is stamped with your name."
+            )
+            target = st.selectbox("Member", TEAM_MEMBERS, key="hist_member")
+            _render_fix_attendance(
+                res, target, workdays_between(start, end),
+                by=viewer, key_prefix="mgmt",
+                title=f"✍️ {target}'s attendance history",
+            )
 
 
 def _render_plan_grid(res: Resolver, days: List[date]):
@@ -1382,13 +1455,81 @@ def _daily_detail_rows(res: Resolver, days: List[date]) -> List[dict]:
     return rows
 
 
+def _detection_analysis(res: Resolver,
+                        manual_meta: Dict[str, Dict[str, Tuple[str, str]]],
+                        days: List[date]) -> dict:
+    """Compare every manual correction against what IP detection said.
+
+    Only office days on/after the detection start (and not in the future) are
+    in scope. Buckets:
+      * agree        — manual matches detection (confirms it)
+      * missed_office— detected Home, corrected to Office → office egress IP
+                       likely missing from the office prefix
+      * ghost_office — detected Office, corrected to Home → a non-office
+                       network (VPN/NAT) is inside the prefix, or a shared login
+      * dayoff_activity — sessions detected on a self-recorded day off
+      * no_signal    — correction on a day detection saw nothing (coverage gap)
+    """
+    conflicts: List[dict] = []
+    agree = no_signal = 0
+    for d in days:
+        if not is_office_day(d) or d < res.cutover or d > res.today:
+            continue
+        iso = d.isoformat()
+        for m in TEAM_MEMBERS:
+            rec = manual_meta.get(iso, {}).get(m)
+            if not rec:
+                continue
+            man, by = rec
+            ip = res.ip.get(iso, {}).get(m)
+            if ip is None:
+                no_signal += 1
+                continue
+            det_lbl = "Office" if ip == "WFO" else "Home"
+            if man == "OFF":
+                conflicts.append({
+                    "date": iso, "weekday": d.strftime("%a"), "member": m,
+                    "detected": det_lbl, "corrected_to": "Day off",
+                    "edited_by": by, "category": "Day-off activity",
+                    "hint": ("Office-IP sessions on a day off — check shared "
+                             "logins / stale sessions" if ip == "WFO" else
+                             "Home sessions on a day off — likely worked while off"),
+                })
+            elif man != ip:
+                missed = man == "WFO"
+                conflicts.append({
+                    "date": iso, "weekday": d.strftime("%a"), "member": m,
+                    "detected": det_lbl,
+                    "corrected_to": "Office" if man == "WFO" else "Home",
+                    "edited_by": by,
+                    "category": "Missed office" if missed else "Ghost office",
+                    "hint": ("Was in office but no session came from the office "
+                             "prefix — an office egress IP may be missing"
+                             if missed else
+                             "Detected office but was home — a VPN/NAT range may "
+                             "wrongly match the prefix, or a shared login"),
+                })
+            else:
+                agree += 1
+    reviewed = agree + no_signal + len(conflicts)
+    return {
+        "conflicts": conflicts, "agree": agree, "no_signal": no_signal,
+        "reviewed": reviewed,
+        "missed": sum(1 for c in conflicts if c["category"] == "Missed office"),
+        "ghost": sum(1 for c in conflicts if c["category"] == "Ghost office"),
+        "dayoff": sum(1 for c in conflicts if c["category"] == "Day-off activity"),
+    }
+
+
 def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
     days = workdays_between(start, end)
     stats = {m: member_stats(res, m, days) for m in TEAM_MEMBERS}
     period_tag = f"{start.isoformat()}_{end.isoformat()}"
 
     kind = st.radio(
-        "Report", ["🗂 Management — actual attendance", "🎯 Team — plan vs actual"],
+        "Report",
+        ["🗂 Management — actual attendance", "🎯 Team — plan vs actual",
+         "🔬 Detection quality — corrections vs IP"],
         horizontal=True, key="report_kind", label_visibility="collapsed",
     )
 
@@ -1447,7 +1588,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             file_name=f"attendance_detail_{period_tag}.csv", mime="text/csv",
             use_container_width=True,
         )
-    else:
+    elif kind.startswith("🎯"):
         st.markdown(
             "<div class='report-head'><div class='report-title'>Team report — plan vs actual</div>"
             f"<div class='report-sub'>{start:%d %b %Y} → {end:%d %b %Y} · how closely reality "
@@ -1498,6 +1639,71 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None):
             file_name=f"plan_vs_actual_detail_{period_tag}.csv", mime="text/csv",
             use_container_width=True,
         )
+    else:
+        st.markdown(
+            "<div class='report-head'><div class='report-title'>Detection quality — corrections vs IP</div>"
+            f"<div class='report-sub'>{start:%d %b %Y} → {end:%d %b %Y} · every manual correction "
+            "compared against what IP detection said, to find where detection needs improving "
+            f"(office prefix <code>{OFFICE_IP_PREFIX}</code>, active since {res.cutover:%d %b %Y})</div></div>",
+            unsafe_allow_html=True,
+        )
+        manual_meta = load_manual_meta(start, min(end, res.today))
+        ana = _detection_analysis(res, manual_meta, days)
+
+        k = st.columns(4)
+        k[0].metric("Corrections reviewed", f"{ana['reviewed']}",
+                    help="Manual records on days where detection was active.")
+        acc = (ana["agree"] / (ana["agree"] + len(ana["conflicts"]))
+               if (ana["agree"] + len(ana["conflicts"])) else None)
+        k[1].metric("Detection accuracy", rate_pct(acc),
+                    help="Of corrections with an IP signal, how many detection already had right.")
+        k[2].metric("Conflicts", f"{len(ana['conflicts'])}",
+                    help="Corrections that contradict detection — the enhancement backlog.")
+        k[3].metric("No IP signal", f"{ana['no_signal']}",
+                    help="Corrections on days detection saw nothing — coverage gaps.")
+
+        b = st.columns(3)
+        b[0].metric("🏢 Missed office", f"{ana['missed']}",
+                    help="Was in office, detected Home → likely a missing office egress IP.")
+        b[1].metric("👻 Ghost office", f"{ana['ghost']}",
+                    help="Detected Office, was home → VPN/NAT inside the prefix or a shared login.")
+        b[2].metric("🌴 Day-off activity", f"{ana['dayoff']}",
+                    help="Sessions detected on a self-recorded day off.")
+
+        if ana["conflicts"]:
+            df = pd.DataFrame(ana["conflicts"])[
+                ["date", "weekday", "member", "detected", "corrected_to",
+                 "edited_by", "category", "hint"]
+            ].rename(columns={
+                "date": "Date", "weekday": "Day", "member": "Member",
+                "detected": "Detected", "corrected_to": "Corrected to",
+                "edited_by": "Edited by", "category": "Category",
+                "hint": "Enhancement hint",
+            }).sort_values(["Category", "Date", "Member"])
+            st.markdown("<div class='board-title'>Conflicts (each is an enhancement lead)</div>",
+                        unsafe_allow_html=True)
+            st.dataframe(df, hide_index=True, use_container_width=True)
+            st.download_button(
+                "⬇️ Export detection conflicts (CSV)", df.to_csv(index=False).encode(),
+                file_name=f"detection_conflicts_{period_tag}.csv", mime="text/csv",
+            )
+            st.markdown(
+                "<div class='vbox vbox-warn'><b>How to use this</b><ul>"
+                "<li><b>Missed office</b> clusters on the same dates/members → capture the office's "
+                "real egress IPs those days and extend the prefix list.</li>"
+                "<li><b>Ghost office</b> entries → find which network (VPN pool, NAT) matched the "
+                "prefix from home, or check for shared logins.</li>"
+                "<li><b>Day-off activity</b> with office IPs → stale sessions or someone else on the "
+                "account; with home IPs it's usually just working while off.</li></ul></div>",
+                unsafe_allow_html=True,
+            )
+        elif ana["reviewed"]:
+            st.success("No conflicts — every correction in this period agrees with detection "
+                       "(or falls where detection has no signal).")
+        else:
+            st.info("No manual corrections in this period on detection-active days, so there is "
+                    "nothing to compare yet. Corrections made in My Space or by management feed "
+                    "this report automatically.")
 
 
 # =============================================================================
@@ -1518,8 +1724,9 @@ def render_method(res: Resolver, can_edit: bool):
                 <code>{SESSION_STATES_TABLE}</code>: in office when any session's
                 <code>client_ip</code> starts with <code>{OFFICE_IP_PREFIX}</code>
                 (impersonated sessions excluded). Matched by short name: {umap}.</li>
-            <li><b>Eligible office days</b> — Mon–Thu that aren't public holidays or personal days
-                off. Sundays and off-days never count toward the policy.</li>
+            <li><b>Eligible office days</b> — Mon–Thu that aren't public holidays or days off
+                (from the holiday register <i>or</i> self-recorded as "Day off" in Fix my
+                attendance). Sundays and off-days never count toward the policy.</li>
             <li><b>HR policy (red)</b> — ≥ 50% of eligible office days in office, per member, over
                 the selected period. Office rate = office days ÷ known eligible days.</li>
             <li><b>Plan deviation (orange)</b> — a known day where the actual differed from the
@@ -1717,7 +1924,7 @@ def main() -> None:
             st.markdown(legend_html(), unsafe_allow_html=True)
             render_day_grid(res, TEAM_MEMBERS, workdays_between(start, end))
     with tabs[1]:
-        render_schedule(res, viewer)
+        render_schedule(res, viewer, start, end)
     with tabs[2]:
         render_reports(res, start, end, viewer)
     with tabs[3]:
