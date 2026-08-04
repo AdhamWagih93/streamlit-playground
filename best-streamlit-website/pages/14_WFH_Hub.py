@@ -3,10 +3,10 @@
 Merges the WFH Schedule (rotation building/editing) and Team Attendance
 (policy tracking) pages into one professional workspace:
 
-* **My Space** — personal status vs the 50% policy, fix past attendance,
-  adjust your own upcoming plan.
+* **My Space** — personal status vs the 50% policy, fix past attendance
+  (Office / Home / Day off).
 * **Team & Schedule** — who's in today, an *editable* repeating two-week
-  rotation (management), and per-day plan overrides.
+  rotation (management), and management-set per-day plan overrides.
 * **Reports** — over any selected duration:
   - *Management report*: actual WFO/WFH per member, regardless of plan
     (CSV export, summary + day level).
@@ -14,7 +14,8 @@ Merges the WFH Schedule (rotation building/editing) and Team Attendance
   - *Detection quality*: every manual correction compared against what IP
     detection said — missed-office / ghost-office / day-off-activity buckets
     feed the detection-enhancement backlog (CSV export).
-* **Method & Settings** — the measurement algorithm, IP-detection start date.
+* **Method & Settings** — the measurement algorithm, IP-detection start date,
+  and the company-holiday calendar (management-editable).
 
 Data sources (all in the same vault-credentialed Postgres as the platform):
     wfh_rotation           the repeating 2-week pattern (10 Sun–Thu slots)
@@ -22,7 +23,8 @@ Data sources (all in the same vault-credentialed Postgres as the platform):
     wfh_manual_attendance  self-reported actuals: WFO/WFH/OFF (fills/corrects
                            IP gaps; OFF = self-recorded day off)
     wfh_settings           key/value settings (ip_detection_start)
-    wfh_personal_holidays  / wfh_public_holidays  (read-only here)
+    wfh_public_holidays    company holidays (editable in Settings)
+    wfh_personal_holidays  personal leave register (read-only here)
     session_states         shared platform table → IP-based presence
 
 Actual-attendance precedence: a member's own saved record wins (it is an
@@ -32,7 +34,7 @@ detection start date), otherwise unknown.
 Colour language (validated for colour-vision deficiency on light surfaces):
     green #16a34a  in office        orange #f59e0b  deviation from PLAN
     blue  #3b82f6  home             red    #dc2626  below the 50% HR POLICY
-    every coloured cell also carries a glyph (O/H/·/?) so colour is never
+    every coloured cell also carries a glyph (O/H/P/V/?) so colour is never
     the only channel.
 
 Degrades gracefully without Postgres/vault: deterministic in-memory rotation,
@@ -400,7 +402,8 @@ def _pg_connect():
 
 def _pg_ensure_schema(conn) -> None:
     for _name in (WFH_ROTATION_TABLE, WFH_MANUAL_TABLE,
-                  WFH_OVERRIDES_TABLE, WFH_SETTINGS_TABLE):
+                  WFH_OVERRIDES_TABLE, WFH_SETTINGS_TABLE,
+                  WFH_PUBLIC_HOLIDAYS_TABLE, WFH_PERSONAL_HOLIDAYS_TABLE):
         if not _pg_safe_ident(_name):
             raise RuntimeError(f"unsafe table identifier: {_name!r}")
     cur = conn.cursor()
@@ -436,6 +439,23 @@ def _pg_ensure_schema(conn) -> None:
             key        TEXT PRIMARY KEY,
             value      TEXT,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    # Holiday tables — shared with (and identical to) the WFH Schedule page's
+    # DDL, ensured here too so the hub is self-sufficient on a fresh database.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {WFH_PUBLIC_HOLIDAYS_TABLE} (
+            day        DATE PRIMARY KEY,
+            name       TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {WFH_PERSONAL_HOLIDAYS_TABLE} (
+            day        DATE NOT NULL,
+            member     TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (day, member)
         )
     """)
     cur.close()
@@ -592,6 +612,60 @@ def load_personal_holidays() -> Dict[str, List[str]]:
         if m in TEAM_MEMBERS:
             out.setdefault(iso, []).append(m)
     return out
+
+
+def load_public_holidays_db() -> Dict[str, str] | None:
+    """Rows actually stored in the table — no default-list fallback.
+    ``None`` means the database is unreachable; ``{}`` means simply empty."""
+    def _q(cur):
+        cur.execute(f"SELECT day, name FROM {WFH_PUBLIC_HOLIDAYS_TABLE}")
+        return cur.fetchall()
+
+    rows = _pg_read(_q)
+    if rows is None:
+        return None
+    out: Dict[str, str] = {}
+    for d, name in rows:
+        dd = d if hasattr(d, "isoformat") else date.fromisoformat(str(d))
+        out[dd.isoformat()] = str(name)
+    return out
+
+
+def upsert_public_holidays(entries: Dict[str, str]) -> bool:
+    """Add or rename company holidays: {iso: name}."""
+    rows = []
+    for iso, name in entries.items():
+        try:
+            rows.append((date.fromisoformat(iso), str(name).strip()))
+        except ValueError:
+            continue
+    if not rows:
+        return True
+
+    def _w(cur):
+        cur.executemany(
+            f"INSERT INTO {WFH_PUBLIC_HOLIDAYS_TABLE} (day, name) VALUES (%s, %s) "
+            f"ON CONFLICT (day) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()",
+            rows,
+        )
+
+    return _pg_write(_w, "company holidays")
+
+
+def delete_public_holidays(isos: List[str]) -> bool:
+    days = []
+    for iso in isos:
+        try:
+            days.append((date.fromisoformat(iso),))
+        except ValueError:
+            continue
+    if not days:
+        return True
+    return _pg_write(
+        lambda cur: cur.executemany(
+            f"DELETE FROM {WFH_PUBLIC_HOLIDAYS_TABLE} WHERE day = %s", days),
+        "company holidays",
+    )
 
 
 # ---- Actuals & overrides ------------------------------------------------------
@@ -817,14 +891,51 @@ class Resolver:
                 "deviation": deviation, "overridden": overridden}
 
 
+def _off_kind(note: str | None) -> str | None:
+    """'public' for company holidays, 'personal' for any member day off."""
+    if not note:
+        return None
+    return "public" if note == "Public holiday" else "personal"
+
+
 def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
+    """Policy metrics over ``days``.
+
+    Mon–Thu are the office days the 50% policy is judged on. Sundays are
+    mandated WFH workdays: every past, non-off Sunday is automatically
+    credited as GOOD attendance (numerator and denominator alike), so
+    working the Sunday from home lifts the attendance rate rather than
+    being ignored. A Sunday spent in the office still counts as good — it
+    just also shows as a plan deviation.
+    """
     eligible = known = attended = planned_office = 0
-    deviations = dev_skipped = dev_extra = unknown_past = off_days = 0
+    deviations = dev_skipped = dev_extra = unknown_past = 0
+    public_off = personal_off = 0
+    sunday_ok = sunday_known = 0
     for d in days:
-        if not is_office_day(d):
+        if not is_workday(d):
             continue
-        if res.is_off(member, d):
-            off_days += 1
+        off_note = res.is_off(member, d)
+        if off_note:
+            if _off_kind(off_note) == "public":
+                public_off += 1
+            else:
+                personal_off += 1
+            continue
+        if d.weekday() == 6:  # Sunday: expected-WFH workday, auto-credited
+            if d > res.today:
+                continue
+            sunday_ok += 1
+            plan = res.planned(member, d)
+            actual, _src = res.actual(member, d)
+            if actual is not None:
+                sunday_known += 1
+                if plan is not None and actual != plan:
+                    deviations += 1
+                    if plan == "WFO":
+                        dev_skipped += 1
+                    else:
+                        dev_extra += 1
             continue
         eligible += 1
         plan = res.planned(member, d)
@@ -844,17 +955,22 @@ def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
                 dev_skipped += 1     # planned office, stayed home
             else:
                 dev_extra += 1       # planned home, came in
-    rate = (attended / known) if known else None
-    adherence = ((known - deviations) / known) if known else None
+    rated_days = known + sunday_ok
+    rate = ((attended + sunday_ok) / rated_days) if rated_days else None
+    adh_base = known + sunday_known
+    adherence = ((adh_base - deviations) / adh_base) if adh_base else None
     return {
         "member": member, "eligible": eligible, "known": known,
         "attended": attended, "home": known - attended,
+        "sunday_ok": sunday_ok, "sunday_known": sunday_known,
         "planned_office": planned_office, "deviations": deviations,
         "dev_skipped": dev_skipped, "dev_extra": dev_extra,
-        "unknown_past": unknown_past, "off_days": off_days,
+        "unknown_past": unknown_past,
+        "off_days": public_off + personal_off,
+        "public_off": public_off, "personal_off": personal_off,
         "rate": rate, "adherence": adherence,
         "compliant": (rate is not None and rate >= POLICY_MIN_RATE),
-        "low_sample": known < 2,
+        "low_sample": rated_days < 2,
     }
 
 
@@ -982,7 +1098,7 @@ def gauge_html(rate: float | None, low_sample: bool = False) -> str:
     return ("<div class='gauge'><div class='gauge-track'>"
             f"<div class='gauge-fill {cls}' style='width:{width}%'></div>"
             "<div class='gauge-target'></div></div>"
-            f"<div class='gauge-cap {cls}'>{width}% office · policy ≥ 50%{note}</div></div>")
+            f"<div class='gauge-cap {cls}'>{width}% attendance · policy ≥ 50%{note}</div></div>")
 
 
 def legend_html(plan_focus: bool = False) -> str:
@@ -992,7 +1108,8 @@ def legend_html(plan_focus: bool = False) -> str:
         ("chip-dev", "Deviated from plan"),
         ("chip-breach", "Below 50% policy"),
         ("chip-unknown", "Unknown / fill"),
-        ("chip-off", "Day off / holiday"),
+        ("chip-public", "Public holiday"),
+        ("chip-off", "Personal day off"),
     ]
     if plan_focus:
         chips.insert(2, ("chip-override", "Plan override"))
@@ -1005,8 +1122,13 @@ def cell_html(state: dict, member: str, d: date) -> str:
     plan_lbl = {"WFO": "Office", "WFH": "Home", None: "—"}[state.get("planned")]
     ov = " (override)" if state.get("overridden") else ""
     if cat == "off":
-        return (f"<td class='hcell c-off' title='{member} · {d:%a %d %b} · "
-                f"{state['note']}'>·</td>")
+        # Public holidays (violet, P) read differently from personal days
+        # off (slate, V) — the glyph carries the split for CVD/print too.
+        public = _off_kind(state.get("note")) == "public"
+        cls = "c-public" if public else "c-off"
+        glyph = "P" if public else "V"
+        return (f"<td class='hcell {cls}' title='{member} · {d:%a %d %b} · "
+                f"{state['note']}'>{glyph}</td>")
     if cat in ("unknown", "future"):
         cls = "c-unknown" if cat == "unknown" else "c-future"
         glyph = "?" if cat == "unknown" else ("O" if state.get("planned") == "WFO" else "H")
@@ -1025,23 +1147,24 @@ def cell_html(state: dict, member: str, d: date) -> str:
 def render_day_grid(res: Resolver, members: List[str], days: List[date],
                     breach: Dict[str, bool] | None = None):
     breach = breach or {}
-    office_days = [d for d in days if is_office_day(d)]
+    grid_days = [d for d in days if is_workday(d)]  # Sundays included
     truncated = False
-    if len(office_days) > GRID_MAX_COLS:
-        office_days = office_days[-GRID_MAX_COLS:]
+    if len(grid_days) > GRID_MAX_COLS:
+        grid_days = grid_days[-GRID_MAX_COLS:]
         truncated = True
-    if not office_days:
-        st.caption("No office days (Mon–Thu) in this range.")
+    if not grid_days:
+        st.caption("No workdays in this range.")
         return
     header = "<th class='hhdr sticky'>Member</th>" + "".join(
-        f"<th class='hhdr'><span>{d:%d}</span><span class='mini'>{d:%b}</span></th>"
-        for d in office_days
+        f"<th class='hhdr{' hhdr-sun' if d.weekday() == 6 else ''}'>"
+        f"<span>{d:%d}</span><span class='mini'>{d:%a}</span></th>"
+        for d in grid_days
     )
     rows = []
     for m in members:
         cls = "hlabel breach" if breach.get(m) else "hlabel"
         badge = " <span class='breach-dot' title='Below 50% policy'></span>" if breach.get(m) else ""
-        cells = "".join(cell_html(res.cell(m, d), m, d) for d in office_days)
+        cells = "".join(cell_html(res.cell(m, d), m, d) for d in grid_days)
         rows.append(f"<tr><td class='{cls} sticky'>{m}{badge}</td>{cells}</tr>")
     st.markdown(
         f"<div class='grid-wrap'><table class='hgrid'><thead><tr>{header}</tr></thead>"
@@ -1049,11 +1172,11 @@ def render_day_grid(res: Resolver, members: List[str], days: List[date],
         unsafe_allow_html=True,
     )
     if truncated:
-        st.caption(f"Showing the most recent {GRID_MAX_COLS} office days of the range.")
+        st.caption(f"Showing the most recent {GRID_MAX_COLS} workdays of the range.")
 
 
 def bars_vs_policy(stats: Dict[str, dict], value_key: str = "rate",
-                   suffix: str = "office") -> None:
+                   suffix: str = "attendance") -> None:
     order = sorted(stats.keys(), key=lambda m: (stats[m][value_key] is None,
                                                 -(stats[m][value_key] or 0)))
     bars = []
@@ -1100,8 +1223,9 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
     )
 
     k = st.columns(4)
-    k[0].metric("Office attendance", rate_pct(s["rate"]),
-                help="Days in office ÷ eligible office days with data.")
+    k[0].metric("Attendance score", rate_pct(s["rate"]),
+                help="Office days attended plus credited WFH Sundays, over all "
+                     "counted days. Sundays worked from home count as good.")
     k[1].metric("In office", f"{s['attended']}/{s['known']}")
     k[2].metric("Plan deviations", f"{s['deviations']}",
                 help="Days your actual differed from your effective plan.")
@@ -1111,11 +1235,7 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
     st.markdown(legend_html(), unsafe_allow_html=True)
     render_day_grid(res, [member], days, {member: breach_flag})
 
-    c1, c2 = st.columns(2)
-    with c1:
-        _render_fix_attendance(res, member, days)
-    with c2:
-        _render_adjust_plan(res, member)
+    _render_fix_attendance(res, member, days)
 
 
 def _render_fix_attendance(res: Resolver, member: str, days: List[date],
@@ -1136,14 +1256,14 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date],
     # member marked off *here* stays editable so it can be reverted.
     editable = [
         d for d in days
-        if is_office_day(d) and d <= res.today and not res.off_external(member, d)
+        if is_workday(d) and d <= res.today and not res.off_external(member, d)
     ]
     if not editable:
         st.info("No past office days in the selected period.")
         return
     # The editor covers the FULL selected period (past office days only) —
     # long ranges scroll inside the fixed-height editor instead of truncating.
-    st.caption(f"{len(editable)} past office day(s) in the selected period.")
+    st.caption(f"{len(editable)} past workday(s) in the selected period (Sundays included — they default to Home).")
     recs = []
     for d in editable:
         iso = d.isoformat()
@@ -1185,65 +1305,16 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date],
             st.rerun()
 
 
-def _render_adjust_plan(res: Resolver, member: str, horizon_days: int = 21):
-    st.markdown("<div class='board-title'>🔀 Adjust my plan</div>", unsafe_allow_html=True)
-    st.caption(
-        "Swap an upcoming day between office and home. Deviations from the "
-        "rotation show in orange so the team can see coverage."
-    )
-    upcoming = [
-        d for d in workdays_between(res.today, res.today + timedelta(days=horizon_days))
-        if is_office_day(d) and not res.is_off(member, d)
-    ]
-    if not upcoming:
-        st.info("No upcoming office days in the horizon.")
-        return
-    recs = []
-    for d in upcoming:
-        iso = d.isoformat()
-        rot = res.rotation_default(member, d)
-        ov = res.overrides.get(iso, {}).get(member)
-        recs.append({
-            "Date": d.strftime("%a %d %b"),
-            "_iso": iso,
-            "Rotation": {"WFO": "Office", "WFH": "Home", None: "—"}[rot],
-            "My plan": {"WFO": "Office", "WFH": "Home", None: "Rotation"}[ov],
-        })
-    df = pd.DataFrame(recs)
-    edited = st.data_editor(
-        df.drop(columns=["_iso"]),
-        column_config={
-            "Date": st.column_config.TextColumn(disabled=True),
-            "Rotation": st.column_config.TextColumn(disabled=True, help="Default from the 2-week rotation"),
-            "My plan": st.column_config.SelectboxColumn(
-                options=["Rotation", "Office", "Home"], default="Rotation",
-                help="Pick Office/Home to override the rotation for that day."),
-        },
-        hide_index=True, num_rows="fixed", use_container_width=True,
-        key=f"plan_{member}",
-    )
-    if st.button("Save my plan", type="primary", key=f"plan_save_{member}"):
-        entries: Dict[str, str | None] = {}
-        for i, row in edited.iterrows():
-            v = str(row["My plan"])
-            entries[df.iloc[i]["_iso"]] = (
-                "WFO" if v == "Office" else "WFH" if v == "Home" else None
-            )
-        if save_override_entries(member, entries, by=member):
-            st.success("Plan updated.")
-            st.rerun()
-
-
 # =============================================================================
 # SECTION: TEAM & SCHEDULE
 # =============================================================================
 def render_today_strip(res: Resolver, members: List[str]):
     d = res.today
-    while not is_office_day(d) or res.public.get(d.isoformat()):
+    while not is_workday(d) or res.public.get(d.isoformat()):
         d += timedelta(days=1)
         if (d - res.today).days > 14:
             return
-    label = "Today" if d == res.today else f"Next office day · {d:%a %d %b}"
+    label = "Today" if d == res.today else f"Next workday · {d:%a %d %b}"
     planned_in = [m for m in members
                   if res.planned(m, d) == "WFO" and not res.is_off(m, d)]
     detected_in = [m for m in members
@@ -1292,7 +1363,7 @@ def render_schedule(res: Resolver, viewer: str | None, start: date, end: date,
 
     st.markdown("<div class='board-title'>📆 Next two weeks — effective plan</div>",
                 unsafe_allow_html=True)
-    st.caption("Rotation + overrides + holidays for the filtered members. Orange ring = override.")
+    st.caption("Rotation + overrides + holidays for the filtered members. Sundays default to Home but can be overridden. Orange ring = override.")
     horizon = workdays_between(sunday_of(res.today), sunday_of(res.today) + timedelta(days=13))
     _render_plan_grid(res, horizon, members)
 
@@ -1374,20 +1445,24 @@ def render_schedule(res: Resolver, viewer: str | None, start: date, end: date,
 
 
 def _render_plan_grid(res: Resolver, days: List[date], members: List[str] | None = None):
-    office_days = [d for d in days if is_office_day(d)]
+    plan_days = [d for d in days if is_workday(d)]  # Sundays included (default Home)
     header = "<th class='hhdr sticky'>Member</th>" + "".join(
-        f"<th class='hhdr'><span>{d:%a}</span><span class='mini'>{d:%d %b}</span></th>"
-        for d in office_days
+        f"<th class='hhdr{' hhdr-sun' if d.weekday() == 6 else ''}'>"
+        f"<span>{d:%a}</span><span class='mini'>{d:%d %b}</span></th>"
+        for d in plan_days
     )
     rows = []
     for m in (members or TEAM_MEMBERS):
         cells = []
-        for d in office_days:
+        for d in plan_days:
             off = res.is_off(m, d)
             plan = res.planned(m, d)
             ov = bool(res.overrides.get(d.isoformat(), {}).get(m))
             if off:
-                cells.append(f"<td class='hcell c-off' title='{m} · {d:%a %d %b} · {off}'>·</td>")
+                public = _off_kind(off) == "public"
+                cls = "c-public" if public else "c-off"
+                glyph = "P" if public else "V"
+                cells.append(f"<td class='hcell {cls}' title='{m} · {d:%a %d %b} · {off}'>{glyph}</td>")
                 continue
             base = "c-office" if plan == "WFO" else "c-home"
             ring = " c-dev" if ov else ""
@@ -1431,7 +1506,7 @@ def _render_member_overrides_editor(res: Resolver, viewer: str):
     target = st.selectbox("Member", TEAM_MEMBERS, key="ov_member")
     upcoming = [
         d for d in workdays_between(res.today, res.today + timedelta(days=28))
-        if is_office_day(d) and not res.is_off(target, d)
+        if is_workday(d) and not res.is_off(target, d)
     ]
     if not upcoming:
         st.info("No upcoming office days.")
@@ -1477,7 +1552,7 @@ def _daily_detail_rows(res: Resolver, days: List[date],
                        members: List[str] | None = None) -> List[dict]:
     rows = []
     for d in days:
-        if not is_office_day(d):
+        if not is_workday(d):    # Sundays included; Fri/Sat excluded
             continue
         for m in (members or TEAM_MEMBERS):
             off = res.is_off(m, d)
@@ -1491,6 +1566,7 @@ def _daily_detail_rows(res: Resolver, days: List[date],
                 "actual": {"WFO": "Office", "WFH": "Home", None: ""}[actual],
                 "source": source or "",
                 "off": off or "",
+                "off_kind": _off_kind(off) or "",
                 "deviation": ("yes" if (not off and actual and plan and actual != plan) else ""),
             })
     return rows
@@ -1515,7 +1591,7 @@ def _detection_analysis(res: Resolver,
     conflicts: List[dict] = []
     agree = no_signal = 0
     for d in days:
-        if not is_office_day(d) or d < res.cutover or d > res.today:
+        if not is_workday(d) or d < res.cutover or d > res.today:
             continue
         iso = d.isoformat()
         for m in (members or TEAM_MEMBERS):
@@ -1585,30 +1661,35 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
             unsafe_allow_html=True,
         )
         total_office = sum(s["attended"] for s in stats.values())
+        total_sunday = sum(s["sunday_ok"] for s in stats.values())
         total_home = sum(s["home"] for s in stats.values())
         total_known = sum(s["known"] for s in stats.values())
         total_unknown = sum(s["unknown_past"] for s in stats.values())
-        team_rate = (total_office / total_known) if total_known else None
+        rated = total_known + total_sunday
+        team_rate = ((total_office + total_sunday) / rated) if rated else None
         rated = [s for s in stats.values() if s["rate"] is not None]
         k = st.columns(4)
-        k[0].metric("Team office rate", rate_pct(team_rate))
+        k[0].metric("Team attendance", rate_pct(team_rate),
+                    help="Office days + credited WFH Sundays over all counted days.")
         k[1].metric("Office days", f"{total_office}")
         k[2].metric("Home days", f"{total_home}")
         k[3].metric("Below policy", f"{sum(1 for s in rated if not s['compliant'])}",
                     help="Members under 50% office in this period.")
 
-        st.markdown("<div class='board-title'>Office rate vs the 50% policy</div>",
+        st.markdown("<div class='board-title'>Attendance vs the 50% policy (WFH Sundays credited)</div>",
                     unsafe_allow_html=True)
-        bars_vs_policy(stats, "rate", "office")
+        bars_vs_policy(stats, "rate", "attendance")
 
         summary = pd.DataFrame([{
             "Member": m,
             "Eligible days": stats[m]["eligible"],
             "Office": stats[m]["attended"],
             "Home": stats[m]["home"],
-            "Days off": stats[m]["off_days"],
+            "Sundays ✓": stats[m]["sunday_ok"],
+            "Public holidays": stats[m]["public_off"],
+            "Days off": stats[m]["personal_off"],
             "No data": stats[m]["unknown_past"],
-            "Office rate": rate_pct(stats[m]["rate"]),
+            "Attendance": rate_pct(stats[m]["rate"]),
             "Policy (≥50%)": ("✅ met" if stats[m]["compliant"]
                               else "❌ below" if stats[m]["rate"] is not None else "— no data"),
         } for m in members])
@@ -1639,7 +1720,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
             "followed the rotation + overrides · orange marks deviations</div></div>",
             unsafe_allow_html=True,
         )
-        total_known = sum(s["known"] for s in stats.values())
+        total_known = sum(s["known"] + s["sunday_known"] for s in stats.values())
         total_dev = sum(s["deviations"] for s in stats.values())
         team_adh = ((total_known - total_dev) / total_known) if total_known else None
         k = st.columns(4)
@@ -1760,9 +1841,10 @@ def render_method(res: Resolver, can_edit: bool):
         <div class='algo'>
           <ol>
             <li><b>Plan</b> — the repeating two-week rotation (each member in office 2 of the 4
-                office days, Mon–Thu; Sundays always home), plus per-day <i>overrides</i> that you
-                or management set. During onboarding {NEW_JOINER} is planned in office every office
-                day through {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}.</li>
+                office days, Mon–Thu), plus per-day <i>overrides</i>. Sundays appear in the plan
+                and default to <b>Home</b>, but a Sunday can be overridden (and Sunday attendance
+                is detected like any other day). During onboarding {NEW_JOINER} is planned in
+                office every office day through {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}.</li>
             <li><b>Actual</b> — your own saved record wins (explicit, audit-stamped). Otherwise, on
                 days from <b>{res.cutover:%d %b %Y}</b>, IP detection from
                 <code>{SESSION_STATES_TABLE}</code>: in office when any session's
@@ -1770,9 +1852,12 @@ def render_method(res: Resolver, can_edit: bool):
                 (impersonated sessions excluded). Matched by short name: {umap}.</li>
             <li><b>Eligible office days</b> — Mon–Thu that aren't public holidays or days off
                 (from the holiday register <i>or</i> self-recorded as "Day off" in Fix my
-                attendance). Sundays and off-days never count toward the policy.</li>
-            <li><b>HR policy (red)</b> — ≥ 50% of eligible office days in office, per member, over
-                the selected period. Office rate = office days ÷ known eligible days.</li>
+                attendance). Off-days never count toward the policy.</li>
+            <li><b>HR policy (red)</b> — attendance ≥ 50%, per member, over the selected period.
+                Attendance = (office days attended + credited Sundays) ÷ (known eligible office
+                days + credited Sundays). Every past, non-off <b>Sunday counts as good
+                attendance</b> — it's the mandated WFH day, so working it from home lifts the
+                score (and coming in on a Sunday still counts as good).</li>
             <li><b>Plan deviation (orange)</b> — a known day where the actual differed from the
                 effective plan (rotation + overrides). Deviations are visible, not punitive; the
                 red policy line is the one that matters.</li>
@@ -1782,7 +1867,8 @@ def render_method(res: Resolver, can_edit: bool):
             <span style='color:{C_HOME};font-weight:700'>blue home</span> ·
             <span style='color:#b45309;font-weight:700'>orange plan deviation</span> ·
             <span style='color:{C_BREACH};font-weight:700'>red below 50% policy</span> ·
-            grey unknown · slate day off. Every cell also carries a letter (O/H/?/·).
+            grey unknown · <span style='color:#6d28d9;font-weight:700'>violet public holiday (P)</span> ·
+            slate personal day off (V). Every cell also carries a letter (O/H/?/P/V).
           </div>
         </div>
         """,
@@ -1803,10 +1889,83 @@ def render_method(res: Resolver, can_edit: bool):
                     st.rerun()
     else:
         st.info(f"Current detection start: **{res.cutover:%d %b %Y}** (management can change this).")
+
+    _render_company_holidays(res, can_edit)
+
     st.caption(
-        "Holidays are managed on the WFH Schedule page; this hub reads them for "
-        "eligibility. All data lives in the platform Postgres (vault-credentialed)."
+        "Personal days off are self-recorded in Fix my attendance. All data "
+        "lives in the platform Postgres (vault-credentialed)."
     )
+
+
+def _render_company_holidays(res: Resolver, can_edit: bool):
+    """View — and for management, edit — the company holiday calendar.
+    These dates are excluded from everyone's eligible office days."""
+    st.markdown("<div class='board-title'>🎉 Company holidays</div>", unsafe_allow_html=True)
+    st.caption(
+        "Days off given by the company — excluded from eligible office days "
+        "for the whole team, in every stat and report."
+    )
+
+    effective = dict(sorted(res.public.items()))
+    if effective:
+        hol_df = pd.DataFrame([
+            {"Date": iso, "Day": date.fromisoformat(iso).strftime("%a"), "Holiday": name}
+            for iso, name in effective.items()
+        ])
+        st.dataframe(hol_df, hide_index=True, use_container_width=True,
+                     height=min(320, 64 + 35 * len(hol_df)))
+    else:
+        st.info("No company holidays registered.")
+
+    if not can_edit:
+        st.info("Management can edit the holiday calendar here.", icon="🔒")
+        return
+
+    db = load_public_holidays_db()
+    if db is None:
+        st.warning("Database unavailable — the calendar above is the built-in "
+                   "suggestion list and cannot be edited right now.", icon="⚠️")
+        return
+
+    def _seed_defaults_if_needed() -> bool:
+        """First edit on an empty table: persist the effective (suggested)
+        list first, so the visible calendar and the stored one match and a
+        single add/remove doesn't wipe out the suggestions."""
+        if db:
+            return True
+        return upsert_public_holidays(effective)
+
+    c_add, c_del = st.columns(2)
+    with c_add:
+        st.markdown("**Add or rename a holiday**")
+        hd = st.date_input("Date", value=res.today, key="ph_date")
+        hn = st.text_input("Name", key="ph_name",
+                           placeholder="e.g. National Day (company day off)")
+        if st.button("💾 Save holiday", type="primary", key="ph_save"):
+            if isinstance(hd, date) and hn.strip():
+                if _seed_defaults_if_needed() and upsert_public_holidays({hd.isoformat(): hn.strip()}):
+                    st.success(f"{hd:%d %b %Y} saved as “{hn.strip()}”.")
+                    st.rerun()
+            else:
+                st.warning("Pick a date and a non-empty name.")
+    with c_del:
+        st.markdown("**Remove holidays**")
+        to_remove = st.multiselect(
+            "Select dates to remove", list(effective.keys()),
+            format_func=lambda iso: f"{iso} — {effective.get(iso, '')}",
+            key="ph_remove", label_visibility="collapsed",
+        )
+        if to_remove and st.button("🗑 Remove selected", type="secondary", key="ph_remove_btn"):
+            if _seed_defaults_if_needed() and delete_public_holidays(to_remove):
+                st.success(f"Removed {len(to_remove)} holiday(s).")
+                st.rerun()
+
+    if not db:
+        st.caption(
+            "ℹ️ The calendar above is the suggested list — it isn't stored yet. "
+            "Your first change saves it to the database, then edits apply on top."
+        )
 
 
 # =============================================================================
@@ -1872,6 +2031,7 @@ def inject_css() -> None:
         .chip-breach {{ background:#fee2e2; color:#b91c1c; border-color:var(--breach); }}
         .chip-override {{ background:#fff7e6; color:#92600a; border-color:#f0c36d; }}
         .chip-unknown {{ background:#f1f5f9; color:#64748b; }}
+        .chip-public {{ background:#ede9fe; color:#6d28d9; }}
         .chip-off {{ background:#e9edf2; color:#7c8ba1; }}
         .board-title {{ font-weight:800; color:var(--ink); margin:1rem 0 .35rem; font-size:.98rem; }}
         .board {{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:.8rem 1rem; box-shadow:0 4px 14px rgba(15,41,66,.05); }}
@@ -1890,6 +2050,7 @@ def inject_css() -> None:
         .hgrid th, .hgrid td {{ text-align:center; }}
         .hhdr {{ padding:.35rem .3rem; color:var(--sub); font-weight:700; background:#f7fafc; }}
         .hhdr .mini {{ display:block; font-size:.6rem; opacity:.7; font-weight:600; }}
+        .hhdr-sun {{ background:#eef2f9; color:#8593ab; font-style:italic; }}
         .hhdr.sticky, .hlabel.sticky {{ position:sticky; left:0; z-index:2; background:#f7fafc; }}
         .hlabel {{ text-align:left; padding:.3rem .6rem; font-weight:700; color:var(--ink); white-space:nowrap; background:#fff; }}
         .hlabel.breach {{ color:#b91c1c; }}
@@ -1897,7 +2058,8 @@ def inject_css() -> None:
         .hcell {{ width:27px; height:27px; font-weight:800; color:#fff; border:2px solid #fff; border-radius:7px; }}
         .c-office {{ background:var(--office); }}
         .c-home {{ background:var(--home); }}
-        .c-off {{ background:#e2e8f0; color:#9aa7b6; font-weight:400; }}
+        .c-off {{ background:#e2e8f0; color:#64748b; }}
+        .c-public {{ background:#ede9fe; color:#6d28d9; }}
         .c-unknown {{ background:#f1f5f9; color:#94a3b8; }}
         .c-future {{ background:#fbfdff; color:#b6c4d4; border-style:dashed; border-color:#dbe4ee; }}
         .c-dev {{ box-shadow:0 0 0 3px var(--dev) inset; }}
