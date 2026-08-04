@@ -1351,6 +1351,69 @@ function historyPanelHtml(hist) {
       <div class="hist-list">${rows}</div>
     </div>`;
 }
+// discovered ADO repos grouped 🗄 collection → 📁 project, each project with a
+// one-shot "➕ Add project" that defines all its not-yet-added repos at once
+function discoverGroupsHtml(d, existing, collFilter) {
+  const repos = d.repos || [];
+  if (!repos.length)
+    return `<div class="empty">no repositories found${collFilter ? " in " + esc(collFilter) : " on the ADO instance"}</div>`;
+  const colls = {};
+  repos.forEach((r) => {
+    const c = r.collection || "";
+    const p = r.project || "(ungrouped)";
+    ((colls[c] = colls[c] || {})[p] = colls[c][p] || []).push(r);
+  });
+  const anyColl = Object.keys(colls).some((c) => c);
+  const repoRow = (r) => {
+    const added = existing.has(r.url);
+    return `<div class="disc-row ${added ? "added" : ""}">
+      <span class="ci-job">⛁ ${esc(r.name)}</span>
+      ${added ? '<span class="chip chip-green">✓ added</span>'
+        : `<button class="btn btn-sm" data-adourl="${esc(r.url)}" data-adoname="${esc(r.name)}">+ add</button>`}
+    </div>`;
+  };
+  const projBlock = (collName, projName, arr) => {
+    const news = arr.filter((r) => !existing.has(r.url)).length;
+    const rows = arr.slice().sort((a, b) => a.name.localeCompare(b.name)).map(repoRow).join("");
+    return `<div class="disc-proj">
+      <div class="disc-proj-head">
+        <span class="repo-proj-name">📁 ${esc(projName)}</span>
+        <span class="repo-proj-count ${news ? "" : "all"}">${arr.length - news}/${arr.length} added</span>
+        ${news ? `<button class="btn btn-sm btn-primary disc-add-all" data-add-coll="${esc(collName)}" data-add-proj="${esc(projName)}"
+            title="define all ${news} new repo(s) of this project in one action — DB only, no clone; then use ⬇ Clone all below">➕ Add project (${news})</button>`
+          : '<span class="chip chip-green">✓ all added</span>'}
+      </div>
+      <div class="disc-proj-rows">${rows}</div>
+    </div>`;
+  };
+  const sortedColls = Object.keys(colls).sort((a, b) => (a || "￿").localeCompare(b || "￿"));
+  return sortedColls.map((c) => {
+    const projs = colls[c];
+    const projNames = Object.keys(projs).sort();
+    const inner = projNames.map((p) => projBlock(c, p, projs[p])).join("");
+    if (!anyColl) return inner;
+    return `<details class="repo-coll" open>
+      <summary>🗄 <b>${esc(c || "(no collection)")}</b>
+        <span class="ci-meta">${projNames.length} project${projNames.length === 1 ? "" : "s"}</span></summary>
+      <div class="repo-coll-body">${inner}</div></details>`;
+  }).join("");
+}
+
+async function addProject(collection, project, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ adding…"; }
+  try {
+    const { result } = await api("/api/repos/add-project",
+      { method: "POST", body: { collection, project } });
+    const bits = [`${result.added_count} added`];
+    if (result.skipped_count) bits.push(`${result.skipped_count} already`);
+    if (result.error_count) bits.push(`${result.error_count} failed`);
+    toast(`📁 <b>${esc(project)}</b>: ${bits.join(" · ")} — ⬇ Clone all to fetch them`,
+      result.error_count ? "toast-err" : "toast-xp");
+    (result.errors || []).forEach((e) => oops(`${e.name}: ${e.error}`));
+    renderRepos();
+  } catch (e) { oops(e); if (btn) { btn.disabled = false; btn.textContent = "➕ Add project"; } }
+}
+
 function repoAddHtml() {
   const d = state.repoDiscover;
   const collFilter = state.repoDiscoverColl || "";
@@ -1359,14 +1422,11 @@ function repoAddHtml() {
       <button class="btn btn-sm ${!collFilter ? "btn-primary" : ""}" data-disc-coll="">all collections</button>
       ${d.collections.map((c) => `<button class="btn btn-sm ${collFilter === c ? "btn-primary" : ""}" data-disc-coll="${esc(c)}">🗄 ${esc(c)}</button>`).join(" ")}
     </div>` : "";
+  const existing = new Set((state.reposData || []).map((r) => r.url));
   const list = !d ? `<div class="empty">browsing the ADO instance…</div>`
     : d.error ? `<div class="empty">⚠ ${esc(d.error)}<br>
         <button class="btn btn-sm" id="repo-discover-retry" style="margin-top:8px">↻ retry</button></div>`
-    : (d.repos || []).map((r) => `
-        <div class="ci-row"><span class="ci-job">⛁ ${esc(r.name)}</span>
-          <span class="ci-meta">🗄 ${esc(r.collection)} · ${esc(r.project)}</span>
-          <button class="btn btn-sm" data-adourl="${esc(r.url)}" data-adoname="${esc(r.name)}">+ add</button>
-        </div>`).join("") || `<div class="empty">no repositories found${collFilter ? " in " + esc(collFilter) : " on the ADO instance"}</div>`;
+    : discoverGroupsHtml(d, existing, collFilter);
   return `
     <div class="panel" style="margin-bottom:16px">
       <h2>add repository — cloned with the shared ADO credentials</h2>
@@ -1424,6 +1484,8 @@ function wireAddPanel() {
   const slot = document.getElementById("repo-add-slot");
   (slot || view()).querySelectorAll("[data-adourl]").forEach((b) => b.onclick = () =>
     addRepo(b.dataset.adourl, b.dataset.adoname));
+  (slot || view()).querySelectorAll("[data-add-proj]").forEach((b) => b.onclick = () =>
+    addProject(b.dataset.addColl, b.dataset.addProj, b));
   const retry = document.getElementById("repo-discover-retry");
   if (retry) retry.onclick = () => { state.repoDiscover = null; updateAddPanel(); loadDiscover(true); };
   const refresh = document.getElementById("repo-discover-refresh");
@@ -1922,6 +1984,7 @@ function jumpEditorToLine(line) {
 
 async function renderRepos() {
   const data = await api("/api/repos");
+  state.reposData = data.repos;   // lets the add panel mark already-defined repos
   const addPanel = `<div id="repo-add-slot">${state.repoAddOpen ? repoAddHtml() : ""}</div>`;
   const headHtml = `
     <div class="view-head"><h1>REPOSITORIES</h1>
@@ -2554,6 +2617,207 @@ function invMatch(p, f) {
   return true;
 }
 
+/* ---- inventory config: value grids, four-layer view, project/app diff ---- */
+const INV_SCOPE_LABEL = { project: "project", app: "app", env_app: "env+app", host: "host" };
+const invScopeCls = (o) =>
+  o === "env_app" ? "envapp" : o === "project" ? "proj" : o; // app/host keep their name
+
+// a compact key→value grid (sorted); vault-encrypted scopes show a lock, never values
+function invGrid(dict, opts) {
+  opts = opts || {};
+  const entries = Object.entries(dict || {}).filter(([k]) => k !== "__vault__");
+  const lock = (dict || {}).__vault__
+    ? '<span class="chip chip-amber" title="ansible-vault — encrypted, never decrypted">🔒 encrypted</span>' : "";
+  if (!entries.length) return `<div class="inv-empty">${lock || (opts.empty || "no variables")}</div>`;
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  const rows = entries.map(([k, v]) =>
+    `<div class="inv-kv"><code class="inv-k">${esc(k)}</code>
+      <span class="inv-v">${v === "" ? '<span class="inv-null">—</span>' : esc(v)}</span></div>`).join("");
+  return `<div class="inv-grid">${rows}</div>${lock ? `<div class="inv-lock-note">${lock}</div>` : ""}`;
+}
+
+// env overlays (group_vars/<env>_<app>) belonging to one app → [[env, dict], …]
+function invAppOverlays(c, app) {
+  const suf = `_${app}`;
+  return Object.entries(c.env_app_vars || {})
+    .filter(([g]) => g.length > suf.length && g.slice(g.length - suf.length) === suf)
+    .map(([g, d]) => [g.slice(0, g.length - suf.length), d])
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+// the four layers of one project, values shown, laid out by scope
+function invLayersHtml(p) {
+  const c = p.config || {};
+  const proj = `
+    <div class="inv-layer">
+      <div class="inv-layer-head"><span class="inv-scope proj">project</span>
+        <span class="ci-meta">group_vars/all · inherited by every app</span></div>
+      ${invGrid(c.project_vars, { empty: "no project variables" })}
+    </div>`;
+  const apps = (p.apps || []).map((a) => {
+    const overlays = invAppOverlays(c, a);
+    const ov = overlays.map(([env, d]) => `
+      <div class="inv-overlay">
+        <div class="inv-overlay-head"><span class="inv-scope envapp">${esc(env)}</span>
+          <span class="ci-meta">group_vars/${esc(env)}_${esc(a)}</span></div>
+        ${invGrid(d)}
+      </div>`).join("");
+    return `
+      <details class="inv-applayer">
+        <summary><span class="inv-scope app">app</span> <b>${esc(a)}</b>
+          <span class="ci-meta">group_vars/${esc(a)}${overlays.length ? ` · ${overlays.length} env overlay${overlays.length === 1 ? "" : "s"}` : ""}</span></summary>
+        <div class="inv-applayer-body">
+          ${invGrid((c.app_vars || {})[a], { empty: "no app-level variables" })}${ov}</div>
+      </details>`;
+  }).join("") || '<div class="inv-empty">no apps</div>';
+  const hostEntries = Object.entries(c.host_vars || {});
+  const hosts = hostEntries.length ? `
+    <div class="inv-layer">
+      <div class="inv-layer-head"><span class="inv-scope host">host</span>
+        <span class="ci-meta">host_vars · environment-specific</span></div>
+      ${hostEntries.map(([h, d]) => `
+        <div class="inv-overlay">
+          <div class="inv-overlay-head"><span class="chip">🖥 ${esc(h)}</span></div>
+          ${invGrid(d, { empty: "no host variables" })}
+        </div>`).join("")}
+    </div>` : "";
+  return `<div class="inv-layers">${proj}
+    <div class="inv-applayers">
+      <div class="inv-layer-head"><span class="inv-scope app">apps</span>
+        <span class="ci-meta">group_vars/&lt;app&gt; + env overlays</span></div>${apps}</div>
+    ${hosts}</div>`;
+}
+
+// merge layers low→high, remembering which layer set each key (its origin)
+function invEffective(pairs) {
+  const map = {};
+  let vaulted = false;
+  for (const [dict, origin] of pairs) {
+    if (!dict) continue;
+    for (const [k, v] of Object.entries(dict)) {
+      if (k === "__vault__") { vaulted = true; continue; }
+      map[k] = { value: v, origin };
+    }
+  }
+  return { map, vaulted };
+}
+
+function invProjectEntity(p) {
+  return { label: p.name, sub: "group_vars/all",
+    ...invEffective([[(p.config || {}).project_vars, "project"]]) };
+}
+
+// Ansible-style effective config for one app at one env: project ⊕ app ⊕ env_app ⊕ host
+function invAppEntity(p, app, env) {
+  const c = p.config || {};
+  const pairs = [[c.project_vars, "project"], [(c.app_vars || {})[app], "app"]];
+  if (env && env !== "(base)") {
+    pairs.push([(c.env_app_vars || {})[`${env}_${app}`], "env_app"]);
+    Object.entries(c.host_vars || {}).forEach(([h, hv]) => {
+      if (h.split("_")[0] === env) pairs.push([hv, "host"]);
+    });
+  }
+  return { label: `${p.name} / ${app}`,
+    sub: env && env !== "(base)" ? `effective @ ${env}` : "project + app", ...invEffective(pairs) };
+}
+
+function invDiff(A, B) {
+  const keys = [...new Set([...Object.keys(A.map), ...Object.keys(B.map)])].sort();
+  const rows = keys.map((k) => {
+    const a = A.map[k], b = B.map[k];
+    const status = a && b ? (a.value === b.value ? "same" : "diff") : (a ? "onlyA" : "onlyB");
+    return { key: k, a, b, status };
+  });
+  const n = (st) => rows.filter((r) => r.status === st).length;
+  return { rows, diff: n("diff"), onlyA: n("onlyA"), onlyB: n("onlyB"), same: n("same") };
+}
+
+function invCompareHtml(d) {
+  const projects = d.projects || [];
+  const cmp = state.invCmp = state.invCmp
+    || { kind: "project", a: "", b: "", env: "(base)", diffOnly: true };
+
+  const appList = projects.flatMap((p) =>
+    (p.apps || []).map((a) => ({ project: p.name, app: a, label: `${p.name} / ${a}` })));
+  const opts = cmp.kind === "project"
+    ? projects.map((p) => [p.name, p.name])
+    : appList.map((x, i) => [String(i), x.label]);
+  if (!opts.find(([v]) => v === cmp.a)) cmp.a = (opts[0] || [""])[0];
+  if (!opts.find(([v]) => v === cmp.b)) cmp.b = (opts[1] || opts[0] || [""])[0];
+
+  const projOf = (id) => cmp.kind === "app"
+    ? projects.find((p) => p.name === (appList[+id] || {}).project) : null;
+  const resolve = (id) => {
+    if (cmp.kind === "project") {
+      const p = projects.find((x) => x.name === id);
+      return p ? invProjectEntity(p) : null;
+    }
+    const x = appList[+id];
+    const p = x && projects.find((pp) => pp.name === x.project);
+    return p ? invAppEntity(p, x.app, cmp.env) : null;
+  };
+
+  const kindTabs = `<div class="inv-cmp-kind">
+    <button class="btn btn-sm ${cmp.kind === "project" ? "btn-primary" : ""}" data-inv-kind="project">📁 projects</button>
+    <button class="btn btn-sm ${cmp.kind === "app" ? "btn-primary" : ""}" data-inv-kind="app">🧩 apps</button></div>`;
+
+  if (opts.length < 2)
+    return `<div class="inv-cmp">${kindTabs}<div class="empty">need at least two ${cmp.kind}s to compare</div></div>`;
+
+  let envBar = "";
+  if (cmp.kind === "app") {
+    const envs = [...new Set([...(projOf(cmp.a) || {}).envs || [], ...(projOf(cmp.b) || {}).envs || []])].sort();
+    if (!["(base)", ...envs].includes(cmp.env)) cmp.env = "(base)";
+    envBar = `<div class="inv-cmp-envbar"><span class="ci-meta">environment</span>
+      ${["(base)", ...envs].map((e) => `<button class="btn btn-sm ${cmp.env === e ? "btn-primary" : ""}" data-inv-env="${esc(e)}">${e === "(base)" ? "base" : esc(e)}</button>`).join("")}
+      <span class="ci-meta inv-cmp-envhint">${cmp.env === "(base)" ? "project + app layers" : "project ⊕ app ⊕ env-app ⊕ host (effective)"}</span></div>`;
+  }
+
+  const sel = (id, cur) => `<select id="${id}">${opts.map(([v, l]) =>
+    `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  const A = resolve(cmp.a), B = resolve(cmp.b);
+  if (!A || !B) return `<div class="inv-cmp">${kindTabs}<div class="empty">pick two ${cmp.kind}s</div></div>`;
+
+  const diff = invDiff(A, B);
+  const summary = `
+    <div class="inv-cmp-summary">
+      <span class="inv-cmp-stat diff"><b>${diff.diff}</b> differ</span>
+      <span class="inv-cmp-stat onlyA"><b>${diff.onlyA}</b> only in A</span>
+      <span class="inv-cmp-stat onlyB"><b>${diff.onlyB}</b> only in B</span>
+      <span class="inv-cmp-stat same"><b>${diff.same}</b> identical</span>
+      <span class="spacer"></span>
+      <label class="inv-cmp-diffonly"><input type="checkbox" id="inv-cmp-diffonly" ${cmp.diffOnly ? "checked" : ""}> only differences</label>
+    </div>`;
+
+  const badge = (o) => `<span class="inv-scope ${invScopeCls(o.origin)}" title="value comes from the ${INV_SCOPE_LABEL[o.origin]} layer">${INV_SCOPE_LABEL[o.origin]}</span>`;
+  const cell = (o) => o
+    ? `<div class="inv-cmp-cell"><span class="inv-v">${o.value === "" ? '<span class="inv-null">—</span>' : esc(o.value)}</span>${badge(o)}</div>`
+    : '<div class="inv-cmp-cell missing"><span class="inv-null">absent</span></div>';
+  const icon = { same: "=", diff: "≠", onlyA: "◑", onlyB: "◐" };
+  const rows = cmp.diffOnly ? diff.rows.filter((r) => r.status !== "same") : diff.rows;
+  const table = rows.length ? rows.map((r) => `
+    <div class="inv-cmp-row ${r.status}">
+      <span class="inv-cmp-status" title="${r.status}">${icon[r.status]}</span>
+      <code class="inv-cmp-key">${esc(r.key)}</code>
+      ${cell(r.a)}${cell(r.b)}
+    </div>`).join("")
+    : `<div class="inv-empty">${cmp.diffOnly ? "no differences — configured identically ✓" : "no variables"}</div>`;
+  const heads = `
+    <div class="inv-cmp-row inv-cmp-heads">
+      <span class="inv-cmp-status"></span><span class="inv-cmp-key ci-meta">variable</span>
+      <span class="inv-cmp-cell inv-cmp-head"><span class="inv-cmp-tag a">A</span> <b>${esc(A.label)}</b> <span class="ci-meta">${esc(A.sub)}</span>${A.vaulted ? " 🔒" : ""}</span>
+      <span class="inv-cmp-cell inv-cmp-head"><span class="inv-cmp-tag b">B</span> <b>${esc(B.label)}</b> <span class="ci-meta">${esc(B.sub)}</span>${B.vaulted ? " 🔒" : ""}</span>
+    </div>`;
+
+  return `<div class="inv-cmp">
+    <div class="inv-cmp-bar">${kindTabs}
+      <span class="inv-cmp-pick"><span class="inv-cmp-tag a">A</span>${sel("inv-cmp-a", cmp.a)}
+        <button class="btn btn-sm" id="inv-cmp-swap" title="swap A and B">⇄</button>
+        <span class="inv-cmp-tag b">B</span>${sel("inv-cmp-b", cmp.b)}</span></div>
+    ${envBar}${summary}
+    <div class="inv-cmp-table">${heads}${table}</div></div>`;
+}
+
 function invPanelHtml(d) {
   const s = d.summary || {};
   const f = state.invFilter = state.invFilter || {};
@@ -2607,19 +2871,27 @@ function invPanelHtml(d) {
           ${p.hosts.map((h) => `<div class="ci-row"><span class="ci-job">🖥 ${esc(h.host)}</span>
             ${h.vars ? '<span class="chip chip-green">vars</span>' : ""}
             ${h.vault ? '<span class="chip chip-amber" title="ansible-vault — encrypted, not decrypted">🔒 vault</span>' : ""}</div>`).join("")}` : ""}
-        ${Object.keys(p.vars || {}).length ? `<details class="filebox" style="margin-top:8px">
-          <summary>⚙ project vars (group_vars/all) — ${Object.keys(p.vars).length}</summary>
-          <div style="padding:6px 12px">${Object.entries(p.vars).map(([k, v]) =>
-            `<div class="ci-row"><code class="ci-job">${esc(k)}</code> <span class="ci-meta">${esc(String(v))}</span></div>`).join("")}</div>
-          </details>` : ""}
+        <details class="filebox inv-cfg-box" style="margin-top:10px">
+          <summary>🧩 configuration layers — values by scope (project · app · env-app · host)</summary>
+          <div style="padding:8px 12px">${invLayersHtml(p)}</div>
+        </details>
       </div>
     </details>`).join("") || '<div class="empty">no projects match the filters</div>';
 
-  return `<div class="deps-embed-head"><h2 style="margin:0">🧭 inventory configurations
-      <span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""}${filtering ? ` · ${shown.length} of ${projects.length}` : ""}</span></h2>
-      <span class="spacer"></span><button class="btn btn-sm" id="inv-refresh">↻ re-analyze</button></div>
-    ${d.note ? `<div class="kpi-note">${esc(d.note)}</div>` : ""}
-    ${tiles}${teamOverview}${filterBar}${cards}`;
+  const view_ = state.invView = state.invView || "browse";
+  const head = `<div class="deps-embed-head"><h2 style="margin:0">🧭 inventory configurations
+      <span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""}${view_ === "browse" && filtering ? ` · ${shown.length} of ${projects.length}` : ""}</span></h2>
+      <span class="spacer"></span>
+      <div class="inv-viewtabs">
+        <button class="btn btn-sm ${view_ === "browse" ? "btn-primary" : ""}" id="inv-view-browse" title="browse every project's four config layers">🗂 Browse</button>
+        <button class="btn btn-sm ${view_ === "compare" ? "btn-primary" : ""}" id="inv-view-compare" title="diff two projects or two apps to catch config mismatches">⇄ Compare</button>
+      </div>
+      <button class="btn btn-sm" id="inv-refresh">↻ re-analyze</button></div>
+    ${d.note ? `<div class="kpi-note">${esc(d.note)}</div>` : ""}`;
+
+  if (view_ === "compare")
+    return `${head}${invCompareHtml(d)}`;
+  return `${head}${tiles}${teamOverview}${filterBar}${cards}`;
 }
 
 function rerenderInv() {
@@ -2645,6 +2917,31 @@ function wireInvPanel() {
   if (cb) cb.onclick = () => { state.invFilter = {}; rerenderInv(); };
   const rb = document.getElementById("inv-refresh");
   if (rb) rb.onclick = () => { state.invRefresh = true; renderRepos(); };
+
+  // view tabs (browse / compare)
+  const vb = document.getElementById("inv-view-browse");
+  if (vb) vb.onclick = () => { state.invView = "browse"; rerenderInv(); };
+  const vc = document.getElementById("inv-view-compare");
+  if (vc) vc.onclick = () => { state.invView = "compare"; rerenderInv(); };
+
+  // compare controls
+  view().querySelectorAll("[data-inv-kind]").forEach((b) => b.onclick = () => {
+    if (state.invCmp) { state.invCmp.kind = b.dataset.invKind; state.invCmp.a = ""; state.invCmp.b = ""; }
+    rerenderInv();
+  });
+  view().querySelectorAll("[data-inv-env]").forEach((b) => b.onclick = () => {
+    if (state.invCmp) state.invCmp.env = b.dataset.invEnv; rerenderInv();
+  });
+  const ca = document.getElementById("inv-cmp-a");
+  if (ca) ca.onchange = () => { state.invCmp.a = ca.value; rerenderInv(); };
+  const cbx = document.getElementById("inv-cmp-b");
+  if (cbx) cbx.onchange = () => { state.invCmp.b = cbx.value; rerenderInv(); };
+  const sw = document.getElementById("inv-cmp-swap");
+  if (sw) sw.onclick = () => {
+    const t = state.invCmp.a; state.invCmp.a = state.invCmp.b; state.invCmp.b = t; rerenderInv();
+  };
+  const dof = document.getElementById("inv-cmp-diffonly");
+  if (dof) dof.onchange = () => { state.invCmp.diffOnly = dof.checked; rerenderInv(); };
 }
 
 /* ================= ACCESS MANAGEMENT ================= */

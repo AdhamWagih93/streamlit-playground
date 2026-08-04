@@ -44,6 +44,19 @@ def discover(collection: str = "", user: User = Depends(current_user)):
     return _wrap(repos.discover, collection)
 
 
+class AddProjectBody(BaseModel):
+    collection: str = ""
+    project: str
+
+
+@router.post("/add-project")
+def add_project(body: AddProjectBody, user: User = Depends(current_user),
+                db: Session = Depends(get_db)):
+    """Define every repo of one ADO project at once (DB rows only, no clone)."""
+    return {"result": _wrap(repos.add_project, db, body.collection,
+                            body.project, user.username)}
+
+
 @router.get("/search")
 def search(q: str, regex: bool = False, case_sensitive: bool = False,
            whole_word: bool = False, slot: int | None = None,

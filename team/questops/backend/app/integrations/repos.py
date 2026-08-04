@@ -237,6 +237,51 @@ def add_repo(db: Session, url: str, name: str, username: str) -> dict:
     return {"slot": row.id, "name": row.name, "url": row.url}
 
 
+def add_project(db: Session, collection: str, project: str, username: str) -> dict:
+    """Define EVERY repo of one ADO project in a single action (not one-by-one).
+    Browses the instance (scoped to the collection, sparing it), then registers
+    each repo of that project that isn't already defined. This only writes DB
+    rows — nothing is cloned here, so it never fans out git at the instance;
+    the caller can then 'Clone all' the freshly-added project from the groups."""
+    from ..db import Repository
+    coll = (collection or "").strip()
+    proj = (project or "").strip()
+    if not proj:
+        raise RepoError("project is required")
+    disc = discover(coll)
+    repos_ = [r for r in disc.get("repos", [])
+              if r.get("project", "") == proj
+              and (not coll or r.get("collection", "") == coll)
+              and r.get("url") and r.get("name")]
+    if not repos_:
+        raise RepoError(f"no repositories found for project '{proj}' on the ADO instance")
+    existing_urls = {row.url for row in db.query(Repository.url).all()}
+    existing_names = {(row.name or "").lower() for row in db.query(Repository.name).all()}
+    added, skipped, errors = [], [], []
+    for r in repos_:
+        name, url = r["name"].strip(), r["url"].strip()
+        if url in existing_urls or name.lower() in existing_names:
+            skipped.append(name)
+            continue
+        if not re.match(r"^https?://\S+$", url):
+            errors.append({"name": name, "error": "repository URL must be http(s)"})
+            continue
+        try:
+            db.add(Repository(name=name, url=url, added_by=username))
+            db.flush()
+            existing_urls.add(url)
+            existing_names.add(name.lower())
+            added.append(name)
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            errors.append({"name": name, "error": str(exc)[:160]})
+    db.commit()
+    return {"collection": coll, "project": proj, "requested": len(repos_),
+            "added": added, "skipped": skipped, "errors": errors,
+            "added_count": len(added), "skipped_count": len(skipped),
+            "error_count": len(errors)}
+
+
 def remove_repo(db: Session, slot: int) -> None:
     from ..db import Repository
     row = db.get(Repository, slot)

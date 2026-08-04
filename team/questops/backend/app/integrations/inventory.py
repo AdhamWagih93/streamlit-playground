@@ -14,6 +14,7 @@ group_vars/<app>) names the ADO repo hosting the app's pipeline, so the Access
 page can tie inventory pipelines to real ADO repos. Vault files are detected and
 counted only — secrets are never decrypted into the UI."""
 
+import json
 import re
 import time
 
@@ -133,6 +134,103 @@ def _app_var(pdir, app: str, key: str):
     return None
 
 
+# ---------------------------------------------------- full config-layer parse
+def _val(v) -> str:
+    """A value rendered for the config viewer/diff: scalars as-is, dict/list as
+    canonical JSON (stable so equality == a real diff), None as ''."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (dict, list)):
+        try:
+            return json.dumps(v, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(v)
+    return str(v)
+
+
+def _read_vars_file(path) -> dict:
+    """One YAML vars file as {key: value_str}. Vault-encrypted files are NEVER
+    decrypted — they come back as {'__vault__': True}. Non-dict/parse-fail → {}."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    if _is_vault(text):
+        return {"__vault__": True}
+    data = _load_yaml(text)
+    if not isinstance(data, dict):
+        return {}
+    return {k: _val(v) for k, v in data.items()}
+
+
+def _group_files(gv, name: str) -> list:
+    """Every file backing a group_vars entry `name` — Ansible allows any of:
+    `<name>.yml`, a plain `<name>` file, or `*.yml` under a `<name>/` dir."""
+    files = []
+    for cand in (gv / f"{name}.yml", gv / name):
+        if cand.is_file():
+            files.append(cand)
+    d = gv / name
+    if d.is_dir():
+        files.extend(sorted(d.glob("*.yml")))
+    return files
+
+
+def _merge_files(files) -> dict:
+    """Merge a group's backing files into one {key: value}. A vault-encrypted
+    file contributes a `__vault__` flag (its keys stay opaque, never decrypted)."""
+    out: dict = {}
+    for f in files:
+        d = _read_vars_file(f)
+        if d.get("__vault__"):
+            out["__vault__"] = True
+            continue
+        out.update(d)
+    return out
+
+
+def _project_config(pdir, apps: list[str], envs: set) -> dict:
+    """The four config layers of a project, values included, for the config
+    viewer + diff: project (group_vars/all) · application (group_vars/<app>) ·
+    env+app (group_vars/<env>_<app>) · host/environment (host_vars/<host>)."""
+    app_set = set(apps)
+    gv = pdir / "group_vars"
+    project_vars = _merge_files(_group_files(gv, "all")) if gv.exists() else {}
+    app_vars: dict = {}
+    env_app_vars: dict = {}
+    other_groups: dict = {}
+    if gv.is_dir():
+        seen: set = set()
+        for entry in sorted(gv.iterdir()):
+            gname = entry.name[:-4] if entry.name.endswith(".yml") else entry.name
+            if gname == "all" or gname in seen:
+                continue
+            seen.add(gname)
+            vars_ = _merge_files(_group_files(gv, gname))
+            if gname in app_set:
+                app_vars[gname] = vars_
+            else:
+                head, _, tail = gname.partition("_")
+                if tail and head in envs and tail in app_set:
+                    env_app_vars[gname] = vars_
+                else:
+                    other_groups[gname] = vars_
+    host_vars: dict = {}
+    hv = pdir / "host_vars"
+    if hv.is_dir():
+        for hdir in sorted(hv.iterdir()):
+            if hdir.is_dir():
+                vf = hdir / "vars.yml"
+                host_vars[hdir.name] = _read_vars_file(vf) if vf.is_file() else {}
+            elif hdir.suffix == ".yml":
+                host_vars[hdir.stem] = _read_vars_file(hdir)
+    return {"project_vars": project_vars, "app_vars": app_vars,
+            "env_app_vars": env_app_vars, "other_groups": other_groups,
+            "host_vars": host_vars}
+
+
 # ------------------------------------------------------------- repo location
 def _inventory_dir():
     from . import repos
@@ -193,6 +291,9 @@ def _parse_project(pdir) -> dict:
     # (all.children.<app>.children.<env>_<app>.hosts.<host>)
     envs, inv_hosts = _apps_inventory(pdir, apps)
 
+    # full four-layer config (values included) for the config viewer + diff
+    config = _project_config(pdir, apps, envs)
+
     # host_vars/<host>/{vars.yml, vault.yml} — flags per host
     host_flags: dict = {}
     vault_files = 0
@@ -227,6 +328,7 @@ def _parse_project(pdir) -> dict:
         "vars": other_vars, "var_count": len(other_vars),
         "envs": sorted(envs), "hosts": hosts, "host_count": len(hosts),
         "vault_files": vault_files,
+        "config": config,
     }
 
 
@@ -286,7 +388,7 @@ def _summary(projects: list[dict]) -> dict:
 
 # ------------------------------------------------------------- demo
 def _demo() -> dict:
-    def proj(name, app_repos, teams, other, vars_, envs, hosts, vault):
+    def proj(name, app_repos, teams, other, vars_, envs, hosts, vault, config):
         apps = [a for a, _ in app_repos]
         app_configs = [{"name": a, "repository_name": r} for a, r in app_repos]
         rns = [r for _, r in app_repos if r]
@@ -297,8 +399,11 @@ def _demo() -> dict:
                 "dev_team": teams.get("dev"), "qc_team": teams.get("qc"),
                 "prd_team": teams.get("prd"), "ops_team": teams.get("prd"),
                 "vars": vars_, "var_count": len(vars_), "envs": envs,
-                "hosts": hosts, "host_count": len(hosts), "vault_files": vault}
+                "hosts": hosts, "host_count": len(hosts), "vault_files": vault,
+                "config": config}
     projects = [
+        # Platform: the reference story. payments vs checkout differ on timeout_s,
+        # feature_flags and prd replica counts; prd_payments also overrides log_level.
         proj("Platform", [("payments", "payments-svc"), ("checkout", "checkout-svc"),
                           ("notifications", "notify-svc")],
              {"dev": "Platform_Devs", "qc": "Platform_QC", "prd": "SRE_Core"},
@@ -309,16 +414,58 @@ def _demo() -> dict:
               {"host": "qc_ocp", "vars": True, "vault": False},
               {"host": "uat_ocp", "vars": True, "vault": True},
               {"host": "prd_ocp", "vars": True, "vault": True},
-              {"host": "prd_dr_ocp", "vars": True, "vault": True}], 3),
+              {"host": "prd_dr_ocp", "vars": True, "vault": True}], 3,
+             {"project_vars": {"dev_team": "Platform_Devs", "qc_team": "Platform_QC",
+                               "prd_team": "SRE_Core", "uat_team": "Platform_UAT",
+                               "security_team": "AppSec", "domain": "platform.corp.local",
+                               "region": "eu-west", "log_level": "info", "tls_enabled": "true"},
+              "app_vars": {
+                  "payments": {"repository_name": "payments-svc", "replicas": "2",
+                               "timeout_s": "30", "feature_flags": "wallet,card"},
+                  "checkout": {"repository_name": "checkout-svc", "replicas": "2",
+                               "timeout_s": "45", "feature_flags": "card"},
+                  "notifications": {"repository_name": "notify-svc", "replicas": "2",
+                                    "channels": "email,sms"}},
+              "env_app_vars": {
+                  "dev_payments": {"replicas": "1", "debug": "true"},
+                  "prd_payments": {"replicas": "6", "log_level": "warn"},
+                  "prd_checkout": {"replicas": "4"}},
+              "other_groups": {},
+              "host_vars": {
+                  "dev_ocp": {"ansible_host": "10.0.0.5"},
+                  "qc_ocp": {"ansible_host": "10.0.0.7"},
+                  "uat_ocp": {"ansible_host": "10.0.0.9", "__vault__": True},
+                  "prd_ocp": {"ansible_host": "10.0.0.11", "__vault__": True},
+                  "prd_dr_ocp": {"ansible_host": "10.0.0.12", "__vault__": True}}}),
+        # Control: same region as Platform but log_level=debug, no tls_enabled,
+        # prd_team (ops) missing — a project-level mismatch to catch.
         proj("Control", [("team-configs", "team-configs")],
              {"dev": "Control_Owners", "qc": "Platform_QC"},   # prd_team (ops) missing
              {}, {"domain": "control.corp.local", "region": "eu-west"},
              ["dev", "prd"],
              [{"host": "dev_ocp", "vars": True, "vault": False},
-              {"host": "prd_ocp", "vars": True, "vault": False}], 0),
+              {"host": "prd_ocp", "vars": True, "vault": False}], 0,
+             {"project_vars": {"dev_team": "Control_Owners", "qc_team": "Platform_QC",
+                               "domain": "control.corp.local", "region": "eu-west",
+                               "log_level": "debug"},
+              "app_vars": {"team-configs": {"repository_name": "team-configs",
+                                            "replicas": "1", "timeout_s": "30"}},
+              "env_app_vars": {"prd_team-configs": {"replicas": "2"}},
+              "other_groups": {},
+              "host_vars": {"dev_ocp": {"ansible_host": "10.0.0.5"},
+                            "prd_ocp": {"ansible_host": "10.0.0.11"}}}),
+        # Research: region drifts to us-east — the odd one out across projects.
         proj("Research", [("prototypes", None)],
              {"dev": "Research_Team", "qc": "Research_Team", "prd": "SRE_Core"},
              {"data": "DataEng"}, {"domain": "research.corp.local", "experimental": "true"},
-             ["dev"], [{"host": "dev_ocp", "vars": True, "vault": True}], 1),
+             ["dev"], [{"host": "dev_ocp", "vars": True, "vault": True}], 1,
+             {"project_vars": {"dev_team": "Research_Team", "qc_team": "Research_Team",
+                               "prd_team": "SRE_Core", "data_team": "DataEng",
+                               "domain": "research.corp.local", "region": "us-east",
+                               "experimental": "true"},
+              "app_vars": {"prototypes": {"experimental": "true", "replicas": "1"}},
+              "env_app_vars": {},
+              "other_groups": {},
+              "host_vars": {"dev_ocp": {"ansible_host": "10.0.0.5", "__vault__": True}}}),
     ]
     return {"source": "demo", "projects": projects, "summary": _summary(projects)}
