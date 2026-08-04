@@ -391,8 +391,9 @@ pre.mono { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
   border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
   font: 400 12px var(--mono); }
 .rsearch-glob:focus { outline: none; border-color: var(--amber); }
-#rsearch-scope { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
-  background: var(--bg-2); color: var(--text); font: 400 12px var(--body); }
+#rsearch-scope, #rsearch-coll, #rsearch-proj { padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text); font: 400 12px var(--body); }
+#rsearch-coll:focus, #rsearch-proj:focus, #rsearch-scope:focus { outline: none; border-color: var(--amber); }
 .rsearch-opts { display: inline-flex; gap: 4px; }
 .rsopt { min-width: 30px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line);
   background: var(--bg-2); color: var(--dim); font: 600 12px var(--mono); cursor: pointer;
@@ -1190,3 +1191,14 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   .inv-cmp-row .inv-cmp-cell { grid-column: 2; }
   .inv-cmp-heads { display: none; }
 }
+
+/* ---------- workspace: "mine" marker + group actions ---------- */
+.repo-chip.mine { border-color: rgba(63,198,221,.55); box-shadow: inset 2px 0 0 var(--cyan); }
+.repo-chip.mine.not-cloned { box-shadow: none; }
+.repo-coll > summary { display: flex; align-items: center; gap: 8px; }
+.repo-coll-actions { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+.repo-remove-mine { color: var(--cyan); border-color: rgba(63,198,221,.4); }
+.repo-remove-mine:hover { border-color: var(--cyan); }
+.repo-undefine-grp { color: var(--red); border-color: rgba(239,95,102,.35); opacity: .8; }
+.repo-undefine-grp:hover { opacity: 1; border-color: var(--red); }
+.disc-add-coll { margin-left: auto; }

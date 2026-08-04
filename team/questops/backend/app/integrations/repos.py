@@ -237,29 +237,18 @@ def add_repo(db: Session, url: str, name: str, username: str) -> dict:
     return {"slot": row.id, "name": row.name, "url": row.url}
 
 
-def add_project(db: Session, collection: str, project: str, username: str) -> dict:
-    """Define EVERY repo of one ADO project in a single action (not one-by-one).
-    Browses the instance (scoped to the collection, sparing it), then registers
-    each repo of that project that isn't already defined. This only writes DB
-    rows — nothing is cloned here, so it never fans out git at the instance;
-    the caller can then 'Clone all' the freshly-added project from the groups."""
+def _define_repos(db: Session, candidates: list[dict], username: str) -> tuple:
+    """Register a batch of discovered repos as catalog definitions (DB rows
+    only — no clone, so a bulk add never fans out git at the instance). Skips
+    any already defined by url or name. Returns (added, skipped, errors)."""
     from ..db import Repository
-    coll = (collection or "").strip()
-    proj = (project or "").strip()
-    if not proj:
-        raise RepoError("project is required")
-    disc = discover(coll)
-    repos_ = [r for r in disc.get("repos", [])
-              if r.get("project", "") == proj
-              and (not coll or r.get("collection", "") == coll)
-              and r.get("url") and r.get("name")]
-    if not repos_:
-        raise RepoError(f"no repositories found for project '{proj}' on the ADO instance")
     existing_urls = {row.url for row in db.query(Repository.url).all()}
     existing_names = {(row.name or "").lower() for row in db.query(Repository.name).all()}
     added, skipped, errors = [], [], []
-    for r in repos_:
-        name, url = r["name"].strip(), r["url"].strip()
+    for r in candidates:
+        name, url = (r.get("name") or "").strip(), (r.get("url") or "").strip()
+        if not name or not url:
+            continue
         if url in existing_urls or name.lower() in existing_names:
             skipped.append(name)
             continue
@@ -276,10 +265,108 @@ def add_project(db: Session, collection: str, project: str, username: str) -> di
             db.rollback()
             errors.append({"name": name, "error": str(exc)[:160]})
     db.commit()
-    return {"collection": coll, "project": proj, "requested": len(repos_),
+    return added, skipped, errors
+
+
+def add_project(db: Session, collection: str, project: str, username: str) -> dict:
+    """Define EVERY repo of one ADO project in a single action (not one-by-one).
+    Browses the instance (scoped to the collection, sparing it), then registers
+    each repo of that project that isn't already defined — DB rows only, so it
+    never fans out git; 'Clone all' the freshly-added project afterwards."""
+    coll = (collection or "").strip()
+    proj = (project or "").strip()
+    if not proj:
+        raise RepoError("project is required")
+    disc = discover(coll)
+    cands = [r for r in disc.get("repos", [])
+             if r.get("project", "") == proj and (not coll or r.get("collection", "") == coll)]
+    if not cands:
+        raise RepoError(f"no repositories found for project '{proj}' on the ADO instance")
+    added, skipped, errors = _define_repos(db, cands, username)
+    return {"collection": coll, "project": proj, "requested": len(cands),
             "added": added, "skipped": skipped, "errors": errors,
             "added_count": len(added), "skipped_count": len(skipped),
             "error_count": len(errors)}
+
+
+def add_collection(db: Session, collection: str, username: str) -> dict:
+    """Define EVERY repo of a whole ADO collection at once (all its projects).
+    DB rows only — no clone. The browse is scoped to the collection so it only
+    hits that slice of the instance."""
+    coll = (collection or "").strip()
+    if not coll:
+        raise RepoError("collection is required")
+    disc = discover(coll)
+    cands = [r for r in disc.get("repos", []) if r.get("collection", "") == coll]
+    if not cands:
+        raise RepoError(f"no repositories found in collection '{coll}' on the ADO instance")
+    added, skipped, errors = _define_repos(db, cands, username)
+    projects = sorted({r.get("project", "") for r in cands if r.get("project")})
+    return {"collection": coll, "requested": len(cands), "projects": projects,
+            "added": added, "skipped": skipped, "errors": errors,
+            "added_count": len(added), "skipped_count": len(skipped),
+            "error_count": len(errors)}
+
+
+def _match_repos(slot: int | None = None, collection: str = "",
+                 project: str = "") -> list[dict]:
+    """The defined repos matching an optional slot / collection / project —
+    the selector shared by bulk workspace-remove and catalog-delete."""
+    repos_ = configured()
+    if slot is not None:
+        repos_ = [r for r in repos_ if r["slot"] == slot]
+    if collection:
+        repos_ = [r for r in repos_ if r.get("collection", "") == collection]
+    if project:
+        repos_ = [r for r in repos_ if r.get("project", "") == project]
+    return repos_
+
+
+def remove_workspace(username: str, slot: int | None = None,
+                     collection: str = "", project: str = "") -> dict:
+    """Remove ONLY this member's worktree(s) — their personal workspace — for
+    the matched repos (by slot, or bulk by collection/project). The shared
+    server copy (the source-of-truth mirror of ADO), the catalog definition,
+    every OTHER member's worktree, and the ADO origin are all left untouched;
+    the repos stay available to re-open (a fresh worktree is made on demand)."""
+    repos_ = _match_repos(slot=slot, collection=collection, project=project)
+    if not repos_:
+        raise RepoError("no repositories match")
+    removed, absent = [], []
+    for repo in repos_:
+        wt = _worktree_root(repo) / _safe_user(username)
+        if not wt.exists():
+            absent.append(repo["name"])
+            continue
+        base = _dir_for(repo)
+        if base.exists():   # detach the worktree admin metadata, then delete it
+            _git(base, "worktree", "remove", "--force", str(wt), ok_fail=True)
+        shutil.rmtree(wt, ignore_errors=True)
+        if base.exists():
+            _git(base, "worktree", "prune", ok_fail=True)
+        removed.append(repo["name"])
+    return {"removed": removed, "absent": absent, "requested": len(repos_),
+            "removed_count": len(removed), "absent_count": len(absent)}
+
+
+def undefine_bulk(db: Session, collection: str = "", project: str = "") -> dict:
+    """The SEPARATE, destructive 'delete from catalog' path — bulk. Removes the
+    definition + shared server copy + ALL members' worktrees for every matched
+    repo (ADO origin untouched). Scoped to a collection and/or project."""
+    if not (collection or project):
+        raise RepoError("specify a collection or project to delete from the catalog")
+    repos_ = _match_repos(collection=collection, project=project)
+    if not repos_:
+        raise RepoError("no repositories match")
+    removed, errors = [], []
+    for repo in repos_:
+        try:
+            remove_repo(db, repo["slot"])
+            removed.append(repo["name"])
+        except RepoError as exc:
+            errors.append({"name": repo["name"], "error": str(exc)[:160]})
+    return {"removed": removed, "errors": errors, "requested": len(repos_),
+            "removed_count": len(removed), "error_count": len(errors)}
 
 
 def remove_repo(db: Session, slot: int) -> None:
@@ -899,7 +986,9 @@ def list_repos(username: str | None = None) -> list[dict]:
         row = {"slot": repo["slot"], "name": repo["name"], "url": repo["url"],
                "collection": repo.get("collection", ""), "project": repo.get("project", ""),
                "cloned": base.exists(), "branch": "", "last_commit": "",
-               "dirty": 0, "size": 0, "size_h": "", "branch_count": 0}
+               "dirty": 0, "size": 0, "size_h": "", "branch_count": 0, "mine": False}
+        if username:  # "mine" = this member has a personal workspace (worktree) here
+            row["mine"] = (_worktree_root(repo) / _safe_user(username)).exists()
         if row["cloned"]:
             row["branch"] = _git(base, "rev-parse", "--abbrev-ref", "HEAD",
                                  ok_fail=True).strip()
@@ -1028,17 +1117,16 @@ def _search_one(repo: dict, argv: list[str]) -> dict:
 
 def search(query: str, regex: bool = False, case_sensitive: bool = False,
            whole_word: bool = False, slot: int | None = None,
-           path_glob: str = "") -> dict:
+           path_glob: str = "", collection: str = "", project: str = "") -> dict:
     """Search a string/regex across every cloned repo's server copy via
     `git grep` (tracked files, binaries skipped). Read-only; no worktree
-    needed since the server copy is always clean."""
+    needed since the server copy is always clean. The target set can be
+    narrowed by collection, project and/or a single repo (slot)."""
     q = (query or "").strip()
     if len(q) < SEARCH_MIN_LEN:
         raise RepoError(f"enter at least {SEARCH_MIN_LEN} characters to search")
 
-    targets = configured()
-    if slot is not None:
-        targets = [r for r in targets if r["slot"] == slot]
+    targets = _match_repos(slot=slot, collection=collection, project=project)
 
     flags = ["grep", "-I", "--no-color", "-n", "-z", "--full-name"]
     if not case_sensitive:
@@ -1062,6 +1150,7 @@ def search(query: str, regex: bool = False, case_sensitive: bool = False,
     return {
         "query": q, "regex": regex, "case_sensitive": case_sensitive,
         "whole_word": whole_word, "slot": slot, "path_glob": path_glob.strip(),
+        "collection": collection, "project": project,
         "repos": rows,
         "repos_searched": len(cloned),
         "repos_not_cloned": len(rows) - len(cloned),

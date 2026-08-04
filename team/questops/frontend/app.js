@@ -1392,11 +1392,29 @@ function discoverGroupsHtml(d, existing, collFilter) {
     const projNames = Object.keys(projs).sort();
     const inner = projNames.map((p) => projBlock(c, p, projs[p])).join("");
     if (!anyColl) return inner;
+    const collNew = projNames.reduce((n, p) => n + projs[p].filter((r) => !existing.has(r.url)).length, 0);
     return `<details class="repo-coll" open>
       <summary>🗄 <b>${esc(c || "(no collection)")}</b>
-        <span class="ci-meta">${projNames.length} project${projNames.length === 1 ? "" : "s"}</span></summary>
+        <span class="ci-meta">${projNames.length} project${projNames.length === 1 ? "" : "s"}</span>
+        ${c && collNew ? `<button class="btn btn-sm btn-primary disc-add-coll" data-addc-coll="${esc(c)}"
+            title="define all ${collNew} new repo(s) across this whole collection in one action — DB only, no clone">➕ Add collection (${collNew})</button>` : ""}</summary>
       <div class="repo-coll-body">${inner}</div></details>`;
   }).join("");
+}
+
+async function addCollection(collection, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ adding…"; }
+  try {
+    const { result } = await api("/api/repos/add-collection",
+      { method: "POST", body: { collection } });
+    const bits = [`${result.added_count} added`];
+    if (result.skipped_count) bits.push(`${result.skipped_count} already`);
+    if (result.error_count) bits.push(`${result.error_count} failed`);
+    toast(`🗄 <b>${esc(collection)}</b>: ${bits.join(" · ")} across ${result.projects.length} project(s)`,
+      result.error_count ? "toast-err" : "toast-xp");
+    (result.errors || []).forEach((e) => oops(`${e.name}: ${e.error}`));
+    renderRepos();
+  } catch (e) { oops(e); if (btn) { btn.disabled = false; btn.textContent = "➕ Add collection"; } }
 }
 
 async function addProject(collection, project, btn) {
@@ -1486,6 +1504,10 @@ function wireAddPanel() {
     addRepo(b.dataset.adourl, b.dataset.adoname));
   (slot || view()).querySelectorAll("[data-add-proj]").forEach((b) => b.onclick = () =>
     addProject(b.dataset.addColl, b.dataset.addProj, b));
+  (slot || view()).querySelectorAll("[data-addc-coll]").forEach((b) => b.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    addCollection(b.dataset.addcColl, b);
+  });
   const retry = document.getElementById("repo-discover-retry");
   if (retry) retry.onclick = () => { state.repoDiscover = null; updateAddPanel(); loadDiscover(true); };
   const refresh = document.getElementById("repo-discover-refresh");
@@ -1639,13 +1661,21 @@ function repoGroupsHtml(repos, cur) {
   });
   const anyColl = Object.keys(colls).some((c) => c);
   const chip = (r) => `
-    <button class="btn btn-sm repo-chip ${r.slot === cur.slot ? "btn-primary" : ""} ${r.cloned ? "" : "not-cloned"}"
-      data-repo="${r.slot}" title="${esc(r.url)}${r.cloned && r.size_h ? " · " + esc(r.size_h) : ""}">
+    <button class="btn btn-sm repo-chip ${r.slot === cur.slot ? "btn-primary" : ""} ${r.cloned ? "" : "not-cloned"} ${r.mine ? "mine" : ""}"
+      data-repo="${r.slot}" title="${esc(r.url)}${r.cloned && r.size_h ? " · " + esc(r.size_h) : ""}${r.mine ? " · in your workspace" : ""}">
       ⛁ ${esc(r.name)}${r.dirty ? ` <span class="dirty-badge">${r.dirty}</span>` : ""}${r.cloned ? "" : " ⬇"}
     </button>`;
+  // member-scoped "remove mine" + separate destructive "un-define" (delete from catalog)
+  const removeMineBtn = (coll, proj, n) => n
+    ? `<button class="btn btn-sm repo-remove-mine" data-rm-coll="${esc(coll)}" data-rm-proj="${esc(proj)}"
+        title="remove ONLY your workspace for the ${n} repo(s) you have open here — the shared clone, catalog, other members &amp; ADO are kept">✖ Remove mine (${n})</button>` : "";
+  const undefBtn = (coll, proj, scope) =>
+    `<button class="btn btn-sm repo-undefine-grp" data-ud-coll="${esc(coll)}" data-ud-proj="${esc(proj)}"
+        title="delete this whole ${scope} from the shared catalog (definitions + clones, for ALL members) — ADO untouched">🗑</button>`;
   const projBlock = (collName, projName, arr) => {
     const total = arr.length;
     const clonedN = arr.filter((r) => r.cloned).length;
+    const mineN = arr.filter((r) => r.mine).length;
     const uncloned = total - clonedN;
     const chips = arr.slice().sort((a, b) => a.name.localeCompare(b.name)).map(chip).join("");
     return `
@@ -1655,6 +1685,8 @@ function repoGroupsHtml(repos, cur) {
           <span class="repo-proj-count ${clonedN === total ? "all" : ""}" title="cloned repositories in this project">${clonedN}/${total} cloned</span>
           ${uncloned ? `<button class="btn btn-sm repo-clone-all" data-clone-coll="${esc(collName)}" data-clone-proj="${esc(projName)}"
               title="clone the ${uncloned} un-cloned repo(s) in this project — one at a time, easy on ADO">⬇ Clone all (${uncloned})</button>` : ""}
+          ${removeMineBtn(collName, projName, mineN)}
+          ${undefBtn(collName, projName, "project")}
         </div>
         <div class="repo-proj-chips">${chips}</div>
       </div>`;
@@ -1667,10 +1699,12 @@ function repoGroupsHtml(repos, cur) {
     if (!anyColl) return inner;                      // no collections → just project groups
     const totalRepos = projNames.reduce((n, p) => n + projs[p].length, 0);
     const clonedRepos = projNames.reduce((n, p) => n + projs[p].filter((r) => r.cloned).length, 0);
+    const mineC = projNames.reduce((n, p) => n + projs[p].filter((r) => r.mine).length, 0);
     return `
       <details class="repo-coll" open>
         <summary>🗄 <b>${esc(c || "(no collection)")}</b>
-          <span class="ci-meta">${projNames.length} project${projNames.length === 1 ? "" : "s"} · ${clonedRepos}/${totalRepos} repos cloned</span></summary>
+          <span class="ci-meta">${projNames.length} project${projNames.length === 1 ? "" : "s"} · ${clonedRepos}/${totalRepos} repos cloned</span>
+          <span class="repo-coll-actions">${removeMineBtn(c, "", mineC)}${undefBtn(c, "", "collection")}</span></summary>
         <div class="repo-coll-body">${inner}</div>
       </details>`;
   }).join("");
@@ -1809,7 +1843,8 @@ function wireBranchPanel(slot) {
 function rsState() {
   return (state.repoSearch = state.repoSearch || {
     q: "", regex: false, caseSensitive: false, wholeWord: false,
-    glob: "", scope: "all", data: null, loading: false, open: false });
+    glob: "", scope: "all", collection: "", project: "",
+    data: null, loading: false, open: false });
 }
 
 // build a highlighter for the current query; returns escaped HTML with <mark>
@@ -1839,16 +1874,32 @@ function repoSearchPanelHtml(repos, cur) {
   const rs = rsState();
   const opt = (key, label, title) =>
     `<button type="button" class="rsopt ${rs[key] ? "on" : ""}" data-rsopt="${key}" title="${title}">${label}</button>`;
+  // collection / project / repository scoping — options derived from the catalog,
+  // project narrowed to the chosen collection, repo narrowed to both
+  const colls = [...new Set(repos.map((r) => r.collection).filter(Boolean))].sort();
+  const projs = [...new Set(repos.filter((r) => !rs.collection || r.collection === rs.collection)
+    .map((r) => r.project).filter(Boolean))].sort();
+  const scopeRepos = repos.filter((r) => r.cloned
+    && (!rs.collection || r.collection === rs.collection)
+    && (!rs.project || r.project === rs.project));
+  const collSel = colls.length ? `<select id="rsearch-coll" title="filter by collection">
+      <option value="">any collection</option>
+      ${colls.map((c) => `<option value="${esc(c)}" ${rs.collection === c ? "selected" : ""}>🗄 ${esc(c)}</option>`).join("")}
+    </select>` : "";
+  const projSel = projs.length ? `<select id="rsearch-proj" title="filter by project">
+      <option value="">any project</option>
+      ${projs.map((p) => `<option value="${esc(p)}" ${rs.project === p ? "selected" : ""}>📁 ${esc(p)}</option>`).join("")}
+    </select>` : "";
   const scopeSel = `<select id="rsearch-scope" title="limit the search to one repository">
-      <option value="all" ${rs.scope === "all" ? "selected" : ""}>all cloned repos</option>
-      ${repos.filter((r) => r.cloned).map((r) =>
+      <option value="all" ${rs.scope === "all" ? "selected" : ""}>any repository</option>
+      ${scopeRepos.map((r) =>
         `<option value="${r.slot}" ${String(rs.scope) === String(r.slot) ? "selected" : ""}>${esc(r.name)} only</option>`).join("")}
     </select>`;
   return `
-    <div class="panel repo-search">
+    <div class="panel repo-search" id="repo-search-panel">
       <form id="repo-search-form" class="rsearch-bar">
         <span class="rsearch-icon">🔎</span>
-        <input id="rsearch-q" placeholder="search across all cloned repositories… (Enter to run)"
+        <input id="rsearch-q" placeholder="search across cloned repositories… (Enter to run)"
           value="${esc(rs.q)}" spellcheck="false" autocomplete="off">
         <div class="rsearch-opts">
           ${opt("caseSensitive", "Aa", "Match case")}
@@ -1857,7 +1908,7 @@ function repoSearchPanelHtml(repos, cur) {
         </div>
         <input id="rsearch-glob" class="rsearch-glob" placeholder="path filter · *.py"
           value="${esc(rs.glob)}" spellcheck="false" autocomplete="off">
-        ${scopeSel}
+        ${collSel}${projSel}${scopeSel}
         <button class="btn btn-sm btn-primary" type="submit">Search</button>
         ${rs.q || rs.data ? `<button class="btn btn-sm" type="button" id="rsearch-clear">✕ clear</button>` : ""}
       </form>
@@ -1919,6 +1970,8 @@ async function runRepoSearch() {
   if (rs.wholeWord) qs.set("whole_word", "true");
   if (rs.glob.trim()) qs.set("path_glob", rs.glob.trim());
   if (rs.scope !== "all") qs.set("slot", rs.scope);
+  if (rs.collection) qs.set("collection", rs.collection);
+  if (rs.project) qs.set("project", rs.project);
   try {
     rs.data = await api(`/api/repos/search?${qs.toString()}`);
   } catch (e) {
@@ -1957,6 +2010,25 @@ function wireRepoSearch() {
     sync();
     if (rs.q && rs.q.trim().length >= 2 && !rs.loading) runRepoSearch();  // live re-run
   });
+  // collection / project scoping — rebuild the panel so the dependent selects
+  // (project narrows to collection, repo narrows to both) refresh, then re-run
+  const cc = document.getElementById("rsearch-coll");
+  if (cc) cc.onchange = () => {
+    sync(); rs.collection = cc.value;
+    const stillValid = (state.reposData || []).some((r) => r.project === rs.project
+      && (!rs.collection || r.collection === rs.collection));
+    if (!stillValid) rs.project = "";
+    if (rs.scope !== "all") rs.scope = "all";
+    updateSearchPanel();
+  };
+  const pc = document.getElementById("rsearch-proj");
+  if (pc) pc.onchange = () => {
+    sync(); rs.project = pc.value;
+    if (rs.scope !== "all") rs.scope = "all";
+    updateSearchPanel();
+  };
+  const sc2 = document.getElementById("rsearch-scope");
+  if (sc2) sc2.onchange = () => { rs.scope = sc2.value; if (rs.q && rs.q.trim().length >= 2) runRepoSearch(); };
   const clear = document.getElementById("rsearch-clear");
   if (clear) clear.onclick = () => {
     rs.q = ""; rs.glob = ""; rs.data = null;
@@ -1967,6 +2039,19 @@ function wireRepoSearch() {
     if (q) q.focus();
   };
   wireRepoSearchHits();
+}
+
+// re-render just the search panel in place (used when collection/project
+// scoping changes the dependent selects), preserving the query + re-running it
+function updateSearchPanel() {
+  const el = document.getElementById("repo-search-panel");
+  if (!el) return;
+  const repos = state.reposData || [];
+  const cur = repos.find((r) => r.slot === state.repoSlot) || {};
+  el.outerHTML = repoSearchPanelHtml(repos, cur);
+  wireRepoSearch();
+  const rs = rsState();
+  if (rs.q && rs.q.trim().length >= 2) runRepoSearch();
 }
 
 // move a textarea caret to a 1-based line and scroll it into view
@@ -2020,7 +2105,8 @@ async function renderRepos() {
             style="width:260px" spellcheck="false">
         </div>
         <button class="btn btn-primary" id="repo-clone">⬇ Clone repository</button>
-        <button class="btn btn-danger" id="repo-remove">🗑 Remove</button>
+        <button class="btn btn-danger" id="repo-undefine"
+          title="delete from the shared catalog (definition) — nothing is cloned yet; the remote repo in ADO is untouched">🗑 Un-define</button>
       </div>`;
   } else {
     let scanHtml = "";
@@ -2128,7 +2214,9 @@ async function renderRepos() {
         <button class="btn btn-sm" id="repo-pull" title="fetch the server copy and move your workspace to it">⟳ Sync</button>
         <button class="btn btn-sm btn-danger" id="repo-discard">Discard my edits</button>
         <button class="btn btn-sm btn-danger" id="repo-remove"
-          title="remove from QuestOps (all members' workspaces deleted; the remote repo is untouched)">🗑</button>
+          title="remove ONLY your workspace (worktree + local edits) — the shared clone, catalog, other members &amp; ADO are kept">✖ Remove mine</button>
+        <button class="btn btn-sm" id="repo-undefine"
+          title="delete from the shared catalog for ALL members (definition + clone) — the remote repo in ADO is untouched">🗑 Un-define</button>
       </div>
       <div id="remote-banner">${remoteBannerHtml(remoteData)}</div>
       ${scanHtml}
@@ -2171,6 +2259,32 @@ async function renderRepos() {
       (res.errors || []).forEach((e) => oops(`${e.name}: ${e.error}`));
       renderRepos();
     } catch (e) { oops(e); b.disabled = false; b.textContent = "⬇ Clone all"; }
+  });
+  view().querySelectorAll(".repo-remove-mine").forEach((b) => b.onclick = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const collection = b.dataset.rmColl, project = b.dataset.rmProj;
+    const label = project ? `project “${project}”` : `collection “${collection || "(no collection)"}”`;
+    if (!confirm(`Remove ONLY your workspace across ${label}?\n\nYour worktrees + local edits there are deleted.\nThe shared clones, the catalog, other members and ADO are untouched — re-openable anytime.`)) return;
+    b.disabled = true; b.textContent = "⏳ removing…";
+    try {
+      const { result } = await api("/api/repos/workspace/remove", { method: "POST", body: { collection, project } });
+      toast(`✖ removed my workspace · ${result.removed_count} repo(s)${result.absent_count ? ` · ${result.absent_count} not open` : ""}`, "toast-xp");
+      renderRepos();
+    } catch (e2) { oops(e2); b.disabled = false; }
+  });
+  view().querySelectorAll(".repo-undefine-grp").forEach((b) => b.onclick = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const collection = b.dataset.udColl, project = b.dataset.udProj;
+    const label = project ? `project “${project}”` : `collection “${collection || "(no collection)"}”`;
+    if (!confirm(`Delete ${label} from the SHARED catalog?\n\nThis removes the definitions and shared clones for ALL members.\nThe remote repositories in ADO are untouched.`)) return;
+    b.disabled = true; b.textContent = "⏳…";
+    try {
+      const { result } = await api("/api/repos/undefine", { method: "POST", body: { collection, project } });
+      toast(`🗑 removed ${result.removed_count} repo(s) from the catalog`, result.error_count ? "toast-err" : "toast-xp");
+      (result.errors || []).forEach((er) => oops(`${er.name}: ${er.error}`));
+      state.repoSlot = null; state.scanData = null;
+      renderRepos();
+    } catch (e2) { oops(e2); b.disabled = false; }
   });
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on("repo-clone", async () => {
@@ -2245,10 +2359,18 @@ async function renderRepos() {
   if (isInventories && state.invOpen && state.invData && !state.invData.error)
     wireInvPanel();
   on("repo-remove", async () => {
-    if (!confirm(`Remove ${cur.name} from QuestOps?\n\nThe local workspace (including un-pushed edits) is deleted.\nThe remote repository is untouched.`)) return;
+    if (!confirm(`Remove ONLY your workspace for ${cur.name}?\n\nYour worktree + local edits are deleted.\nThe shared clone, the catalog, other members and ADO are untouched — re-openable anytime.`)) return;
+    try {
+      const { result } = await api(`/api/repos/${cur.slot}/workspace`, { method: "DELETE" });
+      toast(result.removed_count ? `✖ removed my workspace for ${esc(cur.name)}` : `nothing to remove — no workspace here`, "toast-xp");
+      renderRepos();
+    } catch (e) { oops(e); }
+  });
+  on("repo-undefine", async () => {
+    if (!confirm(`Delete ${cur.name} from the SHARED catalog?\n\nThis removes the definition and the shared clone for ALL members.\nThe remote repository in ADO is untouched.`)) return;
     try {
       await api(`/api/repos/${cur.slot}`, { method: "DELETE" });
-      toast(`🗑 ${esc(cur.name)} removed`);
+      toast(`🗑 ${esc(cur.name)} deleted from the catalog`);
       state.repoSlot = null; state.scanData = null;
       renderRepos();
     } catch (e) { oops(e); }

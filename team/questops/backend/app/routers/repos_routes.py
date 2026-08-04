@@ -57,17 +57,68 @@ def add_project(body: AddProjectBody, user: User = Depends(current_user),
                             body.project, user.username)}
 
 
+class AddCollectionBody(BaseModel):
+    collection: str
+
+
+@router.post("/add-collection")
+def add_collection(body: AddCollectionBody, user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    """Define every repo of a whole ADO collection at once (DB rows only)."""
+    return {"result": _wrap(repos.add_collection, db, body.collection, user.username)}
+
+
+class WorkspaceRemoveBody(BaseModel):
+    slot: int | None = None
+    collection: str = ""
+    project: str = ""
+
+
+@router.post("/workspace/remove")
+def workspace_remove(body: WorkspaceRemoveBody, user: User = Depends(current_user)):
+    """Remove ONLY the caller's worktree(s) — their workspace — for the matched
+    repos (bulk by collection/project, or one by slot). Shared clone, catalog,
+    other members and ADO are untouched."""
+    return {"result": _wrap(repos.remove_workspace, user.username,
+                            body.slot, body.collection, body.project)}
+
+
+class UndefineBody(BaseModel):
+    collection: str = ""
+    project: str = ""
+
+
+@router.post("/undefine")
+def undefine_bulk(body: UndefineBody, user: User = Depends(current_user),
+                  db: Session = Depends(get_db)):
+    """Separate destructive path: delete matched repos from the shared catalog
+    (definition + server copy + all worktrees). ADO origin untouched."""
+    return {"result": _wrap(repos.undefine_bulk, db, body.collection, body.project)}
+
+
 @router.get("/search")
 def search(q: str, regex: bool = False, case_sensitive: bool = False,
            whole_word: bool = False, slot: int | None = None,
-           path_glob: str = "", user: User = Depends(current_user)):
-    """Search a string/regex across every cloned repo (git grep, read-only)."""
-    return _wrap(repos.search, q, regex, case_sensitive, whole_word, slot, path_glob)
+           path_glob: str = "", collection: str = "", project: str = "",
+           user: User = Depends(current_user)):
+    """Search a string/regex across cloned repos (git grep, read-only),
+    optionally narrowed by collection / project / repository."""
+    return _wrap(repos.search, q, regex, case_sensitive, whole_word, slot,
+                 path_glob, collection, project)
+
+
+@router.delete("/{slot}/workspace")
+def remove_workspace(slot: int, user: User = Depends(current_user)):
+    """Remove ONLY this member's workspace (worktree) for one repo — the
+    default Remove. The shared clone / catalog / other members / ADO stay."""
+    return {"result": _wrap(repos.remove_workspace, user.username, slot)}
 
 
 @router.delete("/{slot}")
 def remove_repo(slot: int, user: User = Depends(current_user),
                 db: Session = Depends(get_db)):
+    """Separate destructive path: delete this repo from the shared catalog
+    (definition + server copy + all worktrees). ADO origin untouched."""
     _wrap(repos.remove_repo, db, slot)
     return {"ok": True}
 
