@@ -901,10 +901,23 @@ class Resolver:
 
 
 def _off_kind(note: str | None) -> str | None:
-    """'public' for company holidays, 'personal' for any member day off."""
+    """Classify an is_off() note.
+
+    'public' — company holiday · 'leave' — registered personal holiday ·
+    'self' — day off self-recorded in Fix my attendance. ('leave' and 'self'
+    both count as personal absence in the policy stats.)"""
     if not note:
         return None
-    return "public" if note == "Public holiday" else "personal"
+    if note == "Public holiday":
+        return "public"
+    return "self" if "self-reported" in note else "leave"
+
+
+_OFF_CELL = {  # kind -> (css class, glyph)
+    "public": ("c-public", "P"),   # violet — company holiday
+    "leave":  ("c-vac", "V"),      # pink   — registered personal holiday
+    "self":   ("c-off", "D"),      # slate  — self-recorded day off
+}
 
 
 def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
@@ -916,6 +929,12 @@ def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
     working the Sunday from home lifts the attendance rate rather than
     being ignored. A Sunday spent in the office still counts as good — it
     just also shows as a plan deviation.
+
+    Past office days with NO data count as assumed Home — in the
+    denominator only — so missing data lowers the score until the member
+    corrects it (Office raises it; Day off removes the day entirely).
+    Plan-adherence numbers stay strictly data-based: assumptions never
+    enter the adherence base.
     """
     eligible = known = attended = planned_office = 0
     deviations = dev_skipped = dev_extra = unknown_past = 0
@@ -964,7 +983,10 @@ def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
                 dev_skipped += 1     # planned office, stayed home
             else:
                 dev_extra += 1       # planned home, came in
-    rated_days = known + sunday_ok
+    # Past no-data office days count as ASSUMED HOME: they enter the
+    # denominator (not the numerator), so the attendance score drops until
+    # the member corrects them to Office or records a Day off.
+    rated_days = known + sunday_ok + unknown_past
     rate = ((attended + sunday_ok) / rated_days) if rated_days else None
     adh_base = known + sunday_known
     adherence = ((adh_base - deviations) / adh_base) if adh_base else None
@@ -1118,7 +1140,8 @@ def legend_html(plan_focus: bool = False) -> str:
         ("chip-breach", "Below 50% policy"),
         ("chip-unknown", "? No data — fill in My Space"),
         ("chip-public", "Public holiday"),
-        ("chip-off", "Personal day off"),
+        ("chip-vac", "Personal holiday"),
+        ("chip-off", "Day off (self)"),
     ]
     if plan_focus:
         chips.insert(2, ("chip-override", "Plan override"))
@@ -1131,17 +1154,16 @@ def cell_html(state: dict, member: str, d: date) -> str:
     plan_lbl = {"WFO": "Office", "WFH": "Home", None: "—"}[state.get("planned")]
     ov = " (override)" if state.get("overridden") else ""
     if cat == "off":
-        # Public holidays (violet, P) read differently from personal days
-        # off (slate, V) — the glyph carries the split for CVD/print too.
-        public = _off_kind(state.get("note")) == "public"
-        cls = "c-public" if public else "c-off"
-        glyph = "P" if public else "V"
+        # Three visually distinct absences — company holiday (violet P),
+        # registered personal holiday (pink V), self-recorded day off
+        # (slate D). The glyph carries the split for CVD/print too.
+        cls, glyph = _OFF_CELL[_off_kind(state.get("note"))]
         return (f"<td class='hcell {cls}' title='{member} · {d:%a %d %b} · "
                 f"{state['note']}'>{glyph}</td>")
     if cat in ("unknown", "future"):
         cls = "c-unknown" if cat == "unknown" else "c-future"
         glyph = "?" if cat == "unknown" else ("O" if state.get("planned") == "WFO" else "H")
-        note = ("no data — fill it in My Space → Fix my attendance"
+        note = ("no data, counted as Home — correct it in My Space → Fix my attendance"
                 if cat == "unknown" else "upcoming")
         return (f"<td class='hcell {cls}' title='{member} · {d:%a %d %b} · {note} · "
                 f"plan: {plan_lbl}{ov}'>{glyph}</td>")
@@ -1231,8 +1253,9 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
 
     k = st.columns(4)
     k[0].metric("Attendance score", rate_pct(s["rate"]),
-                help="Office days attended plus credited WFH Sundays, over all "
-                     "counted days. Sundays worked from home count as good.")
+                help="Office days + credited WFH Sundays, over all counted days. "
+                     "No-data days count as Home until corrected, so filling "
+                     "them can only help your score.")
     k[1].metric("In office", f"{s['attended']}/{s['known']}")
     k[2].metric("Plan deviations", f"{s['deviations']}",
                 help="Days your actual differed from your effective plan.")
@@ -1242,8 +1265,9 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
     if s["unknown_past"]:
         st.markdown(
             f"<div class='fill-cta'>✍️ <b>{s['unknown_past']} day(s) have no data</b> "
-            "(the dashed <b>?</b> cells below) — they don't count in your attendance "
-            "score until you record them in <b>Fix my attendance</b> just under the grid.</div>",
+            "(the dashed <b>?</b> cells below) — each counts as <b>Home</b> in your "
+            "attendance score until you correct it to Office or a Day off in "
+            "<b>Fix my attendance</b> just under the grid.</div>",
             unsafe_allow_html=True,
         )
 
@@ -1474,9 +1498,7 @@ def _render_plan_grid(res: Resolver, days: List[date], members: List[str] | None
             plan = res.planned(m, d)
             ov = bool(res.overrides.get(d.isoformat(), {}).get(m))
             if off:
-                public = _off_kind(off) == "public"
-                cls = "c-public" if public else "c-off"
-                glyph = "P" if public else "V"
+                cls, glyph = _OFF_CELL[_off_kind(off)]
                 cells.append(f"<td class='hcell {cls}' title='{m} · {d:%a %d %b} · {off}'>{glyph}</td>")
                 continue
             base = "c-office" if plan == "WFO" else "c-home"
@@ -1684,7 +1706,8 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
         total_home = sum(s["home"] for s in stats.values())
         total_known = sum(s["known"] for s in stats.values())
         total_unknown = sum(s["unknown_past"] for s in stats.values())
-        rated = total_known + total_sunday
+        total_assumed = sum(s["unknown_past"] for s in stats.values())
+        rated = total_known + total_sunday + total_assumed
         team_rate = ((total_office + total_sunday) / rated) if rated else None
         rated = [s for s in stats.values() if s["rate"] is not None]
         k = st.columns(4)
@@ -1707,7 +1730,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
             "Sundays ✓": stats[m]["sunday_ok"],
             "Public holidays": stats[m]["public_off"],
             "Days off": stats[m]["personal_off"],
-            "No data": stats[m]["unknown_past"],
+            "No data (= Home)": stats[m]["unknown_past"],
             "Attendance": rate_pct(stats[m]["rate"]),
             "Policy (≥50%)": ("✅ met" if stats[m]["compliant"]
                               else "❌ below" if stats[m]["rate"] is not None else "— no data"),
@@ -1720,11 +1743,12 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
                         {m: (stats[m]["rate"] is not None and not stats[m]["compliant"])
                          for m in members})
         st.caption(
-            "Dashed ? cells have no data and are excluded from every percentage — "
-            "each member records those days themselves in My Space → Fix my attendance "
-            "(management can backfill via Team & Schedule). Sundays with no data show "
-            "as assumed Home. Days before the detection start fall back to the IP "
-            "signal where one exists (marked low-confidence in the tooltip)."
+            "Dashed ? cells have no data and count as HOME in the attendance score "
+            "until corrected — members fix their own days in My Space → Fix my "
+            "attendance (management can backfill via Team & Schedule); marking a "
+            "Day off removes the day from the score entirely. Sundays with no data "
+            "show as assumed Home. Days before the detection start fall back to the "
+            "IP signal where one exists (marked low-confidence in the tooltip)."
         )
 
         d1, d2 = st.columns(2)
@@ -1884,9 +1908,11 @@ def render_method(res: Resolver, can_edit: bool):
                 attendance). Off-days never count toward the policy.</li>
             <li><b>HR policy (red)</b> — attendance ≥ 50%, per member, over the selected period.
                 Attendance = (office days attended + credited Sundays) ÷ (known eligible office
-                days + credited Sundays). Every past, non-off <b>Sunday counts as good
-                attendance</b> — it's the mandated WFH day, so working it from home lifts the
-                score (and coming in on a Sunday still counts as good).</li>
+                days + credited Sundays + no-data days). Every past, non-off <b>Sunday counts as
+                good attendance</b> — it's the mandated WFH day, so working it from home lifts the
+                score (and coming in on a Sunday still counts as good). A past office day with
+                <b>no data counts as Home</b> until corrected — record Office to raise the score,
+                or a Day off to remove the day from it.</li>
             <li><b>Plan deviation (orange)</b> — a known day where the actual differed from the
                 effective plan (rotation + overrides). Deviations are visible, not punitive; the
                 red policy line is the one that matters.</li>
@@ -1897,7 +1923,8 @@ def render_method(res: Resolver, can_edit: bool):
             <span style='color:#b45309;font-weight:700'>orange plan deviation</span> ·
             <span style='color:{C_BREACH};font-weight:700'>red below 50% policy</span> ·
             grey unknown · <span style='color:#6d28d9;font-weight:700'>violet public holiday (P)</span> ·
-            slate personal day off (V). Every cell also carries a letter (O/H/?/P/V).
+            <span style='color:#be185d;font-weight:700'>pink personal holiday (V)</span> ·
+            slate self-recorded day off (D). Every cell also carries a letter (O/H/?/P/V/D).
           </div>
         </div>
         """,
@@ -2061,6 +2088,7 @@ def inject_css() -> None:
         .chip-override {{ background:#fff7e6; color:#92600a; border-color:#f0c36d; }}
         .chip-unknown {{ background:#fdf6ec; color:#b45309; border-color:#e3cfa4; }}
         .chip-public {{ background:#ede9fe; color:#6d28d9; }}
+        .chip-vac {{ background:#fce7f3; color:#be185d; }}
         .chip-off {{ background:#e9edf2; color:#7c8ba1; }}
         .board-title {{ font-weight:800; color:var(--ink); margin:1rem 0 .35rem; font-size:.98rem; }}
         .board {{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:.8rem 1rem; box-shadow:0 4px 14px rgba(15,41,66,.05); }}
@@ -2089,6 +2117,7 @@ def inject_css() -> None:
         .c-home {{ background:var(--home); }}
         .c-off {{ background:#e2e8f0; color:#64748b; }}
         .c-public {{ background:#ede9fe; color:#6d28d9; }}
+        .c-vac {{ background:#fce7f3; color:#be185d; }}
         .c-unknown {{ background:#fdf6ec; color:#b45309; font-weight:800;
                       border:2px dashed #e3cfa4; }}
         .c-future {{ background:#fbfdff; color:#b6c4d4; border-style:dashed; border-color:#dbe4ee; }}
