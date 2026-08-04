@@ -205,7 +205,7 @@ async function refreshMe() {
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
                 repos: renderRepos, deps: renderRepos, access: renderAccess,
-                migration: renderMigration,
+                logging: renderLogging, migration: renderMigration,
                 upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
 
 // bumped on every navigation; async renders capture it and bail if it
@@ -3064,6 +3064,208 @@ function wireInvPanel() {
   };
   const dof = document.getElementById("inv-cmp-diffonly");
   if (dof) dof.onchange = () => { state.invCmp.diffOnly = dof.checked; rerenderInv(); };
+}
+
+/* ================= LOGGING HEALTH ================= */
+function logInt(n) { return (n || 0).toLocaleString(); }
+function logHsize(n) {
+  let f = n || 0;
+  for (const u of ["B", "KB", "MB", "GB", "TB"]) {
+    if (f < 1024 || u === "TB") return (u === "B" ? Math.round(f) : f.toFixed(1)) + " " + u;
+    f /= 1024;
+  }
+}
+function logAgo(h) {
+  if (h == null) return "—";
+  if (h < 1) return "just now";
+  if (h < 48) return Math.round(h) + "h ago";
+  return Math.round(h / 24) + "d ago";
+}
+const logSrcChip = (s) => `<span class="chip ${s === "prd" ? "chip-violet" : "chip-cyan"}" title="${esc(s)} Elasticsearch connection">${esc(s)}</span>`;
+
+function logConnBar(conns) {
+  const one = (kind, label) => {
+    const c = (conns || {})[kind];
+    const placeholder = kind === "nonprd";
+    if (!c || !c.configured)
+      return `<div class="log-conn off">
+        <span class="chip ${placeholder ? "chip-amber" : "chip-red"}">${label}${placeholder ? " · not configured" : " · off"}</span>
+        <span class="ci-meta">${esc((c && c.note) || (placeholder
+          ? "set ES_NONPRD_URL / ES_NONPRD_API_KEY to include dev/qc/uat logs"
+          : "set ES_URL / ES_API_KEY"))}</span></div>`;
+    if (!c.reachable)
+      return `<div class="log-conn bad"><span class="chip chip-red">${label} · unreachable</span>
+        <span class="ci-meta">${esc(c.error || "")}</span></div>`;
+    return `<div class="log-conn ok"><span class="chip chip-green">${label} ✓</span>
+      <span class="ci-meta">${logInt(c.indices)} indices${c.url ? " · " + esc(c.url) : ""}${
+        c.unexpected_envs ? ` · <span class="pct-warn">⚠ unexpected env here: ${esc(c.unexpected_envs.join(", "))}</span>` : ""}</span></div>`;
+  };
+  return `<div class="log-conns">${one("prd", "prd ES")}${one("nonprd", "non-prd ES")}</div>`;
+}
+
+function logTsBadge(a) {
+  if (a.no_logs) return "";
+  if (a.ts_ok) return `<span class="chip chip-green" title="@timestamp is a proper date in all ${a.indices} index(es)">🕓 date ✓</span>`;
+  const kinds = Object.keys(a.ts_types || {}).filter((t) => t !== "date");
+  const bad = (a.ts_bad_indices || []).length;
+  return `<span class="chip chip-red" title="@timestamp is ${esc(kinds.join("/") || "not a date")} in ${bad} index(es) — range/time filters silently match nothing there">🕓 not date · ${bad}</span>`;
+}
+
+function logAppMatch(a, f) {
+  if (f.q) {
+    const hay = (a.app + " " + (a.envs || []).join(" ") + " " + (a.logtypes || []).join(" ")).toLowerCase();
+    if (!hay.includes(f.q.toLowerCase())) return false;
+  }
+  if (f.env && f.env !== "all" && !(a.envs || []).includes(f.env)) return false;
+  if (f.issues && !(a.no_logs || a.stale || !a.ts_ok)) return false;
+  return true;
+}
+
+function logAppRow(a) {
+  const pre = state.logData.index_prefix;
+  const badges = [];
+  if (a.stale && !a.no_logs) badges.push(`<span class="chip chip-amber" title="newest log ${logAgo(a.last_logged_age_h)}">stale</span>`);
+  if (a.not_in_inventory) badges.push('<span class="chip chip-amber" title="indexed under this project but not in the inventory app list">drift</span>');
+  const meta = a.no_logs
+    ? '<span class="ci-meta">no matching indices on either connection</span>'
+    : `<span class="ci-meta">${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs · last ${logAgo(a.last_logged_age_h)}</span>`;
+  const idxRows = (a.index_list || []).map((i) => `
+    <div class="log-idx ${i.ts_type !== "date" ? "bad" : ""}">
+      <code class="log-idx-name">${esc(i.index)}</code>
+      <span class="chip chip-amber">${esc(i.env || "?")}</span>
+      <span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
+      <span class="ci-meta log-idx-week">${esc(i.week || "")}</span>
+      <span class="log-idx-size">${logHsize(i.size_bytes)}</span>
+      <span class="ci-meta">${logInt(i.docs)} docs</span>
+      ${logSrcChip(i.source)}
+      ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
+    </div>`).join("") || '<div class="empty">no indices</div>';
+  const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
+  const body = a.no_logs
+    ? `<div class="empty">No log indices matched <code>${esc(pre)}-${esc(a.project)}-*-${esc(a.app)}-*</code> on either Elasticsearch connection.</div>`
+    : `<div class="log-app-facts">
+        <div><span class="acc-h">environments</span><div class="inv-chips">${chips(a.envs, "chip-amber")}</div></div>
+        <div><span class="acc-h">logtypes</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
+        <div><span class="acc-h">weeks</span><div class="ci-meta">${a.weeks}${a.week_span ? ` · ${esc(a.week_span[0])} → ${esc(a.week_span[1])}` : ""}</div></div>
+        <div><span class="acc-h">last logged</span><div class="ci-meta">${a.last_logged ? esc(a.last_logged) + " · " + logAgo(a.last_logged_age_h) : "—"}</div></div>
+        <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
+        <div><span class="acc-h">@timestamp</span><div class="ci-meta">${a.ts_ok ? "date in all indices ✓" : `⚠ ${(a.ts_bad_indices || []).length} index(es) not date-mapped`}</div></div>
+      </div>
+      ${!a.ts_ok && (a.ts_bad_indices || []).length ? `<div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in: ${a.ts_bad_indices.map((x) => `<code>${esc(x)}</code>`).join(", ")} — time-range queries silently return nothing on these.</div>` : ""}
+      <details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${idxRows}</div></details>`;
+  return `<details class="filebox log-app ${a.no_logs ? "nolog" : ""} ${!a.ts_ok && !a.no_logs ? "tsbad" : ""} ${a.stale && !a.no_logs ? "stale" : ""}">
+    <summary><span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
+      ${a.no_logs ? '<span class="chip chip-red">no logs</span>' : logTsBadge(a)} ${badges.join(" ")} ${meta}</summary>
+    <div class="log-app-body">${body}</div></details>`;
+}
+
+function logProjectCard(p, f) {
+  const apps = (p.apps || []).filter((a) => logAppMatch(a, f));
+  if (!apps.length) return "";
+  const t = p.totals || {};
+  const flag = (n, label, cls) => n ? ` · <span class="${cls}">${n} ${label}</span>` : "";
+  return `<details class="filebox log-proj" ${f._any ? "open" : ""}>
+    <summary>📁 <b>${esc(p.name)}</b>${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
+      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}</span></summary>
+    <div class="log-proj-body">${apps.map(logAppRow).join("")}</div></details>`;
+}
+
+function logContentHtml() {
+  const d = state.logData;
+  const f = state.logFilter;
+  f._any = !!(f.q || (f.env && f.env !== "all") || f.issues);
+  const cards = (d.projects || []).map((p) => logProjectCard(p, f)).join("")
+    || '<div class="empty">no apps match the filters</div>';
+  const un = (d.unmatched || []).length ? `
+    <details class="filebox log-unmatched">
+      <summary>⚠ ${d.unmatched.length} unmatched index${d.unmatched.length === 1 ? "" : "es"} — didn't map to a known project/app (naming drift)</summary>
+      <div class="log-idx-list">${d.unmatched.map((u) => `
+        <div class="log-idx"><code class="log-idx-name">${esc(u.index)}</code>
+          <span class="log-idx-size">${logHsize(u.size_bytes)}</span>
+          <span class="ci-meta">${logInt(u.docs)} docs</span>${logSrcChip(u.source)}</div>`).join("")}</div>
+    </details>` : "";
+  return cards + un;
+}
+
+function rerenderLog() {
+  const box = document.getElementById("log-content");
+  if (box) box.innerHTML = logContentHtml();
+}
+
+async function renderLogging() {
+  const tok = navToken();
+  let d;
+  try {
+    d = await api(`/api/logging${state.logRefresh ? "?refresh=true" : ""}`);
+  } catch (e) {
+    if (!navStale(tok)) view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+    return;
+  }
+  state.logRefresh = false;
+  if (navStale(tok)) return;
+  state.logData = d;
+  const f = state.logFilter = state.logFilter || { q: "", env: "all", issues: false };
+  const s = d.summary || {};
+
+  const head = `<div class="view-head"><h1>LOGGING HEALTH</h1>
+      <span class="sub">ELK index health, performance &amp; utilization across your projects &amp; apps
+        — pattern <code>${esc(d.index_prefix || "${index_prefix}")}-\${project}-\${env}-\${app}-\${logtype}-yyyy.ww</code></span>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="log-refresh">↻ re-analyze</button></div>
+    ${logConnBar(d.connections)}`;
+
+  if (d.note && !(d.projects || []).length) {
+    view().innerHTML = head + `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>`;
+    document.getElementById("log-refresh").onclick = () => { state.logRefresh = true; renderLogging(); };
+    return;
+  }
+
+  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const tiles = `<div class="stat-tiles" style="margin:8px 0 12px">
+    ${tile(s.projects || 0, "projects")}
+    ${tile(s.apps || 0, "apps")}
+    ${tile(logInt(s.indices || 0), "log indices")}
+    ${tile(s.size_h || "0 B", "total size")}
+    ${tile(logInt(s.docs || 0), "documents")}
+    ${tile(s.apps_no_logs || 0, "apps with no logs", s.apps_no_logs ? "pct-bad" : "pct-good")}
+    ${tile(s.apps_stale || 0, `stale (>${d.stale_hours}h)`, s.apps_stale ? "pct-warn" : "pct-good")}
+    ${tile(s.apps_ts_bad || 0, "@timestamp issues", s.apps_ts_bad ? "pct-bad" : "pct-good")}
+    ${s.unmatched ? tile(s.unmatched, "unmatched idx", "pct-warn") : ""}</div>`;
+
+  const envs = s.envs || [];
+  const envOpts = [["all", "env: any"], ...envs.map((e) => [e, e])];
+  const filterBar = `<div class="acc-filters">
+    <input id="log-q" placeholder="🔎 app / env / logtype…" value="${esc(f.q || "")}">
+    <select id="log-env">${envOpts.map(([v, l]) => `<option value="${esc(v)}" ${f.env === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+    <label class="log-issues"><input type="checkbox" id="log-issues" ${f.issues ? "checked" : ""}> issues only (no-logs · stale · @timestamp)</label>
+    ${f._any ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
+    <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""}</span></div>`;
+
+  view().innerHTML = head + tiles + filterBar + `<div id="log-content">${logContentHtml()}</div>`;
+  wireLogging();
+}
+
+function wireLogging() {
+  const rb = document.getElementById("log-refresh");
+  if (rb) rb.onclick = () => { state.logRefresh = true; renderLogging(); };
+  const f = state.logFilter;
+  const q = document.getElementById("log-q");
+  if (q) q.oninput = () => {
+    f.q = q.value;
+    clearTimeout(state._logT);
+    state._logT = setTimeout(() => {
+      rerenderLog();
+      const nq = document.getElementById("log-q");
+      if (nq) { nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }
+    }, 200);
+  };
+  const env = document.getElementById("log-env");
+  if (env) env.onchange = () => { f.env = env.value; rerenderLog(); };
+  const iss = document.getElementById("log-issues");
+  if (iss) iss.onchange = () => { f.issues = iss.checked; rerenderLog(); };
+  const cl = document.getElementById("log-clear");
+  if (cl) cl.onclick = () => { state.logFilter = { q: "", env: "all", issues: false }; renderLogging(); };
 }
 
 /* ================= ACCESS MANAGEMENT ================= */

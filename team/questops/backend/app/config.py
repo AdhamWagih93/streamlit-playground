@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     # The KPI window is applied on these — set it if your index names the
     # build timestamp differently (the diagnostics list the fields it found).
     kpi_date_fields: str = "builddate,@timestamp"
+
+    # --- Logging health monitor (ELK) ---
+    # Application log indices follow the pattern
+    #   ${log_index_prefix}-${project}-${env}-${app}-${logtype}-yyyy.ww
+    # The PRIMARY Elasticsearch connection above (ES_URL / ES_API_KEY) serves
+    # PRD-environment log indices — the same connection the Jenkins KPI uses.
+    # A SEPARATE non-prd connection holds every OTHER environment's log indices
+    # (dev / qc / uat / …). Leave it blank if you only monitor prd.
+    log_index_prefix: str = ""       # e.g. "logs" — the ${index_prefix}
+    log_prd_envs: str = "prd"        # env token(s) served by the primary (prd) ES
+    log_stale_hours: int = 48        # an app with no new log later than this = stale
+    es_nonprd_url: str = ""          # non-prd Elasticsearch (dev/qc/uat log indices)
+    es_nonprd_api_key: str = ""      # sent as 'Authorization: ApiKey <key>'
+    es_nonprd_verify_ssl: bool = True
     # comma-separated tokens; KPI docs whose jobpath/jobname contains one are
     # excluded from the KPI panel (stats, bars, loaded records) — the KPI
     # sibling of JENKINS_IGNORE, deliberately its own knob
@@ -153,6 +167,10 @@ class Settings(BaseSettings):
     @property
     def kpi_date_field_list(self) -> list[str]:
         return self._csv(self.kpi_date_fields) or ["builddate", "@timestamp"]
+
+    @property
+    def log_prd_env_list(self) -> list[str]:
+        return [e.lower() for e in self._csv(self.log_prd_envs)] or ["prd"]
 
     @property
     def ado_access_exclude_list(self) -> set[str]:
