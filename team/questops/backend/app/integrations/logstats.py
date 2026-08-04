@@ -223,7 +223,7 @@ def _finalize_app(rec: dict, stale_h: int) -> dict:
 
 def _assemble(records: list[dict], last_map: dict, conn_status: dict,
               projects: list[dict], known: dict, source: str,
-              proj_meta: dict, note: str = "") -> dict:
+              proj_meta: dict, note: str = "", diag: dict | None = None) -> dict:
     """Shape raw per-index records (+ per-app last-logged map) into the payload.
     `records` matched rows carry project/app/env/logtype/week; unmatched rows
     (unknown project/app) are collected separately. `proj_meta` gives each
@@ -335,7 +335,8 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             "prefixes": sorted({m["prefix"] for m in proj_meta.values() if m.get("prefix")}),
             "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
             "connections": conn_status, "summary": summary,
-            "projects": projects_out, "unmatched": unmatched[:50]}
+            "projects": projects_out, "unmatched": unmatched[:50],
+            "diagnostics": diag}
 
 
 def _known(projects: list[dict], prefixes) -> dict:
@@ -367,39 +368,80 @@ def _project_prefixes(projects: list[dict]) -> dict:
     return out
 
 
+# the user-facing knob names (host/compose env is QO_-prefixed; the container
+# env pydantic reads is the bare name — surface the QO_ names users actually set)
+_CONN_KNOBS = {"prd": "QO_ES_URL / QO_ES_API_KEY",
+               "nonprd": "QO_ES_NONPRD_URL / QO_ES_NONPRD_API_KEY"}
+
+
+def _ping(conn: dict) -> tuple[bool, str | None]:
+    """Cheap reachability probe (used when there's no prefix to query yet):
+    is the ES host up and the ApiKey accepted? (reachable, error)."""
+    try:
+        r = requests.get(f"{conn['url']}/_cluster/health",
+                         headers=_headers(conn["key"]), timeout=10, verify=conn["verify"])
+    except requests.RequestException as exc:
+        return False, str(exc)[:200]
+    if r.status_code in (401, 403):
+        return False, f"authentication rejected (HTTP {r.status_code}) — check the ApiKey"
+    if not r.ok:
+        return False, _es_reason(r) or f"HTTP {r.status_code}"
+    return True, None
+
+
+def _inventory_diag(inv: dict, projects: list[dict], proj_meta: dict,
+                    prefixes: list) -> dict:
+    """What the page managed to parse out of the inventories repo — so a blank
+    page is debuggable (mirrors the Repositories inventory panel)."""
+    return {
+        "inventory_source": inv.get("source"),
+        "inventory_note": inv.get("note"),
+        "projects": len(projects),
+        "apps": sorted({a for p in projects for a in p.get("apps", [])}),
+        "envs": sorted({e for p in projects for e in p.get("envs", [])}),
+        "prefixes": list(prefixes),
+        "platform_map": settings.log_platform_prefix_map,
+        "project_platforms": [
+            {"project": p["name"],
+             "deploy_platform": (proj_meta.get(p["name"]) or {}).get("deploy_platform"),
+             "prefix": (proj_meta.get(p["name"]) or {}).get("prefix"),
+             "prefix_source": (proj_meta.get(p["name"]) or {}).get("source"),
+             "apps": len(p.get("apps", [])), "envs": p.get("envs", [])}
+            for p in projects],
+    }
+
+
 # ------------------------------------------------------------------ live
 def _live() -> dict:
     from . import inventory
     inv = inventory.parse()
     projects = inv.get("projects", [])
-    if not projects:
-        return {"source": "live", "prefixes": [], "platform_legend": [],
-                "note": inv.get("note") or "no inventory projects — the "
-                        "'inventories' repo isn't cloned/parsed yet.",
-                "connections": {}, "summary": {}, "projects": [], "unmatched": []}
-    proj_meta = _project_prefixes(projects)
+    proj_meta = _project_prefixes(projects) if projects else {}
     prefixes = sorted({m["prefix"] for m in proj_meta.values() if m["prefix"]})
-    if not prefixes:
-        return {"source": "live", "prefixes": [], "platform_legend": [],
-                "note": "no log index prefix could be resolved — none of the "
-                        "inventory projects declare a `deploy_platform` (OCP / "
-                        "LinuxVM / WindowsVM) and QO_LOG_INDEX_PREFIX has no fallback.",
-                "connections": {}, "summary": {}, "projects": [], "unmatched": []}
+    diag = _inventory_diag(inv, projects, proj_meta, prefixes)
     known = _known(projects, prefixes)
-    pattern = ",".join(f"{p}-*" for p in prefixes)   # union across the platforms
+    pattern = ",".join(f"{p}-*" for p in prefixes)   # "" when nothing resolved yet
 
+    # ALWAYS probe both connections and report their real status — even when no
+    # prefix resolves — so a configured ES never wrongly shows "off".
     conn_status: dict = {}
     records: list = []
     last_map: dict = {}
     for conn in _connections():
         kind = conn["kind"]
         if not conn["url"] or not conn["key"]:
+            missing = ("QO_ES_URL" if not conn["url"] else "QO_ES_API_KEY") if kind == "prd" \
+                else ("QO_ES_NONPRD_URL" if not conn["url"] else "QO_ES_NONPRD_API_KEY")
             conn_status[kind] = {"label": conn["label"], "configured": False,
                                  "reachable": False, "indices": 0,
-                                 "note": ("primary ES (ES_URL/ES_API_KEY) not configured"
-                                          if kind == "prd" else
-                                          "non-prd ES (ES_NONPRD_URL/ES_NONPRD_API_KEY) "
-                                          "not configured — dev/qc/uat logs won't show")}
+                                 "note": f"not configured — set {_CONN_KNOBS[kind]}"
+                                         f" ({missing} is empty)"}
+            continue
+        if not pattern:                        # configured but no prefix to query yet
+            ok, err = _ping(conn)
+            conn_status[kind] = {"label": conn["label"], "configured": True,
+                                 "reachable": ok, "indices": 0, "url": conn["url"],
+                                 "error": err}
             continue
         try:
             cats = _cat_indices(conn, pattern)
@@ -442,7 +484,17 @@ def _live() -> dict:
                              "reachable": True, "indices": len(cats), "url": conn["url"]}
         if unexpected:
             conn_status[kind]["unexpected_envs"] = sorted(unexpected)
-    return _assemble(records, last_map, conn_status, projects, known, "live", proj_meta)
+
+    note = ""
+    if not projects:
+        note = (inv.get("note") or "the 'inventories' repo isn't cloned/parsed yet — "
+                "add & clone it on the Repositories page, then re-analyze.")
+    elif not prefixes:
+        note = ("no log index prefix resolved: none of the parsed projects declare a "
+                "`deploy_platform` (OCP / LinuxVM / WindowsVM) and QO_LOG_INDEX_PREFIX "
+                "has no fallback. See the per-project detection below.")
+    return _assemble(records, last_map, conn_status, projects, known, "live",
+                     proj_meta, note, diag)
 
 
 # ------------------------------------------------------------------ demo
@@ -453,10 +505,12 @@ def _iso_week(d: dt.datetime) -> str:
 
 def _demo() -> dict:
     from . import inventory
-    projects = inventory.parse().get("projects", [])
+    inv = inventory.parse()
+    projects = inv.get("projects", [])
     proj_meta = _project_prefixes(projects)   # Platform→oc, Control→vmlin, Research→vmwin
     prefixes = sorted({m["prefix"] for m in proj_meta.values() if m["prefix"]})
     known = _known(projects, prefixes)
+    diag = _inventory_diag(inv, projects, proj_meta, prefixes)
     now = _now()
     weeks = [_iso_week(now - dt.timedelta(weeks=i)) for i in range(4)][::-1]  # oldest→newest
     logtypes = ["application", "access", "error"]
@@ -518,7 +572,8 @@ def _demo() -> dict:
                    "indices": sum(1 for r in records if r["source"] == "nonprd"),
                    "url": "https://es-nonprd.demo:9200"},
     }
-    return _assemble(records, last_map, conn_status, projects, known, "demo", proj_meta)
+    return _assemble(records, last_map, conn_status, projects, known, "demo",
+                     proj_meta, diag=diag)
 
 
 # ------------------------------------------------------------------ public

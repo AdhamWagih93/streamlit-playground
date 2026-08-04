@@ -3091,8 +3091,8 @@ function logConnBar(conns) {
       return `<div class="log-conn off">
         <span class="chip ${placeholder ? "chip-amber" : "chip-red"}">${label}${placeholder ? " · not configured" : " · off"}</span>
         <span class="ci-meta">${esc((c && c.note) || (placeholder
-          ? "set ES_NONPRD_URL / ES_NONPRD_API_KEY to include dev/qc/uat logs"
-          : "set ES_URL / ES_API_KEY"))}</span></div>`;
+          ? "set QO_ES_NONPRD_URL / QO_ES_NONPRD_API_KEY to include dev/qc/uat logs"
+          : "set QO_ES_URL / QO_ES_API_KEY"))}</span></div>`;
     if (!c.reachable)
       return `<div class="log-conn bad"><span class="chip chip-red">${label} · unreachable</span>
         <span class="ci-meta">${esc(c.error || "")}</span></div>`;
@@ -3101,6 +3101,46 @@ function logConnBar(conns) {
         c.unexpected_envs ? ` · <span class="pct-warn">⚠ unexpected env here: ${esc(c.unexpected_envs.join(", "))}</span>` : ""}</span></div>`;
   };
   return `<div class="log-conns">${one("prd", "prd ES")}${one("nonprd", "non-prd ES")}</div>`;
+}
+
+// inventory-parse diagnostics — what QuestOps could extract from `inventories`
+// (source, projects, apps, envs, per-project deploy_platform → prefix) + the
+// logtypes actually seen in ES. Mirrors the Repositories inventory panel so a
+// blank/partial page is debuggable.
+function logDiagHtml(d) {
+  const g = d.diagnostics;
+  if (!g) return "";
+  const chips = (arr, cls) => (arr || []).length
+    ? arr.map((x) => `<span class="chip ${cls || ""}">${esc(x)}</span>`).join(" ")
+    : '<span class="ci-meta">none detected</span>';
+  const rows = (g.project_platforms || []).map((pp) => `
+    <div class="log-diag-row">
+      <span class="ci-job">📁 ${esc(pp.project)}</span>
+      ${pp.deploy_platform
+        ? `<span class="chip chip-cyan" title="deploy_platform → prefix">${esc(pp.deploy_platform)} → ${esc(pp.prefix || "?")}</span>`
+        : '<span class="chip chip-red" title="no deploy_platform in group_vars/all — can\'t resolve a prefix">no deploy_platform</span>'}
+      <span class="ci-meta">${pp.apps} app(s) · envs ${(pp.envs || []).join(", ") || "—"}</span>
+    </div>`).join("") || '<div class="ci-meta">no projects parsed from inventories</div>';
+  const logtypes = (d.summary || {}).logtypes || [];
+  const issues = !(g.prefixes || []).length || !g.projects
+    || Object.values(d.connections || {}).some((c) => c && (!c.configured || !c.reachable));
+  const mapChips = Object.entries(g.platform_map || {})
+    .map(([k, v]) => `<span class="chip">${esc(k)} → ${esc(v)}</span>`).join(" ");
+  return `<details class="filebox log-diag" ${issues ? "open" : ""}>
+    <summary>🔎 inventory parse &amp; detection${(g.prefixes || []).length ? "" : ' — <span class="pct-bad">⚠ no prefixes resolved</span>'}</summary>
+    <div class="log-diag-body">
+      <div class="log-diag-facts">
+        <div><span class="acc-h">inventories source</span><div class="ci-meta">${esc(g.inventory_source || "—")}${g.inventory_note ? ` · ${esc(g.inventory_note)}` : ""}</div></div>
+        <div><span class="acc-h">projects (${g.projects})</span><div class="inv-chips">${chips((g.project_platforms || []).map((p) => p.project))}</div></div>
+        <div><span class="acc-h">apps (${(g.apps || []).length})</span><div class="inv-chips">${chips(g.apps)}</div></div>
+        <div><span class="acc-h">environments</span><div class="inv-chips">${chips(g.envs, "chip-amber")}</div></div>
+        <div><span class="acc-h">prefixes resolved</span><div class="inv-chips">${chips(g.prefixes, "chip-cyan")}</div></div>
+        <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(logtypes, "chip-cyan")}</div></div>
+      </div>
+      <div class="acc-h" style="margin-top:8px">per-project deploy_platform → index prefix <span class="ci-meta">(map: ${mapChips})</span></div>
+      <div class="log-diag-rows">${rows}</div>
+    </div>
+  </details>`;
 }
 
 function logTsBadge(a) {
@@ -3227,8 +3267,9 @@ async function renderLogging() {
     ${legend ? `<div class="log-legend"><span class="ci-meta">platform → prefix:</span> ${legend}</div>` : ""}
     ${logConnBar(d.connections)}`;
 
-  if (d.note && !(d.projects || []).length) {
-    view().innerHTML = head + `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>`;
+  if (!(d.projects || []).length) {
+    view().innerHTML = head + (d.note ? `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>` : "")
+      + logDiagHtml(d);
     document.getElementById("log-refresh").onclick = () => { state.logRefresh = true; renderLogging(); };
     return;
   }
@@ -3255,7 +3296,9 @@ async function renderLogging() {
     ${f._any ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
     <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""}</span></div>`;
 
-  view().innerHTML = head + tiles + filterBar + `<div id="log-content">${logContentHtml()}</div>`;
+  const noteHtml = d.note ? `<div class="panel" style="margin-bottom:10px"><div class="kpi-note">${esc(d.note)}</div></div>` : "";
+  view().innerHTML = head + noteHtml + logDiagHtml(d) + tiles + filterBar
+    + `<div id="log-content">${logContentHtml()}</div>`;
   wireLogging();
 }
 

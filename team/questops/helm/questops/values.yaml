@@ -61,6 +61,10 @@ elasticsearch:
   url: "https://es.mycorp.local:9200"
   apiKey: ""              # prefer app.existingSecret (key: ES_API_KEY)
   verifySsl: true
+  # non-prd Elasticsearch (dev/qc/uat log indices) for the Logging Health tab
+  nonprdUrl: ""           # e.g. https://es-nonprd.mycorp.local:9200 (blank = prd only)
+  nonprdApiKey: ""        # prefer app.existingSecret (key: ES_NONPRD_API_KEY)
+  nonprdVerifySsl: true
   kpiIndex: "jenkins-kpi"
   errorAnalysisIndex: "jenkins-error-analysis"
   kpiSyncMinutes: "5,35"  # loader schedule; countdown uses the pod TZ
@@ -68,6 +72,14 @@ elasticsearch:
   kpiDateFields: "builddate,@timestamp"  # doc field(s) holding the build time
   kpiIgnore: ""           # comma tokens; exclude matching job paths from KPIs
   errorAnalysisDays: 14
+
+# Logging Health tab: ${index_prefix}-${project}-${env}-${app}-${logtype}-yyyy.ww
+# The prefix is derived per project from its inventory deploy_platform var.
+logging:
+  platformPrefixes: "OCP:oc,LinuxVM:vmlin,WindowsVM:vmwin"  # deploy_platform:prefix
+  indexPrefix: ""           # fallback prefix for projects with no deploy_platform
+  prdEnvs: "prd"            # env token(s) served by the primary (prd) ES
+  staleHours: 48            # newest-log age (h) that flags an app "stale"
 
 app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)
 

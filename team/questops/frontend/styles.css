@@ -1244,3 +1244,12 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-unmatched > summary { color: var(--amber); }
 .log-legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 10px; }
 .log-legend .chip { font-size: 10.5px; }
+.log-diag { margin: 4px 0 10px; }
+.log-diag > summary { color: var(--cyan); }
+.log-diag-body { padding: 8px 12px 12px; }
+.log-diag-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 16px; }
+.log-diag-facts .acc-h { margin: 0 0 3px; padding: 0; }
+.log-diag-rows { display: flex; flex-direction: column; gap: 3px; }
+.log-diag-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 3px 6px; border-radius: 6px; }
+.log-diag-row:hover { background: rgba(63,198,221,.05); }
+.log-diag-row .ci-job { min-width: 160px; }

@@ -26,6 +26,12 @@ data:
   JIRA_CLOSED_WINDOW_DAYS: {{ .Values.jira.closedWindowDays | quote }}
   ES_URL: {{ .Values.elasticsearch.url | quote }}
   ES_VERIFY_SSL: {{ .Values.elasticsearch.verifySsl | quote }}
+  ES_NONPRD_URL: {{ .Values.elasticsearch.nonprdUrl | quote }}
+  ES_NONPRD_VERIFY_SSL: {{ .Values.elasticsearch.nonprdVerifySsl | quote }}
+  LOG_PLATFORM_PREFIXES: {{ .Values.logging.platformPrefixes | quote }}
+  LOG_INDEX_PREFIX: {{ .Values.logging.indexPrefix | quote }}
+  LOG_PRD_ENVS: {{ .Values.logging.prdEnvs | quote }}
+  LOG_STALE_HOURS: {{ .Values.logging.staleHours | quote }}
   JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}
   ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
   KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}
