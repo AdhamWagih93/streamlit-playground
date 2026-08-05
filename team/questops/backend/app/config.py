@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # have no logs (filtered out by default). Fields: project/application/
     # environment (keyword), startdate/enddate (date).
     log_deploy_index: str = "ef-cicd-deployments"
+    # only count deployments with this testflag as the "last deployment" (skip
+    # test/dry-run/other rows); blank = count all
+    log_deploy_testflag: str = "Normal"
     # log retention policy (days): an app/env keeping logs OLDER than this is
     # flagged "over-retained" (a MINOR issue). prd defaults to 6 months, non-prd
     # (dev/qc/uat) to 3 weeks.

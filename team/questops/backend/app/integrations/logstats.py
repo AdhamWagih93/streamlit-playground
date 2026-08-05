@@ -658,6 +658,10 @@ def _deployments(conn: dict, known: dict) -> tuple[dict, str | None]:
             {"environment": {"terms": {"field": "environment"}}}]},
         "aggs": {"end": {"max": {"field": "enddate"}},
                  "start": {"max": {"field": "startdate"}}}}}}
+    # only count real deployments (testflag), skipping test/dry-run/other rows
+    tf = (settings.log_deploy_testflag or "").strip()
+    if tf:
+        body["query"] = {"term": {"testflag": tf}}
     try:
         r = requests.post(f"{conn['url']}/{idx}/_search", json=body,
                           headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
