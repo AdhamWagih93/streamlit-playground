@@ -3301,168 +3301,152 @@ function logOrderedEnvs(present, d) {
 // health meter bar (score 0–100 → width + colour)
 const logMeter = (score) => `<span class="log-meter" title="health ${score == null ? "n/a" : score}"><span class="log-meter-fill ${logScoreClass(score)}" style="width:${score == null ? 0 : score}%"></span></span>`;
 
-// one app's per-environment detail card (used in the side-by-side layout)
-function logEnvCard(e) {
-  if (!e) return '<div class="log-envcol empty-env"><span class="ci-meta">—</span></div>';
-  const cls = !e.deployed ? "undeployed" : (e.no_logs ? "nolog" : (!e.ts_ok && e.indices ? "tsbad" : (e.stale ? "stale" : "ok")));
-  const owner = e.owner
-    ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `owner: app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(e.env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : "";
-  const badges = (e.issues || []).map((k) => `<span class="chip chip-red">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join(" ")
-    || (e.deployed && e.indices ? '<span class="chip chip-green">ok</span>' : "");
-  const logged = !e.deployed ? '<span class="ci-meta">never deployed</span>'
-    : (e.no_logs ? '<span class="pct-bad">no logs</span>'
-      : `<span class="ci-meta" title="oldest → newest logged">🕓 ${logWhen(e.first_logged)} → ${logWhen(e.last_logged)} <span class="ci-meta">(${logAgo(e.last_logged_age_h)})</span></span>`);
-  return `<div class="log-envcol ${cls}">
-    <div class="log-envcol-head"><span class="chip chip-amber log-env-name">${esc(e.env)}</span>${logScoreBadge(e.score, "env score")}</div>
+// ---- integrated apps × environments MATRIX --------------------------------
+// One grid: rows = apps, columns = environments (MAIN_ENVS then EXTRA_ENVS).
+// The header row is the project's per-env overview; each app row is a compact
+// health cell per env; clicking an app row dives into its detail (aligned under
+// the same columns); clicking an env header focuses that environment.
+let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy detail)
+const LOG_ISSUE_DOT = { no_logs: "bad", stale: "warn", timestamp: "bad",
+  bad_week: "bad", future_week: "bad", over_retained: "warn", team_clash: "bad" };
+const logDots = (issues) => (issues || []).map((k) =>
+  `<span class="log-dot ${LOG_ISSUE_DOT[k] || "bad"}" title="${esc(LOG_ISSUE_LABEL[k] || k)}"></span>`).join("");
+
+// app-level config flags shown on the app (row) cell
+function logAppFlags(a) {
+  const b = [];
+  const unsupported = a.platform_status === "unsupported";
+  if (a.deploy_platform) b.push(`<span class="chip ${unsupported ? "chip-amber" : "chip-cyan"}" title="deploy_platform (${esc(a.prefix_source || "?")})${a.prefix ? ` → ${esc(a.prefix)}` : ""}">${esc(a.deploy_platform)}${a.prefix ? `→${esc(a.prefix)}` : ""}</span>`);
+  else if (a.platform_status !== "none") b.push('<span class="chip chip-red">no platform</span>');
+  if (unsupported) b.push('<span class="chip chip-amber" title="platform not monitored — logs not checked">not monitored</span>');
+  if (a.discrepancy) b.push(`<span class="chip chip-red" title="app deploy_platform (${esc(a.app_platform)}) overrides project (${esc(a.project_platform)})">⚠ clash</span>`);
+  if ((a.owner_clash_envs || []).length) b.push(`<span class="chip chip-red" title="owner ($env_team) differs app vs project @ ${esc(a.owner_clash_envs.join(", "))}">⚠ owner</span>`);
+  if (!a.deployed) b.push('<span class="chip chip-amber" title="never deployed — no logs expected">never deployed</span>');
+  if (a.not_in_inventory) b.push('<span class="chip chip-amber">drift</span>');
+  return b.join(" ");
+}
+
+const _mxCls = (e) => !e ? "empty" : (!e.deployed ? "undeployed" : (e.no_logs ? "nolog"
+  : (!e.ts_ok && e.indices ? "tsbad" : (e.stale ? "stale" : "ok"))));
+
+// compact app×env cell (score meter · size · issue dots)
+function logMxCell(e, sep) {
+  if (!e) return `<div class="log-mx-cell empty ${sep ? "sep" : ""}"><span class="log-mx-na">·</span></div>`;
+  const val = e.no_logs ? (e.deployed ? "no logs" : "—") : esc(e.size_h);
+  return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(e.env)} · score ${e.score == null ? "n/a" : e.score} · ${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs${e.owner ? " · " + esc(e.owner) : ""}">
+    <div class="log-mx-cline"><span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "·" : e.score}</span><span class="log-mx-csize">${val}</span></div>
     ${logMeter(e.score)}
-    <div class="log-envcol-nums">${e.no_logs ? "—" : `${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs`}</div>
-    <div class="log-envcol-line">${owner}</div>
-    <div class="log-envcol-line">${logged}</div>
-    <div class="log-envcol-line ci-meta">📦 ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
-    <div class="log-envcol-badges">${badges}</div>
+    <div class="log-mx-cdots">${logDots(e.issues) || (e.deployed && e.indices ? '<span class="log-dot ok"></span>' : "")}</div>
   </div>`;
 }
 
-// an app's environments, side by side, in the configured order
-function logEnvColumns(a) {
-  const byEnv = {};
-  (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
-  const { main, extra } = logOrderedEnvs(Object.keys(byEnv), state.logData);
-  if (!main.length && !extra.length) return '<div class="ci-meta">no environments</div>';
-  const group = (envs) => `<div class="log-envcols">${envs.map((en) => logEnvCard(byEnv[en])).join("")}</div>`;
-  return `<div class="log-envdetail">
-    <div class="acc-h">environments (side by side) · owner · logged span · last deploy</div>
-    ${main.length ? group(main) : ""}
-    ${extra.length ? `<div class="log-env-extra"><span class="acc-h">extra envs</span>${group(extra)}</div>` : ""}</div>`;
+// project-aggregate header cell (clickable → focus that env)
+function logMxHead(env, m, f, sep, maxBytes) {
+  const active = f.env === env;
+  if (!m) return `<div class="log-mx-cell head ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0"><span class="chip chip-amber">${esc(env)}</span></div>`;
+  const score = m.scores.length ? Math.round(m.scores.reduce((x, y) => x + y, 0) / m.scores.length) : null;
+  const bits = [m.no_logs && `${m.no_logs}⛔`, m.stale && `${m.stale}⏱`, m.ts_bad && `${m.ts_bad}🕓`, m.over && `${m.over}♻`].filter(Boolean).join(" ");
+  return `<div class="log-mx-cell head ${active ? "active" : ""} ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0" title="click to focus ${esc(env)} · ${m.apps} app(s)">
+    <div class="log-mx-cline"><span class="chip chip-amber log-env-name">${esc(env)}</span>${logScoreBadge(score, "env project score")}</div>
+    ${logMeter(score)}
+    <div class="log-mx-cnums"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx</div>
+    <span class="log-sizebar" title="size share"><span class="log-sizebar-fill" style="width:${(m.size_bytes / maxBytes * 100).toFixed(0)}%"></span></span>
+    <div class="log-mx-cmeta">${m.apps} app(s)${bits ? " · " + bits : ""}</div>
+  </div>`;
 }
 
-// project-level per-env dashboard (aggregated across the shown apps) — stays
-// visible at the top of a project expander, side by side in the configured order
-function logProjEnvDash(apps) {
+// per-env detail cell inside an app's dive (owner · logged span · deploy)
+function logMxDetailCell(e, sep) {
+  if (!e) return `<div class="log-mx-cell detail empty ${sep ? "sep" : ""}"><span class="log-mx-na">not in this env</span></div>`;
+  const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(e.env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
+  const logged = !e.deployed ? '<span class="ci-meta">never deployed</span>'
+    : (e.no_logs ? '<span class="pct-bad">no logs</span>'
+      : `🕓 ${logWhen(e.first_logged)}<br>→ ${logWhen(e.last_logged)} <span class="ci-meta">(${logAgo(e.last_logged_age_h)})</span>`);
+  return `<div class="log-mx-cell detail ${_mxCls(e)} ${sep ? "sep" : ""}">
+    <div class="log-mx-dline">${owner}</div>
+    <div class="log-mx-dline ci-meta">${logged}</div>
+    <div class="log-mx-dline ci-meta">📦 ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
+    <div class="log-mx-cdots">${(e.issues || []).map((k) => `<span class="chip chip-red">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join(" ") || (e.deployed && e.indices ? '<span class="chip chip-green">ok</span>' : "")}</div>
+  </div>`;
+}
+
+// an app's dive detail: per-env detail aligned under the columns, then facts +
+// @timestamp inspector + index list — built lazily on expand
+function logAppDetail(a) {
+  const cols = a._mxcols || [];
+  const sepAt = a._mxsep;
+  const unsupported = a.platform_status === "unsupported";
+  if (unsupported) return `<div class="empty">This app's <code>deploy_platform</code> is <b>${esc(a.deploy_platform)}</b>, not one QuestOps monitors (OCP / LinuxVM / WindowsVM / K8s) — logs are <b>not checked</b>.${a.discrepancy ? ` <span class="pct-bad">It overrides the project global <b>${esc(a.project_platform)}</b>.</span>` : ""}</div>`;
+  if (a.platform_status === "none") return `<div class="empty">No index prefix — no <code>deploy_platform</code> on this app or the project.</div>`;
+  const byEnv = {}; (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
+  const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
+  const detailRow = `<div class="log-mx-row detail" style="--envn:${cols.length}">
+      <div class="log-mx-appcell detail"><span class="acc-h">per-env detail</span></div>
+      ${cols.map((en, i) => logMxDetailCell(byEnv[en], i === sepAt)).join("")}</div>`;
+  const idxRows = (a.index_list || []).map((i) => `
+    <div class="log-idx ${i.ts_type !== "date" || i.bad_week || i.future_week ? "bad" : ""}">
+      <code class="log-idx-name">${esc(i.index)}</code>
+      <span class="chip chip-amber">${esc(i.env || "?")}</span><span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
+      <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
+      <span class="log-idx-size">${logHsize(i.size_bytes)}</span><span class="ci-meta">${logInt(i.docs)} docs</span>${logSrcChip(i.source)}
+      ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
+    </div>`).join("") || '<div class="empty">no indices</div>';
+  const tssId = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
+  const badNames = (a.ts_bad_indices || []).slice(0, 15).join(",");
+  const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
+  const tsInspect = (!a.ts_ok && badNames) ? `
+    <div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(a.ts_bad_indices || []).length} index(es) — time filters silently return nothing there.
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}" data-ts-index="${esc(badNames)}" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample bad docs</button>
+      <div id="${tssId}" class="log-tss"></div></div>` : "";
+  return `<div class="log-mx-detail-inner">
+    ${detailRow}
+    <div class="log-app-facts">
+      <div><span class="acc-h">owners ($env_team)</span><div class="inv-chips">${(a.owners || []).map((o) => `<span class="chip chip-cyan">👤 ${esc(o)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}</div></div>
+      <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
+      <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}</div></div>
+      <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
+    </div>
+    ${tsInspect}
+    ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${idxRows}</div></details>` : ""}
+  </div>`;
+}
+
+// the whole matrix for one project (header + app rows + lazy detail placeholders)
+function logMatrixHtml(p, apps, f) {
+  const present = [...new Set(apps.flatMap((a) => (a.env_stats || []).map((e) => e.env)))];
+  const { main, extra } = logOrderedEnvs(present, state.logData);
+  const cols = [...main, ...extra];
+  if (!cols.length) return '<div class="ci-meta" style="padding:6px">no environments to show</div>';
+  const sepAt = extra.length ? main.length : -1;   // first extra column index
   const agg = {};
   apps.forEach((a) => (a.env_stats || []).forEach((e) => {
-    const m = agg[e.env] = agg[e.env] || { env: e.env, indices: 0, size_bytes: 0, docs: 0,
-      scores: [], no_logs: 0, stale: 0, ts_bad: 0, over: 0, apps: 0, owners: new Set() };
-    m.indices += e.indices; m.size_bytes += e.size_bytes; m.docs += e.docs; m.apps++;
+    const m = agg[e.env] = agg[e.env] || { size_bytes: 0, indices: 0, docs: 0, scores: [], no_logs: 0, stale: 0, ts_bad: 0, over: 0, apps: 0 };
+    m.size_bytes += e.size_bytes; m.indices += e.indices; m.docs += e.docs; m.apps++;
     if (e.score != null) m.scores.push(e.score);
     if (e.no_logs && e.deployed) m.no_logs++;
     if (e.stale) m.stale++;
     if (!e.ts_ok && e.indices) m.ts_bad++;
     if (e.over_retained) m.over++;
-    if (e.owner) m.owners.add(e.owner);
   }));
-  const present = Object.keys(agg);
-  if (!present.length) return "";
-  const maxBytes = Math.max(1, ...present.map((en) => agg[en].size_bytes));
-  const { main, extra } = logOrderedEnvs(present, state.logData);
-  const col = (en) => {
-    const m = agg[en]; if (!m) return "";
-    const score = m.scores.length ? Math.round(m.scores.reduce((x, y) => x + y, 0) / m.scores.length) : null;
-    const bits = [m.no_logs && `${m.no_logs} no-logs`, m.stale && `${m.stale} stale`,
-      m.ts_bad && `${m.ts_bad} @ts`, m.over && `${m.over} over-ret`].filter(Boolean);
-    return `<div class="log-envcol dash">
-      <div class="log-envcol-head"><span class="chip chip-amber log-env-name">${esc(en)}</span>${logScoreBadge(score, "env project score")}</div>
-      ${logMeter(score)}
-      <div class="log-envcol-nums"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx · ${logInt(m.docs)} docs</div>
-      <span class="log-sizebar" title="size share"><span class="log-sizebar-fill" style="width:${(m.size_bytes / maxBytes * 100).toFixed(0)}%"></span></span>
-      <div class="log-envcol-line ci-meta">${m.apps} app(s)${m.owners.size ? ` · 👤 ${esc([...m.owners].slice(0, 2).join(", "))}${m.owners.size > 2 ? "…" : ""}` : ""}</div>
-      <div class="log-envcol-badges">${bits.map((tx) => `<span class="chip chip-red">${tx}</span>`).join(" ") || '<span class="chip chip-green">ok</span>'}</div>
-    </div>`;
-  };
-  const group = (envs) => `<div class="log-envcols">${envs.map(col).join("")}</div>`;
-  return `<div class="log-envdash">
-    ${main.length ? group(main) : ""}
-    ${extra.length ? `<div class="log-env-extra"><span class="acc-h">extra envs</span>${group(extra)}</div>` : ""}</div>`;
-}
-
-// the app row is a cheap summary + a LAZY body — the heavy env table / index
-// list / inspector is built only when the row is expanded (keeps filter/sort
-// re-renders fast even with many apps).
-let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy bodies)
-function logAppRow(a) {
-  const _aid = "a" + (++_logAppSeq);
-  (state.logAppMap = state.logAppMap || {})[_aid] = a;
-  const unsupported = a.platform_status === "unsupported";
-  const noPlat = a.platform_status === "none";
-  const badges = [];
-  if (a.deploy_platform) badges.push(`<span class="chip ${unsupported ? "chip-amber" : "chip-cyan"}" title="deploy_platform (source: ${esc(a.prefix_source || "?")})${a.prefix ? ` → prefix ${esc(a.prefix)}` : ""}">${esc(a.deploy_platform)}${a.prefix ? ` → ${esc(a.prefix)}` : ""}</span>`);
-  else if (!noPlat) badges.push('<span class="chip chip-red">no platform</span>');
-  if (unsupported) badges.push('<span class="chip chip-amber" title="deploy_platform is not one QuestOps monitors — logs are not checked">not monitored</span>');
-  if (a.discrepancy) badges.push(`<span class="chip chip-red" title="app deploy_platform (${esc(a.app_platform)}) overrides the project global (${esc(a.project_platform)})">⚠ clash</span>`);
-  if ((a.owner_clash_envs || []).length) badges.push(`<span class="chip chip-red" title="environment owner ($env_team) assigned differently on the app vs the project in: ${esc((a.owner_clash_envs || []).join(", "))}">⚠ owner clash</span>`);
-  if (!a.deployed) badges.push(`<span class="chip chip-amber" title="never deployed per ${esc((state.logData || {}).deploy_index || "the deployments index")} — no logs expected">never deployed</span>`);
-  if (a.monitored) {
-    if (a.envs_no_logs) badges.push(`<span class="chip chip-red" title="deployed environments with no logs">${a.envs_no_logs} env no-logs</span>`);
-    if (a.envs_stale) badges.push(`<span class="chip chip-amber" title="stale environments">${a.envs_stale} env stale</span>`);
-    if (!a.ts_ok && a.indices) badges.push(logTsBadge(a));
-    if ((a.bad_week_indices || []).length) badges.push(`<span class="chip chip-red" title="illogical year in the index name (not 4 digits / out of range)">bad year · ${a.bad_week_indices.length}</span>`);
-    if ((a.future_week_indices || []).length) badges.push(`<span class="chip chip-red" title="index dated in the FUTURE vs the current week (${esc((state.logData || {}).current_week || "?")}) — likely clock skew or a mis-templated index">future-dated · ${a.future_week_indices.length}</span>`);
-    if ((a.over_retained_envs || []).length) badges.push(`<span class="chip chip-amber" title="logs kept beyond the retention policy in: ${esc((a.over_retained_envs || []).join(", "))}">over-retained · ${a.over_retained_envs.length}</span>`);
-  }
-  if (a.not_in_inventory) badges.push('<span class="chip chip-amber">drift</span>');
-  const meta = unsupported
-    ? `<span class="ci-meta">platform not monitored — logs not checked</span>`
-    : (a.monitored
-      ? `<span class="ci-meta">${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs</span>`
-      : `<span class="ci-meta">no index prefix</span>`);
-  const cls = unsupported ? "unsup" : (a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : "")));
-  return `<details class="filebox log-app ${cls}" data-app-key="${_aid}">
-    <summary>${logScoreBadge(a.score, "app health score")}
-      <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
-      ${badges.join(" ")} ${meta}</summary>
-    <div class="log-app-body" data-lazy="1"></div></details>`;
-}
-
-// the heavy body — built on demand when the app row is expanded
-function logAppBody(a) {
-  const unsupported = a.platform_status === "unsupported";
-  const noPlat = a.platform_status === "none";
-  const id = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
-  const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
-  const idxRows = (a.index_list || []).map((i) => `
-    <div class="log-idx ${i.ts_type !== "date" || i.bad_week || i.future_week ? "bad" : ""}">
-      <code class="log-idx-name">${esc(i.index)}</code>
-      <span class="chip chip-amber">${esc(i.env || "?")}</span>
-      <span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
-      <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
-      <span class="log-idx-size">${logHsize(i.size_bytes)}</span>
-      <span class="ci-meta">${logInt(i.docs)} docs</span>
-      ${logSrcChip(i.source)}
-      ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
-    </div>`).join("") || '<div class="empty">no indices</div>';
-
-  // @timestamp sample inspector — ALWAYS offered when @timestamp isn't a date.
-  // Samples across ALL of the app's bad indices (comma list, capped), not one;
-  // a healthy sibling is passed for contrast. The endpoint tries both connections.
-  const badNames = (a.ts_bad_indices || []).slice(0, 15).join(",");
-  const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
-  const tsInspect = (!a.ts_ok && badNames) ? `
-    <div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(a.ts_bad_indices || []).length} index(es) — time-range queries silently return nothing there.
-      <button class="btn btn-sm log-ts-sample" data-tss-target="${id}"
-        data-ts-index="${esc(badNames)}"
-        ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample bad docs</button>
-      <div id="${id}" class="log-tss"></div>
-    </div>` : "";
-
-  let body;
-  if (unsupported) {
-    body = `<div class="empty">This app's <code>deploy_platform</code> is <b>${esc(a.deploy_platform)}</b>, which isn't one QuestOps monitors (OCP / LinuxVM / WindowsVM / K8s) — so its logs are <b>not checked</b>. Shown here for visibility.${a.discrepancy ? ` <span class="pct-bad">It also overrides the project global <b>${esc(a.project_platform)}</b>.</span>` : ""}</div>`;
-  } else if (noPlat) {
-    body = `<div class="empty">No index prefix — no <code>deploy_platform</code> on this app (group_vars/&lt;app&gt;) or the project (group_vars/all).</div>`;
-  } else {
-    body = `${logEnvColumns(a)}
-      <div class="log-app-facts">
-        <div><span class="acc-h">owners ($env_team)</span><div class="inv-chips">${(a.owners || []).map((o) => `<span class="chip chip-cyan">👤 ${esc(o)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}${(a.owner_clash_envs || []).length ? ` <span class="pct-bad">⚠ clash @ ${esc(a.owner_clash_envs.join(", "))}</span>` : ""}</div></div>
-        <div><span class="acc-h">logged span</span><div class="ci-meta">${a.first_logged ? `${logDay(a.first_logged)} → ${logDay(a.last_logged)}` : "—"}</div></div>
-        <div><span class="acc-h">last deploy</span><div class="ci-meta">${a.last_deploy ? esc(a.last_deploy) : (a.deployed ? "—" : "never deployed")}${a.undeployed_envs && a.undeployed_envs.length ? ` · <span class="pct-warn">un-deployed: ${esc(a.undeployed_envs.join(", "))}</span>` : ""}</div></div>
-        <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
-        <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}${a.discrepancy ? ` · <span class="pct-bad">⚠ overrides project ${esc(a.project_platform)}</span>` : ""}</div></div>
-        <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
-      </div>
-      ${tsInspect}
-      ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${idxRows}</div></details>` : ""}`;
-  }
-  return body;
+  const maxBytes = Math.max(1, ...cols.map((en) => (agg[en] || {}).size_bytes || 0));
+  const head = `<div class="log-mx-row head">
+    <div class="log-mx-appcell head">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 <b>${esc(p.name)}</b></span></div>
+    ${cols.map((en, i) => logMxHead(en, agg[en], f, i === sepAt, maxBytes)).join("")}</div>`;
+  const rows = apps.map((a) => {
+    const _aid = "a" + (++_logAppSeq);
+    a._mxcols = cols; a._mxsep = sepAt;
+    (state.logAppMap = state.logAppMap || {})[_aid] = a;
+    const byEnv = {}; (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
+    const rowCls = a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : (!a.deployed ? "undeployed" : "")));
+    return `<div class="log-mx-row app ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0">
+        <div class="log-mx-appcell">
+          <span class="log-mx-appline">${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span> <span class="log-mx-caret">▸</span></span>
+          <span class="log-mx-appflags">${logAppFlags(a)}</span>
+        </div>
+        ${cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("")}</div>
+      <div class="log-mx-detail" data-detail-for="${_aid}" data-lazy="1" hidden></div>`;
+  }).join("");
+  return `<div class="log-matrix" style="--envn:${cols.length}">${head}${rows}</div>`;
 }
 
 function logProjectCardHtml(p, apps, f) {
@@ -3494,11 +3478,7 @@ function logProjectCardHtml(p, apps, f) {
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
         flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}
-      <div class="log-projdash-wrap">
-        <div class="log-projdash-title">📁 <b>${esc(p.name)}</b> ${logScoreBadge(pscore, "project health score")}
-          <span class="ci-meta">${apps.length} app(s) · ${logInt(t.indices)} idx · ${esc(t.size_h)} · environments overview</span></div>
-        ${logProjEnvDash(apps)}</div>
-      <div class="log-app-list">${apps.map(logAppRow).join("")}</div></div></details>`;
+      ${(f._projScore = pscore, logMatrixHtml(p, apps, f))}</div></details>`;
 }
 
 // stat tiles are computed from the FILTERED apps so the numbers track the filters
@@ -3603,18 +3583,45 @@ async function loadTsSamples(btn) {
   try { c.innerHTML = logTsSamplesHtml(await api(`/api/logging/ts-samples?${qs.toString()}`)); }
   catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
+function logToggleAppDetail(row) {
+  const aid = row.dataset.appId;
+  const det = view().querySelector(`.log-mx-detail[data-detail-for="${aid}"]`);
+  if (!det) return;
+  const open = det.hasAttribute("hidden");
+  view().querySelectorAll(`.log-mx-row.app[data-app-id="${aid}"]`).forEach((r) => r.classList.toggle("open", open));
+  if (!open) { det.setAttribute("hidden", ""); return; }
+  det.removeAttribute("hidden");
+  if (det.dataset.lazy) {
+    const a = (state.logAppMap || {})[aid];
+    det.innerHTML = a ? logAppDetail(a) : '<div class="empty">unavailable</div>';
+    delete det.dataset.lazy;
+    det.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
+  }
+}
 function wireLogContent() {
-  // lazily build each app's heavy body the first time its row is expanded
-  view().querySelectorAll("details.log-app").forEach((det) => det.addEventListener("toggle", () => {
-    if (!det.open) return;
-    const body = det.querySelector(".log-app-body");
-    if (!body || !body.dataset.lazy) return;
-    const a = (state.logAppMap || {})[det.dataset.appKey];
-    if (!a) return;
-    body.innerHTML = logAppBody(a);
-    delete body.dataset.lazy;
-    body.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
-  }));
+  // expand an app ROW → lazily build its detail drawer (aligned under the env columns)
+  view().querySelectorAll(".log-mx-row.app").forEach((row) => {
+    const go = (ev) => {
+      if (ev.target.closest(".log-mx-cell.head")) return;   // (defensive) never on header
+      logToggleAppDetail(row);
+    };
+    row.addEventListener("click", go);
+    row.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); logToggleAppDetail(row); } });
+  });
+  // click an ENV column header → focus/unfocus that environment (leverages scoping)
+  view().querySelectorAll(".log-mx-cell.head[data-env]").forEach((cell) => {
+    const focus = (ev) => {
+      ev.stopPropagation();
+      const env = cell.dataset.env;
+      const f = state.logFilter;
+      f.env = (f.env === env) ? "all" : env;
+      const sel = document.getElementById("log-env");   // keep the filter bar in sync
+      if (sel) sel.value = f.env;
+      rerenderLog();
+    };
+    cell.addEventListener("click", focus);
+    cell.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); focus(ev); } });
+  });
 }
 
 async function renderLogging() {
