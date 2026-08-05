@@ -929,10 +929,36 @@ def _demo() -> dict:
 
 
 # ------------------------------------------------ @timestamp sample inspector
+# a value is a plausible date only if it's an epoch (s or ms) landing in
+# [2000, 2100] or an ISO/known date-string in the same range. Deliberately
+# strict, so a text-mapped field's junk — bare number strings like
+# "17840912390", out-of-range epochs, "N/A", "-" — is flagged as NOT a date.
+_EPOCH_MIN = 946684800        # 2000-01-01
+_EPOCH_MAX = 4102444800       # 2100-01-01
+_NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
 def _looks_date(v) -> bool:
-    from .elastic import _parse_es_date
-    w = _parse_es_date(v)
-    return bool(w and w.year >= 2000)
+    if v is None or isinstance(v, bool):
+        return False
+    num = None
+    if isinstance(v, (int, float)):
+        num = float(v)
+    else:
+        s = str(v).strip()
+        if _NUMERIC_RE.match(s):
+            try:
+                num = float(s)
+            except ValueError:
+                num = None
+        else:
+            from .elastic import _parse_es_date   # ISO / known formats
+            w = _parse_es_date(s)
+            return bool(w and 2000 <= w.year <= 2100)
+    if num is None:
+        return False
+    secs = num / 1000.0 if abs(num) >= 1e12 else num   # ms vs s
+    return _EPOCH_MIN <= secs <= _EPOCH_MAX
 
 
 def _conn_by_kind(kind: str) -> dict | None:
@@ -942,50 +968,92 @@ def _conn_by_kind(kind: str) -> dict | None:
     return None
 
 
+def _conn_order(source: str) -> list:
+    """Connections to try for an index, the hinted one first (empty hint → prd
+    then non-prd) — so the inspector finds the index even without a source."""
+    conns = [c for c in _connections() if c.get("url") and c.get("key")]
+    if source in ("prd", "nonprd"):
+        conns.sort(key=lambda c: c["kind"] != source)
+    return conns
+
+
 def _sample_ts(conn: dict, index: str, size: int) -> dict:
-    """A few docs' @timestamp from one index (on ITS OWN connection), each tagged
-    whether the value actually parses as a date — so a text-mapped index's
-    offending values are visible next to a healthy index's proper dates. Never
-    raises: any failure comes back as a structured `error`."""
+    """Sample @timestamp docs from one index (on ITS OWN connection), each tagged
+    whether the value is a plausible date. Runs a general sample PLUS a targeted
+    query for pure-number values (the '17840912390' case) so the offending docs
+    surface even when they're rare. Never raises → failures come back as `error`."""
     if not conn or not conn.get("url") or not conn.get("key"):
         return {"index": index, "error": "Elasticsearch connection not configured", "docs": []}
     try:
         ts_type = _ts_field_types(conn, index).get(index)
     except requests.RequestException:
         ts_type = None
-    try:
-        r = requests.post(f"{conn['url']}/{index}/_search",
-                          json={"size": size, "_source": ["@timestamp"], "sort": "_doc",
-                                "query": {"exists": {"field": "@timestamp"}}},
-                          headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
-    except requests.RequestException as exc:
-        return {"index": index, "ts_type": ts_type, "error": str(exc)[:200], "docs": []}
-    if not r.ok:
-        return {"index": index, "ts_type": ts_type,
-                "error": f"HTTP {r.status_code} from Elasticsearch", "docs": []}
-    try:
-        data = r.json()
-    except ValueError:
-        return {"index": index, "ts_type": ts_type, "error": "non-JSON response", "docs": []}
-    docs = []
-    for h in (data.get("hits", {}).get("hits", []) or []):
-        val = (h.get("_source") or {}).get("@timestamp")
-        docs.append({"id": h.get("_id"), "value": val, "is_date": _looks_date(val)})
-    return {"index": index, "ts_type": ts_type, "docs": docs,
-            "non_date": sum(1 for d in docs if not d["is_date"]), "sampled": len(docs)}
+    docs: dict = {}
+    first_err = None
+
+    def run(body):
+        nonlocal first_err
+        try:
+            r = requests.post(f"{conn['url']}/{index}/_search", json=body,
+                              headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
+        except requests.RequestException as exc:
+            first_err = first_err or str(exc)[:200]
+            return
+        if not r.ok:
+            first_err = first_err or f"HTTP {r.status_code} from Elasticsearch"
+            return
+        try:
+            hits = (r.json().get("hits", {}) or {}).get("hits", []) or []
+        except ValueError:
+            first_err = first_err or "non-JSON response"
+            return
+        for h in hits:
+            val = (h.get("_source") or {}).get("@timestamp")
+            docs.setdefault(h.get("_id"), {"id": h.get("_id"), "value": val,
+                                           "is_date": _looks_date(val)})
+
+    # 1) a general sample of docs that have @timestamp
+    run({"size": size, "_source": ["@timestamp"], "sort": "_doc",
+         "query": {"exists": {"field": "@timestamp"}}})
+    # 2) targeted: @timestamp values that are a bare number (regexp on the raw
+    #    value — the .keyword sub-field for text, the field itself for keyword).
+    #    Best-effort: a 400 (no such field / date-mapped) is ignored.
+    raw_field = "@timestamp" if ts_type == "keyword" else "@timestamp.keyword"
+    run({"size": max(6, size // 2), "_source": ["@timestamp"],
+         "query": {"regexp": {raw_field: "-?[0-9]+([.][0-9]+)?"}}})
+
+    out = sorted(docs.values(), key=lambda d: d["is_date"])   # bad (False) first
+    if first_err and not out:
+        return {"index": index, "ts_type": ts_type, "error": first_err, "docs": []}
+    return {"index": index, "ts_type": ts_type, "docs": out,
+            "non_date": sum(1 for d in out if not d["is_date"]), "sampled": len(out)}
 
 
-def ts_samples(index: str, source: str = "prd", good: str = "",
-               good_source: str = "", size: int = 8) -> dict:
+def _sample_ts_any(order: list, index: str, size: int) -> dict:
+    """Try each connection until one actually has the index (so the inspector
+    works without a correct source hint)."""
+    last = None
+    for conn in order:
+        res = _sample_ts(conn, index, size)
+        last = res
+        if res.get("docs") or res.get("ts_type") is not None:
+            return res
+    return last or {"index": index, "docs": [],
+                    "error": "no configured Elasticsearch connection has this index"}
+
+
+def ts_samples(index: str, source: str = "", good: str = "",
+               good_source: str = "", size: int = 30) -> dict:
     """Sample @timestamp values from a suspect index (and, for contrast, a
-    known-good sibling) to pinpoint what makes @timestamp not a proper date."""
+    known-good sibling) to pinpoint the exact documents whose @timestamp isn't a
+    proper date. Tries both connections so a missing/wrong source hint still works."""
     if not (index or "").strip():
         raise ValueError("index is required")
     if settings.demo_mode:
         return _demo_ts_samples(index, good)
-    out = {"index": _sample_ts(_conn_by_kind(source), index.strip(), size)}
+    out = {"index": _sample_ts_any(_conn_order(source), index.strip(), size)}
     if good.strip():
-        out["good"] = _sample_ts(_conn_by_kind(good_source or source), good.strip(), size)
+        out["good"] = _sample_ts_any(_conn_order(good_source or source), good.strip(), size)
     return out
 
 
@@ -994,11 +1062,14 @@ def _demo_ts_samples(index: str, good: str) -> dict:
     def good_docs(n):
         return [{"id": f"doc-{i}", "value": (now - dt.timedelta(minutes=i * 7))
                  .replace(microsecond=0).isoformat() + "Z", "is_date": True} for i in range(n)]
-    # the bad (text-mapped) index: a mix of valid strings and junk values
-    bad_vals = ["2026-08-05T10:12:03Z", "N/A", "2026-08-05 10:11", "-",
-                "pending", "2026-08-05T09:59:59Z", "null", "0000-00-00"]
+    # a text-mapped index: valid ISO strings mixed with the junk that hides there
+    # — bare epoch-ish numbers, out-of-range numbers, and non-dates
+    bad_vals = ["17840912390", "2026-08-05T10:12:03Z", "N/A", "1784091239012345",
+                "2026-08-05 10:11", "-", "pending", "2026-08-05T09:59:59Z",
+                "null", "0000-00-00", "1699999999"]
     bad = [{"id": f"doc-{i}", "value": v, "is_date": _looks_date(v)}
            for i, v in enumerate(bad_vals)]
+    bad.sort(key=lambda d: d["is_date"])
     res = {"index": {"index": index, "ts_type": "text", "docs": bad,
                      "non_date": sum(1 for d in bad if not d["is_date"]), "sampled": len(bad)}}
     if good:

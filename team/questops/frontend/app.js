@@ -3296,13 +3296,17 @@ function logAppRow(a) {
       ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
     </div>`).join("") || '<div class="empty">no indices</div>';
 
-  // @timestamp sample inspector: contrast a suspect index with a healthy one
-  const badI = (a.index_list || []).find((i) => i.ts_type !== "date");
+  // @timestamp sample inspector — ALWAYS offered when @timestamp isn't a date.
+  // Use ts_bad_indices (authoritative) as the suspect, not index_list (capped):
+  // its source is looked up if that index is in the list, else "" (the endpoint
+  // then tries both connections). A healthy sibling is passed for contrast.
+  const badName = (a.ts_bad_indices || [])[0];
+  const badSrc = ((a.index_list || []).find((i) => i.index === badName) || {}).source || "";
   const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
-  const tsInspect = (!a.ts_ok && badI) ? `
+  const tsInspect = (!a.ts_ok && badName) ? `
     <div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(a.ts_bad_indices || []).length} index(es) — time-range queries silently return nothing there.
       <button class="btn btn-sm log-ts-sample" data-tss-target="${id}"
-        data-ts-index="${esc(badI.index)}" data-ts-source="${esc(badI.source)}"
+        data-ts-index="${esc(badName)}" data-ts-source="${esc(badSrc)}"
         ${goodI ? `data-ts-good="${esc(goodI.index)}" data-ts-goodsource="${esc(goodI.source)}"` : ""}>🔍 sample docs</button>
       <div id="${id}" class="log-tss"></div>
     </div>` : "";
