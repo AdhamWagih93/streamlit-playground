@@ -82,7 +82,6 @@ services:
       # the container too — no hardcoded IPs. Safe on podman >=4, where
       # service names (db, ollama) resolve via DNS, not /etc/hosts.
       - ${QO_HOSTS_FILE:-/etc/hosts}:/etc/hosts:ro
-      - /etc/resolv.conf:/etc/resolv.conf:ro
     # If your endpoints come from CORPORATE DNS (or the host uses a
     # systemd-resolved stub at 127.0.0.53 that the container can't reach),
     # point the container at the real resolver(s) and search domain(s):
