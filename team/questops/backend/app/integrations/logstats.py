@@ -802,17 +802,30 @@ def _conn_by_kind(kind: str) -> dict | None:
 
 
 def _sample_ts(conn: dict, index: str, size: int) -> dict:
-    """A few docs' @timestamp from one index, each tagged whether the value
-    actually parses as a date — so a text-mapped index's offending values are
-    visible next to a healthy index's proper dates."""
-    if not conn or not conn["url"] or not conn["key"]:
-        return {"index": index, "error": "connection not configured", "docs": []}
-    ts_type = _ts_field_types(conn, index).get(index)
+    """A few docs' @timestamp from one index (on ITS OWN connection), each tagged
+    whether the value actually parses as a date — so a text-mapped index's
+    offending values are visible next to a healthy index's proper dates. Never
+    raises: any failure comes back as a structured `error`."""
+    if not conn or not conn.get("url") or not conn.get("key"):
+        return {"index": index, "error": "Elasticsearch connection not configured", "docs": []}
     try:
-        data = _es_search(index, {"size": size, "_source": ["@timestamp"],
-                                  "query": {"exists": {"field": "@timestamp"}}})
-    except (requests.RequestException, ValueError) as exc:
+        ts_type = _ts_field_types(conn, index).get(index)
+    except requests.RequestException:
+        ts_type = None
+    try:
+        r = requests.post(f"{conn['url']}/{index}/_search",
+                          json={"size": size, "_source": ["@timestamp"], "sort": "_doc",
+                                "query": {"exists": {"field": "@timestamp"}}},
+                          headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
+    except requests.RequestException as exc:
         return {"index": index, "ts_type": ts_type, "error": str(exc)[:200], "docs": []}
+    if not r.ok:
+        return {"index": index, "ts_type": ts_type,
+                "error": f"HTTP {r.status_code} from Elasticsearch", "docs": []}
+    try:
+        data = r.json()
+    except ValueError:
+        return {"index": index, "ts_type": ts_type, "error": "non-JSON response", "docs": []}
     docs = []
     for h in (data.get("hits", {}).get("hits", []) or []):
         val = (h.get("_source") or {}).get("@timestamp")

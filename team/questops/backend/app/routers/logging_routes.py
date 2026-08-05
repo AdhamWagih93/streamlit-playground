@@ -28,3 +28,5 @@ def logging_ts_samples(index: str, source: str = "prd", good: str = "",
         return logstats.ts_samples(index, source, good, good_source)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001 — surface a clean message, never a 500
+        raise HTTPException(502, f"@timestamp sampling failed: {str(exc)[:200]}")

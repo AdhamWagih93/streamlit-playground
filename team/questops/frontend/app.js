@@ -3189,6 +3189,8 @@ function logAppMatch(a, f) {
     if (f.issue === "any") { if (!(a.issues || []).length) return false; }
     else if (!(a.issues || []).includes(f.issue)) return false;
   }
+  if (f.hideNoLogs && a.no_logs) return false;          // exclude apps with no logs
+  if (f.hideUnmonitored && !a.monitored) return false;  // exclude unmonitored apps
   return true;
 }
 
@@ -3425,8 +3427,11 @@ async function renderLogging() {
   if (navStale(tok)) return;
   state.logData = d;
   const f = state.logFilter = state.logFilter
-    || { q: "", project: "all", platform: "all", logtype: "all", env: "all", issue: "all", sort: "score" };
+    || { q: "", project: "all", platform: "all", logtype: "all", env: "all", issue: "all",
+      sort: "score", hideNoLogs: false, hideUnmonitored: false };
   const s = d.summary || {};
+  const anyActive = !!(f.q || ["project", "platform", "logtype", "env", "issue"]
+    .some((k) => f[k] && f[k] !== "all") || f.hideNoLogs || f.hideUnmonitored);
 
   const legend = (d.platform_legend || []).map((x) =>
     `<span class="chip chip-cyan" title="deploy_platform ${esc(x.platform)} → index prefix ${esc(x.prefix)}">${esc(x.platform)} → <b>${esc(x.prefix)}</b></span>`).join(" ");
@@ -3464,7 +3469,9 @@ async function renderLogging() {
     ${sel("log-issue", f.issue || "all", issueOpts)}
     ${sel("log-sort", f.sort || "score", [["score", "↑ worst score"], ["size", "↓ size"],
       ["updated", "↓ last updated"], ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]])}
-    ${f._any ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
+    <label class="log-issues" title="hide apps that have no log indices"><input type="checkbox" id="log-hide-nolog" ${f.hideNoLogs ? "checked" : ""}> hide no-logs</label>
+    <label class="log-issues" title="hide apps whose platform isn't monitored"><input type="checkbox" id="log-hide-unmon" ${f.hideUnmonitored ? "checked" : ""}> hide unmonitored</label>
+    ${anyActive ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
     <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""} · stale &gt;${d.stale_hours}h${d.current_week ? ` · current week <b>${esc(d.current_week)}</b>` : ""}</span></div>`;
 
   const noteHtml = d.note ? `<div class="panel" style="margin-bottom:10px"><div class="kpi-note">${esc(d.note)}</div></div>` : "";
@@ -3492,10 +3499,15 @@ function wireLogging() {
     const el = document.getElementById(id);
     if (el) el.onchange = () => { f[key] = el.value; rerenderLog(); };
   });
+  [["log-hide-nolog", "hideNoLogs"], ["log-hide-unmon", "hideUnmonitored"]].forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    // re-render the whole view so the "✕ clear" button appears/disappears
+    if (el) el.onchange = () => { f[key] = el.checked; renderLogging(); };
+  });
   const cl = document.getElementById("log-clear");
   if (cl) cl.onclick = () => {
     state.logFilter = { q: "", project: "all", platform: "all", logtype: "all",
-      env: "all", issue: "all", sort: f.sort || "score" };
+      env: "all", issue: "all", sort: f.sort || "score", hideNoLogs: false, hideUnmonitored: false };
     renderLogging();
   };
   wireLogContent();
