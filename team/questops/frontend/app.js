@@ -3162,7 +3162,8 @@ function logScoreBadge(s, label) {
 }
 const LOG_ISSUE_LABEL = {
   no_logs: "no logs", stale: "stale", timestamp: "@timestamp not date",
-  bad_week: "bad week/year", clash: "platform clash", unsupported: "unsupported platform",
+  bad_week: "bad week/year", future_week: "future-dated", clash: "platform clash",
+  unsupported: "unsupported platform",
 };
 
 function logTsBadge(a) {
@@ -3237,6 +3238,7 @@ function logAppRow(a) {
     if (a.envs_stale) badges.push(`<span class="chip chip-amber" title="stale environments">${a.envs_stale} env stale</span>`);
     if (!a.ts_ok && a.indices) badges.push(logTsBadge(a));
     if ((a.bad_week_indices || []).length) badges.push(`<span class="chip chip-red" title="illogical year/week in the index name">bad week · ${a.bad_week_indices.length}</span>`);
+    if ((a.future_week_indices || []).length) badges.push(`<span class="chip chip-red" title="index dated in the FUTURE vs the current week (${esc((state.logData || {}).current_week || "?")}) — likely clock skew or a mis-templated index">future-dated · ${a.future_week_indices.length}</span>`);
   }
   if (a.not_in_inventory) badges.push('<span class="chip chip-amber">drift</span>');
   const meta = unsupported
@@ -3247,11 +3249,11 @@ function logAppRow(a) {
 
   const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
   const idxRows = (a.index_list || []).map((i) => `
-    <div class="log-idx ${i.ts_type !== "date" ? "bad" : ""} ${i.bad_week ? "bad" : ""}">
+    <div class="log-idx ${i.ts_type !== "date" || i.bad_week || i.future_week ? "bad" : ""}">
       <code class="log-idx-name">${esc(i.index)}</code>
       <span class="chip chip-amber">${esc(i.env || "?")}</span>
       <span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
-      <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}</span>
+      <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
       <span class="log-idx-size">${logHsize(i.size_bytes)}</span>
       <span class="ci-meta">${logInt(i.docs)} docs</span>
       ${logSrcChip(i.source)}
@@ -3306,7 +3308,7 @@ function logProjectCardHtml(p, apps, f) {
     <summary>${logScoreBadge(p.score, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
-        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-week", "pct-bad")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}</span></summary>
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-week", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}${apps.map(logAppRow).join("")}</div></details>`;
 }
 
@@ -3329,6 +3331,7 @@ function logTilesHtml(apps) {
     ${tile(has("stale"), "apps stale", has("stale") ? "pct-warn" : "pct-good")}
     ${tile(has("timestamp"), "@timestamp", has("timestamp") ? "pct-bad" : "pct-good")}
     ${tile(has("bad_week"), "bad week/year", has("bad_week") ? "pct-bad" : "pct-good")}
+    ${tile(has("future_week"), "future-dated", has("future_week") ? "pct-bad" : "pct-good")}
     ${tile(has("clash"), "platform clashes", has("clash") ? "pct-bad" : "pct-good")}
     ${tile(has("unsupported"), "unmonitored", has("unsupported") ? "pct-warn" : "pct-good")}</div>`;
 }
@@ -3348,9 +3351,9 @@ function logContentHtml() {
     <details class="filebox log-unmatched">
       <summary>⚠ ${d.unmatched.length} unmatched index${d.unmatched.length === 1 ? "" : "es"} — didn't map to a known project/app (naming drift)</summary>
       <div class="log-idx-list">${d.unmatched.map((u) => `
-        <div class="log-idx"><code class="log-idx-name">${esc(u.index)}</code>
+        <div class="log-idx ${u.bad_week || u.future_week ? "bad" : ""}"><code class="log-idx-name">${esc(u.index)}</code>
           <span class="log-idx-size">${logHsize(u.size_bytes)}</span>
-          <span class="ci-meta">${logInt(u.docs)} docs</span>${logSrcChip(u.source)}</div>`).join("")}</div>
+          <span class="ci-meta">${logInt(u.docs)} docs</span>${logSrcChip(u.source)}${u.bad_week ? '<span class="chip chip-red">⚠ bad year</span>' : ""}${u.future_week ? '<span class="chip chip-red">⚠ future</span>' : ""}</div>`).join("")}</div>
     </details>` : "";
   return logTilesHtml(filtered)
     + (cards || '<div class="empty">no apps match the filters</div>') + un;
@@ -3427,7 +3430,7 @@ async function renderLogging() {
   const platforms = [...new Set((d.projects || []).flatMap((p) => (p.apps || [])
     .map((a) => a.deploy_platform).filter(Boolean)))].sort();
   const issueOpts = [["all", "issue: any"], ["any", "any issue"],
-    ...["no_logs", "stale", "timestamp", "bad_week", "clash", "unsupported"]
+    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "clash", "unsupported"]
       .map((k) => [k, LOG_ISSUE_LABEL[k]])];
   // filters PRECEDE the stat tiles so the numbers respond to them
   const filterBar = `<div class="acc-filters">
@@ -3440,7 +3443,7 @@ async function renderLogging() {
     ${sel("log-sort", f.sort || "score", [["score", "↑ worst score"], ["size", "↓ size"],
       ["updated", "↓ last updated"], ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]])}
     ${f._any ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
-    <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""} · stale &gt;${d.stale_hours}h</span></div>`;
+    <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""} · stale &gt;${d.stale_hours}h${d.current_week ? ` · current week <b>${esc(d.current_week)}</b>` : ""}</span></div>`;
 
   const noteHtml = d.note ? `<div class="panel" style="margin-bottom:10px"><div class="kpi-note">${esc(d.note)}</div></div>` : "";
   view().innerHTML = head + noteHtml + logDiagHtml(d) + filterBar

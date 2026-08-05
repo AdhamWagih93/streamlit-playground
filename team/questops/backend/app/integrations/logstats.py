@@ -70,6 +70,31 @@ def _age_hours(iso: str | None) -> float | None:
         return None
 
 
+def _iso_week(d: dt.datetime) -> str:
+    y, w, _ = d.isocalendar()
+    return f"{y}.{w:02d}"
+
+
+def _cur_isoweek() -> tuple[int, int]:
+    y, w, _ = _now().isocalendar()
+    return (y, w)
+
+
+def _parse_week(week: str | None) -> tuple[int, int] | None:
+    """'yyyy.ww' → (year, week) ints, or None if it isn't that shape."""
+    try:
+        y, w = (week or "").split(".")
+        return (int(y), int(w))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _week_future(week: str | None, cur: tuple[int, int]) -> bool:
+    """True when a well-formed yyyy.ww is later than the current ISO week."""
+    yw = _parse_week(week)
+    return bool(yw and yw > cur)
+
+
 def _match_token(low_rest: str, candidates: list[str]) -> tuple[str | None, int]:
     """Longest known candidate (case-insensitive) that prefixes `low_rest` as a
     whole `-`-separated token. Returns (canonical_name, chars_consumed)."""
@@ -195,17 +220,20 @@ def _blank_app(project: str, app: str) -> dict:
 
 
 # per-env health score deductions from 100 (higher = healthier)
-_PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20}
+_PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20, "future_week": 20}
 # the issue keys used across scoring + the issue-type filter
-ISSUE_KEYS = ("no_logs", "stale", "timestamp", "bad_week", "clash", "unsupported")
+ISSUE_KEYS = ("no_logs", "stale", "timestamp", "bad_week", "future_week",
+              "clash", "unsupported")
 
 
-def _env_score(no_logs: bool, stale: bool, ts_bad: bool, bad_week: bool) -> int:
+def _env_score(no_logs: bool, stale: bool, ts_bad: bool,
+               bad_week: bool, future_week: bool) -> int:
     if no_logs:
         return 0
     s = 100 - (_PENALTY["stale"] if stale else 0) \
         - (_PENALTY["timestamp"] if ts_bad else 0) \
-        - (_PENALTY["bad_week"] if bad_week else 0)
+        - (_PENALTY["bad_week"] if bad_week else 0) \
+        - (_PENALTY["future_week"] if future_week else 0)
     return max(s, 0)
 
 
@@ -239,6 +267,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         last = max(lasts) if lasts else None
         age = _age_hours(last)
         bad_week = sorted({i["index"] for i in eidx if i.get("bad_week")})
+        future_week = sorted({i["index"] for i in eidx if i.get("future_week")})
         no_logs = len(eidx) == 0
         stale = (not no_logs) and (age is None or age > stale_h)
         ts_ok = (not no_logs) and not bad
@@ -254,7 +283,9 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
                 issues.append("timestamp")
             if bad_week:
                 issues.append("bad_week")
-            score = _env_score(no_logs, stale, not ts_ok, bool(bad_week))
+            if future_week:
+                issues.append("future_week")
+            score = _env_score(no_logs, stale, not ts_ok, bool(bad_week), bool(future_week))
         env_stats.append({
             "env": env, "indices": len(eidx),
             "size_bytes": sum(i["size_bytes"] for i in eidx),
@@ -265,7 +296,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
             "last_logged": last, "last_logged_age_h": age,
             "no_logs": no_logs, "stale": stale, "ts_ok": ts_ok,
             "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:10],
-            "bad_week_indices": bad_week[:10],
+            "bad_week_indices": bad_week[:10], "future_week_indices": future_week[:10],
             "issues": issues, "score": score})
 
     # app-level aggregates
@@ -287,6 +318,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         "ts_types": {t: len(v) for t, v in types.items()},
         "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:25],
         "bad_week_indices": sorted({i["index"] for i in idxs if i.get("bad_week")})[:25],
+        "future_week_indices": sorted({i["index"] for i in idxs if i.get("future_week")})[:25],
         "monitored": monitored, "platform_status": status,
         "env_stats": env_stats,
         # meta / platform fields (were _apply_app_meta)
@@ -315,6 +347,8 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         issues.add("timestamp")
     if rec["bad_week_indices"]:
         issues.add("bad_week")
+    if rec["future_week_indices"]:
+        issues.add("future_week")
     if rec["discrepancy"]:
         issues.add("clash")
     rec["issues"] = sorted(issues)
@@ -342,15 +376,20 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
     (project, app) its effective deploy_platform + prefix + clash flag;
     `proj_meta` the project-global platform. Shared by live and demo."""
     stale_h = settings.log_stale_hours
+    cur_yw = _cur_isoweek()          # detect the current ISO year.week from "now"
     apps_model: dict = {}
     unmatched: list = []
     for r in records:
+        # a well-formed but FUTURE-dated index (year/week ahead of now) — usually
+        # clock skew or a mis-templated index; distinct from a malformed bad_week
+        r["future_week"] = (not r.get("bad_week")) and _week_future(r.get("week"), cur_yw)
         if r.get("app") and r.get("project"):
             key = (r["project"], r["app"])
             apps_model.setdefault(key, _blank_app(*key))["index_list"].append(r)
         else:
-            unmatched.append({k: r[k] for k in ("index", "source", "size_bytes",
-                                                "docs", "health", "ts_type") if k in r})
+            unmatched.append({k: r[k] for k in ("index", "source", "size_bytes", "docs",
+                                                "health", "ts_type", "week", "bad_week",
+                                                "future_week") if k in r})
     all_envs: set = set()
     all_logtypes: set = set()
 
@@ -369,6 +408,7 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             "ts_bad": sum(1 for a in rows if "timestamp" in a["issues"]),
             "stale": sum(1 for a in rows if "stale" in a["issues"]),
             "bad_week": sum(1 for a in rows if "bad_week" in a["issues"]),
+            "future_week": sum(1 for a in rows if "future_week" in a["issues"]),
             "discrepancies": sum(1 for a in rows if "clash" in a["issues"]),
             "unsupported": sum(1 for a in rows if "unsupported" in a["issues"]),
         }
@@ -429,6 +469,7 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
         "overall_score": _mean([a["score"] for a in all_apps]),
         "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
         "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
+        "apps_future_week": cnt("future_week"),
         "discrepancies": cnt("clash"), "apps_unsupported": cnt("unsupported"),
         "apps_no_platform": sum(1 for a in all_apps if not a.get("prefix")),
         "projects_no_platform": sum(1 for po in projects_out if po.get("no_prefix")),
@@ -436,6 +477,7 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
         "envs_no_logs": sum(a.get("envs_no_logs", 0) for a in all_apps),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
+            "current_week": _iso_week(_now()),
             "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
             "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
             "connections": conn_status, "summary": summary,
@@ -652,11 +694,6 @@ def _live() -> dict:
 
 
 # ------------------------------------------------------------------ demo
-def _iso_week(d: dt.datetime) -> str:
-    y, w, _ = d.isocalendar()
-    return f"{y}.{w:02d}"
-
-
 def _demo() -> dict:
     from . import inventory
     inv = inventory.parse()
@@ -676,6 +713,8 @@ def _demo() -> dict:
     STALE_ENV = {("Platform", "notifications", "prd")}  # stale in PRD only
     MISSING_ENV = {("Platform", "payments", "qc")}   # payments not logging in qc
     BAD_WEEK = {("Platform", "checkout", "prd")}     # an illogical 5-digit year index
+    FUTURE_WEEK = {("Platform", "checkout", "uat")}  # a future-dated index (clock skew)
+    future_wk = _iso_week(now + dt.timedelta(weeks=3))
 
     def env_conn(env):  # prd env served by prd connection, else non-prd
         return "prd" if env in set(settings.log_prd_env_list) else "nonprd"
@@ -715,6 +754,14 @@ def _demo() -> dict:
                                     "project": pname, "env": env, "app": app,
                                     "logtype": "application", "week": f"2{weeks[-1]}",
                                     "bad_week": True})
+                # a well-formed but FUTURE-dated index → future_week issue
+                if (pname, app, env) in FUTURE_WEEK:
+                    records.append({"index": f"{prefix}-{pname}-{env}-{app}-application-{future_wk}",
+                                    "source": src, "size_bytes": 4_000_000, "docs": 2500,
+                                    "health": "green", "ts_type": "date", "prefix": prefix,
+                                    "project": pname, "env": env, "app": app,
+                                    "logtype": "application", "week": future_wk,
+                                    "bad_week": False})
                 # last-logged PER ENV: fresh, except the scripted stale env
                 if (pname, app, env) in STALE_ENV:
                     iso = (now - dt.timedelta(days=6, hours=2)).replace(microsecond=0).isoformat() + "Z"
