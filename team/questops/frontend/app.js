@@ -3196,6 +3196,60 @@ function logAppMatch(a, f) {
   return true;
 }
 
+// filtering by env/team scopes the app's DATA to the matching environments —
+// its env rows, index list, sizes, counts, issues and score are recomputed from
+// just those envs (client-side, from data already loaded). No-op when neither
+// env nor team is active.
+function logScopeApp(a, f) {
+  const envA = f.env && f.env !== "all";
+  const teamA = f.team && f.team !== "all";
+  if (!envA && !teamA) return a;
+  const es = (a.env_stats || []).filter((e) =>
+    (!envA || e.env === f.env) && (!teamA || e.owner === f.team));
+  if (!es.length || es.length === (a.env_stats || []).length) return a;
+  const uniq = (arr) => [...new Set(arr)];
+  const sum = (fn) => es.reduce((n, e) => n + (fn(e) || 0), 0);
+  const maxS = (arr) => arr.length ? arr.reduce((m, x) => x > m ? x : m) : null;
+  const minS = (arr) => arr.length ? arr.reduce((m, x) => x < m ? x : m) : null;
+  const escores = es.map((e) => e.score).filter((x) => x != null);
+  const ownerClash = es.filter((e) => e.owner_clash).map((e) => e.env);
+  const idxCount = sum((e) => e.indices);
+  const bytes = sum((e) => e.size_bytes);
+  const issues = uniq([...es.flatMap((e) => e.issues || []),
+    ...(a.discrepancy ? ["clash"] : []),
+    ...(a.platform_status === "unsupported" ? ["unsupported"] : [])]).sort();
+  let score = null;
+  if (a.monitored && escores.length) {
+    let base = escores.reduce((x, y) => x + y, 0) / escores.length;
+    if (a.discrepancy) base -= 10;
+    if (ownerClash.length) base -= 10;
+    score = Math.max(Math.round(base), 0);
+  }
+  return { ...a, _scoped: true, env_stats: es,
+    envs: uniq(es.filter((e) => e.indices).map((e) => e.env)).sort(),
+    expected_envs: uniq(es.map((e) => e.env)).sort(),
+    indices: idxCount, size_bytes: bytes, size_h: logHsize(bytes), docs: sum((e) => e.docs),
+    first_logged: minS(es.map((e) => e.first_logged).filter(Boolean)),
+    last_logged: maxS(es.map((e) => e.last_logged).filter(Boolean)),
+    last_deploy: maxS(es.map((e) => e.last_deploy).filter(Boolean)),
+    owners: uniq(es.map((e) => e.owner).filter(Boolean)).sort(),
+    logtypes: uniq(es.flatMap((e) => e.logtypes || [])).sort(),
+    sources: uniq(es.flatMap((e) => e.sources || [])).sort(),
+    index_list: (a.index_list || []).filter((i) => es.some((e) => e.env === i.env)),
+    ts_bad_indices: uniq(es.flatMap((e) => e.ts_bad_indices || [])),
+    bad_week_indices: uniq(es.flatMap((e) => e.bad_week_indices || [])),
+    future_week_indices: uniq(es.flatMap((e) => e.future_week_indices || [])),
+    over_retained_envs: es.filter((e) => e.over_retained).map((e) => e.env),
+    owner_clash_envs: ownerClash,
+    envs_stale: es.filter((e) => e.stale).length,
+    envs_no_logs: es.filter((e) => e.no_logs && e.deployed).length,
+    deployed: es.some((e) => e.deployed),
+    undeployed_envs: es.filter((e) => !e.deployed).map((e) => e.env),
+    no_logs: a.monitored && idxCount === 0 && es.some((e) => e.deployed),
+    ts_ok: !es.some((e) => !e.ts_ok && e.indices),
+    stale: es.some((e) => e.stale), issues, score };
+}
+
 const _sv = (a) => (a.score == null ? 1000 : a.score);
 const LOG_SORTS = {
   score: (a, b) => _sv(a) - _sv(b) || b.size_bytes - a.size_bytes,   // worst first
@@ -3216,7 +3270,7 @@ function logSortApps(apps, sort) {
 const _psv = (p) => (p.score == null ? 1000 : p.score);
 const _plast = (apps) => (apps || []).reduce((m, a) => (a.last_logged || "") > m ? (a.last_logged || "") : m, "");
 const LOG_PROJ_SORTS = {
-  score: (a, b) => _psv(a.p) - _psv(b.p) || (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
+  score: (a, b) => _psv(a) - _psv(b) || (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
   size: (a, b) => (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
   docs: (a, b) => (b.t.docs || 0) - (a.t.docs || 0),
   indices: (a, b) => (b.t.indices || 0) - (a.t.indices || 0),
@@ -3351,7 +3405,21 @@ function logAppBody(a) {
 }
 
 function logProjectCardHtml(p, apps, f) {
-  const t = p.totals || {};
+  // totals + score recomputed from the (filtered + scoped) apps so the project
+  // header stays consistent with the active env/team filters
+  const has = (k) => apps.filter((a) => (a.issues || []).includes(k)).length;
+  const bytes = apps.reduce((n, a) => n + a.size_bytes, 0);
+  const scores = apps.map((a) => a.score).filter((x) => x != null);
+  const pscore = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+  const t = {
+    apps: (p.totals || {}).apps || (p.apps || []).length,
+    indices: apps.reduce((n, a) => n + a.indices, 0), size_h: logHsize(bytes),
+    docs: apps.reduce((n, a) => n + a.docs, 0),
+    no_logs: has("no_logs"), stale: has("stale"), ts_bad: has("timestamp"),
+    bad_week: has("bad_week"), future_week: has("future_week"), over_retained: has("over_retained"),
+    discrepancies: has("clash"), team_clash: has("team_clash"), unsupported: has("unsupported"),
+    undeployed: apps.filter((a) => !a.deployed).length,
+  };
   const flag = (n, label, cls) => n ? ` · <span class="${cls}">${n} ${label}</span>` : "";
   const plat = p.deploy_platform
     ? `<span class="chip chip-cyan" title="project-global deploy_platform → index prefix">${esc(p.deploy_platform)} → ${esc(p.prefix || "?")}</span>`
@@ -3360,7 +3428,7 @@ function logProjectCardHtml(p, apps, f) {
     ? `<div class="log-tsbad-note">⚠ project <b>${esc(p.name)}</b> resolves no <code>deploy_platform</code> on any app (group_vars/&lt;app&gt;) or project-wide (group_vars/all) — can't build a log index prefix (OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin · K8s→k8s), so its apps can't be located.</div>`
     : "";
   return `<details class="filebox log-proj" ${f._any ? "open" : ""}>
-    <summary>${logScoreBadge(p.score, "project health score")}
+    <summary>${logScoreBadge(pscore, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
         flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
@@ -3401,12 +3469,18 @@ function logContentHtml() {
   f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("team") || on("issue"));
   state.logAppMap = {};   // rebuilt as rows render → lazy bodies look apps up here
   const filtered = [];
-  // build filtered+sorted apps per project, then SORT THE PROJECTS by the same
-  // metric so the ordering actually changes on screen (cards are collapsed)
-  const entries = (d.projects || []).map((p) => ({
-    p, t: p.totals || {},
-    apps: logSortApps((p.apps || []).filter((a) => logAppMatch(a, f)), f.sort),
-  })).filter((e) => e.apps.length);
+  // filter → SCOPE (env/team) → sort apps; then sort the projects the same way.
+  // Scoping recomputes each app's aggregates from just the matching envs.
+  const entries = (d.projects || []).map((p) => {
+    const apps = logSortApps((p.apps || []).filter((a) => logAppMatch(a, f))
+      .map((a) => logScopeApp(a, f)), f.sort);
+    const scores = apps.map((a) => a.score).filter((x) => x != null);
+    return { p, apps,
+      t: { size_bytes: apps.reduce((n, a) => n + a.size_bytes, 0),
+           docs: apps.reduce((n, a) => n + a.docs, 0),
+           indices: apps.reduce((n, a) => n + a.indices, 0) },
+      score: scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null };
+  }).filter((e) => e.apps.length);
   const cards = logSortProjects(entries, f.sort).map((e) => {
     filtered.push(...e.apps);
     return logProjectCardHtml(e.p, e.apps, f);
