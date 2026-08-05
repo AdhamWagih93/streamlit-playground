@@ -82,6 +82,7 @@ logging:
   indexPrefix: ""           # fallback prefix for projects with no deploy_platform
   prdEnvs: "prd"            # env token(s) served by the primary (prd) ES
   staleHours: 48            # newest-log age (h) that flags an app "stale"
+  deployIndex: "ef-cicd-deployments"  # CI/CD deployments index (prd ES) for last-deploy / never-deployed
 
 app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)
 

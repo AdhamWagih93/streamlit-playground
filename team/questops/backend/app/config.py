@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     log_platform_prefixes: str = ""  # optional extra deploy_platform:prefix pairs
     log_index_prefix: str = ""       # fallback ${index_prefix} (no deploy_platform)
     log_prd_envs: str = "prd"        # env token(s) served by the primary (prd) ES
+    # CI/CD deployments index (on the PRIMARY/prd ES) — used to find each
+    # app/env's last deployment date; an app/env never deployed is expected to
+    # have no logs (filtered out by default). Fields: project/application/
+    # environment (keyword), startdate/enddate (date).
+    log_deploy_index: str = "ef-cicd-deployments"
     log_stale_hours: int = 48        # an app with no new log later than this = stale
     es_nonprd_url: str = ""          # non-prd Elasticsearch (dev/qc/uat log indices)
     es_nonprd_api_key: str = ""      # sent as 'Authorization: ApiKey <key>'

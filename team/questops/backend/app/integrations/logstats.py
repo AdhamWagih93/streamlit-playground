@@ -181,15 +181,17 @@ def _ts_field_types(conn: dict, pattern: str) -> dict:
     return out
 
 
-def _msearch_max_ts(conn: dict, groups: list[tuple]) -> dict:
-    """One round trip: max(@timestamp) for each (key, [indices]) group."""
+def _msearch_ts_range(conn: dict, groups: list[tuple]) -> dict:
+    """One round trip: (first, last) @timestamp for each (key, [indices]) group
+    — the oldest and newest logged document."""
     if not groups:
         return {}
     lines = []
     for _key, idxs in groups:
         lines.append(json.dumps({"index": ",".join(idxs)}))
         lines.append(json.dumps({"size": 0, "track_total_hits": False,
-                                 "aggs": {"m": {"max": {"field": "@timestamp"}}}}))
+                                 "aggs": {"mn": {"min": {"field": "@timestamp"}},
+                                          "mx": {"max": {"field": "@timestamp"}}}}))
     payload = "\n".join(lines) + "\n"
     r = requests.post(f"{conn['url']}/_msearch", data=payload,
                       headers={**_headers(conn["key"]),
@@ -199,7 +201,9 @@ def _msearch_max_ts(conn: dict, groups: list[tuple]) -> dict:
     resp = r.json().get("responses", [])
     out = {}
     for (key, _idxs), res in zip(groups, resp):
-        out[key] = _ms_to_iso((((res or {}).get("aggregations") or {}).get("m") or {}).get("value"))
+        aggs = (res or {}).get("aggregations") or {}
+        out[key] = (_ms_to_iso((aggs.get("mn") or {}).get("value")),
+                    _ms_to_iso((aggs.get("mx") or {}).get("value")))
     return out
 
 
@@ -223,7 +227,7 @@ def _blank_app(project: str, app: str) -> dict:
 _PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20, "future_week": 20}
 # the issue keys used across scoring + the issue-type filter
 ISSUE_KEYS = ("no_logs", "stale", "timestamp", "bad_week", "future_week",
-              "clash", "unsupported")
+              "clash", "team_clash", "unsupported")
 
 
 def _env_score(no_logs: bool, stale: bool, ts_bad: bool,
@@ -237,8 +241,8 @@ def _env_score(no_logs: bool, stale: bool, ts_bad: bool,
     return max(s, 0)
 
 
-def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
-                  meta: dict | None) -> dict:
+def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
+                  meta: dict | None, env_meta: dict, deploy_map: dict) -> dict:
     idxs = rec.pop("index_list")
     pname, app = rec["project"], rec["app"]
     meta = meta or {}
@@ -257,15 +261,22 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
     for i in idxs:
         by_env.setdefault(i.get("env") or "?", []).append(i)
 
-    # env_stats covers every EXPECTED env (from inventory) ∪ envs seen in indices,
-    # so an env that simply isn't logging shows up as a "no logs" issue there
+    # env_stats covers every EXPECTED env (from inventory) ∪ envs seen in indices.
+    # An env that was DEPLOYED but isn't logging = a real "no logs" issue; an env
+    # never deployed is expected to have no logs (not an issue).
     env_stats = []
     for env in sorted(set(expected_envs or []) | set(by_env)):
         eidx = by_env.get(env, [])
         bad, _types = _ts_bad(eidx)
-        lasts = [x for x in last_map.get((pname, app, env), []) if x]
+        rng = ts_map.get((pname, app, env), [])
+        firsts = [f for f, _l in rng if f]
+        lasts = [l for _f, l in rng if l]
+        first = min(firsts) if firsts else None
         last = max(lasts) if lasts else None
         age = _age_hours(last)
+        om = env_meta.get((pname, app, env)) or {}
+        dep = deploy_map.get((pname, app, env)) or {}
+        deployed = bool(dep)
         bad_week = sorted({i["index"] for i in eidx if i.get("bad_week")})
         future_week = sorted({i["index"] for i in eidx if i.get("future_week")})
         no_logs = len(eidx) == 0
@@ -274,6 +285,8 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         issues = []
         if not monitored:
             score = None
+        elif no_logs and not deployed:
+            score = None                 # never deployed → expected, not scored
         elif no_logs:
             issues, score = ["no_logs"], 0
         else:
@@ -286,6 +299,8 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
             if future_week:
                 issues.append("future_week")
             score = _env_score(no_logs, stale, not ts_ok, bool(bad_week), bool(future_week))
+        if om.get("clash"):
+            issues.append("team_clash")
         env_stats.append({
             "env": env, "indices": len(eidx),
             "size_bytes": sum(i["size_bytes"] for i in eidx),
@@ -293,8 +308,11 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
             "docs": sum(i["docs"] for i in eidx),
             "logtypes": sorted({i["logtype"] for i in eidx if i.get("logtype")}),
             "sources": sorted({i["source"] for i in eidx}),
-            "last_logged": last, "last_logged_age_h": age,
+            "first_logged": first, "last_logged": last, "last_logged_age_h": age,
             "no_logs": no_logs, "stale": stale, "ts_ok": ts_ok,
+            "deployed": deployed, "last_deploy": dep.get("last_deploy"),
+            "owner": om.get("owner"), "owner_app": om.get("app_owner"),
+            "owner_project": om.get("project_owner"), "owner_clash": bool(om.get("clash")),
             "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:10],
             "bad_week_indices": bad_week[:10], "future_week_indices": future_week[:10],
             "issues": issues, "score": score})
@@ -303,6 +321,9 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
     bad, types = _ts_bad(idxs)
     weeks = sorted({i["week"] for i in idxs if i.get("week") and not i.get("bad_week")})
     all_last = [s["last_logged"] for s in env_stats if s["last_logged"]]
+    all_first = [s["first_logged"] for s in env_stats if s["first_logged"]]
+    all_deploys = [s["last_deploy"] for s in env_stats if s["last_deploy"]]
+    owner_clash_envs = [s["env"] for s in env_stats if s["owner_clash"]]
     rec.update({
         "indices": len(idxs),
         "size_bytes": sum(i["size_bytes"] for i in idxs),
@@ -314,14 +335,18 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         "weeks": len(weeks), "week_span": [weeks[0], weeks[-1]] if weeks else None,
         "latest_week": weeks[-1] if weeks else None,
         "sources": sorted({i["source"] for i in idxs}),
+        "first_logged": min(all_first) if all_first else None,
         "last_logged": max(all_last) if all_last else None,
+        "last_deploy": max(all_deploys) if all_deploys else None,
+        "owners": sorted({s["owner"] for s in env_stats if s["owner"]}),
+        "owner_clash_envs": owner_clash_envs,
         "ts_types": {t: len(v) for t, v in types.items()},
         "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:25],
         "bad_week_indices": sorted({i["index"] for i in idxs if i.get("bad_week")})[:25],
         "future_week_indices": sorted({i["index"] for i in idxs if i.get("future_week")})[:25],
         "monitored": monitored, "platform_status": status,
         "env_stats": env_stats,
-        # meta / platform fields (were _apply_app_meta)
+        # meta / platform fields
         "prefix": meta.get("prefix"), "deploy_platform": meta.get("deploy_platform"),
         "prefix_source": meta.get("source"),
         "app_platform": meta.get("app_platform"),
@@ -329,17 +354,22 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         "discrepancy": meta.get("discrepancy", False),
     })
     rec["last_logged_age_h"] = _age_hours(rec["last_logged"])
-    rec["no_logs"] = monitored and len(idxs) == 0
+    # deployment: an app is "deployed" if any of its envs was ever deployed
+    rec["deployed"] = any(s["deployed"] for s in env_stats)
+    rec["deployed_envs"] = sorted(s["env"] for s in env_stats if s["deployed"])
+    rec["undeployed_envs"] = sorted(s["env"] for s in env_stats if not s["deployed"])
+    rec["no_logs"] = monitored and len(idxs) == 0 and rec["deployed"]
     rec["ts_ok"] = len(idxs) > 0 and not bad
     rec["envs_stale"] = sum(1 for s in env_stats if s["stale"])
-    rec["envs_no_logs"] = sum(1 for s in env_stats if monitored and s["no_logs"])
+    # only DEPLOYED envs missing logs are real "no logs" problems
+    rec["envs_no_logs"] = sum(1 for s in env_stats if monitored and s["no_logs"] and s["deployed"])
     rec["stale"] = rec["envs_stale"] > 0
 
     # per-app issue set (drives the issue-type filter) + health score
     issues = set()
     if not monitored and status == "unsupported":
         issues.add("unsupported")
-    if monitored and (len(idxs) == 0 or rec["envs_no_logs"]):
+    if monitored and rec["envs_no_logs"]:
         issues.add("no_logs")
     if rec["envs_stale"]:
         issues.add("stale")
@@ -351,24 +381,32 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, last_map: dict,
         issues.add("future_week")
     if rec["discrepancy"]:
         issues.add("clash")
+    if owner_clash_envs:
+        issues.add("team_clash")
     rec["issues"] = sorted(issues)
     if not monitored:
         rec["score"] = None
     else:
         env_scores = [s["score"] for s in env_stats if s["score"] is not None]
-        base = (sum(env_scores) / len(env_scores)) if env_scores else 0
-        if rec["discrepancy"]:
-            base -= 10                    # config-hygiene deduction
-        rec["score"] = max(int(round(base)), 0)
+        base = (sum(env_scores) / len(env_scores)) if env_scores else None
+        if base is None:                  # monitored but no scored env (all un-deployed)
+            rec["score"] = None
+        else:
+            if rec["discrepancy"]:
+                base -= 10                # config-hygiene deductions
+            if owner_clash_envs:
+                base -= 10
+            rec["score"] = max(int(round(base)), 0)
 
     rec["index_list"] = sorted(
         idxs, key=lambda x: (x.get("week") or "", x["index"]), reverse=True)[:60]
     return rec
 
 
-def _assemble(records: list[dict], last_map: dict, conn_status: dict,
+def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
               projects: list[dict], known: dict, source: str,
-              app_meta: dict, proj_meta: dict, note: str = "",
+              app_meta: dict, proj_meta: dict, env_meta: dict | None = None,
+              deploy_map: dict | None = None, note: str = "",
               diag: dict | None = None) -> dict:
     """Shape raw per-index records (+ per-app last-logged map) into the payload.
     `records` matched rows carry project/app/env/logtype/week; unmatched rows
@@ -377,6 +415,8 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
     `proj_meta` the project-global platform. Shared by live and demo."""
     stale_h = settings.log_stale_hours
     cur_yw = _cur_isoweek()          # detect the current ISO year.week from "now"
+    env_meta = env_meta or {}
+    deploy_map = deploy_map or {}
     apps_model: dict = {}
     unmatched: list = []
     for r in records:
@@ -410,12 +450,14 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
             "bad_week": sum(1 for a in rows if "bad_week" in a["issues"]),
             "future_week": sum(1 for a in rows if "future_week" in a["issues"]),
             "discrepancies": sum(1 for a in rows if "clash" in a["issues"]),
+            "team_clash": sum(1 for a in rows if "team_clash" in a["issues"]),
             "unsupported": sum(1 for a in rows if "unsupported" in a["issues"]),
+            "undeployed": sum(1 for a in rows if not a.get("deployed")),
         }
 
     def _fin(rec, pname, expected_envs, not_in_inv=False):
-        a = _finalize_app(rec, stale_h, expected_envs, last_map,
-                          app_meta.get((pname, rec["app"])))
+        a = _finalize_app(rec, stale_h, expected_envs, ts_map,
+                          app_meta.get((pname, rec["app"])), env_meta, deploy_map)
         if not_in_inv:
             a["not_in_inventory"] = True
         all_envs.update(a["envs"])
@@ -470,14 +512,18 @@ def _assemble(records: list[dict], last_map: dict, conn_status: dict,
         "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
         "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
         "apps_future_week": cnt("future_week"),
-        "discrepancies": cnt("clash"), "apps_unsupported": cnt("unsupported"),
+        "discrepancies": cnt("clash"), "apps_team_clash": cnt("team_clash"),
+        "apps_unsupported": cnt("unsupported"),
         "apps_no_platform": sum(1 for a in all_apps if not a.get("prefix")),
+        "apps_undeployed": sum(1 for a in all_apps if not a.get("deployed")),
         "projects_no_platform": sum(1 for po in projects_out if po.get("no_prefix")),
         "envs_stale": sum(a.get("envs_stale", 0) for a in all_apps),
         "envs_no_logs": sum(a.get("envs_no_logs", 0) for a in all_apps),
+        "teams": sorted({o for a in all_apps for o in (a.get("owners") or [])}),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
             "current_week": _iso_week(_now()),
+            "deploy_index": settings.log_deploy_index,
             "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
             "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
             "connections": conn_status, "summary": summary,
@@ -549,6 +595,82 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
     return app_meta, proj_meta
 
 
+def _env_teams(projects: list[dict]) -> tuple[dict, dict]:
+    """The environment OWNER per (project, app, env), read from the inventory
+    `${env}_team` var — app group_vars first (group_vars/<app>), else project
+    group_vars/all. Returns (env_meta, proj_env):
+      env_meta[(project, app, env)] = {owner, app_owner, project_owner, clash}
+      proj_env[(project, env)] = project-level owner.
+    `clash` = the app's env owner differs from the project's (assignment drift)."""
+    env_meta: dict = {}
+    proj_env: dict = {}
+    for p in projects:
+        cfg = p.get("config") or {}
+        pvars = cfg.get("project_vars") or {}
+        avars = cfg.get("app_vars") or {}
+        for env in p.get("envs", []):
+            proj_owner = _clean(pvars.get(f"{env}_team"))
+            proj_env[(p["name"], env)] = proj_owner
+            for app in p.get("apps", []):
+                app_owner = _clean((avars.get(app) or {}).get(f"{env}_team"))
+                env_meta[(p["name"], app, env)] = {
+                    "owner": app_owner or proj_owner,
+                    "app_owner": app_owner, "project_owner": proj_owner,
+                    "clash": bool(app_owner and proj_owner
+                                  and app_owner.lower() != proj_owner.lower())}
+    return env_meta, proj_env
+
+
+def _deployments(conn: dict, known: dict) -> tuple[dict, str | None]:
+    """Last deployment date per (project, app, env) from the CI/CD deployments
+    index (ef-cicd-deployments) on the prd ES. An (app, env) absent here was
+    never deployed. Returns (deploy_map, error). Best-effort — never raises."""
+    idx = (settings.log_deploy_index or "").strip()
+    if not conn or not conn.get("url") or not conn.get("key") or not idx:
+        return {}, None
+    body = {"size": 0, "aggs": {"by": {
+        "composite": {"size": 10000, "sources": [
+            {"project": {"terms": {"field": "project"}}},
+            {"application": {"terms": {"field": "application"}}},
+            {"environment": {"terms": {"field": "environment"}}}]},
+        "aggs": {"end": {"max": {"field": "enddate"}},
+                 "start": {"max": {"field": "startdate"}}}}}}
+    try:
+        r = requests.post(f"{conn['url']}/{idx}/_search", json=body,
+                          headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
+    except requests.RequestException as exc:
+        return {}, str(exc)[:200]
+    if not r.ok:
+        return {}, f"HTTP {r.status_code} from {idx}"
+    try:
+        agg = ((r.json().get("aggregations") or {}).get("by") or {})
+    except ValueError:
+        return {}, "non-JSON response"
+    proj_lc = {p.lower(): p for p in known["projects"]}
+    app_lc = {a.lower(): a for a in known["apps"]}
+    out: dict = {}
+    for b in agg.get("buckets", []) or []:
+        k = b.get("key") or {}
+        proj = proj_lc.get(str(k.get("project", "")).lower())
+        app = app_lc.get(str(k.get("application", "")).lower())
+        env = str(k.get("environment", "")).strip().lower()
+        if not proj or not app or not env:
+            continue
+        last = _ms_to_iso((b.get("end") or {}).get("value")) \
+            or _ms_to_iso((b.get("start") or {}).get("value"))
+        key = (proj, app, env)
+        prev = out.get(key)
+        cnt = (b.get("doc_count") or 0)
+        if not prev:
+            out[key] = {"last_deploy": last, "count": cnt}
+        else:
+            prev["count"] += cnt
+            if (last or "") > (prev["last_deploy"] or ""):
+                prev["last_deploy"] = last
+    note = "deployment buckets truncated (>10k)" if agg.get("after_key") else None
+    return out, note
+
+
 # the user-facing knob names (host/compose env is QO_-prefixed; the container
 # env pydantic reads is the bare name — surface the QO_ names users actually set)
 _CONN_KNOBS = {"prd": "QO_ES_URL / QO_ES_API_KEY",
@@ -612,16 +734,19 @@ def _live() -> dict:
     inv = inventory.parse()
     projects = inv.get("projects", [])
     app_meta, proj_meta = _app_meta(projects) if projects else ({}, {})
+    env_meta, _proj_env = _env_teams(projects) if projects else ({}, {})
     prefixes = sorted({m["prefix"] for m in app_meta.values() if m["prefix"]})
     diag = _inventory_diag(inv, projects, app_meta, proj_meta, prefixes)
     known = _known(projects, prefixes)
     pattern = ",".join(f"{p}-*" for p in prefixes)   # "" when nothing resolved yet
+    # last deployment date per (project, app, env) — from the prd CI/CD index
+    deploy_map, deploy_err = _deployments(_conn_by_kind("prd"), known)
 
     # ALWAYS probe both connections and report their real status — even when no
     # prefix resolves — so a configured ES never wrongly shows "off".
     conn_status: dict = {}
     records: list = []
-    last_map: dict = {}
+    ts_map: dict = {}
     for conn in _connections():
         kind = conn["kind"]
         if not conn["url"] or not conn["key"]:
@@ -665,21 +790,23 @@ def _live() -> dict:
                     unexpected.add(p["env"])
                 conn_groups.setdefault((p["project"], p["app"], p["env"]), []).append(name)
             records.append(rec)
-        # newest @timestamp per (app, ENV) on this connection (one round trip) —
-        # staleness must be judged per environment, not for the whole app
+        # first + newest @timestamp per (app, ENV) on this connection (one round
+        # trip) — staleness/coverage are judged per environment, not per app
         try:
-            got = _msearch_max_ts(conn, [("\x00".join(k), v)
-                                         for k, v in conn_groups.items()])
+            got = _msearch_ts_range(conn, [("\x00".join(k), v)
+                                           for k, v in conn_groups.items()])
         except requests.RequestException:
             got = {}
         for k in conn_groups:
-            iso = got.get("\x00".join(k))
-            if iso:
-                last_map.setdefault(k, []).append(iso)
+            rng = got.get("\x00".join(k))
+            if rng:
+                ts_map.setdefault(k, []).append(rng)
         conn_status[kind] = {"label": conn["label"], "configured": True,
                              "reachable": True, "indices": len(cats), "url": conn["url"]}
         if unexpected:
             conn_status[kind]["unexpected_envs"] = sorted(unexpected)
+    if deploy_err and "prd" in conn_status:
+        conn_status["prd"]["deploy_error"] = deploy_err
 
     note = ""
     if not projects:
@@ -689,8 +816,8 @@ def _live() -> dict:
         note = ("no log index prefix resolved: no app or project declares a known "
                 "`deploy_platform` (OCP / LinuxVM / WindowsVM / K8s) and "
                 "QO_LOG_INDEX_PREFIX has no fallback. See the per-project/app detection below.")
-    return _assemble(records, last_map, conn_status, projects, known, "live",
-                     app_meta, proj_meta, note, diag)
+    return _assemble(records, ts_map, conn_status, projects, known, "live",
+                     app_meta, proj_meta, env_meta, deploy_map, note, diag)
 
 
 # ------------------------------------------------------------------ demo
@@ -699,6 +826,7 @@ def _demo() -> dict:
     inv = inventory.parse()
     projects = inv.get("projects", [])
     app_meta, proj_meta = _app_meta(projects)
+    env_meta, _proj_env = _env_teams(projects)
     prefixes = sorted({m["prefix"] for m in app_meta.values() if m["prefix"]})
     known = _known(projects, prefixes)
     diag = _inventory_diag(inv, projects, app_meta, proj_meta, prefixes)
@@ -706,7 +834,8 @@ def _demo() -> dict:
     weeks = [_iso_week(now - dt.timedelta(weeks=i)) for i in range(4)][::-1]  # oldest→newest
     logtypes = ["application", "access", "error"]
     records: list = []
-    last_map: dict = {}
+    ts_map: dict = {}
+    deploy_map: dict = {}
     # scripted quirks for a good story
     NO_LOGS = {("Control", "team-configs")}          # app with no indices at all
     TS_BAD = {("Platform", "checkout")}              # @timestamp = text in dev
@@ -714,6 +843,9 @@ def _demo() -> dict:
     MISSING_ENV = {("Platform", "payments", "qc")}   # payments not logging in qc
     BAD_WEEK = {("Platform", "checkout", "prd")}     # an illogical 5-digit year index
     FUTURE_WEEK = {("Platform", "checkout", "uat")}  # a future-dated index (clock skew)
+    # never deployed (→ expected to have no logs, hidden by default): the uat env
+    # of notifications, and every env of team-configs
+    UNDEPLOYED = {("Platform", "notifications", "uat")}
     future_wk = _iso_week(now + dt.timedelta(weeks=3))
 
     def env_conn(env):  # prd env served by prd connection, else non-prd
@@ -725,10 +857,17 @@ def _demo() -> dict:
         for app in p.get("apps", []):
             key = (pname, app)
             prefix = (app_meta.get(key) or {}).get("prefix")   # per-app prefix
+            # record deployments for every env EXCEPT the scripted un-deployed ones
+            for env in envs:
+                if key not in NO_LOGS and (pname, app, env) not in UNDEPLOYED:
+                    deploy_map[(pname, app, env)] = {
+                        "last_deploy": (now - dt.timedelta(days=2 + hash((app, env)) % 20))
+                        .replace(microsecond=0).isoformat() + "Z", "count": 3 + hash(app) % 9}
             if key in NO_LOGS or not prefix:      # unsupported/none platform → not checked
                 continue
             for env in envs:
-                if (pname, app, env) in MISSING_ENV:   # this env simply isn't logging
+                # not logging (deployed but broken) vs never deployed (expected)
+                if (pname, app, env) in MISSING_ENV or (pname, app, env) in UNDEPLOYED:
                     continue
                 src = env_conn(env)
                 for wk in weeks:
@@ -762,12 +901,14 @@ def _demo() -> dict:
                                     "project": pname, "env": env, "app": app,
                                     "logtype": "application", "week": future_wk,
                                     "bad_week": False})
-                # last-logged PER ENV: fresh, except the scripted stale env
+                # first + last logged PER ENV: fresh last, except the scripted
+                # stale env; first ≈ the oldest fabricated week
                 if (pname, app, env) in STALE_ENV:
-                    iso = (now - dt.timedelta(days=6, hours=2)).replace(microsecond=0).isoformat() + "Z"
+                    last = (now - dt.timedelta(days=6, hours=2)).replace(microsecond=0).isoformat() + "Z"
                 else:
-                    iso = (now - dt.timedelta(minutes=6 + hash((app, env)) % 40)).replace(microsecond=0).isoformat() + "Z"
-                last_map.setdefault((pname, app, env), []).append(iso)
+                    last = (now - dt.timedelta(minutes=6 + hash((app, env)) % 40)).replace(microsecond=0).isoformat() + "Z"
+                first = (now - dt.timedelta(weeks=3, hours=hash((app, env)) % 12)).replace(microsecond=0).isoformat() + "Z"
+                ts_map.setdefault((pname, app, env), []).append((first, last))
     # a couple of stray indices that carry a valid prefix but don't map to any
     # known app/project (naming drift → surfaced in the "unmatched" section)
     for name in (f"oc-Platform-prd-legacy-batch-application-{weeks[-1]}",
@@ -783,8 +924,8 @@ def _demo() -> dict:
                    "indices": sum(1 for r in records if r["source"] == "nonprd"),
                    "url": "https://es-nonprd.demo:9200"},
     }
-    return _assemble(records, last_map, conn_status, projects, known, "demo",
-                     app_meta, proj_meta, diag=diag)
+    return _assemble(records, ts_map, conn_status, projects, known, "demo",
+                     app_meta, proj_meta, env_meta, deploy_map, diag=diag)
 
 
 # ------------------------------------------------ @timestamp sample inspector

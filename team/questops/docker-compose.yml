@@ -48,6 +48,7 @@ services:
       LOG_INDEX_PREFIX: ${QO_LOG_INDEX_PREFIX:-}
       LOG_PRD_ENVS: ${QO_LOG_PRD_ENVS:-prd}
       LOG_STALE_HOURS: ${QO_LOG_STALE_HOURS:-48}
+      LOG_DEPLOY_INDEX: ${QO_LOG_DEPLOY_INDEX:-ef-cicd-deployments}
       UPGRADES_PROXY: ${QO_UPGRADES_PROXY:-}
       UPGRADES_VERIFY_SSL: ${QO_UPGRADES_VERIFY_SSL:-true}
       DOCKERHUB_API_BASE: ${QO_DOCKERHUB_API_BASE:-https://hub.docker.com/v2}
@@ -81,6 +82,7 @@ services:
       # the container too — no hardcoded IPs. Safe on podman >=4, where
       # service names (db, ollama) resolve via DNS, not /etc/hosts.
       - ${QO_HOSTS_FILE:-/etc/hosts}:/etc/hosts:ro
+      - /etc/resolv.conf:/etc/resolv.conf:ro
     # If your endpoints come from CORPORATE DNS (or the host uses a
     # systemd-resolved stub at 127.0.0.53 that the container can't reach),
     # point the container at the real resolver(s) and search domain(s):

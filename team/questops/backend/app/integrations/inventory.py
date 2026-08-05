@@ -432,10 +432,11 @@ def _demo() -> dict:
                                "deploy_platform": "OCP"},
               "app_vars": {
                   # app-specific deploy_platform (group_vars/payments/cicd.yml) —
-                  # K8s, which CLASHES with the project-global OCP → highlighted
+                  # K8s, which CLASHES with the project-global OCP → highlighted.
+                  # prd_team here also OVERRIDES the project's prd_team (owner clash).
                   "payments": {"repository_name": "payments-svc", "replicas": "2",
                                "timeout_s": "30", "feature_flags": "wallet,card",
-                               "deploy_platform": "K8s"},
+                               "deploy_platform": "K8s", "prd_team": "Payments_SRE"},
                   "checkout": {"repository_name": "checkout-svc", "replicas": "2",
                                "timeout_s": "45", "feature_flags": "card"},
                   "notifications": {"repository_name": "notify-svc", "replicas": "2",

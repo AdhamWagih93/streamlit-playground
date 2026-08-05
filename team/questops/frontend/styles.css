@@ -1268,8 +1268,11 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 /* ---------- logging: per-environment table ---------- */
 .log-env-table { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 8px; background: var(--bg-2); margin-bottom: 8px; }
 .log-env-table > .acc-h { margin: 2px 0 5px; padding: 0; }
-.log-env-row { display: grid; grid-template-columns: 60px 34px minmax(150px,1fr) minmax(150px,1.3fr) auto;
-  gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; border-left: 3px solid transparent; }
+.log-env-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 5px 6px; border-radius: 6px; border-left: 3px solid transparent; }
+.log-env-row .log-env-meta { min-width: 150px; }
+.log-env-row .log-env-badges { margin-left: auto; }
+.log-env-row.undeployed { opacity: .7; }
 .log-env-row + .log-env-row { border-top: 1px solid var(--line); }
 .log-env-row.nolog { border-left-color: var(--red); background: rgba(239,95,102,.05); }
 .log-env-row.stale { border-left-color: var(--amber); background: rgba(255,178,36,.05); }
@@ -1278,8 +1281,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-env-badges { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .log-env-row .chip { font-size: 10px; }
 @media (max-width: 720px) {
-  .log-env-row { grid-template-columns: 52px 30px 1fr; }
-  .log-env-last, .log-env-badges { grid-column: 3; justify-content: flex-start; }
+  .log-env-row .log-env-badges { margin-left: 0; }
 }
 
 /* ---------- logging: @timestamp sample inspector ---------- */

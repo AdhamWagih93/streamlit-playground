@@ -32,6 +32,7 @@ data:
   LOG_INDEX_PREFIX: {{ .Values.logging.indexPrefix | quote }}
   LOG_PRD_ENVS: {{ .Values.logging.prdEnvs | quote }}
   LOG_STALE_HOURS: {{ .Values.logging.staleHours | quote }}
+  LOG_DEPLOY_INDEX: {{ .Values.logging.deployIndex | quote }}
   JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}
   ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
   KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}

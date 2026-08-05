@@ -3163,7 +3163,7 @@ function logScoreBadge(s, label) {
 const LOG_ISSUE_LABEL = {
   no_logs: "no logs", stale: "stale", timestamp: "@timestamp not date",
   bad_week: "bad week/year", future_week: "future-dated", clash: "platform clash",
-  unsupported: "unsupported platform",
+  team_clash: "owner clash", unsupported: "unsupported platform",
 };
 
 function logTsBadge(a) {
@@ -3185,12 +3185,14 @@ function logAppMatch(a, f) {
   if (f.logtype && f.logtype !== "all" && !(a.logtypes || []).includes(f.logtype)) return false;
   if (f.env && f.env !== "all"
     && !(a.envs || []).includes(f.env) && !(a.expected_envs || []).includes(f.env)) return false;
+  if (f.team && f.team !== "all" && !(a.owners || []).includes(f.team)) return false;
   if (f.issue && f.issue !== "all") {
     if (f.issue === "any") { if (!(a.issues || []).length) return false; }
     else if (!(a.issues || []).includes(f.issue)) return false;
   }
   if (f.hideNoLogs && a.no_logs) return false;          // exclude apps with no logs
   if (f.hideUnmonitored && !a.monitored) return false;  // exclude unmonitored apps
+  if (f.hideUndeployed && !a.deployed) return false;    // exclude never-deployed apps
   return true;
 }
 
@@ -3226,21 +3228,34 @@ function logSortProjects(entries, sort) {
   return entries.slice().sort(cmp);
 }
 
-// per-environment health: last log + staleness are judged PER env, not per app
+const logDay = (iso) => iso ? esc(String(iso).slice(0, 10)) : "—";
+
+// per-environment health: owner ($env_team), last/first log + staleness, and
+// deployment state — all judged PER env, not per app
 function logEnvTable(a) {
   const rows = (a.env_stats || []).map((e) => {
     const badges = (e.issues || []).map((k) =>
       `<span class="chip chip-red">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join(" ")
-      || (e.indices ? '<span class="chip chip-green">ok</span>' : "");
-    return `<div class="log-env-row ${e.no_logs ? "nolog" : ""} ${e.stale ? "stale" : ""} ${!e.ts_ok && e.indices ? "tsbad" : ""}">
+      || (e.deployed && e.indices ? '<span class="chip chip-green">ok</span>' : "");
+    const owner = e.owner
+      ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `env owner: app sets ${esc(e.owner_app)}, project sets ${esc(e.owner_project)}` : `${esc(e.env)}_team (environment owner)`}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>`
+      : `<span class="ci-meta" title="no ${esc(e.env)}_team defined">👤 —</span>`;
+    const logged = !e.deployed
+      ? '<span class="ci-meta">never deployed</span>'
+      : (e.no_logs ? '<span class="pct-bad">no logs</span>'
+        : `<span title="first → last logged">${logDay(e.first_logged)} → ${logAgo(e.last_logged_age_h)}</span>`);
+    const deploy = e.deployed
+      ? `<span class="ci-meta" title="last deployment (${esc((state.logData || {}).deploy_index || "deployments")})">📦 ${logDay(e.last_deploy)}</span>`
+      : '<span class="chip chip-amber" title="no deployment on record">never deployed</span>';
+    return `<div class="log-env-row ${e.no_logs && e.deployed ? "nolog" : ""} ${e.stale ? "stale" : ""} ${!e.ts_ok && e.indices ? "tsbad" : ""} ${!e.deployed ? "undeployed" : ""}">
       <span class="chip chip-amber log-env-name">${esc(e.env)}</span>
-      ${logScoreBadge(e.score, "env score")}
-      <span class="ci-meta log-env-meta">${e.no_logs ? "no logs" : `${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs`}</span>
-      <span class="ci-meta log-env-last">last ${e.no_logs ? "—" : logAgo(e.last_logged_age_h)}${e.last_logged ? ` · ${esc(e.last_logged)}` : ""}</span>
+      ${logScoreBadge(e.score, "env score")}${owner}
+      <span class="ci-meta log-env-meta">${e.no_logs ? "—" : `${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs`}</span>
+      <span class="ci-meta log-env-last">${logged}</span>${deploy}
       <span class="log-env-badges">${badges}</span>
     </div>`;
   }).join("") || '<div class="ci-meta">no environments</div>';
-  return `<div class="log-env-table"><div class="acc-h">per-environment health</div>${rows}</div>`;
+  return `<div class="log-env-table"><div class="acc-h">per-environment · owner · logged (first→last) · last deploy</div>${rows}</div>`;
 }
 
 function logAppRow(a) {
@@ -3252,8 +3267,10 @@ function logAppRow(a) {
   else if (!noPlat) badges.push('<span class="chip chip-red">no platform</span>');
   if (unsupported) badges.push('<span class="chip chip-amber" title="deploy_platform is not one QuestOps monitors — logs are not checked">not monitored</span>');
   if (a.discrepancy) badges.push(`<span class="chip chip-red" title="app deploy_platform (${esc(a.app_platform)}) overrides the project global (${esc(a.project_platform)})">⚠ clash</span>`);
+  if ((a.owner_clash_envs || []).length) badges.push(`<span class="chip chip-red" title="environment owner ($env_team) assigned differently on the app vs the project in: ${esc((a.owner_clash_envs || []).join(", "))}">⚠ owner clash</span>`);
+  if (!a.deployed) badges.push(`<span class="chip chip-amber" title="never deployed per ${esc((state.logData || {}).deploy_index || "the deployments index")} — no logs expected">never deployed</span>`);
   if (a.monitored) {
-    if (a.envs_no_logs) badges.push(`<span class="chip chip-red" title="environments with no logs">${a.envs_no_logs} env no-logs</span>`);
+    if (a.envs_no_logs) badges.push(`<span class="chip chip-red" title="deployed environments with no logs">${a.envs_no_logs} env no-logs</span>`);
     if (a.envs_stale) badges.push(`<span class="chip chip-amber" title="stale environments">${a.envs_stale} env stale</span>`);
     if (!a.ts_ok && a.indices) badges.push(logTsBadge(a));
     if ((a.bad_week_indices || []).length) badges.push(`<span class="chip chip-red" title="illogical year/week in the index name">bad week · ${a.bad_week_indices.length}</span>`);
@@ -3298,8 +3315,10 @@ function logAppRow(a) {
   } else {
     body = `${logEnvTable(a)}
       <div class="log-app-facts">
+        <div><span class="acc-h">owners ($env_team)</span><div class="inv-chips">${(a.owners || []).map((o) => `<span class="chip chip-cyan">👤 ${esc(o)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}${(a.owner_clash_envs || []).length ? ` <span class="pct-bad">⚠ clash @ ${esc(a.owner_clash_envs.join(", "))}</span>` : ""}</div></div>
+        <div><span class="acc-h">logged span</span><div class="ci-meta">${a.first_logged ? `${logDay(a.first_logged)} → ${logDay(a.last_logged)}` : "—"}</div></div>
+        <div><span class="acc-h">last deploy</span><div class="ci-meta">${a.last_deploy ? esc(a.last_deploy) : (a.deployed ? "—" : "never deployed")}${a.undeployed_envs && a.undeployed_envs.length ? ` · <span class="pct-warn">un-deployed: ${esc(a.undeployed_envs.join(", "))}</span>` : ""}</div></div>
         <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
-        <div><span class="acc-h">weeks</span><div class="ci-meta">${a.weeks}${a.week_span ? ` · ${esc(a.week_span[0])} → ${esc(a.week_span[1])}` : ""}</div></div>
         <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}${a.discrepancy ? ` · <span class="pct-bad">⚠ overrides project ${esc(a.project_platform)}</span>` : ""}</div></div>
         <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
       </div>
@@ -3327,7 +3346,7 @@ function logProjectCardHtml(p, apps, f) {
     <summary>${logScoreBadge(p.score, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
-        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-week", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}</span></summary>
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-week", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}${apps.map(logAppRow).join("")}</div></details>`;
 }
 
@@ -3352,14 +3371,16 @@ function logTilesHtml(apps) {
     ${tile(has("bad_week"), "bad week/year", has("bad_week") ? "pct-bad" : "pct-good")}
     ${tile(has("future_week"), "future-dated", has("future_week") ? "pct-bad" : "pct-good")}
     ${tile(has("clash"), "platform clashes", has("clash") ? "pct-bad" : "pct-good")}
-    ${tile(has("unsupported"), "unmonitored", has("unsupported") ? "pct-warn" : "pct-good")}</div>`;
+    ${tile(has("team_clash"), "owner clashes", has("team_clash") ? "pct-bad" : "pct-good")}
+    ${tile(has("unsupported"), "unmonitored", has("unsupported") ? "pct-warn" : "pct-good")}
+    ${tile(sum((a) => a.deployed ? 0 : 1), "un-deployed", sum((a) => a.deployed ? 0 : 1) ? "pct-warn" : "pct-good")}</div>`;
 }
 
 function logContentHtml() {
   const d = state.logData;
   const f = state.logFilter;
   const on = (k) => f[k] && f[k] !== "all";
-  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("issue"));
+  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("team") || on("issue"));
   const filtered = [];
   // build filtered+sorted apps per project, then SORT THE PROJECTS by the same
   // metric so the ordering actually changes on screen (cards are collapsed)
@@ -3427,11 +3448,11 @@ async function renderLogging() {
   if (navStale(tok)) return;
   state.logData = d;
   const f = state.logFilter = state.logFilter
-    || { q: "", project: "all", platform: "all", logtype: "all", env: "all", issue: "all",
-      sort: "score", hideNoLogs: false, hideUnmonitored: false };
+    || { q: "", project: "all", platform: "all", logtype: "all", env: "all", team: "all",
+      issue: "all", sort: "score", hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
   const s = d.summary || {};
-  const anyActive = !!(f.q || ["project", "platform", "logtype", "env", "issue"]
-    .some((k) => f[k] && f[k] !== "all") || f.hideNoLogs || f.hideUnmonitored);
+  const anyActive = !!(f.q || ["project", "platform", "logtype", "env", "team", "issue"]
+    .some((k) => f[k] && f[k] !== "all") || f.hideNoLogs || f.hideUnmonitored || f.hideUndeployed);
 
   const legend = (d.platform_legend || []).map((x) =>
     `<span class="chip chip-cyan" title="deploy_platform ${esc(x.platform)} → index prefix ${esc(x.prefix)}">${esc(x.platform)} → <b>${esc(x.prefix)}</b></span>`).join(" ");
@@ -3457,7 +3478,7 @@ async function renderLogging() {
   const platforms = [...new Set((d.projects || []).flatMap((p) => (p.apps || [])
     .map((a) => a.deploy_platform).filter(Boolean)))].sort();
   const issueOpts = [["all", "issue: any"], ["any", "any issue"],
-    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "clash", "unsupported"]
+    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "clash", "team_clash", "unsupported"]
       .map((k) => [k, LOG_ISSUE_LABEL[k]])];
   // filters PRECEDE the stat tiles so the numbers respond to them
   const filterBar = `<div class="acc-filters">
@@ -3466,9 +3487,11 @@ async function renderLogging() {
     ${sel("log-platform", f.platform || "all", [["all", "platform: any"], ...platforms.map((p) => [p, p])])}
     ${sel("log-logtype", f.logtype || "all", [["all", "type: any"], ...(s.logtypes || []).map((l) => [l, l])])}
     ${sel("log-env", f.env || "all", [["all", "env: any"], ...(s.envs || []).map((e) => [e, e])])}
+    ${sel("log-team", f.team || "all", [["all", "owner: any"], ...(s.teams || []).map((tm) => [tm, tm])])}
     ${sel("log-issue", f.issue || "all", issueOpts)}
     ${sel("log-sort", f.sort || "score", [["score", "↑ worst score"], ["size", "↓ size"],
       ["updated", "↓ last updated"], ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]])}
+    <label class="log-issues" title="hide apps never deployed (per ${esc(d.deploy_index || "the deployments index")}) — no logs expected"><input type="checkbox" id="log-hide-undep" ${f.hideUndeployed ? "checked" : ""}> hide un-deployed</label>
     <label class="log-issues" title="hide apps that have no log indices"><input type="checkbox" id="log-hide-nolog" ${f.hideNoLogs ? "checked" : ""}> hide no-logs</label>
     <label class="log-issues" title="hide apps whose platform isn't monitored"><input type="checkbox" id="log-hide-unmon" ${f.hideUnmonitored ? "checked" : ""}> hide unmonitored</label>
     ${anyActive ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
@@ -3495,11 +3518,12 @@ function wireLogging() {
     }, 200);
   };
   [["log-project", "project"], ["log-platform", "platform"], ["log-logtype", "logtype"],
-   ["log-env", "env"], ["log-issue", "issue"], ["log-sort", "sort"]].forEach(([id, key]) => {
+   ["log-env", "env"], ["log-team", "team"], ["log-issue", "issue"], ["log-sort", "sort"]].forEach(([id, key]) => {
     const el = document.getElementById(id);
     if (el) el.onchange = () => { f[key] = el.value; rerenderLog(); };
   });
-  [["log-hide-nolog", "hideNoLogs"], ["log-hide-unmon", "hideUnmonitored"]].forEach(([id, key]) => {
+  [["log-hide-undep", "hideUndeployed"], ["log-hide-nolog", "hideNoLogs"],
+   ["log-hide-unmon", "hideUnmonitored"]].forEach(([id, key]) => {
     const el = document.getElementById(id);
     // re-render the whole view so the "✕ clear" button appears/disappears
     if (el) el.onchange = () => { f[key] = el.checked; renderLogging(); };
@@ -3507,7 +3531,8 @@ function wireLogging() {
   const cl = document.getElementById("log-clear");
   if (cl) cl.onclick = () => {
     state.logFilter = { q: "", project: "all", platform: "all", logtype: "all",
-      env: "all", issue: "all", sort: f.sort || "score", hideNoLogs: false, hideUnmonitored: false };
+      env: "all", team: "all", issue: "all", sort: f.sort || "score",
+      hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
     renderLogging();
   };
   wireLogContent();
