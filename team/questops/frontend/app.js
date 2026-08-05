@@ -3207,6 +3207,23 @@ function logSortApps(apps, sort) {
   return apps.slice().sort((a, b) => ((a.no_logs ? 1 : 0) - (b.no_logs ? 1 : 0)) || cmp(a, b));
 }
 
+// projects are sorted too (by the same metric, aggregated) — otherwise a sort
+// only reorders apps INSIDE collapsed cards and looks like it does nothing
+const _psv = (p) => (p.score == null ? 1000 : p.score);
+const _plast = (apps) => (apps || []).reduce((m, a) => (a.last_logged || "") > m ? (a.last_logged || "") : m, "");
+const LOG_PROJ_SORTS = {
+  score: (a, b) => _psv(a.p) - _psv(b.p) || (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
+  size: (a, b) => (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
+  docs: (a, b) => (b.t.docs || 0) - (a.t.docs || 0),
+  indices: (a, b) => (b.t.indices || 0) - (a.t.indices || 0),
+  updated: (a, b) => _plast(b.apps).localeCompare(_plast(a.apps)),
+  name: (a, b) => a.p.name.localeCompare(b.p.name),
+};
+function logSortProjects(entries, sort) {
+  const cmp = LOG_PROJ_SORTS[sort] || LOG_PROJ_SORTS.size;
+  return entries.slice().sort(cmp);
+}
+
 // per-environment health: last log + staleness are judged PER env, not per app
 function logEnvTable(a) {
   const rows = (a.env_stats || []).map((e) => {
@@ -3342,10 +3359,15 @@ function logContentHtml() {
   const on = (k) => f[k] && f[k] !== "all";
   f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("issue"));
   const filtered = [];
-  const cards = (d.projects || []).map((p) => {
-    const apps = logSortApps((p.apps || []).filter((a) => logAppMatch(a, f)), f.sort);
-    filtered.push(...apps);
-    return apps.length ? logProjectCardHtml(p, apps, f) : "";
+  // build filtered+sorted apps per project, then SORT THE PROJECTS by the same
+  // metric so the ordering actually changes on screen (cards are collapsed)
+  const entries = (d.projects || []).map((p) => ({
+    p, t: p.totals || {},
+    apps: logSortApps((p.apps || []).filter((a) => logAppMatch(a, f)), f.sort),
+  })).filter((e) => e.apps.length);
+  const cards = logSortProjects(entries, f.sort).map((e) => {
+    filtered.push(...e.apps);
+    return logProjectCardHtml(e.p, e.apps, f);
   }).join("");
   const un = (d.unmatched || []).length ? `
     <details class="filebox log-unmatched">
