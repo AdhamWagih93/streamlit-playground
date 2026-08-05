@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # (dev/qc/uat) to 3 weeks.
     log_retention_prd_days: int = 183
     log_retention_nonprd_days: int = 21
+    # environment display order inside each project (side-by-side columns).
+    # MAIN_ENVS are the primary columns; EXTRA_ENVS are shown separately.
+    log_main_envs: str = "dev,qc,uat,prd"
+    log_extra_envs: str = ""
     log_stale_hours: int = 48        # an app with no new log later than this = stale
     es_nonprd_url: str = ""          # non-prd Elasticsearch (dev/qc/uat log indices)
     es_nonprd_api_key: str = ""      # sent as 'Authorization: ApiKey <key>'
@@ -190,6 +194,14 @@ class Settings(BaseSettings):
     @property
     def log_prd_env_list(self) -> list[str]:
         return [e.lower() for e in self._csv(self.log_prd_envs)] or ["prd"]
+
+    @property
+    def log_main_env_list(self) -> list[str]:
+        return [e.lower() for e in self._csv(self.log_main_envs)]
+
+    @property
+    def log_extra_env_list(self) -> list[str]:
+        return [e.lower() for e in self._csv(self.log_extra_envs)]
 
     @property
     def log_platform_prefix_map(self) -> dict:

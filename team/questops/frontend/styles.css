@@ -1321,3 +1321,38 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   word-break: break-word; font: 400 11px var(--mono); background: var(--bg-2);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 .tss-noorig { font-style: italic; padding-left: 2px; }
+
+/* ---------- logging: side-by-side environment columns + project env dashboard ---------- */
+.log-envdetail, .log-envdash { margin: 4px 0 8px; }
+.log-envcols { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; align-items: stretch; }
+.log-envcol { flex: 1 1 150px; min-width: 150px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-2); padding: 7px 9px; display: flex; flex-direction: column; gap: 5px;
+  border-top: 3px solid var(--line); }
+.log-envcol.ok { border-top-color: var(--green); }
+.log-envcol.stale { border-top-color: var(--amber); }
+.log-envcol.nolog, .log-envcol.tsbad { border-top-color: var(--red); }
+.log-envcol.undeployed { border-top-color: var(--faint); opacity: .75; }
+.log-envcol.dash { background: var(--panel); }
+.log-envcol-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.log-envcol-head .log-env-name { font-weight: 600; }
+.log-envcol-nums { font: 500 11px var(--mono); color: var(--text); }
+.log-envcol-nums b { color: var(--amber); }
+.log-envcol-line { font-size: 11px; color: var(--dim); word-break: break-word; }
+.log-envcol-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: auto; }
+.log-envcol-badges .chip { font-size: 9.5px; }
+.log-env-extra { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.log-env-extra .acc-h { margin: 0 0 4px; padding: 0; }
+
+/* health meter + size bar */
+.log-meter { display: block; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.log-meter-fill { display: block; height: 100%; border-radius: 3px; }
+.log-meter-fill.a { background: var(--green); } .log-meter-fill.b { background: var(--cyan); }
+.log-meter-fill.c { background: var(--amber); } .log-meter-fill.f { background: var(--red); }
+.log-meter-fill.na { background: var(--faint); }
+.log-sizebar { display: block; height: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.log-sizebar-fill { display: block; height: 100%; background: var(--violet); border-radius: 3px; }
+
+/* the project env dashboard stays visible while browsing apps in the expander */
+.log-projdash-wrap { position: sticky; top: 0; z-index: 3; background: var(--panel);
+  padding: 6px 2px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+.log-projdash-wrap > .acc-h { margin: 0 0 5px; padding: 0; }

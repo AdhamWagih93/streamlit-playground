@@ -36,6 +36,8 @@ data:
   LOG_DEPLOY_TESTFLAG: {{ .Values.logging.deployTestflag | quote }}
   LOG_RETENTION_PRD_DAYS: {{ .Values.logging.retentionPrdDays | quote }}
   LOG_RETENTION_NONPRD_DAYS: {{ .Values.logging.retentionNonprdDays | quote }}
+  LOG_MAIN_ENVS: {{ .Values.logging.mainEnvs | quote }}
+  LOG_EXTRA_ENVS: {{ .Values.logging.extraEnvs | quote }}
   JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}
   ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
   KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}

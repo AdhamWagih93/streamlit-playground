@@ -3286,33 +3286,93 @@ const logDay = (iso) => iso ? esc(String(iso).slice(0, 10)) : "—";
 const logWhen = (iso) => iso ? esc(String(iso).slice(0, 16).replace("T", " ")) : "—";
 
 // per-environment health: owner ($env_team), logged SPAN (first→last), last
-// DEPLOYMENT, staleness — all judged and shown PER env, not per app
-function logEnvTable(a) {
-  const rows = (a.env_stats || []).map((e) => {
-    const badges = (e.issues || []).map((k) =>
-      `<span class="chip chip-red">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join(" ")
-      || (e.deployed && e.indices ? '<span class="chip chip-green">ok</span>' : "");
-    const owner = e.owner
-      ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `env owner: app sets ${esc(e.owner_app)}, project sets ${esc(e.owner_project)}` : `${esc(e.env)}_team (environment owner)`}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>`
-      : `<span class="ci-meta" title="no ${esc(e.env)}_team defined">👤 —</span>`;
-    // logged SPAN per env: first → last (+ relative age)
-    const logged = !e.deployed
-      ? '<span class="ci-meta">logs not expected (never deployed)</span>'
-      : (e.no_logs ? '<span class="pct-bad">no logs</span>'
-        : `<span title="oldest → newest logged @timestamp">🕓 <b>${logWhen(e.first_logged)}</b> → <b>${logWhen(e.last_logged)}</b> <span class="ci-meta">(${logAgo(e.last_logged_age_h)})</span></span>`);
-    // last DEPLOYMENT per env
-    const deploy = `<span title="last deployment for this env (${esc((state.logData || {}).deploy_index || "deployments")})">📦 <b>${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never deployed")}</b></span>`;
-    const size = e.no_logs ? "" : `${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs · `;
-    return `<div class="log-env-row ${e.no_logs && e.deployed ? "nolog" : ""} ${e.stale ? "stale" : ""} ${!e.ts_ok && e.indices ? "tsbad" : ""} ${!e.deployed ? "undeployed" : ""}">
-      <div class="log-env-head">
-        <span class="chip chip-amber log-env-name">${esc(e.env)}</span>
-        ${logScoreBadge(e.score, "env score")}${owner}
-        <span class="log-env-badges">${badges}</span>
-      </div>
-      <div class="log-env-detail ci-meta">${size}${logged} &nbsp;·&nbsp; ${deploy}</div>
+// environments are laid out SIDE BY SIDE in the configured order: MAIN_ENVS as
+// the primary columns, EXTRA_ENVS shown separately (also side by side).
+function logOrderedEnvs(present, d) {
+  const eo = (d || state.logData || {}).env_order || {};
+  const has = new Set(present);
+  const main = (eo.main || []).filter((e) => has.has(e));
+  const extra = (eo.extra || []).filter((e) => has.has(e));
+  const listed = new Set([...(eo.main || []), ...(eo.extra || [])]);
+  const rest = present.filter((e) => !listed.has(e)).sort();
+  return { main: [...main, ...rest], extra };
+}
+
+// health meter bar (score 0–100 → width + colour)
+const logMeter = (score) => `<span class="log-meter" title="health ${score == null ? "n/a" : score}"><span class="log-meter-fill ${logScoreClass(score)}" style="width:${score == null ? 0 : score}%"></span></span>`;
+
+// one app's per-environment detail card (used in the side-by-side layout)
+function logEnvCard(e) {
+  if (!e) return '<div class="log-envcol empty-env"><span class="ci-meta">—</span></div>';
+  const cls = !e.deployed ? "undeployed" : (e.no_logs ? "nolog" : (!e.ts_ok && e.indices ? "tsbad" : (e.stale ? "stale" : "ok")));
+  const owner = e.owner
+    ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `owner: app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(e.env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : "";
+  const badges = (e.issues || []).map((k) => `<span class="chip chip-red">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join(" ")
+    || (e.deployed && e.indices ? '<span class="chip chip-green">ok</span>' : "");
+  const logged = !e.deployed ? '<span class="ci-meta">never deployed</span>'
+    : (e.no_logs ? '<span class="pct-bad">no logs</span>'
+      : `<span class="ci-meta" title="oldest → newest logged">🕓 ${logWhen(e.first_logged)} → ${logWhen(e.last_logged)} <span class="ci-meta">(${logAgo(e.last_logged_age_h)})</span></span>`);
+  return `<div class="log-envcol ${cls}">
+    <div class="log-envcol-head"><span class="chip chip-amber log-env-name">${esc(e.env)}</span>${logScoreBadge(e.score, "env score")}</div>
+    ${logMeter(e.score)}
+    <div class="log-envcol-nums">${e.no_logs ? "—" : `${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs`}</div>
+    <div class="log-envcol-line">${owner}</div>
+    <div class="log-envcol-line">${logged}</div>
+    <div class="log-envcol-line ci-meta">📦 ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
+    <div class="log-envcol-badges">${badges}</div>
+  </div>`;
+}
+
+// an app's environments, side by side, in the configured order
+function logEnvColumns(a) {
+  const byEnv = {};
+  (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
+  const { main, extra } = logOrderedEnvs(Object.keys(byEnv), state.logData);
+  if (!main.length && !extra.length) return '<div class="ci-meta">no environments</div>';
+  const group = (envs) => `<div class="log-envcols">${envs.map((en) => logEnvCard(byEnv[en])).join("")}</div>`;
+  return `<div class="log-envdetail">
+    <div class="acc-h">environments (side by side) · owner · logged span · last deploy</div>
+    ${main.length ? group(main) : ""}
+    ${extra.length ? `<div class="log-env-extra"><span class="acc-h">extra envs</span>${group(extra)}</div>` : ""}</div>`;
+}
+
+// project-level per-env dashboard (aggregated across the shown apps) — stays
+// visible at the top of a project expander, side by side in the configured order
+function logProjEnvDash(apps) {
+  const agg = {};
+  apps.forEach((a) => (a.env_stats || []).forEach((e) => {
+    const m = agg[e.env] = agg[e.env] || { env: e.env, indices: 0, size_bytes: 0, docs: 0,
+      scores: [], no_logs: 0, stale: 0, ts_bad: 0, over: 0, apps: 0, owners: new Set() };
+    m.indices += e.indices; m.size_bytes += e.size_bytes; m.docs += e.docs; m.apps++;
+    if (e.score != null) m.scores.push(e.score);
+    if (e.no_logs && e.deployed) m.no_logs++;
+    if (e.stale) m.stale++;
+    if (!e.ts_ok && e.indices) m.ts_bad++;
+    if (e.over_retained) m.over++;
+    if (e.owner) m.owners.add(e.owner);
+  }));
+  const present = Object.keys(agg);
+  if (!present.length) return "";
+  const maxBytes = Math.max(1, ...present.map((en) => agg[en].size_bytes));
+  const { main, extra } = logOrderedEnvs(present, state.logData);
+  const col = (en) => {
+    const m = agg[en]; if (!m) return "";
+    const score = m.scores.length ? Math.round(m.scores.reduce((x, y) => x + y, 0) / m.scores.length) : null;
+    const bits = [m.no_logs && `${m.no_logs} no-logs`, m.stale && `${m.stale} stale`,
+      m.ts_bad && `${m.ts_bad} @ts`, m.over && `${m.over} over-ret`].filter(Boolean);
+    return `<div class="log-envcol dash">
+      <div class="log-envcol-head"><span class="chip chip-amber log-env-name">${esc(en)}</span>${logScoreBadge(score, "env project score")}</div>
+      ${logMeter(score)}
+      <div class="log-envcol-nums"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx · ${logInt(m.docs)} docs</div>
+      <span class="log-sizebar" title="size share"><span class="log-sizebar-fill" style="width:${(m.size_bytes / maxBytes * 100).toFixed(0)}%"></span></span>
+      <div class="log-envcol-line ci-meta">${m.apps} app(s)${m.owners.size ? ` · 👤 ${esc([...m.owners].slice(0, 2).join(", "))}${m.owners.size > 2 ? "…" : ""}` : ""}</div>
+      <div class="log-envcol-badges">${bits.map((tx) => `<span class="chip chip-red">${tx}</span>`).join(" ") || '<span class="chip chip-green">ok</span>'}</div>
     </div>`;
-  }).join("") || '<div class="ci-meta">no environments</div>';
-  return `<div class="log-env-table"><div class="acc-h">per-environment · owner · logged span (first→last) · last deployment</div>${rows}</div>`;
+  };
+  const group = (envs) => `<div class="log-envcols">${envs.map(col).join("")}</div>`;
+  return `<div class="log-envdash">
+    ${main.length ? group(main) : ""}
+    ${extra.length ? `<div class="log-env-extra"><span class="acc-h">extra envs</span>${group(extra)}</div>` : ""}</div>`;
 }
 
 // the app row is a cheap summary + a LAZY body — the heavy env table / index
@@ -3389,7 +3449,7 @@ function logAppBody(a) {
   } else if (noPlat) {
     body = `<div class="empty">No index prefix — no <code>deploy_platform</code> on this app (group_vars/&lt;app&gt;) or the project (group_vars/all).</div>`;
   } else {
-    body = `${logEnvTable(a)}
+    body = `${logEnvColumns(a)}
       <div class="log-app-facts">
         <div><span class="acc-h">owners ($env_team)</span><div class="inv-chips">${(a.owners || []).map((o) => `<span class="chip chip-cyan">👤 ${esc(o)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}${(a.owner_clash_envs || []).length ? ` <span class="pct-bad">⚠ clash @ ${esc(a.owner_clash_envs.join(", "))}</span>` : ""}</div></div>
         <div><span class="acc-h">logged span</span><div class="ci-meta">${a.first_logged ? `${logDay(a.first_logged)} → ${logDay(a.last_logged)}` : "—"}</div></div>
@@ -3432,7 +3492,9 @@ function logProjectCardHtml(p, apps, f) {
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
         flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
-    <div class="log-proj-body">${warn}${apps.map(logAppRow).join("")}</div></details>`;
+    <div class="log-proj-body">${warn}
+      <div class="log-projdash-wrap"><div class="acc-h">environments — project overview</div>${logProjEnvDash(apps)}</div>
+      <div class="log-app-list">${apps.map(logAppRow).join("")}</div></div></details>`;
 }
 
 // stat tiles are computed from the FILTERED apps so the numbers track the filters
