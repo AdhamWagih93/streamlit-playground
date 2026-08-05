@@ -6,7 +6,8 @@ Merges the WFH Schedule (rotation building/editing) and Team Attendance
 * **My Space** — personal status vs the 50% policy, fix past attendance
   (Office / Home / Day off).
 * **Team & Schedule** — who's in today, an *editable* repeating two-week
-  rotation (management), and management-set per-day plan overrides.
+  rotation (management; full-office members are fixed), and management-set
+  per-day plan overrides.
 * **Reports** — over any selected duration:
   - *Management report*: actual WFO/WFH per member, regardless of plan
     (CSV export, summary + day level).
@@ -76,7 +77,7 @@ except Exception:  # pragma: no cover
 # =============================================================================
 # TEAM RULES & CONFIG
 # =============================================================================
-TEAM_MEMBERS: List[str] = ["Adham", "Karam", "Hesham", "Salma", "Zanaty"]
+TEAM_MEMBERS: List[str] = ["Adham", "Karam", "Hesham", "Salma", "Zanaty", "Marwan"]
 YEAR = 2026
 
 ROLE_BY_MEMBER: Dict[str, str] = {
@@ -85,14 +86,24 @@ ROLE_BY_MEMBER: Dict[str, str] = {
     "Hesham": "mgmt-support",
     "Salma": "engineering",
     "Zanaty": "engineering",
+    "Marwan": "mgmt-support",
 }
+
+# Members who work from the office EVERY office day, permanently. They are
+# excluded from the 50/50 rotation (the rotation pattern never contains
+# them); rotation_default overlays WFO on Mon–Thu, WFH on Sundays.
+FULL_OFFICE_MEMBERS: Set[str] = {"Marwan"}
+ROTATING_MEMBERS: List[str] = [m for m in TEAM_MEMBERS if m not in FULL_OFFICE_MEMBERS]
 
 NEW_JOINER = "Zanaty"
 NEW_JOINER_FULL_OFFICE_UNTIL = date(2026, 8, 14)
 
 WORKDAYS = {6, 0, 1, 2, 3}       # Sun(6)–Thu(3)
 OFFICE_WEEKDAYS = {0, 1, 2, 3}   # Mon–Thu (Sundays always WFH)
-DAILY_OFFICE_MIN, DAILY_OFFICE_MAX = 2, 3
+# Daily cap raised 3→4 when Marwan (permanent full-office) joined: 5 rotating
+# members × 2 days = 10 rotating slots per week, and with one seat taken every
+# day only a 2–4 band leaves the required 1–3 rotating slots per day.
+DAILY_OFFICE_MIN, DAILY_OFFICE_MAX = 2, 4
 WEEKLY_WFO = 2
 WFO_PER_MEMBER_FORTNIGHT = 4
 
@@ -107,6 +118,7 @@ MEMBER_TO_SESSION_USER: Dict[str, str] = {
     "Hesham": "Hesham_Mostafa",
     "Salma": "Salma_Adel",
     "Zanaty": "Ahmed_zanaty",  # note the lowercase z — as it appears in session_states
+    "Marwan": "Marwan_Bakeer",
 }
 SESSION_USER_TO_MEMBER: Dict[str, str] = {v: k for k, v in MEMBER_TO_SESSION_USER.items()}
 # All session-username matching is case-insensitive: the platform is not
@@ -296,12 +308,20 @@ def generate_two_week_pattern(rotating=None, forced_office=None) -> List[Set[str
 
 
 def generate_stable_rotation(seed_bump: int = 0) -> List[Set[str]]:
+    """Deterministic rotation for the ROTATING members only. Full-office
+    members are not part of the stored pattern — ``rotation_default``
+    overlays them as WFO on every office day."""
     state = random.getstate()
     try:
         random.seed(ROTATION_SEED + seed_bump)
         for _ in range(200):
             try:
-                return generate_two_week_pattern(rotating=list(TEAM_MEMBERS))
+                pat = generate_two_week_pattern(
+                    rotating=list(ROTATING_MEMBERS),
+                    forced_office=sorted(FULL_OFFICE_MEMBERS),
+                )
+                # Strip the forced members: the pattern stores rotation only.
+                return [slot - FULL_OFFICE_MEMBERS for slot in pat]
             except RuntimeError:
                 continue
         raise RuntimeError("could not generate rotation")
@@ -310,10 +330,15 @@ def generate_stable_rotation(seed_bump: int = 0) -> List[Set[str]]:
 
 
 def validate_rotation(pattern: List[Set[str]]) -> Tuple[List[str], List[str]]:
-    """(errors, warnings) for an edited rotation. Errors are hard rules."""
+    """(errors, warnings) for an edited rotation. Errors are hard rules.
+
+    ``pattern`` holds only rotating members; full-office members are counted
+    as implicitly present on every office day (daily size + mgmt coverage)."""
     errors: List[str] = []
     warnings: List[str] = []
     weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu"] * 2
+    n_full = len(FULL_OFFICE_MEMBERS)
+    full_mgmt = any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in FULL_OFFICE_MEMBERS)
     for i, members in enumerate(pattern):
         wd = weekdays[i]
         label = f"Week {1 + i // 5} {wd}"
@@ -321,12 +346,15 @@ def validate_rotation(pattern: List[Set[str]]) -> Tuple[List[str], List[str]]:
             if members:
                 errors.append(f"{label}: Sundays are always home.")
             continue
-        n = len(members)
+        n = len(members) + n_full
         if n < DAILY_OFFICE_MIN or n > DAILY_OFFICE_MAX:
-            errors.append(f"{label}: {n} in office (need {DAILY_OFFICE_MIN}–{DAILY_OFFICE_MAX}).")
-        if not any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in members):
+            errors.append(
+                f"{label}: {n} in office incl. full-office members "
+                f"(need {DAILY_OFFICE_MIN}–{DAILY_OFFICE_MAX})."
+            )
+        if not full_mgmt and not any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in members):
             errors.append(f"{label}: no mgmt-support member present.")
-    for m in TEAM_MEMBERS:
+    for m in ROTATING_MEMBERS:
         for w in range(2):
             cnt = sum(1 for i in range(w * 5, w * 5 + 5) if m in pattern[i])
             if cnt != WEEKLY_WFO:
@@ -840,6 +868,9 @@ class Resolver:
         """Pure rotation plan (no overrides). None on Fri/Sat."""
         if not is_workday(d):
             return None
+        if member in FULL_OFFICE_MEMBERS:
+            # Permanently full-office: WFO every office day, WFH Sundays.
+            return "WFO" if is_office_day(d) else "WFH"
         if in_full_office_period(d) and member == NEW_JOINER and is_office_day(d):
             return "WFO"
         slot = rotation_slot(d)
@@ -1375,13 +1406,15 @@ def render_today_strip(res: Resolver, members: List[str]):
 
 
 def _pattern_to_df(pattern: List[Set[str]]) -> pd.DataFrame:
+    """Editor dataframe — ROTATING members only; full-office members are
+    fixed (always in) and don't appear as editable rows."""
     cols = [f"W{w + 1} {wd}" for w in range(2) for wd in ["Mon", "Tue", "Wed", "Thu"]]
     slots = [1, 2, 3, 4, 6, 7, 8, 9]  # office slots (skip Sundays 0 and 5)
     data = {}
     for c, slot in zip(cols, slots):
-        data[c] = [m in pattern[slot] for m in TEAM_MEMBERS]
-    df = pd.DataFrame(data, index=TEAM_MEMBERS)
-    df.insert(0, "Member", TEAM_MEMBERS)
+        data[c] = [m in pattern[slot] for m in ROTATING_MEMBERS]
+    df = pd.DataFrame(data, index=ROTATING_MEMBERS)
+    df.insert(0, "Member", ROTATING_MEMBERS)
     return df
 
 
@@ -1390,7 +1423,7 @@ def _df_to_pattern(df: pd.DataFrame) -> List[Set[str]]:
     slots = [1, 2, 3, 4, 6, 7, 8, 9]
     pattern: List[Set[str]] = [set() for _ in range(10)]
     for c, slot in zip(cols, slots):
-        for i, m in enumerate(TEAM_MEMBERS):
+        for i, m in enumerate(ROTATING_MEMBERS):
             if bool(df.iloc[i][c]):
                 pattern[slot].add(m)
     return pattern
@@ -1410,9 +1443,12 @@ def render_schedule(res: Resolver, viewer: str | None, start: date, end: date,
                 unsafe_allow_html=True)
     can_edit = is_mgmt(viewer)
     if can_edit:
+        full = ", ".join(sorted(FULL_OFFICE_MEMBERS))
         st.caption(
             "Tick = in office. Save validates the team rules; you can save "
-            "anyway if you accept the listed violations. Sundays are always home."
+            "anyway if you accept the listed violations. Sundays are always home"
+            + (f"; {full} works full-office and is counted automatically on every "
+               "office day (no editable row)." if full else ".")
         )
         df = _pattern_to_df(res.rotation)
         cfg = {"Member": st.column_config.TextColumn(disabled=True)}
@@ -1527,11 +1563,16 @@ def _render_rotation_readonly(pattern: List[Set[str]]):
     for m in TEAM_MEMBERS:
         cells = []
         for slot in range(10):
-            if weekdays[slot % 5] == "Sun" or m not in pattern[slot]:
-                cells.append("<td class='hcell c-home'>H</td>")
-            else:
+            in_office = (
+                weekdays[slot % 5] != "Sun"
+                and (m in pattern[slot] or m in FULL_OFFICE_MEMBERS)
+            )
+            if in_office:
                 cells.append("<td class='hcell c-office'>O</td>")
-        rows.append(f"<tr><td class='hlabel sticky'>{m}</td>{''.join(cells)}</tr>")
+            else:
+                cells.append("<td class='hcell c-home'>H</td>")
+        tag = " <span class='mini-full'>full office</span>" if m in FULL_OFFICE_MEMBERS else ""
+        rows.append(f"<tr><td class='hlabel sticky'>{m}{tag}</td>{''.join(cells)}</tr>")
     st.markdown(
         f"<div class='grid-wrap'><table class='hgrid'><thead><tr>{header}</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>",
@@ -1890,11 +1931,13 @@ def render_method(res: Resolver, can_edit: bool):
         f"""
         <div class='algo'>
           <ol>
-            <li><b>Plan</b> — the repeating two-week rotation (each member in office 2 of the 4
-                office days, Mon–Thu), plus per-day <i>overrides</i>. Sundays appear in the plan
-                and default to <b>Home</b>, but a Sunday can be overridden (and Sunday attendance
-                is detected like any other day). During onboarding {NEW_JOINER} is planned in
-                office every office day through {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}.</li>
+            <li><b>Plan</b> — the repeating two-week rotation (each rotating member in office 2
+                of the 4 office days, Mon–Thu), plus per-day <i>overrides</i>. Full-office members
+                ({", ".join(sorted(FULL_OFFICE_MEMBERS))}) are planned in office every office day.
+                Sundays appear in the plan and default to <b>Home</b>, but a Sunday can be
+                overridden (and Sunday attendance is detected like any other day). During
+                onboarding {NEW_JOINER} is planned in office every office day through
+                {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}.</li>
             <li><b>Actual</b> — your own saved record wins (explicit, audit-stamped). Otherwise
                 IP detection from <code>{SESSION_STATES_TABLE}</code>: in office when any session's
                 <code>client_ip</code> starts with <code>{OFFICE_IP_PREFIX}</code>
@@ -2102,6 +2145,7 @@ def inject_css() -> None:
         .bar-val {{ width:110px; text-align:right; font-weight:800; font-size:.82rem; }}
         .bar-val.ok {{ color:#15803d; }} .bar-val.bad {{ color:#b91c1c; }} .bar-val.muted {{ color:var(--sub); }}
         .mini-breach {{ font-size:.64rem; background:#fee2e2; color:#b91c1c; padding:.05rem .3rem; border-radius:6px; font-weight:800; }}
+        .mini-full {{ font-size:.62rem; background:#e2f4e8; color:#15803d; padding:.05rem .3rem; border-radius:6px; font-weight:800; }}
         .grid-wrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 4px 14px rgba(15,41,66,.05); }}
         .hgrid {{ border-collapse:separate; border-spacing:0; font-size:.72rem; }}
         .hgrid th, .hgrid td {{ text-align:center; }}
