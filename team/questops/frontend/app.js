@@ -3430,23 +3430,28 @@ function logMatrixHtml(p, apps, f) {
   }));
   const maxBytes = Math.max(1, ...cols.map((en) => (agg[en] || {}).size_bytes || 0));
   const head = `<div class="log-mx-row head">
-    <div class="log-mx-appcell head">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 <b>${esc(p.name)}</b></span></div>
+    <div class="log-mx-appcell head">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 <b>${esc(p.name)}</b></span> <span class="log-mx-headhint ci-meta">↓ apps · click an env to focus</span></div>
     ${cols.map((en, i) => logMxHead(en, agg[en], f, i === sepAt, maxBytes)).join("")}</div>`;
+  // each app is its OWN native expander, listed directly under the env header;
+  // its collapsed summary is the aligned per-env health row, expanding reveals
+  // all its details (built lazily on first open).
   const rows = apps.map((a) => {
     const _aid = "a" + (++_logAppSeq);
     a._mxcols = cols; a._mxsep = sepAt;
     (state.logAppMap = state.logAppMap || {})[_aid] = a;
     const byEnv = {}; (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
     const rowCls = a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : (!a.deployed ? "undeployed" : "")));
-    return `<div class="log-mx-row app ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0">
-        <div class="log-mx-appcell">
-          <span class="log-mx-appline">${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span> <span class="log-mx-caret">▸</span></span>
-          <span class="log-mx-appflags">${logAppFlags(a)}</span>
-        </div>
-        ${cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("")}</div>
-      <div class="log-mx-detail" data-detail-for="${_aid}" data-lazy="1" hidden></div>`;
+    return `<details class="log-mx-app ${rowCls}" data-app-id="${_aid}">
+        <summary class="log-mx-row app">
+          <div class="log-mx-appcell">
+            <span class="log-mx-appline"><span class="log-mx-caret">▸</span> ${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span></span>
+            <span class="log-mx-appflags">${logAppFlags(a)}</span>
+          </div>
+          ${cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("")}
+        </summary>
+        <div class="log-mx-app-body" data-lazy="1"></div></details>`;
   }).join("");
-  return `<div class="log-matrix" style="--envn:${cols.length}">${head}${rows}</div>`;
+  return `<div class="log-mx-scroll"><div class="log-matrix" style="--envn:${cols.length}">${head}${rows}</div></div>`;
 }
 
 function logProjectCardHtml(p, apps, f) {
@@ -3583,31 +3588,19 @@ async function loadTsSamples(btn) {
   try { c.innerHTML = logTsSamplesHtml(await api(`/api/logging/ts-samples?${qs.toString()}`)); }
   catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
-function logToggleAppDetail(row) {
-  const aid = row.dataset.appId;
-  const det = view().querySelector(`.log-mx-detail[data-detail-for="${aid}"]`);
-  if (!det) return;
-  const open = det.hasAttribute("hidden");
-  view().querySelectorAll(`.log-mx-row.app[data-app-id="${aid}"]`).forEach((r) => r.classList.toggle("open", open));
-  if (!open) { det.setAttribute("hidden", ""); return; }
-  det.removeAttribute("hidden");
-  if (det.dataset.lazy) {
-    const a = (state.logAppMap || {})[aid];
-    det.innerHTML = a ? logAppDetail(a) : '<div class="empty">unavailable</div>';
-    delete det.dataset.lazy;
-    det.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
-  }
-}
 function wireLogContent() {
-  // expand an app ROW → lazily build its detail drawer (aligned under the env columns)
-  view().querySelectorAll(".log-mx-row.app").forEach((row) => {
-    const go = (ev) => {
-      if (ev.target.closest(".log-mx-cell.head")) return;   // (defensive) never on header
-      logToggleAppDetail(row);
-    };
-    row.addEventListener("click", go);
-    row.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); logToggleAppDetail(row); } });
-  });
+  // each app is a native <details> — build its heavy detail body the first
+  // time it's expanded (keeps filter/sort re-renders fast even with many apps)
+  view().querySelectorAll("details.log-mx-app").forEach((det) => det.addEventListener("toggle", () => {
+    if (!det.open) return;
+    const body = det.querySelector(".log-mx-app-body");
+    if (!body || !body.dataset.lazy) return;
+    const a = (state.logAppMap || {})[det.dataset.appId];
+    if (!a) return;
+    body.innerHTML = logAppDetail(a);
+    delete body.dataset.lazy;
+    body.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
+  }));
   // click an ENV column header → focus/unfocus that environment (leverages scoping)
   view().querySelectorAll(".log-mx-cell.head[data-env]").forEach((cell) => {
     const focus = (ev) => {
@@ -3683,8 +3676,9 @@ async function renderLogging() {
   const issueOpts = [["all", "issue: any"], ["any", "any issue"],
     ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "over_retained", "clash", "team_clash", "unsupported"]
       .map((k) => [k, LOG_ISSUE_LABEL[k]])];
-  // filters PRECEDE the stat tiles so the numbers respond to them
-  const filterBar = `<div class="acc-filters">
+  // filters PRECEDE the stat tiles so the numbers respond to them; the bar is
+  // STICKY (always visible while scrolling) and visually compact
+  const filterBar = `<div class="acc-filters log-filters">
     <input id="log-q" placeholder="🔎 app / project / platform / env / logtype…" value="${esc(f.q || "")}">
     ${sel("log-project", f.project || "all", [["all", "project: any"], ...projNames.map((p) => [p, p])])}
     ${sel("log-platform", f.platform || "all", [["all", "platform: any"], ...platforms.map((p) => [p, p])])}

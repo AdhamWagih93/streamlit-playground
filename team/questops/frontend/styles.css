@@ -685,6 +685,17 @@ a.chip.chip-green:hover { filter: brightness(1.3); }
 .acc-filters input:focus, .acc-filters select:focus { outline: none; border-color: var(--amber); }
 .acc-filters #ado-q { flex: 1; min-width: 150px; }
 .acc-filter-num { width: 92px; }
+
+/* Logging filter bar: STICKY (always visible under the page scroll) + compact */
+.log-filters { position: sticky; top: 0; z-index: 20; margin: 0 -30px 10px; padding: 7px 30px;
+  background: var(--bg); border: none; border-bottom: 1px solid var(--line); border-radius: 0;
+  gap: 5px 6px; box-shadow: 0 6px 14px -10px rgba(0,0,0,.6); }
+.log-filters input, .log-filters select { padding: 3px 6px; font-size: 11.5px; }
+.log-filters #log-q { flex: 1 1 180px; min-width: 140px; }
+.log-filters select { max-width: 130px; }
+.log-filters .log-issues { font-size: 11px; color: var(--dim); display: inline-flex; align-items: center; gap: 3px; }
+.log-filters .log-issues input { margin: 0; }
+.log-filters .ci-meta { font-size: 10.5px; }
 .acc-duprepo { margin-bottom: 10px; border-color: rgba(165,139,245,.35); }
 .acc-duprepo > summary { color: var(--violet); }
 .acc-duprepo-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 3px 0;
@@ -1316,28 +1327,34 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 
 /* ---------- logging: side-by-side environment columns + project env dashboard ---------- */
 /* ---- apps × environments matrix -------------------------------------- */
-/* every row shares one column template so app cells line up under the env
-   headers; the whole grid scrolls horizontally as a unit when envs are many */
+/* env header + every app row share one column template so cells line up; the
+   inner grid grows to its content width and the wrapper scrolls horizontally
+   as a unit (rows all stretch to the same width → columns stay aligned) */
+.log-mx-scroll { overflow-x: auto; padding-bottom: 4px; }
 .log-matrix { --mx-tmpl: minmax(160px, 1.35fr) repeat(var(--envn), minmax(104px, 1fr));
-  display: flex; flex-direction: column; gap: 5px; overflow-x: auto; padding-bottom: 4px; }
-.log-mx-row { display: grid; grid-template-columns: var(--mx-tmpl); gap: 6px;
-  align-items: stretch; min-width: max-content; }
-.log-mx-row.app { cursor: pointer; border-radius: 9px; }
-.log-mx-row.app:hover .log-mx-appcell { background: rgba(255,178,36,.05); }
-.log-mx-row.app:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
-.log-mx-row.app.open .log-mx-caret { transform: rotate(90deg); }
-.log-mx-row.app.open .log-mx-appcell { border-color: var(--amber); }
+  display: flex; flex-direction: column; gap: 5px; width: max-content; min-width: 100%; }
+.log-mx-row { display: grid; grid-template-columns: var(--mx-tmpl); gap: 6px; align-items: stretch; }
 
-/* the sticky project/env header row */
+/* each app is a native <details>; its <summary> IS the aligned grid row */
+.log-mx-app { border-radius: 9px; }
+.log-mx-app > summary { cursor: pointer; list-style: none; padding: 0; margin: 0; }
+.log-mx-app > summary::-webkit-details-marker { display: none; }
+.log-mx-app > summary:hover .log-mx-appcell { background: rgba(255,178,36,.05); border-color: var(--amber); }
+.log-mx-app > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 9px; }
+.log-mx-app[open] > summary .log-mx-caret { transform: rotate(90deg); }
+.log-mx-app[open] > summary .log-mx-appcell { border-color: var(--amber); background: rgba(255,178,36,.06); }
+
+/* the project/env header row sits directly above its apps */
 .log-mx-row.head { position: sticky; top: 0; z-index: 4; padding: 4px 0 6px;
   background: var(--panel); border-bottom: 1px solid var(--line); }
+.log-mx-headhint { margin-left: auto; font-size: 10px; }
 
 .log-mx-appcell { border: 1px solid var(--line); border-radius: 9px; background: var(--bg-2);
   padding: 7px 9px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .log-mx-appcell.head { background: transparent; border: none; padding: 6px 4px; justify-content: center; }
 .log-mx-appline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .log-mx-projname { font: 700 13.5px var(--body); color: var(--text); }
-.log-mx-caret { margin-left: auto; color: var(--faint); font-size: 11px; transition: transform .12s ease; }
+.log-mx-caret { color: var(--faint); font-size: 11px; transition: transform .12s ease; flex: none; }
 .log-mx-appflags { display: flex; gap: 4px; flex-wrap: wrap; }
 .log-mx-appflags .chip { font-size: 9.5px; }
 
@@ -1375,12 +1392,10 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-dot.bad { background: var(--red); } .log-dot.warn { background: var(--amber); }
 .log-dot.ok { background: var(--green); }
 
-/* an app's dive detail: the aligned per-env detail row + facts + inspector */
-.log-mx-detail { margin: -1px 0 3px; }
-.log-mx-detail[hidden] { display: none; }
+/* an app's expander body: the aligned per-env detail row + facts + inspector */
+.log-mx-app-body { padding: 3px 0 6px; }
 .log-mx-detail-inner { border: 1px solid var(--amber); border-radius: 9px; background: var(--panel);
   padding: 9px 10px; display: flex; flex-direction: column; gap: 8px; }
-.log-mx-detail-inner .log-mx-row { min-width: 0; }
 .log-mx-cell.detail { gap: 3px; }
 .log-mx-dline { font-size: 10.5px; color: var(--dim); word-break: break-word; }
 .log-mx-cell.detail .chip { font-size: 9px; }
