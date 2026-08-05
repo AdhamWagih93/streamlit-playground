@@ -1356,3 +1356,6 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-projdash-wrap { position: sticky; top: 0; z-index: 3; background: var(--panel);
   padding: 6px 2px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
 .log-projdash-wrap > .acc-h { margin: 0 0 5px; padding: 0; }
+.log-projdash-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px;
+  font: 600 13px var(--body); color: var(--text); }
+.log-projdash-title .log-score { font-size: 10px; }

@@ -3494,7 +3494,10 @@ function logProjectCardHtml(p, apps, f) {
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
         flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}
-      <div class="log-projdash-wrap"><div class="acc-h">environments — project overview</div>${logProjEnvDash(apps)}</div>
+      <div class="log-projdash-wrap">
+        <div class="log-projdash-title">📁 <b>${esc(p.name)}</b> ${logScoreBadge(pscore, "project health score")}
+          <span class="ci-meta">${apps.length} app(s) · ${logInt(t.indices)} idx · ${esc(t.size_h)} · environments overview</span></div>
+        ${logProjEnvDash(apps)}</div>
       <div class="log-app-list">${apps.map(logAppRow).join("")}</div></div></details>`;
 }
 
