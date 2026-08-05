@@ -3378,9 +3378,10 @@ function logProjEnvDash(apps) {
 // the app row is a cheap summary + a LAZY body — the heavy env table / index
 // list / inspector is built only when the row is expanded (keeps filter/sort
 // re-renders fast even with many apps).
-const logAppKey = (a) => a.project + " " + a.app + (a.not_in_inventory ? " ni" : "");
+let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy bodies)
 function logAppRow(a) {
-  (state.logAppMap = state.logAppMap || {})[logAppKey(a)] = a;
+  const _aid = "a" + (++_logAppSeq);
+  (state.logAppMap = state.logAppMap || {})[_aid] = a;
   const unsupported = a.platform_status === "unsupported";
   const noPlat = a.platform_status === "none";
   const badges = [];
@@ -3405,7 +3406,7 @@ function logAppRow(a) {
       ? `<span class="ci-meta">${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs</span>`
       : `<span class="ci-meta">no index prefix</span>`);
   const cls = unsupported ? "unsup" : (a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : "")));
-  return `<details class="filebox log-app ${cls}" data-app-key="${esc(logAppKey(a))}">
+  return `<details class="filebox log-app ${cls}" data-app-key="${_aid}">
     <summary>${logScoreBadge(a.score, "app health score")}
       <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
       ${badges.join(" ")} ${meta}</summary>
@@ -3529,7 +3530,7 @@ function logContentHtml() {
   const f = state.logFilter;
   const on = (k) => f[k] && f[k] !== "all";
   f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("team") || on("issue"));
-  state.logAppMap = {};   // rebuilt as rows render → lazy bodies look apps up here
+  state.logAppMap = {}; _logAppSeq = 0;   // rebuilt as rows render → lazy bodies look apps up here
   const filtered = [];
   // filter → SCOPE (env/team) → sort apps; then sort the projects the same way.
   // Scoping recomputes each app's aggregates from just the matching envs.
