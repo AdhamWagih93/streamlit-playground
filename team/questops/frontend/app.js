@@ -3229,9 +3229,10 @@ function logSortProjects(entries, sort) {
 }
 
 const logDay = (iso) => iso ? esc(String(iso).slice(0, 10)) : "—";
+const logWhen = (iso) => iso ? esc(String(iso).slice(0, 16).replace("T", " ")) : "—";
 
-// per-environment health: owner ($env_team), last/first log + staleness, and
-// deployment state — all judged PER env, not per app
+// per-environment health: owner ($env_team), logged SPAN (first→last), last
+// DEPLOYMENT, staleness — all judged and shown PER env, not per app
 function logEnvTable(a) {
   const rows = (a.env_stats || []).map((e) => {
     const badges = (e.issues || []).map((k) =>
@@ -3240,22 +3241,24 @@ function logEnvTable(a) {
     const owner = e.owner
       ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `env owner: app sets ${esc(e.owner_app)}, project sets ${esc(e.owner_project)}` : `${esc(e.env)}_team (environment owner)`}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>`
       : `<span class="ci-meta" title="no ${esc(e.env)}_team defined">👤 —</span>`;
+    // logged SPAN per env: first → last (+ relative age)
     const logged = !e.deployed
-      ? '<span class="ci-meta">never deployed</span>'
+      ? '<span class="ci-meta">logs not expected (never deployed)</span>'
       : (e.no_logs ? '<span class="pct-bad">no logs</span>'
-        : `<span title="first → last logged">${logDay(e.first_logged)} → ${logAgo(e.last_logged_age_h)}</span>`);
-    const deploy = e.deployed
-      ? `<span class="ci-meta" title="last deployment (${esc((state.logData || {}).deploy_index || "deployments")})">📦 ${logDay(e.last_deploy)}</span>`
-      : '<span class="chip chip-amber" title="no deployment on record">never deployed</span>';
+        : `<span title="oldest → newest logged @timestamp">🕓 <b>${logWhen(e.first_logged)}</b> → <b>${logWhen(e.last_logged)}</b> <span class="ci-meta">(${logAgo(e.last_logged_age_h)})</span></span>`);
+    // last DEPLOYMENT per env
+    const deploy = `<span title="last deployment for this env (${esc((state.logData || {}).deploy_index || "deployments")})">📦 <b>${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never deployed")}</b></span>`;
+    const size = e.no_logs ? "" : `${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs · `;
     return `<div class="log-env-row ${e.no_logs && e.deployed ? "nolog" : ""} ${e.stale ? "stale" : ""} ${!e.ts_ok && e.indices ? "tsbad" : ""} ${!e.deployed ? "undeployed" : ""}">
-      <span class="chip chip-amber log-env-name">${esc(e.env)}</span>
-      ${logScoreBadge(e.score, "env score")}${owner}
-      <span class="ci-meta log-env-meta">${e.no_logs ? "—" : `${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs`}</span>
-      <span class="ci-meta log-env-last">${logged}</span>${deploy}
-      <span class="log-env-badges">${badges}</span>
+      <div class="log-env-head">
+        <span class="chip chip-amber log-env-name">${esc(e.env)}</span>
+        ${logScoreBadge(e.score, "env score")}${owner}
+        <span class="log-env-badges">${badges}</span>
+      </div>
+      <div class="log-env-detail ci-meta">${size}${logged} &nbsp;·&nbsp; ${deploy}</div>
     </div>`;
   }).join("") || '<div class="ci-meta">no environments</div>';
-  return `<div class="log-env-table"><div class="acc-h">per-environment · owner · logged (first→last) · last deploy</div>${rows}</div>`;
+  return `<div class="log-env-table"><div class="acc-h">per-environment · owner · logged span (first→last) · last deployment</div>${rows}</div>`;
 }
 
 function logAppRow(a) {
