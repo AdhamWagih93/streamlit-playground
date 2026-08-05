@@ -1300,3 +1300,24 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .tss-doc.ok { background: rgba(67,200,132,.06); }
 .tss-doc .chip { font-size: 9.5px; }
 .log-app.unsup { border-left: 3px solid var(--amber); opacity: .92; }
+
+/* ---------- logging: collapsed setup / health ---------- */
+.log-setup { margin: 6px 0 10px; }
+.log-setup > summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--cyan); }
+.log-setup-dots { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+.log-setup-dots .chip { font-size: 10px; }
+.log-setup-body { padding: 8px 12px 12px; }
+
+/* ---------- logging: @timestamp sample docs + event.original ---------- */
+.tss-doc { display: block; padding: 5px 7px; border-radius: 6px; margin-bottom: 4px; }
+.tss-doc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tss-val { font: 600 12px var(--mono); word-break: break-all; }
+.tss-doc.bad { background: rgba(239,95,102,.09); }
+.tss-doc.ok { background: rgba(67,200,132,.06); }
+.tss-src { margin-left: auto; }
+.tss-orig { margin-top: 3px; }
+.tss-orig > summary { cursor: pointer; font: 500 10.5px var(--mono); color: var(--dim); }
+.tss-orig pre { margin: 4px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap;
+  word-break: break-word; font: 400 11px var(--mono); background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.tss-noorig { font-style: italic; padding-left: 2px; }

@@ -33,6 +33,8 @@ data:
   LOG_PRD_ENVS: {{ .Values.logging.prdEnvs | quote }}
   LOG_STALE_HOURS: {{ .Values.logging.staleHours | quote }}
   LOG_DEPLOY_INDEX: {{ .Values.logging.deployIndex | quote }}
+  LOG_RETENTION_PRD_DAYS: {{ .Values.logging.retentionPrdDays | quote }}
+  LOG_RETENTION_NONPRD_DAYS: {{ .Values.logging.retentionNonprdDays | quote }}
   JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}
   ERROR_ANALYSIS_INDEX: {{ .Values.elasticsearch.errorAnalysisIndex | quote }}
   KPI_SYNC_MINUTES: {{ .Values.elasticsearch.kpiSyncMinutes | quote }}

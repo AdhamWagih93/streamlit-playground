@@ -83,6 +83,8 @@ logging:
   prdEnvs: "prd"            # env token(s) served by the primary (prd) ES
   staleHours: 48            # newest-log age (h) that flags an app "stale"
   deployIndex: "ef-cicd-deployments"  # CI/CD deployments index (prd ES) for last-deploy / never-deployed
+  retentionPrdDays: 183     # prd log retention (days) — older = "over-retained" (minor)
+  retentionNonprdDays: 21   # non-prd log retention (days)
 
 app_timezone: "UTC"       # TZ env for the pod (KPI countdown alignment)
 

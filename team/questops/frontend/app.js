@@ -3162,8 +3162,8 @@ function logScoreBadge(s, label) {
 }
 const LOG_ISSUE_LABEL = {
   no_logs: "no logs", stale: "stale", timestamp: "@timestamp not date",
-  bad_week: "bad week/year", future_week: "future-dated", clash: "platform clash",
-  team_clash: "owner clash", unsupported: "unsupported platform",
+  bad_week: "bad year", future_week: "future-dated", over_retained: "over-retained",
+  clash: "platform clash", team_clash: "owner clash", unsupported: "unsupported platform",
 };
 
 function logTsBadge(a) {
@@ -3261,10 +3261,14 @@ function logEnvTable(a) {
   return `<div class="log-env-table"><div class="acc-h">per-environment · owner · logged span (first→last) · last deployment</div>${rows}</div>`;
 }
 
+// the app row is a cheap summary + a LAZY body — the heavy env table / index
+// list / inspector is built only when the row is expanded (keeps filter/sort
+// re-renders fast even with many apps).
+const logAppKey = (a) => a.project + " " + a.app + (a.not_in_inventory ? " ni" : "");
 function logAppRow(a) {
+  (state.logAppMap = state.logAppMap || {})[logAppKey(a)] = a;
   const unsupported = a.platform_status === "unsupported";
   const noPlat = a.platform_status === "none";
-  const id = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
   const badges = [];
   if (a.deploy_platform) badges.push(`<span class="chip ${unsupported ? "chip-amber" : "chip-cyan"}" title="deploy_platform (source: ${esc(a.prefix_source || "?")})${a.prefix ? ` → prefix ${esc(a.prefix)}` : ""}">${esc(a.deploy_platform)}${a.prefix ? ` → ${esc(a.prefix)}` : ""}</span>`);
   else if (!noPlat) badges.push('<span class="chip chip-red">no platform</span>');
@@ -3276,8 +3280,9 @@ function logAppRow(a) {
     if (a.envs_no_logs) badges.push(`<span class="chip chip-red" title="deployed environments with no logs">${a.envs_no_logs} env no-logs</span>`);
     if (a.envs_stale) badges.push(`<span class="chip chip-amber" title="stale environments">${a.envs_stale} env stale</span>`);
     if (!a.ts_ok && a.indices) badges.push(logTsBadge(a));
-    if ((a.bad_week_indices || []).length) badges.push(`<span class="chip chip-red" title="illogical year/week in the index name">bad week · ${a.bad_week_indices.length}</span>`);
+    if ((a.bad_week_indices || []).length) badges.push(`<span class="chip chip-red" title="illogical year in the index name (not 4 digits / out of range)">bad year · ${a.bad_week_indices.length}</span>`);
     if ((a.future_week_indices || []).length) badges.push(`<span class="chip chip-red" title="index dated in the FUTURE vs the current week (${esc((state.logData || {}).current_week || "?")}) — likely clock skew or a mis-templated index">future-dated · ${a.future_week_indices.length}</span>`);
+    if ((a.over_retained_envs || []).length) badges.push(`<span class="chip chip-amber" title="logs kept beyond the retention policy in: ${esc((a.over_retained_envs || []).join(", "))}">over-retained · ${a.over_retained_envs.length}</span>`);
   }
   if (a.not_in_inventory) badges.push('<span class="chip chip-amber">drift</span>');
   const meta = unsupported
@@ -3285,7 +3290,19 @@ function logAppRow(a) {
     : (a.monitored
       ? `<span class="ci-meta">${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs</span>`
       : `<span class="ci-meta">no index prefix</span>`);
+  const cls = unsupported ? "unsup" : (a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : "")));
+  return `<details class="filebox log-app ${cls}" data-app-key="${esc(logAppKey(a))}">
+    <summary>${logScoreBadge(a.score, "app health score")}
+      <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
+      ${badges.join(" ")} ${meta}</summary>
+    <div class="log-app-body" data-lazy="1"></div></details>`;
+}
 
+// the heavy body — built on demand when the app row is expanded
+function logAppBody(a) {
+  const unsupported = a.platform_status === "unsupported";
+  const noPlat = a.platform_status === "none";
+  const id = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
   const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
   const idxRows = (a.index_list || []).map((i) => `
     <div class="log-idx ${i.ts_type !== "date" || i.bad_week || i.future_week ? "bad" : ""}">
@@ -3300,17 +3317,15 @@ function logAppRow(a) {
     </div>`).join("") || '<div class="empty">no indices</div>';
 
   // @timestamp sample inspector — ALWAYS offered when @timestamp isn't a date.
-  // Use ts_bad_indices (authoritative) as the suspect, not index_list (capped):
-  // its source is looked up if that index is in the list, else "" (the endpoint
-  // then tries both connections). A healthy sibling is passed for contrast.
-  const badName = (a.ts_bad_indices || [])[0];
-  const badSrc = ((a.index_list || []).find((i) => i.index === badName) || {}).source || "";
+  // Samples across ALL of the app's bad indices (comma list, capped), not one;
+  // a healthy sibling is passed for contrast. The endpoint tries both connections.
+  const badNames = (a.ts_bad_indices || []).slice(0, 15).join(",");
   const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
-  const tsInspect = (!a.ts_ok && badName) ? `
+  const tsInspect = (!a.ts_ok && badNames) ? `
     <div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(a.ts_bad_indices || []).length} index(es) — time-range queries silently return nothing there.
       <button class="btn btn-sm log-ts-sample" data-tss-target="${id}"
-        data-ts-index="${esc(badName)}" data-ts-source="${esc(badSrc)}"
-        ${goodI ? `data-ts-good="${esc(goodI.index)}" data-ts-goodsource="${esc(goodI.source)}"` : ""}>🔍 sample docs</button>
+        data-ts-index="${esc(badNames)}"
+        ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample bad docs</button>
       <div id="${id}" class="log-tss"></div>
     </div>` : "";
 
@@ -3332,12 +3347,7 @@ function logAppRow(a) {
       ${tsInspect}
       ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${idxRows}</div></details>` : ""}`;
   }
-  const cls = unsupported ? "unsup" : (a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : "")));
-  return `<details class="filebox log-app ${cls}">
-    <summary>${logScoreBadge(a.score, "app health score")}
-      <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
-      ${badges.join(" ")} ${meta}</summary>
-    <div class="log-app-body">${body}</div></details>`;
+  return body;
 }
 
 function logProjectCardHtml(p, apps, f) {
@@ -3353,7 +3363,7 @@ function logProjectCardHtml(p, apps, f) {
     <summary>${logScoreBadge(p.score, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
-        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-week", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}${apps.map(logAppRow).join("")}</div></details>`;
 }
 
@@ -3375,8 +3385,9 @@ function logTilesHtml(apps) {
     ${tile(has("no_logs"), "apps no-logs", has("no_logs") ? "pct-bad" : "pct-good")}
     ${tile(has("stale"), "apps stale", has("stale") ? "pct-warn" : "pct-good")}
     ${tile(has("timestamp"), "@timestamp", has("timestamp") ? "pct-bad" : "pct-good")}
-    ${tile(has("bad_week"), "bad week/year", has("bad_week") ? "pct-bad" : "pct-good")}
+    ${tile(has("bad_week"), "bad year", has("bad_week") ? "pct-bad" : "pct-good")}
     ${tile(has("future_week"), "future-dated", has("future_week") ? "pct-bad" : "pct-good")}
+    ${tile(has("over_retained"), "over-retained", has("over_retained") ? "pct-warn" : "pct-good")}
     ${tile(has("clash"), "platform clashes", has("clash") ? "pct-bad" : "pct-good")}
     ${tile(has("team_clash"), "owner clashes", has("team_clash") ? "pct-bad" : "pct-good")}
     ${tile(has("unsupported"), "unmonitored", has("unsupported") ? "pct-warn" : "pct-good")}
@@ -3388,6 +3399,7 @@ function logContentHtml() {
   const f = state.logFilter;
   const on = (k) => f[k] && f[k] !== "all";
   f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("team") || on("issue"));
+  state.logAppMap = {};   // rebuilt as rows render → lazy bodies look apps up here
   const filtered = [];
   // build filtered+sorted apps per project, then SORT THE PROJECTS by the same
   // metric so the ordering actually changes on screen (cards are collapsed)
@@ -3416,30 +3428,53 @@ function rerenderLog() {
   if (box) { box.innerHTML = logContentHtml(); wireLogContent(); }
 }
 
-// @timestamp sample inspector — contrast a suspect index's values with a good one
+// @timestamp sample inspector — the offending docs (across all bad indices)
+// with their @timestamp value + event.original, next to a healthy index.
 function logTsSamplesHtml(data) {
-  const col = (title, blk) => {
+  const col = (title, blk, badCol) => {
     if (!blk) return "";
     if (blk.error) return `<div class="tss-col"><div class="acc-h">${title}</div><div class="rsearch-status rsearch-err">⚠ ${esc(blk.error)}</div></div>`;
-    const rows = (blk.docs || []).map((dd) =>
-      `<div class="tss-doc ${dd.is_date ? "ok" : "bad"}"><code>${esc(String(dd.value))}</code>${dd.is_date ? '<span class="chip chip-green">date ✓</span>' : '<span class="chip chip-red">not a date</span>'}</div>`).join("")
-      || '<div class="ci-meta">no docs</div>';
+    const idxLabel = (blk.indices || []).length > 1
+      ? `${blk.indices.length} indices` : esc((blk.indices || [])[0] || "—");
+    const rows = (blk.docs || []).map((dd) => {
+      const orig = dd.original == null ? "" : String(dd.original);
+      const origBlock = orig
+        ? `<details class="tss-orig"><summary>event.original <span class="ci-meta">(${orig.length}${dd.original_truncated ? "+" : ""} chars)</span></summary><pre>${esc(orig)}${dd.original_truncated ? "\n…(truncated)" : ""}</pre></details>`
+        : '<div class="ci-meta tss-noorig">no event.original</div>';
+      return `<div class="tss-doc ${dd.is_date ? "ok" : "bad"}">
+        <div class="tss-doc-head">
+          <code class="tss-val">${esc(String(dd.value))}</code>
+          ${dd.is_date ? '<span class="chip chip-green">date ✓</span>' : '<span class="chip chip-red">not a date</span>'}
+          <span class="ci-meta tss-src">${badCol ? esc(String(dd.index || "").split("-").slice(1, 3).join("-") || dd.index || "") : ""}</span>
+        </div>
+        ${origBlock}</div>`;
+    }).join("") || '<div class="ci-meta">no docs sampled</div>';
     return `<div class="tss-col"><div class="acc-h">${title}</div>
-      <div class="ci-meta tss-idx">${esc(blk.index)} · mapping <b>${esc(blk.ts_type || "?")}</b> · <b>${blk.non_date}</b>/${blk.sampled} not dates</div>${rows}</div>`;
+      <div class="ci-meta tss-idx">${idxLabel} · mapping <b>${esc(Object.values(blk.ts_types || {})[0] || "?")}</b> · <b>${blk.non_date}</b>/${blk.sampled} not dates</div>${rows}</div>`;
   };
-  return `<div class="tss">${col("⚠ suspect index", data.index)}${col("✓ healthy index", data.good)}</div>`;
+  return `<div class="tss">${col("⚠ offending docs", data.index, true)}${col("✓ healthy index", data.good, false)}</div>`;
 }
 async function loadTsSamples(btn) {
   const c = document.getElementById(btn.dataset.tssTarget);
   if (!c) return;
   c.innerHTML = '<div class="rsearch-status">sampling… <span class="rsearch-spin"></span></div>';
-  const qs = new URLSearchParams({ index: btn.dataset.tsIndex, source: btn.dataset.tsSource || "prd" });
-  if (btn.dataset.tsGood) { qs.set("good", btn.dataset.tsGood); qs.set("good_source", btn.dataset.tsGoodsource || ""); }
+  const qs = new URLSearchParams({ index: btn.dataset.tsIndex });
+  if (btn.dataset.tsGood) qs.set("good", btn.dataset.tsGood);
   try { c.innerHTML = logTsSamplesHtml(await api(`/api/logging/ts-samples?${qs.toString()}`)); }
   catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
 function wireLogContent() {
-  view().querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
+  // lazily build each app's heavy body the first time its row is expanded
+  view().querySelectorAll("details.log-app").forEach((det) => det.addEventListener("toggle", () => {
+    if (!det.open) return;
+    const body = det.querySelector(".log-app-body");
+    if (!body || !body.dataset.lazy) return;
+    const a = (state.logAppMap || {})[det.dataset.appKey];
+    if (!a) return;
+    body.innerHTML = logAppBody(a);
+    delete body.dataset.lazy;
+    body.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
+  }));
 }
 
 async function renderLogging() {
@@ -3463,18 +3498,32 @@ async function renderLogging() {
 
   const legend = (d.platform_legend || []).map((x) =>
     `<span class="chip chip-cyan" title="deploy_platform ${esc(x.platform)} → index prefix ${esc(x.prefix)}">${esc(x.platform)} → <b>${esc(x.prefix)}</b></span>`).join(" ");
+  // compact at-a-glance connection dots on the (collapsed) setup summary
+  const connDot = (kind, label) => {
+    const c = (d.connections || {})[kind];
+    if (!c || !c.configured) return `<span class="chip ${kind === "nonprd" ? "chip-amber" : "chip-red"}" title="${esc((c && c.note) || "not configured")}">${label} ○</span>`;
+    return `<span class="chip ${c.reachable ? "chip-green" : "chip-red"}" title="${c.reachable ? c.indices + " indices" : esc(c.error || "unreachable")}">${label} ${c.reachable ? "✓" : "✗"}</span>`;
+  };
+  const connProblem = ["prd", "nonprd"].some((k) => { const c = (d.connections || {})[k]; return c && c.configured && !c.reachable; });
   const head = `<div class="view-head"><h1>LOGGING HEALTH</h1>
-      <span class="sub">ELK index health, performance &amp; utilization across your projects &amp; apps
-        — pattern <code>\${prefix}-\${project}-\${env}-\${app}-\${logtype}-yyyy.ww</code>,
-        prefix per project from <code>deploy_platform</code></span>
+      <span class="sub">ELK index health across your projects &amp; apps</span>
       <span class="spacer"></span>
-      <button class="btn btn-sm" id="log-refresh">↻ re-analyze</button></div>
-    ${legend ? `<div class="log-legend"><span class="ci-meta">platform → prefix:</span> ${legend}</div>` : ""}
-    ${logConnBar(d.connections)}`;
+      <button class="btn btn-sm" id="log-refresh">↻ re-analyze</button></div>`;
+  // pattern logic + ES health + inventory detection — collapsed, on demand
+  // (auto-opens only when there's a page-level note or a connection problem)
+  const setup = `<details class="filebox log-setup" ${(d.note || connProblem) ? "open" : ""}>
+      <summary>ℹ index pattern · Elasticsearch health · inventory detection
+        <span class="log-setup-dots">${connDot("prd", "prd")} ${connDot("nonprd", "non-prd")}
+          <span class="ci-meta">${(d.prefixes || []).length} prefix(es)</span></span></summary>
+      <div class="log-setup-body">
+        <div class="ci-meta" style="margin-bottom:8px">index pattern <code>\${prefix}-\${project}-\${env}-\${app}-\${logtype}-yyyy.ww</code> — prefix per app from <code>deploy_platform</code>; retention prd ${Math.round((d.retention || {}).prd_days / 30) || "?"}mo · non-prd ${(d.retention || {}).nonprd_days || "?"}d</div>
+        ${legend ? `<div class="log-legend"><span class="ci-meta">platform → prefix:</span> ${legend}</div>` : ""}
+        ${logConnBar(d.connections)}
+        ${logDiagHtml(d)}
+      </div></details>`;
 
   if (!(d.projects || []).length) {
-    view().innerHTML = head + (d.note ? `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>` : "")
-      + logDiagHtml(d);
+    view().innerHTML = head + (d.note ? `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>` : "") + setup;
     document.getElementById("log-refresh").onclick = () => { state.logRefresh = true; renderLogging(); };
     return;
   }
@@ -3485,7 +3534,7 @@ async function renderLogging() {
   const platforms = [...new Set((d.projects || []).flatMap((p) => (p.apps || [])
     .map((a) => a.deploy_platform).filter(Boolean)))].sort();
   const issueOpts = [["all", "issue: any"], ["any", "any issue"],
-    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "clash", "team_clash", "unsupported"]
+    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "over_retained", "clash", "team_clash", "unsupported"]
       .map((k) => [k, LOG_ISSUE_LABEL[k]])];
   // filters PRECEDE the stat tiles so the numbers respond to them
   const filterBar = `<div class="acc-filters">
@@ -3505,7 +3554,8 @@ async function renderLogging() {
     <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""} · stale &gt;${d.stale_hours}h${d.current_week ? ` · current week <b>${esc(d.current_week)}</b>` : ""}</span></div>`;
 
   const noteHtml = d.note ? `<div class="panel" style="margin-bottom:10px"><div class="kpi-note">${esc(d.note)}</div></div>` : "";
-  view().innerHTML = head + noteHtml + logDiagHtml(d) + filterBar
+  // compact: title · collapsed setup/health · always-visible filters + stats + results
+  view().innerHTML = head + noteHtml + setup + filterBar
     + `<div id="log-body">${logContentHtml()}</div>`;
   wireLogging();
 }

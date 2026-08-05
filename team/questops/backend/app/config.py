@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # have no logs (filtered out by default). Fields: project/application/
     # environment (keyword), startdate/enddate (date).
     log_deploy_index: str = "ef-cicd-deployments"
+    # log retention policy (days): an app/env keeping logs OLDER than this is
+    # flagged "over-retained" (a MINOR issue). prd defaults to 6 months, non-prd
+    # (dev/qc/uat) to 3 weeks.
+    log_retention_prd_days: int = 183
+    log_retention_nonprd_days: int = 21
     log_stale_hours: int = 48        # an app with no new log later than this = stale
     es_nonprd_url: str = ""          # non-prd Elasticsearch (dev/qc/uat log indices)
     es_nonprd_api_key: str = ""      # sent as 'Authorization: ApiKey <key>'

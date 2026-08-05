@@ -169,6 +169,7 @@ def _cat_indices(conn: dict, pattern: str) -> list[dict]:
 def _ts_field_types(conn: dict, pattern: str) -> dict:
     """Per-index @timestamp mapping type ('date' / 'text' / … / None=unmapped)."""
     r = requests.get(f"{conn['url']}/{pattern}/_mapping/field/@timestamp",
+                     params={"ignore_unavailable": "true", "allow_no_indices": "true"},
                      headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
     if r.status_code == 404:
         return {}
@@ -223,21 +224,24 @@ def _blank_app(project: str, app: str) -> dict:
     return {"project": project, "app": app, "index_list": []}
 
 
-# per-env health score deductions from 100 (higher = healthier)
-_PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20, "future_week": 20}
+# per-env health score deductions from 100 (higher = healthier); over_retained
+# is MINOR
+_PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20, "future_week": 20,
+            "over_retained": 10}
 # the issue keys used across scoring + the issue-type filter
 ISSUE_KEYS = ("no_logs", "stale", "timestamp", "bad_week", "future_week",
-              "clash", "team_clash", "unsupported")
+              "over_retained", "clash", "team_clash", "unsupported")
 
 
-def _env_score(no_logs: bool, stale: bool, ts_bad: bool,
-               bad_week: bool, future_week: bool) -> int:
+def _env_score(no_logs: bool, stale: bool, ts_bad: bool, bad_week: bool,
+               future_week: bool, over_retained: bool) -> int:
     if no_logs:
         return 0
     s = 100 - (_PENALTY["stale"] if stale else 0) \
         - (_PENALTY["timestamp"] if ts_bad else 0) \
         - (_PENALTY["bad_week"] if bad_week else 0) \
-        - (_PENALTY["future_week"] if future_week else 0)
+        - (_PENALTY["future_week"] if future_week else 0) \
+        - (_PENALTY["over_retained"] if over_retained else 0)
     return max(s, 0)
 
 
@@ -256,6 +260,9 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         for i in indices:
             types.setdefault(i.get("ts_type") or "unmapped", []).append(i["index"])
         return {t: v for t, v in types.items() if t != "date"}, types
+
+    prd_envs = set(settings.log_prd_env_list)
+    ret_grace_days = 7   # tolerance before flagging over-retention
 
     by_env: dict = {}
     for i in idxs:
@@ -282,6 +289,12 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         no_logs = len(eidx) == 0
         stale = (not no_logs) and (age is None or age > stale_h)
         ts_ok = (not no_logs) and not bad
+        # over-retention: the OLDEST log is kept beyond the env's retention policy
+        ret_days = settings.log_retention_prd_days if env in prd_envs \
+            else settings.log_retention_nonprd_days
+        first_age_h = _age_hours(first)
+        over_retained = (not no_logs) and first_age_h is not None \
+            and (first_age_h / 24.0) > (ret_days + ret_grace_days)
         issues = []
         if not monitored:
             score = None
@@ -298,7 +311,10 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
                 issues.append("bad_week")
             if future_week:
                 issues.append("future_week")
-            score = _env_score(no_logs, stale, not ts_ok, bool(bad_week), bool(future_week))
+            if over_retained:
+                issues.append("over_retained")
+            score = _env_score(no_logs, stale, not ts_ok, bool(bad_week),
+                               bool(future_week), over_retained)
         if om.get("clash"):
             issues.append("team_clash")
         env_stats.append({
@@ -308,6 +324,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
             "docs": sum(i["docs"] for i in eidx),
             "logtypes": sorted({i["logtype"] for i in eidx if i.get("logtype")}),
             "sources": sorted({i["source"] for i in eidx}),
+            "retention_days": ret_days, "over_retained": over_retained,
             "first_logged": first, "last_logged": last, "last_logged_age_h": age,
             "no_logs": no_logs, "stale": stale, "ts_ok": ts_ok,
             "deployed": deployed, "last_deploy": dep.get("last_deploy"),
@@ -363,6 +380,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
     rec["envs_stale"] = sum(1 for s in env_stats if s["stale"])
     # only DEPLOYED envs missing logs are real "no logs" problems
     rec["envs_no_logs"] = sum(1 for s in env_stats if monitored and s["no_logs"] and s["deployed"])
+    rec["over_retained_envs"] = sorted(s["env"] for s in env_stats if s.get("over_retained"))
     rec["stale"] = rec["envs_stale"] > 0
 
     # per-app issue set (drives the issue-type filter) + health score
@@ -379,6 +397,8 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         issues.add("bad_week")
     if rec["future_week_indices"]:
         issues.add("future_week")
+    if rec["over_retained_envs"]:
+        issues.add("over_retained")
     if rec["discrepancy"]:
         issues.add("clash")
     if owner_clash_envs:
@@ -449,6 +469,7 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
             "stale": sum(1 for a in rows if "stale" in a["issues"]),
             "bad_week": sum(1 for a in rows if "bad_week" in a["issues"]),
             "future_week": sum(1 for a in rows if "future_week" in a["issues"]),
+            "over_retained": sum(1 for a in rows if "over_retained" in a["issues"]),
             "discrepancies": sum(1 for a in rows if "clash" in a["issues"]),
             "team_clash": sum(1 for a in rows if "team_clash" in a["issues"]),
             "unsupported": sum(1 for a in rows if "unsupported" in a["issues"]),
@@ -511,7 +532,7 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "overall_score": _mean([a["score"] for a in all_apps]),
         "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
         "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
-        "apps_future_week": cnt("future_week"),
+        "apps_future_week": cnt("future_week"), "apps_over_retained": cnt("over_retained"),
         "discrepancies": cnt("clash"), "apps_team_clash": cnt("team_clash"),
         "apps_unsupported": cnt("unsupported"),
         "apps_no_platform": sum(1 for a in all_apps if not a.get("prefix")),
@@ -524,6 +545,8 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
     return {"source": source, "note": note, "stale_hours": stale_h,
             "current_week": _iso_week(_now()),
             "deploy_index": settings.log_deploy_index,
+            "retention": {"prd_days": settings.log_retention_prd_days,
+                          "nonprd_days": settings.log_retention_nonprd_days},
             "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
             "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
             "connections": conn_status, "summary": summary,
@@ -843,6 +866,7 @@ def _demo() -> dict:
     MISSING_ENV = {("Platform", "payments", "qc")}   # payments not logging in qc
     BAD_WEEK = {("Platform", "checkout", "prd")}     # an illogical 5-digit year index
     FUTURE_WEEK = {("Platform", "checkout", "uat")}  # a future-dated index (clock skew)
+    OVER_RETAINED = {("Platform", "notifications", "qc")}  # logs kept beyond retention
     # never deployed (→ expected to have no logs, hidden by default): the uat env
     # of notifications, and every env of team-configs
     UNDEPLOYED = {("Platform", "notifications", "uat")}
@@ -902,12 +926,14 @@ def _demo() -> dict:
                                     "logtype": "application", "week": future_wk,
                                     "bad_week": False})
                 # first + last logged PER ENV: fresh last, except the scripted
-                # stale env; first ≈ the oldest fabricated week
+                # stale env; first ≈ oldest fabricated week, except the scripted
+                # over-retained env (logs kept far beyond its retention policy)
                 if (pname, app, env) in STALE_ENV:
                     last = (now - dt.timedelta(days=6, hours=2)).replace(microsecond=0).isoformat() + "Z"
                 else:
                     last = (now - dt.timedelta(minutes=6 + hash((app, env)) % 40)).replace(microsecond=0).isoformat() + "Z"
-                first = (now - dt.timedelta(weeks=3, hours=hash((app, env)) % 12)).replace(microsecond=0).isoformat() + "Z"
+                first_days = 120 if (pname, app, env) in OVER_RETAINED else 21
+                first = (now - dt.timedelta(days=first_days, hours=hash((app, env)) % 12)).replace(microsecond=0).isoformat() + "Z"
                 ts_map.setdefault((pname, app, env), []).append((first, last))
     # a couple of stray indices that carry a valid prefix but don't map to any
     # known app/project (naming drift → surfaced in the "unmatched" section)
@@ -968,113 +994,127 @@ def _conn_by_kind(kind: str) -> dict | None:
     return None
 
 
-def _conn_order(source: str) -> list:
-    """Connections to try for an index, the hinted one first (empty hint → prd
-    then non-prd) — so the inspector finds the index even without a source."""
-    conns = [c for c in _connections() if c.get("url") and c.get("key")]
-    if source in ("prd", "nonprd"):
-        conns.sort(key=lambda c: c["kind"] != source)
-    return conns
+_ORIG_MAX = 4000     # cap event.original per doc so a huge message can't bloat the payload
 
 
-def _sample_ts(conn: dict, index: str, size: int) -> dict:
-    """Sample @timestamp docs from one index (on ITS OWN connection), each tagged
-    whether the value is a plausible date. Runs a general sample PLUS a targeted
-    query for pure-number values (the '17840912390' case) so the offending docs
-    surface even when they're rare. Never raises → failures come back as `error`."""
-    if not conn or not conn.get("url") or not conn.get("key"):
-        return {"index": index, "error": "Elasticsearch connection not configured", "docs": []}
+def _orig_value(src: dict):
+    """event.original from a doc _source (nested `event.original` or flattened),
+    stringified and capped. Returns (value, truncated)."""
+    v = src.get("event.original")
+    if v is None:
+        ev = src.get("event")
+        if isinstance(ev, dict):
+            v = ev.get("original")
+    if v is None:
+        return None, False
+    s = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+    if len(s) > _ORIG_MAX:
+        return s[:_ORIG_MAX], True
+    return s, False
+
+
+def _sample_search(conn: dict, pattern: str, body: dict, docs: list, seen: set) -> str | None:
+    """POST _search over a (multi-index) pattern, missing indices ignored;
+    append parsed docs (deduped by index+id). Error string or None."""
     try:
-        ts_type = _ts_field_types(conn, index).get(index)
-    except requests.RequestException:
-        ts_type = None
-    docs: dict = {}
-    first_err = None
+        r = requests.post(f"{conn['url']}/{pattern}/_search",
+                          params={"ignore_unavailable": "true", "allow_no_indices": "true"},
+                          json=body, headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
+    except requests.RequestException as exc:
+        return str(exc)[:200]
+    if not r.ok:
+        return f"HTTP {r.status_code} from Elasticsearch"
+    try:
+        hits = (r.json().get("hits", {}) or {}).get("hits", []) or []
+    except ValueError:
+        return "non-JSON response"
+    for h in hits:
+        key = (h.get("_index"), h.get("_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        src = h.get("_source") or {}
+        val = src.get("@timestamp")
+        orig, trunc = _orig_value(src)
+        docs.append({"index": h.get("_index"), "id": h.get("_id"), "value": val,
+                     "is_date": _looks_date(val), "original": orig, "original_truncated": trunc})
+    return None
 
-    def run(body):
-        nonlocal first_err
+
+def _sample_ts_multi(pattern: str, size: int) -> dict:
+    """Sample @timestamp + event.original across ALL the given indices (a comma
+    list of the app's suspect indices), on BOTH connections (missing ones
+    ignored), tagging each @timestamp value as a plausible date or not. A
+    targeted bare-number query surfaces the junk even when it's rare."""
+    conns = [c for c in _connections() if c.get("url") and c.get("key")]
+    if not conns:
+        return {"indices": [i for i in pattern.split(",") if i],
+                "error": "no Elasticsearch connection configured", "docs": []}
+    src_fields = ["@timestamp", "event.original"]
+    docs: list = []
+    seen: set = set()
+    ts_types: dict = {}
+    err = None
+    for conn in conns:
         try:
-            r = requests.post(f"{conn['url']}/{index}/_search", json=body,
-                              headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])
-        except requests.RequestException as exc:
-            first_err = first_err or str(exc)[:200]
-            return
-        if not r.ok:
-            first_err = first_err or f"HTTP {r.status_code} from Elasticsearch"
-            return
-        try:
-            hits = (r.json().get("hits", {}) or {}).get("hits", []) or []
-        except ValueError:
-            first_err = first_err or "non-JSON response"
-            return
-        for h in hits:
-            val = (h.get("_source") or {}).get("@timestamp")
-            docs.setdefault(h.get("_id"), {"id": h.get("_id"), "value": val,
-                                           "is_date": _looks_date(val)})
-
-    # 1) a general sample of docs that have @timestamp
-    run({"size": size, "_source": ["@timestamp"], "sort": "_doc",
-         "query": {"exists": {"field": "@timestamp"}}})
-    # 2) targeted: @timestamp values that are a bare number (regexp on the raw
-    #    value — the .keyword sub-field for text, the field itself for keyword).
-    #    Best-effort: a 400 (no such field / date-mapped) is ignored.
-    raw_field = "@timestamp" if ts_type == "keyword" else "@timestamp.keyword"
-    run({"size": max(6, size // 2), "_source": ["@timestamp"],
-         "query": {"regexp": {raw_field: "-?[0-9]+([.][0-9]+)?"}}})
-
-    out = sorted(docs.values(), key=lambda d: d["is_date"])   # bad (False) first
-    if first_err and not out:
-        return {"index": index, "ts_type": ts_type, "error": first_err, "docs": []}
-    return {"index": index, "ts_type": ts_type, "docs": out,
-            "non_date": sum(1 for d in out if not d["is_date"]), "sampled": len(out)}
+            ts_types.update(_ts_field_types(conn, pattern))
+        except requests.RequestException:
+            pass
+        e = _sample_search(conn, pattern, {"size": size, "_source": src_fields,
+            "sort": "_doc", "query": {"exists": {"field": "@timestamp"}}}, docs, seen)
+        _sample_search(conn, pattern, {"size": max(6, size // 2), "_source": src_fields,
+            "query": {"regexp": {"@timestamp.keyword": "-?[0-9]+([.][0-9]+)?"}}}, docs, seen)
+        err = err or e
+    docs.sort(key=lambda d: d["is_date"])           # bad (False) first
+    docs = docs[:max(size, 25)]
+    res = {"indices": sorted({d["index"] for d in docs}) or [i for i in pattern.split(",") if i],
+           "ts_types": ts_types, "docs": docs,
+           "non_date": sum(1 for d in docs if not d["is_date"]), "sampled": len(docs)}
+    if err and not docs:
+        res["error"] = err
+    return res
 
 
-def _sample_ts_any(order: list, index: str, size: int) -> dict:
-    """Try each connection until one actually has the index (so the inspector
-    works without a correct source hint)."""
-    last = None
-    for conn in order:
-        res = _sample_ts(conn, index, size)
-        last = res
-        if res.get("docs") or res.get("ts_type") is not None:
-            return res
-    return last or {"index": index, "docs": [],
-                    "error": "no configured Elasticsearch connection has this index"}
-
-
-def ts_samples(index: str, source: str = "", good: str = "",
+def ts_samples(index: str = "", source: str = "", good: str = "",
                good_source: str = "", size: int = 30) -> dict:
-    """Sample @timestamp values from a suspect index (and, for contrast, a
-    known-good sibling) to pinpoint the exact documents whose @timestamp isn't a
-    proper date. Tries both connections so a missing/wrong source hint still works."""
-    if not (index or "").strip():
+    """`index` = comma-separated suspect indices (ALL of an app's @timestamp-bad
+    ones). Samples @timestamp + event.original across all of them (both ES
+    connections), flagging the exact documents whose @timestamp isn't a date."""
+    idx = (index or "").strip()
+    if not idx:
         raise ValueError("index is required")
     if settings.demo_mode:
-        return _demo_ts_samples(index, good)
-    out = {"index": _sample_ts_any(_conn_order(source), index.strip(), size)}
+        return _demo_ts_samples(idx, good)
+    out = {"index": _sample_ts_multi(idx, size)}
     if good.strip():
-        out["good"] = _sample_ts_any(_conn_order(good_source or source), good.strip(), size)
+        out["good"] = _sample_ts_multi(good.strip(), size)
     return out
 
 
 def _demo_ts_samples(index: str, good: str) -> dict:
     now = _now()
-    def good_docs(n):
-        return [{"id": f"doc-{i}", "value": (now - dt.timedelta(minutes=i * 7))
-                 .replace(microsecond=0).isoformat() + "Z", "is_date": True} for i in range(n)]
-    # a text-mapped index: valid ISO strings mixed with the junk that hides there
-    # — bare epoch-ish numbers, out-of-range numbers, and non-dates
+    idxs = [i for i in index.split(",") if i][:3] or ["demo-index"]
+    big = "<133>1 2026-08-05T10:12:03Z host app 4821 - [meta] " + ("lorem ipsum dolor sit amet " * 260)
     bad_vals = ["17840912390", "2026-08-05T10:12:03Z", "N/A", "1784091239012345",
                 "2026-08-05 10:11", "-", "pending", "2026-08-05T09:59:59Z",
                 "null", "0000-00-00", "1699999999"]
-    bad = [{"id": f"doc-{i}", "value": v, "is_date": _looks_date(v)}
-           for i, v in enumerate(bad_vals)]
+    bad = []
+    for i, v in enumerate(bad_vals):
+        raw = (big[:_ORIG_MAX] if i == 0 else f"<134>1 {v} host svc - - raw event line for @timestamp={v!r}")
+        bad.append({"index": idxs[i % len(idxs)], "id": f"AbC{i}xY",
+                    "value": v, "is_date": _looks_date(v),
+                    "original": raw, "original_truncated": i == 0})
     bad.sort(key=lambda d: d["is_date"])
-    res = {"index": {"index": index, "ts_type": "text", "docs": bad,
-                     "non_date": sum(1 for d in bad if not d["is_date"]), "sampled": len(bad)}}
-    if good:
-        res["good"] = {"index": good, "ts_type": "date", "docs": good_docs(6),
-                       "non_date": 0, "sampled": 6}
+    res = {"index": {"indices": idxs, "ts_types": {ix: "text" for ix in idxs},
+                     "docs": bad, "non_date": sum(1 for d in bad if not d["is_date"]),
+                     "sampled": len(bad)}}
+    if good.strip():
+        gi = [i for i in good.split(",") if i][:1] or ["demo-good"]
+        res["good"] = {"indices": gi, "ts_types": {gi[0]: "date"},
+                       "docs": [{"index": gi[0], "id": f"G{i}", "value": (now - dt.timedelta(minutes=i * 7))
+                                 .replace(microsecond=0).isoformat() + "Z", "is_date": True,
+                                 "original": f"<134>1 ... normal log line {i}", "original_truncated": False}
+                                for i in range(6)], "non_date": 0, "sampled": 6}
     return res
 
 
