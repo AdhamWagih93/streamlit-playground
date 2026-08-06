@@ -993,6 +993,32 @@ def _looks_date(v) -> bool:
     return _EPOCH_MIN <= secs <= _EPOCH_MAX
 
 
+def _looks_future(v) -> bool:
+    """True when the @timestamp parses to a date suspiciously in the FUTURE
+    (> 2 days ahead of now) — the doc-level cousin of the future-dated index
+    check (clock skew / mis-templated loader)."""
+    if v is None or isinstance(v, bool):
+        return False
+    num = None
+    if isinstance(v, (int, float)):
+        num = float(v)
+    else:
+        s = str(v).strip()
+        if _NUMERIC_RE.match(s):
+            try:
+                num = float(s)
+            except ValueError:
+                return False
+        else:
+            from .elastic import _parse_es_date
+            w = _parse_es_date(s)
+            return bool(w and w > _now() + dt.timedelta(days=2))
+    secs = num / 1000.0 if abs(num) >= 1e12 else num
+    if not (_EPOCH_MIN <= secs <= _EPOCH_MAX):
+        return False
+    return dt.datetime.utcfromtimestamp(secs) > _now() + dt.timedelta(days=2)
+
+
 def _conn_by_kind(kind: str) -> dict | None:
     for c in _connections():
         if c["kind"] == kind:
@@ -1043,7 +1069,8 @@ def _sample_search(conn: dict, pattern: str, body: dict, docs: list, seen: set) 
         val = src.get("@timestamp")
         orig, trunc = _orig_value(src)
         docs.append({"index": h.get("_index"), "id": h.get("_id"), "value": val,
-                     "is_date": _looks_date(val), "original": orig, "original_truncated": trunc})
+                     "is_date": _looks_date(val), "is_future": _looks_future(val),
+                     "original": orig, "original_truncated": trunc})
     return None
 
 
@@ -1071,48 +1098,64 @@ def _sample_ts_multi(pattern: str, size: int) -> dict:
         _sample_search(conn, pattern, {"size": max(6, size // 2), "_source": src_fields,
             "query": {"regexp": {"@timestamp.keyword": "-?[0-9]+([.][0-9]+)?"}}}, docs, seen)
         err = err or e
-    docs.sort(key=lambda d: d["is_date"])           # bad (False) first
+    # worst first: non-dates, then future-dated, then normal docs
+    docs.sort(key=lambda d: (d["is_date"], not d.get("is_future")))
     docs = docs[:max(size, 25)]
     res = {"indices": sorted({d["index"] for d in docs}) or [i for i in pattern.split(",") if i],
            "ts_types": ts_types, "docs": docs,
-           "non_date": sum(1 for d in docs if not d["is_date"]), "sampled": len(docs)}
+           "non_date": sum(1 for d in docs if not d["is_date"]),
+           "future": sum(1 for d in docs if d.get("is_future")), "sampled": len(docs)}
     if err and not docs:
         res["error"] = err
     return res
 
 
 def ts_samples(index: str = "", source: str = "", good: str = "",
-               good_source: str = "", size: int = 30) -> dict:
-    """`index` = comma-separated suspect indices (ALL of an app's @timestamp-bad
-    ones). Samples @timestamp + event.original across all of them (both ES
-    connections), flagging the exact documents whose @timestamp isn't a date."""
+               good_source: str = "", size: int = 30, mode: str = "") -> dict:
+    """`index` = comma-separated suspect indices — ALL of an app's
+    @timestamp-bad ones, or its FUTURE-dated ones (mode="future"). Samples
+    @timestamp + event.original across all of them (both ES connections),
+    flagging docs whose @timestamp isn't a date / is in the future. The live
+    sampling is identical either way; `mode` only shapes the demo payload."""
     idx = (index or "").strip()
     if not idx:
         raise ValueError("index is required")
     if settings.demo_mode:
-        return _demo_ts_samples(idx, good)
+        return _demo_ts_samples(idx, good, mode)
     out = {"index": _sample_ts_multi(idx, size)}
     if good.strip():
         out["good"] = _sample_ts_multi(good.strip(), size)
     return out
 
 
-def _demo_ts_samples(index: str, good: str) -> dict:
+def _demo_ts_samples(index: str, good: str, mode: str = "") -> dict:
     now = _now()
     idxs = [i for i in index.split(",") if i][:3] or ["demo-index"]
     big = "<133>1 2026-08-05T10:12:03Z host app 4821 - [meta] " + ("lorem ipsum dolor sit amet " * 260)
-    bad_vals = ["17840912390", "2026-08-05T10:12:03Z", "N/A", "1784091239012345",
-                "2026-08-05 10:11", "-", "pending", "2026-08-05T09:59:59Z",
-                "null", "0000-00-00", "1699999999"]
+    if mode == "future":
+        # future-dated indices hold VALID dates — just from the future (clock
+        # skew / a mis-templated loader), plus a couple of normal stragglers
+        iso = lambda w: w.replace(microsecond=0).isoformat() + "Z"  # noqa: E731
+        bad_vals = [iso(now + dt.timedelta(days=n)) for n in (365, 210, 92, 30, 30, 9)] \
+            + [str(int((now + dt.timedelta(days=48)).timestamp()))] \
+            + [iso(now - dt.timedelta(minutes=m)) for m in (12, 95)]
+        ts_type = "date"
+    else:
+        bad_vals = ["17840912390", "2026-08-05T10:12:03Z", "N/A", "1784091239012345",
+                    "2026-08-05 10:11", "-", "pending", "2026-08-05T09:59:59Z",
+                    "null", "0000-00-00", "1699999999"]
+        ts_type = "text"
     bad = []
     for i, v in enumerate(bad_vals):
-        raw = (big[:_ORIG_MAX] if i == 0 else f"<134>1 {v} host svc - - raw event line for @timestamp={v!r}")
+        raw = (big[:_ORIG_MAX] if i == 0 and mode != "future"
+               else f"<134>1 {v} host svc - - raw event line for @timestamp={v!r}")
         bad.append({"index": idxs[i % len(idxs)], "id": f"AbC{i}xY",
-                    "value": v, "is_date": _looks_date(v),
-                    "original": raw, "original_truncated": i == 0})
-    bad.sort(key=lambda d: d["is_date"])
-    res = {"index": {"indices": idxs, "ts_types": {ix: "text" for ix in idxs},
+                    "value": v, "is_date": _looks_date(v), "is_future": _looks_future(v),
+                    "original": raw, "original_truncated": i == 0 and mode != "future"})
+    bad.sort(key=lambda d: (d["is_date"], not d["is_future"]))
+    res = {"index": {"indices": idxs, "ts_types": {ix: ts_type for ix in idxs},
                      "docs": bad, "non_date": sum(1 for d in bad if not d["is_date"]),
+                     "future": sum(1 for d in bad if d["is_future"]),
                      "sampled": len(bad)}}
     if good.strip():
         gi = [i for i in good.split(",") if i][:1] or ["demo-good"]

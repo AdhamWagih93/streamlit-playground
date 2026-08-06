@@ -3398,6 +3398,13 @@ function logAppDetail(a) {
     <div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(a.ts_bad_indices || []).length} index(es) — time filters silently return nothing there.
       <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}" data-ts-index="${esc(badNames)}" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample bad docs</button>
       <div id="${tssId}" class="log-tss"></div></div>` : "";
+  // same inspector for FUTURE-dated indices — what @timestamp are those docs
+  // actually carrying? (clock skew vs a mis-templated loader)
+  const futNames = (a.future_week_indices || []).slice(0, 15).join(",");
+  const futInspect = futNames ? `
+    <div class="log-tsbad-note">⚠ ${(a.future_week_indices || []).length} index(es) dated in the <b>FUTURE</b> vs the current week (${esc((state.logData || {}).current_week || "?")}) — likely clock skew or a mis-templated index.
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}-fut" data-ts-index="${esc(futNames)}" data-ts-mode="future" data-tss-label="⏩ docs in future-dated indices" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample docs</button>
+      <div id="${tssId}-fut" class="log-tss"></div></div>` : "";
   return `<div class="log-mx-detail-inner">
     ${detailRow}
     <div class="log-app-facts">
@@ -3407,6 +3414,7 @@ function logAppDetail(a) {
       <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
     </div>
     ${tsInspect}
+    ${futInspect}
     ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${idxRows}</div></details>` : ""}
   </div>`;
 }
@@ -3553,9 +3561,10 @@ function rerenderLog() {
   if (box) { box.innerHTML = logContentHtml(); wireLogContent(); }
 }
 
-// @timestamp sample inspector — the offending docs (across all bad indices)
-// with their @timestamp value + event.original, next to a healthy index.
-function logTsSamplesHtml(data) {
+// @timestamp sample inspector — the offending docs (across all suspect
+// indices) with their @timestamp value + event.original, next to a healthy
+// index. Non-dates are red; valid-but-FUTURE dates are flagged too.
+function logTsSamplesHtml(data, label) {
   const col = (title, blk, badCol) => {
     if (!blk) return "";
     if (blk.error) return `<div class="tss-col"><div class="acc-h">${title}</div><div class="rsearch-status rsearch-err">⚠ ${esc(blk.error)}</div></div>`;
@@ -3566,27 +3575,43 @@ function logTsSamplesHtml(data) {
       const origBlock = orig
         ? `<details class="tss-orig"><summary>event.original <span class="ci-meta">(${orig.length}${dd.original_truncated ? "+" : ""} chars)</span></summary><pre>${esc(orig)}${dd.original_truncated ? "\n…(truncated)" : ""}</pre></details>`
         : '<div class="ci-meta tss-noorig">no event.original</div>';
-      return `<div class="tss-doc ${dd.is_date ? "ok" : "bad"}">
+      const verdict = !dd.is_date ? '<span class="chip chip-red">not a date</span>'
+        : (dd.is_future ? '<span class="chip chip-red">⏩ future date</span>' : '<span class="chip chip-green">date ✓</span>');
+      return `<div class="tss-doc ${dd.is_date && !dd.is_future ? "ok" : "bad"}">
         <div class="tss-doc-head">
           <code class="tss-val">${esc(String(dd.value))}</code>
-          ${dd.is_date ? '<span class="chip chip-green">date ✓</span>' : '<span class="chip chip-red">not a date</span>'}
+          ${verdict}
           <span class="ci-meta tss-src">${badCol ? esc(String(dd.index || "").split("-").slice(1, 3).join("-") || dd.index || "") : ""}</span>
         </div>
         ${origBlock}</div>`;
     }).join("") || '<div class="ci-meta">no docs sampled</div>';
+    const futBit = blk.future ? ` · <b>${blk.future}</b> future-dated` : "";
     return `<div class="tss-col"><div class="acc-h">${title}</div>
-      <div class="ci-meta tss-idx">${idxLabel} · mapping <b>${esc(Object.values(blk.ts_types || {})[0] || "?")}</b> · <b>${blk.non_date}</b>/${blk.sampled} not dates</div>${rows}</div>`;
+      <div class="ci-meta tss-idx">${idxLabel} · mapping <b>${esc(Object.values(blk.ts_types || {})[0] || "?")}</b> · <b>${blk.non_date}</b>/${blk.sampled} not dates${futBit}</div>${rows}</div>`;
   };
-  return `<div class="tss">${col("⚠ offending docs", data.index, true)}${col("✓ healthy index", data.good, false)}</div>`;
+  return `<div class="tss">${col(label || "⚠ offending docs", data.index, true)}${col("✓ healthy index", data.good, false)}</div>`;
 }
 async function loadTsSamples(btn) {
   const c = document.getElementById(btn.dataset.tssTarget);
   if (!c) return;
+  // already fetched → the button just toggles the panel (no refetch)
+  if (c.dataset.loaded) {
+    const hide = !c.hasAttribute("hidden");
+    c.toggleAttribute("hidden", hide);
+    btn.textContent = hide ? btn.dataset.showLabel : "🙈 hide samples";
+    return;
+  }
+  btn.dataset.showLabel = btn.dataset.showLabel || btn.textContent;
+  c.removeAttribute("hidden");
   c.innerHTML = '<div class="rsearch-status">sampling… <span class="rsearch-spin"></span></div>';
   const qs = new URLSearchParams({ index: btn.dataset.tsIndex });
   if (btn.dataset.tsGood) qs.set("good", btn.dataset.tsGood);
-  try { c.innerHTML = logTsSamplesHtml(await api(`/api/logging/ts-samples?${qs.toString()}`)); }
-  catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
+  if (btn.dataset.tsMode) qs.set("mode", btn.dataset.tsMode);
+  try {
+    c.innerHTML = logTsSamplesHtml(await api(`/api/logging/ts-samples?${qs.toString()}`), btn.dataset.tssLabel);
+    c.dataset.loaded = "1";               // success → future clicks toggle
+    btn.textContent = "🙈 hide samples";
+  } catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
 function wireLogContent() {
   // each app is a native <details> — build its heavy detail body the first

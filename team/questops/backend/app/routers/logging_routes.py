@@ -21,11 +21,13 @@ def logging_health(refresh: bool = False, user: User = Depends(current_user)):
 
 @router.get("/logging/ts-samples")
 def logging_ts_samples(index: str, source: str = "prd", good: str = "",
-                       good_source: str = "", user: User = Depends(current_user)):
-    """Sample @timestamp values from a suspect index (+ a good sibling) to show
-    exactly which documents make @timestamp not a proper date."""
+                       good_source: str = "", mode: str = "",
+                       user: User = Depends(current_user)):
+    """Sample @timestamp + event.original from suspect indices (+ a good
+    sibling): the docs that make @timestamp not a proper date, or — with
+    mode=future — the docs inside future-dated indices."""
     try:
-        return logstats.ts_samples(index, source, good, good_source)
+        return logstats.ts_samples(index, source, good, good_source, mode=mode)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001 — surface a clean message, never a 500
