@@ -12,6 +12,9 @@ Merges the WFH Schedule (rotation building/editing) and Team Attendance
   - *Management report*: actual WFO/WFH per member, regardless of plan
     (CSV export, summary + day level).
   - *Team report*: plan vs actual, deviation-focused (CSV export).
+  - *Hours & punctuality*: office start/end times (member-set beats
+    session-derived), lateness vs a configurable threshold with permission
+    confirmations, and short-day (<8h) detection (CSV export).
   - *Detection quality*: every manual correction compared against what IP
     detection said — missed-office / ghost-office / day-off-activity buckets
     feed the detection-enhancement backlog (CSV export).
@@ -23,7 +26,10 @@ Data sources (all in the same vault-credentialed Postgres as the platform):
     wfh_plan_overrides     per-day, per-member plan deviations from rotation
     wfh_manual_attendance  self-reported actuals: WFO/WFH/OFF (fills/corrects
                            IP gaps; OFF = self-recorded day off)
-    wfh_settings           key/value settings (ip_detection_start)
+    wfh_settings           key/value settings (ip_detection_start,
+                           late_threshold)
+    wfh_day_times          member-set office start/end + lateness
+                           permission confirmations
     wfh_public_holidays    company holidays (editable in Settings)
     wfh_personal_holidays  personal leave register (read-only here)
     session_states         shared platform table → IP-based presence
@@ -47,7 +53,7 @@ from __future__ import annotations
 import os
 import random
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from itertools import combinations
 from typing import Dict, List, Sequence, Set, Tuple
 
@@ -135,12 +141,16 @@ WFH_ROTATION_TABLE = os.environ.get("WFH_ROTATION_TABLE", "wfh_rotation").strip(
 WFH_MANUAL_TABLE = os.environ.get("WFH_MANUAL_ATTENDANCE_TABLE", "wfh_manual_attendance").strip()
 WFH_OVERRIDES_TABLE = os.environ.get("WFH_PLAN_OVERRIDES_TABLE", "wfh_plan_overrides").strip()
 WFH_SETTINGS_TABLE = os.environ.get("WFH_SETTINGS_TABLE", "wfh_settings").strip()
+WFH_DAY_TIMES_TABLE = os.environ.get("WFH_DAY_TIMES_TABLE", "wfh_day_times").strip()
 WFH_PERSONAL_HOLIDAYS_TABLE = os.environ.get(
     "WFH_PERSONAL_HOLIDAYS_TABLE", "wfh_personal_holidays").strip()
 WFH_PUBLIC_HOLIDAYS_TABLE = os.environ.get(
     "WFH_PUBLIC_HOLIDAYS_TABLE", "wfh_public_holidays").strip()
 
 DETECTION_START_SETTING = "ip_detection_start"
+LATE_THRESHOLD_SETTING = "late_threshold"
+DEFAULT_LATE_THRESHOLD = time(10, 0)   # office starts after this = late
+MIN_DAY_HOURS = 8.0                    # office days shorter than this are flagged
 DEFAULT_DETECTION_START = date(2026, 6, 1)
 
 DEFAULT_PUBLIC_HOLIDAYS: Dict[str, str] = {
@@ -429,7 +439,7 @@ def _pg_connect():
 
 def _pg_ensure_schema(conn) -> None:
     for _name in (WFH_ROTATION_TABLE, WFH_MANUAL_TABLE,
-                  WFH_OVERRIDES_TABLE, WFH_SETTINGS_TABLE,
+                  WFH_OVERRIDES_TABLE, WFH_SETTINGS_TABLE, WFH_DAY_TIMES_TABLE,
                   WFH_PUBLIC_HOLIDAYS_TABLE, WFH_PERSONAL_HOLIDAYS_TABLE):
         if not _pg_safe_ident(_name):
             raise RuntimeError(f"unsafe table identifier: {_name!r}")
@@ -466,6 +476,18 @@ def _pg_ensure_schema(conn) -> None:
             key        TEXT PRIMARY KEY,
             value      TEXT,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {WFH_DAY_TIMES_TABLE} (
+            day             DATE NOT NULL,
+            member          TEXT NOT NULL,
+            start_time      TIME,
+            end_time        TIME,
+            late_permission BOOLEAN,
+            updated_by      TEXT,
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (day, member)
         )
     """)
     # Holiday tables — shared with (and identical to) the WFH Schedule page's
@@ -611,6 +633,34 @@ def set_detection_start(d: date) -> bool:
     )
 
 
+def get_late_threshold() -> time:
+    """Office starts after this time count as late (Settings-editable)."""
+    def _q(cur):
+        cur.execute(f"SELECT value FROM {WFH_SETTINGS_TABLE} WHERE key = %s",
+                    (LATE_THRESHOLD_SETTING,))
+        return cur.fetchone()
+
+    row = _pg_read(_q)
+    if row and row[0]:
+        try:
+            hh, mm = str(row[0]).split(":")[:2]
+            return time(int(hh), int(mm))
+        except (ValueError, TypeError):
+            pass
+    return DEFAULT_LATE_THRESHOLD
+
+
+def set_late_threshold(t: time) -> bool:
+    return _pg_write(
+        lambda cur: cur.execute(
+            f"INSERT INTO {WFH_SETTINGS_TABLE} (key, value) VALUES (%s, %s) "
+            f"ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+            (LATE_THRESHOLD_SETTING, t.strftime("%H:%M")),
+        ),
+        "the lateness threshold",
+    )
+
+
 # ---- Holidays ----------------------------------------------------------------
 def load_public_holidays() -> Dict[str, str]:
     def _q(cur):
@@ -696,6 +746,22 @@ def delete_public_holidays(isos: List[str]) -> bool:
 
 
 # ---- Actuals & overrides ------------------------------------------------------
+def _office_ip_regex() -> str:
+    """POSIX regex matching the office prefix at the start of the IP or of any
+    entry in a proxy chain ("203.0.1.2, 10.26.3.4" — X-Forwarded-For style)."""
+    return "(^|[, ])" + re.escape(OFFICE_IP_PREFIX)
+
+
+# Session rows in the wild are messy: usernames arrive with stray case and
+# whitespace, original_user may be '' instead of NULL, and client_ip can be a
+# comma-separated proxy chain. All session queries share these conditions.
+_SESSION_USER_COND = "LOWER(TRIM(s.username)) = ANY(%s)"
+_SESSION_IMPERSONATION_COND = (
+    "(s.original_user IS NULL OR TRIM(s.original_user) = '' "
+    "OR LOWER(TRIM(s.original_user)) = LOWER(TRIM(s.username)))"
+)
+
+
 def load_ip_actuals(start: date, end: date) -> Dict[str, Dict[str, str]]:
     if not _pg_safe_ident(SESSION_STATES_TABLE):
         return {}
@@ -704,13 +770,13 @@ def load_ip_actuals(start: date, end: date) -> Dict[str, Dict[str, str]]:
     def _q(cur):
         cur.execute(
             f"SELECT s.username, (s.timestamp)::date AS day, "
-            f"COUNT(*) FILTER (WHERE s.client_ip LIKE %s) AS office_sessions "
+            f"COUNT(*) FILTER (WHERE s.client_ip ~ %s) AS office_sessions "
             f"FROM {SESSION_STATES_TABLE} AS s "
-            f"WHERE LOWER(s.username) = ANY(%s) "
+            f"WHERE {_SESSION_USER_COND} "
             f"AND s.timestamp >= %s AND s.timestamp < %s "
-            f"AND (s.original_user IS NULL OR LOWER(s.original_user) = LOWER(s.username)) "
+            f"AND {_SESSION_IMPERSONATION_COND} "
             f"GROUP BY s.username, (s.timestamp)::date",
-            (OFFICE_IP_PREFIX + "%", usernames, start, end + timedelta(days=1)),
+            (_office_ip_regex(), usernames, start, end + timedelta(days=1)),
         )
         return cur.fetchall()
 
@@ -723,6 +789,92 @@ def load_ip_actuals(start: date, end: date) -> Dict[str, Dict[str, str]]:
         iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
         out.setdefault(iso, {})[member] = "WFO" if int(office_sessions or 0) > 0 else "WFH"
     return out
+
+
+def load_ip_times(start: date, end: date) -> Dict[str, Dict[str, Tuple[time, time]]]:
+    """Detected office hours: first/last office-IP session per member-day.
+    {iso: {member: (first_time, last_time)}} — only days with office sessions."""
+    if not _pg_safe_ident(SESSION_STATES_TABLE):
+        return {}
+    usernames = [u.lower() for u in MEMBER_TO_SESSION_USER.values()]
+
+    def _q(cur):
+        cur.execute(
+            f"SELECT s.username, (s.timestamp)::date AS day, "
+            f"MIN(s.timestamp) FILTER (WHERE s.client_ip ~ %s) AS first_office, "
+            f"MAX(s.timestamp) FILTER (WHERE s.client_ip ~ %s) AS last_office "
+            f"FROM {SESSION_STATES_TABLE} AS s "
+            f"WHERE {_SESSION_USER_COND} "
+            f"AND s.timestamp >= %s AND s.timestamp < %s "
+            f"AND {_SESSION_IMPERSONATION_COND} "
+            f"GROUP BY s.username, (s.timestamp)::date",
+            (_office_ip_regex(), _office_ip_regex(), usernames,
+             start, end + timedelta(days=1)),
+        )
+        return cur.fetchall()
+
+    rows = _pg_read(_q)
+    out: Dict[str, Dict[str, Tuple[time, time]]] = {}
+    for username, day, first_ts, last_ts in rows or []:
+        member = SESSION_USER_TO_MEMBER_CI.get(str(username).lower())
+        if not member or first_ts is None or last_ts is None:
+            continue
+        iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        out.setdefault(iso, {})[member] = (first_ts.time(), last_ts.time())
+    return out
+
+
+def load_day_times(start: date, end: date) -> Dict[str, Dict[str, dict]]:
+    """Member-set office hours + lateness confirmations from wfh_day_times:
+    {iso: {member: {start, end, perm}}} (perm: True/False/None)."""
+    def _q(cur):
+        cur.execute(
+            f"SELECT day, member, start_time, end_time, late_permission "
+            f"FROM {WFH_DAY_TIMES_TABLE} WHERE day >= %s AND day <= %s",
+            (start, end),
+        )
+        return cur.fetchall()
+
+    rows = _pg_read(_q)
+    out: Dict[str, Dict[str, dict]] = {}
+    for d, m, st_t, en_t, perm in rows or []:
+        iso = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        if m in TEAM_MEMBERS:
+            out.setdefault(iso, {})[m] = {"start": st_t, "end": en_t, "perm": perm}
+    return out
+
+
+def save_day_times(member: str, entries: Dict[str, dict], by: str) -> bool:
+    """entries: {iso: {start: time|None, end: time|None, perm: bool|None}}.
+    A row with everything None is deleted."""
+    ups, dels = [], []
+    for iso, v in entries.items():
+        try:
+            d = date.fromisoformat(iso)
+        except ValueError:
+            continue
+        if v.get("start") is None and v.get("end") is None and v.get("perm") is None:
+            dels.append((d, member))
+        else:
+            ups.append((d, member, v.get("start"), v.get("end"), v.get("perm"), by))
+
+    def _w(cur):
+        if ups:
+            cur.executemany(
+                f"INSERT INTO {WFH_DAY_TIMES_TABLE} "
+                f"(day, member, start_time, end_time, late_permission, updated_by) "
+                f"VALUES (%s, %s, %s, %s, %s, %s) "
+                f"ON CONFLICT (day, member) DO UPDATE SET "
+                f"start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, "
+                f"late_permission = EXCLUDED.late_permission, "
+                f"updated_by = EXCLUDED.updated_by, updated_at = NOW()",
+                ups,
+            )
+        if dels:
+            cur.executemany(
+                f"DELETE FROM {WFH_DAY_TIMES_TABLE} WHERE day = %s AND member = %s", dels)
+
+    return _pg_write(_w, "office hours")
 
 
 def _load_day_member_status(table: str, start: date, end: date,
@@ -836,7 +988,8 @@ def resolve_member(identity: str | None) -> str | None:
 class Resolver:
     """Answers plan/actual questions for a period, from pre-loaded data."""
 
-    def __init__(self, rotation, ip, manual, overrides, holidays, public, cutover, today):
+    def __init__(self, rotation, ip, manual, overrides, holidays, public, cutover, today,
+                 ip_times=None, day_times=None, late_threshold=DEFAULT_LATE_THRESHOLD):
         self.rotation = rotation
         self.ip = ip
         self.manual = manual
@@ -845,6 +998,9 @@ class Resolver:
         self.public = public
         self.cutover = cutover
         self.today = today
+        self.ip_times = ip_times or {}
+        self.day_times = day_times or {}
+        self.late_threshold = late_threshold
 
     def off_external(self, member: str, d: date) -> str | None:
         """Off for a reason outside the member's own record (holiday registers)."""
@@ -926,9 +1082,72 @@ class Resolver:
             return {"cat": "unknown", "note": None, "planned": planned,
                     "actual": None, "source": None, "overridden": overridden}
         deviation = (planned is not None) and (actual != planned)
-        return {"cat": "office" if actual == "WFO" else "home", "note": None,
-                "planned": planned, "actual": actual, "source": source,
-                "deviation": deviation, "overridden": overridden}
+        state = {"cat": "office" if actual == "WFO" else "home", "note": None,
+                 "planned": planned, "actual": actual, "source": source,
+                 "deviation": deviation, "overridden": overridden}
+        if state["cat"] == "office":
+            oh = self.office_hours(member, d)
+            if oh and (oh["start"] or oh["end"]):
+                parts = [f"{fmt_time(oh['start'])}–{fmt_time(oh['end'])}"]
+                if oh["hours"] is not None:
+                    parts[0] += f" ({oh['hours']:.1f}h)"
+                if oh["late"]:
+                    parts.append({True: "late (permitted)", False: "late (no permission)",
+                                  None: "late (unconfirmed)"}[oh["perm"]])
+                if oh["short"]:
+                    parts.append(f"short day (<{MIN_DAY_HOURS:.0f}h)")
+                state["hours_tip"] = " · ".join(parts)
+        return state
+
+    def office_hours(self, member: str, d: date) -> dict | None:
+        """Hours detail for an office day (None when the day isn't Office).
+
+        Per-field precedence: member-set start/end (wfh_day_times) win over
+        session-derived first/last office-IP timestamps. Returns::
+
+            {start, end, start_src, end_src, hours, late, perm,
+             short, missing: [..]}
+
+        ``late``  — start after the threshold (None when start unknown).
+        ``perm``  — True/False confirmation, None = unconfirmed.
+        ``short`` — worked < MIN_DAY_HOURS (None when hours unknown).
+        ``missing`` — subtle-warning keys: 'start', 'end', 'invalid',
+        'late-unconfirmed'.
+        """
+        actual, _src = self.actual(member, d)
+        if actual != "WFO":
+            return None
+        iso = d.isoformat()
+        manual_t = self.day_times.get(iso, {}).get(member, {})
+        ip_t = self.ip_times.get(iso, {}).get(member)
+        start = manual_t.get("start") or (ip_t[0] if ip_t else None)
+        start_src = "self" if manual_t.get("start") else ("ip" if ip_t else None)
+        end = manual_t.get("end") or (ip_t[1] if ip_t else None)
+        end_src = "self" if manual_t.get("end") else ("ip" if ip_t else None)
+        # A single office ping yields first == last — that's a start signal,
+        # not a real end-of-day.
+        if end_src == "ip" and start is not None and end == start:
+            end, end_src = None, None
+        perm = manual_t.get("perm")
+        missing: List[str] = []
+        if start is None:
+            missing.append("start")
+        if end is None:
+            missing.append("end")
+        hours = None
+        if start is not None and end is not None:
+            delta = (datetime.combine(d, end) - datetime.combine(d, start)).total_seconds()
+            if delta <= 0:
+                missing.append("invalid")
+            else:
+                hours = delta / 3600.0
+        late = (start > self.late_threshold) if start is not None else None
+        if late and perm is None:
+            missing.append("late-unconfirmed")
+        short = (hours < MIN_DAY_HOURS) if hours is not None else None
+        return {"start": start, "end": end, "start_src": start_src,
+                "end_src": end_src, "hours": hours, "late": late,
+                "perm": perm, "short": short, "missing": missing}
 
 
 def _off_kind(note: str | None) -> str | None:
@@ -1034,6 +1253,53 @@ def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
         "compliant": (rate is not None and rate >= POLICY_MIN_RATE),
         "low_sample": rated_days < 2,
     }
+
+
+def member_time_stats(res: Resolver, member: str, days: List[date]) -> dict:
+    """Office-hours metrics for one member: averages, lateness, short days."""
+    office_days = timed = late = late_perm = late_noperm = late_unconf = 0
+    short = missing = 0
+    tot_hours = 0.0
+    starts: List[time] = []
+    for d in days:
+        if not is_workday(d) or d > res.today:
+            continue
+        oh = res.office_hours(member, d)
+        if oh is None:
+            continue
+        office_days += 1
+        if oh["missing"]:
+            missing += 1
+        if oh["hours"] is not None:
+            timed += 1
+            tot_hours += oh["hours"]
+        if oh["start"] is not None:
+            starts.append(oh["start"])
+        if oh["late"]:
+            late += 1
+            if oh["perm"] is True:
+                late_perm += 1
+            elif oh["perm"] is False:
+                late_noperm += 1
+            else:
+                late_unconf += 1
+        if oh["short"]:
+            short += 1
+    avg_hours = (tot_hours / timed) if timed else None
+    avg_start = None
+    if starts:
+        secs = sum(t.hour * 3600 + t.minute * 60 + t.second for t in starts) // len(starts)
+        avg_start = time(secs // 3600, (secs % 3600) // 60)
+    return {
+        "member": member, "office_days": office_days, "timed": timed,
+        "avg_hours": avg_hours, "avg_start": avg_start,
+        "late": late, "late_perm": late_perm, "late_noperm": late_noperm,
+        "late_unconf": late_unconf, "short": short, "missing": missing,
+    }
+
+
+def fmt_time(t: time | None) -> str:
+    return t.strftime("%H:%M") if t else "—"
 
 
 # =============================================================================
@@ -1206,8 +1472,9 @@ def cell_html(state: dict, member: str, d: date) -> str:
            "self": "self-reported",
            "assumed": "assumed — WFH Sunday, no data needed"}.get(state["source"], "—")
     actual_lbl = "Office" if state["actual"] == "WFO" else "Home"
+    tip = f" · {state['hours_tip']}" if state.get("hours_tip") else ""
     return (f"<td class='hcell {base}{dev}{assumed}' title='{member} · {d:%a %d %b} · "
-            f"was {actual_lbl} ({src}) · plan: {plan_lbl}{ov}'>{glyph}</td>")
+            f"was {actual_lbl} ({src}) · plan: {plan_lbl}{ov}{tip}'>{glyph}</td>")
 
 
 def render_day_grid(res: Resolver, members: List[str], days: List[date],
@@ -1306,6 +1573,112 @@ def render_my_space(res: Resolver, member: str, start: date, end: date):
     render_day_grid(res, [member], days, {member: breach_flag})
 
     _render_fix_attendance(res, member, days)
+    _render_office_hours(res, member, days)
+
+
+def _render_office_hours(res: Resolver, member: str, days: List[date]):
+    """Member-editable start/end times + lateness confirmations for their
+    office days in the selected period."""
+    office_days = [
+        d for d in days
+        if is_workday(d) and d <= res.today and res.actual(member, d)[0] == "WFO"
+    ]
+    if not office_days:
+        return
+
+    st.markdown("<div class='board-title'>🕐 My office hours</div>", unsafe_allow_html=True)
+    st.caption(
+        "Start/end default to your first/last session from an office IP — "
+        "correct them here. Starts after "
+        f"{fmt_time(res.late_threshold)} count as late and need a permission "
+        f"confirmation; days under {MIN_DAY_HOURS:.0f}h are flagged short."
+    )
+
+    # Subtle rollup of what needs attention — quiet by design.
+    n_missing = n_unconf = n_short = 0
+    for d in office_days:
+        oh = res.office_hours(member, d)
+        if not oh:
+            continue
+        if "start" in oh["missing"] or "end" in oh["missing"] or "invalid" in oh["missing"]:
+            n_missing += 1
+        if "late-unconfirmed" in oh["missing"]:
+            n_unconf += 1
+        if oh["short"]:
+            n_short += 1
+    notes = []
+    if n_missing:
+        notes.append(f"{n_missing} day(s) missing start/end")
+    if n_unconf:
+        notes.append(f"{n_unconf} lateness confirmation(s) pending")
+    if n_short:
+        notes.append(f"{n_short} day(s) under {MIN_DAY_HOURS:.0f}h")
+    if notes:
+        st.markdown(f"<div class='hours-note'>· {' · '.join(notes)}</div>",
+                    unsafe_allow_html=True)
+
+    perm_opts = ["—", "With permission", "No permission"]
+    recs = []
+    for d in office_days[-20:]:
+        iso = d.isoformat()
+        oh = res.office_hours(member, d) or {}
+        mt = res.day_times.get(iso, {}).get(member, {})
+        ipt = res.ip_times.get(iso, {}).get(member)
+        detected = f"{fmt_time(ipt[0])}–{fmt_time(ipt[1])}" if ipt else "—"
+        hours = oh.get("hours")
+        flags = []
+        if oh.get("late"):
+            flags.append("late")
+        if oh.get("short"):
+            flags.append(f"<{MIN_DAY_HOURS:.0f}h")
+        if "invalid" in (oh.get("missing") or []):
+            flags.append("invalid")
+        recs.append({
+            "Date": d.strftime("%a %d %b"),
+            "_iso": iso,
+            "_late": bool(oh.get("late")),
+            "Detected": detected,
+            "Start": mt.get("start") or (ipt[0] if ipt else None),
+            "End": mt.get("end") or (ipt[1] if ipt else None),
+            "Late permission": {True: "With permission", False: "No permission",
+                                None: "—"}[mt.get("perm")],
+            "Hours": (f"{hours:.1f}h" if hours is not None else "—")
+                     + ((" · " + " ".join(flags)) if flags else ""),
+        })
+    df = pd.DataFrame(recs)
+    edited = st.data_editor(
+        df.drop(columns=["_iso", "_late"]),
+        column_config={
+            "Date": st.column_config.TextColumn(disabled=True),
+            "Detected": st.column_config.TextColumn(
+                disabled=True, help="First–last session from an office IP."),
+            "Start": st.column_config.TimeColumn(format="HH:mm", step=300),
+            "End": st.column_config.TimeColumn(format="HH:mm", step=300),
+            "Late permission": st.column_config.SelectboxColumn(
+                options=perm_opts, default="—",
+                help="Required when you started after "
+                     f"{fmt_time(res.late_threshold)}."),
+            "Hours": st.column_config.TextColumn(disabled=True),
+        },
+        hide_index=True, num_rows="fixed", use_container_width=True,
+        height=min(520, 64 + 35 * len(recs)),
+        key=f"hours_{member}",
+    )
+    if st.button("Save my hours", type="primary", key=f"hours_save_{member}"):
+        entries: Dict[str, dict] = {}
+        for i, row in edited.iterrows():
+            perm_v = str(row["Late permission"])
+            perm = (True if perm_v == "With permission"
+                    else False if perm_v == "No permission" else None)
+            sv, ev = row["Start"], row["End"]
+            entries[df.iloc[i]["_iso"]] = {
+                "start": sv if isinstance(sv, time) else None,
+                "end": ev if isinstance(ev, time) else None,
+                "perm": perm,
+            }
+        if save_day_times(member, entries, by=member):
+            st.success("Office hours saved.")
+            st.rerun()
 
 
 def _render_fix_attendance(res: Resolver, member: str, days: List[date],
@@ -1378,31 +1751,55 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date],
 # =============================================================================
 # SECTION: TEAM & SCHEDULE
 # =============================================================================
+@st.fragment(run_every=60)
 def render_today_strip(res: Resolver, members: List[str]):
+    """Live who's-in strip. Re-queries session_states every 60s on its own —
+    deliberately independent of the page's period filter, so today's
+    detections always show even when a past range is selected. All data it
+    needs is fetched inside the fragment (no outside-widget dependency)."""
     d = res.today
     while not is_workday(d) or res.public.get(d.isoformat()):
         d += timedelta(days=1)
         if (d - res.today).days > 14:
             return
     label = "Today" if d == res.today else f"Next workday · {d:%a %d %b}"
+
+    # Fresh, single-day fetch on every fragment tick — never the page cache.
+    ip_now = load_ip_actuals(d, d).get(d.isoformat(), {})
+    times_now = load_ip_times(d, d).get(d.isoformat(), {})
+
     planned_in = [m for m in members
                   if res.planned(m, d) == "WFO" and not res.is_off(m, d)]
-    detected_in = [m for m in members
-                   if res.ip.get(d.isoformat(), {}).get(m) == "WFO"]
+    detected_in = [m for m in members if ip_now.get(m) == "WFO"]
+    home_active = [m for m in members
+                   if ip_now.get(m) == "WFH" and not res.is_off(m, d)]
     on_leave = [m for m in members if res.is_off(m, d)]
+
+    def _since(m: str) -> str:
+        t = times_now.get(m)
+        return f" · since {fmt_time(t[0])}" if t and t[0] else ""
+
     pl = "".join(f"<span class='pill pill-plan'>{m}</span>" for m in planned_in) or \
          "<span class='pill-empty'>nobody planned</span>"
-    dt = "".join(f"<span class='pill pill-live'>{m}</span>" for m in detected_in) or \
+    dt = "".join(f"<span class='pill pill-live'>{m}{_since(m)}</span>"
+                 for m in detected_in) or \
          "<span class='pill-empty'>none detected yet</span>"
+    hm = "".join(f"<span class='pill pill-plan'>{m}</span>" for m in home_active)
+    hm_row = (f"<div class='strip-row'><span class='strip-k'>Active from home</span>{hm}</div>"
+              if hm else "")
     lv = ("".join(f"<span class='pill pill-off'>{m}</span>" for m in on_leave)) if on_leave else ""
     lv_row = f"<div class='strip-row'><span class='strip-k'>On leave</span>{lv}</div>" if lv else ""
+    stamp = datetime.now().strftime("%H:%M:%S")
     st.markdown(
-        f"<div class='panel strip'><div class='strip-title'>{label}</div>"
+        f"<div class='panel strip'><div class='strip-title'>{label}"
+        f"<span class='strip-live'>● live · checked {stamp}</span></div>"
         f"<div class='strip-row'><span class='strip-k'>Planned in office</span>{pl}</div>"
         f"<div class='strip-row'><span class='strip-k'>Detected in office</span>{dt}</div>"
-        f"{lv_row}</div>",
+        f"{hm_row}{lv_row}</div>",
         unsafe_allow_html=True,
     )
+    if st.button("🔄 Check now", key="strip_refresh", help="Re-query detection immediately."):
+        st.rerun(scope="fragment")
 
 
 def _pattern_to_df(pattern: List[Set[str]]) -> pd.DataFrame:
@@ -1650,7 +2047,20 @@ def _daily_detail_rows(res: Resolver, days: List[date],
                 "off": off or "",
                 "off_kind": _off_kind(off) or "",
                 "deviation": ("yes" if (not off and actual and plan and actual != plan) else ""),
+                "start": "", "end": "", "hours": "", "late": "",
+                "late_permission": "", "short_day": "",
             })
+            oh = res.office_hours(m, d)
+            if oh is not None:
+                rows[-1].update({
+                    "start": fmt_time(oh["start"]) if oh["start"] else "",
+                    "end": fmt_time(oh["end"]) if oh["end"] else "",
+                    "hours": (f"{oh['hours']:.2f}" if oh["hours"] is not None else ""),
+                    "late": "yes" if oh["late"] else ("" if oh["late"] is None else "no"),
+                    "late_permission": {True: "with permission", False: "no permission",
+                                        None: ""}[oh["perm"]],
+                    "short_day": "yes" if oh["short"] else "",
+                })
     return rows
 
 
@@ -1721,6 +2131,136 @@ def _detection_analysis(res: Resolver,
     }
 
 
+def _hours_detail_rows(res: Resolver, days: List[date],
+                       members: List[str]) -> List[dict]:
+    rows = []
+    for d in days:
+        if not is_workday(d) or d > res.today:
+            continue
+        for m in members:
+            oh = res.office_hours(m, d)
+            if oh is None:
+                continue
+            rows.append({
+                "date": d.isoformat(), "weekday": d.strftime("%a"), "member": m,
+                "start": fmt_time(oh["start"]) if oh["start"] else "",
+                "end": fmt_time(oh["end"]) if oh["end"] else "",
+                "start_source": oh["start_src"] or "",
+                "end_source": oh["end_src"] or "",
+                "hours": (f"{oh['hours']:.2f}" if oh["hours"] is not None else ""),
+                "late": "yes" if oh["late"] else ("" if oh["late"] is None else "no"),
+                "late_permission": {True: "with permission", False: "no permission",
+                                    None: ""}[oh["perm"]],
+                "short_day": "yes" if oh["short"] else "",
+                "missing": ",".join(oh["missing"]),
+            })
+    return rows
+
+
+def _render_hours_report(res: Resolver, start: date, end: date,
+                         members: List[str], stats: Dict[str, dict],
+                         period_tag: str):
+    st.markdown(
+        "<div class='report-head'><div class='report-title'>Hours & punctuality</div>"
+        f"<div class='report-sub'>{start:%d %b %Y} → {end:%d %b %Y} · office start/end times "
+        f"(member-set over detected) · late = start after {fmt_time(res.late_threshold)} · "
+        f"short = under {MIN_DAY_HOURS:.0f}h</div></div>",
+        unsafe_allow_html=True,
+    )
+    days = workdays_between(start, end)
+    tstats = {m: member_time_stats(res, m, days) for m in members}
+
+    total_timed = sum(t["timed"] for t in tstats.values())
+    tot_hours = sum((t["avg_hours"] or 0) * t["timed"] for t in tstats.values())
+    team_avg = (tot_hours / total_timed) if total_timed else None
+    total_late = sum(t["late"] for t in tstats.values())
+    total_perm = sum(t["late_perm"] for t in tstats.values())
+    total_noperm = sum(t["late_noperm"] for t in tstats.values())
+    total_unconf = sum(t["late_unconf"] for t in tstats.values())
+    total_short = sum(t["short"] for t in tstats.values())
+    total_missing = sum(t["missing"] for t in tstats.values())
+
+    k = st.columns(4)
+    k[0].metric("Avg office day", f"{team_avg:.1f}h" if team_avg is not None else "—",
+                help=f"Across {total_timed} office days with both start and end.")
+    k[1].metric("Late arrivals", f"{total_late}",
+                help=f"{total_perm} with permission · {total_noperm} without · "
+                     f"{total_unconf} unconfirmed.")
+    k[2].metric("Short days", f"{total_short}", help=f"Office days under {MIN_DAY_HOURS:.0f}h.")
+    k[3].metric("Needs attention", f"{total_missing}",
+                help="Office days missing start/end or a lateness confirmation.")
+
+    if total_unconf or total_noperm:
+        st.markdown(
+            f"<div class='hours-note'>· {total_unconf} lateness confirmation(s) pending · "
+            f"{total_noperm} lateness(es) without permission</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Average office-day length vs the 8h target (scaled to a 12h track).
+    st.markdown(f"<div class='board-title'>Average office day vs {MIN_DAY_HOURS:.0f}h</div>",
+                unsafe_allow_html=True)
+    scale = 12.0
+    bars = []
+    order = sorted(members, key=lambda m: (tstats[m]["avg_hours"] is None,
+                                           -(tstats[m]["avg_hours"] or 0)))
+    for m in order:
+        t = tstats[m]
+        if t["avg_hours"] is None:
+            bars.append(f"<div class='bar-row'><div class='bar-name'>{m}</div>"
+                        f"<div class='bar-track'><div class='bar-target' "
+                        f"style='left:{MIN_DAY_HOURS/scale*100:.0f}%'></div></div>"
+                        f"<div class='bar-val muted'>—</div></div>")
+            continue
+        w = max(2, min(100, round(100 * t["avg_hours"] / scale)))
+        good = t["avg_hours"] >= MIN_DAY_HOURS
+        cls = "ok" if good else "bad"
+        tip = (f"{m}: avg {t['avg_hours']:.1f}h over {t['timed']} timed day(s), "
+               f"avg start {fmt_time(t['avg_start'])}")
+        bars.append(
+            f"<div class='bar-row'><div class='bar-name'>{m}</div>"
+            f"<div class='bar-track' title='{tip}'>"
+            f"<div class='bar-fill {cls}' style='width:{w}%'></div>"
+            f"<div class='bar-target' style='left:{MIN_DAY_HOURS/scale*100:.0f}%'></div></div>"
+            f"<div class='bar-val {cls}'>{t['avg_hours']:.1f}h</div></div>"
+        )
+    st.markdown(f"<div class='board'>{''.join(bars)}</div>", unsafe_allow_html=True)
+    st.caption(f"Track scaled to {scale:.0f}h; the dark marker is the {MIN_DAY_HOURS:.0f}h target.")
+
+    summary = pd.DataFrame([{
+        "Member": m,
+        "Office days": tstats[m]["office_days"],
+        "Timed days": tstats[m]["timed"],
+        "Avg start": fmt_time(tstats[m]["avg_start"]),
+        "Avg hours": (f"{tstats[m]['avg_hours']:.1f}h"
+                      if tstats[m]["avg_hours"] is not None else "—"),
+        "Late": tstats[m]["late"],
+        "· with permission": tstats[m]["late_perm"],
+        "· no permission": tstats[m]["late_noperm"],
+        "· unconfirmed": tstats[m]["late_unconf"],
+        "Short days": tstats[m]["short"],
+        "Needs attention": tstats[m]["missing"],
+    } for m in members])
+    st.dataframe(summary, hide_index=True, use_container_width=True)
+
+    d1, d2 = st.columns(2)
+    d1.download_button(
+        "⬇️ Export summary (CSV)", summary.to_csv(index=False).encode(),
+        file_name=f"hours_summary_{period_tag}.csv", mime="text/csv",
+        use_container_width=True,
+    )
+    detail = pd.DataFrame(_hours_detail_rows(res, days, members))
+    d2.download_button(
+        "⬇️ Export day-level detail (CSV)",
+        (detail.to_csv(index=False) if not detail.empty else "").encode(),
+        file_name=f"hours_detail_{period_tag}.csv", mime="text/csv",
+        use_container_width=True, disabled=detail.empty,
+    )
+    if detail.empty:
+        st.info("No office days with time data in this period yet — hours build up "
+                "from office-IP sessions and members' own entries in My Space.")
+
+
 def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
                    members: List[str] | None = None):
     members = members or list(TEAM_MEMBERS)
@@ -1731,7 +2271,7 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
     kind = st.radio(
         "Report",
         ["🗂 Management — actual attendance", "🎯 Team — plan vs actual",
-         "🔬 Detection quality — corrections vs IP"],
+         "⏱ Hours & punctuality", "🔬 Detection quality — corrections vs IP"],
         horizontal=True, key="report_kind", label_visibility="collapsed",
     )
 
@@ -1746,7 +2286,6 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
         total_sunday = sum(s["sunday_ok"] for s in stats.values())
         total_home = sum(s["home"] for s in stats.values())
         total_known = sum(s["known"] for s in stats.values())
-        total_unknown = sum(s["unknown_past"] for s in stats.values())
         total_assumed = sum(s["unknown_past"] for s in stats.values())
         rated = total_known + total_sunday + total_assumed
         team_rate = ((total_office + total_sunday) / rated) if rated else None
@@ -1855,6 +2394,8 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
             file_name=f"plan_vs_actual_detail_{period_tag}.csv", mime="text/csv",
             use_container_width=True,
         )
+    elif kind.startswith("⏱"):
+        _render_hours_report(res, start, end, members, stats, period_tag)
     else:
         st.markdown(
             "<div class='report-head'><div class='report-title'>Detection quality — corrections vs IP</div>"
@@ -1959,6 +2500,11 @@ def render_method(res: Resolver, can_edit: bool):
             <li><b>Plan deviation (orange)</b> — a known day where the actual differed from the
                 effective plan (rotation + overrides). Deviations are visible, not punitive; the
                 red policy line is the one that matters.</li>
+            <li><b>Office hours</b> — on office days, start/end default to the first/last session
+                from an office IP; members can correct both in My Space → My office hours. Starts
+                after <b>{fmt_time(res.late_threshold)}</b> count as late and the member confirms
+                whether a time permission covered it; days under {MIN_DAY_HOURS:.0f}h are flagged
+                short. The ⏱ Hours &amp; punctuality report aggregates all of it.</li>
           </ol>
           <div class='algo-colours'>
             <b>Colours:</b> <span style='color:{C_OFFICE};font-weight:700'>green in office</span> ·
@@ -1988,6 +2534,27 @@ def render_method(res: Resolver, can_edit: bool):
                     st.rerun()
     else:
         st.info(f"Current detection start: **{res.cutover:%d %b %Y}** (management can change this).")
+
+    st.markdown("<div class='board-title'>⏰ Lateness threshold</div>", unsafe_allow_html=True)
+    st.caption(
+        "Office starts after this time count as late; the member is asked to "
+        "confirm whether the lateness had a time permission."
+    )
+    if can_edit:
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            new_t = st.time_input("Late after", value=res.late_threshold,
+                                  key="late_threshold_edit", step=300)
+        with c2:
+            st.write("")
+            st.write("")
+            if st.button("Save lateness threshold", type="secondary"):
+                if isinstance(new_t, time) and set_late_threshold(new_t):
+                    st.success(f"Lateness threshold set to {fmt_time(new_t)}.")
+                    st.rerun()
+    else:
+        st.info(f"Current threshold: **{fmt_time(res.late_threshold)}** "
+                "(management can change this).")
 
     _render_company_holidays(res, can_edit)
 
@@ -2107,6 +2674,8 @@ def inject_css() -> None:
         .panel-flag.ok {{ background:#e7f6ec; color:#15803d; }}
         .panel-flag.breach {{ background:#fdecec; color:#b91c1c; }}
         .strip .strip-title {{ font-weight:800; color:var(--ink); margin-bottom:.35rem; }}
+        .strip-live {{ margin-left:.6rem; font-size:.68rem; font-weight:700;
+                       color:#15803d; opacity:.75; }}
         .strip-row {{ display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; margin:.22rem 0; }}
         .strip-k {{ font-size:.74rem; color:var(--sub); font-weight:700; width:130px; }}
         .pill {{ padding:.16rem .6rem; border-radius:999px; font-size:.8rem; font-weight:700; }}
@@ -2181,6 +2750,8 @@ def inject_css() -> None:
         .algo code {{ background:#eef2f7; padding:.02rem .3rem; border-radius:4px; color:#0b3c5d; font-size:.8rem; }}
         .algo-colours {{ margin-top:.5rem; font-size:.8rem; color:#475569; }}
         .filter-cap {{ color:var(--sub); font-size:.8rem; margin:.05rem 0 .5rem; font-weight:600; }}
+        .hours-note {{ color:#9a8f7d; font-size:.78rem; margin:.15rem 0 .35rem;
+                       font-style:italic; }}
         .fill-cta {{ background:#fdf6ec; border:1px dashed #e3cfa4; color:#92600a;
                      border-radius:10px; padding:.5rem .8rem; font-size:.84rem;
                      margin:.5rem 0 .2rem 0; }}
@@ -2224,7 +2795,11 @@ def main() -> None:
     manual = load_manual(start, min(end, today))
     ov_end = max(end, today + timedelta(days=35))
     overrides = load_overrides(start, ov_end)
-    res = Resolver(rotation, ip, manual, overrides, holidays, public, cutover, today)
+    ip_times = load_ip_times(start, min(end, today))
+    day_times = load_day_times(start, min(end, today))
+    late_threshold = get_late_threshold()
+    res = Resolver(rotation, ip, manual, overrides, holidays, public, cutover, today,
+                   ip_times=ip_times, day_times=day_times, late_threshold=late_threshold)
 
     labels = ["🏠 My Space", "📅 Team & Schedule", "📊 Reports", "⚙️ Method & Settings"]
     tabs = st.tabs(labels)
