@@ -1268,27 +1268,6 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-score-tile b.log-score { font-size: 22px; padding: 2px 10px; }
 .log-app > summary .log-score, .log-proj > summary .log-score { margin-right: 2px; }
 
-/* ---------- logging: per-environment table ---------- */
-.log-env-table { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 8px; background: var(--bg-2); margin-bottom: 8px; }
-.log-env-table > .acc-h { margin: 2px 0 5px; padding: 0; }
-.log-env-row { display: flex; flex-direction: column; gap: 3px;
-  padding: 6px 8px; border-radius: 6px; border-left: 3px solid transparent; }
-.log-env-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.log-env-head .log-env-badges { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
-.log-env-detail { padding-left: 4px; line-height: 1.5; }
-.log-env-detail b { color: var(--text); font-weight: 600; }
-.log-env-row.undeployed { opacity: .72; }
-.log-env-row + .log-env-row { border-top: 1px solid var(--line); }
-.log-env-row.nolog { border-left-color: var(--red); background: rgba(239,95,102,.05); }
-.log-env-row.stale { border-left-color: var(--amber); background: rgba(255,178,36,.05); }
-.log-env-row.tsbad { border-left-color: var(--red); background: rgba(239,95,102,.05); }
-.log-env-name { justify-self: start; }
-.log-env-badges { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.log-env-row .chip { font-size: 10px; }
-@media (max-width: 720px) {
-  .log-env-row .log-env-badges { margin-left: 0; }
-}
-
 /* ---------- logging: @timestamp sample inspector ---------- */
 .log-ts-sample { margin-left: 8px; }
 .log-tss { margin-top: 8px; }
@@ -1325,81 +1304,99 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 .tss-noorig { font-style: italic; padding-left: 2px; }
 
-/* ---------- logging: side-by-side environment columns + project env dashboard ---------- */
-/* ---- apps × environments matrix -------------------------------------- */
-/* env header + every app row share one column template so cells line up; the
-   inner grid grows to its content width and the wrapper scrolls horizontally
-   as a unit (rows all stretch to the same width → columns stay aligned) */
-.log-mx-scroll { overflow-x: auto; padding-bottom: 4px; }
-.log-matrix { --mx-tmpl: minmax(160px, 1.35fr) repeat(var(--envn), minmax(104px, 1fr));
-  display: flex; flex-direction: column; gap: 5px; width: max-content; min-width: 100%; }
-.log-mx-row { display: grid; grid-template-columns: var(--mx-tmpl); gap: 6px; align-items: stretch; }
+/* ---- apps × environments matrix — table-style grid --------------------- */
+/* ONE coherent table, not a wall of boxes: env header + app rows share a
+   single column template; cells are quiet (row stripes + thin column rules +
+   a soft heat tint carry the status); the wrapper scrolls horizontally as a
+   unit so columns always stay aligned. */
+.log-mx-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-2); }
+.log-matrix { --mx-tmpl: minmax(172px, 1.4fr) repeat(var(--envn), minmax(118px, 1fr));
+  display: flex; flex-direction: column; width: max-content; min-width: 100%; }
+.log-mx-row { display: grid; grid-template-columns: var(--mx-tmpl); align-items: stretch; }
 
-/* each app is a native <details>; its <summary> IS the aligned grid row */
-.log-mx-app { border-radius: 9px; }
-.log-mx-app > summary { cursor: pointer; list-style: none; padding: 0; margin: 0; }
-.log-mx-app > summary::-webkit-details-marker { display: none; }
-.log-mx-app > summary:hover .log-mx-appcell { background: rgba(255,178,36,.05); border-color: var(--amber); }
-.log-mx-app > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 9px; }
-.log-mx-app[open] > summary .log-mx-caret { transform: rotate(90deg); }
-.log-mx-app[open] > summary .log-mx-appcell { border-color: var(--amber); background: rgba(255,178,36,.06); }
+/* header row: project identity + one aggregate cell per environment */
+.log-mx-row.head { position: sticky; top: 0; z-index: 4; background: var(--panel);
+  border-bottom: 1px solid var(--line); }
+.log-mx-appcell.head { justify-content: center; gap: 3px; }
+.log-mx-projname { font: 700 13px var(--body); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-mx-axis { font-size: 9.5px; color: var(--faint); letter-spacing: .03em; }
+.log-mx-envname { font: 700 11px var(--display); color: var(--amber);
+  letter-spacing: .07em; text-transform: uppercase; }
 
-/* the project/env header row sits directly above its apps */
-.log-mx-row.head { position: sticky; top: 0; z-index: 4; padding: 4px 0 6px;
-  background: var(--panel); border-bottom: 1px solid var(--line); }
-.log-mx-headhint { margin-left: auto; font-size: 10px; }
+/* cells: no individual borders — thin column rules; consistent inner layout */
+.log-mx-cell, .log-mx-appcell { min-width: 0; padding: 8px 10px; display: flex;
+  flex-direction: column; gap: 4px; justify-content: center; }
+.log-mx-appcell { padding: 8px 12px; }
+.log-mx-cell { border-left: 1px solid rgba(255,255,255,.05); }
+.log-mx-cell.sep { border-left: 2px solid rgba(255,178,36,.5); }   /* main | extra divider */
+/* soft heat tint — only problem cells get a wash, healthy stays quiet */
+.log-mx-cell.stale { background: rgba(255,178,36,.06); }
+.log-mx-cell.nolog, .log-mx-cell.tsbad { background: rgba(239,95,102,.07); }
+.log-mx-cell.absent, .log-mx-cell.undeployed { align-items: center; justify-content: center; }
+.log-mx-na { font-size: 10.5px; color: var(--faint); }
 
-.log-mx-appcell { border: 1px solid var(--line); border-radius: 9px; background: var(--bg-2);
-  padding: 7px 9px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.log-mx-appcell.head { background: transparent; border: none; padding: 6px 4px; justify-content: center; }
-.log-mx-appline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.log-mx-projname { font: 700 13.5px var(--body); color: var(--text); }
-.log-mx-caret { color: var(--faint); font-size: 11px; transition: transform .12s ease; flex: none; }
-.log-mx-appflags { display: flex; gap: 4px; flex-wrap: wrap; }
-.log-mx-appflags .chip { font-size: 9.5px; }
-
-.log-mx-cell { border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2);
-  padding: 6px 7px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
-  border-top: 3px solid var(--line); }
-.log-mx-cell.ok { border-top-color: var(--green); }
-.log-mx-cell.stale { border-top-color: var(--amber); }
-.log-mx-cell.nolog, .log-mx-cell.tsbad { border-top-color: var(--red); }
-.log-mx-cell.undeployed { border-top-color: var(--faint); opacity: .7; }
-.log-mx-cell.empty { border: 1px dashed var(--line); background: transparent; opacity: .5;
-  align-items: center; justify-content: center; }
-.log-mx-cell.sep { margin-left: 9px; box-shadow: -9px 0 0 -8px var(--amber); }   /* main|extra divider */
 .log-mx-cline { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.log-mx-cscore { font: 700 11px var(--mono); }
+.log-mx-cscore { font: 700 12px var(--mono); }
 .log-mx-cscore.a { color: var(--green); } .log-mx-cscore.b { color: var(--cyan); }
 .log-mx-cscore.c { color: var(--amber); } .log-mx-cscore.f { color: var(--red); } .log-mx-cscore.na { color: var(--faint); }
-.log-mx-csize { font: 600 11px var(--mono); color: var(--amber); text-align: right;
+.log-mx-csize { font: 600 11px var(--mono); color: var(--text); text-align: right;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.log-mx-cnums { font: 500 10.5px var(--mono); color: var(--text); }
-.log-mx-cnums b { color: var(--amber); }
-.log-mx-cmeta { font-size: 10px; color: var(--dim); }
-.log-mx-na { font-size: 11px; color: var(--faint); }
-.log-mx-cdots { display: flex; gap: 3px; flex-wrap: wrap; min-height: 6px; }
-.log-mx-cell .log-sizebar { margin-top: 1px; }
+.log-mx-nolog { font: 600 10.5px var(--body); color: var(--red); }
+.log-mx-cmeta { font-size: 10px; color: var(--dim); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.log-mx-cell .log-meter { height: 4px; }
 
-.log-mx-cell.head { cursor: pointer; background: var(--panel); border-top-color: var(--line); }
-.log-mx-cell.head:hover { background: rgba(63,198,221,.06); border-color: var(--cyan); }
-.log-mx-cell.head.active { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan) inset; }
-.log-mx-cell.head:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
-.log-mx-cell.head .log-env-name { font-weight: 600; }
+/* labeled issue micro-chips (readable at a glance — no mystery dots) */
+.log-mx-cissues { display: flex; gap: 3px; flex-wrap: wrap; }
+.log-mxi { font: 600 9px var(--body); padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+.log-mxi.bad { color: var(--red); background: rgba(239,95,102,.14); }
+.log-mxi.warn { color: var(--amber); background: rgba(255,178,36,.14); }
+.log-mxi.more { color: var(--dim); background: rgba(255,255,255,.06); }
 
-/* colored issue dots inside a compact cell */
-.log-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
-.log-dot.bad { background: var(--red); } .log-dot.warn { background: var(--amber); }
-.log-dot.ok { background: var(--green); }
+/* env header cells: click to focus that environment */
+.log-mx-cell.head { cursor: pointer; }
+.log-mx-cell.head:hover { background: rgba(63,198,221,.07); }
+.log-mx-cell.head.active { background: rgba(63,198,221,.08); box-shadow: inset 0 -2px 0 var(--cyan); }
+.log-mx-cell.head:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
 
-/* an app's expander body: the aligned per-env detail row + facts + inspector */
-.log-mx-app-body { padding: 3px 0 6px; }
-.log-mx-detail-inner { border: 1px solid var(--amber); border-radius: 9px; background: var(--panel);
-  padding: 9px 10px; display: flex; flex-direction: column; gap: 8px; }
-.log-mx-cell.detail { gap: 3px; }
+/* app rows: native <details>, the <summary> IS the aligned table row;
+   striping + hover + an amber accent when open (inset — no layout shift) */
+.log-mx-app > summary { cursor: pointer; list-style: none; padding: 0; margin: 0; }
+.log-mx-app > summary::-webkit-details-marker { display: none; }
+.log-mx-app { border-top: 1px solid rgba(255,255,255,.05); }
+.log-mx-app:nth-of-type(even) > summary { background: rgba(255,255,255,.015); }
+.log-mx-app > summary:hover { background: rgba(63,198,221,.05); }
+.log-mx-app > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.log-mx-app[open] { box-shadow: inset 2px 0 0 var(--amber); }
+.log-mx-app[open] > summary { background: rgba(255,178,36,.05); }
+.log-mx-app[open] .log-mx-caret { transform: rotate(90deg); }
+.log-mx-appline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.log-mx-caret { color: var(--faint); font-size: 10px; transition: transform .12s ease; flex: none; }
+.log-mx-appline .log-app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-mx-appflags { display: flex; gap: 3px; flex-wrap: wrap; }
+.log-mx-appflags .chip { font-size: 9px; padding: 1px 6px; }
+
+/* an app's expander body: aligned per-env detail cards + facts + inspector */
+.log-mx-app-body { padding: 6px 10px 12px; }
+.log-mx-detail-inner { display: flex; flex-direction: column; gap: 10px; }
+/* the per-env detail row DOES use cards — it's the dive, aligned under the
+   same columns, with a status-colored top edge */
+.log-mx-row.detail .log-mx-cell { border: 1px solid var(--line); border-top: 3px solid var(--line);
+  border-radius: 8px; background: var(--panel); margin: 0 3px; padding: 7px 9px;
+  justify-content: flex-start; gap: 3px; }
+.log-mx-row.detail .log-mx-cell.ok { border-top-color: var(--green); }
+.log-mx-row.detail .log-mx-cell.stale { border-top-color: var(--amber); background: var(--panel); }
+.log-mx-row.detail .log-mx-cell.nolog,
+.log-mx-row.detail .log-mx-cell.tsbad { border-top-color: var(--red); background: var(--panel); }
+.log-mx-row.detail .log-mx-cell.undeployed { border-top-color: var(--faint); opacity: .7; }
+.log-mx-row.detail .log-mx-cell.absent { border-style: dashed; opacity: .45;
+  align-items: center; justify-content: center; }
+.log-mx-row.detail .log-mx-cell.sep { border-left: 2px solid rgba(255,178,36,.5); }
+.log-mx-appcell.detail { justify-content: center; padding: 0 8px; }
 .log-mx-dline { font-size: 10.5px; color: var(--dim); word-break: break-word; }
-.log-mx-cell.detail .chip { font-size: 9px; }
-.log-mx-appcell.detail { background: transparent; border: none; justify-content: center; padding: 0 6px; }
+.log-mx-row.detail .chip { font-size: 9px; }
 
 /* health meter + size bar */
 .log-meter { display: block; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
@@ -1407,6 +1404,4 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-meter-fill.a { background: var(--green); } .log-meter-fill.b { background: var(--cyan); }
 .log-meter-fill.c { background: var(--amber); } .log-meter-fill.f { background: var(--red); }
 .log-meter-fill.na { background: var(--faint); }
-.log-sizebar { display: block; height: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.log-sizebar-fill { display: block; height: 100%; background: var(--violet); border-radius: 3px; }
 

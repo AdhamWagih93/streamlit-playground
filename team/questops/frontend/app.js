@@ -3307,10 +3307,19 @@ const logMeter = (score) => `<span class="log-meter" title="health ${score == nu
 // health cell per env; clicking an app row dives into its detail (aligned under
 // the same columns); clicking an env header focuses that environment.
 let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy detail)
-const LOG_ISSUE_DOT = { no_logs: "bad", stale: "warn", timestamp: "bad",
-  bad_week: "bad", future_week: "bad", over_retained: "warn", team_clash: "bad" };
-const logDots = (issues) => (issues || []).map((k) =>
-  `<span class="log-dot ${LOG_ISSUE_DOT[k] || "bad"}" title="${esc(LOG_ISSUE_LABEL[k] || k)}"></span>`).join("");
+const LOG_ISSUE_SEV = { no_logs: "bad", stale: "warn", timestamp: "bad",
+  bad_week: "bad", future_week: "bad", over_retained: "warn", team_clash: "bad", clash: "bad" };
+// labeled issue micro-chips (a reader shouldn't have to decode mystery dots);
+// at most `cap` shown, the rest folded into a "+n" with a tooltip
+function logIssueChips(issues, cap = 2) {
+  const list = issues || [];
+  if (!list.length) return "";
+  const shown = list.slice(0, cap).map((k) =>
+    `<span class="log-mxi ${LOG_ISSUE_SEV[k] || "bad"}">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join("");
+  const more = list.length > cap
+    ? `<span class="log-mxi more" title="${esc(list.slice(cap).map((k) => LOG_ISSUE_LABEL[k] || k).join(", "))}">+${list.length - cap}</span>` : "";
+  return `<div class="log-mx-cissues">${shown}${more}</div>`;
+}
 
 // app-level config flags shown on the app (row) cell
 function logAppFlags(a) {
@@ -3326,38 +3335,46 @@ function logAppFlags(a) {
   return b.join(" ");
 }
 
-const _mxCls = (e) => !e ? "empty" : (!e.deployed ? "undeployed" : (e.no_logs ? "nolog"
+const _mxCls = (e) => !e ? "absent" : (!e.deployed ? "undeployed" : (e.no_logs ? "nolog"
   : (!e.ts_ok && e.indices ? "tsbad" : (e.stale ? "stale" : "ok"))));
 
-// compact app×env cell (score meter · size · issue dots)
+// compact app×env cell — table-style: one status line (score · size), a slim
+// health meter, labeled issue chips. Absent / never-deployed envs stay QUIET
+// (a faint word, no box) so real data stands out.
 function logMxCell(e, sep) {
-  if (!e) return `<div class="log-mx-cell empty ${sep ? "sep" : ""}"><span class="log-mx-na">·</span></div>`;
-  const val = e.no_logs ? (e.deployed ? "no logs" : "—") : esc(e.size_h);
-  return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(e.env)} · score ${e.score == null ? "n/a" : e.score} · ${logInt(e.indices)} idx · ${esc(e.size_h)} · ${logInt(e.docs)} docs${e.owner ? " · " + esc(e.owner) : ""}">
-    <div class="log-mx-cline"><span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "·" : e.score}</span><span class="log-mx-csize">${val}</span></div>
+  if (!e) return `<div class="log-mx-cell absent ${sep ? "sep" : ""}" title="app not present in this environment"><span class="log-mx-na">—</span></div>`;
+  if (!e.deployed) return `<div class="log-mx-cell undeployed ${sep ? "sep" : ""}" title="${esc(e.env)} — never deployed, no logs expected"><span class="log-mx-na">not deployed</span></div>`;
+  const tip = `${e.env} · score ${e.score == null ? "n/a" : e.score} · ${logInt(e.indices)} idx · ${e.size_h} · ${logInt(e.docs)} docs`
+    + (e.owner ? ` · 👤 ${e.owner}` : "")
+    + (e.no_logs ? " · NO LOGS" : (e.last_logged_age_h != null ? ` · last log ${logAgo(e.last_logged_age_h)}` : ""));
+  const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>' : `<span class="log-mx-csize">${esc(e.size_h)}</span>`;
+  return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(tip)}">
+    <div class="log-mx-cline"><span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${right}</div>
     ${logMeter(e.score)}
-    <div class="log-mx-cdots">${logDots(e.issues) || (e.deployed && e.indices ? '<span class="log-dot ok"></span>' : "")}</div>
+    ${logIssueChips(e.issues)}
   </div>`;
 }
 
-// project-aggregate header cell (clickable → focus that env)
-function logMxHead(env, m, f, sep, maxBytes) {
+// env column header — the project's aggregate for that env (score, meter,
+// size, apps, issue count). Click to focus/unfocus the environment.
+function logMxHead(env, m, f, sep, total) {
   const active = f.env === env;
-  if (!m) return `<div class="log-mx-cell head ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0"><span class="chip chip-amber">${esc(env)}</span></div>`;
+  const base = `class="log-mx-cell head ${active ? "active" : ""} ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0"`;
+  if (!m) return `<div ${base} title="click to focus ${esc(env)}"><div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span></div></div>`;
   const score = m.scores.length ? Math.round(m.scores.reduce((x, y) => x + y, 0) / m.scores.length) : null;
-  const bits = [m.no_logs && `${m.no_logs}⛔`, m.stale && `${m.stale}⏱`, m.ts_bad && `${m.ts_bad}🕓`, m.over && `${m.over}♻`].filter(Boolean).join(" ");
-  return `<div class="log-mx-cell head ${active ? "active" : ""} ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0" title="click to focus ${esc(env)} · ${m.apps} app(s)">
-    <div class="log-mx-cline"><span class="chip chip-amber log-env-name">${esc(env)}</span>${logScoreBadge(score, "env project score")}</div>
+  const issueN = m.no_logs + m.stale + m.ts_bad + m.over;
+  const parts = [m.no_logs && `${m.no_logs} no-logs`, m.stale && `${m.stale} stale`,
+    m.ts_bad && `${m.ts_bad} @timestamp`, m.over && `${m.over} over-retained`].filter(Boolean).join(" · ");
+  return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logInt(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to ${active ? "unfocus" : "focus"} this environment">
+    <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
-    <div class="log-mx-cnums"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx</div>
-    <span class="log-sizebar" title="size share"><span class="log-sizebar-fill" style="width:${(m.size_bytes / maxBytes * 100).toFixed(0)}%"></span></span>
-    <div class="log-mx-cmeta">${m.apps} app(s)${bits ? " · " + bits : ""}</div>
+    <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
   </div>`;
 }
 
 // per-env detail cell inside an app's dive (owner · logged span · deploy)
 function logMxDetailCell(e, sep) {
-  if (!e) return `<div class="log-mx-cell detail empty ${sep ? "sep" : ""}"><span class="log-mx-na">not in this env</span></div>`;
+  if (!e) return `<div class="log-mx-cell detail absent ${sep ? "sep" : ""}"><span class="log-mx-na">not in this env</span></div>`;
   const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(e.env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
   const logged = !e.deployed ? '<span class="ci-meta">never deployed</span>'
     : (e.no_logs ? '<span class="pct-bad">no logs</span>'
@@ -3366,7 +3383,7 @@ function logMxDetailCell(e, sep) {
     <div class="log-mx-dline">${owner}</div>
     <div class="log-mx-dline ci-meta">${logged}</div>
     <div class="log-mx-dline ci-meta">📦 ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
-    <div class="log-mx-cdots">${(e.issues || []).map((k) => `<span class="chip chip-red">${esc(LOG_ISSUE_LABEL[k] || k)}</span>`).join(" ") || (e.deployed && e.indices ? '<span class="chip chip-green">ok</span>' : "")}</div>
+    <div class="log-mx-dline">${logIssueChips(e.issues, 6) || (e.deployed && e.indices ? '<span class="chip chip-green">ok ✓</span>' : "")}</div>
   </div>`;
 }
 
@@ -3436,10 +3453,12 @@ function logMatrixHtml(p, apps, f) {
     if (!e.ts_ok && e.indices) m.ts_bad++;
     if (e.over_retained) m.over++;
   }));
-  const maxBytes = Math.max(1, ...cols.map((en) => (agg[en] || {}).size_bytes || 0));
   const head = `<div class="log-mx-row head">
-    <div class="log-mx-appcell head">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 <b>${esc(p.name)}</b></span> <span class="log-mx-headhint ci-meta">↓ apps · click an env to focus</span></div>
-    ${cols.map((en, i) => logMxHead(en, agg[en], f, i === sepAt, maxBytes)).join("")}</div>`;
+    <div class="log-mx-appcell head">
+      <span class="log-mx-appline">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 ${esc(p.name)}</span></span>
+      <span class="log-mx-axis">apps ↓ · environments → (click one to focus)</span>
+    </div>
+    ${cols.map((en, i) => logMxHead(en, agg[en], f, i === sepAt, apps.length)).join("")}</div>`;
   // each app is its OWN native expander, listed directly under the env header;
   // its collapsed summary is the aligned per-env health row, expanding reveals
   // all its details (built lazily on first open).
@@ -3449,11 +3468,12 @@ function logMatrixHtml(p, apps, f) {
     (state.logAppMap = state.logAppMap || {})[_aid] = a;
     const byEnv = {}; (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
     const rowCls = a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : (!a.deployed ? "undeployed" : "")));
+    const flags = logAppFlags(a);
     return `<details class="log-mx-app ${rowCls}" data-app-id="${_aid}">
         <summary class="log-mx-row app">
           <div class="log-mx-appcell">
             <span class="log-mx-appline"><span class="log-mx-caret">▸</span> ${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span></span>
-            <span class="log-mx-appflags">${logAppFlags(a)}</span>
+            ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
           </div>
           ${cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("")}
         </summary>
