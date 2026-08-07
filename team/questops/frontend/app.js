@@ -3420,7 +3420,7 @@ function logEnvDiveHtml(mx, env) {
       : (e.no_logs ? '<span class="pct-bad">deployed but NO LOGS</span>'
         : `<span class="ci-meta">🕓 ${logWhen(e.first_logged)} → ${logWhen(e.last_logged)} (${logAgo(e.last_logged_age_h)})</span>`);
     return `<div class="log-envdive-app">
-      <div class="log-envdive-line main">${logScoreBadge(e.score, env + " health score")}
+      <div class="log-envdive-line">${logScoreBadge(e.score, env + " health score")}
         <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
         ${e.no_logs || !e.deployed ? "" : `<span class="ci-meta">${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs${(e.logtypes || []).length ? " · " + esc(e.logtypes.join(", ")) : ""}</span>`}
         ${logIssueChips(e.issues, 8) || (e.deployed && e.indices ? '<span class="chip chip-green">ok ✓</span>' : "")}</div>
@@ -3558,7 +3558,7 @@ function logMatrixHtml(p, apps, f) {
     const cells = note
       ? `<div class="log-mx-cell note ${a.no_logs && a.deployed ? "nolog" : ""}">${esc(note)}</div>`
       : cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("");
-    return `<div class="log-mx-row app ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
+    return `<div class="log-mx-row approw ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
         <div class="log-mx-appcell">${logScoreBadge(a.score, "app health score")}
           <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
           ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
@@ -3592,7 +3592,7 @@ function logProjectCardHtml(p, apps, f) {
   const warn = p.no_prefix
     ? `<div class="log-tsbad-note">⚠ project <b>${esc(p.name)}</b> resolves no <code>deploy_platform</code> on any app (group_vars/&lt;app&gt;) or project-wide (group_vars/all) — can't build a log index prefix (OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin · K8s→k8s), so its apps can't be located.</div>`
     : "";
-  return `<details class="filebox log-proj" ${f._any ? "open" : ""}>
+  return `<details class="filebox log-proj">
     <summary>${logScoreBadge(pscore, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
@@ -3727,7 +3727,7 @@ async function loadTsSamples(btn) {
 }
 function wireLogContent() {
   // app rows open the slide-over drawer (content built on demand per click)
-  view().querySelectorAll(".log-mx-row.app[data-app-id]").forEach((row) => {
+  view().querySelectorAll(".log-mx-row.approw[data-app-id]").forEach((row) => {
     const open = () => openLogDrawer(row.dataset.appId);
     row.addEventListener("click", open);
     row.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } });

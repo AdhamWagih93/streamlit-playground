@@ -1384,17 +1384,17 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 
 /* app rows: ONE text line tall — every cell is a horizontal flex line; all
    depth lives in the drawer. Clicking a row opens it. */
-.log-mx-row.app { cursor: pointer; border-top: 1px solid rgba(255,255,255,.05); }
-.log-mx-row.app:nth-of-type(even) { background: rgba(255,255,255,.015); }
-.log-matrix .log-mx-row.app:hover { background: rgba(63,198,221,.05); }
-.log-mx-row.app:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
-.log-matrix .log-mx-row.app:hover .log-mx-caret { color: var(--cyan); }
-.log-mx-row.app .log-mx-appcell,
-.log-mx-row.app .log-mx-cell { flex-direction: row; align-items: center; gap: 6px;
+.log-mx-row.approw { cursor: pointer; border-top: 1px solid rgba(255,255,255,.05); }
+.log-mx-row.approw:nth-of-type(even) { background: rgba(255,255,255,.015); }
+.log-matrix .log-mx-row.approw:hover { background: rgba(63,198,221,.05); }
+.log-mx-row.approw:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.log-matrix .log-mx-row.approw:hover .log-mx-caret { color: var(--cyan); }
+.log-mx-row.approw .log-mx-appcell,
+.log-mx-row.approw .log-mx-cell { flex-direction: row; align-items: center; gap: 6px;
   padding: 4px 10px; }
-.log-mx-row.app .log-mx-appcell { padding: 4px 12px; }
-.log-mx-row.app .log-app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.log-mx-row.app .log-mx-csize { margin-left: auto; }
+.log-mx-row.approw .log-mx-appcell { padding: 4px 12px; }
+.log-mx-row.approw .log-app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-mx-row.approw .log-mx-csize { margin-left: auto; }
 .log-mx-caret { color: var(--faint); font-size: 13px; flex: none; margin-left: auto; }
 .log-mx-appflags { display: flex; gap: 3px; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
 .log-mx-appflags .chip { font-size: 9px; padding: 1px 6px; }
