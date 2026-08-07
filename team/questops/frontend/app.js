@@ -3682,12 +3682,14 @@ function logTsSamplesHtml(data, label) {
         : '<div class="ci-meta tss-noorig">no event.original</div>';
       const verdict = !dd.is_date ? '<span class="chip chip-red">not a date</span>'
         : (dd.is_future ? '<span class="chip chip-red">⏩ future date</span>' : '<span class="chip chip-green">date ✓</span>');
+      const path = dd.path ? `<div class="tss-path" title="log.file.path — the log file this doc was shipped from">📄 <code>${esc(dd.path)}</code></div>` : "";
       return `<div class="tss-doc ${dd.is_date && !dd.is_future ? "ok" : "bad"}">
         <div class="tss-doc-head">
           <code class="tss-val">${esc(String(dd.value))}</code>
           ${verdict}
           <span class="ci-meta tss-src">${badCol ? esc(String(dd.index || "").split("-").slice(1, 3).join("-") || dd.index || "") : ""}</span>
         </div>
+        ${path}
         ${origBlock}</div>`;
     }).join("") || '<div class="ci-meta">no docs sampled</div>';
     const futBit = blk.future ? ` · <b>${blk.future}</b> future-dated` : "";

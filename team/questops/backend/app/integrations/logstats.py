@@ -1045,6 +1045,25 @@ def _orig_value(src: dict):
     return s, False
 
 
+def _log_path(src: dict):
+    """log.file.path from a doc _source (nested or flattened) — which log FILE
+    on the host the troublesome doc was shipped from."""
+    v = src.get("log.file.path")
+    if v is None:
+        lg = src.get("log")
+        if isinstance(lg, dict):
+            f = lg.get("file")
+            if isinstance(f, dict):
+                v = f.get("path")
+            if v is None:
+                v = lg.get("file.path")
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else None
+    return v if (v is None or isinstance(v, str)) else json.dumps(v, ensure_ascii=False)
+
+
 def _sample_search(conn: dict, pattern: str, body: dict, docs: list, seen: set) -> str | None:
     """POST _search over a (multi-index) pattern, missing indices ignored;
     append parsed docs (deduped by index+id). Error string or None."""
@@ -1070,7 +1089,7 @@ def _sample_search(conn: dict, pattern: str, body: dict, docs: list, seen: set) 
         orig, trunc = _orig_value(src)
         docs.append({"index": h.get("_index"), "id": h.get("_id"), "value": val,
                      "is_date": _looks_date(val), "is_future": _looks_future(val),
-                     "original": orig, "original_truncated": trunc})
+                     "path": _log_path(src), "original": orig, "original_truncated": trunc})
     return None
 
 
@@ -1083,7 +1102,7 @@ def _sample_ts_multi(pattern: str, size: int) -> dict:
     if not conns:
         return {"indices": [i for i in pattern.split(",") if i],
                 "error": "no Elasticsearch connection configured", "docs": []}
-    src_fields = ["@timestamp", "event.original"]
+    src_fields = ["@timestamp", "event.original", "log.file.path"]
     docs: list = []
     seen: set = set()
     ts_types: dict = {}
@@ -1145,12 +1164,15 @@ def _demo_ts_samples(index: str, good: str, mode: str = "") -> dict:
                     "2026-08-05 10:11", "-", "pending", "2026-08-05T09:59:59Z",
                     "null", "0000-00-00", "1699999999"]
         ts_type = "text"
+    demo_paths = ["/var/log/app/application.log", "/var/log/app/application.log.1",
+                  "/opt/app/logs/batch-runner.log", "/var/log/messages"]
     bad = []
     for i, v in enumerate(bad_vals):
         raw = (big[:_ORIG_MAX] if i == 0 and mode != "future"
                else f"<134>1 {v} host svc - - raw event line for @timestamp={v!r}")
         bad.append({"index": idxs[i % len(idxs)], "id": f"AbC{i}xY",
                     "value": v, "is_date": _looks_date(v), "is_future": _looks_future(v),
+                    "path": demo_paths[i % len(demo_paths)],
                     "original": raw, "original_truncated": i == 0 and mode != "future"})
     bad.sort(key=lambda d: (d["is_date"], not d["is_future"]))
     res = {"index": {"indices": idxs, "ts_types": {ix: ts_type for ix in idxs},
@@ -1162,6 +1184,7 @@ def _demo_ts_samples(index: str, good: str, mode: str = "") -> dict:
         res["good"] = {"indices": gi, "ts_types": {gi[0]: "date"},
                        "docs": [{"index": gi[0], "id": f"G{i}", "value": (now - dt.timedelta(minutes=i * 7))
                                  .replace(microsecond=0).isoformat() + "Z", "is_date": True,
+                                 "path": "/var/log/app/application.log",
                                  "original": f"<134>1 ... normal log line {i}", "original_truncated": False}
                                 for i in range(6)], "non_date": 0, "sampled": 6}
     return res
