@@ -1151,13 +1151,19 @@ def _demo_ts_samples(index: str, good: str, mode: str = "") -> dict:
     now = _now()
     idxs = [i for i in index.split(",") if i][:3] or ["demo-index"]
     big = "<133>1 2026-08-05T10:12:03Z host app 4821 - [meta] " + ("lorem ipsum dolor sit amet " * 260)
+    iso = lambda w: w.replace(microsecond=0).isoformat() + "Z"  # noqa: E731
     if mode == "future":
         # future-dated indices hold VALID dates — just from the future (clock
         # skew / a mis-templated loader), plus a couple of normal stragglers
-        iso = lambda w: w.replace(microsecond=0).isoformat() + "Z"  # noqa: E731
         bad_vals = [iso(now + dt.timedelta(days=n)) for n in (365, 210, 92, 30, 30, 9)] \
             + [str(int((now + dt.timedelta(days=48)).timestamp()))] \
             + [iso(now - dt.timedelta(minutes=m)) for m in (12, 95)]
+        ts_type = "date"
+    elif mode == "badweek":
+        # bad-year indices: the INDEX NAME is malformed (mis-templated
+        # yyyy.ww) — the docs themselves usually carry perfectly normal
+        # timestamps; the value here is seeing WHICH file shipped them
+        bad_vals = [iso(now - dt.timedelta(minutes=m)) for m in (3, 18, 41, 66, 120, 240, 300)]
         ts_type = "date"
     else:
         bad_vals = ["17840912390", "2026-08-05T10:12:03Z", "N/A", "1784091239012345",

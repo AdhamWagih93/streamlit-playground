@@ -3403,7 +3403,7 @@ function logEnvDiveHtml(mx, env) {
   const issueN = inEnv.reduce((n, x) => n + (x.e.issues || []).length, 0);
   const rows = inEnv.map(({ a, e }) => {
     const id = ("tssd-" + a.project + "-" + a.app + "-" + env).replace(/[^A-Za-z0-9_-]/g, "_");
-    const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
+    const goodI = (a.index_list || []).find((i) => i.ts_type === "date" && !i.bad_week && !i.future_week);
     const goodAttr = goodI ? `data-ts-good="${esc(goodI.index)}"` : "";
     const badNames = (e.ts_bad_indices || []).slice(0, 15).join(",");
     const futNames = (e.future_week_indices || []).slice(0, 15).join(",");
@@ -3414,6 +3414,10 @@ function logEnvDiveHtml(mx, env) {
     if (futNames) insp.push(`<div class="log-tsbad-note">⚠ ${(e.future_week_indices || []).length} ${esc(env)} index(es) dated in the <b>FUTURE</b> vs the current week (${esc((state.logData || {}).current_week || "?")}).
       <button class="btn btn-sm log-ts-sample" data-tss-target="${id}-fut" data-ts-index="${esc(futNames)}" data-ts-mode="future" data-tss-label="⏩ docs in future-dated indices" ${goodAttr}>🔍 sample docs</button>
       <div id="${id}-fut" class="log-tss"></div></div>`);
+    const bwNames = (e.bad_week_indices || []).slice(0, 15).join(",");
+    if (bwNames) insp.push(`<div class="log-tsbad-note">⚠ ${(e.bad_week_indices || []).length} ${esc(env)} index(es) with an illogical <b>YEAR</b> in the name (malformed yyyy.ww).
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${id}-bw" data-ts-index="${esc(bwNames)}" data-ts-mode="badweek" data-tss-label="🗓 docs in bad-year indices" ${goodAttr}>🔍 sample docs</button>
+      <div id="${id}-bw" class="log-tss"></div></div>`);
     const idxs = (a.index_list || []).filter((i) => i.env === env);
     const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
     const logged = !e.deployed ? '<span class="ci-meta">never deployed — no logs expected</span>'
@@ -3471,7 +3475,7 @@ function logAppDrawerHtml(a) {
   const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
   const tssId = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
   const badNames = (a.ts_bad_indices || []).slice(0, 15).join(",");
-  const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
+  const goodI = (a.index_list || []).find((i) => i.ts_type === "date" && !i.bad_week && !i.future_week);
   const tsInspect = (!a.ts_ok && badNames) ? `
     <div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(a.ts_bad_indices || []).length} index(es) — time filters silently return nothing there.
       <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}" data-ts-index="${esc(badNames)}" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample bad docs</button>
@@ -3483,6 +3487,13 @@ function logAppDrawerHtml(a) {
     <div class="log-tsbad-note">⚠ ${(a.future_week_indices || []).length} index(es) dated in the <b>FUTURE</b> vs the current week (${esc((state.logData || {}).current_week || "?")}) — likely clock skew or a mis-templated index.
       <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}-fut" data-ts-index="${esc(futNames)}" data-ts-mode="future" data-tss-label="⏩ docs in future-dated indices" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample docs</button>
       <div id="${tssId}-fut" class="log-tss"></div></div>` : "";
+  // and for BAD-YEAR indices — the index NAME is malformed (yyyy.ww), so the
+  // docs' @timestamp + log.file.path point at the mis-templated shipper
+  const bwNames = (a.bad_week_indices || []).slice(0, 15).join(",");
+  const bwInspect = bwNames ? `
+    <div class="log-tsbad-note">⚠ ${(a.bad_week_indices || []).length} index(es) with an illogical <b>YEAR</b> in the name (malformed yyyy.ww — a mis-templated loader).
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}-bw" data-ts-index="${esc(bwNames)}" data-ts-mode="badweek" data-tss-label="🗓 docs in bad-year indices" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample docs</button>
+      <div id="${tssId}-bw" class="log-tss"></div></div>` : "";
   return `${head}
     <div class="log-drawer-envs">${envsHtml}</div>
     <div class="log-app-facts">
@@ -3493,6 +3504,7 @@ function logAppDrawerHtml(a) {
     </div>
     ${tsInspect}
     ${futInspect}
+    ${bwInspect}
     ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(a.index_list)}</div></details>` : ""}`;
 }
 
