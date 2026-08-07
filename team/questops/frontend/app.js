@@ -3765,7 +3765,7 @@ function logTsSamplesHtml(data, label) {
         : '<div class="ci-meta tss-noorig">no event.original</div>';
       const verdict = !dd.is_date ? '<span class="chip chip-red">not a date</span>'
         : (dd.is_future ? '<span class="chip chip-red">⏩ future date</span>' : '<span class="chip chip-green">date ✓</span>');
-      const path = dd.path ? `<div class="tss-path" title="log.file.path — the log file this doc was shipped from">📄 <code>${esc(dd.path)}</code></div>` : "";
+      const path = (dd.path || dd.logtype) ? `<div class="tss-path">${dd.logtype ? `<span class="chip chip-cyan" title="fields.type — the shipper's log-type tag">${esc(dd.logtype)}</span> ` : ""}${dd.path ? `<span title="log.file.path — the log file this doc was shipped from">📄 <code>${esc(dd.path)}</code></span>` : ""}</div>` : "";
       return `<div class="tss-doc ${dd.is_date && !dd.is_future ? "ok" : "bad"}">
         <div class="tss-doc-head">
           <code class="tss-val">${esc(String(dd.value))}</code>
