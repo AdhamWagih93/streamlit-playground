@@ -3339,20 +3339,24 @@ function logAppFlags(a) {
 const _mxCls = (e) => !e ? "absent" : (!e.deployed ? "undeployed" : (e.no_logs ? "nolog"
   : (!e.ts_ok && e.indices ? "tsbad" : (e.stale ? "stale" : "ok"))));
 
-// compact app×env cell — table-style: one status line (score · size), a slim
-// health meter, labeled issue chips. Absent / never-deployed envs stay QUIET
-// (a faint word, no box) so real data stands out.
+// compact app×env cell — ONE text line: score · ⚠issue-count · size. The
+// full story (meter, labeled issues, owner, spans) lives in the app drawer;
+// the cell's tooltip carries it for a hover. Absent / never-deployed envs
+// stay QUIET (a faint word, no box) so real data stands out.
 function logMxCell(e, sep) {
   if (!e) return `<div class="log-mx-cell absent ${sep ? "sep" : ""}" title="app not present in this environment"><span class="log-mx-na">—</span></div>`;
   if (!e.deployed) return `<div class="log-mx-cell undeployed ${sep ? "sep" : ""}" title="${esc(e.env)} — never deployed, no logs expected"><span class="log-mx-na">not deployed</span></div>`;
+  const issues = e.issues || [];
   const tip = `${e.env} · score ${e.score == null ? "n/a" : e.score} · ${logInt(e.indices)} idx · ${e.size_h} · ${logInt(e.docs)} docs`
     + (e.owner ? ` · 👤 ${e.owner}` : "")
-    + (e.no_logs ? " · NO LOGS" : (e.last_logged_age_h != null ? ` · last log ${logAgo(e.last_logged_age_h)}` : ""));
+    + (e.no_logs ? " · NO LOGS" : (e.last_logged_age_h != null ? ` · last log ${logAgo(e.last_logged_age_h)}` : ""))
+    + (issues.length ? ` · ⚠ ${issues.map((k) => LOG_ISSUE_LABEL[k] || k).join(" · ")}` : "");
+  const sev = issues.some((k) => (LOG_ISSUE_SEV[k] || "bad") === "bad") ? "bad" : "warn";
+  const warn = issues.length
+    ? `<span class="log-mxi ${sev}" title="${esc(issues.map((k) => LOG_ISSUE_LABEL[k] || k).join(" · "))}">⚠${issues.length}</span>` : "";
   const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>' : `<span class="log-mx-csize">${esc(e.size_h)}</span>`;
   return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(tip)}">
-    <div class="log-mx-cline"><span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${right}</div>
-    ${e.no_logs ? "" : logMeter(e.score)}
-    ${logIssueChips(e.issues)}
+    <span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${warn}${right}
   </div>`;
 }
 
@@ -3555,9 +3559,10 @@ function logMatrixHtml(p, apps, f) {
       ? `<div class="log-mx-cell note ${a.no_logs && a.deployed ? "nolog" : ""}">${esc(note)}</div>`
       : cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("");
     return `<div class="log-mx-row app ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
-        <div class="log-mx-appcell">
-          <span class="log-mx-appline">${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span><span class="log-mx-caret">›</span></span>
+        <div class="log-mx-appcell">${logScoreBadge(a.score, "app health score")}
+          <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
           ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
+          <span class="log-mx-caret">›</span>
         </div>
         ${cells}</div>`;
   }).join("");
