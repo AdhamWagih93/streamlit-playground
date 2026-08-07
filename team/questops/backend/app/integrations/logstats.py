@@ -519,6 +519,30 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
                      for m in app_meta.values() if m.get("deploy_platform") and m.get("prefix")})
     all_apps = [a for po in projects_out for a in po["apps"]]
 
+    # ---- storage vs the fleet AVERAGE (per app and per project) ----------
+    # average over entities that actually store logs; >= factor × average =
+    # "over_sized", a MINOR issue (-10) on the app / project score
+    factor = settings.log_oversize_factor
+    sized = [a["size_bytes"] for a in all_apps if a.get("monitored") and a["size_bytes"] > 0]
+    app_avg = (sum(sized) / len(sized)) if sized else 0
+    for a in all_apps:
+        a["size_ratio"] = round(a["size_bytes"] / app_avg, 2) if app_avg and a["size_bytes"] else None
+        a["over_sized"] = bool(app_avg and a["size_bytes"] >= app_avg * factor)
+        if a["over_sized"]:
+            a["issues"] = sorted(set(a["issues"]) | {"over_sized"})
+            if a["score"] is not None:
+                a["score"] = max(a["score"] - 10, 0)
+    psized = [po["totals"]["size_bytes"] for po in projects_out if po["totals"]["size_bytes"] > 0]
+    proj_avg = (sum(psized) / len(psized)) if psized else 0
+    for po in projects_out:
+        tb = po["totals"]["size_bytes"]
+        po["size_ratio"] = round(tb / proj_avg, 2) if proj_avg and tb else None
+        po["over_sized"] = bool(proj_avg and tb >= proj_avg * factor)
+        po["score"] = _mean([a["score"] for a in po["apps"]])   # re-mean after app deductions
+        if po["over_sized"] and po["score"] is not None:
+            po["score"] = max(po["score"] - 10, 0)
+        po["totals"]["over_sized"] = sum(1 for a in po["apps"] if "over_sized" in a["issues"])
+
     def cnt(key):
         return sum(1 for a in all_apps if key in a["issues"])
     summary = {
@@ -533,6 +557,8 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
         "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
         "apps_future_week": cnt("future_week"), "apps_over_retained": cnt("over_retained"),
+        "apps_over_sized": cnt("over_sized"),
+        "projects_over_sized": sum(1 for po in projects_out if po.get("over_sized")),
         "discrepancies": cnt("clash"), "apps_team_clash": cnt("team_clash"),
         "apps_unsupported": cnt("unsupported"),
         "apps_no_platform": sum(1 for a in all_apps if not a.get("prefix")),
@@ -547,6 +573,9 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
             "deploy_index": settings.log_deploy_index,
             "retention": {"prd_days": settings.log_retention_prd_days,
                           "nonprd_days": settings.log_retention_nonprd_days},
+            "storage_avg": {"app_bytes": int(app_avg), "app_h": _hsize(int(app_avg)),
+                            "project_bytes": int(proj_avg), "project_h": _hsize(int(proj_avg)),
+                            "factor": factor},
             "env_order": {"main": settings.log_main_env_list,
                           "extra": settings.log_extra_env_list},
             "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
@@ -905,6 +934,8 @@ def _demo() -> dict:
                         if lt == "error" and (hash((app, env, wk)) % 3):
                             continue
                         size = 40_000_000 + (hash((app, env, wk, lt)) % 900) * 1_000_000
+                        if app == "payments":     # scripted storage hog → over_sized story
+                            size *= 4
                         docs = 50_000 + (hash((lt, app, wk)) % 800) * 1000
                         idx = f"{prefix}-{pname}-{env}-{app}-{lt}-{wk}"
                         ts_type = "text" if (key in TS_BAD and env == "dev"

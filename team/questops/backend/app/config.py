@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # (dev/qc/uat) to 3 weeks.
     log_retention_prd_days: int = 183
     log_retention_nonprd_days: int = 21
+    # storage-hog detection: an app (or project) storing >= this multiple of
+    # the fleet AVERAGE app (project) log size is flagged "over-sized" — a
+    # MINOR issue (-10 on the app/project score), filterable in the UI
+    log_oversize_factor: float = 2.0
     # environment display order inside each project (side-by-side columns).
     # MAIN_ENVS are the primary columns; EXTRA_ENVS are shown separately.
     log_main_envs: str = "dev,qc,uat,prd"

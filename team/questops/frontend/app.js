@@ -3163,6 +3163,7 @@ function logScoreBadge(s, label) {
 const LOG_ISSUE_LABEL = {
   no_logs: "no logs", stale: "stale", timestamp: "@timestamp not date",
   bad_week: "bad year", future_week: "future-dated", over_retained: "over-retained",
+  over_sized: "over-sized storage",
   clash: "platform clash", team_clash: "owner clash", unsupported: "unsupported platform",
 };
 
@@ -3217,12 +3218,14 @@ function logScopeApp(a, f) {
   const bytes = sum((e) => e.size_bytes);
   const issues = uniq([...es.flatMap((e) => e.issues || []),
     ...(a.discrepancy ? ["clash"] : []),
+    ...(a.over_sized ? ["over_sized"] : []),
     ...(a.platform_status === "unsupported" ? ["unsupported"] : [])]).sort();
   let score = null;
   if (a.monitored && escores.length) {
     let base = escores.reduce((x, y) => x + y, 0) / escores.length;
     if (a.discrepancy) base -= 10;
     if (ownerClash.length) base -= 10;
+    if (a.over_sized) base -= 10;
     score = Math.max(Math.round(base), 0);
   }
   return { ...a, _scoped: true, env_stats: es,
@@ -3309,7 +3312,7 @@ const logMeter = (score) => `<span class="log-meter" title="health ${score == nu
 let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy detail)
 let _logMxSeq = 0;    // per-render matrix id counter (env-dive lookups)
 const LOG_ISSUE_SEV = { no_logs: "bad", stale: "warn", timestamp: "bad",
-  bad_week: "bad", future_week: "bad", over_retained: "warn", team_clash: "bad", clash: "bad" };
+  bad_week: "bad", future_week: "bad", over_retained: "warn", over_sized: "warn", team_clash: "bad", clash: "bad" };
 // labeled issue micro-chips (a reader shouldn't have to decode mystery dots);
 // at most `cap` shown, the rest folded into a "+n" with a tooltip
 function logIssueChips(issues, cap = 2) {
@@ -3332,6 +3335,7 @@ function logAppFlags(a) {
   if (a.discrepancy) b.push(`<span class="chip chip-red" title="app deploy_platform (${esc(a.app_platform)}) overrides project (${esc(a.project_platform)})">⚠ clash</span>`);
   if ((a.owner_clash_envs || []).length) b.push(`<span class="chip chip-red" title="owner ($env_team) differs app vs project @ ${esc(a.owner_clash_envs.join(", "))}">⚠ owner</span>`);
   if (!a.deployed) b.push('<span class="chip chip-amber" title="never deployed — no logs expected">never deployed</span>');
+  if (a.over_sized) b.push(`<span class="chip chip-amber" title="stores ${esc(a.size_h)} — ${a.size_ratio}× the fleet's average app (${esc(((state.logData || {}).storage_avg || {}).app_h || "?")}); flagged at ≥${((state.logData || {}).storage_avg || {}).factor || 2}×">🗄 ${a.size_ratio}× avg</span>`);
   if (a.not_in_inventory) b.push('<span class="chip chip-amber">drift</span>');
   return b.join(" ");
 }
@@ -3501,6 +3505,7 @@ function logAppDrawerHtml(a) {
       <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
       <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}</div></div>
       <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
+      <div><span class="acc-h">storage vs fleet</span><div class="ci-meta"><b>${esc(a.size_h)}</b>${a.size_ratio != null ? ` · ${a.size_ratio}× the average app (${esc(((state.logData || {}).storage_avg || {}).app_h || "?")})` : ""}${a.over_sized ? ' · <span class="pct-warn">over-sized</span>' : ""}</div></div>
     </div>
     ${tsInspect}
     ${futInspect}
@@ -3528,6 +3533,9 @@ function openLogDrawer(aid) {
 
 // the whole matrix for one project (header + app rows + lazy detail placeholders)
 function logMatrixHtml(p, apps, f) {
+  // per-project app sort override (the small selector in the header row)
+  const psort = (state.logProjSort || {})[p.name] || "global";
+  if (psort !== "global") apps = logSortApps(apps, psort);
   const present = [...new Set(apps.flatMap((a) => (a.env_stats || []).map((e) => e.env)))];
   const { main, extra } = logOrderedEnvs(present, state.logData);
   const cols = [...main, ...extra];
@@ -3544,11 +3552,17 @@ function logMatrixHtml(p, apps, f) {
     if (e.over_retained) m.over++;
   }));
   const _mid = "m" + (++_logMxSeq);
-  (state.logMxMap = state.logMxMap || {})[_mid] = { p, apps };
+  (state.logMxMap = state.logMxMap || {})[_mid] = { p, apps, pscore: f._projScore };
   const head = `<div class="log-mx-row head">
     <div class="log-mx-appcell head">
       <span class="log-mx-appline">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 ${esc(p.name)}</span></span>
-      <span class="log-mx-axis">apps ↓ · environments → (click an env for its dive)</span>
+      <span class="log-mx-axis">apps ↓ · environments → (click an env for its dive)
+        <select class="log-mx-sortsel" title="sort this project's apps">
+          <option value="global" ${psort === "global" ? "selected" : ""}>sort: global</option>
+          ${[["score", "↑ worst score"], ["size", "↓ size"], ["updated", "↓ last updated"],
+             ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]].map(([v, l]) =>
+            `<option value="${v}" ${psort === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select></span>
     </div>
     ${cols.map((en, i) => logMxHead(en, agg[en], i === sepAt, apps.length)).join("")}</div>
   <div class="log-mx-envdive" hidden></div>`;
@@ -3587,13 +3601,15 @@ function logProjectCardHtml(p, apps, f) {
   const has = (k) => apps.filter((a) => (a.issues || []).includes(k)).length;
   const bytes = apps.reduce((n, a) => n + a.size_bytes, 0);
   const scores = apps.map((a) => a.score).filter((x) => x != null);
-  const pscore = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+  let pscore = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+  if (p.over_sized && pscore != null) pscore = Math.max(pscore - 10, 0);   // project-level storage-hog deduction
   const t = {
     apps: (p.totals || {}).apps || (p.apps || []).length,
     indices: apps.reduce((n, a) => n + a.indices, 0), size_h: logHsize(bytes),
     docs: apps.reduce((n, a) => n + a.docs, 0),
     no_logs: has("no_logs"), stale: has("stale"), ts_bad: has("timestamp"),
     bad_week: has("bad_week"), future_week: has("future_week"), over_retained: has("over_retained"),
+    over_sized: has("over_sized"),
     discrepancies: has("clash"), team_clash: has("team_clash"), unsupported: has("unsupported"),
     undeployed: apps.filter((a) => !a.deployed).length,
   };
@@ -3606,9 +3622,9 @@ function logProjectCardHtml(p, apps, f) {
     : "";
   return `<details class="filebox log-proj">
     <summary>${logScoreBadge(pscore, "project health score")}
-      <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
+      <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
-        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.over_sized, "over-sized", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}
       ${(f._projScore = pscore, logMatrixHtml(p, apps, f))}</div></details>`;
 }
@@ -3634,6 +3650,7 @@ function logTilesHtml(apps) {
     ${tile(has("bad_week"), "bad year", has("bad_week") ? "pct-bad" : "pct-good")}
     ${tile(has("future_week"), "future-dated", has("future_week") ? "pct-bad" : "pct-good")}
     ${tile(has("over_retained"), "over-retained", has("over_retained") ? "pct-warn" : "pct-good")}
+    ${tile(has("over_sized"), "over-sized", has("over_sized") ? "pct-warn" : "pct-good")}
     ${tile(has("clash"), "platform clashes", has("clash") ? "pct-bad" : "pct-good")}
     ${tile(has("team_clash"), "owner clashes", has("team_clash") ? "pct-bad" : "pct-good")}
     ${tile(has("unsupported"), "unmonitored", has("unsupported") ? "pct-warn" : "pct-good")}
@@ -3654,11 +3671,13 @@ function logContentHtml() {
     const apps = logSortApps((p.apps || []).filter((a) => logAppMatch(a, f))
       .map((a) => logScopeApp(a, f)), f.sort);
     const scores = apps.map((a) => a.score).filter((x) => x != null);
+    let score = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+    if (p.over_sized && score != null) score = Math.max(score - 10, 0);
     return { p, apps,
       t: { size_bytes: apps.reduce((n, a) => n + a.size_bytes, 0),
            docs: apps.reduce((n, a) => n + a.docs, 0),
            indices: apps.reduce((n, a) => n + a.indices, 0) },
-      score: scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null };
+      score };
   }).filter((e) => e.apps.length);
   const cards = logSortProjects(entries, f.sort).map((e) => {
     filtered.push(...e.apps);
@@ -3737,27 +3756,23 @@ async function loadTsSamples(btn) {
     btn.textContent = "🙈 hide samples";
   } catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
-function wireLogContent() {
+// wire ONE matrix element (rows, env headers, per-project sort) — scoped so a
+// single project's matrix can be rebuilt in place without re-binding the rest
+function wireLogMatrix(mxEl) {
   // app rows open the slide-over drawer (content built on demand per click)
-  view().querySelectorAll(".log-mx-row.approw[data-app-id]").forEach((row) => {
+  mxEl.querySelectorAll(".log-mx-row.approw[data-app-id]").forEach((row) => {
     const open = () => openLogDrawer(row.dataset.appId);
     row.addEventListener("click", open);
     row.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } });
   });
-  // Esc closes the drawer (wired once — closeLogDrawer is a no-op when shut)
-  if (!state._logEscWired) {
-    state._logEscWired = true;
-    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeLogDrawer(); });
-  }
   // click an ENV column header → open/close that environment's dive for THIS
   // project only (all apps' details for the env). Does NOT touch the global
   // env filter — that lives in the always-visible filter bar.
-  view().querySelectorAll(".log-mx-cell.head[data-env]").forEach((cell) => {
+  mxEl.querySelectorAll(".log-mx-cell.head[data-env]").forEach((cell) => {
     const toggle = (ev) => {
       ev.stopPropagation();
-      const mxEl = cell.closest(".log-matrix");
-      const dive = mxEl && mxEl.querySelector(".log-mx-envdive");
-      const mx = mxEl && (state.logMxMap || {})[mxEl.dataset.mxId];
+      const dive = mxEl.querySelector(".log-mx-envdive");
+      const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
       if (!dive || !mx) return;
       const env = cell.dataset.env;
       const wasOpen = !dive.hidden && dive.dataset.env === env;
@@ -3774,6 +3789,31 @@ function wireLogContent() {
     cell.addEventListener("click", toggle);
     cell.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(ev); } });
   });
+  // small per-project app-sort — rebuilds ONLY this matrix, in place, so the
+  // project expander stays open and other projects keep their listeners
+  const sel = mxEl.querySelector(".log-mx-sortsel");
+  if (sel) sel.onchange = () => {
+    const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
+    if (!mx) return;
+    (state.logProjSort = state.logProjSort || {})[mx.p.name] = sel.value;
+    const scroll = mxEl.closest(".log-mx-scroll");
+    if (!scroll) return;
+    const f2 = Object.assign({}, state.logFilter, { _projScore: mx.pscore });
+    const tmp = document.createElement("div");
+    tmp.innerHTML = logMatrixHtml(mx.p, mx.apps, f2);   // re-applies the stored sort
+    const fresh = tmp.firstElementChild;
+    scroll.replaceWith(fresh);
+    const freshMx = fresh.querySelector(".log-matrix");
+    if (freshMx) wireLogMatrix(freshMx);
+  };
+}
+function wireLogContent() {
+  view().querySelectorAll(".log-matrix").forEach(wireLogMatrix);
+  // Esc closes the drawer (wired once — closeLogDrawer is a no-op when shut)
+  if (!state._logEscWired) {
+    state._logEscWired = true;
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeLogDrawer(); });
+  }
 }
 
 async function renderLogging() {
@@ -3833,7 +3873,7 @@ async function renderLogging() {
   const platforms = [...new Set((d.projects || []).flatMap((p) => (p.apps || [])
     .map((a) => a.deploy_platform).filter(Boolean)))].sort();
   const issueOpts = [["all", "issue: any"], ["any", "any issue"],
-    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "over_retained", "clash", "team_clash", "unsupported"]
+    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "over_retained", "over_sized", "clash", "team_clash", "unsupported"]
       .map((k) => [k, LOG_ISSUE_LABEL[k]])];
   // filters PRECEDE the stat tiles so the numbers respond to them; the bar is
   // STICKY (always visible while scrolling) and visually compact

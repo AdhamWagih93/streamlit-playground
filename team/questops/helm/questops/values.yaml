@@ -86,6 +86,7 @@ logging:
   deployTestflag: "Normal"  # only count deployments with this testflag (blank = all)
   retentionPrdDays: 183     # prd log retention (days) — older = "over-retained" (minor)
   retentionNonprdDays: 21   # non-prd log retention (days)
+  oversizeFactor: 2.0       # >= this multiple of the fleet-average app/project size = "over-sized" (minor)
   mainEnvs: "dev,qc,uat,prd"  # environment display order (side-by-side columns)
   extraEnvs: ""             # extra envs shown separately (e.g. "dr")
 
