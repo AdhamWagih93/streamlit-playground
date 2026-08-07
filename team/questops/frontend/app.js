@@ -3378,7 +3378,8 @@ function logMxCell(e, sep) {
   const sev = issues.some((k) => (LOG_ISSUE_SEV[k] || "bad") === "bad") ? "bad" : "warn";
   const warn = issues.length
     ? `<span class="log-mxi ${sev}" title="${esc(issues.map((k) => LOG_ISSUE_LABEL[k] || k).join(" · "))}">⚠${issues.length}</span>` : "";
-  const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>' : `<span class="log-mx-csize">${esc(e.size_h)}</span>`;
+  const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>'
+    : `<span class="log-mx-csize">${esc(e.size_h)}</span>${e.indices ? `<span class="log-mx-cidx" title="${logInt(e.indices)} log indices in ${esc(e.env)}">${logInt(e.indices)} idx</span>` : ""}`;
   return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(tip)}">
     <span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${warn}${right}
   </div>`;
@@ -3397,7 +3398,7 @@ function logMxHead(env, m, sep, total) {
   return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logInt(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to open this environment's dive (all apps' details)">
     <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
-    <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
+    <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
     ${(() => { const r = logRates(m.size_bytes, m.docs, m.first, m.last);
       return r ? `<div class="log-mx-cmeta" title="ingest rate across this env's apps">📈 ≈${esc(r.size_day_h)}/day · ${logInt(r.docs_day)} docs/day</div>` : ""; })()}
   </div>`;
@@ -3616,6 +3617,7 @@ function logMatrixHtml(p, apps, f) {
     return `<div class="log-mx-row approw ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
         <div class="log-mx-appcell">${logScoreBadge(a.score, "app health score")}
           <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
+          ${a.indices ? `<span class="log-mx-cidx" title="${logInt(a.indices)} log indices in total">${logInt(a.indices)} idx</span>` : ""}
           ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
           <span class="log-mx-caret">›</span>
         </div>

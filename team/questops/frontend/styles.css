@@ -1353,6 +1353,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-mx-csize { font: 600 11px var(--mono); color: var(--text); text-align: right;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-mx-nolog { font: 600 10.5px var(--body); color: var(--red); }
+.log-mx-cidx { font: 500 9px var(--mono); color: var(--faint); white-space: nowrap; }
 .log-mx-cmeta { font-size: 10px; color: var(--dim); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .log-mx-cell .log-meter { height: 4px; }
