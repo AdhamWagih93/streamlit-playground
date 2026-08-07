@@ -3307,6 +3307,7 @@ const logMeter = (score) => `<span class="log-meter" title="health ${score == nu
 // health cell per env; clicking an app row dives into its detail (aligned under
 // the same columns); clicking an env header focuses that environment.
 let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy detail)
+let _logMxSeq = 0;    // per-render matrix id counter (env-dive lookups)
 const LOG_ISSUE_SEV = { no_logs: "bad", stale: "warn", timestamp: "bad",
   bad_week: "bad", future_week: "bad", over_retained: "warn", team_clash: "bad", clash: "bad" };
 // labeled issue micro-chips (a reader shouldn't have to decode mystery dots);
@@ -3356,16 +3357,16 @@ function logMxCell(e, sep) {
 }
 
 // env column header — the project's aggregate for that env (score, meter,
-// size, apps, issue count). Click to focus/unfocus the environment.
-function logMxHead(env, m, f, sep, total) {
-  const active = f.env === env;
-  const base = `class="log-mx-cell head ${active ? "active" : ""} ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0"`;
-  if (!m) return `<div ${base} title="click to focus ${esc(env)}"><div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span></div></div>`;
+// size, apps, issue count). Click opens the env DIVE for THIS project (the
+// global env filter lives in the filter bar, not here).
+function logMxHead(env, m, sep, total) {
+  const base = `class="log-mx-cell head ${sep ? "sep" : ""}" data-env="${esc(env)}" role="button" tabindex="0"`;
+  if (!m) return `<div ${base} title="click to open the ${esc(env)} dive for this project"><div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span></div></div>`;
   const score = m.scores.length ? Math.round(m.scores.reduce((x, y) => x + y, 0) / m.scores.length) : null;
   const issueN = m.no_logs + m.stale + m.ts_bad + m.over;
   const parts = [m.no_logs && `${m.no_logs} no-logs`, m.stale && `${m.stale} stale`,
     m.ts_bad && `${m.ts_bad} @timestamp`, m.over && `${m.over} over-retained`].filter(Boolean).join(" · ");
-  return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logInt(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to ${active ? "unfocus" : "focus"} this environment">
+  return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logInt(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to open this environment's dive (all apps' details)">
     <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
     <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
@@ -3387,6 +3388,63 @@ function logMxDetailCell(e, sep) {
   </div>`;
 }
 
+// shared index-row list (app dive + env dive)
+function logIdxRows(list) {
+  return (list || []).map((i) => `
+    <div class="log-idx ${i.ts_type !== "date" || i.bad_week || i.future_week ? "bad" : ""}">
+      <code class="log-idx-name">${esc(i.index)}</code>
+      <span class="chip chip-amber">${esc(i.env || "?")}</span><span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
+      <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
+      <span class="log-idx-size">${logHsize(i.size_bytes)}</span><span class="ci-meta">${logInt(i.docs)} docs</span>${logSrcChip(i.source)}
+      ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
+    </div>`).join("") || '<div class="empty">no indices</div>';
+}
+
+// ENVIRONMENT dive for ONE project — opened by clicking an env column header.
+// Shows EVERY app's full detail for that environment: stats, owner, logged
+// span, deploy, issues, the @timestamp/future sample inspectors, and that
+// env's index list. Project-local by design — the global env filter lives in
+// the always-visible filter bar, not here.
+function logEnvDiveHtml(mx, env) {
+  const close = '<button class="btn btn-sm btn-ghost log-envdive-close" title="close this environment dive">✕</button>';
+  const inEnv = mx.apps.map((a) => ({ a, e: (a.env_stats || []).find((x) => x.env === env) })).filter((x) => x.e);
+  const title = `<span class="log-envdive-title">🔎 ${esc(env)} <span class="ci-meta">·</span> ${esc(mx.p.name)}</span>`;
+  if (!inEnv.length) return `<div class="log-envdive-head">${title}<span class="ci-meta">no apps in this environment</span><span class="spacer"></span>${close}</div>`;
+  const size = inEnv.reduce((n, x) => n + (x.e.size_bytes || 0), 0);
+  const issueN = inEnv.reduce((n, x) => n + (x.e.issues || []).length, 0);
+  const rows = inEnv.map(({ a, e }) => {
+    const id = ("tssd-" + a.project + "-" + a.app + "-" + env).replace(/[^A-Za-z0-9_-]/g, "_");
+    const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
+    const goodAttr = goodI ? `data-ts-good="${esc(goodI.index)}"` : "";
+    const badNames = (e.ts_bad_indices || []).slice(0, 15).join(",");
+    const futNames = (e.future_week_indices || []).slice(0, 15).join(",");
+    const insp = [];
+    if (badNames) insp.push(`<div class="log-tsbad-note">⚠ <b>@timestamp</b> is not a <b>date</b> in ${(e.ts_bad_indices || []).length} ${esc(env)} index(es) — time filters silently return nothing there.
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${id}-ts" data-ts-index="${esc(badNames)}" ${goodAttr}>🔍 sample bad docs</button>
+      <div id="${id}-ts" class="log-tss"></div></div>`);
+    if (futNames) insp.push(`<div class="log-tsbad-note">⚠ ${(e.future_week_indices || []).length} ${esc(env)} index(es) dated in the <b>FUTURE</b> vs the current week (${esc((state.logData || {}).current_week || "?")}).
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${id}-fut" data-ts-index="${esc(futNames)}" data-ts-mode="future" data-tss-label="⏩ docs in future-dated indices" ${goodAttr}>🔍 sample docs</button>
+      <div id="${id}-fut" class="log-tss"></div></div>`);
+    const idxs = (a.index_list || []).filter((i) => i.env === env);
+    const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
+    const logged = !e.deployed ? '<span class="ci-meta">never deployed — no logs expected</span>'
+      : (e.no_logs ? '<span class="pct-bad">deployed but NO LOGS</span>'
+        : `<span class="ci-meta">🕓 ${logWhen(e.first_logged)} → ${logWhen(e.last_logged)} (${logAgo(e.last_logged_age_h)})</span>`);
+    return `<div class="log-envdive-app">
+      <div class="log-envdive-line main">${logScoreBadge(e.score, env + " health score")}
+        <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
+        ${e.no_logs || !e.deployed ? "" : `<span class="ci-meta">${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs${(e.logtypes || []).length ? " · " + esc(e.logtypes.join(", ")) : ""}</span>`}
+        ${logIssueChips(e.issues, 8) || (e.deployed && e.indices ? '<span class="chip chip-green">ok ✓</span>' : "")}</div>
+      <div class="log-envdive-line">${owner} ${logged} <span class="ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</span></div>
+      ${insp.join("")}
+      ${idxs.length ? `<details class="filebox log-idx-box"><summary>📑 ${idxs.length} ${esc(env)} index${idxs.length === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(idxs)}</div></details>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="log-envdive-head">${title}
+      <span class="ci-meta">${inEnv.length}/${mx.apps.length} apps · <b>${esc(logHsize(size))}</b> · ${issueN ? `<span class="pct-warn">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : '<span class="pct-good">no issues</span>'}</span>
+      <span class="spacer"></span>${close}</div>${rows}`;
+}
+
 // an app's dive detail: per-env detail aligned under the columns, then facts +
 // @timestamp inspector + index list — built lazily on expand
 function logAppDetail(a) {
@@ -3400,14 +3458,7 @@ function logAppDetail(a) {
   const detailRow = `<div class="log-mx-row detail" style="--envn:${cols.length}">
       <div class="log-mx-appcell detail"><span class="acc-h">per-env detail</span></div>
       ${cols.map((en, i) => logMxDetailCell(byEnv[en], i === sepAt)).join("")}</div>`;
-  const idxRows = (a.index_list || []).map((i) => `
-    <div class="log-idx ${i.ts_type !== "date" || i.bad_week || i.future_week ? "bad" : ""}">
-      <code class="log-idx-name">${esc(i.index)}</code>
-      <span class="chip chip-amber">${esc(i.env || "?")}</span><span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
-      <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
-      <span class="log-idx-size">${logHsize(i.size_bytes)}</span><span class="ci-meta">${logInt(i.docs)} docs</span>${logSrcChip(i.source)}
-      ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
-    </div>`).join("") || '<div class="empty">no indices</div>';
+  const idxRows = logIdxRows(a.index_list);
   const tssId = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
   const badNames = (a.ts_bad_indices || []).slice(0, 15).join(",");
   const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
@@ -3453,12 +3504,15 @@ function logMatrixHtml(p, apps, f) {
     if (!e.ts_ok && e.indices) m.ts_bad++;
     if (e.over_retained) m.over++;
   }));
+  const _mid = "m" + (++_logMxSeq);
+  (state.logMxMap = state.logMxMap || {})[_mid] = { p, apps };
   const head = `<div class="log-mx-row head">
     <div class="log-mx-appcell head">
       <span class="log-mx-appline">${logScoreBadge(f._projScore, "project score")} <span class="log-mx-projname">📁 ${esc(p.name)}</span></span>
-      <span class="log-mx-axis">apps ↓ · environments → (click one to focus)</span>
+      <span class="log-mx-axis">apps ↓ · environments → (click an env for its dive)</span>
     </div>
-    ${cols.map((en, i) => logMxHead(en, agg[en], f, i === sepAt, apps.length)).join("")}</div>`;
+    ${cols.map((en, i) => logMxHead(en, agg[en], i === sepAt, apps.length)).join("")}</div>
+  <div class="log-mx-envdive" hidden></div>`;
   // each app is its OWN native expander, listed directly under the env header;
   // its collapsed summary is the aligned per-env health row, expanding reveals
   // all its details (built lazily on first open).
@@ -3479,7 +3533,7 @@ function logMatrixHtml(p, apps, f) {
         </summary>
         <div class="log-mx-app-body" data-lazy="1"></div></details>`;
   }).join("");
-  return `<div class="log-mx-scroll"><div class="log-matrix" style="--envn:${cols.length}">${head}${rows}</div></div>`;
+  return `<div class="log-mx-scroll"><div class="log-matrix" data-mx-id="${_mid}" style="--envn:${cols.length}">${head}${rows}</div></div>`;
 }
 
 function logProjectCardHtml(p, apps, f) {
@@ -3547,6 +3601,7 @@ function logContentHtml() {
   const on = (k) => f[k] && f[k] !== "all";
   f._any = !!(f.q || on("env") || on("project") || on("platform") || on("logtype") || on("team") || on("issue"));
   state.logAppMap = {}; _logAppSeq = 0;   // rebuilt as rows render → lazy bodies look apps up here
+  state.logMxMap = {}; _logMxSeq = 0;     // per-project matrix registry (env dives)
   const filtered = [];
   // filter → SCOPE (env/team) → sort apps; then sort the projects the same way.
   // Scoping recomputes each app's aggregates from just the matching envs.
@@ -3646,19 +3701,30 @@ function wireLogContent() {
     delete body.dataset.lazy;
     body.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
   }));
-  // click an ENV column header → focus/unfocus that environment (leverages scoping)
+  // click an ENV column header → open/close that environment's dive for THIS
+  // project only (all apps' details for the env). Does NOT touch the global
+  // env filter — that lives in the always-visible filter bar.
   view().querySelectorAll(".log-mx-cell.head[data-env]").forEach((cell) => {
-    const focus = (ev) => {
+    const toggle = (ev) => {
       ev.stopPropagation();
+      const mxEl = cell.closest(".log-matrix");
+      const dive = mxEl && mxEl.querySelector(".log-mx-envdive");
+      const mx = mxEl && (state.logMxMap || {})[mxEl.dataset.mxId];
+      if (!dive || !mx) return;
       const env = cell.dataset.env;
-      const f = state.logFilter;
-      f.env = (f.env === env) ? "all" : env;
-      const sel = document.getElementById("log-env");   // keep the filter bar in sync
-      if (sel) sel.value = f.env;
-      rerenderLog();
+      const wasOpen = !dive.hidden && dive.dataset.env === env;
+      mxEl.querySelectorAll(".log-mx-cell.head.active").forEach((h) => h.classList.remove("active"));
+      if (wasOpen) { dive.hidden = true; dive.dataset.env = ""; return; }
+      dive.dataset.env = env;
+      dive.innerHTML = logEnvDiveHtml(mx, env);
+      dive.hidden = false;
+      cell.classList.add("active");
+      dive.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
+      const cl = dive.querySelector(".log-envdive-close");
+      if (cl) cl.onclick = () => { dive.hidden = true; dive.dataset.env = ""; cell.classList.remove("active"); };
     };
-    cell.addEventListener("click", focus);
-    cell.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); focus(ev); } });
+    cell.addEventListener("click", toggle);
+    cell.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(ev); } });
   });
 }
 
