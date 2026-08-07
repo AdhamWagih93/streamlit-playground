@@ -148,7 +148,7 @@ database:
   # or run a tiny in-cluster Postgres (dev/small-team use)
   builtin:
     enabled: true
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     storage: 2Gi
     storageClassName: ""
     password: "questops"
