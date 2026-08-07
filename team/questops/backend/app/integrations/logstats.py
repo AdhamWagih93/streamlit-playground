@@ -796,7 +796,12 @@ def _live() -> dict:
     prefixes = sorted({m["prefix"] for m in app_meta.values() if m["prefix"]})
     diag = _inventory_diag(inv, projects, app_meta, proj_meta, prefixes)
     known = _known(projects, prefixes)
-    pattern = ",".join(f"{p}-*" for p in prefixes)   # "" when nothing resolved yet
+    # fetch *${prefix}-* (not just ${prefix}-*) so STRAY indices — a known
+    # prefix buried mid-name (reindexes, restores, mis-templated shippers like
+    # backup-oc-...) — are still pulled; _parse_index only matches the prefix
+    # at the START, so those fall through to the "unmatched" (stray) list
+    # instead of being invisible. "" when nothing resolved yet.
+    pattern = ",".join(f"*{p}-*" for p in prefixes)
     # last deployment date per (project, app, env) — from the prd CI/CD index
     deploy_map, deploy_err = _deployments(_conn_by_kind("prd"), known)
 
@@ -972,10 +977,13 @@ def _demo() -> dict:
                 first_days = 120 if (pname, app, env) in OVER_RETAINED else 21
                 first = (now - dt.timedelta(days=first_days, hours=hash((app, env)) % 12)).replace(microsecond=0).isoformat() + "Z"
                 ts_map.setdefault((pname, app, env), []).append((first, last))
-    # a couple of stray indices that carry a valid prefix but don't map to any
-    # known app/project (naming drift → surfaced in the "unmatched" section)
+    # a few stray indices that carry a valid prefix but don't map to any known
+    # app/project (naming drift → surfaced in the "unmatched" section). The
+    # third has the prefix BURIED mid-name — caught by the *${prefix}-* fetch
+    # pattern (a restore/reindex artifact), invisible under plain ${prefix}-*.
     for name in (f"oc-Platform-prd-legacy-batch-application-{weeks[-1]}",
-                 f"vmwin-Sandbox-dev-scratch-debug-{weeks[-1]}"):
+                 f"vmwin-Sandbox-dev-scratch-debug-{weeks[-1]}",
+                 f"restored-oc-Platform-prd-payments-application-{weeks[0]}"):
         records.append({"index": name, "source": "prd" if "-prd-" in name else "nonprd",
                         "size_bytes": 12_000_000, "docs": 8000, "health": "yellow",
                         "ts_type": "date"})
