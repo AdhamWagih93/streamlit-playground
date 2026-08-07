@@ -3304,6 +3304,26 @@ function logOrderedEnvs(present, d) {
 // health meter bar (score 0–100 → width + colour)
 const logMeter = (score) => `<span class="log-meter" title="health ${score == null ? "n/a" : score}"><span class="log-meter-fill ${logScoreClass(score)}" style="width:${score == null ? 0 : score}%"></span></span>`;
 
+// logging-RATE stats from what's already on an app/env/aggregate: bytes+docs
+// over the logged span (first→last). Span clamped to >=1h so a brand-new
+// index doesn't explode the per-day extrapolation.
+function logRates(size, docs, first, last) {
+  if (!size || !first || !last) return null;
+  const days = Math.max((new Date(last) - new Date(first)) / 86400000, 1 / 24);
+  return {
+    days,
+    size_day_h: logHsize(Math.round(size / days)),
+    docs_day: docs ? Math.round(docs / days) : 0,
+    doc_avg_h: docs ? logHsize(Math.round(size / docs)) : null,
+  };
+}
+// one compact "📈 rate" line used by the drawer env sections + env dive
+function logRateLine(size, docs, first, last) {
+  const r = logRates(size, docs, first, last);
+  if (!r) return "";
+  return `<span class="ci-meta" title="ingest rate over the logged span (${r.days < 1.5 ? "~" + Math.round(r.days * 24) + "h" : Math.round(r.days) + " days"})">📈 ≈<b>${esc(r.size_day_h)}</b>/day · ${logInt(r.docs_day)} docs/day${r.doc_avg_h ? ` · avg doc ${esc(r.doc_avg_h)}` : ""}</span>`;
+}
+
 // ---- integrated apps × environments MATRIX --------------------------------
 // One grid: rows = apps, columns = environments (MAIN_ENVS then EXTRA_ENVS).
 // The header row is the project's per-env overview; each app row is a compact
@@ -3378,6 +3398,8 @@ function logMxHead(env, m, sep, total) {
     <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
     <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
+    ${(() => { const r = logRates(m.size_bytes, m.docs, m.first, m.last);
+      return r ? `<div class="log-mx-cmeta" title="ingest rate across this env's apps">📈 ≈${esc(r.size_day_h)}/day · ${logInt(r.docs_day)} docs/day</div>` : ""; })()}
   </div>`;
 }
 
@@ -3404,6 +3426,10 @@ function logEnvDiveHtml(mx, env) {
   const title = `<span class="log-envdive-title">🔎 ${esc(env)} <span class="ci-meta">·</span> ${esc(mx.p.name)}</span>`;
   if (!inEnv.length) return `<div class="log-envdive-head">${title}<span class="ci-meta">no apps in this environment</span><span class="spacer"></span>${close}</div>`;
   const size = inEnv.reduce((n, x) => n + (x.e.size_bytes || 0), 0);
+  const docsT = inEnv.reduce((n, x) => n + (x.e.docs || 0), 0);
+  const eFirst = inEnv.map((x) => x.e.first_logged).filter(Boolean).sort()[0];
+  const eLast = inEnv.map((x) => x.e.last_logged).filter(Boolean).sort().slice(-1)[0];
+  const eRate = logRates(size, docsT, eFirst, eLast);
   const issueN = inEnv.reduce((n, x) => n + (x.e.issues || []).length, 0);
   const rows = inEnv.map(({ a, e }) => {
     const id = ("tssd-" + a.project + "-" + a.app + "-" + env).replace(/[^A-Za-z0-9_-]/g, "_");
@@ -3432,13 +3458,13 @@ function logEnvDiveHtml(mx, env) {
         <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
         ${e.no_logs || !e.deployed ? "" : `<span class="ci-meta">${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs${(e.logtypes || []).length ? " · " + esc(e.logtypes.join(", ")) : ""}</span>`}
         ${logIssueChips(e.issues, 8) || (e.deployed && e.indices ? '<span class="chip chip-green">ok ✓</span>' : "")}</div>
-      <div class="log-envdive-line">${owner} ${logged} <span class="ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</span></div>
+      <div class="log-envdive-line">${owner} ${logged} <span class="ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</span> ${!e.no_logs && e.deployed ? logRateLine(e.size_bytes, e.docs, e.first_logged, e.last_logged) : ""}</div>
       ${insp.join("")}
       ${idxs.length ? `<details class="filebox log-idx-box"><summary>📑 ${idxs.length} ${esc(env)} index${idxs.length === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(idxs)}</div></details>` : ""}
     </div>`;
   }).join("");
   return `<div class="log-envdive-head">${title}
-      <span class="ci-meta">${inEnv.length}/${mx.apps.length} apps · <b>${esc(logHsize(size))}</b> · ${issueN ? `<span class="pct-warn">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : '<span class="pct-good">no issues</span>'}</span>
+      <span class="ci-meta">${inEnv.length}/${mx.apps.length} apps · <b>${esc(logHsize(size))}</b>${eRate ? ` · ≈<b>${esc(eRate.size_day_h)}</b>/day` : ""} · ${issueN ? `<span class="pct-warn">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : '<span class="pct-good">no issues</span>'}</span>
       <span class="spacer"></span>${close}</div>${rows}`;
 }
 
@@ -3449,7 +3475,7 @@ function logAppDrawerHtml(a) {
   const head = `<div class="log-drawer-head">
       ${logScoreBadge(a.score, "app health score")}
       <div class="log-drawer-title"><span class="log-drawer-app">🧩 ${esc(a.app)}</span>
-        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs` : ""}</span></div>
+        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs${(() => { const r = logRates(a.size_bytes, a.docs, a.first_logged, a.last_logged); return r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : ""; })()}` : ""}</span></div>
       <span class="spacer"></span>
       <button class="btn btn-sm btn-ghost log-drawer-close" title="close (Esc)">✕</button></div>
     ${flags ? `<div class="log-mx-appflags">${flags}</div>` : ""}`;
@@ -3471,6 +3497,7 @@ function logAppDrawerHtml(a) {
       ${e.deployed && !e.no_logs ? logMeter(e.score) : ""}
       <div class="log-envdive-line">${owner} ${logged}</div>
       <div class="log-envdive-line ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
+      ${!e.no_logs && e.deployed ? `<div class="log-envdive-line">${logRateLine(e.size_bytes, e.docs, e.first_logged, e.last_logged)}</div>` : ""}
       ${logIssueChips(e.issues, 8) || (e.deployed && e.indices ? '<div><span class="chip chip-green">ok ✓</span></div>' : "")}
     </div>`;
   };
@@ -3543,8 +3570,10 @@ function logMatrixHtml(p, apps, f) {
   const sepAt = extra.length ? main.length : -1;   // first extra column index
   const agg = {};
   apps.forEach((a) => (a.env_stats || []).forEach((e) => {
-    const m = agg[e.env] = agg[e.env] || { size_bytes: 0, indices: 0, docs: 0, scores: [], no_logs: 0, stale: 0, ts_bad: 0, over: 0, apps: 0 };
+    const m = agg[e.env] = agg[e.env] || { size_bytes: 0, indices: 0, docs: 0, scores: [], no_logs: 0, stale: 0, ts_bad: 0, over: 0, apps: 0, first: null, last: null };
     m.size_bytes += e.size_bytes; m.indices += e.indices; m.docs += e.docs; m.apps++;
+    if (e.first_logged && (!m.first || e.first_logged < m.first)) m.first = e.first_logged;
+    if (e.last_logged && (!m.last || e.last_logged > m.last)) m.last = e.last_logged;
     if (e.score != null) m.scores.push(e.score);
     if (e.no_logs && e.deployed) m.no_logs++;
     if (e.stale) m.stale++;
@@ -3623,7 +3652,13 @@ function logProjectCardHtml(p, apps, f) {
   return `<details class="filebox log-proj">
     <summary>${logScoreBadge(pscore, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
-      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${
+      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${(() => {
+        const wl = apps.filter((x) => x.size_bytes > 0);
+        const r = logRates(bytes, t.docs, wl.map((x) => x.first_logged).filter(Boolean).sort()[0],
+          wl.map((x) => x.last_logged).filter(Boolean).sort().slice(-1)[0]);
+        return (wl.length ? ` · avg app ${esc(logHsize(Math.round(bytes / wl.length)))}` : "")
+          + (r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : "");
+      })()}${
         flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.over_sized, "over-sized", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}
       ${(f._projScore = pscore, logMatrixHtml(p, apps, f))}</div></details>`;
@@ -3644,6 +3679,16 @@ function logTilesHtml(apps) {
     ${tile(logInt(sum((a) => a.indices)), "log indices")}
     ${tile(logHsize(sum((a) => a.size_bytes)), "total size")}
     ${tile(logInt(sum((a) => a.docs)), "documents")}
+    ${(() => {
+      const withLogs = apps.filter((a) => a.size_bytes > 0);
+      const avgApp = withLogs.length ? Math.round(sum((a) => a.size_bytes) / withLogs.length) : 0;
+      const first = withLogs.map((a) => a.first_logged).filter(Boolean).sort()[0];
+      const last = withLogs.map((a) => a.last_logged).filter(Boolean).sort().slice(-1)[0];
+      const r = logRates(sum((a) => a.size_bytes), sum((a) => a.docs), first, last);
+      return tile(logHsize(avgApp), "avg app size")
+        + (r ? tile(r.size_day_h + "/d", "ingest / day") + tile(logInt(r.docs_day), "docs / day")
+             + (r.doc_avg_h ? tile(r.doc_avg_h, "avg doc size") : "") : "");
+    })()}
     ${tile(has("no_logs"), "apps no-logs", has("no_logs") ? "pct-bad" : "pct-good")}
     ${tile(has("stale"), "apps stale", has("stale") ? "pct-warn" : "pct-good")}
     ${tile(has("timestamp"), "@timestamp", has("timestamp") ? "pct-bad" : "pct-good")}
