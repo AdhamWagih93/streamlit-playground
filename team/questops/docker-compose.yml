@@ -105,7 +105,7 @@ services:
       POSTGRES_PASSWORD: questops
       POSTGRES_DB: questops
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - upgrade_pgdata:/var/lib/postgresql
     networks: [backend]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U questops"]
@@ -129,5 +129,6 @@ networks:
 
 volumes:
   pgdata:
+  upgrade_pgdata:
   ollama:
   repos:
