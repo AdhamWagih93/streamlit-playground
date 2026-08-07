@@ -1325,10 +1325,11 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-mx-envname { font: 700 11px var(--display); color: var(--amber);
   letter-spacing: .07em; text-transform: uppercase; }
 
-/* cells: no individual borders — thin column rules; consistent inner layout */
-.log-mx-cell, .log-mx-appcell { min-width: 0; padding: 8px 10px; display: flex;
-  flex-direction: column; gap: 4px; justify-content: center; }
-.log-mx-appcell { padding: 8px 12px; }
+/* cells: no individual borders — thin column rules; consistent inner layout,
+   tight vertical rhythm so rows stay slim */
+.log-mx-cell, .log-mx-appcell { min-width: 0; padding: 5px 10px; display: flex;
+  flex-direction: column; gap: 3px; justify-content: center; }
+.log-mx-appcell { padding: 5px 12px; }
 .log-mx-cell { border-left: 1px solid rgba(255,255,255,.05); }
 .log-mx-cell.sep { border-left: 2px solid rgba(255,178,36,.5); }   /* main | extra divider */
 /* soft heat tint — only problem cells get a wash, healthy stays quiet */
@@ -1377,42 +1378,48 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-envdive-app .log-tsbad-note { margin: 2px 0 0; }
 .log-envdive-app .log-idx-box { margin-top: 2px; }
 
-/* app rows: native <details>, the <summary> IS the aligned table row;
-   striping + hover + an amber accent when open (inset — no layout shift) */
-.log-mx-app > summary { cursor: pointer; list-style: none; padding: 0; margin: 0; }
-.log-mx-app > summary::-webkit-details-marker { display: none; }
-.log-mx-app { border-top: 1px solid rgba(255,255,255,.05); }
-.log-mx-app:nth-of-type(even) > summary { background: rgba(255,255,255,.015); }
-.log-mx-app > summary:hover { background: rgba(63,198,221,.05); }
-.log-mx-app > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
-.log-mx-app[open] { box-shadow: inset 2px 0 0 var(--amber); }
-.log-mx-app[open] > summary { background: rgba(255,178,36,.05); }
-.log-mx-app[open] .log-mx-caret { transform: rotate(90deg); }
+/* app rows: slim clickable table rows — clicking opens the app DRAWER */
+.log-mx-row.app { cursor: pointer; border-top: 1px solid rgba(255,255,255,.05); }
+.log-mx-row.app:nth-of-type(even) { background: rgba(255,255,255,.015); }
+.log-matrix .log-mx-row.app:hover { background: rgba(63,198,221,.05); }
+.log-mx-row.app:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.log-matrix .log-mx-row.app:hover .log-mx-caret { color: var(--cyan); }
 .log-mx-appline { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.log-mx-caret { color: var(--faint); font-size: 10px; transition: transform .12s ease; flex: none; }
+.log-mx-caret { color: var(--faint); font-size: 13px; flex: none; margin-left: auto; }
 .log-mx-appline .log-app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-mx-appflags { display: flex; gap: 3px; flex-wrap: wrap; }
 .log-mx-appflags .chip { font-size: 9px; padding: 1px 6px; }
+/* one quiet spanning note instead of a row of empty cells */
+.log-mx-cell.note { grid-column: 2 / -1; justify-content: center; align-items: flex-start;
+  font-size: 10.5px; font-style: italic; color: var(--faint); }
+.log-mx-cell.note.nolog { color: var(--red); font-style: normal; font-weight: 600; }
 
-/* an app's expander body: aligned per-env detail cards + facts + inspector */
-.log-mx-app-body { padding: 6px 10px 12px; }
-.log-mx-detail-inner { display: flex; flex-direction: column; gap: 10px; }
-/* the per-env detail row DOES use cards — it's the dive, aligned under the
-   same columns, with a status-colored top edge */
-.log-mx-row.detail .log-mx-cell { border: 1px solid var(--line); border-top: 3px solid var(--line);
-  border-radius: 8px; background: var(--panel); margin: 0 3px; padding: 7px 9px;
-  justify-content: flex-start; gap: 3px; }
-.log-mx-row.detail .log-mx-cell.ok { border-top-color: var(--green); }
-.log-mx-row.detail .log-mx-cell.stale { border-top-color: var(--amber); background: var(--panel); }
-.log-mx-row.detail .log-mx-cell.nolog,
-.log-mx-row.detail .log-mx-cell.tsbad { border-top-color: var(--red); background: var(--panel); }
-.log-mx-row.detail .log-mx-cell.undeployed { border-top-color: var(--faint); opacity: .7; }
-.log-mx-row.detail .log-mx-cell.absent { border-style: dashed; opacity: .45;
-  align-items: center; justify-content: center; }
-.log-mx-row.detail .log-mx-cell.sep { border-left: 2px solid rgba(255,178,36,.5); }
-.log-mx-appcell.detail { justify-content: center; padding: 0 8px; }
-.log-mx-dline { font-size: 10.5px; color: var(--dim); word-break: break-word; }
-.log-mx-row.detail .chip { font-size: 9px; }
+/* the app DRAWER — a slide-over panel; the table never gets pushed apart */
+#log-drawer[hidden] { display: none; }
+.log-drawer-backdrop { position: fixed; inset: 0; background: rgba(4,7,12,.55); z-index: 60; }
+.log-drawer-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(540px, 94vw);
+  background: var(--bg); border-left: 1px solid var(--line); z-index: 61;
+  overflow-y: auto; padding: 12px 16px 26px; box-shadow: -20px 0 44px rgba(0,0,0,.5);
+  display: flex; flex-direction: column; gap: 10px; animation: log-drawer-in .16s ease; }
+@keyframes log-drawer-in { from { transform: translateX(36px); opacity: 0; } }
+.log-drawer-head { display: flex; align-items: center; gap: 10px; position: sticky;
+  top: -12px; background: var(--bg); padding: 6px 0; z-index: 1;
+  border-bottom: 1px solid var(--line); }
+.log-drawer-head .spacer { flex: 1; }
+.log-drawer-title { display: flex; flex-direction: column; min-width: 0; }
+.log-drawer-app { font: 700 14px var(--body); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* vertical env sections with a status-colored left edge */
+.log-drawer-envs { display: flex; flex-direction: column; gap: 7px; }
+.log-drawer-env { border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 8px; background: var(--bg-2); padding: 7px 10px;
+  display: flex; flex-direction: column; gap: 4px; }
+.log-drawer-env.ok { border-left-color: var(--green); }
+.log-drawer-env.stale { border-left-color: var(--amber); }
+.log-drawer-env.nolog, .log-drawer-env.tsbad { border-left-color: var(--red); }
+.log-drawer-env.undeployed { border-left-color: var(--faint); opacity: .75; }
+.log-drawer-envhead { display: flex; align-items: center; gap: 8px; }
+.log-drawer-envhead .spacer { flex: 1; }
 
 /* health meter + size bar */
 .log-meter { display: block; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }

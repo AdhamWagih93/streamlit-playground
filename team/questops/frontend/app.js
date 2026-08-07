@@ -3351,7 +3351,7 @@ function logMxCell(e, sep) {
   const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>' : `<span class="log-mx-csize">${esc(e.size_h)}</span>`;
   return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(tip)}">
     <div class="log-mx-cline"><span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${right}</div>
-    ${logMeter(e.score)}
+    ${e.no_logs ? "" : logMeter(e.score)}
     ${logIssueChips(e.issues)}
   </div>`;
 }
@@ -3370,21 +3370,6 @@ function logMxHead(env, m, sep, total) {
     <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
     <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
-  </div>`;
-}
-
-// per-env detail cell inside an app's dive (owner · logged span · deploy)
-function logMxDetailCell(e, sep) {
-  if (!e) return `<div class="log-mx-cell detail absent ${sep ? "sep" : ""}"><span class="log-mx-na">not in this env</span></div>`;
-  const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(e.env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
-  const logged = !e.deployed ? '<span class="ci-meta">never deployed</span>'
-    : (e.no_logs ? '<span class="pct-bad">no logs</span>'
-      : `🕓 ${logWhen(e.first_logged)}<br>→ ${logWhen(e.last_logged)} <span class="ci-meta">(${logAgo(e.last_logged_age_h)})</span>`);
-  return `<div class="log-mx-cell detail ${_mxCls(e)} ${sep ? "sep" : ""}">
-    <div class="log-mx-dline">${owner}</div>
-    <div class="log-mx-dline ci-meta">${logged}</div>
-    <div class="log-mx-dline ci-meta">📦 ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
-    <div class="log-mx-dline">${logIssueChips(e.issues, 6) || (e.deployed && e.indices ? '<span class="chip chip-green">ok ✓</span>' : "")}</div>
   </div>`;
 }
 
@@ -3445,20 +3430,41 @@ function logEnvDiveHtml(mx, env) {
       <span class="spacer"></span>${close}</div>${rows}`;
 }
 
-// an app's dive detail: per-env detail aligned under the columns, then facts +
-// @timestamp inspector + index list — built lazily on expand
-function logAppDetail(a) {
-  const cols = a._mxcols || [];
-  const sepAt = a._mxsep;
-  const unsupported = a.platform_status === "unsupported";
-  if (unsupported) return `<div class="empty">This app's <code>deploy_platform</code> is <b>${esc(a.deploy_platform)}</b>, not one QuestOps monitors (OCP / LinuxVM / WindowsVM / K8s) — logs are <b>not checked</b>.${a.discrepancy ? ` <span class="pct-bad">It overrides the project global <b>${esc(a.project_platform)}</b>.</span>` : ""}</div>`;
-  if (a.platform_status === "none") return `<div class="empty">No index prefix — no <code>deploy_platform</code> on this app or the project.</div>`;
+// the app DRAWER (slide-over panel): everything about one app without pushing
+// the table apart — vertical env sections, facts, inspectors, index list
+function logAppDrawerHtml(a) {
+  const flags = logAppFlags(a);
+  const head = `<div class="log-drawer-head">
+      ${logScoreBadge(a.score, "app health score")}
+      <div class="log-drawer-title"><span class="log-drawer-app">🧩 ${esc(a.app)}</span>
+        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs` : ""}</span></div>
+      <span class="spacer"></span>
+      <button class="btn btn-sm btn-ghost log-drawer-close" title="close (Esc)">✕</button></div>
+    ${flags ? `<div class="log-mx-appflags">${flags}</div>` : ""}`;
+  if (a.platform_status === "unsupported")
+    return head + `<div class="empty">This app's <code>deploy_platform</code> is <b>${esc(a.deploy_platform)}</b>, not one QuestOps monitors (OCP / LinuxVM / WindowsVM / K8s) — logs are <b>not checked</b>.${a.discrepancy ? ` <span class="pct-bad">It overrides the project global <b>${esc(a.project_platform)}</b>.</span>` : ""}</div>`;
+  if (a.platform_status === "none")
+    return head + `<div class="empty">No index prefix — no <code>deploy_platform</code> on this app or the project.</div>`;
   const byEnv = {}; (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
+  const { main, extra } = logOrderedEnvs(Object.keys(byEnv), state.logData);
+  const envSec = (en, isExtra) => {
+    const e = byEnv[en]; if (!e) return "";
+    const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(en) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
+    const logged = !e.deployed ? '<span class="ci-meta">never deployed — no logs expected</span>'
+      : (e.no_logs ? '<span class="pct-bad">deployed but NO LOGS</span>'
+        : `<span class="ci-meta">🕓 ${logWhen(e.first_logged)} → ${logWhen(e.last_logged)} (${logAgo(e.last_logged_age_h)})</span>`);
+    return `<div class="log-drawer-env ${_mxCls(e)}">
+      <div class="log-drawer-envhead"><span class="log-mx-envname">${esc(en)}</span>${isExtra ? '<span class="chip chip-amber">extra</span>' : ""}${logScoreBadge(e.score, en + " health score")}
+        <span class="spacer"></span>${!e.deployed || e.no_logs ? "" : `<span class="ci-meta">${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs</span>`}</div>
+      ${e.deployed && !e.no_logs ? logMeter(e.score) : ""}
+      <div class="log-envdive-line">${owner} ${logged}</div>
+      <div class="log-envdive-line ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
+      ${logIssueChips(e.issues, 8) || (e.deployed && e.indices ? '<div><span class="chip chip-green">ok ✓</span></div>' : "")}
+    </div>`;
+  };
+  const envsHtml = [...main.map((en) => envSec(en, false)), ...extra.map((en) => envSec(en, true))].join("")
+    || '<div class="ci-meta">no environment data</div>';
   const chips = (arr, cls) => (arr || []).map((x) => `<span class="chip ${cls}">${esc(x)}</span>`).join(" ") || '<span class="ci-meta">none</span>';
-  const detailRow = `<div class="log-mx-row detail" style="--envn:${cols.length}">
-      <div class="log-mx-appcell detail"><span class="acc-h">per-env detail</span></div>
-      ${cols.map((en, i) => logMxDetailCell(byEnv[en], i === sepAt)).join("")}</div>`;
-  const idxRows = logIdxRows(a.index_list);
   const tssId = "tss-" + (a.project + "-" + a.app).replace(/[^A-Za-z0-9_-]/g, "_");
   const badNames = (a.ts_bad_indices || []).slice(0, 15).join(",");
   const goodI = (a.index_list || []).find((i) => i.ts_type === "date");
@@ -3473,8 +3479,8 @@ function logAppDetail(a) {
     <div class="log-tsbad-note">⚠ ${(a.future_week_indices || []).length} index(es) dated in the <b>FUTURE</b> vs the current week (${esc((state.logData || {}).current_week || "?")}) — likely clock skew or a mis-templated index.
       <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}-fut" data-ts-index="${esc(futNames)}" data-ts-mode="future" data-tss-label="⏩ docs in future-dated indices" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample docs</button>
       <div id="${tssId}-fut" class="log-tss"></div></div>` : "";
-  return `<div class="log-mx-detail-inner">
-    ${detailRow}
+  return `${head}
+    <div class="log-drawer-envs">${envsHtml}</div>
     <div class="log-app-facts">
       <div><span class="acc-h">owners ($env_team)</span><div class="inv-chips">${(a.owners || []).map((o) => `<span class="chip chip-cyan">👤 ${esc(o)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}</div></div>
       <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
@@ -3483,8 +3489,25 @@ function logAppDetail(a) {
     </div>
     ${tsInspect}
     ${futInspect}
-    ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${idxRows}</div></details>` : ""}
-  </div>`;
+    ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(a.index_list)}</div></details>` : ""}`;
+}
+
+function closeLogDrawer() {
+  const d = document.getElementById("log-drawer");
+  if (d) d.hidden = true;
+}
+function openLogDrawer(aid) {
+  const a = (state.logAppMap || {})[aid];
+  const d = document.getElementById("log-drawer");
+  if (!a || !d) return;
+  const panel = d.querySelector(".log-drawer-panel");
+  panel.innerHTML = logAppDrawerHtml(a);
+  panel.scrollTop = 0;
+  d.hidden = false;
+  panel.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
+  d.querySelector(".log-drawer-backdrop").onclick = closeLogDrawer;
+  const cl = panel.querySelector(".log-drawer-close");
+  if (cl) { cl.onclick = closeLogDrawer; cl.focus(); }
 }
 
 // the whole matrix for one project (header + app rows + lazy detail placeholders)
@@ -3513,25 +3536,30 @@ function logMatrixHtml(p, apps, f) {
     </div>
     ${cols.map((en, i) => logMxHead(en, agg[en], i === sepAt, apps.length)).join("")}</div>
   <div class="log-mx-envdive" hidden></div>`;
-  // each app is its OWN native expander, listed directly under the env header;
-  // its collapsed summary is the aligned per-env health row, expanding reveals
-  // all its details (built lazily on first open).
+  // each app is ONE slim clickable row; clicking opens the app DRAWER (a
+  // slide-over panel) instead of pushing detail into the table. Apps with
+  // nothing to chart (unsupported / never deployed / no logs anywhere) get a
+  // single spanning note instead of a row of empty cells.
   const rows = apps.map((a) => {
     const _aid = "a" + (++_logAppSeq);
-    a._mxcols = cols; a._mxsep = sepAt;
     (state.logAppMap = state.logAppMap || {})[_aid] = a;
     const byEnv = {}; (a.env_stats || []).forEach((e) => { byEnv[e.env] = e; });
     const rowCls = a.no_logs ? "nolog" : (!a.ts_ok && a.indices ? "tsbad" : (a.stale ? "stale" : (!a.deployed ? "undeployed" : "")));
     const flags = logAppFlags(a);
-    return `<details class="log-mx-app ${rowCls}" data-app-id="${_aid}">
-        <summary class="log-mx-row app">
-          <div class="log-mx-appcell">
-            <span class="log-mx-appline"><span class="log-mx-caret">▸</span> ${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span></span>
-            ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
-          </div>
-          ${cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("")}
-        </summary>
-        <div class="log-mx-app-body" data-lazy="1"></div></details>`;
+    const note = a.platform_status === "unsupported" ? "platform not monitored — logs not checked"
+      : (!a.deployed ? "never deployed — no logs expected"
+        : (a.platform_status === "none" ? "no deploy_platform — can't build an index prefix"
+          : (a.monitored && a.no_logs
+            ? `deployed but NO LOGS — expected in: ${(a.env_stats || []).filter((e) => e.deployed).map((e) => e.env).join(", ") || "?"}` : null)));
+    const cells = note
+      ? `<div class="log-mx-cell note ${a.no_logs && a.deployed ? "nolog" : ""}">${esc(note)}</div>`
+      : cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("");
+    return `<div class="log-mx-row app ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
+        <div class="log-mx-appcell">
+          <span class="log-mx-appline">${logScoreBadge(a.score, "app health score")} <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span><span class="log-mx-caret">›</span></span>
+          ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
+        </div>
+        ${cells}</div>`;
   }).join("");
   return `<div class="log-mx-scroll"><div class="log-matrix" data-mx-id="${_mid}" style="--envn:${cols.length}">${head}${rows}</div></div>`;
 }
@@ -3628,7 +3656,9 @@ function logContentHtml() {
           <span class="ci-meta">${logInt(u.docs)} docs</span>${logSrcChip(u.source)}${u.bad_week ? '<span class="chip chip-red">⚠ bad year</span>' : ""}${u.future_week ? '<span class="chip chip-red">⚠ future</span>' : ""}</div>`).join("")}</div>
     </details>` : "";
   return logTilesHtml(filtered)
-    + (cards || '<div class="empty">no apps match the filters</div>') + un;
+    + (cards || '<div class="empty">no apps match the filters</div>') + un
+    + `<div id="log-drawer" hidden><div class="log-drawer-backdrop"></div>
+       <aside class="log-drawer-panel" role="dialog" aria-modal="true" aria-label="app logging detail"></aside></div>`;
 }
 
 function rerenderLog() {
@@ -3689,18 +3719,17 @@ async function loadTsSamples(btn) {
   } catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
 function wireLogContent() {
-  // each app is a native <details> — build its heavy detail body the first
-  // time it's expanded (keeps filter/sort re-renders fast even with many apps)
-  view().querySelectorAll("details.log-mx-app").forEach((det) => det.addEventListener("toggle", () => {
-    if (!det.open) return;
-    const body = det.querySelector(".log-mx-app-body");
-    if (!body || !body.dataset.lazy) return;
-    const a = (state.logAppMap || {})[det.dataset.appId];
-    if (!a) return;
-    body.innerHTML = logAppDetail(a);
-    delete body.dataset.lazy;
-    body.querySelectorAll(".log-ts-sample").forEach((b) => b.onclick = () => loadTsSamples(b));
-  }));
+  // app rows open the slide-over drawer (content built on demand per click)
+  view().querySelectorAll(".log-mx-row.app[data-app-id]").forEach((row) => {
+    const open = () => openLogDrawer(row.dataset.appId);
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } });
+  });
+  // Esc closes the drawer (wired once — closeLogDrawer is a no-op when shut)
+  if (!state._logEscWired) {
+    state._logEscWired = true;
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeLogDrawer(); });
+  }
   // click an ENV column header → open/close that environment's dive for THIS
   // project only (all apps' details for the env). Does NOT touch the global
   // env filter — that lives in the always-visible filter bar.
