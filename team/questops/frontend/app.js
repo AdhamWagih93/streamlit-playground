@@ -3796,6 +3796,7 @@ function logContentHtml() {
            <button class="btn btn-sm btn-ghost log-report-close" title="close (Esc)">✕</button></div>
          <div class="log-report-bar log-report-opts">
            <label class="log-issues" title="EXTRA_ENVS are excluded by default — tick to include them"><input type="checkbox" id="log-report-extra"> include extra envs</label>
+           <label class="log-issues" title="hide apps with a perfect score (100) — a focused problem report"><input type="checkbox" id="log-report-healthy"> hide healthy apps</label>
            <select id="log-report-team" title="narrow the report to the environments owned by one team"></select></div>
          <div class="log-report-bar">
            <input id="log-report-subj" title="email subject">
@@ -3909,8 +3910,10 @@ async function openLogReport(projName) {
   // scope controls: extra envs OFF by default; env-owner team filter from
   // this project's actual env owners
   const extraCb = m.querySelector("#log-report-extra");
+  const healthyCb = m.querySelector("#log-report-healthy");
   const teamSel = m.querySelector("#log-report-team");
   extraCb.checked = false;
+  healthyCb.checked = false;
   const proj = ((state.logData || {}).projects || []).find((x) => x.name === projName);
   const owners = [...new Set((proj ? proj.apps || [] : [])
     .flatMap((a) => (a.env_stats || []).map((e) => e.owner_project || e.owner))
@@ -3922,6 +3925,7 @@ async function openLogReport(projName) {
     status.textContent = "building report…";
     const qs = new URLSearchParams({ project: projName });
     if (extraCb.checked) qs.set("extra", "true");
+    if (healthyCb.checked) qs.set("skip_healthy", "true");
     if (teamSel.value) qs.set("team", teamSel.value);
     try {
       const rep = await api(`/api/logging/report?${qs.toString()}`);
@@ -3931,6 +3935,7 @@ async function openLogReport(projName) {
     } catch (e) { status.textContent = `⚠ ${e.message}`; }
   };
   extraCb.onchange = load;
+  healthyCb.onchange = load;
   teamSel.onchange = load;
   await load();
   const sendBtn = m.querySelector("#log-report-send");
@@ -3942,7 +3947,8 @@ async function openLogReport(projName) {
     try {
       const res = await api("/api/logging/report/send", { method: "POST",
         body: { project: projName, recipients: to, subject: subj.value,
-                extra: extraCb.checked, team: teamSel.value || null } });
+                extra: extraCb.checked, team: teamSel.value || null,
+                skip_healthy: healthyCb.checked } });
       status.classList.remove("log-report-err");
       status.textContent = `✓ sent to ${res.sent} recipient(s) (${res.recipients.join(", ")})`
         + (res.transport && res.transport !== "demo" ? ` via ${res.transport.toUpperCase()}${res.attempts > 1 ? ` after ${res.attempts} attempts` : ""}` : "")

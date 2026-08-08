@@ -37,12 +37,13 @@ def logging_ts_samples(index: str, source: str = "prd", good: str = "",
 
 @router.get("/logging/report")
 def logging_report(project: str, extra: bool = False, team: str = "",
-                   user: User = Depends(current_user)):
+                   skip_healthy: bool = False, user: User = Depends(current_user)):
     """Comprehensive per-project HTML report (email-ready) for preview.
     Extra envs are excluded unless extra=true; team narrows to the envs that
-    team owns."""
+    team owns; skip_healthy hides score-100 apps."""
     try:
-        return logreport.build_report(project, include_extra=extra, team=team or None)
+        return logreport.build_report(project, include_extra=extra, team=team or None,
+                                      skip_healthy=skip_healthy)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
 
@@ -53,6 +54,7 @@ class ReportSendBody(BaseModel):
     subject: str | None = None
     extra: bool = False
     team: str | None = None
+    skip_healthy: bool = False
 
 
 @router.post("/logging/report/send")
@@ -60,7 +62,8 @@ def logging_report_send(body: ReportSendBody, user: User = Depends(current_user)
     """Send the per-project report via the configured SMTP server."""
     try:
         return logreport.send_report(body.project, body.recipients, body.subject,
-                                     include_extra=body.extra, team=body.team)
+                                     include_extra=body.extra, team=body.team,
+                                     skip_healthy=body.skip_healthy)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001 — clean message, never a 500
