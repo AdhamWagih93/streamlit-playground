@@ -3264,36 +3264,50 @@ function logScopeApp(a, f) {
     stale: es.some((e) => e.stale), issues, score };
 }
 
-const _sv = (a) => (a.score == null ? 1000 : a.score);
-const LOG_SORTS = {
-  score: (a, b) => _sv(a) - _sv(b) || b.size_bytes - a.size_bytes,   // worst first
-  size: (a, b) => b.size_bytes - a.size_bytes,
-  updated: (a, b) => (b.last_logged || "").localeCompare(a.last_logged || ""),
-  docs: (a, b) => b.docs - a.docs,
-  indices: (a, b) => b.indices - a.indices,
-  name: (a, b) => a.app.localeCompare(b.app),
+// sorting is CRITERIA + DIRECTION: the selects carry only the criteria, a
+// separate ↑/↓ toggle carries the direction. Sensible defaults per criteria:
+// score + name ascend (worst / A first), everything else descends (big first).
+// No-score / no-logs apps always sink to the END regardless of direction.
+const LOG_SORT_LABELS = [["score", "score"], ["size", "size"], ["updated", "last updated"],
+  ["docs", "documents"], ["indices", "indices"], ["name", "name"]];
+const logDefaultDir = (sort) => (sort === "score" || sort === "name") ? "asc" : "desc";
+const LOG_SORT_VAL = {
+  score: (a) => a.score, size: (a) => a.size_bytes, updated: (a) => a.last_logged || "",
+  docs: (a) => a.docs, indices: (a) => a.indices, name: (a) => a.app.toLowerCase(),
 };
-function logSortApps(apps, sort) {
-  if (sort === "score") return apps.slice().sort(LOG_SORTS.score);
-  const cmp = LOG_SORTS[sort] || LOG_SORTS.size;
-  return apps.slice().sort((a, b) => ((a.no_logs ? 1 : 0) - (b.no_logs ? 1 : 0)) || cmp(a, b));
+const _cmpVals = (va, vb) => (typeof va === "string" || typeof vb === "string")
+  ? String(va).localeCompare(String(vb)) : ((va || 0) - (vb || 0));
+function logSortApps(apps, sort, dir) {
+  const get = LOG_SORT_VAL[sort] || LOG_SORT_VAL.score;
+  const mul = ((dir || logDefaultDir(sort)) === "desc") ? -1 : 1;
+  const sink = (sort === "score" || !LOG_SORT_VAL[sort])
+    ? (a) => (a.score == null ? 1 : 0) : (a) => (a.no_logs ? 1 : 0);
+  return apps.slice().sort((a, b) => (sink(a) - sink(b))
+    || (mul * _cmpVals(get(a), get(b))) || (b.size_bytes - a.size_bytes));
 }
 
 // projects are sorted too (by the same metric, aggregated) — otherwise a sort
 // only reorders apps INSIDE collapsed cards and looks like it does nothing
-const _psv = (p) => (p.score == null ? 1000 : p.score);
 const _plast = (apps) => (apps || []).reduce((m, a) => (a.last_logged || "") > m ? (a.last_logged || "") : m, "");
-const LOG_PROJ_SORTS = {
-  score: (a, b) => _psv(a) - _psv(b) || (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
-  size: (a, b) => (b.t.size_bytes || 0) - (a.t.size_bytes || 0),
-  docs: (a, b) => (b.t.docs || 0) - (a.t.docs || 0),
-  indices: (a, b) => (b.t.indices || 0) - (a.t.indices || 0),
-  updated: (a, b) => _plast(b.apps).localeCompare(_plast(a.apps)),
-  name: (a, b) => a.p.name.localeCompare(b.p.name),
+const LOG_PROJ_VAL = {
+  score: (e) => e.score, size: (e) => e.t.size_bytes || 0, docs: (e) => e.t.docs || 0,
+  indices: (e) => e.t.indices || 0, updated: (e) => _plast(e.apps),
+  name: (e) => e.p.name.toLowerCase(),
 };
-function logSortProjects(entries, sort) {
-  const cmp = LOG_PROJ_SORTS[sort] || LOG_PROJ_SORTS.size;
-  return entries.slice().sort(cmp);
+function logSortProjects(entries, sort, dir) {
+  const get = LOG_PROJ_VAL[sort] || LOG_PROJ_VAL.score;
+  const mul = ((dir || logDefaultDir(sort)) === "desc") ? -1 : 1;
+  return entries.slice().sort((a, b) => {
+    const sk = (sort === "score" || !LOG_PROJ_VAL[sort])
+      ? ((a.score == null ? 1 : 0) - (b.score == null ? 1 : 0)) : 0;
+    return sk || (mul * _cmpVals(get(a), get(b)))
+      || ((b.t.size_bytes || 0) - (a.t.size_bytes || 0));
+  });
+}
+// shared ↑/↓ segmented toggle
+function logDirBtn(cls, dir, title) {
+  return `<button type="button" class="log-dir ${cls}" title="${esc(title || "toggle ascending / descending")}">
+    <span class="seg asc ${dir === "asc" ? "active" : ""}">↑</span><span class="seg desc ${dir === "desc" ? "active" : ""}">↓</span></button>`;
 }
 
 const logDay = (iso) => iso ? esc(String(iso).slice(0, 10)) : "—";
@@ -3590,7 +3604,10 @@ function openLogDrawer(aid) {
 function logMatrixHtml(p, apps, f) {
   // per-project app sort override (the small selector in the header row)
   const psort = (state.logProjSort || {})[p.name] || "global";
-  if (psort !== "global") apps = logSortApps(apps, psort);
+  const skey = psort === "global" ? ((state.logFilter || {}).sort || "score") : psort;
+  const sdir = (state.logProjDir || {})[p.name]
+    || (psort === "global" ? (state.logFilter || {}).sortDir : null) || logDefaultDir(skey);
+  apps = logSortApps(apps, skey, sdir);
   const present = [...new Set(apps.flatMap((a) => (a.env_stats || []).map((e) => e.env)))];
   const { main, extra } = logOrderedEnvs(present, state.logData);
   const cols = [...main, ...extra];
@@ -3618,10 +3635,10 @@ function logMatrixHtml(p, apps, f) {
       <span class="log-mx-axis">apps ↓ · environments → (click an env for its dive)
         <select class="log-mx-sortsel" title="sort this project's apps">
           <option value="global" ${psort === "global" ? "selected" : ""}>sort: global</option>
-          ${[["score", "↑ worst score"], ["size", "↓ size"], ["updated", "↓ last updated"],
-             ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]].map(([v, l]) =>
+          ${LOG_SORT_LABELS.map(([v, l]) =>
             `<option value="${v}" ${psort === v ? "selected" : ""}>${l}</option>`).join("")}
         </select>
+        ${logDirBtn("log-mx-dir", sdir, "sort direction for this project's apps")}
         <button class="btn btn-sm log-mx-report" title="prepare, preview and email this project's logging report">📧 report</button></span>
     </div>
     ${cols.map((en, i) => logMxHead(en, agg[en], i === sepAt, apps.length)).join("")}</div>
@@ -3681,7 +3698,7 @@ function logProjectCardHtml(p, apps, f) {
   const warn = p.no_prefix
     ? `<div class="log-tsbad-note">⚠ project <b>${esc(p.name)}</b> resolves no <code>deploy_platform</code> on any app (group_vars/&lt;app&gt;) or project-wide (group_vars/all) — can't build a log index prefix (OCP→oc · LinuxVM→vmlin · WindowsVM→vmwin · K8s→k8s), so its apps can't be located.</div>`
     : "";
-  return `<details class="filebox log-proj">
+  return `<details class="filebox log-proj" data-proj="${esc(p.name)}">
     <summary>${logScoreBadge(pscore, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.company ? `<span class="chip chip-violet" title="company (group_vars/all)">🏢 ${esc(p.company)}</span>` : ""}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b class="${p.over_sized ? "pct-bad" : ""}">${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${(() => {
@@ -3746,7 +3763,7 @@ function logContentHtml() {
   // Scoping recomputes each app's aggregates from just the matching envs.
   const entries = (d.projects || []).map((p) => {
     const apps = logSortApps((p.apps || []).filter((a) => logAppMatch(a, f))
-      .map((a) => logScopeApp(a, f)), f.sort);
+      .map((a) => logScopeApp(a, f)), f.sort, f.sortDir);
     const scores = apps.map((a) => a.score).filter((x) => x != null);
     let score = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
     if (p.over_sized && score != null) score = Math.max(score - 10, 0);
@@ -3756,7 +3773,7 @@ function logContentHtml() {
            indices: apps.reduce((n, a) => n + a.indices, 0) },
       score };
   }).filter((e) => e.apps.length);
-  const cards = logSortProjects(entries, f.sort).map((e) => {
+  const cards = logSortProjects(entries, f.sort, f.sortDir).map((e) => {
     filtered.push(...e.apps);
     return logProjectCardHtml(e.p, e.apps, f);
   }).join("");
@@ -3791,7 +3808,32 @@ function logContentHtml() {
 
 function rerenderLog() {
   const box = document.getElementById("log-body");
-  if (box) { box.innerHTML = logContentHtml(); wireLogContent(); }
+  if (!box) return;
+  // keep the user's place: which projects are expanded, which env dives are
+  // open, and the scroll offset — a filter change must not reset the view
+  const scroller = view();
+  const top = scroller ? scroller.scrollTop : 0;
+  const openProj = new Set([...box.querySelectorAll("details.log-proj[open]")]
+    .map((el) => el.dataset.proj));
+  const openDives = {};
+  box.querySelectorAll(".log-matrix").forEach((mxEl) => {
+    const dive = mxEl.querySelector(".log-mx-envdive");
+    const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
+    if (dive && mx && !dive.hidden && dive.dataset.env) openDives[mx.p.name] = dive.dataset.env;
+  });
+  box.innerHTML = logContentHtml();
+  wireLogContent();
+  box.querySelectorAll("details.log-proj").forEach((el) => {
+    if (openProj.has(el.dataset.proj)) el.setAttribute("open", "");
+  });
+  box.querySelectorAll(".log-matrix").forEach((mxEl) => {
+    const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
+    const env = mx && openDives[mx.p.name];
+    if (!env) return;
+    const cell = mxEl.querySelector(`.log-mx-cell.head[data-env="${env}"]`);
+    if (cell) cell.dispatchEvent(new Event("click"));
+  });
+  if (scroller) scroller.scrollTop = top;
 }
 
 // @timestamp sample inspector — the offending docs (across all suspect
@@ -3946,22 +3988,40 @@ function wireLogMatrix(mxEl) {
     const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
     if (mx) openLogReport(mx.p.name);
   };
-  // small per-project app-sort — rebuilds ONLY this matrix, in place, so the
-  // project expander stays open and other projects keep their listeners
+  // small per-project app-sort (criteria select + ↑/↓ toggle) — rebuilds ONLY
+  // this matrix, in place, so the project expander stays open and other
+  // projects keep their listeners
+  const rebuild = () => {
+    const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
+    const scroll = mxEl.closest(".log-mx-scroll");
+    if (!mx || !scroll) return;
+    const f2 = Object.assign({}, state.logFilter, { _projScore: mx.pscore });
+    const tmp = document.createElement("div");
+    tmp.innerHTML = logMatrixHtml(mx.p, mx.apps, f2);   // re-applies the stored sort+dir
+    const fresh = tmp.firstElementChild;
+    scroll.replaceWith(fresh);
+    const freshMx = fresh.querySelector(".log-matrix");
+    if (freshMx) wireLogMatrix(freshMx);
+  };
   const sel = mxEl.querySelector(".log-mx-sortsel");
   if (sel) sel.onchange = () => {
     const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
     if (!mx) return;
     (state.logProjSort = state.logProjSort || {})[mx.p.name] = sel.value;
-    const scroll = mxEl.closest(".log-mx-scroll");
-    if (!scroll) return;
-    const f2 = Object.assign({}, state.logFilter, { _projScore: mx.pscore });
-    const tmp = document.createElement("div");
-    tmp.innerHTML = logMatrixHtml(mx.p, mx.apps, f2);   // re-applies the stored sort
-    const fresh = tmp.firstElementChild;
-    scroll.replaceWith(fresh);
-    const freshMx = fresh.querySelector(".log-matrix");
-    if (freshMx) wireLogMatrix(freshMx);
+    delete (state.logProjDir || {})[mx.p.name];   // direction resets to the criteria's default
+    rebuild();
+  };
+  const mxDir = mxEl.querySelector(".log-mx-dir");
+  if (mxDir) mxDir.onclick = (ev) => {
+    ev.stopPropagation();
+    const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
+    if (!mx) return;
+    const psort = (state.logProjSort || {})[mx.p.name] || "global";
+    const skey = psort === "global" ? ((state.logFilter || {}).sort || "score") : psort;
+    const cur = (state.logProjDir || {})[mx.p.name]
+      || (psort === "global" ? (state.logFilter || {}).sortDir : null) || logDefaultDir(skey);
+    (state.logProjDir = state.logProjDir || {})[mx.p.name] = cur === "asc" ? "desc" : "asc";
+    rebuild();
   };
 }
 function wireLogContent() {
@@ -4059,8 +4119,8 @@ async function renderLogging() {
           .map((tm) => opt(en + ":" + tm, en + "_team: " + tm)).join("")}</optgroup>`).join("")}</select>`;
     })()}
     ${sel("log-issue", f.issue || "all", issueOpts)}
-    ${sel("log-sort", f.sort || "score", [["score", "↑ worst score"], ["size", "↓ size"],
-      ["updated", "↓ last updated"], ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]])}
+    ${sel("log-sort", f.sort || "score", [...LOG_SORT_LABELS.map(([v, l]) => [v, "sort: " + l])])}
+    ${logDirBtn("", f.sortDir || logDefaultDir(f.sort || "score"), "toggle ascending / descending")}
     <label class="log-issues" title="hide apps never deployed (per ${esc(d.deploy_index || "the deployments index")}) — no logs expected"><input type="checkbox" id="log-hide-undep" ${f.hideUndeployed ? "checked" : ""}> hide un-deployed</label>
     <label class="log-issues" title="hide apps that have no log indices"><input type="checkbox" id="log-hide-nolog" ${f.hideNoLogs ? "checked" : ""}> hide no-logs</label>
     <label class="log-issues" title="hide apps whose platform isn't monitored"><input type="checkbox" id="log-hide-unmon" ${f.hideUnmonitored ? "checked" : ""}> hide unmonitored</label>
@@ -4089,10 +4149,25 @@ function wireLogging() {
     }, 200);
   };
   [["log-project", "project"], ["log-platform", "platform"], ["log-tech", "tech"], ["log-company", "company"], ["log-logreq", "logreq"], ["log-logtype", "logtype"],
-   ["log-env", "env"], ["log-team", "team"], ["log-issue", "issue"], ["log-sort", "sort"]].forEach(([id, key]) => {
+   ["log-env", "env"], ["log-team", "team"], ["log-issue", "issue"]].forEach(([id, key]) => {
     const el = document.getElementById(id);
     if (el) el.onchange = () => { f[key] = el.value; rerenderLog(); };
   });
+  // sort criteria + a separate ↑/↓ direction toggle (direction resets to the
+  // criteria's natural default when the criteria changes)
+  const dirBtn = view().querySelector(".log-filters .log-dir");
+  const syncDir = () => {
+    if (!dirBtn) return;
+    const dd = f.sortDir || logDefaultDir(f.sort || "score");
+    dirBtn.querySelector(".seg.asc").classList.toggle("active", dd === "asc");
+    dirBtn.querySelector(".seg.desc").classList.toggle("active", dd === "desc");
+  };
+  const so = document.getElementById("log-sort");
+  if (so) so.onchange = () => { f.sort = so.value; f.sortDir = logDefaultDir(so.value); syncDir(); rerenderLog(); };
+  if (dirBtn) dirBtn.onclick = () => {
+    f.sortDir = (f.sortDir || logDefaultDir(f.sort || "score")) === "asc" ? "desc" : "asc";
+    syncDir(); rerenderLog();
+  };
   [["log-hide-undep", "hideUndeployed"], ["log-hide-nolog", "hideNoLogs"],
    ["log-hide-unmon", "hideUnmonitored"]].forEach(([id, key]) => {
     const el = document.getElementById(id);
@@ -4102,7 +4177,7 @@ function wireLogging() {
   const cl = document.getElementById("log-clear");
   if (cl) cl.onclick = () => {
     state.logFilter = { q: "", project: "all", platform: "all", tech: "all", company: "all", logreq: "all", logtype: "all",
-      env: "all", team: "all", issue: "all", sort: f.sort || "score",
+      env: "all", team: "all", issue: "all", sort: f.sort || "score", sortDir: f.sortDir,
       hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
     renderLogging();
   };
