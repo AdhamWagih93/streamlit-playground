@@ -3186,6 +3186,8 @@ function logAppMatch(a, f) {
   if (f.platform && f.platform !== "all" && (a.deploy_platform || "—") !== f.platform) return false;
   if (f.tech && f.tech !== "all" && (a.deploy_technology || "—") !== f.tech) return false;
   if (f.company && f.company !== "all" && (a.company || "—") !== f.company) return false;
+  if (f.logreq === "required" && a.logging_required !== true) return false;
+  if (f.logreq === "notrequired" && a.logging_required !== false) return false;
   if (f.logtype && f.logtype !== "all" && !(a.logtypes || []).includes(f.logtype)) return false;
   if (f.env && f.env !== "all"
     && !(a.envs || []).includes(f.env) && !(a.expected_envs || []).includes(f.env)) return false;
@@ -3362,6 +3364,7 @@ function logAppFlags(a) {
   if (a.deploy_platform) b.push(`<span class="chip ${unsupported ? "chip-amber" : "chip-cyan"}" title="deploy_platform (${esc(a.prefix_source || "?")})${a.prefix ? ` → ${esc(a.prefix)}` : ""}">${esc(a.deploy_platform)}${a.prefix ? `→${esc(a.prefix)}` : ""}</span>`);
   else if (a.platform_status !== "none") b.push('<span class="chip chip-red">no platform</span>');
   if (a.deploy_technology) b.push(`<span class="chip chip-violet" title="deploy_technology (${esc(a.tech_source || "?")})">🛠 ${esc(a.deploy_technology)}</span>`);
+  if (a.logging_required === false) b.push(`<span class="chip chip-amber" title="the ${esc(a.deploy_technology || "?")} technology has logging: false in the Engine repo (vars/Deploy_Technologies) — logs are not expected from this app">🔇 logging not required</span>`);
   if (unsupported) b.push('<span class="chip chip-amber" title="platform not monitored — logs not checked">not monitored</span>');
   if (a.discrepancy) b.push(`<span class="chip chip-red" title="app deploy_platform (${esc(a.app_platform)}) overrides project (${esc(a.project_platform)})">⚠ clash</span>`);
   if ((a.owner_clash_envs || []).length) b.push(`<span class="chip chip-red" title="owner ($env_team) differs app vs project @ ${esc(a.owner_clash_envs.join(", "))}">⚠ owner</span>`);
@@ -3552,7 +3555,7 @@ function logAppDrawerHtml(a) {
       <div><span class="acc-h">owners ($env_team)</span><div class="inv-chips">${(a.owners || []).map((o) => `<span class="chip chip-cyan">👤 ${esc(o)}</span>`).join(" ") || '<span class="ci-meta">none</span>'}</div></div>
       <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
       <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}</div></div>
-      <div><span class="acc-h">deploy_technology</span><div class="ci-meta">${a.deploy_technology ? `${esc(a.deploy_technology)} (${esc(a.tech_source || "?")})` : "—"}</div></div>
+      <div><span class="acc-h">deploy_technology</span><div class="ci-meta">${a.deploy_technology ? `${esc(a.deploy_technology)} (${esc(a.tech_source || "?")})` : "—"}${a.logging_required === false ? ' · <span class="pct-warn">🔇 logging not required</span>' : (a.logging_required === true ? ' · logging required' : "")}</div></div>
       <div><span class="acc-h">company</span><div class="ci-meta">${a.company ? `🏢 ${esc(a.company)}` : "—"}</div></div>
       <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
       <div><span class="acc-h">storage vs fleet</span><div class="ci-meta"><b class="${a.over_sized ? "pct-bad" : ""}">${esc(a.size_h)}</b>${a.size_ratio != null ? ` · ${a.size_ratio}× the average app (${esc(((state.logData || {}).storage_avg || {}).app_h || "?")})` : ""}${a.over_sized ? ' · <span class="pct-warn">over-sized</span>' : ""}</div></div>
@@ -3733,7 +3736,7 @@ function logContentHtml() {
   const d = state.logData;
   const f = state.logFilter;
   const on = (k) => f[k] && f[k] !== "all";
-  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("tech") || on("company") || on("logtype") || on("team") || on("issue"));
+  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("tech") || on("company") || on("logtype") || on("team") || on("issue") || on("logreq"));
   state.logAppMap = {}; _logAppSeq = 0;   // rebuilt as rows render → lazy bodies look apps up here
   state.logMxMap = {}; _logMxSeq = 0;     // per-project matrix registry (env dives)
   const filtered = [];
@@ -3957,10 +3960,10 @@ async function renderLogging() {
   if (navStale(tok)) return;
   state.logData = d;
   const f = state.logFilter = state.logFilter
-    || { q: "", project: "all", platform: "all", tech: "all", company: "all", logtype: "all", env: "all", team: "all",
+    || { q: "", project: "all", platform: "all", tech: "all", company: "all", logreq: "all", logtype: "all", env: "all", team: "all",
       issue: "all", sort: "score", hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
   const s = d.summary || {};
-  const anyActive = !!(f.q || ["project", "platform", "tech", "company", "logtype", "env", "team", "issue"]
+  const anyActive = !!(f.q || ["project", "platform", "tech", "company", "logreq", "logtype", "env", "team", "issue"]
     .some((k) => f[k] && f[k] !== "all") || f.hideNoLogs || f.hideUnmonitored || f.hideUndeployed);
 
   const legend = (d.platform_legend || []).map((x) =>
@@ -4007,10 +4010,12 @@ async function renderLogging() {
   // STICKY (always visible while scrolling) and visually compact
   const filterBar = `<div class="acc-filters log-filters">
     <input id="log-q" placeholder="🔎 app / project / platform / env / logtype…" value="${esc(f.q || "")}">
+    ${(s.companies || []).length ? sel("log-company", f.company || "all", [["all", "company: any"], ...(s.companies || []).map((c) => [c, c])]) : ""}
     ${sel("log-project", f.project || "all", [["all", "project: any"], ...projNames.map((p) => [p, p])])}
     ${sel("log-platform", f.platform || "all", [["all", "platform: any"], ...platforms.map((p) => [p, p])])}
     ${(s.technologies || []).length ? sel("log-tech", f.tech || "all", [["all", "tech: any"], ...(s.technologies || []).map((t) => [t, t])]) : ""}
-    ${(s.companies || []).length ? sel("log-company", f.company || "all", [["all", "company: any"], ...(s.companies || []).map((c) => [c, c])]) : ""}
+    ${(d.projects || []).some((p) => (p.apps || []).some((a) => a.logging_required != null))
+      ? sel("log-logreq", f.logreq || "all", [["all", "logging: any"], ["required", "logging required"], ["notrequired", "logging not required"]]) : ""}
     ${sel("log-logtype", f.logtype || "all", [["all", "type: any"], ...(s.logtypes || []).map((l) => [l, l])])}
     ${sel("log-env", f.env || "all", [["all", "env: any"], ...(s.envs || []).map((e) => [e, e])])}
     ${(() => {
@@ -4057,7 +4062,7 @@ function wireLogging() {
       if (nq) { nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }
     }, 200);
   };
-  [["log-project", "project"], ["log-platform", "platform"], ["log-tech", "tech"], ["log-company", "company"], ["log-logtype", "logtype"],
+  [["log-project", "project"], ["log-platform", "platform"], ["log-tech", "tech"], ["log-company", "company"], ["log-logreq", "logreq"], ["log-logtype", "logtype"],
    ["log-env", "env"], ["log-team", "team"], ["log-issue", "issue"], ["log-sort", "sort"]].forEach(([id, key]) => {
     const el = document.getElementById(id);
     if (el) el.onchange = () => { f[key] = el.value; rerenderLog(); };
@@ -4070,7 +4075,7 @@ function wireLogging() {
   });
   const cl = document.getElementById("log-clear");
   if (cl) cl.onclick = () => {
-    state.logFilter = { q: "", project: "all", platform: "all", tech: "all", company: "all", logtype: "all",
+    state.logFilter = { q: "", project: "all", platform: "all", tech: "all", company: "all", logreq: "all", logtype: "all",
       env: "all", team: "all", issue: "all", sort: f.sort || "score",
       hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
     renderLogging();

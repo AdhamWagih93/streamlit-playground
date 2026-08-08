@@ -442,6 +442,7 @@ def _demo() -> dict:
                   "checkout": {"repository_name": "checkout-svc", "replicas": "2",
                                "timeout_s": "45", "feature_flags": "card"},
                   "notifications": {"repository_name": "notify-svc", "replicas": "2",
+                                    "deploy_technology": "Batch",
                                     "channels": "email,sms"},
                   # deploy_platform not in the monitored set → shown but logs
                   # aren't checked (still displays the app + its platform)

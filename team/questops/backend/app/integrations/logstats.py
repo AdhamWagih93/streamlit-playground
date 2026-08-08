@@ -379,6 +379,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         "prefix": meta.get("prefix"), "deploy_platform": meta.get("deploy_platform"),
         "deploy_technology": meta.get("deploy_technology"),
         "tech_source": meta.get("tech_source"),
+        "logging_required": meta.get("logging_required"),
         "company": meta.get("company"),
         "prefix_source": meta.get("source"),
         "app_platform": meta.get("app_platform"),
@@ -588,6 +589,8 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "technologies": sorted({a.get("deploy_technology") for a in all_apps
                                 if a.get("deploy_technology")}),
         "companies": sorted({a.get("company") for a in all_apps if a.get("company")}),
+        "apps_logging_not_required": sum(1 for a in all_apps
+                                         if a.get("logging_required") is False),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
             "current_week": _iso_week(_now()),
@@ -627,6 +630,35 @@ def _platform_prefix(platform, pmap: dict) -> str | None:
     return pmap.get(p.lower()) if p else None
 
 
+def _tech_logging() -> dict:
+    """{technology_lower: logging-enabled bool} from the cloned Engine repo's
+    vars/Deploy_Technologies/<technology>.yml files (`logging: true/false`).
+    A technology with logging: false is NOT expected to ship logs. Missing
+    repo/folder → {} (everything unknown). Demo fabricates a story."""
+    if settings.demo_mode:
+        return {"docker": True, "helm": True, "batch": False}
+    from ..auth import _engine_dir
+    d = _engine_dir()
+    if not d:
+        return {}
+    folder = d / "vars" / "Deploy_Technologies"
+    if not folder.is_dir():
+        return {}
+    import yaml
+    out: dict = {}
+    for f in list(folder.glob("*.yml")) + list(folder.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(f.read_text()) or {}
+        except Exception:  # noqa: BLE001 — one broken file must not kill the page
+            continue
+        v = data.get("logging") if isinstance(data, dict) else None
+        if isinstance(v, str):
+            v = v.strip().lower() in ("true", "yes", "1", "on")
+        if v is not None:
+            out[f.stem.lower()] = bool(v)
+    return out
+
+
 def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
     """Resolve the log index prefix PER (project, app) from `deploy_platform`.
 
@@ -640,6 +672,7 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
       proj_meta[project] = {deploy_platform (project-global), prefix}."""
     pmap = settings.log_platform_prefix_map
     fallback = (settings.log_index_prefix or "").strip() or None
+    tech_log = _tech_logging()
     app_meta: dict = {}
     proj_meta: dict = {}
     for p in projects:
@@ -670,6 +703,7 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
                 "deploy_platform": eff_plat, "company": proj_company,
                 "deploy_technology": app_tech or proj_tech,
                 "tech_source": "app" if app_tech else ("project" if proj_tech else None),
+                "logging_required": tech_log.get((app_tech or proj_tech or "").lower()),
                 "prefix": prefix, "source": src,
                 "status": status, "app_platform": app_plat, "project_platform": proj_plat,
                 "discrepancy": bool(app_plat and proj_plat
