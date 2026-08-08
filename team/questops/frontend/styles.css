@@ -1245,6 +1245,8 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-idx .chip { font-size: 10px; }
 .log-unmatched { margin-top: 12px; }
 .log-unmatched > summary { color: var(--amber); }
+/* the FULL stray list is returned (no cap) — scroll it past ~12 rows */
+.log-unmatched .log-idx-list { max-height: 420px; overflow-y: auto; }
 .log-legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 10px; }
 .log-legend .chip { font-size: 10.5px; }
 .log-diag { margin: 4px 0 10px; }

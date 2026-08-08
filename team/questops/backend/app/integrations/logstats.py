@@ -365,6 +365,8 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         "env_stats": env_stats,
         # meta / platform fields
         "prefix": meta.get("prefix"), "deploy_platform": meta.get("deploy_platform"),
+        "deploy_technology": meta.get("deploy_technology"),
+        "tech_source": meta.get("tech_source"),
         "prefix_source": meta.get("source"),
         "app_platform": meta.get("app_platform"),
         "project_platform": meta.get("project_platform"),
@@ -553,6 +555,8 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "docs": sum(a["docs"] for a in all_apps),
         "envs": sorted(all_envs), "logtypes": sorted(all_logtypes),
         "unmatched": len(unmatched),
+        "unmatched_size_bytes": sum(u.get("size_bytes") or 0 for u in unmatched),
+        "unmatched_size_h": _hsize(sum(u.get("size_bytes") or 0 for u in unmatched)),
         "overall_score": _mean([a["score"] for a in all_apps]),
         "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
         "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
@@ -567,6 +571,8 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "envs_stale": sum(a.get("envs_stale", 0) for a in all_apps),
         "envs_no_logs": sum(a.get("envs_no_logs", 0) for a in all_apps),
         "teams": sorted({o for a in all_apps for o in (a.get("owners") or [])}),
+        "technologies": sorted({a.get("deploy_technology") for a in all_apps
+                                if a.get("deploy_technology")}),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
             "current_week": _iso_week(_now()),
@@ -581,7 +587,7 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
             "prefixes": sorted({m["prefix"] for m in app_meta.values() if m.get("prefix")}),
             "platform_legend": [{"platform": pl, "prefix": pr} for pl, pr in legend],
             "connections": conn_status, "summary": summary,
-            "projects": projects_out, "unmatched": unmatched[:50],
+            "projects": projects_out, "unmatched": unmatched,
             "diagnostics": diag}
 
 
@@ -628,8 +634,11 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
         proj_plat = _clean(pvars.get("deploy_platform") or p.get("deploy_platform"))
         proj_meta[p["name"]] = {"deploy_platform": proj_plat,
                                 "prefix": _platform_prefix(proj_plat, pmap)}
+        proj_tech = _clean(pvars.get("deploy_technology"))
         for app in p.get("apps", []):
             app_plat = _clean((avars.get(app) or {}).get("deploy_platform"))
+            # deploy_technology resolves the same way: app group_vars → project
+            app_tech = _clean((avars.get(app) or {}).get("deploy_technology"))
             eff_plat = app_plat or proj_plat            # app group_vars win (Ansible)
             src = "app" if app_plat else ("project" if proj_plat else None)
             known = _platform_prefix(eff_plat, pmap)
@@ -642,7 +651,9 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
             else:
                 prefix, status = None, "none"
             app_meta[(p["name"], app)] = {
-                "deploy_platform": eff_plat, "prefix": prefix, "source": src,
+                "deploy_platform": eff_plat, "deploy_technology": app_tech or proj_tech,
+                "tech_source": "app" if app_tech else ("project" if proj_tech else None),
+                "prefix": prefix, "source": src,
                 "status": status, "app_platform": app_plat, "project_platform": proj_plat,
                 "discrepancy": bool(app_plat and proj_plat
                                     and app_plat.lower() != proj_plat.lower())}

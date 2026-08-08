@@ -429,14 +429,15 @@ def _demo() -> dict:
                                "prd_team": "SRE_Core", "uat_team": "Platform_UAT",
                                "security_team": "AppSec", "domain": "platform.corp.local",
                                "region": "eu-west", "log_level": "info", "tls_enabled": "true",
-                               "deploy_platform": "OCP"},
+                               "deploy_platform": "OCP", "deploy_technology": "Docker"},
               "app_vars": {
                   # app-specific deploy_platform (group_vars/payments/cicd.yml) —
                   # K8s, which CLASHES with the project-global OCP → highlighted.
                   # prd_team here also OVERRIDES the project's prd_team (owner clash).
                   "payments": {"repository_name": "payments-svc", "replicas": "2",
                                "timeout_s": "30", "feature_flags": "wallet,card",
-                               "deploy_platform": "K8s", "prd_team": "Payments_SRE"},
+                               "deploy_platform": "K8s", "deploy_technology": "Helm",
+                               "prd_team": "Payments_SRE"},
                   "checkout": {"repository_name": "checkout-svc", "replicas": "2",
                                "timeout_s": "45", "feature_flags": "card"},
                   "notifications": {"repository_name": "notify-svc", "replicas": "2",
