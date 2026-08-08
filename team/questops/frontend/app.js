@@ -3378,7 +3378,7 @@ const _mxCls = (e) => !e ? "absent" : (!e.deployed ? "undeployed" : (e.no_logs ?
 // full story (meter, labeled issues, owner, spans) lives in the app drawer;
 // the cell's tooltip carries it for a hover. Absent / never-deployed envs
 // stay QUIET (a faint word, no box) so real data stands out.
-function logMxCell(e, sep) {
+function logMxCell(e, sep, over) {
   if (!e) return `<div class="log-mx-cell absent ${sep ? "sep" : ""}" title="app not present in this environment"><span class="log-mx-na">—</span></div>`;
   if (!e.deployed) return `<div class="log-mx-cell undeployed ${sep ? "sep" : ""}" title="${esc(e.env)} — never deployed, no logs expected"><span class="log-mx-na">not deployed</span></div>`;
   const issues = e.issues || [];
@@ -3390,7 +3390,7 @@ function logMxCell(e, sep) {
   const warn = issues.length
     ? `<span class="log-mxi ${sev}" title="${esc(issues.map((k) => LOG_ISSUE_LABEL[k] || k).join(" · "))}">⚠${issues.length}</span>` : "";
   const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>'
-    : `<span class="log-mx-csize">${esc(e.size_h)}</span>${e.indices ? `<span class="log-mx-cidx" title="${logInt(e.indices)} log indices in ${esc(e.env)}">${logInt(e.indices)} idx</span>` : ""}`;
+    : `<span class="log-mx-csize${over ? " over" : ""}"${over ? ` title="app stores over the fleet average"` : ""}>${esc(e.size_h)}</span>${e.indices ? `<span class="log-mx-cidx" title="${logInt(e.indices)} log indices in ${esc(e.env)}">${logInt(e.indices)} idx</span>` : ""}`;
   return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(tip)}">
     <span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${warn}${right}
   </div>`;
@@ -3496,7 +3496,7 @@ function logAppDrawerHtml(a) {
   const head = `<div class="log-drawer-head">
       ${logScoreBadge(a.score, "app health score")}
       <div class="log-drawer-title"><span class="log-drawer-app">🧩 ${esc(a.app)}</span>
-        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logInt(a.indices)} idx · <b>${esc(a.size_h)}</b> · ${logInt(a.docs)} docs${(() => { const r = logRates(a.size_bytes, a.docs, a.first_logged, a.last_logged); return r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : ""; })()}` : ""}</span></div>
+        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logInt(a.indices)} idx · <b class="${a.over_sized ? "pct-bad" : ""}">${esc(a.size_h)}</b> · ${logInt(a.docs)} docs${(() => { const r = logRates(a.size_bytes, a.docs, a.first_logged, a.last_logged); return r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : ""; })()}` : ""}</span></div>
       <span class="spacer"></span>
       <button class="btn btn-sm btn-ghost log-drawer-close" title="close (Esc)">✕</button></div>
     ${flags ? `<div class="log-mx-appflags">${flags}</div>` : ""}`;
@@ -3555,7 +3555,7 @@ function logAppDrawerHtml(a) {
       <div><span class="acc-h">deploy_technology</span><div class="ci-meta">${a.deploy_technology ? `${esc(a.deploy_technology)} (${esc(a.tech_source || "?")})` : "—"}</div></div>
       <div><span class="acc-h">company</span><div class="ci-meta">${a.company ? `🏢 ${esc(a.company)}` : "—"}</div></div>
       <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
-      <div><span class="acc-h">storage vs fleet</span><div class="ci-meta"><b>${esc(a.size_h)}</b>${a.size_ratio != null ? ` · ${a.size_ratio}× the average app (${esc(((state.logData || {}).storage_avg || {}).app_h || "?")})` : ""}${a.over_sized ? ' · <span class="pct-warn">over-sized</span>' : ""}</div></div>
+      <div><span class="acc-h">storage vs fleet</span><div class="ci-meta"><b class="${a.over_sized ? "pct-bad" : ""}">${esc(a.size_h)}</b>${a.size_ratio != null ? ` · ${a.size_ratio}× the average app (${esc(((state.logData || {}).storage_avg || {}).app_h || "?")})` : ""}${a.over_sized ? ' · <span class="pct-warn">over-sized</span>' : ""}</div></div>
     </div>
     ${tsInspect}
     ${futInspect}
@@ -3638,7 +3638,7 @@ function logMatrixHtml(p, apps, f) {
             ? `deployed but NO LOGS — expected in: ${(a.env_stats || []).filter((e) => e.deployed).map((e) => e.env).join(", ") || "?"}` : null)));
     const cells = note
       ? `<div class="log-mx-cell note ${a.no_logs && a.deployed ? "nolog" : ""}">${esc(note)}</div>`
-      : cols.map((en, i) => logMxCell(byEnv[en], i === sepAt)).join("");
+      : cols.map((en, i) => logMxCell(byEnv[en], i === sepAt, a.over_sized)).join("");
     return `<div class="log-mx-row approw ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
         <div class="log-mx-appcell">${logScoreBadge(a.score, "app health score")}
           <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
@@ -3679,7 +3679,7 @@ function logProjectCardHtml(p, apps, f) {
   return `<details class="filebox log-proj">
     <summary>${logScoreBadge(pscore, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.company ? `<span class="chip chip-violet" title="company (group_vars/all)">🏢 ${esc(p.company)}</span>` : ""}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
-      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${(() => {
+      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b class="${p.over_sized ? "pct-bad" : ""}">${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${(() => {
         const wl = apps.filter((x) => x.size_bytes > 0);
         const r = logRates(bytes, t.docs, wl.map((x) => x.first_logged).filter(Boolean).sort()[0],
           wl.map((x) => x.last_logged).filter(Boolean).sort().slice(-1)[0]);

@@ -141,7 +141,8 @@ def build_report(project: str) -> dict:
                      f'{" · " + _esc(a["deploy_technology"]) if a.get("deploy_technology") else ""}</span></td>'
                      f'<td style="{td}">{_score_pill(a.get("score"))}</td>'
                      + "".join(f'<td style="{td}">{c}</td>' for c in env_cells)
-                     + f'<td style="{td}"><b>{_esc(a.get("size_h") or "0 B")}</b>{oversize_tag}</td>'
+                     + f'<td style="{td}"><b style="color:{_C["red"] if a.get("over_sized") else _C["text"]}">'
+                     f'{_esc(a.get("size_h") or "0 B")}</b>{oversize_tag}</td>'
                      f'<td style="{td}">{_esc(r["size_day"]) + "/day" if r else "—"}</td>'
                      f'<td style="{td};color:{_C["red"] if issues else _C["green"]};font-size:12px">'
                      f'{_esc(", ".join(_ISSUE_LABEL.get(k, k) for k in issues)) or "ok ✓"}</td></tr>')
@@ -193,7 +194,7 @@ def build_report(project: str) -> dict:
   <table cellspacing="6" cellpadding="0" style="border-collapse:separate;margin:0 0 16px"><tr>
     {stat("apps", t.get("apps", len(apps)))}
     {stat("indices", t.get("indices", 0))}
-    {stat("total size", _esc(t.get("size_h") or "0 B"))}
+    {stat("total size", f'<span style="color:{_C["red"]}">{_esc(t.get("size_h") or "0 B")}</span>' if p.get("over_sized") else _esc(t.get("size_h") or "0 B"))}
     {stat("documents", f"{t.get('docs', 0):,}")}
     {stat("avg app size", _esc(avg_app))}
     {stat("ingest / day", _esc(pr["size_day"]) if pr else "—")}
