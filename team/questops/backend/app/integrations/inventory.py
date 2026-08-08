@@ -429,7 +429,8 @@ def _demo() -> dict:
                                "prd_team": "SRE_Core", "uat_team": "Platform_UAT",
                                "security_team": "AppSec", "domain": "platform.corp.local",
                                "region": "eu-west", "log_level": "info", "tls_enabled": "true",
-                               "deploy_platform": "OCP", "deploy_technology": "Docker"},
+                               "deploy_platform": "OCP", "deploy_technology": "Docker",
+                               "company": "Acme Retail"},
               "app_vars": {
                   # app-specific deploy_platform (group_vars/payments/cicd.yml) —
                   # K8s, which CLASHES with the project-global OCP → highlighted.

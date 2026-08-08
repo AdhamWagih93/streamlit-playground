@@ -367,6 +367,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         "prefix": meta.get("prefix"), "deploy_platform": meta.get("deploy_platform"),
         "deploy_technology": meta.get("deploy_technology"),
         "tech_source": meta.get("tech_source"),
+        "company": meta.get("company"),
         "prefix_source": meta.get("source"),
         "app_platform": meta.get("app_platform"),
         "project_platform": meta.get("project_platform"),
@@ -503,6 +504,7 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         rows.sort(key=_rank)
         projects_out.append({
             "name": pname, "deploy_platform": meta.get("deploy_platform"),
+            "company": meta.get("company"),
             "prefix": meta.get("prefix"),
             "no_prefix": bool(rows) and not any(a.get("prefix") for a in rows),
             "score": _mean([a["score"] for a in rows]),
@@ -573,6 +575,7 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "teams": sorted({o for a in all_apps for o in (a.get("owners") or [])}),
         "technologies": sorted({a.get("deploy_technology") for a in all_apps
                                 if a.get("deploy_technology")}),
+        "companies": sorted({a.get("company") for a in all_apps if a.get("company")}),
     }
     return {"source": source, "note": note, "stale_hours": stale_h,
             "current_week": _iso_week(_now()),
@@ -632,7 +635,8 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
         pvars = cfg.get("project_vars") or {}
         avars = cfg.get("app_vars") or {}
         proj_plat = _clean(pvars.get("deploy_platform") or p.get("deploy_platform"))
-        proj_meta[p["name"]] = {"deploy_platform": proj_plat,
+        proj_company = _clean(pvars.get("company"))
+        proj_meta[p["name"]] = {"deploy_platform": proj_plat, "company": proj_company,
                                 "prefix": _platform_prefix(proj_plat, pmap)}
         proj_tech = _clean(pvars.get("deploy_technology"))
         for app in p.get("apps", []):
@@ -651,7 +655,8 @@ def _app_meta(projects: list[dict]) -> tuple[dict, dict]:
             else:
                 prefix, status = None, "none"
             app_meta[(p["name"], app)] = {
-                "deploy_platform": eff_plat, "deploy_technology": app_tech or proj_tech,
+                "deploy_platform": eff_plat, "company": proj_company,
+                "deploy_technology": app_tech or proj_tech,
                 "tech_source": "app" if app_tech else ("project" if proj_tech else None),
                 "prefix": prefix, "source": src,
                 "status": status, "app_platform": app_plat, "project_platform": proj_plat,

@@ -3178,13 +3178,14 @@ function logTsBadge(a) {
 function logAppMatch(a, f) {
   if (f.q) {
     const hay = (a.app + " " + (a.project || "") + " " + (a.deploy_platform || "") + " "
-      + (a.deploy_technology || "") + " "
+      + (a.deploy_technology || "") + " " + (a.company || "") + " "
       + (a.envs || []).join(" ") + " " + (a.logtypes || []).join(" ")).toLowerCase();
     if (!hay.includes(f.q.toLowerCase())) return false;
   }
   if (f.project && f.project !== "all" && a.project !== f.project) return false;
   if (f.platform && f.platform !== "all" && (a.deploy_platform || "—") !== f.platform) return false;
   if (f.tech && f.tech !== "all" && (a.deploy_technology || "—") !== f.tech) return false;
+  if (f.company && f.company !== "all" && (a.company || "—") !== f.company) return false;
   if (f.logtype && f.logtype !== "all" && !(a.logtypes || []).includes(f.logtype)) return false;
   if (f.env && f.env !== "all"
     && !(a.envs || []).includes(f.env) && !(a.expected_envs || []).includes(f.env)) return false;
@@ -3551,6 +3552,7 @@ function logAppDrawerHtml(a) {
       <div><span class="acc-h">logtypes (live from ES)</span><div class="inv-chips">${chips(a.logtypes, "chip-cyan")}</div></div>
       <div><span class="acc-h">deploy_platform</span><div class="ci-meta">${a.deploy_platform ? `${esc(a.deploy_platform)} → ${esc(a.prefix || "?")} (${esc(a.prefix_source || "?")})` : "—"}</div></div>
       <div><span class="acc-h">deploy_technology</span><div class="ci-meta">${a.deploy_technology ? `${esc(a.deploy_technology)} (${esc(a.tech_source || "?")})` : "—"}</div></div>
+      <div><span class="acc-h">company</span><div class="ci-meta">${a.company ? `🏢 ${esc(a.company)}` : "—"}</div></div>
       <div><span class="acc-h">stored on</span><div class="inv-chips">${(a.sources || []).map(logSrcChip).join(" ") || '<span class="ci-meta">—</span>'}</div></div>
       <div><span class="acc-h">storage vs fleet</span><div class="ci-meta"><b>${esc(a.size_h)}</b>${a.size_ratio != null ? ` · ${a.size_ratio}× the average app (${esc(((state.logData || {}).storage_avg || {}).app_h || "?")})` : ""}${a.over_sized ? ' · <span class="pct-warn">over-sized</span>' : ""}</div></div>
     </div>
@@ -3674,7 +3676,7 @@ function logProjectCardHtml(p, apps, f) {
     : "";
   return `<details class="filebox log-proj">
     <summary>${logScoreBadge(pscore, "project health score")}
-      <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
+      <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.company ? `<span class="chip chip-violet" title="company (group_vars/all)">🏢 ${esc(p.company)}</span>` : ""}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
       <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b>${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${(() => {
         const wl = apps.filter((x) => x.size_bytes > 0);
         const r = logRates(bytes, t.docs, wl.map((x) => x.first_logged).filter(Boolean).sort()[0],
@@ -3729,7 +3731,7 @@ function logContentHtml() {
   const d = state.logData;
   const f = state.logFilter;
   const on = (k) => f[k] && f[k] !== "all";
-  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("tech") || on("logtype") || on("team") || on("issue"));
+  f._any = !!(f.q || on("env") || on("project") || on("platform") || on("tech") || on("company") || on("logtype") || on("team") || on("issue"));
   state.logAppMap = {}; _logAppSeq = 0;   // rebuilt as rows render → lazy bodies look apps up here
   state.logMxMap = {}; _logMxSeq = 0;     // per-project matrix registry (env dives)
   const filtered = [];
@@ -3897,10 +3899,10 @@ async function renderLogging() {
   if (navStale(tok)) return;
   state.logData = d;
   const f = state.logFilter = state.logFilter
-    || { q: "", project: "all", platform: "all", tech: "all", logtype: "all", env: "all", team: "all",
+    || { q: "", project: "all", platform: "all", tech: "all", company: "all", logtype: "all", env: "all", team: "all",
       issue: "all", sort: "score", hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
   const s = d.summary || {};
-  const anyActive = !!(f.q || ["project", "platform", "tech", "logtype", "env", "team", "issue"]
+  const anyActive = !!(f.q || ["project", "platform", "tech", "company", "logtype", "env", "team", "issue"]
     .some((k) => f[k] && f[k] !== "all") || f.hideNoLogs || f.hideUnmonitored || f.hideUndeployed);
 
   const legend = (d.platform_legend || []).map((x) =>
@@ -3950,6 +3952,7 @@ async function renderLogging() {
     ${sel("log-project", f.project || "all", [["all", "project: any"], ...projNames.map((p) => [p, p])])}
     ${sel("log-platform", f.platform || "all", [["all", "platform: any"], ...platforms.map((p) => [p, p])])}
     ${(s.technologies || []).length ? sel("log-tech", f.tech || "all", [["all", "tech: any"], ...(s.technologies || []).map((t) => [t, t])]) : ""}
+    ${(s.companies || []).length ? sel("log-company", f.company || "all", [["all", "company: any"], ...(s.companies || []).map((c) => [c, c])]) : ""}
     ${sel("log-logtype", f.logtype || "all", [["all", "type: any"], ...(s.logtypes || []).map((l) => [l, l])])}
     ${sel("log-env", f.env || "all", [["all", "env: any"], ...(s.envs || []).map((e) => [e, e])])}
     ${(() => {
@@ -3996,7 +3999,7 @@ function wireLogging() {
       if (nq) { nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }
     }, 200);
   };
-  [["log-project", "project"], ["log-platform", "platform"], ["log-tech", "tech"], ["log-logtype", "logtype"],
+  [["log-project", "project"], ["log-platform", "platform"], ["log-tech", "tech"], ["log-company", "company"], ["log-logtype", "logtype"],
    ["log-env", "env"], ["log-team", "team"], ["log-issue", "issue"], ["log-sort", "sort"]].forEach(([id, key]) => {
     const el = document.getElementById(id);
     if (el) el.onchange = () => { f[key] = el.value; rerenderLog(); };
@@ -4009,7 +4012,7 @@ function wireLogging() {
   });
   const cl = document.getElementById("log-clear");
   if (cl) cl.onclick = () => {
-    state.logFilter = { q: "", project: "all", platform: "all", tech: "all", logtype: "all",
+    state.logFilter = { q: "", project: "all", platform: "all", tech: "all", company: "all", logtype: "all",
       env: "all", team: "all", issue: "all", sort: f.sort || "score",
       hideNoLogs: false, hideUnmonitored: false, hideUndeployed: true };
     renderLogging();
