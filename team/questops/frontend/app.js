@@ -3802,6 +3802,7 @@ function logContentHtml() {
            <input id="log-report-subj" title="email subject">
            <input id="log-report-to" placeholder="recipients — comma-separated emails">
            <button class="btn btn-sm btn-primary" id="log-report-send">📤 send</button>
+           <button class="btn btn-sm" id="log-report-dl" title="download the previewed report as an HTML file">⬇ download</button>
            <span id="log-report-status" class="ci-meta"></span></div>
          <iframe id="log-report-frame" title="report preview"></iframe>
        </div></div>`;
@@ -3921,6 +3922,7 @@ async function openLogReport(projName) {
   teamSel.innerHTML = `<option value="">env team: all</option>`
     + owners.map((o) => `<option value="${esc(o)}">${esc(o)} envs only</option>`).join("");
   teamSel.value = "";
+  let lastRep = null;
   const load = async () => {
     status.textContent = "building report…";
     const qs = new URLSearchParams({ project: projName });
@@ -3929,10 +3931,30 @@ async function openLogReport(projName) {
     if (teamSel.value) qs.set("team", teamSel.value);
     try {
       const rep = await api(`/api/logging/report?${qs.toString()}`);
+      lastRep = rep;
       subj.value = rep.subject;
       frame.setAttribute("srcdoc", rep.html);
       status.textContent = `preview ready (${(rep.envs || []).join(", ") || "no envs in scope"}) — add recipients and send`;
     } catch (e) { status.textContent = `⚠ ${e.message}`; }
+  };
+  // download EXACTLY what's previewed (same scope) as a standalone HTML file
+  const dlBtn = m.querySelector("#log-report-dl");
+  if (dlBtn) dlBtn.onclick = () => {
+    if (!lastRep) { status.textContent = "⚠ no report built yet"; return; }
+    const scope = [teamSel.value && teamSel.value.replace(/[^A-Za-z0-9_-]+/g, "_"),
+      extraCb.checked ? "with-extra" : "", healthyCb.checked ? "problems-only" : ""]
+      .filter(Boolean).join("_");
+    const name = `logging-report_${projName.replace(/[^A-Za-z0-9_-]+/g, "_")}`
+      + (scope ? `_${scope}` : "") + `_${new Date().toISOString().slice(0, 10)}.html`;
+    const url = URL.createObjectURL(new Blob([lastRep.html], { type: "text/html" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    status.textContent = `⬇ downloaded ${name}`;
   };
   extraCb.onchange = load;
   healthyCb.onchange = load;
