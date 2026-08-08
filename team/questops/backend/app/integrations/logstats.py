@@ -203,9 +203,21 @@ def _msearch_ts_range(conn: dict, groups: list[tuple]) -> dict:
     out = {}
     for (key, _idxs), res in zip(groups, resp):
         aggs = (res or {}).get("aggregations") or {}
-        out[key] = (_ms_to_iso((aggs.get("mn") or {}).get("value")),
-                    _ms_to_iso((aggs.get("mx") or {}).get("value")))
+        out[key] = (_sane_ts(_ms_to_iso((aggs.get("mn") or {}).get("value"))),
+                    _sane_ts(_ms_to_iso((aggs.get("mx") or {}).get("value"))))
     return out
+
+
+def _sane_ts(iso: str | None) -> str | None:
+    """Drop @timestamp aggregate values outside [2000, 2100] — junk docs
+    (year 0001 / epoch 0 / five-digit years) otherwise poison the min/max
+    logged span and every ingest-rate derived from it."""
+    if not iso:
+        return None
+    try:
+        return iso if 2000 <= int(iso[:4]) <= 2100 else None
+    except ValueError:
+        return None
 
 
 def _connections() -> list[dict]:
@@ -705,10 +717,18 @@ def _deployments(conn: dict, known: dict) -> tuple[dict, str | None]:
             {"environment": {"terms": {"field": "environment"}}}]},
         "aggs": {"end": {"max": {"field": "enddate"}},
                  "start": {"max": {"field": "startdate"}}}}}}
-    # only count real deployments (testflag), skipping test/dry-run/other rows
+    # only count REAL, SUCCESSFUL deployments: testflag skips test/dry-run
+    # rows, status=SUCCESS skips failed/aborted runs (a failed deploy doesn't
+    # make an environment "deployed")
+    musts = []
     tf = (settings.log_deploy_testflag or "").strip()
     if tf:
-        body["query"] = {"term": {"testflag": tf}}
+        musts.append({"term": {"testflag": tf}})
+    st = (settings.log_deploy_status or "").strip()
+    if st:
+        musts.append({"term": {"status": st}})
+    if musts:
+        body["query"] = musts[0] if len(musts) == 1 else {"bool": {"filter": musts}}
     try:
         r = requests.post(f"{conn['url']}/{idx}/_search", json=body,
                           headers=_headers(conn["key"]), timeout=30, verify=conn["verify"])

@@ -2,10 +2,11 @@
 logged, @timestamp health) across the prd + non-prd Elasticsearch connections."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from ..auth import current_user
 from ..db import User
-from ..integrations import logstats
+from ..integrations import logreport, logstats
 
 router = APIRouter(prefix="/api", tags=["logging"])
 
@@ -32,3 +33,29 @@ def logging_ts_samples(index: str, source: str = "prd", good: str = "",
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001 — surface a clean message, never a 500
         raise HTTPException(502, f"@timestamp sampling failed: {str(exc)[:200]}")
+
+
+@router.get("/logging/report")
+def logging_report(project: str, user: User = Depends(current_user)):
+    """Comprehensive per-project HTML report (email-ready) for preview."""
+    try:
+        return logreport.build_report(project)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+
+class ReportSendBody(BaseModel):
+    project: str
+    recipients: list[str]
+    subject: str | None = None
+
+
+@router.post("/logging/report/send")
+def logging_report_send(body: ReportSendBody, user: User = Depends(current_user)):
+    """Send the per-project report via the configured SMTP server."""
+    try:
+        return logreport.send_report(body.project, body.recipients, body.subject)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001 — clean message, never a 500
+        raise HTTPException(502, f"send failed: {str(exc)[:200]}")

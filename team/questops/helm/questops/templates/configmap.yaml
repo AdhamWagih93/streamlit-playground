@@ -34,9 +34,16 @@ data:
   LOG_STALE_HOURS: {{ .Values.logging.staleHours | quote }}
   LOG_DEPLOY_INDEX: {{ .Values.logging.deployIndex | quote }}
   LOG_DEPLOY_TESTFLAG: {{ .Values.logging.deployTestflag | quote }}
+  LOG_DEPLOY_STATUS: {{ .Values.logging.deployStatus | quote }}
   LOG_RETENTION_PRD_DAYS: {{ .Values.logging.retentionPrdDays | quote }}
   LOG_RETENTION_NONPRD_DAYS: {{ .Values.logging.retentionNonprdDays | quote }}
   LOG_OVERSIZE_FACTOR: {{ .Values.logging.oversizeFactor | quote }}
+  SMTP_HOST: {{ .Values.smtp.host | quote }}
+  SMTP_PORT: {{ .Values.smtp.port | quote }}
+  SMTP_USER: {{ .Values.smtp.user | quote }}
+  SMTP_STARTTLS: {{ .Values.smtp.starttls | quote }}
+  SMTP_SSL: {{ .Values.smtp.ssl | quote }}
+  SMTP_FROM: {{ .Values.smtp.from | quote }}
   LOG_MAIN_ENVS: {{ .Values.logging.mainEnvs | quote }}
   LOG_EXTRA_ENVS: {{ .Values.logging.extraEnvs | quote }}
   JENKINS_KPI_INDEX: {{ .Values.elasticsearch.kpiIndex | quote }}

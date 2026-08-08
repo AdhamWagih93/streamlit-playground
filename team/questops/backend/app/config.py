@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # only count deployments with this testflag as the "last deployment" (skip
     # test/dry-run/other rows); blank = count all
     log_deploy_testflag: str = "Normal"
+    # only deployments whose `status` field equals this count as DEPLOYED
+    # (failed/aborted runs don't make an env "deployed"); blank = count all
+    log_deploy_status: str = "SUCCESS"
     # log retention policy (days): an app/env keeping logs OLDER than this is
     # flagged "over-retained" (a MINOR issue). prd defaults to 6 months, non-prd
     # (dev/qc/uat) to 3 weeks.
@@ -115,6 +118,17 @@ class Settings(BaseSettings):
     dockerhub_api_base: str = "https://hub.docker.com/v2"
     github_api_base: str = "https://api.github.com"
     artifacthub_api_base: str = "https://artifacthub.io/api/v1"
+
+    # --- SMTP (Logging health email reports) ---
+    # Leave smtp_host blank to disable sending (the report PREVIEW always
+    # works). In demo mode a send with no SMTP host is simulated.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""              # blank = no auth
+    smtp_password: str = ""
+    smtp_starttls: bool = True       # STARTTLS on the plain port (587)
+    smtp_ssl: bool = False           # implicit TLS (465) instead of STARTTLS
+    smtp_from: str = "questops@localhost"
 
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389

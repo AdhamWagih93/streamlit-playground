@@ -1332,6 +1332,24 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-mx-sortsel { font: 500 10px var(--body); color: var(--dim); background: var(--panel);
   border: 1px solid var(--line); border-radius: 5px; padding: 1px 4px; max-width: 140px; }
 .log-mx-sortsel:focus { outline: none; border-color: var(--amber); }
+.log-mx-report { font-size: 10px; padding: 1px 7px; }
+
+/* per-project report modal: preview iframe + recipients + send */
+#log-report[hidden] { display: none; }
+.log-report-panel { position: fixed; top: 3vh; left: 50%; transform: translateX(-50%);
+  width: min(940px, 96vw); height: 92vh; z-index: 61; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  display: flex; flex-direction: column; padding: 12px 14px; gap: 8px; }
+.log-report-head { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); }
+.log-report-head .spacer { flex: 1; }
+.log-report-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.log-report-bar input { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: 400 12px var(--body); }
+.log-report-bar input:focus { outline: none; border-color: var(--amber); }
+#log-report-subj { flex: 1 1 260px; min-width: 200px; }
+#log-report-to { flex: 2 1 320px; min-width: 220px; }
+#log-report-frame { flex: 1; border: 1px solid var(--line); border-radius: 8px;
+  background: #f5f7fa; width: 100%; }
 .log-mx-envname { font: 700 11px var(--display); color: var(--amber);
   letter-spacing: .07em; text-transform: uppercase; }
 .log-mx-envteam { font-size: 9.5px; color: var(--dim); min-width: 0; flex: 1;

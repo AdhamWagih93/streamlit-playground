@@ -84,9 +84,19 @@ logging:
   staleHours: 48            # newest-log age (h) that flags an app "stale"
   deployIndex: "ef-cicd-deployments"  # CI/CD deployments index (prd ES) for last-deploy / never-deployed
   deployTestflag: "Normal"  # only count deployments with this testflag (blank = all)
+  deployStatus: SUCCESS    # env is "deployed" only when the deployment status = this
   retentionPrdDays: 183     # prd log retention (days) — older = "over-retained" (minor)
   retentionNonprdDays: 21   # non-prd log retention (days)
   oversizeFactor: 2.0       # >= this multiple of the fleet-average app/project size = "over-sized" (minor)
+
+# SMTP for the Logging page's emailed per-project reports (blank host = preview only)
+smtp:
+  host: ""
+  port: 587
+  user: ""                  # blank = no auth; password via an existing Secret (SMTP_PASSWORD)
+  starttls: true
+  ssl: false
+  from: questops@mycorp.local
   mainEnvs: "dev,qc,uat,prd"  # environment display order (side-by-side columns)
   extraEnvs: ""             # extra envs shown separately (e.g. "dr")
 

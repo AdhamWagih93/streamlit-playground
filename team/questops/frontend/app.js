@@ -3319,6 +3319,7 @@ const logMeter = (score) => `<span class="log-meter" title="health ${score == nu
 function logRates(size, docs, first, last) {
   if (!size || !first || !last) return null;
   const days = Math.max((new Date(last) - new Date(first)) / 86400000, 1 / 24);
+  if (!isFinite(days) || days > 365 * 15) return null;   // poisoned span (junk @timestamp docs) — no rate beats a wrong rate
   return {
     days,
     size_day_h: logHsize(Math.round(size / days)),
@@ -3615,7 +3616,8 @@ function logMatrixHtml(p, apps, f) {
           ${[["score", "↑ worst score"], ["size", "↓ size"], ["updated", "↓ last updated"],
              ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]].map(([v, l]) =>
             `<option value="${v}" ${psort === v ? "selected" : ""}>${l}</option>`).join("")}
-        </select></span>
+        </select>
+        <button class="btn btn-sm log-mx-report" title="prepare, preview and email this project's logging report">📧 report</button></span>
     </div>
     ${cols.map((en, i) => logMxHead(en, agg[en], i === sepAt, apps.length)).join("")}</div>
   <div class="log-mx-envdive" hidden></div>`;
@@ -3764,7 +3766,19 @@ function logContentHtml() {
   return logTilesHtml(filtered)
     + (cards || '<div class="empty">no apps match the filters</div>') + un
     + `<div id="log-drawer" hidden><div class="log-drawer-backdrop"></div>
-       <aside class="log-drawer-panel" role="dialog" aria-modal="true" aria-label="app logging detail"></aside></div>`;
+       <aside class="log-drawer-panel" role="dialog" aria-modal="true" aria-label="app logging detail"></aside></div>`
+    + `<div id="log-report" hidden><div class="log-drawer-backdrop"></div>
+       <div class="log-report-panel" role="dialog" aria-modal="true" aria-label="project logging report">
+         <div class="log-report-head">📧 <b id="log-report-title"></b>
+           <span class="spacer"></span>
+           <button class="btn btn-sm btn-ghost log-report-close" title="close (Esc)">✕</button></div>
+         <div class="log-report-bar">
+           <input id="log-report-subj" title="email subject">
+           <input id="log-report-to" placeholder="recipients — comma-separated emails">
+           <button class="btn btn-sm btn-primary" id="log-report-send">📤 send</button>
+           <span id="log-report-status" class="ci-meta"></span></div>
+         <iframe id="log-report-frame" title="report preview"></iframe>
+       </div></div>`;
 }
 
 function rerenderLog() {
@@ -3826,6 +3840,44 @@ async function loadTsSamples(btn) {
     btn.textContent = "🙈 hide samples";
   } catch (e) { c.innerHTML = `<div class="rsearch-status rsearch-err">⚠ ${esc(e.message)}</div>`; }
 }
+function closeLogReport() {
+  const m = document.getElementById("log-report");
+  if (m) m.hidden = true;
+}
+// prepare + preview the per-project report; recipients are chosen here and
+// the send goes through the backend's SMTP (QO_SMTP_* in .env)
+async function openLogReport(projName) {
+  const m = document.getElementById("log-report");
+  if (!m) return;
+  m.hidden = false;
+  m.querySelector("#log-report-title").textContent = `logging report — ${projName}`;
+  const frame = m.querySelector("#log-report-frame");
+  const status = m.querySelector("#log-report-status");
+  const subj = m.querySelector("#log-report-subj");
+  status.textContent = "building report…";
+  m.querySelector(".log-drawer-backdrop").onclick = closeLogReport;
+  m.querySelector(".log-report-close").onclick = closeLogReport;
+  let rep;
+  try { rep = await api(`/api/logging/report?project=${encodeURIComponent(projName)}`); }
+  catch (e) { status.textContent = `⚠ ${e.message}`; return; }
+  subj.value = rep.subject;
+  frame.setAttribute("srcdoc", rep.html);
+  status.textContent = "preview ready — add recipients and send";
+  const sendBtn = m.querySelector("#log-report-send");
+  sendBtn.onclick = async () => {
+    const to = m.querySelector("#log-report-to").value.split(",").map((x) => x.trim()).filter(Boolean);
+    if (!to.length) { status.textContent = "⚠ add at least one recipient"; return; }
+    sendBtn.disabled = true;
+    status.textContent = "sending…";
+    try {
+      const res = await api("/api/logging/report/send", { method: "POST",
+        body: { project: projName, recipients: to, subject: subj.value } });
+      status.textContent = `✓ sent to ${res.sent} recipient(s)${res.note ? ` — ${res.note}` : ""}`;
+    } catch (e) { status.textContent = `⚠ ${e.message}`; }
+    sendBtn.disabled = false;
+  };
+}
+
 // wire ONE matrix element (rows, env headers, per-project sort) — scoped so a
 // single project's matrix can be rebuilt in place without re-binding the rest
 function wireLogMatrix(mxEl) {
@@ -3859,6 +3911,12 @@ function wireLogMatrix(mxEl) {
     cell.addEventListener("click", toggle);
     cell.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(ev); } });
   });
+  const repBtn = mxEl.querySelector(".log-mx-report");
+  if (repBtn) repBtn.onclick = (ev) => {
+    ev.stopPropagation();
+    const mx = (state.logMxMap || {})[mxEl.dataset.mxId];
+    if (mx) openLogReport(mx.p.name);
+  };
   // small per-project app-sort — rebuilds ONLY this matrix, in place, so the
   // project expander stays open and other projects keep their listeners
   const sel = mxEl.querySelector(".log-mx-sortsel");
@@ -3882,7 +3940,7 @@ function wireLogContent() {
   // Esc closes the drawer (wired once — closeLogDrawer is a no-op when shut)
   if (!state._logEscWired) {
     state._logEscWired = true;
-    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeLogDrawer(); });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { closeLogDrawer(); closeLogReport(); } });
   }
 }
 
