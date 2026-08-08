@@ -3188,7 +3188,13 @@ function logAppMatch(a, f) {
   if (f.logtype && f.logtype !== "all" && !(a.logtypes || []).includes(f.logtype)) return false;
   if (f.env && f.env !== "all"
     && !(a.envs || []).includes(f.env) && !(a.expected_envs || []).includes(f.env)) return false;
-  if (f.team && f.team !== "all" && !(a.owners || []).includes(f.team)) return false;
+  if (f.team && f.team !== "all") {
+    const ci = f.team.indexOf(":");
+    if (ci > 0) {              // role filter "<env>:<team>" → match that env's owner
+      const e = (a.env_stats || []).find((x) => x.env === f.team.slice(0, ci));
+      if (!e || e.owner !== f.team.slice(ci + 1)) return false;
+    } else if (!(a.owners || []).includes(f.team)) return false;
+  }
   if (f.issue && f.issue !== "all") {
     if (f.issue === "any") { if (!(a.issues || []).length) return false; }
     else if (!(a.issues || []).includes(f.issue)) return false;
@@ -3205,7 +3211,7 @@ function logAppMatch(a, f) {
 // env nor team is active.
 function logScopeApp(a, f) {
   const envA = f.env && f.env !== "all";
-  const teamA = f.team && f.team !== "all";
+  const teamA = f.team && f.team !== "all" && !f.team.includes(":");   // role mode never scopes
   if (!envA && !teamA) return a;
   const es = (a.env_stats || []).filter((e) =>
     (!envA || e.env === f.env) && (!teamA || e.owner === f.team));
@@ -3935,7 +3941,20 @@ async function renderLogging() {
     ${(s.technologies || []).length ? sel("log-tech", f.tech || "all", [["all", "tech: any"], ...(s.technologies || []).map((t) => [t, t])]) : ""}
     ${sel("log-logtype", f.logtype || "all", [["all", "type: any"], ...(s.logtypes || []).map((l) => [l, l])])}
     ${sel("log-env", f.env || "all", [["all", "env: any"], ...(s.envs || []).map((e) => [e, e])])}
-    ${sel("log-team", f.team || "all", [["all", "owner: any"], ...(s.teams || []).map((tm) => [tm, tm])])}
+    ${(() => {
+      const byEnv = {};
+      (d.projects || []).forEach((p) => (p.apps || []).forEach((a) => (a.env_stats || []).forEach((e) => {
+        if (e.owner) (byEnv[e.env] = byEnv[e.env] || new Set()).add(e.owner);
+      })));
+      const order = [...((d.env_order || {}).main || []), ...((d.env_order || {}).extra || [])];
+      const roleEnvs = [...order.filter((en) => byEnv[en]),
+        ...Object.keys(byEnv).sort().filter((en) => !order.includes(en))];
+      const opt = (v, l) => `<option value="${esc(v)}" ${String(f.team) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+      return `<select id="log-team">${opt("all", "owner: any")}
+        <optgroup label="env owner (scopes to their envs)">${(s.teams || []).map((tm) => opt(tm, tm)).join("")}</optgroup>
+        ${roleEnvs.map((en) => `<optgroup label="${esc(en)}_team (all envs shown)">${[...byEnv[en]].sort()
+          .map((tm) => opt(en + ":" + tm, en + "_team: " + tm)).join("")}</optgroup>`).join("")}</select>`;
+    })()}
     ${sel("log-issue", f.issue || "all", issueOpts)}
     ${sel("log-sort", f.sort || "score", [["score", "↑ worst score"], ["size", "↓ size"],
       ["updated", "↓ last updated"], ["docs", "↓ documents"], ["indices", "↓ indices"], ["name", "↑ name"]])}
