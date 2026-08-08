@@ -119,16 +119,29 @@ class Settings(BaseSettings):
     github_api_base: str = "https://api.github.com"
     artifacthub_api_base: str = "https://artifacthub.io/api/v1"
 
-    # --- SMTP (Logging health email reports) ---
+    # --- Mail (Logging health email reports) ---
     # Leave smtp_host blank to disable sending (the report PREVIEW always
-    # works). In demo mode a send with no SMTP host is simulated.
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_user: str = ""              # blank = no auth
+    # works). In demo mode a send with no host is simulated.
+    # mail_transport picks HOW to talk to the server:
+    #   ews  — Exchange Web Services via exchangelib (Credentials →
+    #          Configuration(server=SMTP_HOST) → Account(primary_smtp_address=
+    #          SMTP_FROM, autodiscover=False) → Message(HTMLBody).send()) —
+    #          for Exchange servers that reject basic SMTP AUTH
+    #          ("No suitable authentication method found")
+    #   smtp — classic smtplib (port/starttls/ssl knobs apply)
+    mail_transport: str = "ews"
+    smtp_host: str = ""              # EWS server hostname, or the SMTP host
+    smtp_port: int = 587             # smtp transport only
+    smtp_user: str = ""              # login username (EWS credentials / SMTP auth)
     smtp_password: str = ""
-    smtp_starttls: bool = True       # STARTTLS on the plain port (587)
-    smtp_ssl: bool = False           # implicit TLS (465) instead of STARTTLS
-    smtp_from: str = "questops@localhost"
+    smtp_starttls: bool = True       # smtp transport only
+    smtp_ssl: bool = False           # smtp transport only
+    smtp_from: str = "questops@localhost"   # sender / EWS primary_smtp_address
+    # bare recipient names (no @) get this domain appended, mirroring the
+    # send_mail.py utility; blank = full addresses required
+    mail_default_domain: str = ""
+    mail_retries: int = 3            # send attempts before giving up
+    mail_retry_wait: float = 3.0     # seconds between attempts
 
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389

@@ -3943,8 +3943,15 @@ async function openLogReport(projName) {
       const res = await api("/api/logging/report/send", { method: "POST",
         body: { project: projName, recipients: to, subject: subj.value,
                 extra: extraCb.checked, team: teamSel.value || null } });
-      status.textContent = `✓ sent to ${res.sent} recipient(s)${res.note ? ` — ${res.note}` : ""}`;
-    } catch (e) { status.textContent = `⚠ ${e.message}`; }
+      status.classList.remove("log-report-err");
+      status.textContent = `✓ sent to ${res.sent} recipient(s) (${res.recipients.join(", ")})`
+        + (res.transport && res.transport !== "demo" ? ` via ${res.transport.toUpperCase()}${res.attempts > 1 ? ` after ${res.attempts} attempts` : ""}` : "")
+        + (res.note ? ` — ${res.note}` : "");
+    } catch (e) {
+      status.classList.add("log-report-err");
+      status.textContent = `⚠ ${e.message}`;
+      status.title = e.message;
+    }
     sendBtn.disabled = false;
   };
 }

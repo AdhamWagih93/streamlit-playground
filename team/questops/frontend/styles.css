@@ -1358,6 +1358,9 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 #log-report-to { flex: 2 1 320px; min-width: 220px; }
 #log-report-frame { flex: 1; border: 1px solid var(--line); border-radius: 8px;
   background: #f5f7fa; width: 100%; }
+#log-report-status { flex-basis: 100%; }
+#log-report-status.log-report-err { color: var(--red); font-weight: 600;
+  white-space: normal; word-break: break-word; }
 .log-mx-envname { font: 700 11px var(--display); color: var(--amber);
   letter-spacing: .07em; text-transform: uppercase; }
 .log-mx-envteam { font-size: 9.5px; color: var(--dim); min-width: 0; flex: 1;

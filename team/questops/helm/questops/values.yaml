@@ -91,6 +91,9 @@ logging:
 
 # SMTP for the Logging page's emailed per-project reports (blank host = preview only)
 smtp:
+  transport: ews            # ews (exchangelib) or smtp (smtplib)
+  defaultDomain: ""         # appended to bare recipient names
+  retries: 3
   host: ""
   port: 587
   user: ""                  # blank = no auth; password via an existing Secret (SMTP_PASSWORD)

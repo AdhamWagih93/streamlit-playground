@@ -13,6 +13,7 @@ Sending uses the QO_SMTP_* knobs; demo mode with no SMTP simulates the send.
 import datetime as dt
 import re
 import smtplib
+import time
 from email.message import EmailMessage
 
 from ..config import settings
@@ -349,28 +350,55 @@ def build_report(project: str, include_extra: bool = False, team: str | None = N
             "include_extra": include_extra, "team": team or None}
 
 
-def send_report(project: str, recipients: list[str], subject: str | None = None,
-                include_extra: bool = False, team: str | None = None) -> dict:
-    rep = build_report(project, include_extra=include_extra, team=team)
-    to = [r.strip() for r in (recipients or []) if r and r.strip()]
-    if not to:
-        raise ValueError("no recipients given")
-    bad = [r for r in to if not _EMAIL_RE.match(r)]
-    if bad:
-        raise ValueError("invalid recipient(s): " + ", ".join(bad))
-    subj = (subject or "").strip() or rep["subject"]
-    if not settings.smtp_host:
-        if settings.demo_mode:
-            return {"ok": True, "sent": len(to), "recipients": to,
-                    "note": "demo mode — SMTP not configured, email NOT actually sent"}
-        raise RuntimeError("SMTP is not configured — set QO_SMTP_HOST (and the other "
-                           "QO_SMTP_* knobs) in .env")
+def _complete_recipients(recipients: list[str]) -> list[str]:
+    """Mirror send_mail.py's filter_words + domain completion: drop empties,
+    the "@default.domain" placeholder and case-insensitive duplicates; append
+    MAIL_DEFAULT_DOMAIN to bare (no-@) names."""
+    dd = (settings.mail_default_domain or "").strip().lstrip("@")
+    out: list[str] = []
+    seen: set = set()
+    for r in recipients or []:
+        r = (r or "").strip()
+        if not r or r.lower() == "@default.domain":
+            continue
+        if "@" not in r and dd:
+            r = f"{r}@{dd}"
+        if r.lower() in seen:
+            continue
+        seen.add(r.lower())
+        out.append(r)
+    return out
+
+
+def _send_ews(subject: str, html: str, to: list[str]) -> None:
+    """Exchange Web Services, exactly like the send_mail.py utility:
+    Credentials → Configuration(server=SMTP_HOST) → Account(SMTP_FROM,
+    autodiscover=False) → Message(HTMLBody, folder=Sent).send()."""
+    try:
+        from exchangelib import (Account, Configuration, Credentials,
+                                 HTMLBody, Message)
+    except ImportError as exc:
+        raise RuntimeError("MAIL_TRANSPORT=ews but the exchangelib package is "
+                           "not installed in the backend image — add "
+                           "`exchangelib` (see requirements.txt) or switch "
+                           "QO_MAIL_TRANSPORT=smtp") from exc
+    credentials = Credentials(username=settings.smtp_user,
+                              password=settings.smtp_password)
+    config = Configuration(server=settings.smtp_host, credentials=credentials)
+    account = Account(primary_smtp_address=settings.smtp_from,
+                      credentials=credentials, autodiscover=False, config=config)
+    message = Message(account=account, folder=account.sent, subject=subject,
+                      body=HTMLBody(html), to_recipients=to)
+    message.send()
+
+
+def _send_smtp(subject: str, html: str, to: list[str]) -> None:
     msg = EmailMessage()
-    msg["Subject"] = subj
+    msg["Subject"] = subject
     msg["From"] = settings.smtp_from
     msg["To"] = ", ".join(to)
     msg.set_content("This report is HTML — please open it in an HTML-capable mail client.")
-    msg.add_alternative(rep["html"], subtype="html")
+    msg.add_alternative(html, subtype="html")
     if settings.smtp_ssl:
         server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30)
     else:
@@ -386,4 +414,40 @@ def send_report(project: str, recipients: list[str], subject: str | None = None,
             server.quit()
         except Exception:  # noqa: BLE001 — best-effort close
             pass
-    return {"ok": True, "sent": len(to), "recipients": to}
+
+
+def send_report(project: str, recipients: list[str], subject: str | None = None,
+                include_extra: bool = False, team: str | None = None) -> dict:
+    rep = build_report(project, include_extra=include_extra, team=team)
+    to = _complete_recipients(recipients)
+    if not to:
+        raise ValueError("no recipients given")
+    bad = [r for r in to if not _EMAIL_RE.match(r)]
+    if bad:
+        hint = "" if settings.mail_default_domain else             " (bare names need QO_MAIL_DEFAULT_DOMAIN to be completed)"
+        raise ValueError("invalid recipient(s): " + ", ".join(bad) + hint)
+    subj = (subject or "").strip() or rep["subject"]
+    if not settings.smtp_host:
+        if settings.demo_mode:
+            return {"ok": True, "sent": len(to), "recipients": to, "transport": "demo",
+                    "note": "demo mode — mail server not configured, email NOT actually sent"}
+        raise RuntimeError("mail is not configured — set QO_SMTP_HOST (and the other "
+                           "QO_SMTP_*/QO_MAIL_* knobs) in .env")
+    transport = (settings.mail_transport or "ews").strip().lower()
+    sender = _send_smtp if transport == "smtp" else _send_ews
+    retries = max(int(settings.mail_retries or 1), 1)
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            sender(subj, rep["html"], to)
+            return {"ok": True, "sent": len(to), "recipients": to,
+                    "transport": transport, "attempts": attempt}
+        except Exception as exc:  # noqa: BLE001 — retried, then surfaced verbatim
+            last_err = exc
+            if attempt < retries:
+                time.sleep(max(float(settings.mail_retry_wait or 0), 0))
+    raise RuntimeError(
+        f"{transport.upper()} send failed after {retries} attempt(s) — "
+        f"server {settings.smtp_host!r}, user {settings.smtp_user!r}, "
+        f"from {settings.smtp_from!r}, to {', '.join(to)} — "
+        f"{type(last_err).__name__}: {last_err}")

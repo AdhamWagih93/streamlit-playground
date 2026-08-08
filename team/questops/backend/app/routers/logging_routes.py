@@ -64,4 +64,4 @@ def logging_report_send(body: ReportSendBody, user: User = Depends(current_user)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001 — clean message, never a 500
-        raise HTTPException(502, f"send failed: {str(exc)[:200]}")
+        raise HTTPException(502, f"send failed: {str(exc)[:600]}")

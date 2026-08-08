@@ -8,3 +8,4 @@ ldap3>=2.9
 PyJWT>=2.8
 langchain>=0.2
 langchain-ollama>=0.1
+exchangelib>=5.0
