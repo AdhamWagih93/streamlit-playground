@@ -3316,12 +3316,14 @@ function logOrderedEnvs(present, d) {
 const logMeter = (score) => `<span class="log-meter" title="health ${score == null ? "n/a" : score}"><span class="log-meter-fill ${logScoreClass(score)}" style="width:${score == null ? 0 : score}%"></span></span>`;
 
 // logging-RATE stats from what's already on an app/env/aggregate: bytes+docs
-// over the logged span (first→last). Span clamped to >=1h so a brand-new
-// index doesn't explode the per-day extrapolation.
+// over the logged span (first→last). Span clamped to >= 1 DAY so a tiny
+// observation window (one fresh 500 KB index) is never extrapolated into a
+// fantasy daily rate — for sub-day spans "per day" = what was actually logged.
 function logRates(size, docs, first, last) {
   if (!size || !first || !last) return null;
-  const days = Math.max((new Date(last) - new Date(first)) / 86400000, 1 / 24);
+  let days = (new Date(last) - new Date(first)) / 86400000;
   if (!isFinite(days) || days > 365 * 15) return null;   // poisoned span (junk @timestamp docs) — no rate beats a wrong rate
+  days = Math.max(days, 1);
   return {
     days,
     size_day_h: logHsize(Math.round(size / days)),
@@ -3775,6 +3777,9 @@ function logContentHtml() {
          <div class="log-report-head">📧 <b id="log-report-title"></b>
            <span class="spacer"></span>
            <button class="btn btn-sm btn-ghost log-report-close" title="close (Esc)">✕</button></div>
+         <div class="log-report-bar log-report-opts">
+           <label class="log-issues" title="EXTRA_ENVS are excluded by default — tick to include them"><input type="checkbox" id="log-report-extra"> include extra envs</label>
+           <select id="log-report-team" title="narrow the report to the environments owned by one team"></select></div>
          <div class="log-report-bar">
            <input id="log-report-subj" title="email subject">
            <input id="log-report-to" placeholder="recipients — comma-separated emails">
@@ -3857,15 +3862,35 @@ async function openLogReport(projName) {
   const frame = m.querySelector("#log-report-frame");
   const status = m.querySelector("#log-report-status");
   const subj = m.querySelector("#log-report-subj");
-  status.textContent = "building report…";
   m.querySelector(".log-drawer-backdrop").onclick = closeLogReport;
   m.querySelector(".log-report-close").onclick = closeLogReport;
-  let rep;
-  try { rep = await api(`/api/logging/report?project=${encodeURIComponent(projName)}`); }
-  catch (e) { status.textContent = `⚠ ${e.message}`; return; }
-  subj.value = rep.subject;
-  frame.setAttribute("srcdoc", rep.html);
-  status.textContent = "preview ready — add recipients and send";
+  // scope controls: extra envs OFF by default; env-owner team filter from
+  // this project's actual env owners
+  const extraCb = m.querySelector("#log-report-extra");
+  const teamSel = m.querySelector("#log-report-team");
+  extraCb.checked = false;
+  const proj = ((state.logData || {}).projects || []).find((x) => x.name === projName);
+  const owners = [...new Set((proj ? proj.apps || [] : [])
+    .flatMap((a) => (a.env_stats || []).map((e) => e.owner_project || e.owner))
+    .filter(Boolean))].sort();
+  teamSel.innerHTML = `<option value="">env team: all</option>`
+    + owners.map((o) => `<option value="${esc(o)}">${esc(o)} envs only</option>`).join("");
+  teamSel.value = "";
+  const load = async () => {
+    status.textContent = "building report…";
+    const qs = new URLSearchParams({ project: projName });
+    if (extraCb.checked) qs.set("extra", "true");
+    if (teamSel.value) qs.set("team", teamSel.value);
+    try {
+      const rep = await api(`/api/logging/report?${qs.toString()}`);
+      subj.value = rep.subject;
+      frame.setAttribute("srcdoc", rep.html);
+      status.textContent = `preview ready (${(rep.envs || []).join(", ") || "no envs in scope"}) — add recipients and send`;
+    } catch (e) { status.textContent = `⚠ ${e.message}`; }
+  };
+  extraCb.onchange = load;
+  teamSel.onchange = load;
+  await load();
   const sendBtn = m.querySelector("#log-report-send");
   sendBtn.onclick = async () => {
     const to = m.querySelector("#log-report-to").value.split(",").map((x) => x.trim()).filter(Boolean);
@@ -3874,7 +3899,8 @@ async function openLogReport(projName) {
     status.textContent = "sending…";
     try {
       const res = await api("/api/logging/report/send", { method: "POST",
-        body: { project: projName, recipients: to, subject: subj.value } });
+        body: { project: projName, recipients: to, subject: subj.value,
+                extra: extraCb.checked, team: teamSel.value || null } });
       status.textContent = `✓ sent to ${res.sent} recipient(s)${res.note ? ` — ${res.note}` : ""}`;
     } catch (e) { status.textContent = `⚠ ${e.message}`; }
     sendBtn.disabled = false;

@@ -1,9 +1,13 @@
 """Per-project logging-health HTML REPORT (email-ready) + SMTP delivery.
 
-The report is built from the same payload the Logging page shows (logstats
-.analyze()), rendered as self-contained, inline-styled HTML that renders in
-mail clients (tables, no external assets, light background). Sending uses the
-QO_SMTP_* knobs; in demo mode with no SMTP configured the send is simulated.
+Built from the same payload the Logging page shows (logstats.analyze()),
+rendered as self-contained inline-styled HTML that renders in mail clients
+(tables, no external assets, light background).
+
+Scoping: EXTRA envs (LOG_EXTRA_ENVS) are EXCLUDED by default (include_extra
+toggles them in), and `team` narrows the report to just the environments that
+team owns. Every table, stat and score is recomputed from the included envs.
+Sending uses the QO_SMTP_* knobs; demo mode with no SMTP simulates the send.
 """
 
 import datetime as dt
@@ -42,6 +46,10 @@ def _score_pill(score, label="") -> str:
 
 
 def _rates(size, docs, first, last):
+    """Ingest per day over the logged span. The span is clamped to >= 1 DAY so
+    a tiny observation window (one fresh 500 KB index spanning an hour) is
+    never extrapolated into a fantasy daily rate — for sub-day spans the
+    "per-day" rate is simply what was actually logged."""
     if not size or not first or not last:
         return None
     try:
@@ -49,7 +57,10 @@ def _rates(size, docs, first, last):
         l = dt.datetime.fromisoformat(str(last).replace("Z", "+00:00"))
     except ValueError:
         return None
-    days = max((l - f).total_seconds() / 86400.0, 1 / 24)
+    days = (l - f).total_seconds() / 86400.0
+    if days > 365 * 15:          # poisoned span (junk @timestamp docs)
+        return None
+    days = max(days, 1.0)
     return {"size_day": logstats._hsize(int(size / days)),
             "docs_day": int(docs / days) if docs else 0}
 
@@ -61,21 +72,55 @@ _ISSUE_LABEL = {"no_logs": "no logs", "stale": "stale", "timestamp": "@timestamp
                 "unsupported": "unsupported platform"}
 
 
-def build_report(project: str) -> dict:
+def _env_issue_lines(a: dict, e: dict, stale_hours) -> list[str]:
+    """Human explanations for every issue an app carries IN one environment."""
+    out = []
+    for k in (e.get("issues") or []):
+        if k == "no_logs":
+            out.append("deployed here but produced NO logs")
+        elif k == "stale":
+            age = e.get("last_logged_age_h")
+            out.append(f"stale — newest log is {age:.0f}h old (threshold {stale_hours}h)"
+                       if age is not None else f"stale — no log newer than {stale_hours}h")
+        elif k == "timestamp":
+            n = len(e.get("ts_bad_indices") or [])
+            out.append(f"@timestamp is not a date in {n} index(es) — time filters "
+                       f"silently return nothing there")
+        elif k == "bad_week":
+            names = e.get("bad_week_indices") or []
+            out.append(f"illogical YEAR in the index name (mis-templated shipper): "
+                       f"{_esc(', '.join(names[:3]))}{'…' if len(names) > 3 else ''}")
+        elif k == "future_week":
+            names = e.get("future_week_indices") or []
+            out.append(f"future-dated index (clock skew / mis-template): "
+                       f"{_esc(', '.join(names[:3]))}{'…' if len(names) > 3 else ''}")
+        elif k == "over_retained":
+            out.append(f"logs kept beyond the retention policy "
+                       f"({e.get('retention_days', '?')} days)")
+        elif k == "team_clash":
+            out.append(f"env owner clash — app says {_esc(e.get('owner_app') or '?')}, "
+                       f"project says {_esc(e.get('owner_project') or '?')}")
+        else:
+            out.append(_ISSUE_LABEL.get(k, k))
+    return out
+
+
+def build_report(project: str, include_extra: bool = False, team: str | None = None) -> dict:
     d = logstats.analyze()
     p = next((x for x in (d.get("projects") or []) if x["name"] == project), None)
     if p is None:
         raise ValueError(f"unknown project {project!r}")
-    apps = p.get("apps") or []
-    t = p.get("totals") or {}
+    apps_all = p.get("apps") or []
     now = logstats._now().replace(microsecond=0).isoformat() + "Z"
     company = p.get("company")
+    stale_hours = d.get("stale_hours")
     order = (d.get("env_order") or {})
-    envs_order = [*(order.get("main") or []), *(order.get("extra") or [])]
+    main_order = order.get("main") or []
+    extra_set = set(order.get("extra") or [])
 
-    # ---- per-env aggregate across the project's apps -------------------
+    # ---- per-env aggregate over ALL envs (to know owners before filtering) --
     agg: dict = {}
-    for a in apps:
+    for a in apps_all:
         for e in (a.get("env_stats") or []):
             m = agg.setdefault(e["env"], {"size": 0, "docs": 0, "idx": 0, "apps": 0,
                                           "scores": [], "issues": 0, "owner": None,
@@ -92,14 +137,62 @@ def build_report(project: str) -> dict:
                 m["first"] = e["first_logged"]
             if e.get("last_logged") and (not m["last"] or e["last_logged"] > m["last"]):
                 m["last"] = e["last_logged"]
-    env_names = [en for en in envs_order if en in agg] \
-        + [en for en in sorted(agg) if en not in envs_order]
+    present = [en for en in main_order if en in agg] \
+        + [en for en in sorted(agg) if en not in main_order]
+
+    # ---- scope: extra envs off by default; optional env-owner team filter --
+    env_names = [en for en in present if include_extra or en not in extra_set]
+    if team:
+        tl = team.strip().lower()
+        env_names = [en for en in env_names
+                     if (agg[en]["owner"] or "").strip().lower() == tl]
+    scope_bits = []
+    if extra_set:
+        scope_bits.append("extra envs included" if include_extra else "extra envs excluded")
+    if team:
+        scope_bits.append(f"envs owned by {team}")
+    scope_note = " · ".join(scope_bits)
 
     th = (f'padding:6px 10px;border-bottom:2px solid {_C["line"]};text-align:left;'
           f'font-size:12px;color:{_C["dim"]};text-transform:uppercase;letter-spacing:.04em')
     td = f'padding:6px 10px;border-bottom:1px solid {_C["line"]};font-size:13px;vertical-align:top'
 
+    # ---- scope every app to the included envs; drop apps with none ---------
+    scoped = []
+    for a in apps_all:
+        es = [e for e in (a.get("env_stats") or []) if e["env"] in env_names]
+        if not es and (a.get("env_stats") or []):
+            continue                      # nothing of this app is in scope
+        size = sum(e.get("size_bytes") or 0 for e in es)
+        docs = sum(e.get("docs") or 0 for e in es)
+        idx = sum(e.get("indices") or 0 for e in es)
+        firsts = [e["first_logged"] for e in es if e.get("first_logged")]
+        lasts = [e["last_logged"] for e in es if e.get("last_logged")]
+        escores = [e["score"] for e in es if e.get("score") is not None]
+        score = None
+        if a.get("monitored") and escores:
+            base = sum(escores) / len(escores)
+            if a.get("discrepancy"):
+                base -= 10
+            if any(e.get("owner_clash") for e in es):
+                base -= 10
+            if a.get("over_sized"):
+                base -= 10
+            score = max(int(round(base)), 0)
+        scoped.append({**a, "_es": es, "_size": size, "_docs": docs, "_idx": idx,
+                       "_first": min(firsts) if firsts else None,
+                       "_last": max(lasts) if lasts else None, "_score": score})
+
+    t_size = sum(x["_size"] for x in scoped)
+    t_docs = sum(x["_docs"] for x in scoped)
+    t_idx = sum(x["_idx"] for x in scoped)
+    pscores = [x["_score"] for x in scoped if x["_score"] is not None]
+    pscore = int(round(sum(pscores) / len(pscores))) if pscores else None
+    if p.get("over_sized") and pscore is not None:
+        pscore = max(pscore - 10, 0)
+
     env_rows = ""
+    env_issue_blocks = ""
     for en in env_names:
         m = agg[en]
         score = round(sum(m["scores"]) / len(m["scores"])) if m["scores"] else None
@@ -113,89 +206,116 @@ def build_report(project: str) -> dict:
                      f'<td style="{td}">{_esc(r["size_day"]) + "/day" if r else "—"}</td>'
                      f'<td style="{td};color:{_C["red"] if m["issues"] else _C["green"]}">'
                      f'{m["issues"] or "none"}</td></tr>')
+        # ---- the per-env issue EXPLANATIONS (why each highlight is red) ----
+        lines = []
+        for a in scoped:
+            e = next((x for x in a["_es"] if x["env"] == en), None)
+            if not e or not (e.get("issues") or []):
+                continue
+            expl = _env_issue_lines(a, e, stale_hours)
+            if expl:
+                lines.append(f'<li style="margin:2px 0"><b>{_esc(a["app"])}</b>: '
+                             + "; ".join(expl) + "</li>")
+        if lines:
+            owner_tag = f" · {_esc(m['owner'])}" if m["owner"] else ""
+            env_issue_blocks += (f'<p style="margin:8px 0 2px;font-size:13px">'
+                                 f'<b>{_esc(en.upper())}</b>{owner_tag}</p>'
+                                 f'<ul style="margin:2px 0 8px 18px;padding:0;font-size:12.5px;'
+                                 f'color:{_C["text"]}">{"".join(lines)}</ul>')
+
+    # app-level (env-independent) issues explained separately
+    app_level = ""
+    for a in scoped:
+        det = []
+        if a.get("discrepancy"):
+            det.append(f'deploy_platform clash — app says {_esc(a.get("app_platform"))}, '
+                       f'project says {_esc(a.get("project_platform"))}')
+        if a.get("over_sized"):
+            det.append(f'over-sized storage — {_esc(a.get("size_h"))}, '
+                       f'{a.get("size_ratio")}× the fleet-average app')
+        if a.get("platform_status") == "unsupported":
+            det.append(f'platform {_esc(a.get("deploy_platform"))} is not monitored — '
+                       f'logs are not checked')
+        if a.get("logging_required") is False:
+            det.append(f'technology {_esc(a.get("deploy_technology"))} does not require '
+                       f'logging (Engine Deploy_Technologies)')
+        if det:
+            app_level += (f'<li style="margin:2px 0"><b>{_esc(a["app"])}</b>: '
+                          + "; ".join(det) + "</li>")
 
     app_rows = ""
-    issue_blocks = ""
-    for a in apps:
-        issues = a.get("issues") or []
-        r = _rates(a.get("size_bytes"), a.get("docs"), a.get("first_logged"), a.get("last_logged"))
-        ratio = a.get("size_ratio")
-        env_cells = []
-        by_env = {e["env"]: e for e in (a.get("env_stats") or [])}
+    for a in scoped:
+        issues = sorted({k for e in a["_es"] for k in (e.get("issues") or [])}
+                        | ({"clash"} if a.get("discrepancy") else set())
+                        | ({"over_sized"} if a.get("over_sized") else set()))
+        r = _rates(a["_size"], a["_docs"], a["_first"], a["_last"])
+        by_env = {e["env"]: e for e in a["_es"]}
+        cells = []
         for en in env_names:
             e = by_env.get(en)
             if not e:
-                env_cells.append("—")
+                cells.append("—")
             elif not e.get("deployed"):
-                env_cells.append(f'<span style="color:{_C["dim"]}">not deployed</span>')
+                cells.append(f'<span style="color:{_C["dim"]}">not deployed</span>')
             elif e.get("no_logs"):
-                env_cells.append(f'<span style="color:{_C["red"]};font-weight:700">NO LOGS</span>')
+                cells.append(f'<span style="color:{_C["red"]};font-weight:700">NO LOGS</span>')
             else:
-                env_cells.append(f'{_esc(logstats._hsize(e.get("size_bytes") or 0))}'
-                                 f' <span style="color:{_C["dim"]}">({e.get("indices") or 0} idx)</span>')
-        oversize_tag = (f'<br><span style="color:{_C["amber"]};font-size:11px">{ratio}&times; avg</span>'
-                        if a.get("over_sized") else "")
+                cells.append(f'{_esc(logstats._hsize(e.get("size_bytes") or 0))}'
+                             f' <span style="color:{_C["dim"]}">({e.get("indices") or 0} idx)</span>')
+        oversize_tag = (f'<br><span style="color:{_C["amber"]};font-size:11px">'
+                        f'{a.get("size_ratio")}&times; avg</span>' if a.get("over_sized") else "")
         app_rows += (f'<tr><td style="{td}"><b>{_esc(a["app"])}</b><br>'
                      f'<span style="color:{_C["dim"]};font-size:11px">'
                      f'{_esc(a.get("deploy_platform") or "—")}'
                      f'{" · " + _esc(a["deploy_technology"]) if a.get("deploy_technology") else ""}</span></td>'
-                     f'<td style="{td}">{_score_pill(a.get("score"))}</td>'
-                     + "".join(f'<td style="{td}">{c}</td>' for c in env_cells)
-                     + f'<td style="{td}"><b style="color:{_C["red"] if a.get("over_sized") else _C["text"]}">'
-                     f'{_esc(a.get("size_h") or "0 B")}</b>{oversize_tag}</td>'
+                     f'<td style="{td}">{_score_pill(a["_score"])}</td>'
+                     + "".join(f'<td style="{td}">{c}</td>' for c in cells)
+                     + f'<td style="{td}"><b style="color:'
+                     f'{_C["red"] if a.get("over_sized") else _C["text"]}">'
+                     f'{_esc(logstats._hsize(a["_size"]))}</b>{oversize_tag}</td>'
                      f'<td style="{td}">{_esc(r["size_day"]) + "/day" if r else "—"}</td>'
                      f'<td style="{td};color:{_C["red"] if issues else _C["green"]};font-size:12px">'
                      f'{_esc(", ".join(_ISSUE_LABEL.get(k, k) for k in issues)) or "ok ✓"}</td></tr>')
-        if issues:
-            det = []
-            if (a.get("ts_bad_indices") or []):
-                det.append(f'@timestamp is not a <b>date</b> in {len(a["ts_bad_indices"])} '
-                           f'index(es): {_esc(", ".join(a["ts_bad_indices"][:5]))}'
-                           f'{"…" if len(a["ts_bad_indices"]) > 5 else ""}')
-            if (a.get("bad_week_indices") or []):
-                det.append(f'illogical YEAR in: {_esc(", ".join(a["bad_week_indices"][:5]))}')
-            if (a.get("future_week_indices") or []):
-                det.append(f'future-dated: {_esc(", ".join(a["future_week_indices"][:5]))}')
-            if (a.get("over_retained_envs") or []):
-                det.append(f'logs kept beyond retention in: {_esc(", ".join(a["over_retained_envs"]))}')
-            if a.get("discrepancy"):
-                det.append(f'deploy_platform clash: app {_esc(a.get("app_platform"))} vs '
-                           f'project {_esc(a.get("project_platform"))}')
-            if (a.get("owner_clash_envs") or []):
-                det.append(f'owner clash in: {_esc(", ".join(a["owner_clash_envs"]))}')
-            if a.get("over_sized"):
-                det.append(f'stores {_esc(a.get("size_h"))} — {ratio}× the fleet average app')
-            if a.get("no_logs"):
-                det.append("deployed but produced NO logs")
-            if det:
-                issue_blocks += (f'<p style="margin:6px 0 2px;font-size:13px"><b>🧩 {_esc(a["app"])}</b></p>'
-                                 f'<ul style="margin:2px 0 8px 18px;padding:0;font-size:12.5px;color:{_C["text"]}">'
-                                 + "".join(f"<li>{x}</li>" for x in det) + "</ul>")
 
-    pr = _rates(t.get("size_bytes"),
-                t.get("docs"),
-                min((a.get("first_logged") for a in apps if a.get("first_logged")), default=None),
-                max((a.get("last_logged") for a in apps if a.get("last_logged")), default=None))
-    with_logs = [a for a in apps if (a.get("size_bytes") or 0) > 0]
-    avg_app = logstats._hsize(int(t.get("size_bytes", 0) / len(with_logs))) if with_logs else "—"
+    pr = _rates(t_size, t_docs,
+                min((x["_first"] for x in scoped if x["_first"]), default=None),
+                max((x["_last"] for x in scoped if x["_last"]), default=None))
+    with_logs = [x for x in scoped if x["_size"] > 0]
+    avg_app = logstats._hsize(int(t_size / len(with_logs))) if with_logs else "—"
     stat = lambda label, val: (f'<td style="padding:8px 14px;border:1px solid {_C["line"]};'  # noqa: E731
                                f'border-radius:6px;background:#fff"><div style="font-size:17px;'
                                f'font-weight:700;color:{_C["text"]}">{val}</div>'
                                f'<div style="font-size:11px;color:{_C["dim"]}">{label}</div></td>')
+    total_stat = (f'<span style="color:{_C["red"]}">{_esc(logstats._hsize(t_size))}</span>'
+                  if p.get("over_sized") else _esc(logstats._hsize(t_size)))
 
     env_head = "".join(f'<th style="{th}">{_esc(en)}</th>' for en in env_names)
+    issues_section = ""
+    if env_issue_blocks or app_level:
+        none_note = (f'<p style="font-size:12.5px;color:{_C["green"]}">'
+                     'no environment issues in scope</p>')
+        app_block = ""
+        if app_level:
+            app_block = (f'<p style="margin:10px 0 2px;font-size:13px"><b>App-level</b></p>'
+                         f'<ul style="margin:2px 0 6px 18px;padding:0;font-size:12.5px;'
+                         f'color:{_C["text"]}">{app_level}</ul>')
+        issues_section = (f'<h2 style="font-size:15px;margin:18px 0 6px">Issue summary — per environment</h2>'
+                          f'<div style="background:#fff;border:1px solid {_C["line"]};border-radius:6px;padding:8px 12px">'
+                          f'{env_issue_blocks or none_note}{app_block}</div>')
+
     html = f"""<!doctype html><html><body style="margin:0;padding:0;background:{_C['bg']}">
 <div style="max-width:860px;margin:0 auto;padding:18px;font-family:Arial,Helvetica,sans-serif;color:{_C['text']}">
   <h1 style="font-size:20px;margin:0 0 2px">📊 Logging health — {_esc(project)}</h1>
   <p style="margin:0 0 12px;color:{_C['dim']};font-size:12px">
     {f"🏢 {_esc(company)} · " if company else ""}{_esc(p.get('deploy_platform') or '—')} → {_esc(p.get('prefix') or '—')}
-    · generated {_esc(now)} · source: {_esc(d.get('source') or '?')}</p>
-  <p style="margin:0 0 14px;font-size:14px">Project health score: {_score_pill(p.get('score'), 'project score')}</p>
+    · generated {_esc(now)}{f" · {_esc(scope_note)}" if scope_note else ""}
+    · environments: {_esc(", ".join(env_names) or "none in scope")}</p>
+  <p style="margin:0 0 14px;font-size:14px">Project health score: {_score_pill(pscore, 'project score (in scope)')}</p>
   <table cellspacing="6" cellpadding="0" style="border-collapse:separate;margin:0 0 16px"><tr>
-    {stat("apps", t.get("apps", len(apps)))}
-    {stat("indices", t.get("indices", 0))}
-    {stat("total size", f'<span style="color:{_C["red"]}">{_esc(t.get("size_h") or "0 B")}</span>' if p.get("over_sized") else _esc(t.get("size_h") or "0 B"))}
-    {stat("documents", f"{t.get('docs', 0):,}")}
+    {stat("apps", len(scoped))}
+    {stat("indices", t_idx)}
+    {stat("total size", total_stat)}
+    {stat("documents", f"{t_docs:,}")}
     {stat("avg app size", _esc(avg_app))}
     {stat("ingest / day", _esc(pr["size_day"]) if pr else "—")}
   </tr></table>
@@ -205,31 +325,33 @@ def build_report(project: str) -> dict:
     <tr><th style="{th}">env</th><th style="{th}">owner team</th><th style="{th}">score</th>
         <th style="{th}">apps</th><th style="{th}">indices</th><th style="{th}">size</th>
         <th style="{th}">rate</th><th style="{th}">issues</th></tr>
-    {env_rows}
+    {env_rows or f'<tr><td style="{td}" colspan="8">no environments in scope</td></tr>'}
   </table>
 
   <h2 style="font-size:15px;margin:18px 0 6px">Applications</h2>
   <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#fff;border:1px solid {_C['line']};border-radius:6px">
     <tr><th style="{th}">app</th><th style="{th}">score</th>{env_head}
         <th style="{th}">total</th><th style="{th}">rate</th><th style="{th}">issues</th></tr>
-    {app_rows}
+    {app_rows or f'<tr><td style="{td}" colspan="6">no applications in scope</td></tr>'}
   </table>
 
-  {f'<h2 style="font-size:15px;margin:18px 0 6px">Issue detail</h2><div style="background:#fff;border:1px solid {_C["line"]};border-radius:6px;padding:8px 12px">{issue_blocks}</div>' if issue_blocks else ''}
+  {issues_section}
 
-  <p style="margin:16px 0 0;color:{_C['dim']};font-size:11px">Generated by QuestOps · Logging Health
+  <p style="margin:16px 0 0;color:{_C['dim']};font-size:11px">Logging health report
     · retention prd {int((d.get('retention') or {}).get('prd_days') or 0)}d / non-prd {int((d.get('retention') or {}).get('nonprd_days') or 0)}d
-    · stale &gt; {_esc(d.get('stale_hours'))}h</p>
+    · stale &gt; {_esc(stale_hours)}h</p>
 </div></body></html>"""
-    score = p.get("score")
     return {"project": project,
-            "subject": f"[QuestOps] Logging health — {project}"
-                       f" (score {score if score is not None else 'n/a'}/100)",
-            "html": html}
+            "subject": f"Logging health — {project}"
+                       f" (score {pscore if pscore is not None else 'n/a'}/100)"
+                       + (f" · {team} envs" if team else ""),
+            "html": html, "envs": env_names,
+            "include_extra": include_extra, "team": team or None}
 
 
-def send_report(project: str, recipients: list[str], subject: str | None = None) -> dict:
-    rep = build_report(project)
+def send_report(project: str, recipients: list[str], subject: str | None = None,
+                include_extra: bool = False, team: str | None = None) -> dict:
+    rep = build_report(project, include_extra=include_extra, team=team)
     to = [r.strip() for r in (recipients or []) if r and r.strip()]
     if not to:
         raise ValueError("no recipients given")
