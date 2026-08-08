@@ -1334,6 +1334,8 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-mx-sortsel:focus { outline: none; border-color: var(--amber); }
 .log-mx-envname { font: 700 11px var(--display); color: var(--amber);
   letter-spacing: .07em; text-transform: uppercase; }
+.log-mx-envteam { font-size: 9.5px; color: var(--dim); min-width: 0; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* cells: no individual borders — thin column rules; consistent inner layout,
    tight vertical rhythm so rows stay slim */

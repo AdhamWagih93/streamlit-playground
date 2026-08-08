@@ -3405,7 +3405,13 @@ function logMxHead(env, m, sep, total) {
   const parts = [m.no_logs && `${m.no_logs} no-logs`, m.stale && `${m.stale} stale`,
     m.ts_bad && `${m.ts_bad} @timestamp`, m.over && `${m.over} over-retained`].filter(Boolean).join(" · ");
   return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logInt(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to open this environment's dive (all apps' details)">
-    <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${logScoreBadge(score, "env score across this project's apps")}</div>
+    <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${(() => {
+      const owners = [...(m.owners || [])];
+      const lead = m.powner || owners[0];
+      if (!lead) return "";
+      const extra = owners.filter((o) => o !== lead);
+      return `<span class="log-mx-envteam" title="${esc(env)}_team: ${esc(lead)}${extra.length ? ` · app overrides: ${esc(extra.join(", "))}` : ""}">👤 ${esc(lead)}${extra.length ? ` +${extra.length}` : ""}</span>`;
+    })()}${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
     <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
     ${(() => { const r = logRates(m.size_bytes, m.docs, m.first, m.last);
@@ -3433,14 +3439,17 @@ function logIdxRows(list) {
 function logEnvDiveHtml(mx, env) {
   const close = '<button class="btn btn-sm btn-ghost log-envdive-close" title="close this environment dive">✕</button>';
   const inEnv = mx.apps.map((a) => ({ a, e: (a.env_stats || []).find((x) => x.env === env) })).filter((x) => x.e);
-  const title = `<span class="log-envdive-title">🔎 ${esc(env)} <span class="ci-meta">·</span> ${esc(mx.p.name)}</span>`;
+  let title = `<span class="log-envdive-title">🔎 ${esc(env)} <span class="ci-meta">·</span> ${esc(mx.p.name)}</span>`;
   if (!inEnv.length) return `<div class="log-envdive-head">${title}<span class="ci-meta">no apps in this environment</span><span class="spacer"></span>${close}</div>`;
   const size = inEnv.reduce((n, x) => n + (x.e.size_bytes || 0), 0);
   const docsT = inEnv.reduce((n, x) => n + (x.e.docs || 0), 0);
   const eFirst = inEnv.map((x) => x.e.first_logged).filter(Boolean).sort()[0];
   const eLast = inEnv.map((x) => x.e.last_logged).filter(Boolean).sort().slice(-1)[0];
   const eRate = logRates(size, docsT, eFirst, eLast);
+  const powner = (inEnv.find((x) => x.e.owner_project) || {}).e?.owner_project
+    || (inEnv.find((x) => x.e.owner) || {}).e?.owner;
   const issueN = inEnv.reduce((n, x) => n + (x.e.issues || []).length, 0);
+  if (powner) title += ` <span class="chip chip-cyan" title="${esc(env)}_team">👤 ${esc(powner)}</span>`;
   const rows = inEnv.map(({ a, e }) => {
     const id = ("tssd-" + a.project + "-" + a.app + "-" + env).replace(/[^A-Za-z0-9_-]/g, "_");
     const goodI = (a.index_list || []).find((i) => i.ts_type === "date" && !i.bad_week && !i.future_week);
@@ -3585,6 +3594,8 @@ function logMatrixHtml(p, apps, f) {
     m.size_bytes += e.size_bytes; m.indices += e.indices; m.docs += e.docs; m.apps++;
     if (e.first_logged && (!m.first || e.first_logged < m.first)) m.first = e.first_logged;
     if (e.last_logged && (!m.last || e.last_logged > m.last)) m.last = e.last_logged;
+    if (e.owner) (m.owners = m.owners || new Set()).add(e.owner);
+    if (e.owner_project && !m.powner) m.powner = e.owner_project;   // THE project ${env}_team
     if (e.score != null) m.scores.push(e.score);
     if (e.no_logs && e.deployed) m.no_logs++;
     if (e.stale) m.stale++;
