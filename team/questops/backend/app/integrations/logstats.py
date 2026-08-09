@@ -143,7 +143,26 @@ def _parse_index(name: str, known: dict) -> dict | None:
     apps = known["apps_by_project"].get(proj) or known["apps"]
     app, n = _match_token(rest.lower(), apps)
     if app is None:
-        return None
+        # RARE pattern variant ${app}*-${logtype}: extra characters glued
+        # DIRECTLY to the app name (payments2, checkoutv3-…) before the
+        # -logtype part. Only tried when the exact token match fails, so the
+        # normal pattern is unaffected. Longest app name that prefixes the
+        # segment wins; the glued junk (up to the next '-' AFTER the app
+        # name) is dropped and the remainder is the logtype.
+        low = rest.lower()
+        best = None
+        for c in apps:
+            cl = c.lower()
+            if low.startswith(cl) and (best is None or len(cl) > len(best[1])):
+                best = (c, cl)
+        if best is None:
+            return None
+        app = best[0]
+        cut = rest.find("-", len(best[1]))
+        logtype = rest[cut + 1:].lstrip("-") if cut >= 0 else ""
+        return {"prefix": prefix, "project": proj, "env": env.lower(), "app": app,
+                "logtype": logtype or "—", "week": week, "bad_week": bad_week,
+                "app_glued": rest[len(best[1]):cut if cut >= 0 else len(rest)]}
     logtype = rest[n:].lstrip("-") or "—"
     return {"prefix": prefix, "project": proj, "env": env.lower(), "app": app,
             "logtype": logtype, "week": week, "bad_week": bad_week}
