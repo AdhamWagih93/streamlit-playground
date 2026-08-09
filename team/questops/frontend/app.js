@@ -3797,12 +3797,15 @@ function logContentHtml() {
          <div class="log-report-bar log-report-opts">
            <label class="log-issues" title="EXTRA_ENVS are excluded by default — tick to include them"><input type="checkbox" id="log-report-extra"> include extra envs</label>
            <label class="log-issues" title="hide apps with a perfect score (100) — a focused problem report"><input type="checkbox" id="log-report-healthy"> hide healthy apps</label>
+           <label class="log-issues" title="hide apps never deployed in the in-scope environments (no logs expected)"><input type="checkbox" id="log-report-undep" checked> hide un-deployed apps</label>
+           <label class="log-issues" title="hide apps whose platform isn't monitored (logs not checked)"><input type="checkbox" id="log-report-unmon"> hide unmonitored apps</label>
            <select id="log-report-team" title="narrow the report to the environments owned by one team"></select></div>
          <div class="log-report-bar">
            <input id="log-report-subj" title="email subject">
            <input id="log-report-to" placeholder="recipients — comma-separated emails">
            <button class="btn btn-sm btn-primary" id="log-report-send">📤 send</button>
-           <button class="btn btn-sm" id="log-report-dl" title="download the previewed report as an HTML file">⬇ download</button>
+           <button class="btn btn-sm" id="log-report-dl" title="download the previewed report as an HTML file">⬇ HTML</button>
+           <button class="btn btn-sm" id="log-report-pdf" title="save the previewed report as PDF (opens the print dialog — choose 'Save as PDF')">🖨 PDF</button>
            <span id="log-report-status" class="ci-meta"></span></div>
          <iframe id="log-report-frame" title="report preview"></iframe>
        </div></div>`;
@@ -3912,9 +3915,13 @@ async function openLogReport(projName) {
   // this project's actual env owners
   const extraCb = m.querySelector("#log-report-extra");
   const healthyCb = m.querySelector("#log-report-healthy");
+  const undepCb = m.querySelector("#log-report-undep");
+  const unmonCb = m.querySelector("#log-report-unmon");
   const teamSel = m.querySelector("#log-report-team");
   extraCb.checked = false;
   healthyCb.checked = false;
+  undepCb.checked = true;    // like the page: never-deployed apps hidden by default
+  unmonCb.checked = false;
   const proj = ((state.logData || {}).projects || []).find((x) => x.name === projName);
   const owners = [...new Set((proj ? proj.apps || [] : [])
     .flatMap((a) => (a.env_stats || []).map((e) => e.owner_project || e.owner))
@@ -3928,6 +3935,8 @@ async function openLogReport(projName) {
     const qs = new URLSearchParams({ project: projName });
     if (extraCb.checked) qs.set("extra", "true");
     if (healthyCb.checked) qs.set("skip_healthy", "true");
+    if (undepCb.checked) qs.set("skip_undeployed", "true");
+    if (unmonCb.checked) qs.set("skip_unmonitored", "true");
     if (teamSel.value) qs.set("team", teamSel.value);
     try {
       const rep = await api(`/api/logging/report?${qs.toString()}`);
@@ -3956,8 +3965,20 @@ async function openLogReport(projName) {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     status.textContent = `⬇ downloaded ${name}`;
   };
+  // PDF = the browser's print-to-PDF of exactly the previewed document
+  const pdfBtn = m.querySelector("#log-report-pdf");
+  if (pdfBtn) pdfBtn.onclick = () => {
+    if (!lastRep) { status.textContent = "⚠ no report built yet"; return; }
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      status.textContent = "🖨 print dialog opened — choose “Save as PDF”";
+    } catch (e) { status.textContent = `⚠ ${e.message}`; }
+  };
   extraCb.onchange = load;
   healthyCb.onchange = load;
+  undepCb.onchange = load;
+  unmonCb.onchange = load;
   teamSel.onchange = load;
   await load();
   const sendBtn = m.querySelector("#log-report-send");
@@ -3970,7 +3991,8 @@ async function openLogReport(projName) {
       const res = await api("/api/logging/report/send", { method: "POST",
         body: { project: projName, recipients: to, subject: subj.value,
                 extra: extraCb.checked, team: teamSel.value || null,
-                skip_healthy: healthyCb.checked } });
+                skip_healthy: healthyCb.checked, skip_undeployed: undepCb.checked,
+                skip_unmonitored: unmonCb.checked } });
       status.classList.remove("log-report-err");
       status.textContent = `✓ sent to ${res.sent} recipient(s) (${res.recipients.join(", ")})`
         + (res.transport && res.transport !== "demo" ? ` via ${res.transport.toUpperCase()}${res.attempts > 1 ? ` after ${res.attempts} attempts` : ""}` : "")

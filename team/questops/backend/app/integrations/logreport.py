@@ -107,7 +107,8 @@ def _env_issue_lines(a: dict, e: dict, stale_hours) -> list[str]:
 
 
 def build_report(project: str, include_extra: bool = False, team: str | None = None,
-                 skip_healthy: bool = False) -> dict:
+                 skip_healthy: bool = False, skip_undeployed: bool = False,
+                 skip_unmonitored: bool = False) -> dict:
     d = logstats.analyze()
     p = next((x for x in (d.get("projects") or []) if x["name"] == project), None)
     if p is None:
@@ -185,12 +186,19 @@ def build_report(project: str, include_extra: bool = False, team: str | None = N
                        "_first": min(firsts) if firsts else None,
                        "_last": max(lasts) if lasts else None, "_score": score})
 
-    # optionally hide perfectly HEALTHY apps (score 100) — a focused problem
-    # report; the count of hidden apps is stated in the scope note
+    # optional app filters — every hidden count is stated in the scope note
+    hidden_unmonitored = 0
+    if skip_unmonitored:                      # platform not checked at all
+        hidden_unmonitored = sum(1 for x in scoped if not x.get("monitored"))
+        scoped = [x for x in scoped if x.get("monitored")]
+    hidden_undeployed = 0
+    if skip_undeployed:                       # never deployed in the in-scope envs
+        dep = lambda x: any(e.get("deployed") for e in x["_es"])  # noqa: E731
+        hidden_undeployed = sum(1 for x in scoped if not dep(x))
+        scoped = [x for x in scoped if dep(x)]
     hidden_healthy = 0
-    if skip_healthy:
-        healthy = [x for x in scoped if x["_score"] == 100]
-        hidden_healthy = len(healthy)
+    if skip_healthy:                          # perfect score (in scope)
+        hidden_healthy = sum(1 for x in scoped if x["_score"] == 100)
         scoped = [x for x in scoped if x["_score"] != 100]
 
     t_size = sum(x["_size"] for x in scoped)
@@ -299,10 +307,11 @@ def build_report(project: str, include_extra: bool = False, team: str | None = N
     total_stat = (f'<span style="color:{_C["red"]}">{_esc(logstats._hsize(t_size))}</span>'
                   if p.get("over_sized") else _esc(logstats._hsize(t_size)))
 
-    if hidden_healthy:
-        scope_note = (scope_note + " · " if scope_note else "") \
-            + f"{hidden_healthy} healthy (score 100) app(s) hidden"
-    elif skip_healthy:
+    for n, what in ((hidden_unmonitored, "unmonitored"), (hidden_undeployed, "un-deployed"),
+                    (hidden_healthy, "healthy (score 100)")):
+        if n:
+            scope_note = (scope_note + " · " if scope_note else "") + f"{n} {what} app(s) hidden"
+    if skip_healthy and not hidden_healthy:
         scope_note = (scope_note + " · " if scope_note else "") + "healthy apps hidden"
     env_head = "".join(f'<th style="{th}">{_esc(en)}</th>' for en in env_names)
     issues_section = ""
@@ -361,6 +370,8 @@ def build_report(project: str, include_extra: bool = False, team: str | None = N
                        f" (score {pscore if pscore is not None else 'n/a'}/100)"
                        + (f" · {team} envs" if team else ""),
             "html": html, "envs": env_names, "hidden_healthy": hidden_healthy,
+            "hidden_undeployed": hidden_undeployed,
+            "hidden_unmonitored": hidden_unmonitored,
             "include_extra": include_extra, "team": team or None,
             "skip_healthy": skip_healthy}
 
@@ -433,9 +444,11 @@ def _send_smtp(subject: str, html: str, to: list[str]) -> None:
 
 def send_report(project: str, recipients: list[str], subject: str | None = None,
                 include_extra: bool = False, team: str | None = None,
-                skip_healthy: bool = False) -> dict:
+                skip_healthy: bool = False, skip_undeployed: bool = False,
+                skip_unmonitored: bool = False) -> dict:
     rep = build_report(project, include_extra=include_extra, team=team,
-                       skip_healthy=skip_healthy)
+                       skip_healthy=skip_healthy, skip_undeployed=skip_undeployed,
+                       skip_unmonitored=skip_unmonitored)
     to = _complete_recipients(recipients)
     if not to:
         raise ValueError("no recipients given")
