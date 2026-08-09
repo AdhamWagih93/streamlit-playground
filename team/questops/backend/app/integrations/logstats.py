@@ -1407,6 +1407,7 @@ def analyze(force: bool = False) -> dict:
     if not force and _CACHE["payload"] and time.time() - _CACHE["at"] < _TTL:
         return {**_CACHE["payload"], "cached": True}
     payload = _demo() if settings.demo_mode else _live()
+    payload["analyzed_at"] = _now().replace(microsecond=0).isoformat() + "Z"
     _CACHE.update(at=time.time(), payload=payload)
     return {**payload, "cached": False}
 

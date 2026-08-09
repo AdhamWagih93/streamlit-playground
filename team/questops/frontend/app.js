@@ -3738,6 +3738,7 @@ function logTilesHtml(apps) {
     <div class="stat-tile log-score-tile"><b class="log-score ${logScoreClass(overall)}">${overall == null ? "—" : overall}</b><span>health score</span></div>
     ${tile(projects, "projects")}
     ${tile(apps.length, "apps")}
+    ${tile(new Set(apps.map((a) => a.deploy_technology).filter(Boolean)).size, "technologies")}
     ${tile(logInt(sum((a) => a.indices)), "log indices")}
     ${tile(logHsize(sum((a) => a.size_bytes)), "total size")}
     ${tile(logInt(sum((a) => a.docs)), "documents")}
@@ -4139,9 +4140,7 @@ async function renderLogging() {
   };
   const connProblem = ["prd", "nonprd"].some((k) => { const c = (d.connections || {})[k]; return c && c.configured && !c.reachable; });
   const head = `<div class="view-head"><h1>LOGGING HEALTH</h1>
-      <span class="sub">ELK index health across your projects &amp; apps</span>
-      <span class="spacer"></span>
-      <button class="btn btn-sm" id="log-refresh">↻ re-analyze</button></div>`;
+      <span class="sub">ELK index health across your projects &amp; apps</span></div>`;
   // pattern logic + ES health + inventory detection — collapsed, on demand
   // (auto-opens only when there's a page-level note or a connection problem)
   const setup = `<details class="filebox log-setup" ${(d.note || connProblem) ? "open" : ""}>
@@ -4156,7 +4155,8 @@ async function renderLogging() {
       </div></details>`;
 
   if (!(d.projects || []).length) {
-    view().innerHTML = head + (d.note ? `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>` : "") + setup;
+    view().innerHTML = head + (d.note ? `<div class="panel"><div class="kpi-note">${esc(d.note)}</div></div>` : "") + setup
+      + `<button class="btn btn-sm" id="log-refresh" style="margin-top:8px">↻ re-analyze</button>`;
     document.getElementById("log-refresh").onclick = () => { state.logRefresh = true; renderLogging(); };
     return;
   }
@@ -4202,7 +4202,8 @@ async function renderLogging() {
     <label class="log-issues" title="hide apps that have no log indices"><input type="checkbox" id="log-hide-nolog" ${f.hideNoLogs ? "checked" : ""}> hide no-logs</label>
     <label class="log-issues" title="hide apps whose platform isn't monitored"><input type="checkbox" id="log-hide-unmon" ${f.hideUnmonitored ? "checked" : ""}> hide unmonitored</label>
     ${anyActive ? '<button class="btn btn-sm" id="log-clear">✕ clear</button>' : ""}
-    <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""} · stale &gt;${d.stale_hours}h${d.current_week ? ` · current week <b>${esc(d.current_week)}</b>` : ""}</span></div>`;
+    <span class="spacer"></span><span class="ci-meta">${esc(d.source)}${d.cached ? " · cached" : ""} · stale &gt;${d.stale_hours}h${d.current_week ? ` · current week <b>${esc(d.current_week)}</b>` : ""}${d.analyzed_at ? ` · analyzed <b title="${esc(d.analyzed_at)}">${logAgo(Math.max((Date.now() - new Date(d.analyzed_at)) / 3600000, 0))}</b>` : ""}</span>
+    <button class="btn btn-sm" id="log-refresh" title="drop the cache and re-analyze the whole estate now">↻ re-analyze</button></div>`;
 
   const noteHtml = d.note ? `<div class="panel" style="margin-bottom:10px"><div class="kpi-note">${esc(d.note)}</div></div>` : "";
   // compact: title · collapsed setup/health · always-visible filters + stats + results
