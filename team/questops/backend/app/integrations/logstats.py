@@ -201,6 +201,30 @@ def _ts_field_types(conn: dict, pattern: str) -> dict:
     return out
 
 
+def _grok_indices(conn: dict, pattern: str) -> dict:
+    """{index: doc count} of indices holding docs tagged _grokparsefailure —
+    Logstash grok patterns not matching, so the docs' fields are unusable.
+    One cheap aggregation; best-effort ({} on any error)."""
+    body = {"size": 0, "track_total_hits": False,
+            "query": {"bool": {"should": [
+                {"term": {"tags": "_grokparsefailure"}},
+                {"term": {"tags.keyword": "_grokparsefailure"}}],
+                "minimum_should_match": 1}},
+            "aggs": {"idx": {"terms": {"field": "_index", "size": 2000}}}}
+    try:
+        r = requests.post(f"{conn['url']}/{pattern}/_search",
+                          params={"ignore_unavailable": "true", "allow_no_indices": "true"},
+                          json=body, headers=_headers(conn["key"]), timeout=30,
+                          verify=conn["verify"])
+        if not r.ok:
+            return {}
+        buckets = (((r.json().get("aggregations") or {}).get("idx") or {})
+                   .get("buckets") or [])
+        return {b["key"]: b.get("doc_count", 0) for b in buckets}
+    except (requests.RequestException, ValueError):
+        return {}
+
+
 def _msearch_ts_range(conn: dict, groups: list[tuple]) -> dict:
     """One round trip: (first, last) @timestamp for each (key, [indices]) group
     — the oldest and newest logged document."""
@@ -256,22 +280,23 @@ def _blank_app(project: str, app: str) -> dict:
 
 
 # per-env health score deductions from 100 (higher = healthier); over_retained
-# is MINOR
+# is MINOR; grok = docs tagged _grokparsefailure (fields unusable, moderate)
 _PENALTY = {"stale": 50, "timestamp": 40, "bad_week": 20, "future_week": 20,
-            "over_retained": 10}
+            "grok": 15, "over_retained": 10}
 # the issue keys used across scoring + the issue-type filter
 ISSUE_KEYS = ("no_logs", "stale", "timestamp", "bad_week", "future_week",
-              "over_retained", "clash", "team_clash", "unsupported")
+              "grok", "over_retained", "clash", "team_clash", "unsupported")
 
 
 def _env_score(no_logs: bool, stale: bool, ts_bad: bool, bad_week: bool,
-               future_week: bool, over_retained: bool) -> int:
+               future_week: bool, over_retained: bool, grok: bool = False) -> int:
     if no_logs:
         return 0
     s = 100 - (_PENALTY["stale"] if stale else 0) \
         - (_PENALTY["timestamp"] if ts_bad else 0) \
         - (_PENALTY["bad_week"] if bad_week else 0) \
         - (_PENALTY["future_week"] if future_week else 0) \
+        - (_PENALTY["grok"] if grok else 0) \
         - (_PENALTY["over_retained"] if over_retained else 0)
     return max(s, 0)
 
@@ -317,6 +342,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         deployed = bool(dep)
         bad_week = sorted({i["index"] for i in eidx if i.get("bad_week")})
         future_week = sorted({i["index"] for i in eidx if i.get("future_week")})
+        grok = sorted({i["index"] for i in eidx if i.get("grok_fail")})
         no_logs = len(eidx) == 0
         stale = (not no_logs) and (age is None or age > stale_h)
         ts_ok = (not no_logs) and not bad
@@ -342,10 +368,12 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
                 issues.append("bad_week")
             if future_week:
                 issues.append("future_week")
+            if grok:
+                issues.append("grok")
             if over_retained:
                 issues.append("over_retained")
             score = _env_score(no_logs, stale, not ts_ok, bool(bad_week),
-                               bool(future_week), over_retained)
+                               bool(future_week), over_retained, bool(grok))
         if om.get("clash"):
             issues.append("team_clash")
         env_stats.append({
@@ -363,6 +391,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
             "owner_project": om.get("project_owner"), "owner_clash": bool(om.get("clash")),
             "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:10],
             "bad_week_indices": bad_week[:10], "future_week_indices": future_week[:10],
+            "grok_indices": grok[:10],
             "issues": issues, "score": score})
 
     # app-level aggregates
@@ -392,6 +421,7 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         "ts_bad_indices": sorted({x for v in bad.values() for x in v})[:25],
         "bad_week_indices": sorted({i["index"] for i in idxs if i.get("bad_week")})[:25],
         "future_week_indices": sorted({i["index"] for i in idxs if i.get("future_week")})[:25],
+        "grok_indices": sorted({i["index"] for i in idxs if i.get("grok_fail")})[:25],
         "monitored": monitored, "platform_status": status,
         "env_stats": env_stats,
         # meta / platform fields
@@ -432,6 +462,8 @@ def _finalize_app(rec: dict, stale_h: int, expected_envs, ts_map: dict,
         issues.add("bad_week")
     if rec["future_week_indices"]:
         issues.add("future_week")
+    if rec["grok_indices"]:
+        issues.add("grok")
     if rec["over_retained_envs"]:
         issues.add("over_retained")
     if rec["discrepancy"]:
@@ -595,6 +627,7 @@ def _assemble(records: list[dict], ts_map: dict, conn_status: dict,
         "apps_no_logs": cnt("no_logs"), "apps_stale": cnt("stale"),
         "apps_ts_bad": cnt("timestamp"), "apps_bad_week": cnt("bad_week"),
         "apps_future_week": cnt("future_week"), "apps_over_retained": cnt("over_retained"),
+        "apps_grok": cnt("grok"),
         "apps_over_sized": cnt("over_sized"),
         "projects_over_sized": sum(1 for po in projects_out if po.get("over_sized")),
         "discrepancies": cnt("clash"), "apps_team_clash": cnt("team_clash"),
@@ -918,6 +951,7 @@ def _live() -> dict:
         try:
             cats = _cat_indices(conn, pattern)
             ts_types = _ts_field_types(conn, pattern)
+            grok_map = _grok_indices(conn, pattern)
         except requests.RequestException as exc:
             conn_status[kind] = {"label": conn["label"], "configured": True,
                                  "reachable": False, "indices": 0, "url": conn["url"],
@@ -933,7 +967,9 @@ def _live() -> dict:
             rec = {"index": name, "source": kind,
                    "size_bytes": int(row.get("store.size") or 0),
                    "docs": int(row.get("docs.count") or 0),
-                   "health": row.get("health"), "ts_type": ts_types.get(name)}
+                   "health": row.get("health"), "ts_type": ts_types.get(name),
+                   "grok_fail": name in grok_map,
+                   "grok_docs": grok_map.get(name, 0)}
             if p:
                 rec.update(p)
                 if conn["expect_envs"] is not None and p["env"] not in conn["expect_envs"]:
@@ -996,6 +1032,7 @@ def _demo() -> dict:
     BAD_WEEK = {("Platform", "checkout", "prd")}     # an illogical 5-digit year index
     FUTURE_WEEK = {("Platform", "checkout", "uat")}  # a future-dated index (clock skew)
     OVER_RETAINED = {("Platform", "notifications", "qc")}  # logs kept beyond retention
+    GROK = {("Platform", "payments", "dev")}         # docs tagged _grokparsefailure
     # never deployed (→ expected to have no logs, hidden by default): the uat env
     # of notifications, and every env of team-configs
     UNDEPLOYED = {("Platform", "notifications", "uat")}
@@ -1037,6 +1074,8 @@ def _demo() -> dict:
                         records.append({"index": idx, "source": src,
                                         "size_bytes": size, "docs": docs,
                                         "health": "green", "ts_type": ts_type,
+                                        "grok_fail": (pname, app, env) in GROK
+                                                     and lt == "application",
                                         "prefix": prefix, "project": pname, "env": env,
                                         "app": app, "logtype": lt, "week": wk,
                                         "bad_week": False})
@@ -1230,14 +1269,23 @@ def _sample_search(conn: dict, pattern: str, body: dict, docs: list, seen: set) 
         src = h.get("_source") or {}
         val = src.get("@timestamp")
         orig, trunc = _orig_value(src)
+        tags = src.get("tags")
+        if isinstance(tags, str):
+            tags = [tags]
         docs.append({"index": h.get("_index"), "id": h.get("_id"), "value": val,
                      "is_date": _looks_date(val), "is_future": _looks_future(val),
                      "path": _log_path(src), "logtype": _fields_type(src),
+                     "tags": tags if isinstance(tags, list) else None,
                      "original": orig, "original_truncated": trunc})
     return None
 
 
-def _sample_ts_multi(pattern: str, size: int) -> dict:
+_GROK_QUERY = {"bool": {"should": [
+    {"term": {"tags": "_grokparsefailure"}},
+    {"term": {"tags.keyword": "_grokparsefailure"}}], "minimum_should_match": 1}}
+
+
+def _sample_ts_multi(pattern: str, size: int, grok: bool = False) -> dict:
     """Sample @timestamp + event.original across ALL the given indices (a comma
     list of the app's suspect indices), on BOTH connections (missing ones
     ignored), tagging each @timestamp value as a plausible date or not. A
@@ -1246,7 +1294,7 @@ def _sample_ts_multi(pattern: str, size: int) -> dict:
     if not conns:
         return {"indices": [i for i in pattern.split(",") if i],
                 "error": "no Elasticsearch connection configured", "docs": []}
-    src_fields = ["@timestamp", "event.original", "log.file.path", "fields.type"]
+    src_fields = ["@timestamp", "event.original", "log.file.path", "fields.type", "tags"]
     docs: list = []
     seen: set = set()
     ts_types: dict = {}
@@ -1256,10 +1304,14 @@ def _sample_ts_multi(pattern: str, size: int) -> dict:
             ts_types.update(_ts_field_types(conn, pattern))
         except requests.RequestException:
             pass
-        e = _sample_search(conn, pattern, {"size": size, "_source": src_fields,
-            "sort": "_doc", "query": {"exists": {"field": "@timestamp"}}}, docs, seen)
-        _sample_search(conn, pattern, {"size": max(6, size // 2), "_source": src_fields,
-            "query": {"regexp": {"@timestamp.keyword": "-?[0-9]+([.][0-9]+)?"}}}, docs, seen)
+        if grok:   # only the docs that actually FAILED grok parsing
+            e = _sample_search(conn, pattern, {"size": size, "_source": src_fields,
+                "sort": "_doc", "query": _GROK_QUERY}, docs, seen)
+        else:
+            e = _sample_search(conn, pattern, {"size": size, "_source": src_fields,
+                "sort": "_doc", "query": {"exists": {"field": "@timestamp"}}}, docs, seen)
+            _sample_search(conn, pattern, {"size": max(6, size // 2), "_source": src_fields,
+                "query": {"regexp": {"@timestamp.keyword": "-?[0-9]+([.][0-9]+)?"}}}, docs, seen)
         err = err or e
     # worst first: non-dates, then future-dated, then normal docs
     docs.sort(key=lambda d: (d["is_date"], not d.get("is_future")))
@@ -1285,7 +1337,7 @@ def ts_samples(index: str = "", source: str = "", good: str = "",
         raise ValueError("index is required")
     if settings.demo_mode:
         return _demo_ts_samples(idx, good, mode)
-    out = {"index": _sample_ts_multi(idx, size)}
+    out = {"index": _sample_ts_multi(idx, size, grok=(mode == "grok"))}
     if good.strip():
         out["good"] = _sample_ts_multi(good.strip(), size)
     return out
@@ -1302,6 +1354,11 @@ def _demo_ts_samples(index: str, good: str, mode: str = "") -> dict:
         bad_vals = [iso(now + dt.timedelta(days=n)) for n in (365, 210, 92, 30, 30, 9)] \
             + [str(int((now + dt.timedelta(days=48)).timestamp()))] \
             + [iso(now - dt.timedelta(minutes=m)) for m in (12, 95)]
+        ts_type = "date"
+    elif mode == "grok":
+        # grok-failed docs: timestamps fine, but the raw line didn't match any
+        # grok pattern — fields never extracted
+        bad_vals = [iso(now - dt.timedelta(minutes=m)) for m in (2, 9, 25, 44, 61, 90)]
         ts_type = "date"
     elif mode == "badweek":
         # bad-year indices: the INDEX NAME is malformed (mis-templated
@@ -1320,10 +1377,14 @@ def _demo_ts_samples(index: str, good: str, mode: str = "") -> dict:
     for i, v in enumerate(bad_vals):
         raw = (big[:_ORIG_MAX] if i == 0 and mode != "future"
                else f"<134>1 {v} host svc - - raw event line for @timestamp={v!r}")
+        if mode == "grok":
+            raw = ("PAYMENT|%s|txn=%d|amount=EUR %d.%02d|state=OK|node=pay-0%d <unstructured tail>"
+                   % (v, 91000 + i, 25 + i * 3, i * 7 % 100, i % 3 + 1))
         bad.append({"index": idxs[i % len(idxs)], "id": f"AbC{i}xY",
                     "value": v, "is_date": _looks_date(v), "is_future": _looks_future(v),
                     "path": demo_paths[i % len(demo_paths)],
                     "logtype": ("application", "access", "error")[i % 3],
+                    "tags": ["_grokparsefailure", "beats_input"] if mode == "grok" else None,
                     "original": raw, "original_truncated": i == 0 and mode != "future"})
     bad.sort(key=lambda d: (d["is_date"], not d["is_future"]))
     res = {"index": {"indices": idxs, "ts_types": {ix: ts_type for ix in idxs},

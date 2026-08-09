@@ -69,6 +69,7 @@ def _rates(size, docs, first, last):
 _ISSUE_LABEL = {"no_logs": "no logs", "stale": "stale", "timestamp": "@timestamp not a date",
                 "bad_week": "bad year in index name", "future_week": "future-dated index",
                 "over_retained": "over-retained", "over_sized": "over-sized storage",
+                "grok": "grok parse failures",
                 "clash": "deploy_platform clash", "team_clash": "owner clash",
                 "unsupported": "unsupported platform"}
 
@@ -95,6 +96,10 @@ def _env_issue_lines(a: dict, e: dict, stale_hours) -> list[str]:
             names = e.get("future_week_indices") or []
             out.append(f"future-dated index (clock skew / mis-template): "
                        f"{_esc(', '.join(names[:3]))}{'…' if len(names) > 3 else ''}")
+        elif k == "grok":
+            n = len(e.get("grok_indices") or [])
+            out.append(f"{n} index(es) contain docs tagged _grokparsefailure — "
+                       f"grok patterns not matching, fields never extracted")
         elif k == "over_retained":
             out.append(f"logs kept beyond the retention policy "
                        f"({e.get('retention_days', '?')} days)")

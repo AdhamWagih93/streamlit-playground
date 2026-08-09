@@ -3163,7 +3163,7 @@ function logScoreBadge(s, label) {
 const LOG_ISSUE_LABEL = {
   no_logs: "no logs", stale: "stale", timestamp: "@timestamp not date",
   bad_week: "bad year", future_week: "future-dated", over_retained: "over-retained",
-  over_sized: "over-sized storage",
+  over_sized: "over-sized storage", grok: "grok parse failure",
   clash: "platform clash", team_clash: "owner clash", unsupported: "unsupported platform",
 };
 
@@ -3253,6 +3253,7 @@ function logScopeApp(a, f) {
     ts_bad_indices: uniq(es.flatMap((e) => e.ts_bad_indices || [])),
     bad_week_indices: uniq(es.flatMap((e) => e.bad_week_indices || [])),
     future_week_indices: uniq(es.flatMap((e) => e.future_week_indices || [])),
+    grok_indices: uniq(es.flatMap((e) => e.grok_indices || [])),
     over_retained_envs: es.filter((e) => e.over_retained).map((e) => e.env),
     owner_clash_envs: ownerClash,
     envs_stale: es.filter((e) => e.stale).length,
@@ -3360,7 +3361,7 @@ function logRateLine(size, docs, first, last) {
 let _logAppSeq = 0;   // per-render app id counter (HTML-safe keys for lazy detail)
 let _logMxSeq = 0;    // per-render matrix id counter (env-dive lookups)
 const LOG_ISSUE_SEV = { no_logs: "bad", stale: "warn", timestamp: "bad",
-  bad_week: "bad", future_week: "bad", over_retained: "warn", over_sized: "warn", team_clash: "bad", clash: "bad" };
+  bad_week: "bad", future_week: "bad", over_retained: "warn", over_sized: "warn", grok: "warn", team_clash: "bad", clash: "bad" };
 // labeled issue micro-chips (a reader shouldn't have to decode mystery dots);
 // at most `cap` shown, the rest folded into a "+n" with a tooltip
 function logIssueChips(issues, cap = 2) {
@@ -3449,6 +3450,7 @@ function logIdxRows(list) {
       <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
       <span class="log-idx-size">${logHsize(i.size_bytes)}</span><span class="ci-meta">${logInt(i.docs)} docs</span>${logSrcChip(i.source)}
       ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
+      ${i.grok_fail ? `<span class="chip chip-amber" title="${logInt(i.grok_docs || 0) || "some"} doc(s) tagged _grokparsefailure">💥 grok</span>` : ""}
     </div>`).join("") || '<div class="empty">no indices</div>';
 }
 
@@ -3488,6 +3490,10 @@ function logEnvDiveHtml(mx, env) {
     if (bwNames) insp.push(`<div class="log-tsbad-note">⚠ ${(e.bad_week_indices || []).length} ${esc(env)} index(es) with an illogical <b>YEAR</b> in the name (malformed yyyy.ww).
       <button class="btn btn-sm log-ts-sample" data-tss-target="${id}-bw" data-ts-index="${esc(bwNames)}" data-ts-mode="badweek" data-tss-label="🗓 docs in bad-year indices" ${goodAttr}>🔍 sample docs</button>
       <div id="${id}-bw" class="log-tss"></div></div>`);
+    const gkNames = (e.grok_indices || []).slice(0, 15).join(",");
+    if (gkNames) insp.push(`<div class="log-tsbad-note">⚠ ${(e.grok_indices || []).length} ${esc(env)} index(es) contain docs tagged <b>_grokparsefailure</b> — fields never extracted.
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${id}-gk" data-ts-index="${esc(gkNames)}" data-ts-mode="grok" data-tss-label="💥 grok-failed docs" ${goodAttr}>🔍 sample failed docs</button>
+      <div id="${id}-gk" class="log-tss"></div></div>`);
     const idxs = (a.index_list || []).filter((i) => i.env === env);
     const owner = e.owner ? `<span class="chip ${e.owner_clash ? "chip-red" : "chip-cyan"}" title="${e.owner_clash ? `app ${esc(e.owner_app)} vs project ${esc(e.owner_project)}` : esc(env) + "_team"}">👤 ${esc(e.owner)}${e.owner_clash ? " ⚠" : ""}</span>` : '<span class="ci-meta">👤 —</span>';
     const logged = !e.deployed ? '<span class="ci-meta">never deployed — no logs expected</span>'
@@ -3565,6 +3571,12 @@ function logAppDrawerHtml(a) {
     <div class="log-tsbad-note">⚠ ${(a.bad_week_indices || []).length} index(es) with an illogical <b>YEAR</b> in the name (malformed yyyy.ww — a mis-templated loader).
       <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}-bw" data-ts-index="${esc(bwNames)}" data-ts-mode="badweek" data-tss-label="🗓 docs in bad-year indices" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample docs</button>
       <div id="${tssId}-bw" class="log-tss"></div></div>` : "";
+  // and for GROK-failed docs — Logstash patterns not matching, fields unusable
+  const gkNames = (a.grok_indices || []).slice(0, 15).join(",");
+  const gkInspect = gkNames ? `
+    <div class="log-tsbad-note">⚠ ${(a.grok_indices || []).length} index(es) contain docs tagged <b>_grokparsefailure</b> — the raw lines didn't match any grok pattern, so their fields were never extracted.
+      <button class="btn btn-sm log-ts-sample" data-tss-target="${tssId}-gk" data-ts-index="${esc(gkNames)}" data-ts-mode="grok" data-tss-label="💥 grok-failed docs" ${goodI ? `data-ts-good="${esc(goodI.index)}"` : ""}>🔍 sample failed docs</button>
+      <div id="${tssId}-gk" class="log-tss"></div></div>` : "";
   return `${head}
     <div class="log-drawer-envs">${envsHtml}</div>
     <div class="log-app-facts">
@@ -3579,6 +3591,7 @@ function logAppDrawerHtml(a) {
     ${tsInspect}
     ${futInspect}
     ${bwInspect}
+    ${gkInspect}
     ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(a.index_list)}</div></details>` : ""}`;
 }
 
@@ -3687,7 +3700,7 @@ function logProjectCardHtml(p, apps, f) {
     docs: apps.reduce((n, a) => n + a.docs, 0),
     no_logs: has("no_logs"), stale: has("stale"), ts_bad: has("timestamp"),
     bad_week: has("bad_week"), future_week: has("future_week"), over_retained: has("over_retained"),
-    over_sized: has("over_sized"),
+    over_sized: has("over_sized"), grok: has("grok"),
     discrepancies: has("clash"), team_clash: has("team_clash"), unsupported: has("unsupported"),
     undeployed: apps.filter((a) => !a.deployed).length,
   };
@@ -3708,7 +3721,7 @@ function logProjectCardHtml(p, apps, f) {
         return (wl.length ? ` · avg app ${esc(logHsize(Math.round(bytes / wl.length)))}` : "")
           + (r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : "");
       })()}${
-        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.over_sized, "over-sized", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
+        flag(t.no_logs, "no-logs", "pct-bad")}${flag(t.stale, "stale", "pct-warn")}${flag(t.ts_bad, "@ts", "pct-bad")}${flag(t.bad_week, "bad-year", "pct-bad")}${flag(t.future_week, "future", "pct-bad")}${flag(t.over_retained, "over-retained", "pct-warn")}${flag(t.over_sized, "over-sized", "pct-warn")}${flag(t.grok, "grok", "pct-warn")}${flag(t.discrepancies, "clash", "pct-bad")}${flag(t.team_clash, "owner-clash", "pct-bad")}${flag(t.unsupported, "unmonitored", "pct-warn")}${flag(t.undeployed, "un-deployed", "pct-warn")}</span></summary>
     <div class="log-proj-body">${warn}
       ${(f._projScore = pscore, logMatrixHtml(p, apps, f))}</div></details>`;
 }
@@ -3745,6 +3758,7 @@ function logTilesHtml(apps) {
     ${tile(has("future_week"), "future-dated", has("future_week") ? "pct-bad" : "pct-good")}
     ${tile(has("over_retained"), "over-retained", has("over_retained") ? "pct-warn" : "pct-good")}
     ${tile(has("over_sized"), "over-sized", has("over_sized") ? "pct-warn" : "pct-good")}
+    ${tile(has("grok"), "grok failures", has("grok") ? "pct-warn" : "pct-good")}
     ${tile(has("clash"), "platform clashes", has("clash") ? "pct-bad" : "pct-good")}
     ${tile(has("team_clash"), "owner clashes", has("team_clash") ? "pct-bad" : "pct-good")}
     ${tile(has("unsupported"), "unmonitored", has("unsupported") ? "pct-warn" : "pct-good")}
@@ -3857,7 +3871,8 @@ function logTsSamplesHtml(data, label) {
         : '<div class="ci-meta tss-noorig">no event.original</div>';
       const verdict = !dd.is_date ? '<span class="chip chip-red">not a date</span>'
         : (dd.is_future ? '<span class="chip chip-red">⏩ future date</span>' : '<span class="chip chip-green">date ✓</span>');
-      const path = (dd.path || dd.logtype) ? `<div class="tss-path">${dd.logtype ? `<span class="chip chip-cyan" title="fields.type — the shipper's log-type tag">${esc(dd.logtype)}</span> ` : ""}${dd.path ? `<span title="log.file.path — the log file this doc was shipped from">📄 <code>${esc(dd.path)}</code></span>` : ""}</div>` : "";
+      const tagChips = (dd.tags || []).map((t) => `<span class="chip ${t === "_grokparsefailure" ? "chip-red" : "chip-amber"}" title="tags">${esc(t)}</span>`).join(" ");
+      const path = (dd.path || dd.logtype || tagChips) ? `<div class="tss-path">${dd.logtype ? `<span class="chip chip-cyan" title="fields.type — the shipper's log-type tag">${esc(dd.logtype)}</span> ` : ""}${tagChips ? tagChips + " " : ""}${dd.path ? `<span title="log.file.path — the log file this doc was shipped from">📄 <code>${esc(dd.path)}</code></span>` : ""}</div>` : "";
       return `<div class="tss-doc ${dd.is_date && !dd.is_future ? "ok" : "bad"}">
         <div class="tss-doc-head">
           <code class="tss-val">${esc(String(dd.value))}</code>
@@ -4152,7 +4167,7 @@ async function renderLogging() {
   const platforms = [...new Set((d.projects || []).flatMap((p) => (p.apps || [])
     .map((a) => a.deploy_platform).filter(Boolean)))].sort();
   const issueOpts = [["all", "issue: any"], ["any", "any issue"],
-    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "over_retained", "over_sized", "clash", "team_clash", "unsupported"]
+    ...["no_logs", "stale", "timestamp", "bad_week", "future_week", "grok", "over_retained", "over_sized", "clash", "team_clash", "unsupported"]
       .map((k) => [k, LOG_ISSUE_LABEL[k]])];
   // filters PRECEDE the stat tiles so the numbers respond to them; the bar is
   // STICKY (always visible while scrolling) and visually compact
