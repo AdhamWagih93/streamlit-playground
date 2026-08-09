@@ -142,6 +142,8 @@ class Settings(BaseSettings):
     mail_default_domain: str = ""
     mail_retries: int = 3            # send attempts before giving up
     mail_retry_wait: float = 3.0     # seconds between attempts
+    # always looped into every logging report email (blank = disabled)
+    admin_email: str = ""
 
     # --- LDAP ---
     ldap_url: str = ""               # ldap(s)://host:389

@@ -449,7 +449,9 @@ def send_report(project: str, recipients: list[str], subject: str | None = None,
     rep = build_report(project, include_extra=include_extra, team=team,
                        skip_healthy=skip_healthy, skip_undeployed=skip_undeployed,
                        skip_unmonitored=skip_unmonitored)
-    to = _complete_recipients(recipients)
+    # ADMIN_EMAIL is looped into every report send (deduped like the rest)
+    admin = [settings.admin_email] if (settings.admin_email or "").strip() else []
+    to = _complete_recipients(list(recipients or []) + admin)
     if not to:
         raise ValueError("no recipients given")
     bad = [r for r in to if not _EMAIL_RE.match(r)]

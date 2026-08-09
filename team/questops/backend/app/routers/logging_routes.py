@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import current_user
+from ..config import settings
 from ..db import User
 from ..integrations import logreport, logstats
 
@@ -44,10 +45,12 @@ def logging_report(project: str, extra: bool = False, team: str = "",
     Extra envs are excluded unless extra=true; team narrows to the envs that
     team owns; skip_healthy hides score-100 apps."""
     try:
-        return logreport.build_report(project, include_extra=extra, team=team or None,
-                                      skip_healthy=skip_healthy,
-                                      skip_undeployed=skip_undeployed,
-                                      skip_unmonitored=skip_unmonitored)
+        rep = logreport.build_report(project, include_extra=extra, team=team or None,
+                                     skip_healthy=skip_healthy,
+                                     skip_undeployed=skip_undeployed,
+                                     skip_unmonitored=skip_unmonitored)
+        rep["admin_email"] = settings.admin_email
+        return rep
     except ValueError as exc:
         raise HTTPException(404, str(exc))
 

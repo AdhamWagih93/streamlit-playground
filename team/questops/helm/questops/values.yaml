@@ -94,6 +94,7 @@ smtp:
   transport: ews            # ews (exchangelib) or smtp (smtplib)
   defaultDomain: ""         # appended to bare recipient names
   retries: 3
+  adminEmail: ""           # always looped into report mails
   host: ""
   port: 587
   user: ""                  # blank = no auth; password via an existing Secret (SMTP_PASSWORD)

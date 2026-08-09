@@ -3941,6 +3941,11 @@ async function openLogReport(projName) {
     try {
       const rep = await api(`/api/logging/report?${qs.toString()}`);
       lastRep = rep;
+      const toInp = m.querySelector("#log-report-to");
+      if (rep.admin_email) {
+        toInp.placeholder = `recipients — comma-separated (${rep.admin_email} is always looped in)`;
+        toInp.title = `${rep.admin_email} is added to every report send (QO_ADMIN_EMAIL)`;
+      }
       subj.value = rep.subject;
       frame.setAttribute("srcdoc", rep.html);
       status.textContent = `preview ready (${(rep.envs || []).join(", ") || "no envs in scope"}) — add recipients and send`;
