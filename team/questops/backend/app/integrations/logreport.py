@@ -111,6 +111,56 @@ def _env_issue_lines(a: dict, e: dict, stale_hours) -> list[str]:
     return out
 
 
+# the issue kinds that have doc SAMPLES + how to fetch them
+_SAMPLED_ISSUES = (("timestamp", "", "ts_bad_indices"),
+                   ("bad_week", "badweek", "bad_week_indices"),
+                   ("future_week", "future", "future_week_indices"),
+                   ("grok", "grok", "grok_indices"))
+
+
+def _issue_samples(indices: list, mode: str, k: int = 3) -> list:
+    """Up to k sampled docs from the suspect indices (never raises)."""
+    if not indices:
+        return []
+    try:
+        res = logstats.ts_samples(",".join(indices[:10]), size=k + 5, mode=mode)
+    except Exception:  # noqa: BLE001 — sampling must never break the report
+        return []
+    docs = (res.get("index") or {}).get("docs") or []
+    if mode == "":                       # @timestamp case: show the NON-dates
+        docs = [d for d in docs if not d.get("is_date")] or docs
+    elif mode == "future":
+        docs = [d for d in docs if d.get("is_future")] or docs
+    return docs[:k]
+
+
+def _samples_html(label: str, docs: list) -> str:
+    if not docs:
+        return ""
+    rows = (f'<div style="font-size:11px;color:{_C["dim"]};margin:4px 0 0 8px">'
+            f'samples — {_esc(label)} (up to 3):</div>')
+    for d in docs:
+        orig = (d.get("original") or "")
+        flags = []
+        if not d.get("is_date"):
+            flags.append("not a date")
+        elif d.get("is_future"):
+            flags.append("future date")
+        if "_grokparsefailure" in (d.get("tags") or []):
+            flags.append("_grokparsefailure")
+        rows += (f'<div style="margin:2px 0 4px 8px;padding:4px 8px;background:{_C["bg"]};'
+                 f'border-left:3px solid {_C["red"]};font-family:monospace;font-size:11px;'
+                 f'word-break:break-all">'
+                 f'<b>@timestamp:</b> {_esc(d.get("value"))}'
+                 + (f' <span style="color:{_C["red"]}">[{_esc(", ".join(flags))}]</span>' if flags else "")
+                 + (f' · <b>type:</b> {_esc(d["logtype"])}' if d.get("logtype") else "")
+                 + (f' · <b>file:</b> {_esc(d["path"])}' if d.get("path") else "")
+                 + (f'<br><span style="color:{_C["dim"]}">{_esc(orig[:200])}'
+                    f'{"…" if len(orig) > 200 else ""}</span>' if orig else "")
+                 + '</div>')
+    return rows
+
+
 def build_report(project: str, include_extra: bool = False, team: str | None = None,
                  skip_healthy: bool = False, skip_undeployed: bool = False,
                  skip_unmonitored: bool = False) -> dict:
@@ -241,10 +291,20 @@ def build_report(project: str, include_extra: bool = False, team: str | None = N
                              + "; ".join(expl) + "</li>")
         if lines:
             owner_tag = f" · {_esc(m['owner'])}" if m["owner"] else ""
+            # up to 3 doc SAMPLES per sampled issue kind, for THIS env's
+            # suspect indices (aggregated across the env's apps)
+            samples = ""
+            for key, mode, fld in _SAMPLED_ISSUES:
+                idxs = sorted({n for a in scoped for e2 in a["_es"]
+                               if e2["env"] == en and key in (e2.get("issues") or [])
+                               for n in (e2.get(fld) or [])})
+                if idxs:
+                    samples += _samples_html(_ISSUE_LABEL.get(key, key),
+                                             _issue_samples(idxs, mode))
             env_issue_blocks += (f'<p style="margin:8px 0 2px;font-size:13px">'
                                  f'<b>{_esc(en.upper())}</b>{owner_tag}</p>'
                                  f'<ul style="margin:2px 0 8px 18px;padding:0;font-size:12.5px;'
-                                 f'color:{_C["text"]}">{"".join(lines)}</ul>')
+                                 f'color:{_C["text"]}">{"".join(lines)}</ul>{samples}')
 
     # app-level (env-independent) issues explained separately
     app_level = ""
