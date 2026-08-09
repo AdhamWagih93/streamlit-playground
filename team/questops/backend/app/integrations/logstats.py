@@ -146,23 +146,53 @@ def _parse_index(name: str, known: dict) -> dict | None:
         # RARE pattern variant ${app}*-${logtype}: extra characters glued
         # DIRECTLY to the app name (payments2, checkoutv3-…) before the
         # -logtype part. Only tried when the exact token match fails, so the
-        # normal pattern is unaffected. Longest app name that prefixes the
-        # segment wins; the glued junk (up to the next '-' AFTER the app
-        # name) is dropped and the remainder is the logtype.
-        low = rest.lower()
-        best = None
-        for c in apps:
-            cl = c.lower()
-            if low.startswith(cl) and (best is None or len(cl) > len(best[1])):
-                best = (c, cl)
-        if best is None:
+        # normal pattern is unaffected. Tried in widening steps:
+        #   1) longest app name that PREFIXES the segment (case-insensitive)
+        #   2) same, but IGNORING '-'/'_' inside the names — shippers
+        #      sometimes drop separators (checkoutservice2 ~ checkout-service)
+        #   3) both again against the GLOBAL app list, for app names that
+        #      live under a different project in the inventory
+        def _glued(cands):
+            low = rest.lower()
+            best = None
+            for c in cands:
+                cl = c.lower()
+                if low.startswith(cl) and (best is None or len(cl) > len(best[1])):
+                    best = (c, cl)
+            if best is None:
+                return None
+            cut = rest.find("-", len(best[1]))
+            return (best[0], rest[len(best[1]):cut if cut >= 0 else len(rest)],
+                    rest[cut + 1:].lstrip("-") if cut >= 0 else "")
+
+        def _glued_squashed(cands):
+            squash = lambda x: x.replace("-", "").replace("_", "")  # noqa: E731
+            low_sq = squash(rest.lower())
+            best = None
+            for c in cands:
+                cl = squash(c.lower())
+                if cl and low_sq.startswith(cl) and (best is None or len(cl) > len(best[1])):
+                    best = (c, cl)
+            if best is None:
+                return None
+            need, i = len(best[1]), 0        # map the squashed length back to rest
+            while i < len(rest) and need > 0:
+                if rest[i] not in "-_":
+                    need -= 1
+                i += 1
+            cut = rest.find("-", i)
+            return (best[0], rest[i:cut if cut >= 0 else len(rest)],
+                    rest[cut + 1:].lstrip("-") if cut >= 0 else "")
+
+        hit = _glued(apps) or _glued_squashed(apps)
+        if hit is None and apps is not known["apps"]:
+            hit = _glued(known["apps"]) or _glued_squashed(known["apps"])
+        if hit is None:
             return None
-        app = best[0]
-        cut = rest.find("-", len(best[1]))
-        logtype = rest[cut + 1:].lstrip("-") if cut >= 0 else ""
+        app, glued, logtype = hit
         return {"prefix": prefix, "project": proj, "env": env.lower(), "app": app,
                 "logtype": logtype or "—", "week": week, "bad_week": bad_week,
-                "app_glued": rest[len(best[1]):cut if cut >= 0 else len(rest)]}
+                "app_glued": glued}
     logtype = rest[n:].lstrip("-") or "—"
     return {"prefix": prefix, "project": proj, "env": env.lower(), "app": app,
             "logtype": logtype, "week": week, "bad_week": bad_week}
