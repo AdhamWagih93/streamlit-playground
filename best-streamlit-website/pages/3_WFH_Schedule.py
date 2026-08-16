@@ -767,7 +767,8 @@ def load_actuals(window: List[date]) -> Dict[str, Dict[str, dict]]:
         return out
     start = min(window)
     end = max(window) + timedelta(days=1)
-    usernames = list(MEMBER_TO_SESSION_USER.values())
+    # Case-insensitive: session usernames vary (Ahmed_zanaty vs Ahmed_Zanaty).
+    usernames = [u.lower() for u in MEMBER_TO_SESSION_USER.values()]
     conn = None
     try:
         conn = _pg_connect()
@@ -777,16 +778,16 @@ def load_actuals(window: List[date]) -> Dict[str, Dict[str, dict]]:
             f"COUNT(*) FILTER (WHERE s.client_ip LIKE %s) AS office_sessions, "
             f"COUNT(*) AS sessions "
             f"FROM {SESSION_STATES_TABLE} AS s "
-            f"WHERE s.username = ANY(%s) "
+            f"WHERE LOWER(TRIM(s.username)) = ANY(%s) "
             f"AND s.timestamp >= %s AND s.timestamp < %s "
-            f"AND (s.original_user IS NULL OR s.original_user = s.username) "
+            f"AND (s.original_user IS NULL OR TRIM(s.original_user) = '' OR LOWER(TRIM(s.original_user)) = LOWER(TRIM(s.username))) "
             f"GROUP BY s.username, (s.timestamp)::date",
             (OFFICE_IP_PREFIX + "%", usernames, start, end),
         )
         rows = cur.fetchall()
         cur.close()
         for username, day, office_sessions, sessions in rows:
-            member = SESSION_USER_TO_MEMBER.get(username)
+            member = {u.lower(): k for k, u in MEMBER_TO_SESSION_USER.items()}.get(str(username).lower())
             if not member:
                 continue
             iso = day.isoformat() if hasattr(day, "isoformat") else str(day)

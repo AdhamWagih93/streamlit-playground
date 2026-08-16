@@ -85,7 +85,8 @@ except Exception:  # pragma: no cover
 # =============================================================================
 # TEAM RULES & CONFIG
 # =============================================================================
-TEAM_MEMBERS: List[str] = ["Adham", "Karam", "Hesham", "Salma", "Zanaty", "Marwan"]
+TEAM_MEMBERS: List[str] = ["Adham", "Karam", "Hesham", "Salma", "Zanaty",
+                           "Marwan", "Abdelazim"]
 YEAR = 2026
 
 ROLE_BY_MEMBER: Dict[str, str] = {
@@ -95,23 +96,45 @@ ROLE_BY_MEMBER: Dict[str, str] = {
     "Salma": "engineering",
     "Zanaty": "engineering",
     "Marwan": "mgmt-support",
+    "Abdelazim": "engineering",
 }
 
 # Members who work from the office EVERY office day, permanently. They are
 # excluded from the 50/50 rotation (the rotation pattern never contains
 # them); rotation_default overlays WFO on Mon–Thu, WFH on Sundays.
 FULL_OFFICE_MEMBERS: Set[str] = {"Marwan"}
-ROTATING_MEMBERS: List[str] = [m for m in TEAM_MEMBERS if m not in FULL_OFFICE_MEMBERS]
 
-NEW_JOINER = "Zanaty"
-NEW_JOINER_FULL_OFFICE_UNTIL = date(2026, 8, 14)
+# Membership timeline. A member absent from MEMBER_JOINED is a founding
+# member; before their join date they don't exist for plans, stats, or
+# editors. ONBOARDING_FULL_OFFICE_UNTIL (inclusive) plans a member in the
+# office every office day while onboarding — entries are kept after they
+# expire so past periods stay historically accurate (Zanaty rotates
+# normally since 15 Aug).
+MEMBER_JOINED: Dict[str, date] = {
+    "Abdelazim": date(2026, 8, 17),
+}
+ONBOARDING_FULL_OFFICE_UNTIL: Dict[str, date] = {
+    "Zanaty": date(2026, 8, 14),
+    "Abdelazim": date(2026, 9, 17),
+}
+
+
+def is_active_member(member: str, d: date) -> bool:
+    return d >= MEMBER_JOINED.get(member, date.min)
+
+
+def in_onboarding(member: str, d: date) -> bool:
+    return (is_active_member(member, d)
+            and d <= ONBOARDING_FULL_OFFICE_UNTIL.get(member, date.min))
+
 
 WORKDAYS = {6, 0, 1, 2, 3}       # Sun(6)–Thu(3)
 OFFICE_WEEKDAYS = {0, 1, 2, 3}   # Mon–Thu (Sundays always WFH)
-# Daily cap raised 3→4 when Marwan (permanent full-office) joined: 5 rotating
-# members × 2 days = 10 rotating slots per week, and with one seat taken every
-# day only a 2–4 band leaves the required 1–3 rotating slots per day.
-DAILY_OFFICE_MIN, DAILY_OFFICE_MAX = 2, 4
+# Each office day fits at most MAX_ROTATING_PER_DAY rotating members on top
+# of the implicit ones (permanent full-office + currently-onboarding), and
+# at least DAILY_OFFICE_MIN people in total.
+DAILY_OFFICE_MIN = 2
+MAX_ROTATING_PER_DAY = 3
 WEEKLY_WFO = 2
 WFO_PER_MEMBER_FORTNIGHT = 4
 
@@ -127,6 +150,7 @@ MEMBER_TO_SESSION_USER: Dict[str, str] = {
     "Salma": "Salma_Adel",
     "Zanaty": "Ahmed_zanaty",  # note the lowercase z — as it appears in session_states
     "Marwan": "Marwan_Bakeer",
+    "Abdelazim": "Mohamed_Abdelazim",
 }
 SESSION_USER_TO_MEMBER: Dict[str, str] = {v: k for k, v in MEMBER_TO_SESSION_USER.items()}
 # All session-username matching is case-insensitive: the platform is not
@@ -170,6 +194,28 @@ def local_today() -> date:
     return local_now().date()
 
 
+def _implicit_office_members(d: date | None = None) -> Set[str]:
+    """Members implicitly in the office every office day on/around ``d``:
+    permanent full-office plus anyone currently onboarding."""
+    d = d or local_today()
+    return set(FULL_OFFICE_MEMBERS) | {
+        m for m in TEAM_MEMBERS if in_onboarding(m, d)
+    }
+
+
+def _rotating_members(d: date | None = None) -> List[str]:
+    """Members on the 50/50 rotation as of ``d`` — active, not full-office,
+    not currently onboarding. Recomputed each script run, so onboarding
+    members drop in automatically the day their onboarding ends."""
+    d = d or local_today()
+    return [m for m in TEAM_MEMBERS
+            if m not in _implicit_office_members(d) and is_active_member(m, d)]
+
+
+# Streamlit re-executes the module every run, so these stay current.
+ROTATING_MEMBERS: List[str] = _rotating_members()
+
+
 def _utc_bounds(start: date, end: date) -> Tuple[datetime, datetime]:
     """[start, end] in local calendar days → naive-UTC half-open bounds
     matching the storage format of session_states.timestamp."""
@@ -209,10 +255,6 @@ def is_workday(d: date) -> bool:
 
 def is_office_day(d: date) -> bool:
     return d.weekday() in OFFICE_WEEKDAYS
-
-
-def in_full_office_period(d: date) -> bool:
-    return d <= NEW_JOINER_FULL_OFFICE_UNTIL
 
 
 def anchor_sunday(year: int) -> date:
@@ -261,7 +303,7 @@ def generate_two_week_pattern(rotating=None, forced_office=None) -> List[Set[str
     weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu"] * 2
 
     min_choose = max(0, DAILY_OFFICE_MIN - len(forced_office))
-    max_choose = max(0, DAILY_OFFICE_MAX - len(forced_office))
+    max_choose = MAX_ROTATING_PER_DAY
 
     all_subsets: List[Sequence[int]] = []
     for rsz in range(min_choose, max_choose + 1):
@@ -353,12 +395,13 @@ def generate_stable_rotation(seed_bump: int = 0) -> List[Set[str]]:
         random.seed(ROTATION_SEED + seed_bump)
         for _ in range(200):
             try:
+                forced = _implicit_office_members()
                 pat = generate_two_week_pattern(
                     rotating=list(ROTATING_MEMBERS),
-                    forced_office=sorted(FULL_OFFICE_MEMBERS),
+                    forced_office=sorted(forced),
                 )
                 # Strip the forced members: the pattern stores rotation only.
-                return [slot - FULL_OFFICE_MEMBERS for slot in pat]
+                return [slot - forced for slot in pat]
             except RuntimeError:
                 continue
         raise RuntimeError("could not generate rotation")
@@ -374,8 +417,10 @@ def validate_rotation(pattern: List[Set[str]]) -> Tuple[List[str], List[str]]:
     errors: List[str] = []
     warnings: List[str] = []
     weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu"] * 2
-    n_full = len(FULL_OFFICE_MEMBERS)
-    full_mgmt = any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in FULL_OFFICE_MEMBERS)
+    implicit = _implicit_office_members()
+    n_impl = len(implicit)
+    daily_max = MAX_ROTATING_PER_DAY + n_impl
+    impl_mgmt = any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in implicit)
     for i, members in enumerate(pattern):
         wd = weekdays[i]
         label = f"Week {1 + i // 5} {wd}"
@@ -383,13 +428,13 @@ def validate_rotation(pattern: List[Set[str]]) -> Tuple[List[str], List[str]]:
             if members:
                 errors.append(f"{label}: Sundays are always home.")
             continue
-        n = len(members) + n_full
-        if n < DAILY_OFFICE_MIN or n > DAILY_OFFICE_MAX:
+        n = len(members) + n_impl
+        if n < DAILY_OFFICE_MIN or n > daily_max:
             errors.append(
-                f"{label}: {n} in office incl. full-office members "
-                f"(need {DAILY_OFFICE_MIN}–{DAILY_OFFICE_MAX})."
+                f"{label}: {n} in office incl. full-office/onboarding members "
+                f"(need {DAILY_OFFICE_MIN}–{daily_max})."
             )
-        if not full_mgmt and not any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in members):
+        if not impl_mgmt and not any(ROLE_BY_MEMBER.get(m) == "mgmt-support" for m in members):
             errors.append(f"{label}: no mgmt-support member present.")
     for m in ROTATING_MEMBERS:
         for w in range(2):
@@ -1059,10 +1104,12 @@ class Resolver:
         """Pure rotation plan (no overrides). None on Fri/Sat."""
         if not is_workday(d):
             return None
+        if not is_active_member(member, d):
+            return None      # not on the team yet
         if member in FULL_OFFICE_MEMBERS:
             # Permanently full-office: WFO every office day, WFH Sundays.
             return "WFO" if is_office_day(d) else "WFH"
-        if in_full_office_period(d) and member == NEW_JOINER and is_office_day(d):
+        if in_onboarding(member, d) and is_office_day(d):
             return "WFO"
         slot = rotation_slot(d)
         if slot is None:
@@ -1082,6 +1129,8 @@ class Resolver:
         audited correction) → IP detection. On days before the detection start
         the IP signal is still used as a best-effort *fallback* when it happens
         to exist, tagged ``ip-early`` so views can flag the lower confidence."""
+        if not is_active_member(member, d):
+            return None, None
         iso = d.isoformat()
         man = self.manual.get(iso, {}).get(member)
         if man == "OFF":
@@ -1096,6 +1145,10 @@ class Resolver:
         return None, None
 
     def cell(self, member: str, d: date) -> dict:
+        if not is_active_member(member, d):
+            return {"cat": "inactive", "note": f"joins {MEMBER_JOINED[member]:%d %b %Y}",
+                    "planned": None, "actual": None, "source": None,
+                    "overridden": False}
         off = self.is_off(member, d)
         planned = self.planned(member, d)
         overridden = bool(self.overrides.get(d.isoformat(), {}).get(member))
@@ -1221,7 +1274,7 @@ def member_stats(res: Resolver, member: str, days: List[date]) -> dict:
     public_off = personal_off = 0
     sunday_ok = sunday_known = 0
     for d in days:
-        if not is_workday(d):
+        if not is_workday(d) or not is_active_member(member, d):
             continue
         off_note = res.is_off(member, d)
         if off_note:
@@ -1294,7 +1347,8 @@ def member_time_stats(res: Resolver, member: str, days: List[date]) -> dict:
     tot_hours = 0.0
     starts: List[time] = []
     for d in days:
-        if not is_workday(d) or d > res.today:
+        if (not is_workday(d) or d > res.today
+                or not is_active_member(member, d)):
             continue
         oh = res.office_hours(member, d)
         if oh is None or oh["kind"] != "office":
@@ -1479,6 +1533,9 @@ def cell_html(state: dict, member: str, d: date) -> str:
     cat = state["cat"]
     plan_lbl = {"WFO": "Office", "WFH": "Home", None: "—"}[state.get("planned")]
     ov = " (override)" if state.get("overridden") else ""
+    if cat == "inactive":
+        return (f"<td class='hcell c-inactive' title='{member} · {d:%a %d %b} · "
+                f"not on the team yet ({state['note']})'></td>")
     if cat == "off":
         # Three visually distinct absences — company holiday (violet P),
         # registered personal holiday (pink V), self-recorded day off
@@ -1623,7 +1680,8 @@ def _render_fix_attendance(res: Resolver, member: str, days: List[date],
     # member marked off *here* stays editable so it can be reverted.
     editable = [
         d for d in days
-        if is_workday(d) and d <= res.today and not res.off_external(member, d)
+        if is_workday(d) and d <= res.today and is_active_member(member, d)
+        and not res.off_external(member, d)
     ]
     if not editable:
         st.info("No past office days in the selected period.")
@@ -1756,12 +1814,13 @@ def render_today_strip(res: Resolver, members: List[str]):
     ip_now = load_ip_actuals(d, d).get(d.isoformat(), {})
     times_now = load_ip_times(d, d).get(d.isoformat(), {})
 
-    planned_in = [m for m in members
+    active = [m for m in members if is_active_member(m, d)]
+    planned_in = [m for m in active
                   if res.planned(m, d) == "WFO" and not res.is_off(m, d)]
-    detected_in = [m for m in members if ip_now.get(m) == "WFO"]
-    home_active = [m for m in members
+    detected_in = [m for m in active if ip_now.get(m) == "WFO"]
+    home_active = [m for m in active
                    if ip_now.get(m) == "WFH" and not res.is_off(m, d)]
-    on_leave = [m for m in members if res.is_off(m, d)]
+    on_leave = [m for m in active if res.is_off(m, d)]
 
     def _since(m: str) -> str:
         t = times_now.get(m)
@@ -1828,12 +1887,12 @@ def render_schedule(res: Resolver, viewer: str | None, start: date, end: date,
                 unsafe_allow_html=True)
     can_edit = is_mgmt(viewer)
     if can_edit:
-        full = ", ".join(sorted(FULL_OFFICE_MEMBERS))
+        implicit_now = ", ".join(sorted(_implicit_office_members()))
         st.caption(
             "Tick = in office. Save validates the team rules; you can save "
             "anyway if you accept the listed violations. Sundays are always home"
-            + (f"; {full} works full-office and is counted automatically on every "
-               "office day (no editable row)." if full else ".")
+            + (f"; {implicit_now} (full-office/onboarding) are counted "
+               "automatically on every office day — no editable row." if implicit_now else ".")
         )
         df = _pattern_to_df(res.rotation)
         cfg = {"Member": st.column_config.TextColumn(disabled=True)}
@@ -1915,6 +1974,10 @@ def _render_plan_grid(res: Resolver, days: List[date], members: List[str] | None
     for m in (members or TEAM_MEMBERS):
         cells = []
         for d in plan_days:
+            if not is_active_member(m, d):
+                cells.append(f"<td class='hcell c-inactive' "
+                             f"title='{m} · {d:%a %d %b} · not on the team yet'></td>")
+                continue
             off = res.is_off(m, d)
             plan = res.planned(m, d)
             ov = bool(res.overrides.get(d.isoformat(), {}).get(m))
@@ -1945,18 +2008,27 @@ def _render_rotation_readonly(pattern: List[Set[str]]):
         f"<th class='hhdr'>W{w + 1} {wd}</th>" for w in range(2) for wd in weekdays
     )
     rows = []
+    implicit = _implicit_office_members()
     for m in TEAM_MEMBERS:
         cells = []
         for slot in range(10):
             in_office = (
                 weekdays[slot % 5] != "Sun"
-                and (m in pattern[slot] or m in FULL_OFFICE_MEMBERS)
+                and (m in pattern[slot] or m in implicit)
             )
             if in_office:
                 cells.append("<td class='hcell c-office'>O</td>")
             else:
                 cells.append("<td class='hcell c-home'>H</td>")
-        tag = " <span class='mini-full'>full office</span>" if m in FULL_OFFICE_MEMBERS else ""
+        if m in FULL_OFFICE_MEMBERS:
+            tag = " <span class='mini-full'>full office</span>"
+        elif in_onboarding(m, local_today()):
+            tag = " <span class='mini-full'>onboarding</span>"
+        elif not is_active_member(m, local_today()):
+            tag = (f" <span class='mini-full'>joins "
+                   f"{MEMBER_JOINED[m]:%d %b}</span>")
+        else:
+            tag = ""
         rows.append(f"<tr><td class='hlabel sticky'>{m}{tag}</td>{''.join(cells)}</tr>")
     st.markdown(
         f"<div class='grid-wrap'><table class='hgrid'><thead><tr>{header}</tr></thead>"
@@ -1969,7 +2041,8 @@ def _render_member_overrides_editor(res: Resolver, viewer: str):
     target = st.selectbox("Member", TEAM_MEMBERS, key="ov_member")
     upcoming = [
         d for d in workdays_between(res.today, res.today + timedelta(days=28))
-        if is_workday(d) and not res.is_off(target, d)
+        if is_workday(d) and is_active_member(target, d)
+        and not res.is_off(target, d)
     ]
     if not upcoming:
         st.info("No upcoming office days.")
@@ -2018,6 +2091,8 @@ def _daily_detail_rows(res: Resolver, days: List[date],
         if not is_workday(d):    # Sundays included; Fri/Sat excluded
             continue
         for m in (members or TEAM_MEMBERS):
+            if not is_active_member(m, d):
+                continue
             off = res.is_off(m, d)
             plan = res.planned(m, d)
             actual, source = res.actual(m, d)
@@ -2455,17 +2530,27 @@ def render_reports(res: Resolver, start: date, end: date, viewer: str | None,
 # =============================================================================
 def render_method(res: Resolver, can_edit: bool):
     umap = " · ".join(f"{k}→<code>{v}</code>" for k, v in MEMBER_TO_SESSION_USER.items())
+    timeline_bits = [
+        f"{m} joins {MEMBER_JOINED[m]:%d %b %Y}"
+        for m in TEAM_MEMBERS
+        if m in MEMBER_JOINED and MEMBER_JOINED[m] > res.today
+    ] + [
+        f"{m} onboards full-office through {ONBOARDING_FULL_OFFICE_UNTIL[m]:%d %b %Y}"
+        for m in TEAM_MEMBERS if in_onboarding(m, res.today)
+    ]
+    timeline_txt = (" Currently: " + " · ".join(timeline_bits) + "."
+                    if timeline_bits else "")
     st.markdown(
         f"""
         <div class='algo'>
           <ol>
             <li><b>Plan</b> — the repeating two-week rotation (each rotating member in office 2
                 of the 4 office days, Mon–Thu), plus per-day <i>overrides</i>. Full-office members
-                ({", ".join(sorted(FULL_OFFICE_MEMBERS))}) are planned in office every office day.
+                ({", ".join(sorted(FULL_OFFICE_MEMBERS))}) are planned in office every office day;
+                new joiners work full-office while onboarding, then drop into the rotation, and
+                don't exist in plans or stats before their join date.{timeline_txt}
                 Sundays appear in the plan and default to <b>Home</b>, but a Sunday can be
-                overridden (and Sunday attendance is detected like any other day). During
-                onboarding {NEW_JOINER} is planned in office every office day through
-                {NEW_JOINER_FULL_OFFICE_UNTIL:%d %b %Y}.</li>
+                overridden (and Sunday attendance is detected like any other day).</li>
             <li><b>Actual</b> — your own saved record wins (explicit, audit-stamped). Otherwise
                 IP detection from <code>{SESSION_STATES_TABLE}</code>: in office when any session's
                 <code>client_ip</code> starts with <code>{OFFICE_IP_PREFIX}</code>
@@ -2726,6 +2811,7 @@ def inject_css() -> None:
         .c-future {{ background:#fbfdff; color:#b6c4d4; border-style:dashed; border-color:#dbe4ee; }}
         .c-dev {{ box-shadow:0 0 0 3px var(--dev) inset; }}
         .c-assumed {{ opacity:.6; }}
+        .c-inactive {{ background:transparent; border-color:transparent; }}
         .vbox {{ border-radius:10px; padding:.55rem .8rem; font-size:.82rem; margin:.4rem 0; }}
         .vbox ul {{ margin:.25rem 0 0 1rem; padding:0; }}
         .vbox-err {{ background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; }}
