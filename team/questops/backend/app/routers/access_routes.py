@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user, require_approver
 from ..db import User, get_db
-from ..integrations import access, migration
+from ..integrations import access, migration, platformdb
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
@@ -22,6 +22,15 @@ def _wrap(fn, *args, **kwargs):
 @router.get("/summary")
 def summary(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.access_summary, refresh)
+
+
+@router.get("/devops-projects-check")
+def devops_projects_check(refresh: bool = False, user: User = Depends(current_user)):
+    """Inventory ⇄ platform-DB devops_projects cross-check: missing projects
+    on either side, duplicated rows, wrong team/company assignments."""
+    if refresh:
+        platformdb.invalidate()
+    return _wrap(platformdb.crosscheck, refresh)
 
 
 @router.get("/ldap")

@@ -4277,6 +4277,7 @@ const ACC_WHAT = {
   jira: "reading Jira permission schemes & their project assignments",
   activity: "reading per-project dates & per-user last-login/activity (JQL per row)",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
+  pgcheck: "cross-checking the inventory against the devops_projects table",
 };
 
 function accTeamSourceHtml(ts) {
@@ -5248,6 +5249,50 @@ function wireMigration(tconf) {
   const run = $$("mig-run"); if (run) run.onclick = () => runExec(false);
 }
 
+// inventory ⇄ platform-DB devops_projects cross-check (Access page panel)
+function accPgCheckHtml(d) {
+  if (!d.configured) return `<div class="empty">${esc(d.note || "not configured")}</div>`;
+  if (d.error) return `<div class="rsearch-status rsearch-err">⚠ platform DB unreachable — ${esc(d.error)}</div>`;
+  const n = (x) => (x || []).length;
+  const chip = (cnt, label, badCls) => `<span class="chip ${cnt ? badCls : "chip-green"}">${cnt} ${label}</span>`;
+  const teamRow = (r, side) => ["dev_team", "qc_team", side === "db" ? "ops_team" : "prd_team"]
+    .map((f) => r[f] ? `<span class="chip chip-cyan" title="${esc(f)}">${esc(r[f])}</span>` : "")
+    .filter(Boolean).join(" ");
+  const section = (title, rows, render) => rows.length ? `
+    <details class="filebox acc-pg-sec" open><summary>${title} · <b>${rows.length}</b></summary>
+      <div class="log-idx-list">${rows.map(render).join("")}</div></details>` : "";
+  return `
+    <div class="inv-chips" style="margin-bottom:8px">
+      <span class="chip">${esc(d.source)} · table <b>${esc(d.table)}</b></span>
+      <span class="chip">inventory <b>${d.inventory_projects}</b></span>
+      <span class="chip">db <b>${d.db_projects}</b>${d.db_rows !== d.db_projects ? ` <span class="pct-warn">(${d.db_rows} rows)</span>` : ""}</span>
+      <span class="chip chip-green">matched <b>${d.matched}</b></span>
+      ${chip(n(d.missing_in_db), "missing in db", "chip-red")}
+      ${chip(n(d.missing_in_inventory), "not in inventory", "chip-amber")}
+      ${chip(n(d.duplicates), "duplicated", "chip-red")}
+      ${chip(n(d.mismatches), "wrong assignments", "chip-red")}
+      ${d.ok ? '<span class="chip chip-green">✓ in sync</span>' : ""}</div>
+    ${section("📁 in the inventory but MISSING from the db", d.missing_in_db, (r) => `
+      <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
+        ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
+        ${teamRow(r, "inv")}</div>`)}
+    ${section("🗄 in the db but NOT in the inventory", d.missing_in_inventory, (r) => `
+      <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
+        ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
+        ${teamRow(r, "db")}</div>`)}
+    ${section("♊ duplicated rows in the db", d.duplicates, (r) => `
+      <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
+        <span class="chip chip-red">${r.count} rows</span></div>`)}
+    ${section("⚠ wrong team / company assignments", d.mismatches, (r) => `
+      <div class="log-idx bad"><code class="log-idx-name">${esc(r.project)}</code>
+        <span class="chip chip-amber">${esc(r.field)}</span>
+        <span class="ci-meta">inventory (${esc(r.inventory_field)}):</span> <span class="chip chip-cyan">${esc(r.inventory)}</span>
+        <span class="ci-meta">→ db:</span> ${r.db ? `<span class="chip chip-red">${esc(r.db)}</span>` : '<span class="pct-bad">missing</span>'}</div>`)}
+    ${d.ok ? '<div class="empty">✓ inventory and devops_projects agree — no discrepancies</div>' : ""}
+    <div class="kpi-note" style="margin-top:8px">comparison is case/separator-insensitive ("SRE Core" = "SRE_Core");
+      inventory prd_team is compared against the table's ops_team</div>`;
+}
+
 async function renderAccess() {
   view().innerHTML = `
     <div class="view-head"><h1>ACCESS MANAGEMENT</h1>
@@ -5258,6 +5303,8 @@ async function renderAccess() {
       ADO project details load only when expanded, and fetches are bounded-parallel</div>
     <div class="panel" style="margin-bottom:18px"><h2>📊 at a glance</h2>
       <div id="acc-summary"></div></div>
+    <div class="panel" style="margin-bottom:18px"><h2>🗄 Inventory ⇄ devops_projects — platform database cross-check</h2>
+      <div id="acc-pgcheck"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects, repository permissions &amp; inventory pipelines</h2>
       <div id="acc-ado"></div></div>
     <div class="panel"><h2>🎫 Jira — permission schemes, assignments &amp; activity</h2>
@@ -5266,6 +5313,7 @@ async function renderAccess() {
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
+    accLoad("pgcheck", `/api/access/devops-projects-check${s}`, accPgCheckHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     loadJira(refresh);
   };

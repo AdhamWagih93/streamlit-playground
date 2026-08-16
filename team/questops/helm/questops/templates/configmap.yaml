@@ -42,6 +42,7 @@ data:
   MAIL_DEFAULT_DOMAIN: {{ .Values.smtp.defaultDomain | quote }}
   MAIL_RETRIES: {{ .Values.smtp.retries | quote }}
   ADMIN_EMAIL: {{ .Values.smtp.adminEmail | quote }}
+  PLATFORM_PROJECTS_TABLE: {{ .Values.platformDb.projectsTable | quote }}
   SMTP_HOST: {{ .Values.smtp.host | quote }}
   SMTP_PORT: {{ .Values.smtp.port | quote }}
   SMTP_USER: {{ .Values.smtp.user | quote }}

@@ -119,6 +119,14 @@ class Settings(BaseSettings):
     github_api_base: str = "https://api.github.com"
     artifacthub_api_base: str = "https://artifacthub.io/api/v1"
 
+    # --- Platform Postgres (extra platform tables, e.g. devops_projects) ---
+    # A SEPARATE database from QuestOps' own DATABASE_URL. Used by the Access
+    # page to cross-check the devops_projects table (project, company,
+    # dev_team, qc_team, ops_team) against the cloned inventory. Blank = the
+    # cross-check panel shows "not configured".
+    platform_database_url: str = ""
+    platform_projects_table: str = "devops_projects"
+
     # --- Mail (Logging health email reports) ---
     # Leave smtp_host blank to disable sending (the report PREVIEW always
     # works). In demo mode a send with no host is simulated.

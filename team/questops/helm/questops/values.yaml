@@ -89,6 +89,12 @@ logging:
   retentionNonprdDays: 21   # non-prd log retention (days)
   oversizeFactor: 2.0       # >= this multiple of the fleet-average app/project size = "over-sized" (minor)
 
+# SEPARATE platform Postgres for the Access page's devops_projects cross-check
+# (URL itself belongs in a Secret as PLATFORM_DATABASE_URL — only the table
+# name is plain config)
+platformDb:
+  projectsTable: devops_projects
+
 # SMTP for the Logging page's emailed per-project reports (blank host = preview only)
 smtp:
   transport: ews            # ews (exchangelib) or smtp (smtplib)
