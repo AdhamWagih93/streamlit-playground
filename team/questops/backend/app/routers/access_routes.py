@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth import current_user, require_approver
-from ..db import User, get_db
+from ..db import DevopsProjectsAudit, User, get_db
 from ..integrations import access, migration, platformdb
 
 router = APIRouter(prefix="/api/access", tags=["access"])
@@ -25,12 +25,15 @@ def summary(refresh: bool = False, user: User = Depends(current_user)):
 
 
 @router.get("/devops-projects-check")
-def devops_projects_check(refresh: bool = False, user: User = Depends(current_user)):
+def devops_projects_check(refresh: bool = False, db: Session = Depends(get_db),
+                          user: User = Depends(current_user)):
     """Inventory ⇄ platform-DB devops_projects cross-check: missing projects
-    on either side, duplicated rows, wrong team/company assignments."""
+    on either side, duplicated rows, wrong team/company assignments — plus the
+    recent audit of writes made through this page."""
     if refresh:
         platformdb.invalidate()
-    return _wrap(platformdb.crosscheck, refresh)
+    out = _wrap(platformdb.crosscheck, refresh)
+    return {**out, "audit": _pg_audit_rows(db)}
 
 
 class PgProjectBody(BaseModel):
@@ -42,38 +45,68 @@ class PgProjectBody(BaseModel):
     fields: dict | None = None   # explicit subset for updates
 
 
-def _pg_action(fn, *args) -> dict:
-    """Run a devops_projects write, then return the FRESH crosscheck so the
-    panel updates in one round trip."""
-    affected = _wrap(fn, *args)
+def _pg_audit_rows(db: Session, limit: int = 20) -> list[dict]:
+    rows = (db.query(DevopsProjectsAudit)
+            .order_by(DevopsProjectsAudit.at.desc()).limit(limit).all())
+    return [{"at": r.at.replace(microsecond=0).isoformat() + "Z",
+             "username": r.username, "action": r.action, "project": r.project,
+             "details": r.details or {}, "affected": r.affected} for r in rows]
+
+
+def _pg_action(db: Session, user: User, action: str, fn, project: str,
+               details: dict, *args) -> dict:
+    """Run a devops_projects write, LOG it to the QuestOps database, then
+    return the FRESH crosscheck (+ recent audit) so the panel updates in one
+    round trip. Failed writes are not logged — nothing changed."""
+    affected = _wrap(fn, project, *args)
+    db.add(DevopsProjectsAudit(username=user.username, action=action,
+                               project=project, details=details or {},
+                               affected=affected))
+    db.commit()
     return {"ok": True, "affected": affected,
-            "check": _wrap(platformdb.crosscheck, True)}
+            "check": _wrap(platformdb.crosscheck, True),
+            "audit": _pg_audit_rows(db)}
+
+
+@router.get("/devops-projects/audit")
+def devops_projects_audit(limit: int = 50, db: Session = Depends(get_db),
+                          user: User = Depends(current_user)):
+    """The permanent change log of devops_projects writes made through here."""
+    return {"audit": _pg_audit_rows(db, min(max(limit, 1), 500))}
 
 
 @router.post("/devops-projects/update")
-def devops_projects_update(body: PgProjectBody, user: User = Depends(require_approver)):
+def devops_projects_update(body: PgProjectBody, db: Session = Depends(get_db),
+                           user: User = Depends(require_approver)):
     fields = body.fields if body.fields else {
         k: v for k, v in (("company", body.company), ("dev_team", body.dev_team),
                           ("qc_team", body.qc_team), ("ops_team", body.ops_team))
         if v is not None}
-    return _pg_action(platformdb.update_project, body.project, fields)
+    return _pg_action(db, user, "update", platformdb.update_project,
+                      body.project, {"fields": fields}, fields)
 
 
 @router.post("/devops-projects/insert")
-def devops_projects_insert(body: PgProjectBody, user: User = Depends(require_approver)):
-    return _pg_action(platformdb.insert_project, body.project, {
-        "company": body.company, "dev_team": body.dev_team,
-        "qc_team": body.qc_team, "ops_team": body.ops_team})
+def devops_projects_insert(body: PgProjectBody, db: Session = Depends(get_db),
+                           user: User = Depends(require_approver)):
+    fields = {"company": body.company, "dev_team": body.dev_team,
+              "qc_team": body.qc_team, "ops_team": body.ops_team}
+    return _pg_action(db, user, "insert", platformdb.insert_project,
+                      body.project, {"fields": fields}, fields)
 
 
 @router.post("/devops-projects/delete")
-def devops_projects_delete(body: PgProjectBody, user: User = Depends(require_approver)):
-    return _pg_action(platformdb.delete_project, body.project)
+def devops_projects_delete(body: PgProjectBody, db: Session = Depends(get_db),
+                           user: User = Depends(require_approver)):
+    return _pg_action(db, user, "delete", platformdb.delete_project,
+                      body.project, {})
 
 
 @router.post("/devops-projects/dedupe")
-def devops_projects_dedupe(body: PgProjectBody, user: User = Depends(require_approver)):
-    return _pg_action(platformdb.dedupe_project, body.project)
+def devops_projects_dedupe(body: PgProjectBody, db: Session = Depends(get_db),
+                           user: User = Depends(require_approver)):
+    return _pg_action(db, user, "dedupe", platformdb.dedupe_project,
+                      body.project, {})
 
 
 @router.get("/ldap")

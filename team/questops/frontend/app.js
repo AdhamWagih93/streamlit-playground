@@ -4644,6 +4644,7 @@ function accAdoHtml(d) {
                     : `<span class="chip" title="distinct members with access">${p.members} members</span>`}
                   <span class="chip">${p.teams || 0} teams</span>
                   <span class="chip">${p.repos || 0} repos</span>
+                  ${p.last_update ? `<span class="chip" title="lastUpdateTime from the projects API — Azure DevOps does not expose a true creation date">🕓 upd ${esc(p.last_update)}</span>` : ""}
                   ${invChips(p)}
                 </span></summary>
               <div class="acc-proj-body" id="acc-proj-${esc(p.coll)}-${esc(p.id)}"><div class="empty">loading…</div></div>
@@ -4736,7 +4737,8 @@ function accAdoProjectHtml(d) {
     </div>`).join("") || `<div class="empty">no teams</div>`;
   const repos = (d.repos || []).map((r) => `
     <div class="acc-repo"><div class="ci-job" style="margin-bottom:4px">⛁ ${esc(r.name)}
-      ${(r.acls || []).length ? `<span class="chip chip-amber">${r.acls.length} explicit</span>` : '<span class="chip chip-green">inherited</span>'} ${extLink(r.url)}</div>
+      ${(r.acls || []).length ? `<span class="chip chip-amber">${r.acls.length} explicit</span>` : '<span class="chip chip-green">inherited</span>'}
+      ${r.first_commit ? `<span class="chip" title="date of the repository's FIRST commit ≈ creation (the API has no true creation date)">📅 ≈${esc(r.first_commit)}</span>` : ""} ${extLink(r.url)}</div>
       ${(r.acls || []).map((a) => `
         <div class="acc-acl"><span class="acc-ident"><span class="chip ${TIER_CLS[a.tier] || ""}" title="privilege tier">${esc(a.tier)}</span> ${esc(a.identity)}</span>
           ${permChips(a.allow)}
@@ -4747,7 +4749,7 @@ function accAdoProjectHtml(d) {
     ? `<div class="kpi-note" style="color:var(--red)">⚠ some ADO calls failed: ${d.errors.map(esc).join(" · ")}</div>` : "";
   return `${errs}${analysisPanel}${restPanel}
     <h4 class="acc-h">teams &amp; members</h4>${teams}
-    <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account &amp; excluded grants hidden)${d.repo_cap_note ? " · first 200 repos" : ""}</span></h4>${repos}`;
+    <h4 class="acc-h">repository permissions <span class="ci-meta">(service-account &amp; excluded grants hidden)${d.repo_cap_note ? " · first 200 repos" : ""}${d.since ? ` · project since ≈ <b title="oldest first commit across the repos — ADO exposes no true creation date">${esc(d.since)}</b>` : ""}</span></h4>${repos}`;
 }
 
 function accJiraHtml(d, act) {
@@ -5320,6 +5322,15 @@ function accPgCheckHtml(d) {
     ${(d.rows || []).length ? `
       <details class="filebox acc-pg-sec"><summary>🛠 browse / edit the table · <b>${d.rows.length}</b> project(s)${canWrite ? "" : ' <span class="ci-meta">(approver role needed to edit)</span>'}</summary>
         <div class="log-idx-list">${d.rows.map(editRow).join("")}</div></details>` : ""}
+    ${(d.audit || []).length ? `
+      <details class="filebox acc-pg-sec"><summary>📜 change log · <b>${d.audit.length}</b> recent write(s) <span class="ci-meta">— every action is recorded in the QuestOps database</span></summary>
+        <div class="log-idx-list">${d.audit.map((a) => `
+          <div class="log-idx"><span class="ci-meta" title="${esc(a.at)}">${esc(String(a.at).slice(0, 16).replace("T", " "))}</span>
+            <span class="chip chip-cyan">👤 ${esc(a.username)}</span>
+            <span class="chip ${a.action === "delete" ? "chip-red" : a.action === "insert" ? "chip-green" : "chip-amber"}">${esc(a.action)}</span>
+            <code class="log-idx-name">${esc(a.project)}</code>
+            <span class="ci-meta">${a.affected} row(s)${(a.details || {}).fields ? " · " + esc(Object.entries(a.details.fields).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join(", ")) : ""}</span>
+          </div>`).join("")}</div></details>` : ""}
     <div class="kpi-note" style="margin-top:8px">comparison is case/separator-insensitive ("SRE Core" = "SRE_Core");
       inventory prd_team is compared against the table's ops_team${canWrite ? " · writes go straight to the platform DB and re-run the check" : ""}</div>`;
 }
@@ -5352,7 +5363,7 @@ async function accPgActionClick(ev) {
   if (status) status.textContent = "⏳ writing…";
   try {
     const res = await api(`/api/access/devops-projects/${actKind}`, { method: "POST", body });
-    if (box) box.innerHTML = accPgCheckHtml(res.check);
+    if (box) box.innerHTML = accPgCheckHtml({ ...res.check, audit: res.audit || res.check.audit });
     const st2 = document.getElementById("acc-pg-status");
     if (st2) st2.textContent = `✓ ${actKind} ${body.project} — ${res.affected} row(s)`;
   } catch (e) {

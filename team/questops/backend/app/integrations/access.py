@@ -223,6 +223,7 @@ def ado_projects(force: bool = False) -> dict:
                 data = _ado.coll_get(coll, "/_apis/projects", {"$top": 500})
                 return [{"id": p["id"], "coll": coll, "name": p["name"],
                          "description": (p.get("description") or "")[:160],
+                         "last_update": (p.get("lastUpdateTime") or "")[:10] or None,
                          "url": _ado.project_url(coll, p["name"])}
                         for p in _values(data) if p]
             except requests.RequestException:
@@ -538,7 +539,7 @@ def _demo_ado_projects() -> dict:
     # p1 Platform: repo-specific (Engine/UI differ); p2 Control: uniform;
     # p3 Sandbox: uniform — exercises the scoring + rollup
     projects = [
-        {"id": "p1", "coll": "DefaultCollection", "name": "Platform",
+        {"id": "p1", "coll": "DefaultCollection", "last_update": "2026-08-14", "name": "Platform",
          "description": "[platform-devs] Product delivery", "repos": 6, "teams": 3,
          "_repolist": [{"id": "r1", "name": "payments-svc"},
                        {"id": "r2", "name": "checkout-svc"},
@@ -552,7 +553,7 @@ def _demo_ado_projects() -> dict:
          "pr_present": True, "pr_scope": "project", "pr_member_count": 3,
          "pr_groups": [{"name": "PR Approvers", "scope": "project", "members": 3}],
          "url": "https://ado.demo/DefaultCollection/Platform"},
-        {"id": "p2", "coll": "DefaultCollection", "name": "Control",
+        {"id": "p2", "coll": "DefaultCollection", "last_update": "2026-07-30", "name": "Control",
          "description": "[control-owners] Team config repos", "repos": 2, "teams": 1,
          "_repolist": [{"id": "r5", "name": "team-configs"},
                        {"id": "r6", "name": "control-utils"}],
@@ -563,7 +564,7 @@ def _demo_ado_projects() -> dict:
          "pr_present": True, "pr_scope": "repo", "pr_member_count": 2,
          "pr_groups": [{"name": "PR", "scope": "repo", "members": 2}],
          "url": "https://ado.demo/DefaultCollection/Control"},
-        {"id": "p3", "coll": "Research", "name": "Sandbox",
+        {"id": "p3", "coll": "Research", "last_update": "2026-05-02", "name": "Sandbox",
          "description": "[sandbox-team] Experiments", "repos": 1, "teams": 1,
          "members": 1, "_memberset": {"Carol Adel"},
          "score": 63, "grade": "C", "uniform": True, "pct_repo_specific": 100,
@@ -571,7 +572,7 @@ def _demo_ado_projects() -> dict:
          "team_non_member_count": 0, "team_ldap_resolved": False,
          "pr_present": False, "pr_scope": None, "pr_member_count": 0, "pr_groups": [],
          "url": "https://ado.demo/Research/Sandbox"},
-        {"id": "p4", "coll": "Research", "name": "Attic",
+        {"id": "p4", "coll": "Research", "last_update": "2024-11-19", "name": "Attic",
          "description": "[UnAssigned] retired area", "repos": 1, "teams": 0,
          "members": 0, "_memberset": set(),
          "score": 100, "grade": "A", "uniform": True, "pct_repo_specific": 0,
@@ -581,7 +582,7 @@ def _demo_ado_projects() -> dict:
          "url": "https://ado.demo/Research/Attic"},
         # same NAME as the 'Platform' project in DefaultCollection — exercises
         # the cross-collection duplicate-name highlight
-        {"id": "p5", "coll": "Research", "name": "Platform",
+        {"id": "p5", "coll": "Research", "last_update": "2026-06-27", "name": "Platform",
          "description": "[research-team] Research platform sandbox", "repos": 1, "teams": 1,
          "members": 1, "_memberset": {"Carol Adel"},
          "score": 80, "grade": "B", "uniform": True, "pct_repo_specific": 0,
@@ -692,7 +693,10 @@ def _demo_project_access(project_id: str) -> dict:
         # demo has no real ADO_USER; filter against the injected demo account
         acls = [dict(a, tier=_privilege_tier(a["allow"]))
                 for a in r["acls"] if a["identity"].strip().lower() != su.strip().lower()]
-        repos.append({"name": r["name"], "acls": acls,
+        _fc = {"Engine": "2021-03-15", "ui-portal": "2022-11-02",
+               "payments-svc": "2023-06-21", "team-configs": "2024-01-09"}
+        repos.append({"first_commit": _fc.get(r["name"], "2023-01-01"),
+                      "name": r["name"], "acls": acls,
                       "signature": _acl_signature(acls),
                       "url": f"https://ado.demo/{coll}/{project_id}/_git/{r['name']}"})
     demo_desc = {"p1": "[platform-devs] Product delivery",
@@ -706,7 +710,9 @@ def _demo_project_access(project_id: str) -> dict:
                      "counts_by_name": {"prapprovers": 3}},
               "p2": {"project_acl_names": [], "counts_by_name": {"pr": 2}}
               }.get(project_id, {})
-    return {"source": "demo", "teams": teams, "repos": repos,
+    since = min((r.get("first_commit") for r in repos if r.get("first_commit")),
+                default=None)
+    return {"source": "demo", "teams": teams, "repos": repos, "since": since,
             "analysis": _project_access_analysis(repos, teams, demo_desc,
                                                  ldap_members, pr_ctx)}
 
@@ -769,7 +775,24 @@ def ado_project_access(collection: str, project_id: str,
             except Exception:  # noqa: BLE001
                 return rp["name"], {}
 
+        # repo "creation" ≈ FIRST commit date (ADO exposes no true creation
+        # date) — one $top=1 oldest-first commits call per repo, pooled and
+        # best-effort, only here (on expand), never in the big sweep
+        def first_commit(rp):
+            try:
+                c = _values(_ado.coll_get(
+                    collection,
+                    f"/{project_id}/_apis/git/repositories/{rp['id']}/commits",
+                    {"searchCriteria.$top": 1,
+                     "searchCriteria.showOldestCommitsFirst": "true"}))
+                if c:
+                    return rp["name"], ((c[0].get("committer") or {}).get("date") or "")[:10] or None
+            except Exception:  # noqa: BLE001 — a date is never worth an error
+                pass
+            return rp["name"], None
+
         with ThreadPoolExecutor(max_workers=POOL) as pool:  # parallel ACL reads
+            first_commits = dict(pool.map(first_commit, repo_list))
             for name, aces in pool.map(fetch_acl, repo_list):
                 raw_acls[name] = aces
                 descriptors.update(aces.keys())
@@ -787,6 +810,9 @@ def ado_project_access(collection: str, project_id: str,
             errors.append(f"project acl: {_short_http(exc)}")
         names = _resolve_identities(sorted(descriptors))
         repos = _build_repos(collection, project_id, repo_list, raw_acls, names)
+        for r in repos:
+            r["first_commit"] = first_commits.get(r["name"])
+        since = min((d for d in first_commits.values() if d), default=None)
         # project description carries the [TEAM] LDAP group for validation
         description = ""
         try:
@@ -799,7 +825,7 @@ def ado_project_access(collection: str, project_id: str,
         analysis = _project_access_analysis(repos, teams, description,
                                             ldap_members, pr_ctx)
         return {"source": "live", "teams": teams, "repos": repos,
-                "analysis": analysis,
+                "analysis": analysis, "since": since,
                 "repo_cap_note": len(repo_list) >= PROJECT_REPO_CAP, "errors": errors}
     return _cached(f"ado:project:{collection}:{project_id}", force, build)
 

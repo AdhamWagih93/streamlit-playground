@@ -85,6 +85,21 @@ class GiteaTarget(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class DevopsProjectsAudit(Base):
+    """Permanent audit log of every write to the platform DB's devops_projects
+    table (insert / update / delete / dedupe) made through the Access page."""
+
+    __tablename__ = "devops_projects_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+    username: Mapped[str] = mapped_column(String(120), index=True)
+    action: Mapped[str] = mapped_column(String(20), index=True)   # insert/update/delete/dedupe
+    project: Mapped[str] = mapped_column(String(200), index=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)     # fields written, etc.
+    affected: Mapped[int] = mapped_column(Integer, default=0)     # rows touched
+
+
 class AgentCommand(Base):
     """Every command/action the repo agent proposes. Nothing executes until a
     human approves; the row is the permanent audit log either way."""
