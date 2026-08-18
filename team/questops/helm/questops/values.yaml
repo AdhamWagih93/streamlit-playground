@@ -94,6 +94,7 @@ logging:
 # name is plain config)
 platformDb:
   projectsTable: devops_projects
+  actions: true             # false = read-only cross-check (write endpoints disabled)
 
 # SMTP for the Logging page's emailed per-project reports (blank host = preview only)
 smtp:

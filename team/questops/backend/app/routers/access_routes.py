@@ -58,6 +58,10 @@ def _pg_action(db: Session, user: User, action: str, fn, project: str,
     """Run a devops_projects write, LOG it to the QuestOps database, then
     return the FRESH crosscheck (+ recent audit) so the panel updates in one
     round trip. Failed writes are not logged — nothing changed."""
+    from ..config import settings
+    if not settings.platform_db_actions:
+        raise HTTPException(403, "devops_projects write actions are disabled "
+                                 "(QO_PLATFORM_DB_ACTIONS=false)")
     affected = _wrap(fn, project, *args)
     db.add(DevopsProjectsAudit(username=user.username, action=action,
                                project=project, details=details or {},

@@ -243,6 +243,7 @@ def _crosscheck() -> dict:
 
     base = {"table": settings.platform_projects_table or "devops_projects",
             "configured": bool(settings.platform_database_url) or settings.demo_mode,
+            "actions_enabled": bool(settings.platform_db_actions),
             "reachable": False, "error": None, "source": "demo" if settings.demo_mode else "live"}
     if not base["configured"]:
         return {**base, "note": "not configured — set QO_PLATFORM_DATABASE_URL in .env "
@@ -303,11 +304,22 @@ def _crosscheck() -> dict:
                                "inventory": ic, "db": dc})
 
     matched = len(set(inv_by_key) & set(db_by_key))
+    # matched-project details for the breakdown visuals — the TABLE's values,
+    # falling back to the inventory where the table has NULLs
+    matched_projects = []
+    for k in sorted(set(inv_by_key) & set(db_by_key)):
+        iv, dv = inv_by_key[k], db_by_key[k]
+        matched_projects.append({
+            "project": iv["project"],
+            "company": dv.get("company") or iv.get("company"),
+            "dev_team": dv.get("dev_team") or iv.get("dev_team"),
+            "qc_team": dv.get("qc_team") or iv.get("qc_team"),
+            "ops_team": dv.get("ops_team") or iv.get("prd_team")})
     editor_rows = [{"project": v.get("project"), "company": v.get("company"),
                     "dev_team": v.get("dev_team"), "qc_team": v.get("qc_team"),
                     "ops_team": v.get("ops_team"), "count": v["_count"]}
                    for _k, v in sorted(db_by_key.items())]
-    return {**base, "rows": editor_rows,
+    return {**base, "rows": editor_rows, "matched_projects": matched_projects,
             "inventory_projects": len(inv_by_key), "db_projects": len(db_by_key),
             "db_rows": len(rows), "matched": matched,
             "missing_in_db": missing_in_db,

@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # cross-check panel shows "not configured".
     platform_database_url: str = ""
     platform_projects_table: str = "devops_projects"
+    # feature flag: whether the Access page offers WRITE actions on the table
+    # (quick fixes, row editor, delete/dedupe). false = read-only cross-check;
+    # the endpoints are disabled server-side too, not just hidden
+    platform_db_actions: bool = True
 
     # --- Mail (Logging health email reports) ---
     # Leave smtp_host blank to disable sending (the report PREVIEW always

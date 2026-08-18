@@ -5257,7 +5257,7 @@ const _pgApprover = () => (state.me || {}).role === "approver";
 function accPgCheckHtml(d) {
   if (!d.configured) return `<div class="empty">${esc(d.note || "not configured")}</div>`;
   if (d.error) return `<div class="rsearch-status rsearch-err">⚠ platform DB unreachable — ${esc(d.error)}</div>`;
-  const canWrite = _pgApprover();
+  const canWrite = _pgApprover() && d.actions_enabled !== false;
   const act = (label, attrs, title, cls = "btn-ghost") => canWrite
     ? `<button class="btn btn-sm ${cls} acc-pg-act" ${attrs} title="${esc(title)}">${label}</button>` : "";
   const n = (x) => (x || []).length;
@@ -5294,6 +5294,7 @@ function accPgCheckHtml(d) {
       ${chip(n(d.mismatches), "wrong assignments", "chip-red")}
       ${d.ok ? '<span class="chip chip-green">✓ in sync</span>' : ""}
       <span class="spacer"></span><span id="acc-pg-status" class="ci-meta"></span></div>
+    ${accPgVizHtml(d)}
     ${section("📁 in the inventory but MISSING from the db", d.missing_in_db, (r) => `
       <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
         ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
@@ -5320,7 +5321,7 @@ function accPgCheckHtml(d) {
           `UPDATE ${r.field} to "${r.inventory}"`, "btn-primary")}</div>`)}
     ${d.ok ? '<div class="empty">✓ inventory and devops_projects agree — no discrepancies</div>' : ""}
     ${(d.rows || []).length ? `
-      <details class="filebox acc-pg-sec"><summary>🛠 browse / edit the table · <b>${d.rows.length}</b> project(s)${canWrite ? "" : ' <span class="ci-meta">(approver role needed to edit)</span>'}</summary>
+      <details class="filebox acc-pg-sec"><summary>🛠 browse / edit the table · <b>${d.rows.length}</b> project(s)${canWrite ? "" : ` <span class="ci-meta">(${d.actions_enabled === false ? "write actions disabled — QO_PLATFORM_DB_ACTIONS=false" : "approver role needed to edit"})</span>`}</summary>
         <div class="log-idx-list">${d.rows.map(editRow).join("")}</div></details>` : ""}
     ${(d.audit || []).length ? `
       <details class="filebox acc-pg-sec"><summary>📜 change log · <b>${d.audit.length}</b> recent write(s) <span class="ci-meta">— every action is recorded in the QuestOps database</span></summary>
@@ -5333,6 +5334,37 @@ function accPgCheckHtml(d) {
           </div>`).join("")}</div></details>` : ""}
     <div class="kpi-note" style="margin-top:8px">comparison is case/separator-insensitive ("SRE Core" = "SRE_Core");
       inventory prd_team is compared against the table's ops_team${canWrite ? " · writes go straight to the platform DB and re-run the check" : ""}</div>`;
+}
+
+// matched-project BREAKDOWNS (projects per dev/qc/ops team + per company):
+// four single-series bar lists — row label carries identity, bar length the
+// count, tooltip the project names; hue #1497b3 validated for the dark surface
+function accPgVizHtml(d) {
+  const mp = d.matched_projects || [];
+  if (!mp.length) return "";
+  const facets = [["dev_team", "per dev_team"], ["qc_team", "per qc_team"],
+    ["ops_team", "per ops_team"], ["company", "per company"]];
+  const cards = facets.map(([f, title]) => {
+    const groups = {};
+    mp.forEach((m) => {
+      const k = m[f] || "— unassigned";
+      (groups[k] = groups[k] || []).push(m.project);
+    });
+    const entries = Object.entries(groups).sort((a, b) => b[1].length - a[1].length
+      || a[0].localeCompare(b[0]));
+    const max = Math.max(...entries.map(([, v]) => v.length), 1);
+    const rows = entries.map(([team, projs]) => `
+      <div class="pgv-row" title="${esc(team)} — ${projs.length} project(s): ${esc(projs.join(", "))}">
+        <span class="pgv-label ${team === "— unassigned" ? "pgv-none" : ""}">${esc(team)}</span>
+        <span class="pgv-track"><span class="pgv-bar ${team === "— unassigned" ? "pgv-bar-none" : ""}"
+          style="width:${(projs.length / max * 100).toFixed(0)}%"></span></span>
+        <span class="pgv-count">${projs.length}</span>
+      </div>`).join("");
+    return `<div class="pgv-card"><div class="pgv-title">${esc(title)}</div>${rows}</div>`;
+  }).join("");
+  return `<details class="filebox acc-pg-sec" open>
+    <summary>📊 matched projects — team &amp; company breakdowns · <b>${mp.length}</b> project(s)</summary>
+    <div class="acc-pg-viz">${cards}</div></details>`;
 }
 
 // one DELEGATED handler on the panel container — survives every re-render
