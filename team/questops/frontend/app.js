@@ -5250,9 +5250,14 @@ function wireMigration(tconf) {
 }
 
 // inventory ⇄ platform-DB devops_projects cross-check (Access page panel)
+// — with approver QUICK ACTIONS on every discrepancy + an inline table editor
+const _pgApprover = () => (state.me || {}).role === "approver";
 function accPgCheckHtml(d) {
   if (!d.configured) return `<div class="empty">${esc(d.note || "not configured")}</div>`;
   if (d.error) return `<div class="rsearch-status rsearch-err">⚠ platform DB unreachable — ${esc(d.error)}</div>`;
+  const canWrite = _pgApprover();
+  const act = (label, attrs, title, cls = "btn-ghost") => canWrite
+    ? `<button class="btn btn-sm ${cls} acc-pg-act" ${attrs} title="${esc(title)}">${label}</button>` : "";
   const n = (x) => (x || []).length;
   const chip = (cnt, label, badCls) => `<span class="chip ${cnt ? badCls : "chip-green"}">${cnt} ${label}</span>`;
   const teamRow = (r, side) => ["dev_team", "qc_team", side === "db" ? "ops_team" : "prd_team"]
@@ -5261,6 +5266,20 @@ function accPgCheckHtml(d) {
   const section = (title, rows, render) => rows.length ? `
     <details class="filebox acc-pg-sec" open><summary>${title} · <b>${rows.length}</b></summary>
       <div class="log-idx-list">${rows.map(render).join("")}</div></details>` : "";
+  const editRow = (r) => `
+    <div class="log-idx acc-pg-row" data-proj="${esc(r.project)}">
+      <code class="log-idx-name">${esc(r.project)}</code>
+      ${r.count > 1 ? `<span class="chip chip-red">${r.count} rows</span>` : ""}
+      ${["company", "dev_team", "qc_team", "ops_team"].map((f) => canWrite
+        ? `<input class="acc-pg-in" data-f="${f}" value="${esc(r[f] || "")}" placeholder="${f}" title="${f}">`
+        : (r[f] ? `<span class="chip chip-cyan" title="${f}">${esc(r[f])}</span>` : "")).join(" ")}
+      ${act("💾 save", `data-pg-act="update" data-proj="${esc(r.project)}"`,
+        "write the edited fields to the table", "btn-primary acc-pg-save")}
+      ${r.count > 1 ? act("♻ dedupe", `data-pg-act="dedupe" data-proj="${esc(r.project)}"`,
+        "remove the duplicate rows, keeping one") : ""}
+      ${act("🗑", `data-pg-act="delete" data-proj="${esc(r.project)}"`,
+        "delete this project from the table")}
+    </div>`;
   return `
     <div class="inv-chips" style="margin-bottom:8px">
       <span class="chip">${esc(d.source)} · table <b>${esc(d.table)}</b></span>
@@ -5271,26 +5290,75 @@ function accPgCheckHtml(d) {
       ${chip(n(d.missing_in_inventory), "not in inventory", "chip-amber")}
       ${chip(n(d.duplicates), "duplicated", "chip-red")}
       ${chip(n(d.mismatches), "wrong assignments", "chip-red")}
-      ${d.ok ? '<span class="chip chip-green">✓ in sync</span>' : ""}</div>
+      ${d.ok ? '<span class="chip chip-green">✓ in sync</span>' : ""}
+      <span class="spacer"></span><span id="acc-pg-status" class="ci-meta"></span></div>
     ${section("📁 in the inventory but MISSING from the db", d.missing_in_db, (r) => `
       <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
         ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
-        ${teamRow(r, "inv")}</div>`)}
+        ${teamRow(r, "inv")}
+        ${act("➕ add to db", `data-pg-act="insert" data-proj="${esc(r.project)}" data-company="${esc(r.company || "")}" data-dev="${esc(r.dev_team || "")}" data-qc="${esc(r.qc_team || "")}" data-ops="${esc(r.prd_team || "")}"`,
+          "insert this project with its inventory teams (prd_team → ops_team)", "btn-primary")}</div>`)}
     ${section("🗄 in the db but NOT in the inventory", d.missing_in_inventory, (r) => `
       <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
         ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
-        ${teamRow(r, "db")}</div>`)}
+        ${teamRow(r, "db")}
+        ${act("🗑 delete from db", `data-pg-act="delete" data-proj="${esc(r.project)}"`,
+          "remove this project from the table")}</div>`)}
     ${section("♊ duplicated rows in the db", d.duplicates, (r) => `
       <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
-        <span class="chip chip-red">${r.count} rows</span></div>`)}
+        <span class="chip chip-red">${r.count} rows</span>
+        ${act("♻ dedupe (keep one)", `data-pg-act="dedupe" data-proj="${esc(r.project)}"`,
+          "delete the duplicate rows, keeping the first", "btn-primary")}</div>`)}
     ${section("⚠ wrong team / company assignments", d.mismatches, (r) => `
       <div class="log-idx bad"><code class="log-idx-name">${esc(r.project)}</code>
         <span class="chip chip-amber">${esc(r.field)}</span>
         <span class="ci-meta">inventory (${esc(r.inventory_field)}):</span> <span class="chip chip-cyan">${esc(r.inventory)}</span>
-        <span class="ci-meta">→ db:</span> ${r.db ? `<span class="chip chip-red">${esc(r.db)}</span>` : '<span class="pct-bad">missing</span>'}</div>`)}
+        <span class="ci-meta">→ db:</span> ${r.db ? `<span class="chip chip-red">${esc(r.db)}</span>` : '<span class="pct-bad">missing</span>'}
+        ${act("✎ set db to inventory", `data-pg-act="update" data-proj="${esc(r.project)}" data-f="${esc(r.field)}" data-v="${esc(r.inventory)}"`,
+          `UPDATE ${r.field} to "${r.inventory}"`, "btn-primary")}</div>`)}
     ${d.ok ? '<div class="empty">✓ inventory and devops_projects agree — no discrepancies</div>' : ""}
+    ${(d.rows || []).length ? `
+      <details class="filebox acc-pg-sec"><summary>🛠 browse / edit the table · <b>${d.rows.length}</b> project(s)${canWrite ? "" : ' <span class="ci-meta">(approver role needed to edit)</span>'}</summary>
+        <div class="log-idx-list">${d.rows.map(editRow).join("")}</div></details>` : ""}
     <div class="kpi-note" style="margin-top:8px">comparison is case/separator-insensitive ("SRE Core" = "SRE_Core");
-      inventory prd_team is compared against the table's ops_team</div>`;
+      inventory prd_team is compared against the table's ops_team${canWrite ? " · writes go straight to the platform DB and re-run the check" : ""}</div>`;
+}
+
+// one DELEGATED handler on the panel container — survives every re-render
+async function accPgActionClick(ev) {
+  const btn = ev.target.closest("[data-pg-act]");
+  if (!btn || btn.disabled) return;
+  const box = document.getElementById("acc-pgcheck");
+  const status = document.getElementById("acc-pg-status");
+  const actKind = btn.dataset.pgAct;
+  const body = { project: btn.dataset.proj };
+  if (actKind === "insert") {
+    body.company = btn.dataset.company || null;
+    body.dev_team = btn.dataset.dev || null;
+    body.qc_team = btn.dataset.qc || null;
+    body.ops_team = btn.dataset.ops || null;
+  } else if (actKind === "update") {
+    if (btn.dataset.f) {                       // quick-fix a single field
+      body.fields = { [btn.dataset.f]: btn.dataset.v };
+    } else {                                   // row-editor save
+      const row = btn.closest(".acc-pg-row");
+      body.fields = {};
+      row.querySelectorAll(".acc-pg-in").forEach((i) => { body.fields[i.dataset.f] = i.value.trim() || null; });
+    }
+  }
+  if ((actKind === "delete" || actKind === "dedupe")
+      && !window.confirm(`${actKind === "delete" ? "Delete" : "De-duplicate"} "${body.project}" in devops_projects?`)) return;
+  btn.disabled = true;
+  if (status) status.textContent = "⏳ writing…";
+  try {
+    const res = await api(`/api/access/devops-projects/${actKind}`, { method: "POST", body });
+    if (box) box.innerHTML = accPgCheckHtml(res.check);
+    const st2 = document.getElementById("acc-pg-status");
+    if (st2) st2.textContent = `✓ ${actKind} ${body.project} — ${res.affected} row(s)`;
+  } catch (e) {
+    btn.disabled = false;
+    if (status) status.textContent = `⚠ ${e.message}`;
+  }
 }
 
 async function renderAccess() {
@@ -5319,6 +5387,7 @@ async function renderAccess() {
   };
   load(false);
   document.getElementById("acc-refresh").onclick = () => load(true);
+  document.getElementById("acc-pgcheck").addEventListener("click", accPgActionClick);
 }
 
 /* ================= UPGRADES ================= */

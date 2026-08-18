@@ -33,6 +33,49 @@ def devops_projects_check(refresh: bool = False, user: User = Depends(current_us
     return _wrap(platformdb.crosscheck, refresh)
 
 
+class PgProjectBody(BaseModel):
+    project: str
+    company: str | None = None
+    dev_team: str | None = None
+    qc_team: str | None = None
+    ops_team: str | None = None
+    fields: dict | None = None   # explicit subset for updates
+
+
+def _pg_action(fn, *args) -> dict:
+    """Run a devops_projects write, then return the FRESH crosscheck so the
+    panel updates in one round trip."""
+    affected = _wrap(fn, *args)
+    return {"ok": True, "affected": affected,
+            "check": _wrap(platformdb.crosscheck, True)}
+
+
+@router.post("/devops-projects/update")
+def devops_projects_update(body: PgProjectBody, user: User = Depends(require_approver)):
+    fields = body.fields if body.fields else {
+        k: v for k, v in (("company", body.company), ("dev_team", body.dev_team),
+                          ("qc_team", body.qc_team), ("ops_team", body.ops_team))
+        if v is not None}
+    return _pg_action(platformdb.update_project, body.project, fields)
+
+
+@router.post("/devops-projects/insert")
+def devops_projects_insert(body: PgProjectBody, user: User = Depends(require_approver)):
+    return _pg_action(platformdb.insert_project, body.project, {
+        "company": body.company, "dev_team": body.dev_team,
+        "qc_team": body.qc_team, "ops_team": body.ops_team})
+
+
+@router.post("/devops-projects/delete")
+def devops_projects_delete(body: PgProjectBody, user: User = Depends(require_approver)):
+    return _pg_action(platformdb.delete_project, body.project)
+
+
+@router.post("/devops-projects/dedupe")
+def devops_projects_dedupe(body: PgProjectBody, user: User = Depends(require_approver)):
+    return _pg_action(platformdb.dedupe_project, body.project)
+
+
 @router.get("/ldap")
 def ldap(refresh: bool = False, user: User = Depends(current_user)):
     return _wrap(access.ldap_health, refresh)

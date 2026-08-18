@@ -1482,3 +1482,12 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .log-meter-fill.c { background: var(--amber); } .log-meter-fill.f { background: var(--red); }
 .log-meter-fill.na { background: var(--faint); }
 
+
+/* devops_projects table editor (Access page cross-check panel) */
+.acc-pg-row { flex-wrap: wrap; }
+.acc-pg-in { padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: 400 11.5px var(--body);
+  width: 130px; }
+.acc-pg-in:focus { outline: none; border-color: var(--amber); }
+.acc-pg-act { font-size: 10.5px; }
+.acc-pg-sec > summary { color: var(--cyan); }

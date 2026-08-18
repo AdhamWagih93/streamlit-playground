@@ -35,7 +35,10 @@ def _norm(v) -> str:
     return re.sub(r"[\s_\-]+", "_", str(v or "").strip().lower())
 
 
-def _demo_rows() -> list[dict]:
+_DEMO_STATE: list | None = None
+
+
+def _demo_seed() -> list[dict]:
     """One of each discrepancy, plus a separator-drift value that must NOT flag."""
     return [
         # Platform: qc team WRONG; ops team only differs by separator (no flag);
@@ -54,12 +57,163 @@ def _demo_rows() -> list[dict]:
     ]
 
 
-def _live_rows() -> list[dict]:
-    from sqlalchemy import create_engine, text
+def _demo_rows() -> list[dict]:
+    global _DEMO_STATE
+    if _DEMO_STATE is None:
+        _DEMO_STATE = _demo_seed()
+    return [dict(r) for r in _DEMO_STATE]
+
+
+_COLUMNS = ("company", "dev_team", "qc_team", "ops_team")
+
+
+def _table() -> str:
     table = (settings.platform_projects_table or "devops_projects").strip()
     if not _IDENT_RE.match(table):
         raise RuntimeError(f"invalid platform projects table name {table!r}")
-    engine = create_engine(settings.platform_database_url, pool_pre_ping=True)
+    return table
+
+
+def _engine():
+    from sqlalchemy import create_engine
+    if not settings.platform_database_url:
+        raise RuntimeError("platform DB is not configured — set QO_PLATFORM_DATABASE_URL")
+    return create_engine(settings.platform_database_url, pool_pre_ping=True)
+
+
+def update_project(project: str, fields: dict) -> int:
+    """UPDATE company/dev_team/qc_team/ops_team on every row of `project`
+    (case-insensitive). Returns rows affected."""
+    sets = {k: fields[k] for k in _COLUMNS if k in fields}
+    if not (project or "").strip():
+        raise ValueError("project is required")
+    if not sets:
+        raise ValueError("nothing to update — pass at least one of "
+                         + ", ".join(_COLUMNS))
+    if settings.demo_mode:
+        _demo_rows()
+        n = 0
+        for r in _DEMO_STATE:
+            if _norm(r.get("project")) == _norm(project):
+                r.update({k: (v or None) for k, v in sets.items()})
+                n += 1
+        invalidate()
+        return n
+    from sqlalchemy import text
+    table = _table()
+    assign = ", ".join(f"{k} = :{k}" for k in sets)
+    eng = _engine()
+    try:
+        with eng.begin() as conn:
+            res = conn.execute(text(
+                f"UPDATE {table} SET {assign} WHERE lower(project) = lower(:_p)"),
+                {**{k: (v or None) for k, v in sets.items()}, "_p": project.strip()})
+            n = res.rowcount or 0
+    finally:
+        eng.dispose()
+    invalidate()
+    return n
+
+
+def delete_project(project: str) -> int:
+    """DELETE every row of `project` (case-insensitive). Returns rows removed."""
+    if not (project or "").strip():
+        raise ValueError("project is required")
+    if settings.demo_mode:
+        _demo_rows()
+        global _DEMO_STATE
+        before = len(_DEMO_STATE)
+        _DEMO_STATE = [r for r in _DEMO_STATE
+                       if _norm(r.get("project")) != _norm(project)]
+        invalidate()
+        return before - len(_DEMO_STATE)
+    from sqlalchemy import text
+    table = _table()
+    eng = _engine()
+    try:
+        with eng.begin() as conn:
+            res = conn.execute(text(
+                f"DELETE FROM {table} WHERE lower(project) = lower(:_p)"),
+                {"_p": project.strip()})
+            n = res.rowcount or 0
+    finally:
+        eng.dispose()
+    invalidate()
+    return n
+
+
+def insert_project(project: str, fields: dict) -> int:
+    """INSERT one row (used by the 'add missing inventory project' action)."""
+    if not (project or "").strip():
+        raise ValueError("project is required")
+    row = {k: (fields.get(k) or None) for k in _COLUMNS}
+    if settings.demo_mode:
+        _demo_rows()
+        if any(_norm(r.get("project")) == _norm(project) for r in _DEMO_STATE):
+            raise ValueError(f"{project} already exists in the table")
+        _DEMO_STATE.append({"project": project.strip(), **row})
+        invalidate()
+        return 1
+    from sqlalchemy import text
+    table = _table()
+    eng = _engine()
+    try:
+        with eng.begin() as conn:
+            dup = conn.execute(text(
+                f"SELECT count(*) FROM {table} WHERE lower(project) = lower(:_p)"),
+                {"_p": project.strip()}).scalar()
+            if dup:
+                raise ValueError(f"{project} already exists in the table")
+            conn.execute(text(
+                f"INSERT INTO {table} (project, company, dev_team, qc_team, ops_team) "
+                f"VALUES (:_p, :company, :dev_team, :qc_team, :ops_team)"),
+                {"_p": project.strip(), **row})
+    finally:
+        eng.dispose()
+    invalidate()
+    return 1
+
+
+def dedupe_project(project: str) -> int:
+    """Remove duplicate rows of `project`, KEEPING the first. Returns removed."""
+    if not (project or "").strip():
+        raise ValueError("project is required")
+    if settings.demo_mode:
+        _demo_rows()
+        global _DEMO_STATE
+        kept, removed, seen = [], 0, False
+        for r in _DEMO_STATE:
+            if _norm(r.get("project")) == _norm(project):
+                if seen:
+                    removed += 1
+                    continue
+                seen = True
+            kept.append(r)
+        _DEMO_STATE = kept
+        invalidate()
+        return removed
+    from sqlalchemy import text
+    table = _table()
+    eng = _engine()
+    try:
+        with eng.begin() as conn:
+            res = conn.execute(text(
+                f"DELETE FROM {table} WHERE ctid IN ("
+                f"  SELECT ctid FROM ("
+                f"    SELECT ctid, row_number() OVER (ORDER BY ctid) AS rn "
+                f"    FROM {table} WHERE lower(project) = lower(:_p)) x "
+                f"  WHERE x.rn > 1)"), {"_p": project.strip()})
+            n = res.rowcount or 0
+    finally:
+        eng.dispose()
+    invalidate()
+    return n
+
+
+def _live_rows() -> list[dict]:
+    from sqlalchemy import text
+    table = _table()
+    engine = _engine()
     try:
         with engine.connect() as conn:
             rows = conn.execute(text(
@@ -149,7 +303,11 @@ def _crosscheck() -> dict:
                                "inventory": ic, "db": dc})
 
     matched = len(set(inv_by_key) & set(db_by_key))
-    return {**base,
+    editor_rows = [{"project": v.get("project"), "company": v.get("company"),
+                    "dev_team": v.get("dev_team"), "qc_team": v.get("qc_team"),
+                    "ops_team": v.get("ops_team"), "count": v["_count"]}
+                   for _k, v in sorted(db_by_key.items())]
+    return {**base, "rows": editor_rows,
             "inventory_projects": len(inv_by_key), "db_projects": len(db_by_key),
             "db_rows": len(rows), "matched": matched,
             "missing_in_db": missing_in_db,
