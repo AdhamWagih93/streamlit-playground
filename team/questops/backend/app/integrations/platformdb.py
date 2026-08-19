@@ -315,11 +315,38 @@ def _crosscheck() -> dict:
             "dev_team": dv.get("dev_team") or iv.get("dev_team"),
             "qc_team": dv.get("qc_team") or iv.get("qc_team"),
             "ops_team": dv.get("ops_team") or iv.get("prd_team")})
+    # enrich every distinct team with its LDAP members — the SAME resolver the
+    # Azure access page uses (Engine repo getTeamMembersCN.sh, 1h-cached).
+    # Inventory teams are often underscored while LDAP CNs are dashed, so
+    # separator variants are tried until one resolves.
+    def _members(team: str) -> dict:
+        from ..auth import ldap_group_members
+        seen_c = set()
+        for cand in (team, team.replace("_", "-"), team.replace(" ", "-"),
+                     team.replace(" ", "_"), team.replace("-", "_")):
+            if cand.lower() in seen_c:
+                continue
+            seen_c.add(cand.lower())
+            res = ldap_group_members(cand)
+            if res.get("found"):
+                return {"found": True, "group": cand,
+                        "members": [m.get("display_name") or m.get("username") or ""
+                                    for m in (res.get("members") or [])]}
+        return {"found": False, "group": team, "members": []}
+
+    team_members = {}
+    for m in matched_projects:
+        for f in ("dev_team", "qc_team", "ops_team"):
+            t = m.get(f)
+            if t and t not in team_members:
+                team_members[t] = _members(t)
+
     editor_rows = [{"project": v.get("project"), "company": v.get("company"),
                     "dev_team": v.get("dev_team"), "qc_team": v.get("qc_team"),
                     "ops_team": v.get("ops_team"), "count": v["_count"]}
                    for _k, v in sorted(db_by_key.items())]
     return {**base, "rows": editor_rows, "matched_projects": matched_projects,
+            "team_members": team_members,
             "inventory_projects": len(inv_by_key), "db_projects": len(db_by_key),
             "db_rows": len(rows), "matched": matched,
             "missing_in_db": missing_in_db,

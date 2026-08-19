@@ -99,6 +99,8 @@ _DEMO_LDAP_GROUPS = {
     "platform-devs": ["Alice Nasr", "Bob Farid", "Carol Adel", "Dave Samir"],
     "control-owners": ["Alice Nasr", "Bob Farid"],
     "research-team": ["Carol Adel"],
+    "platform-qa": ["Grace Hany", "Hesham Aly"],
+    "sre-core": ["Dave Samir", "Omar Waleed", "Alice Nasr"],
 }
 
 # [TEAM] members are resolved by running an asset the user's cloned Engine repo

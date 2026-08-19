@@ -5255,6 +5255,7 @@ function wireMigration(tconf) {
 // — with approver QUICK ACTIONS on every discrepancy + an inline table editor
 const _pgApprover = () => (state.me || {}).role === "approver";
 function accPgCheckHtml(d) {
+  state.pgCheckData = d;                    // viz filters re-render from this
   if (!d.configured) return `<div class="empty">${esc(d.note || "not configured")}</div>`;
   if (d.error) return `<div class="rsearch-status rsearch-err">⚠ platform DB unreachable — ${esc(d.error)}</div>`;
   const canWrite = _pgApprover() && d.actions_enabled !== false;
@@ -5336,35 +5337,88 @@ function accPgCheckHtml(d) {
       inventory prd_team is compared against the table's ops_team${canWrite ? " · writes go straight to the platform DB and re-run the check" : ""}</div>`;
 }
 
-// matched-project BREAKDOWNS (projects per dev/qc/ops team + per company):
-// four single-series bar lists — row label carries identity, bar length the
-// count, tooltip the project names; hue #1497b3 validated for the dark surface
-function accPgVizHtml(d) {
-  const mp = d.matched_projects || [];
-  if (!mp.length) return "";
+// matched-project BREAKDOWNS, grouped BY COMPANY: each company gets its own
+// block of per-dev/qc/ops-team bar lists, every team enriched with its LDAP
+// members (same Engine-script resolver the Azure access page uses).
+// Filterable by free text / company / team; hue #1497b3 validated both modes.
+function accPgVizFacets(projects, tm) {
   const facets = [["dev_team", "per dev_team"], ["qc_team", "per qc_team"],
-    ["ops_team", "per ops_team"], ["company", "per company"]];
-  const cards = facets.map(([f, title]) => {
+    ["ops_team", "per ops_team"]];
+  return `<div class="acc-pg-viz">` + facets.map(([f, title]) => {
     const groups = {};
-    mp.forEach((m) => {
+    projects.forEach((m) => {
       const k = m[f] || "— unassigned";
       (groups[k] = groups[k] || []).push(m.project);
     });
     const entries = Object.entries(groups).sort((a, b) => b[1].length - a[1].length
       || a[0].localeCompare(b[0]));
     const max = Math.max(...entries.map(([, v]) => v.length), 1);
-    const rows = entries.map(([team, projs]) => `
-      <div class="pgv-row" title="${esc(team)} — ${projs.length} project(s): ${esc(projs.join(", "))}">
+    const rows = entries.map(([team, projs]) => {
+      const mem = (tm || {})[team];
+      const memTip = mem ? (mem.found
+        ? `members of ${mem.group} (${mem.members.length}): ${mem.members.join(", ") || "none"}`
+        : "LDAP group not resolved (getTeamMembersCN.sh)") : "";
+      const memChip = team === "— unassigned" ? "" : (mem && mem.found
+        ? `<span class="pgv-mem" title="${esc(memTip)}">👥 ${mem.members.length}</span>`
+        : `<span class="pgv-mem pgv-mem-na" title="${esc(memTip)}">👥 ?</span>`);
+      return `
+      <div class="pgv-row" title="${esc(team)} — ${projs.length} project(s): ${esc(projs.join(", "))}${memTip ? " · " + esc(memTip) : ""}">
         <span class="pgv-label ${team === "— unassigned" ? "pgv-none" : ""}">${esc(team)}</span>
         <span class="pgv-track"><span class="pgv-bar ${team === "— unassigned" ? "pgv-bar-none" : ""}"
           style="width:${(projs.length / max * 100).toFixed(0)}%"></span></span>
-        <span class="pgv-count">${projs.length}</span>
-      </div>`).join("");
+        <span class="pgv-count">${projs.length}</span>${memChip}
+      </div>`;
+    }).join("");
     return `<div class="pgv-card"><div class="pgv-title">${esc(title)}</div>${rows}</div>`;
-  }).join("");
+  }).join("") + `</div>`;
+}
+
+function accPgVizBody(d, f) {
+  f = f || {};
+  const q = (f.q || "").toLowerCase();
+  let mp = (d.matched_projects || []).filter((m) =>
+    (!q || [m.project, m.company, m.dev_team, m.qc_team, m.ops_team]
+      .some((v) => (v || "").toLowerCase().includes(q)))
+    && (!f.company || f.company === "all" || (m.company || "—") === f.company)
+    && (!f.team || f.team === "all"
+        || [m.dev_team, m.qc_team, m.ops_team].includes(f.team)));
+  if (!mp.length) return '<div class="empty">no matched projects fit the filters</div>';
+  // group by company — every company gets its own block of team breakdowns
+  const byCo = {};
+  mp.forEach((m) => { (byCo[m.company || "— no company"] = byCo[m.company || "— no company"] || []).push(m); });
+  return Object.entries(byCo).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([co, projs]) => `
+      <div class="pgv-co">
+        <div class="pgv-co-head ${co === "— no company" ? "pgv-none" : ""}">🏢 ${esc(co)}
+          <span class="ci-meta">· ${projs.length} project(s): ${esc(projs.map((m) => m.project).join(", "))}</span></div>
+        ${accPgVizFacets(projs, d.team_members)}
+      </div>`).join("");
+}
+
+function accPgVizHtml(d) {
+  const mp = d.matched_projects || [];
+  if (!mp.length) return "";
+  const f = state.pgVizFilter = state.pgVizFilter || {};
+  const companies = [...new Set(mp.map((m) => m.company || "—"))].sort();
+  const teams = [...new Set(mp.flatMap((m) => [m.dev_team, m.qc_team, m.ops_team]).filter(Boolean))].sort();
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   return `<details class="filebox acc-pg-sec" open>
-    <summary>📊 matched projects — team &amp; company breakdowns · <b>${mp.length}</b> project(s)</summary>
-    <div class="acc-pg-viz">${cards}</div></details>`;
+    <summary>📊 matched projects — teams by company · <b>${mp.length}</b> project(s)</summary>
+    <div class="acc-filters pgv-filters">
+      <input data-pgv-f="q" placeholder="🔎 project / team / company…" value="${esc(f.q || "")}">
+      <select data-pgv-f="company">${opt("all", "company: any", f.company)}${companies.map((c) => opt(c, c, f.company)).join("")}</select>
+      <select data-pgv-f="team">${opt("all", "team: any", f.team)}${teams.map((t) => opt(t, t, f.team)).join("")}</select>
+    </div>
+    <div id="acc-pg-viz-body">${accPgVizBody(d, f)}</div></details>`;
+}
+
+// filter changes re-render ONLY the viz body (the inputs stay put → focus kept)
+function accPgVizFilter(ev) {
+  const el = ev.target.closest("[data-pgv-f]");
+  if (!el) return;
+  (state.pgVizFilter = state.pgVizFilter || {})[el.dataset.pgvF] = el.value;
+  const body = document.getElementById("acc-pg-viz-body");
+  if (body && state.pgCheckData) body.innerHTML = accPgVizBody(state.pgCheckData, state.pgVizFilter);
 }
 
 // one DELEGATED handler on the panel container — survives every re-render
@@ -5430,7 +5484,10 @@ async function renderAccess() {
   };
   load(false);
   document.getElementById("acc-refresh").onclick = () => load(true);
-  document.getElementById("acc-pgcheck").addEventListener("click", accPgActionClick);
+  const pgBox = document.getElementById("acc-pgcheck");
+  pgBox.addEventListener("click", accPgActionClick);
+  pgBox.addEventListener("input", accPgVizFilter);
+  pgBox.addEventListener("change", accPgVizFilter);
 }
 
 /* ================= UPGRADES ================= */
