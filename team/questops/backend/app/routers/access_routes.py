@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user, require_approver
 from ..db import DevopsProjectsAudit, User, get_db
-from ..integrations import access, migration, platformdb
+from ..integrations import access, approvers, migration, platformdb
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
@@ -111,6 +111,15 @@ def devops_projects_dedupe(body: PgProjectBody, db: Session = Depends(get_db),
                            user: User = Depends(require_approver)):
     return _pg_action(db, user, "dedupe", platformdb.dedupe_project,
                       body.project, {})
+
+
+@router.get("/prd-approvers")
+def prd_approvers(refresh: bool = False, user: User = Depends(current_user)):
+    """Inventory prd_approvers analysis: per-user stats, common approvers per
+    prd_team, LDAP membership + consistency anomalies."""
+    if refresh:
+        approvers.invalidate()
+    return _wrap(approvers.analyze, refresh)
 
 
 @router.get("/ldap")

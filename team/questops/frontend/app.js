@@ -4278,6 +4278,7 @@ const ACC_WHAT = {
   activity: "reading per-project dates & per-user last-login/activity (JQL per row)",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
   pgcheck: "cross-checking the inventory against the devops_projects table",
+  approvers: "analyzing prd_approvers coverage, common approvers & LDAP membership",
 };
 
 function accTeamSourceHtml(ts) {
@@ -5251,6 +5252,74 @@ function wireMigration(tconf) {
   const run = $$("mig-run"); if (run) run.onclick = () => runExec(false);
 }
 
+// PRD approvers — per-team common approvers, per-user stats, anomalies
+const APPR_KIND = {
+  outside_ldap: ["chip-red", "outside LDAP group"],
+  inconsistent_team: ["chip-red", "inconsistent team"],
+  no_approvers: ["chip-red", "no approvers"],
+  single_approver: ["chip-amber", "single approver"],
+  duplicate_entry: ["chip-amber", "duplicate entry"],
+  app_override: ["chip-amber", "app override"],
+};
+function accApproversHtml(d) {
+  const sm = d.summary || {};
+  if (!(d.projects || []).some((p) => p.approvers.length || p.prd_team))
+    return '<div class="empty">no prd_approvers (and no prd_team) found in the inventory</div>';
+  const teamBlocks = (d.teams || []).map((t) => {
+    const partial = t.union.filter((u) => !t.common.includes(u));
+    const projTip = (u) => (d.projects || []).filter((p) => p.prd_team === t.team
+      && p.approvers.map((x) => x.toLowerCase()).includes(u)).map((p) => p.project).join(", ");
+    const ldapChip = t.ldap_found
+      ? `<span class="pgv-mem" title="members of ${esc(t.ldap_group)} (${t.ldap_members.length}): ${esc(t.ldap_members.join(", "))}">👥 ${t.ldap_members.length}</span>`
+      : `<span class="pgv-mem pgv-mem-na" title="LDAP group not resolved (getTeamMembersCN.sh)">👥 ?</span>`;
+    return `<div class="appr-team">
+      <div class="pgv-co-head">🛡 ${esc(t.team)} ${ldapChip}
+        <span class="ci-meta">· ${t.projects.length} project(s): ${esc(t.projects.join(", "))}</span>
+        ${t.consistent ? '<span class="chip chip-green">✓ consistent</span>'
+          : '<span class="chip chip-red" title="the team&#39;s projects disagree on approvers">⚠ inconsistent</span>'}</div>
+      <div class="appr-line"><span class="acc-h">common to ALL project(s)</span>
+        ${t.common.map((u) => `<span class="chip chip-green" title="approves in every ${esc(t.team)} project">👤 ${esc(u)}</span>`).join(" ")
+          || '<span class="pct-bad">none — no approver covers the whole team</span>'}</div>
+      ${partial.length ? `<div class="appr-line"><span class="acc-h">only in some</span>
+        ${partial.map((u) => `<span class="chip chip-amber" title="only in: ${esc(projTip(u))}">👤 ${esc(u)}</span>`).join(" ")}</div>` : ""}
+      ${t.outside_ldap.length ? `<div class="appr-line"><span class="acc-h">outside the LDAP group</span>
+        ${t.outside_ldap.map((u) => `<span class="chip chip-red" title="not a member of ${esc(t.ldap_group)}">🚫 ${esc(u)}</span>`).join(" ")}</div>` : ""}
+      ${!t.consistent ? `<div class="appr-line ci-meta">${Object.entries(t.per_project)
+        .map(([pj, v]) => `${esc(pj)}: [${esc(v.join(", ")) || "—"}]`).join(" · ")}</div>` : ""}
+    </div>`;
+  }).join("");
+  const maxU = Math.max(...(d.users || []).map((u) => u.projects.length), 1);
+  const userRows = (d.users || []).map((u) => `
+    <div class="pgv-row" title="${esc(u.username)} approves ${u.projects.length} project(s): ${esc(u.projects.join(", "))}">
+      <span class="pgv-label">${esc(u.username)}</span>
+      <span class="pgv-track"><span class="pgv-bar" style="width:${(u.projects.length / maxU * 100).toFixed(0)}%"></span></span>
+      <span class="pgv-count">${u.projects.length}</span>
+      ${u.teams.map((t) => `<span class="chip chip-cyan">${esc(t)}</span>`).join(" ")}
+      ${u.outside.length ? `<span class="chip chip-red" title="not in the LDAP group of: ${esc(u.outside.join(", "))}">🚫 outside LDAP</span>` : ""}
+    </div>`).join("");
+  const anomalies = (d.anomalies || []).map((a) => {
+    const [cls, label] = APPR_KIND[a.kind] || ["chip-amber", a.kind];
+    return `<div class="log-idx ${cls === "chip-red" ? "bad" : ""}">
+      <span class="chip ${cls}">${esc(label)}</span>
+      ${a.team ? `<span class="chip chip-cyan">${esc(a.team)}</span>` : ""}
+      ${a.project ? `<code class="log-idx-name" style="flex:none">${esc(a.project)}</code>` : ""}
+      <span class="ci-meta">${esc(a.detail)}</span></div>`;
+  }).join("");
+  return `
+    <div class="inv-chips" style="margin-bottom:8px">
+      <span class="chip">${esc(d.source || "?")}</span>
+      <span class="chip">👤 <b>${sm.approvers}</b> approver(s)</span>
+      <span class="chip">${sm.projects_with} project(s) with approvers</span>
+      ${sm.projects_without ? `<span class="chip chip-red">${sm.projects_without} prd project(s) WITHOUT</span>` : ""}
+      <span class="chip">${sm.teams} prd_team(s)</span>
+      <span class="chip ${sm.anomalies ? "chip-red" : "chip-green"}">${sm.anomalies} anomal${sm.anomalies === 1 ? "y" : "ies"}</span></div>
+    ${teamBlocks}
+    <h4 class="acc-h">approvers — projects per user</h4>${userRows || '<div class="empty">no approvers defined</div>'}
+    ${anomalies ? `<h4 class="acc-h">anomalies</h4><div class="log-idx-list">${anomalies}</div>` : ""}
+    <div class="kpi-note" style="margin-top:8px">LDAP membership uses the same Engine-repo resolver as the Azure section
+      (getTeamMembersCN.sh, separator variants tried); "common" = approvers present in EVERY project of the prd_team</div>`;
+}
+
 // inventory ⇄ platform-DB devops_projects cross-check (Access page panel)
 // — with approver QUICK ACTIONS on every discrepancy + an inline table editor
 const _pgApprover = () => (state.me || {}).role === "approver";
@@ -5468,6 +5537,8 @@ async function renderAccess() {
       ADO project details load only when expanded, and fetches are bounded-parallel</div>
     <div class="panel" style="margin-bottom:18px"><h2>📊 at a glance</h2>
       <div id="acc-summary"></div></div>
+    <div class="panel" style="margin-bottom:18px"><h2>🛡 PRD approvers — coverage, common approvers &amp; anomalies</h2>
+      <div id="acc-approvers"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>🗄 Inventory ⇄ devops_projects — platform database cross-check</h2>
       <div id="acc-pgcheck"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects, repository permissions &amp; inventory pipelines</h2>
@@ -5478,6 +5549,7 @@ async function renderAccess() {
   const load = (refresh) => {
     const s = refresh ? "?refresh=true" : "";
     accLoad("summary", `/api/access/summary${s}`, accSummaryHtml);
+    accLoad("approvers", `/api/access/prd-approvers${s}`, accApproversHtml);
     accLoad("pgcheck", `/api/access/devops-projects-check${s}`, accPgCheckHtml);
     accLoad("ado", `/api/access/ado${s}`, accAdoHtml);
     loadJira(refresh);

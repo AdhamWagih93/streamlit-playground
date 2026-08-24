@@ -430,7 +430,9 @@ def _demo() -> dict:
                                "security_team": "AppSec", "domain": "platform.corp.local",
                                "region": "eu-west", "log_level": "info", "tls_enabled": "true",
                                "deploy_platform": "OCP", "deploy_technology": "Docker",
-                               "company": "Acme Retail"},
+                               "company": "Acme Retail",
+                               # erin is NOT in the sre-core LDAP group; alice twice
+                               "prd_approvers": ["alice", "dave", "erin", "alice"]},
               "app_vars": {
                   # app-specific deploy_platform (group_vars/payments/cicd.yml) —
                   # K8s, which CLASHES with the project-global OCP → highlighted.
@@ -438,6 +440,7 @@ def _demo() -> dict:
                   "payments": {"repository_name": "payments-svc", "replicas": "2",
                                "timeout_s": "30", "feature_flags": "wallet,card",
                                "deploy_platform": "K8s", "deploy_technology": "Helm",
+                               "prd_approvers": ["bob"],   # overrides the project list
                                "prd_team": "Payments_SRE"},
                   "checkout": {"repository_name": "checkout-svc", "replicas": "2",
                                "timeout_s": "45", "feature_flags": "card"},
@@ -482,6 +485,7 @@ def _demo() -> dict:
              ["dev"], [{"host": "dev_ocp", "vars": True, "vault": True}], 1,
              {"project_vars": {"dev_team": "Research_Team", "qc_team": "Research_Team",
                                "prd_team": "SRE_Core", "data_team": "DataEng",
+                               "prd_approvers": "alice, dave",
                                "domain": "research.corp.local", "region": "us-east",
                                "experimental": "true", "deploy_platform": "WindowsVM"},
               "app_vars": {"prototypes": {"experimental": "true", "replicas": "1"}},

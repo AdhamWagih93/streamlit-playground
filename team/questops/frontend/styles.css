@@ -1519,3 +1519,11 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .pgv-mem { flex: 0 0 auto; font: 600 10px var(--body); color: var(--cyan);
   background: rgba(63,198,221,.1); border-radius: 8px; padding: 1px 6px; cursor: default; }
 .pgv-mem-na { color: var(--faint); background: rgba(255,255,255,.05); }
+
+
+/* PRD approvers section */
+.appr-team { border: 1px solid var(--line); border-radius: 9px; background: var(--bg-2);
+  padding: 8px 10px; margin-bottom: 8px; }
+.appr-team .pgv-co-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
+.appr-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+.appr-line .acc-h { margin: 0; padding: 0; flex: 0 0 auto; }
