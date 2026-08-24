@@ -1527,3 +1527,26 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .appr-team .pgv-co-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
 .appr-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
 .appr-line .acc-h { margin: 0; padding: 0; flex: 0 0 auto; }
+
+
+/* PRD approvers — compact team cards */
+.appr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px; margin: 4px 0 8px; }
+.appr-card { border: 1px solid var(--line); border-radius: 9px; background: var(--bg-2);
+  padding: 8px 10px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.appr-card-bad { border-left: 3px solid var(--red); }
+.appr-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.appr-card-head .spacer { flex: 1; }
+.appr-team-name { font: 700 12px var(--body); color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.appr-cover { display: block; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.appr-cover-fill { display: block; height: 100%; border-radius: 3px; }
+.appr-cover-fill.ok { background: var(--green); }
+.appr-cover-fill.part { background: var(--amber); }
+.appr-cover-fill.bad { background: var(--red); }
+.appr-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+.appr-pill { font: 600 10.5px var(--body); padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--line); white-space: nowrap; cursor: default; }
+.appr-pill.appr-ok { color: var(--green); border-color: rgba(67,200,132,.45); background: rgba(67,200,132,.08); }
+.appr-pill.appr-part { color: var(--amber); border-color: rgba(255,178,36,.45); background: rgba(255,178,36,.08); }
+.appr-pill.appr-out { color: var(--red); border-color: rgba(239,95,102,.5); background: rgba(239,95,102,.1); }

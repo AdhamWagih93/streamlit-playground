@@ -5252,7 +5252,8 @@ function wireMigration(tconf) {
   const run = $$("mig-run"); if (run) run.onclick = () => runExec(false);
 }
 
-// PRD approvers — per-team common approvers, per-user stats, anomalies
+// PRD approvers — compact VISUAL cards per team (status-colored approver
+// pills + coverage meter, detail in tooltips), filterable, collapsible.
 const APPR_KIND = {
   outside_ldap: ["chip-red", "outside LDAP group"],
   inconsistent_team: ["chip-red", "inconsistent team"],
@@ -5261,43 +5262,81 @@ const APPR_KIND = {
   duplicate_entry: ["chip-amber", "duplicate entry"],
   app_override: ["chip-amber", "app override"],
 };
-function accApproversHtml(d) {
-  const sm = d.summary || {};
-  if (!(d.projects || []).some((p) => p.approvers.length || p.prd_team))
-    return '<div class="empty">no prd_approvers (and no prd_team) found in the inventory</div>';
-  const teamBlocks = (d.teams || []).map((t) => {
-    const partial = t.union.filter((u) => !t.common.includes(u));
-    const projTip = (u) => (d.projects || []).filter((p) => p.prd_team === t.team
-      && p.approvers.map((x) => x.toLowerCase()).includes(u)).map((p) => p.project).join(", ");
-    const ldapChip = t.ldap_found
-      ? `<span class="pgv-mem" title="members of ${esc(t.ldap_group)} (${t.ldap_members.length}): ${esc(t.ldap_members.join(", "))}">👥 ${t.ldap_members.length}</span>`
-      : `<span class="pgv-mem pgv-mem-na" title="LDAP group not resolved (getTeamMembersCN.sh)">👥 ?</span>`;
-    return `<div class="appr-team">
-      <div class="pgv-co-head">🛡 ${esc(t.team)} ${ldapChip}
-        <span class="ci-meta">· ${t.projects.length} project(s): ${esc(t.projects.join(", "))}</span>
-        ${t.consistent ? '<span class="chip chip-green">✓ consistent</span>'
-          : '<span class="chip chip-red" title="the team&#39;s projects disagree on approvers">⚠ inconsistent</span>'}</div>
-      <div class="appr-line"><span class="acc-h">common to ALL project(s)</span>
-        ${t.common.map((u) => `<span class="chip chip-green" title="approves in every ${esc(t.team)} project">👤 ${esc(u)}</span>`).join(" ")
-          || '<span class="pct-bad">none — no approver covers the whole team</span>'}</div>
-      ${partial.length ? `<div class="appr-line"><span class="acc-h">only in some</span>
-        ${partial.map((u) => `<span class="chip chip-amber" title="only in: ${esc(projTip(u))}">👤 ${esc(u)}</span>`).join(" ")}</div>` : ""}
-      ${t.outside_ldap.length ? `<div class="appr-line"><span class="acc-h">outside the LDAP group</span>
-        ${t.outside_ldap.map((u) => `<span class="chip chip-red" title="not a member of ${esc(t.ldap_group)}">🚫 ${esc(u)}</span>`).join(" ")}</div>` : ""}
-      ${!t.consistent ? `<div class="appr-line ci-meta">${Object.entries(t.per_project)
-        .map(([pj, v]) => `${esc(pj)}: [${esc(v.join(", ")) || "—"}]`).join(" · ")}</div>` : ""}
+
+function accApprTeamIssues(d, team) {
+  return (d.anomalies || []).filter((a) => a.team === team
+    || (a.project && (d.projects || []).some((p) => p.project === a.project && p.prd_team === team)));
+}
+
+function accApprBody(d, f) {
+  f = f || {};
+  const q = (f.q || "").toLowerCase();
+  const hit = (t) => {
+    const projs = t.projects.join(" ").toLowerCase();
+    return (!f.team || f.team === "all" || t.team === f.team)
+      && (!q || t.team.toLowerCase().includes(q) || projs.includes(q)
+          || t.union.some((u) => u.includes(q)));
+  };
+  let teams = (d.teams || []).filter(hit);
+  if (f.only === "anomalies") teams = teams.filter((t) => accApprTeamIssues(d, t.team).length);
+  if (f.only === "outside") teams = teams.filter((t) => t.outside_ldap.length);
+
+  // ---- compact team cards: pills + coverage meter, words → tooltips ----
+  const cards = teams.map((t) => {
+    const issues = accApprTeamIssues(d, t.team);
+    const cover = t.union.length ? Math.round(t.common.length / t.union.length * 100) : 0;
+    const perProj = Object.entries(t.per_project)
+      .map(([pj, v]) => `${pj}: [${v.join(", ") || "—"}]`).join(" · ");
+    const pill = (u) => {
+      const out = t.outside_ldap.includes(u);
+      const com = t.common.includes(u);
+      const cls = out ? "appr-out" : com ? "appr-ok" : "appr-part";
+      const tip = out ? `not a member of the ${t.ldap_group} LDAP group`
+        : com ? `approves in EVERY ${t.team} project`
+        : `only in: ${(d.projects || []).filter((p) => p.prd_team === t.team
+            && p.approvers.map((x) => x.toLowerCase()).includes(u)).map((p) => p.project).join(", ")}`;
+      return `<span class="appr-pill ${cls}" title="${esc(u)} — ${esc(tip)}">${out ? "🚫" : com ? "✓" : "◐"} ${esc(u)}</span>`;
+    };
+    return `<div class="appr-card ${issues.length ? "appr-card-bad" : ""}">
+      <div class="appr-card-head">
+        <span class="appr-team-name" title="${esc(perProj)}">🛡 ${esc(t.team)}</span>
+        ${t.ldap_found
+          ? `<span class="pgv-mem" title="members of ${esc(t.ldap_group)} (${t.ldap_members.length}): ${esc(t.ldap_members.join(", "))}">👥 ${t.ldap_members.length}</span>`
+          : '<span class="pgv-mem pgv-mem-na" title="LDAP group not resolved">👥 ?</span>'}
+        <span class="ci-meta" title="${esc(t.projects.join(", "))}">${t.projects.length} proj</span>
+        <span class="spacer"></span>
+        ${t.consistent ? '<span class="chip chip-green" title="every project lists the same approvers">✓</span>'
+          : `<span class="chip chip-red" title="projects disagree — ${esc(perProj)}">⚠</span>`}
+      </div>
+      <div class="appr-cover" title="${t.common.length} of ${t.union.length} approver(s) cover EVERY project">
+        <span class="appr-cover-fill ${cover === 100 ? "ok" : cover ? "part" : "bad"}" style="width:${cover}%"></span>
+      </div>
+      <div class="appr-pills">${t.union.map(pill).join("") || '<span class="pct-bad">no approvers</span>'}</div>
     </div>`;
   }).join("");
-  const maxU = Math.max(...(d.users || []).map((u) => u.projects.length), 1);
-  const userRows = (d.users || []).map((u) => `
+
+  // ---- per-user rows + anomalies (both filtered, both collapsible) ------
+  let users = (d.users || []).filter((u) =>
+    (!q || u.username.includes(q) || u.projects.join(" ").toLowerCase().includes(q)
+      || u.teams.join(" ").toLowerCase().includes(q))
+    && (!f.team || f.team === "all" || u.teams.includes(f.team)));
+  if (f.only === "outside") users = users.filter((u) => u.outside.length);
+  const maxU = Math.max(...users.map((u) => u.projects.length), 1);
+  const userRows = users.map((u) => `
     <div class="pgv-row" title="${esc(u.username)} approves ${u.projects.length} project(s): ${esc(u.projects.join(", "))}">
       <span class="pgv-label">${esc(u.username)}</span>
       <span class="pgv-track"><span class="pgv-bar" style="width:${(u.projects.length / maxU * 100).toFixed(0)}%"></span></span>
       <span class="pgv-count">${u.projects.length}</span>
       ${u.teams.map((t) => `<span class="chip chip-cyan">${esc(t)}</span>`).join(" ")}
-      ${u.outside.length ? `<span class="chip chip-red" title="not in the LDAP group of: ${esc(u.outside.join(", "))}">🚫 outside LDAP</span>` : ""}
+      ${u.outside.length ? `<span class="chip chip-red" title="not in the LDAP group of: ${esc(u.outside.join(", "))}">🚫</span>` : ""}
     </div>`).join("");
-  const anomalies = (d.anomalies || []).map((a) => {
+
+  let anomalies = (d.anomalies || []).filter((a) =>
+    (!q || JSON.stringify(a).toLowerCase().includes(q))
+    && (!f.team || f.team === "all" || a.team === f.team
+        || (a.project && (d.projects || []).some((p) => p.project === a.project && p.prd_team === f.team))));
+  if (f.only === "outside") anomalies = anomalies.filter((a) => a.kind === "outside_ldap");
+  const anomalyRows = anomalies.map((a) => {
     const [cls, label] = APPR_KIND[a.kind] || ["chip-amber", a.kind];
     return `<div class="log-idx ${cls === "chip-red" ? "bad" : ""}">
       <span class="chip ${cls}">${esc(label)}</span>
@@ -5305,19 +5344,48 @@ function accApproversHtml(d) {
       ${a.project ? `<code class="log-idx-name" style="flex:none">${esc(a.project)}</code>` : ""}
       <span class="ci-meta">${esc(a.detail)}</span></div>`;
   }).join("");
+
+  if (!cards && !userRows && !anomalyRows)
+    return '<div class="empty">nothing matches the filters</div>';
+  return `<div class="appr-grid">${cards || '<div class="empty">no teams match</div>'}</div>
+    <details class="filebox acc-pg-sec"><summary>👤 projects per approver · <b>${users.length}</b></summary>
+      <div style="padding:6px 4px">${userRows || '<div class="empty">no approvers match</div>'}</div></details>
+    <details class="filebox acc-pg-sec" ${f.only === "anomalies" ? "open" : ""}><summary>⚠ anomalies · <b>${anomalies.length}</b></summary>
+      <div class="log-idx-list">${anomalyRows || '<div class="empty">none match</div>'}</div></details>`;
+}
+
+function accApproversHtml(d) {
+  state.apprData = d;
+  const sm = d.summary || {};
+  if (!(d.projects || []).some((p) => p.approvers.length || p.prd_team))
+    return '<div class="empty">no prd_approvers (and no prd_team) found in the inventory</div>';
+  const f = state.apprFilter = state.apprFilter || {};
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   return `
-    <div class="inv-chips" style="margin-bottom:8px">
+    <div class="inv-chips" style="margin-bottom:6px">
       <span class="chip">${esc(d.source || "?")}</span>
       <span class="chip">👤 <b>${sm.approvers}</b> approver(s)</span>
-      <span class="chip">${sm.projects_with} project(s) with approvers</span>
+      <span class="chip">${sm.projects_with} project(s) covered</span>
       ${sm.projects_without ? `<span class="chip chip-red">${sm.projects_without} prd project(s) WITHOUT</span>` : ""}
       <span class="chip">${sm.teams} prd_team(s)</span>
-      <span class="chip ${sm.anomalies ? "chip-red" : "chip-green"}">${sm.anomalies} anomal${sm.anomalies === 1 ? "y" : "ies"}</span></div>
-    ${teamBlocks}
-    <h4 class="acc-h">approvers — projects per user</h4>${userRows || '<div class="empty">no approvers defined</div>'}
-    ${anomalies ? `<h4 class="acc-h">anomalies</h4><div class="log-idx-list">${anomalies}</div>` : ""}
-    <div class="kpi-note" style="margin-top:8px">LDAP membership uses the same Engine-repo resolver as the Azure section
-      (getTeamMembersCN.sh, separator variants tried); "common" = approvers present in EVERY project of the prd_team</div>`;
+      <span class="chip ${sm.anomalies ? "chip-red" : "chip-green"}">${sm.anomalies} anomal${sm.anomalies === 1 ? "y" : "ies"}</span>
+      <span class="spacer"></span>
+      <span class="ci-meta">✓ common to all · ◐ partial · 🚫 outside LDAP</span></div>
+    <div class="acc-filters pgv-filters">
+      <input data-appr-f="q" placeholder="🔎 team / user / project…" value="${esc(f.q || "")}">
+      <select data-appr-f="team">${opt("all", "team: any", f.team)}${(d.teams || []).map((t) => opt(t.team, t.team, f.team)).join("")}</select>
+      <select data-appr-f="only">${opt("all", "show: everything", f.only)}${opt("anomalies", "only teams with anomalies", f.only)}${opt("outside", "only outside-LDAP", f.only)}</select>
+    </div>
+    <div id="acc-appr-body">${accApprBody(d, f)}</div>`;
+}
+
+// filter changes re-render only the body (inputs stay put → focus kept)
+function accApprFilter(ev) {
+  const el = ev.target.closest("[data-appr-f]");
+  if (!el) return;
+  (state.apprFilter = state.apprFilter || {})[el.dataset.apprF] = el.value;
+  const body = document.getElementById("acc-appr-body");
+  if (body && state.apprData) body.innerHTML = accApprBody(state.apprData, state.apprFilter);
 }
 
 // inventory ⇄ platform-DB devops_projects cross-check (Access page panel)
@@ -5560,6 +5628,9 @@ async function renderAccess() {
   pgBox.addEventListener("click", accPgActionClick);
   pgBox.addEventListener("input", accPgVizFilter);
   pgBox.addEventListener("change", accPgVizFilter);
+  const apBox = document.getElementById("acc-approvers");
+  apBox.addEventListener("input", accApprFilter);
+  apBox.addEventListener("change", accApprFilter);
 }
 
 /* ================= UPGRADES ================= */
