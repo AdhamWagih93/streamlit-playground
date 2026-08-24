@@ -19,6 +19,7 @@ page's approvers section:
       - app_override      an app's group_vars overrides the project's list
 """
 
+import re
 import time
 
 from ..config import settings  # noqa: F401 — parity with sibling integrations
@@ -27,18 +28,32 @@ _CACHE: dict = {"at": 0.0, "payload": None}
 _TTL = 300
 
 
+def _clean(u) -> str:
+    """One approver entry as written → canonical form: surrounding quotes and
+    whitespace stripped, lower-cased (usernames are case-insensitive)."""
+    return str(u or "").strip().strip("'\"").strip().lower()
+
+
 def _as_list(v) -> list[str]:
     if v is None:
         return []
     if isinstance(v, str):
-        return [x.strip() for x in v.replace(";", ",").split(",") if x.strip()]
-    if isinstance(v, (list, tuple)):
-        return [str(x).strip() for x in v if str(x).strip()]
-    return []
+        vals = v.replace(";", ",").split(",")
+    elif isinstance(v, (list, tuple)):
+        vals = v
+    else:
+        return []
+    return [c for c in (_clean(x) for x in vals) if c]
 
 
 def _norm(u) -> str:
-    return str(u or "").strip().lower()
+    return _clean(u)
+
+
+def _ukey(u) -> str:
+    """MATCHING key: quotes/case/separator/dot-insensitive — "A.Meshhal",
+    'a.meshhal', 'A_Meshhal' and 'ameshhal' all collapse to 'ameshhal'."""
+    return re.sub(r"[\s._\-'\"]+", "", _clean(u))
 
 
 def _ldap_lookup(team: str) -> dict:
@@ -60,14 +75,28 @@ def _ldap_lookup(team: str) -> dict:
 
 
 def _member_keys(members: list[dict]) -> set:
-    """Every way an approver username may match a group member: the username,
-    the full display name, and the display name's first token."""
+    """Every way an approver entry may denote a group member. prd_approvers
+    hold sAMAccountNames while getTeamMembersCN.sh may return CNs (display
+    names), so besides the username and display name we derive the COMMON
+    sAMAccountName conventions from each display name — first.last, f.last,
+    firstlast, last.f — all through the separator/dot-insensitive _ukey."""
     keys = set()
     for m in members or []:
-        for v in (m.get("username"), m.get("display_name"),
-                  (m.get("display_name") or "").split(" ")[0]):
+        username = m.get("username") or ""
+        display = m.get("display_name") or ""
+        for v in (username, display):
             if v:
-                keys.add(_norm(v))
+                keys.add(_ukey(v))
+        parts = [p for p in re.split(r"[\s._\-]+", _clean(display)) if p]
+        if parts:
+            first, last = parts[0], parts[-1]
+            keys.add(_ukey(first))                       # jdoe styles: first only
+            if len(parts) > 1:
+                keys.add(_ukey(first + last))            # first.last / firstlast
+                keys.add(_ukey(first[0] + last))         # j.doe / jdoe
+                keys.add(_ukey(last + first[0]))         # doej
+                keys.add(_ukey(first + last[0]))         # johnd
+    keys.discard("")
     return keys
 
 
@@ -147,7 +176,7 @@ def _analyze() -> dict:
         consistent = len({tuple(v) for v in with_lists.values()}) <= 1
         ldap = _ldap_lookup(team)
         keys = _member_keys(ldap["members"]) if ldap["found"] else set()
-        outside = [u for u in union if ldap["found"] and u not in keys]
+        outside = [u for u in union if ldap["found"] and _ukey(u) not in keys]
         if not consistent:
             diff = "; ".join(f"{proj}: [{', '.join(v) or '—'}]"
                              for proj, v in sorted(lists.items()))
