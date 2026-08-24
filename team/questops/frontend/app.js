@@ -5302,7 +5302,7 @@ function accApprBody(d, f) {
         <span class="appr-team-name" title="${esc(perProj)}">🛡 ${esc(t.team)}</span>
         ${t.ldap_found
           ? `<span class="pgv-mem" title="members of ${esc(t.ldap_group)} (${t.ldap_members.length}): ${esc(t.ldap_members.join(", "))}">👥 ${t.ldap_members.length}</span>`
-          : '<span class="pgv-mem pgv-mem-na" title="LDAP group not resolved">👥 ?</span>'}
+          : `<span class="pgv-mem pgv-mem-na" title="LDAP group NOT resolved — tried: ${esc((t.ldap_tried || [t.ldap_group]).join(", "))} (membership can't be checked, so nobody is flagged outside)">👥 ?</span>`}
         <span class="ci-meta" title="${esc(t.projects.join(", "))}">${t.projects.length} proj</span>
         <span class="spacer"></span>
         ${t.consistent ? '<span class="chip chip-green" title="every project lists the same approvers">✓</span>'

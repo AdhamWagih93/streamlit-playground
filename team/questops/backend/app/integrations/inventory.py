@@ -48,10 +48,18 @@ _Loader.add_multi_constructor("", _ignore_tag)
 _Loader.add_multi_constructor("!", _ignore_tag)
 
 
+def _flow_items(v: str) -> list:
+    """`["a", 'b', c]` / `{a, b}` → ['a', 'b', 'c'] — inline YAML lists that the
+    line-parse fallback would otherwise keep as one bracket-laden string."""
+    return [x.strip().strip("\"'").strip() for x in v[1:-1].split(",") if x.strip()]
+
+
 def _load_yaml(text: str) -> dict:
     """Top-level dict from a (possibly jinja/vault-laden) Ansible YAML file.
     Falls back to a flat `key: value` line parse when strict YAML can't cope
-    (unquoted jinja `{{ }}`, tabs, etc.) — enough for the team/var extraction."""
+    (unquoted jinja `{{ }}`, tabs, etc.) — enough for the team/var extraction.
+    The fallback parses LISTS properly (flow `[a, b]` and block `- a` styles),
+    so vars like prd_approvers never surface as raw '["x", "y"]' strings."""
     try:
         d = yaml.load(text, Loader=_Loader)
         if isinstance(d, dict):
@@ -59,14 +67,32 @@ def _load_yaml(text: str) -> dict:
     except yaml.YAMLError:
         pass
     out: dict = {}
+    pending = None  # key with an empty value → block-list items may follow
     for line in text.splitlines():
-        if not line or line[0] in " #\t-":
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        m_item = re.match(r"^\s*-\s*(.*)$", line)
+        if m_item is not None:
+            if pending is not None:
+                if not isinstance(out.get(pending), list):
+                    out[pending] = []
+                out[pending].append(m_item.group(1).strip().strip("\"'").strip())
             continue
         m = re.match(r"^([A-Za-z_][\w.-]*)\s*:\s*(.*)$", line)
-        if m:
-            k, v = m.group(1), m.group(2).strip()
-            if v.startswith(("|", ">", "!")):
-                v = "<multiline>"
+        if not m:           # indented sub-key etc. — whatever follows isn't
+            pending = None  # our block list any more
+            continue
+        pending = None
+        k, v = m.group(1), m.group(2).strip()
+        if not v:
+            out[k] = ""     # becomes a list if `- item` lines follow
+            pending = k
+        elif v.startswith(("|", ">", "!")):
+            out[k] = "<multiline>"
+        elif len(v) > 1 and (v[0], v[-1]) in {("[", "]"), ("{", "}")}:
+            out[k] = _flow_items(v)
+        else:
             out[k] = v.strip("\"'")
     return out
 
@@ -485,7 +511,10 @@ def _demo() -> dict:
              ["dev"], [{"host": "dev_ocp", "vars": True, "vault": True}], 1,
              {"project_vars": {"dev_team": "Research_Team", "qc_team": "Research_Team",
                                "prd_team": "SRE_Core", "data_team": "DataEng",
-                               "prd_approvers": "alice, dave",
+                               # raw flow-list STRING on purpose — mimics the
+                               # live line-parse fallback / quoted entries;
+                               # approvers must still resolve to alice + dave
+                               "prd_approvers": '["Alice", \'DAVE\']',
                                "domain": "research.corp.local", "region": "us-east",
                                "experimental": "true", "deploy_platform": "WindowsVM"},
               "app_vars": {"prototypes": {"experimental": "true", "replicas": "1"}},

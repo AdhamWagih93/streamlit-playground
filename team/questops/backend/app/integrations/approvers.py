@@ -29,9 +29,12 @@ _TTL = 300
 
 
 def _clean(u) -> str:
-    """One approver entry as written → canonical form: surrounding quotes and
-    whitespace stripped, lower-cased (usernames are case-insensitive)."""
-    return str(u or "").strip().strip("'\"").strip().lower()
+    """One approver entry as written → canonical form: stray list brackets /
+    braces (from raw '["x", "y"]' strings), surrounding quotes and whitespace
+    stripped, lower-cased (usernames are case-insensitive)."""
+    s = str(u or "").strip()
+    s = s.strip("[](){}").strip()   # '["alice"' / '"bob"]' → '"alice"' / '"bob"'
+    return s.strip("'\"").strip().lower()
 
 
 def _as_list(v) -> list[str]:
@@ -39,7 +42,7 @@ def _as_list(v) -> list[str]:
         return []
     if isinstance(v, str):
         vals = v.replace(";", ",").split(",")
-    elif isinstance(v, (list, tuple)):
+    elif isinstance(v, (list, tuple, set)):
         vals = v
     else:
         return []
@@ -51,9 +54,9 @@ def _norm(u) -> str:
 
 
 def _ukey(u) -> str:
-    """MATCHING key: quotes/case/separator/dot-insensitive — "A.Meshhal",
-    'a.meshhal', 'A_Meshhal' and 'ameshhal' all collapse to 'ameshhal'."""
-    return re.sub(r"[\s._\-'\"]+", "", _clean(u))
+    """MATCHING key: quotes/case/separator/dot/bracket-insensitive —
+    "A.Meshhal", 'a.meshhal', '["A_Meshhal"]' and 'ameshhal' → 'ameshhal'."""
+    return re.sub(r"[\s._\-'\"\[\](){}]+", "", _clean(u))
 
 
 def _ldap_lookup(team: str) -> dict:
@@ -61,17 +64,17 @@ def _ldap_lookup(team: str) -> dict:
     page (Engine repo getTeamMembersCN.sh, 1h-cached), trying separator
     variants because inventory teams are underscored while CNs are dashed."""
     from ..auth import ldap_group_members
-    tried = set()
+    tried: list[str] = []
     for cand in (team, team.replace("_", "-"), team.replace(" ", "-"),
                  team.replace(" ", "_"), team.replace("-", "_")):
-        if cand.lower() in tried:
+        if cand.lower() in (t.lower() for t in tried):
             continue
-        tried.add(cand.lower())
+        tried.append(cand)
         res = ldap_group_members(cand)
         if res.get("found"):
             return {"found": True, "group": cand,
-                    "members": res.get("members") or []}
-    return {"found": False, "group": team, "members": []}
+                    "members": res.get("members") or [], "tried": tried}
+    return {"found": False, "group": team, "members": [], "tried": tried}
 
 
 def _member_keys(members: list[dict]) -> set:
@@ -194,6 +197,7 @@ def _analyze() -> dict:
                           "common": common, "union": union,
                           "consistent": consistent,
                           "ldap_found": ldap["found"], "ldap_group": ldap["group"],
+                          "ldap_tried": ldap.get("tried") or [],
                           "ldap_members": [m.get("display_name") or m.get("username")
                                            for m in ldap["members"]],
                           "outside_ldap": outside})
