@@ -3067,7 +3067,18 @@ function wireInvPanel() {
 }
 
 /* ================= LOGGING HEALTH ================= */
-function logInt(n) { return (n || 0).toLocaleString(); }
+// counts abbreviated so big numbers never overflow tiles/cells: 950 · 1.2K ·
+// 34M · 2.4B (one decimal below 100, whole numbers above)
+function logInt(n) {
+  n = n || 0;
+  const abs = Math.abs(n);
+  if (abs < 1000) return String(Math.round(n));
+  for (const [div, suf] of [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]])
+    if (abs >= div * 0.9995) {   // 999,950 → "1M", not "1000K"
+      const v = n / div;
+      return (v >= 100 ? String(Math.round(v)) : v.toFixed(1).replace(/\.0$/, "")) + suf;
+    }
+}
 function logHsize(n) {
   let f = n || 0;
   for (const u of ["B", "KB", "MB", "GB", "TB"]) {
@@ -3733,15 +3744,15 @@ function logTilesHtml(apps) {
   const scores = apps.map((a) => a.score).filter((x) => x != null);
   const overall = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
   const projects = new Set(apps.map((a) => a.project)).size;
-  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const tile = (n, label, cls, exact) => `<div class="stat-tile"${exact != null ? ` title="${Number(exact).toLocaleString("en-US")} ${label}"` : ""}><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
   return `<div class="stat-tiles" style="margin:8px 0 12px">
     <div class="stat-tile log-score-tile"><b class="log-score ${logScoreClass(overall)}">${overall == null ? "—" : overall}</b><span>health score</span></div>
     ${tile(projects, "projects")}
     ${tile(apps.length, "apps")}
     ${tile(new Set(apps.map((a) => a.deploy_technology).filter(Boolean)).size, "technologies")}
-    ${tile(logInt(sum((a) => a.indices)), "log indices")}
+    ${tile(logInt(sum((a) => a.indices)), "log indices", "", sum((a) => a.indices))}
     ${tile(logHsize(sum((a) => a.size_bytes)), "total size")}
-    ${tile(logInt(sum((a) => a.docs)), "documents")}
+    ${tile(logInt(sum((a) => a.docs)), "documents", "", sum((a) => a.docs))}
     ${(() => {
       const withLogs = apps.filter((a) => a.size_bytes > 0);
       const avgApp = withLogs.length ? Math.round(sum((a) => a.size_bytes) / withLogs.length) : 0;
@@ -3749,7 +3760,7 @@ function logTilesHtml(apps) {
       const last = withLogs.map((a) => a.last_logged).filter(Boolean).sort().slice(-1)[0];
       const r = logRates(sum((a) => a.size_bytes), sum((a) => a.docs), first, last);
       return tile(logHsize(avgApp), "avg app size")
-        + (r ? tile(r.size_day_h + "/d", "ingest / day") + tile(logInt(r.docs_day), "docs / day")
+        + (r ? tile(r.size_day_h + "/d", "ingest / day") + tile(logInt(r.docs_day), "docs / day", "", r.docs_day)
              + (r.doc_avg_h ? tile(r.doc_avg_h, "avg doc size") : "") : "");
     })()}
     ${tile(has("no_logs"), "apps no-logs", has("no_logs") ? "pct-bad" : "pct-good")}
