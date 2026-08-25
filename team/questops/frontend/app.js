@@ -3069,6 +3069,12 @@ function wireInvPanel() {
 /* ================= LOGGING HEALTH ================= */
 // counts abbreviated so big numbers never overflow tiles/cells: 950 · 1.2K ·
 // 34M · 2.4B (one decimal below 100, whole numbers above)
+function logExact(n) { return Math.round(n || 0).toLocaleString("en-US"); }
+// abbreviated count that reveals the EXACT number on hover
+function logIntT(n) {
+  return (n || 0) < 1000 ? logInt(n)
+    : `<span class="log-nt" title="${logExact(n)}">${logInt(n)}</span>`;
+}
 function logInt(n) {
   n = n || 0;
   const abs = Math.abs(n);
@@ -3108,7 +3114,7 @@ function logConnBar(conns) {
       return `<div class="log-conn bad"><span class="chip chip-red">${label} · unreachable</span>
         <span class="ci-meta">${esc(c.error || "")}</span></div>`;
     return `<div class="log-conn ok"><span class="chip chip-green">${label} ✓</span>
-      <span class="ci-meta">${logInt(c.indices)} indices${c.url ? " · " + esc(c.url) : ""}${
+      <span class="ci-meta">${logIntT(c.indices)} indices${c.url ? " · " + esc(c.url) : ""}${
         c.unexpected_envs ? ` · <span class="pct-warn">⚠ unexpected env here: ${esc(c.unexpected_envs.join(", "))}</span>` : ""}</span></div>`;
   };
   return `<div class="log-conns">${one("prd", "prd ES")}${one("nonprd", "non-prd ES")}</div>`;
@@ -3361,7 +3367,7 @@ function logRates(size, docs, first, last) {
 function logRateLine(size, docs, first, last) {
   const r = logRates(size, docs, first, last);
   if (!r) return "";
-  return `<span class="ci-meta" title="ingest rate over the logged span (${r.days < 1.5 ? "~" + Math.round(r.days * 24) + "h" : Math.round(r.days) + " days"})">📈 ≈<b>${esc(r.size_day_h)}</b>/day · ${logInt(r.docs_day)} docs/day${r.doc_avg_h ? ` · avg doc ${esc(r.doc_avg_h)}` : ""}</span>`;
+  return `<span class="ci-meta" title="ingest rate over the logged span (${r.days < 1.5 ? "~" + Math.round(r.days * 24) + "h" : Math.round(r.days) + " days"})">📈 ≈<b>${esc(r.size_day_h)}</b>/day · ${logIntT(r.docs_day)} docs/day${r.doc_avg_h ? ` · avg doc ${esc(r.doc_avg_h)}` : ""}</span>`;
 }
 
 // ---- integrated apps × environments MATRIX --------------------------------
@@ -3413,7 +3419,7 @@ function logMxCell(e, sep, over) {
   if (!e) return `<div class="log-mx-cell absent ${sep ? "sep" : ""}" title="app not present in this environment"><span class="log-mx-na">—</span></div>`;
   if (!e.deployed) return `<div class="log-mx-cell undeployed ${sep ? "sep" : ""}" title="${esc(e.env)} — never deployed, no logs expected"><span class="log-mx-na">not deployed</span></div>`;
   const issues = e.issues || [];
-  const tip = `${e.env} · score ${e.score == null ? "n/a" : e.score} · ${logInt(e.indices)} idx · ${e.size_h} · ${logInt(e.docs)} docs`
+  const tip = `${e.env} · score ${e.score == null ? "n/a" : e.score} · ${logExact(e.indices)} idx · ${e.size_h} · ${logExact(e.docs)} docs`
     + (e.owner ? ` · 👤 ${e.owner}` : "")
     + (e.no_logs ? " · NO LOGS" : (e.last_logged_age_h != null ? ` · last log ${logAgo(e.last_logged_age_h)}` : ""))
     + (issues.length ? ` · ⚠ ${issues.map((k) => LOG_ISSUE_LABEL[k] || k).join(" · ")}` : "");
@@ -3421,7 +3427,7 @@ function logMxCell(e, sep, over) {
   const warn = issues.length
     ? `<span class="log-mxi ${sev}" title="${esc(issues.map((k) => LOG_ISSUE_LABEL[k] || k).join(" · "))}">⚠${issues.length}</span>` : "";
   const right = e.no_logs ? '<span class="log-mx-nolog">no logs</span>'
-    : `<span class="log-mx-csize${over ? " over" : ""}"${over ? ` title="app stores over the fleet average"` : ""}>${esc(e.size_h)}</span>${e.indices ? `<span class="log-mx-cidx" title="${logInt(e.indices)} log indices in ${esc(e.env)}">${logInt(e.indices)} idx</span>` : ""}`;
+    : `<span class="log-mx-csize${over ? " over" : ""}"${over ? ` title="app stores over the fleet average"` : ""}>${esc(e.size_h)}</span>${e.indices ? `<span class="log-mx-cidx" title="${logExact(e.indices)} log indices in ${esc(e.env)}">${logInt(e.indices)} idx</span>` : ""}`;
   return `<div class="log-mx-cell ${_mxCls(e)} ${sep ? "sep" : ""}" title="${esc(tip)}">
     <span class="log-mx-cscore ${logScoreClass(e.score)}">${e.score == null ? "–" : e.score}</span>${warn}${right}
   </div>`;
@@ -3437,7 +3443,7 @@ function logMxHead(env, m, sep, total) {
   const issueN = m.no_logs + m.stale + m.ts_bad + m.over;
   const parts = [m.no_logs && `${m.no_logs} no-logs`, m.stale && `${m.stale} stale`,
     m.ts_bad && `${m.ts_bad} @timestamp`, m.over && `${m.over} over-retained`].filter(Boolean).join(" · ");
-  return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logInt(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to open this environment's dive (all apps' details)">
+  return `<div ${base} title="${esc(env)} — ${m.apps}/${total} apps · ${esc(logHsize(m.size_bytes))} · ${logExact(m.indices)} idx${parts ? " · " + esc(parts) : ""} · click to open this environment's dive (all apps' details)">
     <div class="log-mx-cline"><span class="log-mx-envname">${esc(env)}</span>${(() => {
       const owners = [...(m.owners || [])];
       const lead = m.powner || owners[0];
@@ -3446,9 +3452,9 @@ function logMxHead(env, m, sep, total) {
       return `<span class="log-mx-envteam" title="${esc(env)}_team: ${esc(lead)}${extra.length ? ` · app overrides: ${esc(extra.join(", "))}` : ""}">👤 ${esc(lead)}${extra.length ? ` +${extra.length}` : ""}</span>`;
     })()}${logScoreBadge(score, "env score across this project's apps")}</div>
     ${logMeter(score)}
-    <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${logInt(m.indices)} idx · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
+    <div class="log-mx-cmeta"><b>${esc(logHsize(m.size_bytes))}</b> · ${logIntT(m.indices)} idx · ${m.apps}/${total} apps${issueN ? ` <span class="log-mxi ${(m.no_logs || m.ts_bad) ? "bad" : "warn"}">${issueN} issue${issueN === 1 ? "" : "s"}</span>` : ""}</div>
     ${(() => { const r = logRates(m.size_bytes, m.docs, m.first, m.last);
-      return r ? `<div class="log-mx-cmeta" title="ingest rate across this env's apps">📈 ≈${esc(r.size_day_h)}/day · ${logInt(r.docs_day)} docs/day</div>` : ""; })()}
+      return r ? `<div class="log-mx-cmeta" title="ingest rate across this env's apps">📈 ≈${esc(r.size_day_h)}/day · ${logIntT(r.docs_day)} docs/day</div>` : ""; })()}
   </div>`;
 }
 
@@ -3459,9 +3465,9 @@ function logIdxRows(list) {
       <code class="log-idx-name">${esc(i.index)}</code>
       <span class="chip chip-amber">${esc(i.env || "?")}</span><span class="chip chip-cyan">${esc(i.logtype || "—")}</span>
       <span class="ci-meta log-idx-week">${esc(i.week || "")}${i.bad_week ? ' <span class="pct-bad">⚠ year</span>' : ""}${i.future_week ? ' <span class="pct-bad">⚠ future</span>' : ""}</span>
-      <span class="log-idx-size">${logHsize(i.size_bytes)}</span><span class="ci-meta">${logInt(i.docs)} docs</span>${logSrcChip(i.source)}
+      <span class="log-idx-size">${logHsize(i.size_bytes)}</span><span class="ci-meta">${logIntT(i.docs)} docs</span>${logSrcChip(i.source)}
       ${i.ts_type !== "date" ? `<span class="chip chip-red" title="@timestamp mapping">🕓 ${esc(i.ts_type || "unmapped")}</span>` : ""}
-      ${i.grok_fail ? `<span class="chip chip-amber" title="${logInt(i.grok_docs || 0) || "some"} doc(s) tagged _grokparsefailure">💥 grok</span>` : ""}
+      ${i.grok_fail ? `<span class="chip chip-amber" title="${i.grok_docs ? logExact(i.grok_docs) : "some"} doc(s) tagged _grokparsefailure">💥 grok</span>` : ""}
     </div>`).join("") || '<div class="empty">no indices</div>';
 }
 
@@ -3513,7 +3519,7 @@ function logEnvDiveHtml(mx, env) {
     return `<div class="log-envdive-app">
       <div class="log-envdive-line">${logScoreBadge(e.score, env + " health score")}
         <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
-        ${e.no_logs || !e.deployed ? "" : `<span class="ci-meta">${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs${(e.logtypes || []).length ? " · " + esc(e.logtypes.join(", ")) : ""}</span>`}
+        ${e.no_logs || !e.deployed ? "" : `<span class="ci-meta">${logIntT(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logIntT(e.docs)} docs${(e.logtypes || []).length ? " · " + esc(e.logtypes.join(", ")) : ""}</span>`}
         ${logIssueChips(e.issues, 8) || (e.deployed && e.indices ? '<span class="chip chip-green">ok ✓</span>' : "")}</div>
       <div class="log-envdive-line">${owner} ${logged} <span class="ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</span> ${!e.no_logs && e.deployed ? logRateLine(e.size_bytes, e.docs, e.first_logged, e.last_logged) : ""}</div>
       ${insp.join("")}
@@ -3532,7 +3538,7 @@ function logAppDrawerHtml(a) {
   const head = `<div class="log-drawer-head">
       ${logScoreBadge(a.score, "app health score")}
       <div class="log-drawer-title"><span class="log-drawer-app">🧩 ${esc(a.app)}</span>
-        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logInt(a.indices)} idx · <b class="${a.over_sized ? "pct-bad" : ""}">${esc(a.size_h)}</b> · ${logInt(a.docs)} docs${(() => { const r = logRates(a.size_bytes, a.docs, a.first_logged, a.last_logged); return r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : ""; })()}` : ""}</span></div>
+        <span class="ci-meta">📁 ${esc(a.project)}${a.monitored && a.indices ? ` · ${logIntT(a.indices)} idx · <b class="${a.over_sized ? "pct-bad" : ""}">${esc(a.size_h)}</b> · ${logIntT(a.docs)} docs${(() => { const r = logRates(a.size_bytes, a.docs, a.first_logged, a.last_logged); return r ? ` · ≈<b>${esc(r.size_day_h)}</b>/day` : ""; })()}` : ""}</span></div>
       <span class="spacer"></span>
       <button class="btn btn-sm btn-ghost log-drawer-close" title="close (Esc)">✕</button></div>
     ${flags ? `<div class="log-mx-appflags">${flags}</div>` : ""}`;
@@ -3550,7 +3556,7 @@ function logAppDrawerHtml(a) {
         : `<span class="ci-meta">🕓 ${logWhen(e.first_logged)} → ${logWhen(e.last_logged)} (${logAgo(e.last_logged_age_h)})</span>`);
     return `<div class="log-drawer-env ${_mxCls(e)}">
       <div class="log-drawer-envhead"><span class="log-mx-envname">${esc(en)}</span>${isExtra ? '<span class="chip chip-amber">extra</span>' : ""}${logScoreBadge(e.score, en + " health score")}
-        <span class="spacer"></span>${!e.deployed || e.no_logs ? "" : `<span class="ci-meta">${logInt(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logInt(e.docs)} docs</span>`}</div>
+        <span class="spacer"></span>${!e.deployed || e.no_logs ? "" : `<span class="ci-meta">${logIntT(e.indices)} idx · <b>${esc(e.size_h)}</b> · ${logIntT(e.docs)} docs</span>`}</div>
       ${e.deployed && !e.no_logs ? logMeter(e.score) : ""}
       <div class="log-envdive-line">${owner} ${logged}</div>
       <div class="log-envdive-line ci-meta">📦 last deploy ${e.last_deploy ? logWhen(e.last_deploy) : (e.deployed ? "—" : "never")}</div>
@@ -3603,7 +3609,7 @@ function logAppDrawerHtml(a) {
     ${futInspect}
     ${bwInspect}
     ${gkInspect}
-    ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logInt(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(a.index_list)}</div></details>` : ""}`;
+    ${a.indices ? `<details class="filebox log-idx-box"><summary>📑 ${logIntT(a.indices)} index${a.indices === 1 ? "" : "es"}</summary><div class="log-idx-list">${logIdxRows(a.index_list)}</div></details>` : ""}`;
 }
 
 function closeLogDrawer() {
@@ -3688,7 +3694,7 @@ function logMatrixHtml(p, apps, f) {
     return `<div class="log-mx-row approw ${rowCls}" data-app-id="${_aid}" role="button" tabindex="0" title="click for the full app breakdown">
         <div class="log-mx-appcell">${logScoreBadge(a.score, "app health score")}
           <span class="log-app-name">🧩 <b>${esc(a.app)}</b></span>
-          ${a.indices ? `<span class="log-mx-cidx" title="${logInt(a.indices)} log indices in total">${logInt(a.indices)} idx</span>` : ""}
+          ${a.indices ? `<span class="log-mx-cidx" title="${logExact(a.indices)} log indices in total">${logInt(a.indices)} idx</span>` : ""}
           ${flags ? `<span class="log-mx-appflags">${flags}</span>` : ""}
           <span class="log-mx-caret">›</span>
         </div>
@@ -3725,7 +3731,7 @@ function logProjectCardHtml(p, apps, f) {
   return `<details class="filebox log-proj" data-proj="${esc(p.name)}">
     <summary>${logScoreBadge(pscore, "project health score")}
       <span class="log-proj-name">📁 <b>${esc(p.name)}</b></span> ${plat}${p.company ? `<span class="chip chip-violet" title="company (group_vars/all)">🏢 ${esc(p.company)}</span>` : ""}${p.over_sized ? `<span class="chip chip-amber" title="project stores ${esc(logHsize(bytes))} — ${p.size_ratio}× the average project (${esc(((state.logData || {}).storage_avg || {}).project_h || "?")})">🗄 ${p.size_ratio}× avg</span>` : ""}${p.not_in_inventory ? ' <span class="chip chip-amber">not in inventory</span>' : ""}
-      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logInt(t.indices)} idx · <b class="${p.over_sized ? "pct-bad" : ""}">${esc(t.size_h)}</b> · ${logInt(t.docs)} docs${(() => {
+      <span class="ci-meta">${apps.length}/${t.apps} app(s) · ${logIntT(t.indices)} idx · <b class="${p.over_sized ? "pct-bad" : ""}">${esc(t.size_h)}</b> · ${logIntT(t.docs)} docs${(() => {
         const wl = apps.filter((x) => x.size_bytes > 0);
         const r = logRates(bytes, t.docs, wl.map((x) => x.first_logged).filter(Boolean).sort()[0],
           wl.map((x) => x.last_logged).filter(Boolean).sort().slice(-1)[0]);
@@ -3809,7 +3815,7 @@ function logContentHtml() {
       <div class="log-idx-list">${d.unmatched.map((u) => `
         <div class="log-idx ${u.bad_week || u.future_week ? "bad" : ""}"><code class="log-idx-name">${esc(u.index)}</code>
           <span class="log-idx-size">${logHsize(u.size_bytes)}</span>
-          <span class="ci-meta">${logInt(u.docs)} docs</span>${logSrcChip(u.source)}${u.bad_week ? '<span class="chip chip-red">⚠ bad year</span>' : ""}${u.future_week ? '<span class="chip chip-red">⚠ future</span>' : ""}</div>`).join("")}</div>
+          <span class="ci-meta">${logIntT(u.docs)} docs</span>${logSrcChip(u.source)}${u.bad_week ? '<span class="chip chip-red">⚠ bad year</span>' : ""}${u.future_week ? '<span class="chip chip-red">⚠ future</span>' : ""}</div>`).join("")}</div>
     </details>` : "";
   return logTilesHtml(filtered)
     + (cards || '<div class="empty">no apps match the filters</div>') + un
