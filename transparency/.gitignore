@@ -1,0 +1,12 @@
+target/
+*.class
+.mvn/
+!.mvn/wrapper/maven-wrapper.properties
+.idea/
+*.iml
+.vscode/
+
+# Real connection settings — never commit
+samples/powerbi.env
+.env
+/config/
