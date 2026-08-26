@@ -107,6 +107,43 @@ document.querySelectorAll(".theme-toggle-btn").forEach((b) =>
     applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light")));
 applyTheme(document.documentElement.dataset.theme || "dark");
 
+/* ---------------- hideable sidebar / top bar ----------------
+   toggled by the topbar buttons or single-key shortcuts ("[" sidebar,
+   "]" top bar); tiny fixed restore handles appear while a bar is hidden;
+   state persists in localStorage. */
+const BARS = { sidebar: "qo_hide_sidebar", topbar: "qo_hide_topbar" };
+function applyBars() {
+  const shell = document.getElementById("app");
+  if (!shell) return;
+  for (const [bar, key] of Object.entries(BARS)) {
+    const hidden = localStorage.getItem(key) === "1";
+    shell.classList.toggle(`hide-${bar}`, hidden);
+    const restore = document.getElementById(`unhide-${bar}`);
+    if (restore) restore.classList.toggle("hidden", !hidden);
+  }
+}
+function toggleBar(bar) {
+  const key = BARS[bar];
+  if (!key) return;
+  const hide = localStorage.getItem(key) !== "1";
+  if (hide) localStorage.setItem(key, "1");
+  else localStorage.removeItem(key);
+  applyBars();
+}
+document.querySelectorAll("[data-bar-toggle]").forEach((b) =>
+  b.addEventListener("click", () => toggleBar(b.dataset.barToggle)));
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.isContentEditable
+    || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+  const shell = document.getElementById("app");
+  if (!shell || shell.classList.contains("hidden")) return;   // login screen
+  if (e.key === "[") { e.preventDefault(); toggleBar("sidebar"); }
+  else if (e.key === "]") { e.preventDefault(); toggleBar("topbar"); }
+});
+applyBars();
+
 /* ---------------- toasts ---------------- */
 function toast(html, cls = "", ms = 3800) {
   const el = document.createElement("div");

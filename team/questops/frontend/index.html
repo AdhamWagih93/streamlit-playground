@@ -80,6 +80,8 @@
           <span id="streak-chip" class="chip chip-streak" title="daily activity streak">🔥 0</span>
           <span id="mode-chip" class="chip chip-mode hidden">DEMO</span>
           <button class="btn btn-ghost btn-sm theme-toggle-btn" title="light/dark mode">☀️</button>
+          <button class="btn btn-ghost btn-sm" data-bar-toggle="sidebar" title="hide / show the sidebar — shortcut: [">◧</button>
+          <button class="btn btn-ghost btn-sm" data-bar-toggle="topbar" title="hide this top bar — shortcut: ] (restore with ] or the ⬒ handle)">⬒</button>
         </div>
       </header>
       <main id="view"></main>
@@ -101,6 +103,10 @@
       </form>
     </aside>
   </div>
+
+  <!-- restore handles — visible only while their bar is hidden -->
+  <button id="unhide-sidebar" class="bar-restore bar-restore-left hidden" data-bar-toggle="sidebar" title="show the sidebar — shortcut: [">☰</button>
+  <button id="unhide-topbar" class="bar-restore bar-restore-right hidden" data-bar-toggle="topbar" title="show the top bar — shortcut: ]">⬒</button>
 
   <div id="toasts" class="toasts"></div>
   <script src="app.js"></script>
