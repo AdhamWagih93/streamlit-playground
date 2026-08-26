@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# File-based alternative to samples/powerbi.env, for `java -jar` deployments.
+#
+#   cp samples/application-onprem.yml.sample config/application.yml
+#
+# Spring Boot loads ./config/application.yml automatically and it overrides the
+# packaged defaults, so nothing has to be rebuilt to change a setting. Restart
+# to pick up an edit.
+#
+# Every value here also has an environment-variable form, which is what a
+# container or a secret store should use for the password.
+# ---------------------------------------------------------------------------
+
+powerbi:
+  report-server:
+    # Scheme + host + port only. No path, no trailing slash.
+    base-url: https://reports.internal.example.com
+
+    # The only host this proxy may reach. Must match base-url's host.
+    allowed-host: reports.internal.example.com
+
+    # Path of the report on the report server.
+    transparency-report-path: /Reports/powerbi/Transparency
+
+    # Optional full URL, used instead of base-url + path when the report needs
+    # query parameters. rs:Embed=true drops the portal chrome inside the frame.
+    # report-url: https://reports.internal.example.com/Reports/powerbi/Transparency?rs:Embed=true
+
+    # BASIC | NTLM | NONE — NTLM is the usual on-prem case.
+    auth-type: NTLM
+
+    # DOMAIN\user, or a bare username with `domain:` set below.
+    username: EXAMPLE\svc_transparency
+    password: ${POWERBI_PASSWORD}    # keep the secret out of the file
+    # domain: EXAMPLE
+    # workstation:
+
+    # How long to wait for the report server. Raise response-timeout if a large
+    # report legitimately takes longer than a minute to render.
+    connect-timeout: 5s
+    response-timeout: 60s
+
+    # A response larger than this fails the request instead of the JVM.
+    max-response-size: 32MB
+
+    pool:
+      max-total: 20
+      max-per-route: 10
+      idle-eviction: 5m
+      validate-after-inactivity: 5s
+
+    # Deny-by-default: a path must start with one of these before any other rule
+    # is even consulted. Add a prefix only if the viewer bundle needs it — check
+    # the browser's network tab for blocked requests, which log as 403 with a
+    # reason on the server side.
+    allowed-resource-path-prefixes:
+      - /Reports/
+      - /ReportServer/
+      - /Reserved.ReportViewerWebControl.axd
+      - /PowerBI/
+      - /powerbi/
+      - /api/
+      - /explore/
+      - /modelsAndExploration/
+      - /querydata/
+      - /metadata/
+      - /resources/
+      - /public/
+      - /13.0.
+
+app:
+  security:
+    # Who may open the dashboard. Leave true anywhere real.
+    enabled: true
+
+  ui:
+    brand: Transparency
+    title: Transparency Dashboard
+    report-name: Public Payments — Quarterly Transparency Report
+    support-contact: data-office@example.com
+    # How long the shell waits for the frame before offering the recovery state.
+    load-timeout: 45s
+
+  rate-limit:
+    # Sized for a browser loading a report: hundreds of asset requests in a burst,
+    # then near silence. Raise if a legitimate viewer ever sees a 429.
+    enabled: true
+    requests-per-minute: 600
+    burst: 120
+
+spring:
+  security:
+    # Stop-gap sign-in until an identity provider is wired up. Replace with LDAP
+    # or OIDC before this reaches users.
+    user:
+      name: transparency
+      password: ${DASHBOARD_PASSWORD}
+
+server:
+  port: 8080
+
+  # Terminating TLS here instead of at a load balancer? Then also set
+  # server.forward-headers-strategy=none.
+  # ssl:
+  #   enabled: true
+  #   key-store: file:/etc/pki/transparency.p12
+  #   key-store-type: PKCS12
+  #   key-store-password: ${KEYSTORE_PASSWORD}
+
+logging:
+  level:
+    # Turn this up while working out which paths the viewer bundle needs.
+    eg.com.efinance.powerbi: INFO

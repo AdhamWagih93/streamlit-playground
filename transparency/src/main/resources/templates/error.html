@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title th:text="${title} + ' — Transparency Dashboard'">Something went wrong</title>
+  <link rel="icon" href="/img/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/shell.css">
+  <script th:nonce="${nonce}">
+    try {
+      var stored = localStorage.getItem("transparency.theme");
+      if (stored === "light" || stored === "dark") {
+        document.documentElement.setAttribute("data-theme", stored);
+      }
+    } catch (e) { /* storage unavailable: fall back to the system preference */ }
+  </script>
+</head>
+
+<body class="page-error">
+  <main class="page-error__card">
+    <p class="page-error__code label">
+      <strong th:text="${status}">502</strong>
+      <span th:text="${statusText}">Bad Gateway</span>
+    </p>
+
+    <h1 class="page-error__title" th:text="${title}">Report server unavailable</h1>
+    <p class="page-error__body" th:text="${detail}">The report server did not respond.</p>
+
+    <div class="page-error__actions">
+      <a class="button button--primary" th:if="${retryable}" th:href="${retryUrl}">Try again</a>
+      <a class="button" th:href="@{/reports/powerbi/transparency}">Back to the dashboard</a>
+    </div>
+
+    <p class="page-error__meta mono" th:text="'Request ' + ${requestId}">Request —</p>
+  </main>
+</body>
+</html>

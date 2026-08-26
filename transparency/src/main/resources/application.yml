@@ -1,0 +1,103 @@
+spring:
+  application:
+    name: efinance-powerbi
+  thymeleaf:
+    cache: true
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          max-age: 1h
+          cache-public: true
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: 8080
+  error:
+    whitelabel:
+      enabled: false
+    include-message: never
+    include-stacktrace: never
+  compression:
+    enabled: true
+    mime-types: text/html,text/css,application/javascript,application/json,image/svg+xml
+    min-response-size: 2KB
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: true
+  forward-headers-strategy: framework
+
+app:
+  security:
+    # Always true outside a developer machine. The local profile turns it off explicitly.
+    enabled: true
+  ui:
+    brand: Transparency
+    title: Transparency Dashboard
+    report-name: Transparency Report
+    support-contact: ""
+    load-timeout: 45s
+  rate-limit:
+    enabled: true
+    requests-per-minute: 600
+    burst: 120
+
+powerbi:
+  report-server:
+    base-url: ${POWERBI_BASE_URL:}
+    allowed-host: ${POWERBI_ALLOWED_HOST:}
+    username: ${POWERBI_USERNAME:}
+    password: ${POWERBI_PASSWORD:}
+    domain: ${POWERBI_DOMAIN:}
+    workstation: ${POWERBI_WORKSTATION:}
+    auth-type: ${POWERBI_AUTH_TYPE:BASIC}
+    report-url: ${POWERBI_REPORT_URL:}
+    transparency-report-path: ${POWERBI_REPORT_PATH:/Reports/powerbi/Transparency}
+    connect-timeout: 5s
+    response-timeout: 60s
+    max-response-size: 32MB
+    pool:
+      max-total: 20
+      max-per-route: 10
+      idle-eviction: 5m
+      validate-after-inactivity: 5s
+    allowed-resource-path-prefixes:
+      - /Reports/
+      - /ReportServer/
+      - /Reserved.ReportViewerWebControl.axd
+      - /PowerBI/
+      - /powerbi/
+      - /api/
+      - /explore/
+      - /modelsAndExploration/
+      - /querydata/
+      - /metadata/
+      - /resources/
+      - /public/
+      - /13.0.
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # env and beans are deliberately not exposed: they leak configuration and topology.
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  metrics:
+    tags:
+      application: efinance-powerbi
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{requestId:-               }] %logger{36} - %msg%n"
+  level:
+    AUDIT_POWERBI_REPORT_ACCESS: INFO

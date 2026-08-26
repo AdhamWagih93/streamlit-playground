@@ -1,0 +1,32 @@
+# Dev container for the Transparency Dashboard.
+#
+#   docker compose up --build
+#
+# The image builds the jar inside Maven, so no JDK is needed on the host. The
+# first build downloads dependencies and takes a few minutes; later ones reuse
+# the layer cache.
+services:
+  transparency:
+    build: .
+    image: efinance-powerbi:dev
+    container_name: transparency-dashboard
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    env_file:
+      - samples/powerbi.env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 30s
+      timeout: 3s
+      start_period: 40s
+      retries: 3
+
+    # If the report server resolves only on the workstation's network — a VPN
+    # route or an internal DNS suffix — the container needs one of these:
+    #
+    # network_mode: host          # simplest; drop the `ports:` block above
+    # extra_hosts:
+    #   - "reports.internal.example.com:10.20.30.40"
+    # dns:
+    #   - 10.20.30.1

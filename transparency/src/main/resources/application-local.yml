@@ -1,0 +1,22 @@
+# Developer profile: no upstream credentials, no application login.
+# Never activate this profile anywhere a real report server is reachable.
+app:
+  security:
+    enabled: false
+  ui:
+    report-name: Transparency Report (local)
+
+spring:
+  thymeleaf:
+    cache: false
+
+powerbi:
+  report-server:
+    base-url: http://localhost:8081
+    allowed-host: localhost
+    auth-type: NONE
+    transparency-report-path: /Reports/powerbi/Transparency
+
+logging:
+  level:
+    eg.com.efinance.powerbi: DEBUG
