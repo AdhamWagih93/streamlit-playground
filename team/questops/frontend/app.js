@@ -5304,15 +5304,19 @@ function accApprBody(d, f) {
     const cover = t.union.length ? Math.round(t.common.length / t.union.length * 100) : 0;
     const perProj = Object.entries(t.per_project)
       .map(([pj, v]) => `${pj}: [${v.join(", ") || "—"}]`).join(" · ");
+    const withLists = Object.values(t.per_project).filter((v) => v.length);
     const pill = (u) => {
       const out = t.outside_ldap.includes(u);
       const com = t.common.includes(u);
+      const inN = withLists.filter((v) => v.includes(u)).length;
       const cls = out ? "appr-out" : com ? "appr-ok" : "appr-part";
       const tip = out ? `not a member of the ${t.ldap_group} LDAP group`
         : com ? `approves in EVERY ${t.team} project`
-        : `only in: ${(d.projects || []).filter((p) => p.prd_team === t.team
+        : `approves ${inN} of ${withLists.length} project(s) — only in: ${(d.projects || []).filter((p) => p.prd_team === t.team
             && p.approvers.map((x) => x.toLowerCase()).includes(u)).map((p) => p.project).join(", ")}`;
-      return `<span class="appr-pill ${cls}" title="${esc(u)} — ${esc(tip)}">${out ? "🚫" : com ? "✓" : "◐"} ${esc(u)}</span>`;
+      // partial approvers subtly carry their project coverage (n/m)
+      const cnt = !out && !com && withLists.length > 1 ? `<i class="appr-n">${inN}/${withLists.length}</i>` : "";
+      return `<span class="appr-pill ${cls}" title="${esc(u)} — ${esc(tip)}">${out ? "🚫" : com ? "✓" : "◐"} ${esc(u)}${cnt}</span>`;
     };
     return `<div class="appr-card ${issues.length ? "appr-card-bad" : ""}">
       <div class="appr-card-head">

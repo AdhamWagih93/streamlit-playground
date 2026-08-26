@@ -1552,3 +1552,5 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .appr-pill.appr-ok { color: var(--green); border-color: rgba(67,200,132,.45); background: rgba(67,200,132,.08); }
 .appr-pill.appr-part { color: var(--amber); border-color: rgba(255,178,36,.45); background: rgba(255,178,36,.08); }
 .appr-pill.appr-out { color: var(--red); border-color: rgba(239,95,102,.5); background: rgba(239,95,102,.1); }
+/* partial approver's project coverage — subtle n/m after the name */
+.appr-pill .appr-n { font: 500 8.5px var(--mono); font-style: normal; opacity: .62; margin-left: 4px; }
