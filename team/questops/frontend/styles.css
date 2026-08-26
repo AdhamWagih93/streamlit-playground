@@ -1518,6 +1518,8 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .pgv-co:first-child { border-top: none; }
 .pgv-co-head { font: 700 12px var(--body); color: var(--text); margin: 2px 2px 2px 4px; }
 .pgv-co-head.pgv-none { color: var(--faint); font-style: italic; }
+/* app-specific access (group_vars/<app>/team.yml) — unmapped-by-design block */
+.pgv-appacc { border-left: 2px solid rgba(255,178,36,.5); padding-left: 8px; margin-left: 2px; }
 .pgv-mem { flex: 0 0 auto; font: 600 10px var(--body); color: var(--cyan);
   background: rgba(63,198,221,.1); border-radius: 8px; padding: 1px 6px; cursor: default; }
 .pgv-mem-na { color: var(--faint); background: rgba(255,255,255,.05); }

@@ -334,10 +334,28 @@ def _crosscheck() -> dict:
                                     for m in (res.get("members") or [])]}
         return {"found": False, "group": team, "members": []}
 
+    # ---- APP-specific access: team.yml under group_vars/<app>/ ----------
+    # some inventories assign teams per APP instead of (or on top of) the
+    # project-wide group_vars/all — the devops_projects table is project-level
+    # only, so these can never map to it and are surfaced as their own block
+    app_access = []
+    for p in inv_projects:
+        for app, vars_ in sorted(((p.get("config") or {}).get("app_vars") or {}).items()):
+            if not isinstance(vars_, dict):
+                continue
+            teams = {k: str(v).strip() for k, v in vars_.items()
+                     if k.endswith("_team") and isinstance(v, str) and str(v).strip()}
+            if teams:
+                app_access.append({"project": p["name"], "app": app, "teams": teams})
+
     team_members = {}
     for m in matched_projects:
         for f in ("dev_team", "qc_team", "ops_team"):
             t = m.get(f)
+            if t and t not in team_members:
+                team_members[t] = _members(t)
+    for aa in app_access:
+        for t in aa["teams"].values():
             if t and t not in team_members:
                 team_members[t] = _members(t)
 
@@ -346,7 +364,7 @@ def _crosscheck() -> dict:
                     "ops_team": v.get("ops_team"), "count": v["_count"]}
                    for _k, v in sorted(db_by_key.items())]
     return {**base, "rows": editor_rows, "matched_projects": matched_projects,
-            "team_members": team_members,
+            "app_access": app_access, "team_members": team_members,
             "inventory_projects": len(inv_by_key), "db_projects": len(db_by_key),
             "db_rows": len(rows), "matched": matched,
             "missing_in_db": missing_in_db,

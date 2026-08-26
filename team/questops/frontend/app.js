@@ -5531,6 +5531,36 @@ function accPgVizFacets(projects, tm) {
   }).join("") + `</div>`;
 }
 
+// APP-specific access — team.yml under group_vars/<app>/ instead of
+// group_vars/all. The devops_projects table holds PROJECT-level access only,
+// so these can never map to it and are surfaced as their own unmapped block.
+function accPgAppAccessHtml(d, f) {
+  f = f || {};
+  const q = (f.q || "").toLowerCase();
+  const co = {};
+  (d.matched_projects || []).forEach((m) => { co[m.project] = m.company || "— no company"; });
+  const rows = (d.app_access || []).filter((a) =>
+    (!q || [a.project, a.app, ...Object.values(a.teams)].some((v) => (v || "").toLowerCase().includes(q)))
+    && (!f.company || f.company === "all" || (co[a.project] || "— no company") === f.company)
+    && (!f.team || f.team === "all" || Object.values(a.teams).includes(f.team)));
+  if (!rows.length) return "";
+  const mem = (team) => {
+    const m = (d.team_members || {})[team];
+    return m && m.found
+      ? `<span class="pgv-mem" title="members of ${esc(m.group)} (${m.members.length}): ${esc(m.members.join(", ") || "none")}">👥 ${m.members.length}</span>`
+      : `<span class="pgv-mem pgv-mem-na" title="LDAP group not resolved (getTeamMembersCN.sh)">👥 ?</span>`;
+  };
+  return `<div class="pgv-co pgv-appacc">
+    <div class="pgv-co-head">📦 app-specific access
+      <span class="ci-meta">· ${rows.length} app(s) — team.yml under group_vars/&lt;app&gt;/ · NOT mapped to devops_projects (the table holds project-level access only)</span></div>
+    <div class="log-idx-list">${rows.map((a) => `
+      <div class="log-idx"><code class="log-idx-name">${esc(a.project)} / ${esc(a.app)}</code>
+        <span class="chip chip-amber" title="teams assigned at APP level (group_vars/${esc(a.app)}), not project level — unmapped to the devops_projects table by design">app-level</span>
+        ${Object.entries(a.teams).map(([field, team]) =>
+          `<span class="chip chip-cyan" title="${esc(field)} from group_vars/${esc(a.app)}">${esc(field)} → ${esc(team)}</span>${mem(team)}`).join(" ")}
+      </div>`).join("")}</div></div>`;
+}
+
 function accPgVizBody(d, f) {
   f = f || {};
   const q = (f.q || "").toLowerCase();
@@ -5540,7 +5570,8 @@ function accPgVizBody(d, f) {
     && (!f.company || f.company === "all" || (m.company || "—") === f.company)
     && (!f.team || f.team === "all"
         || [m.dev_team, m.qc_team, m.ops_team].includes(f.team)));
-  if (!mp.length) return '<div class="empty">no matched projects fit the filters</div>';
+  const appacc = accPgAppAccessHtml(d, f);
+  if (!mp.length) return appacc || '<div class="empty">no matched projects fit the filters</div>';
   // group by company — every company gets its own block of team breakdowns
   const byCo = {};
   mp.forEach((m) => { (byCo[m.company || "— no company"] = byCo[m.company || "— no company"] || []).push(m); });
@@ -5550,18 +5581,20 @@ function accPgVizBody(d, f) {
         <div class="pgv-co-head ${co === "— no company" ? "pgv-none" : ""}">🏢 ${esc(co)}
           <span class="ci-meta">· ${projs.length} project(s): ${esc(projs.map((m) => m.project).join(", "))}</span></div>
         ${accPgVizFacets(projs, d.team_members)}
-      </div>`).join("");
+      </div>`).join("") + appacc;
 }
 
 function accPgVizHtml(d) {
   const mp = d.matched_projects || [];
-  if (!mp.length) return "";
+  const aa = d.app_access || [];
+  if (!mp.length && !aa.length) return "";
   const f = state.pgVizFilter = state.pgVizFilter || {};
   const companies = [...new Set(mp.map((m) => m.company || "—"))].sort();
-  const teams = [...new Set(mp.flatMap((m) => [m.dev_team, m.qc_team, m.ops_team]).filter(Boolean))].sort();
+  const teams = [...new Set([...mp.flatMap((m) => [m.dev_team, m.qc_team, m.ops_team]),
+    ...aa.flatMap((a) => Object.values(a.teams))].filter(Boolean))].sort();
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   return `<details class="filebox acc-pg-sec" open>
-    <summary>📊 matched projects — teams by company · <b>${mp.length}</b> project(s)</summary>
+    <summary>📊 matched projects — teams by company · <b>${mp.length}</b> project(s)${aa.length ? ` · <b>${aa.length}</b> app-specific` : ""}</summary>
     <div class="acc-filters pgv-filters">
       <input data-pgv-f="q" placeholder="🔎 project / team / company…" value="${esc(f.q || "")}">
       <select data-pgv-f="company">${opt("all", "company: any", f.company)}${companies.map((c) => opt(c, c, f.company)).join("")}</select>
