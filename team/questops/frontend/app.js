@@ -4294,7 +4294,7 @@ const ACC_WHAT = {
   jira: "reading Jira permission schemes & their project assignments",
   activity: "reading per-project dates & per-user last-login/activity (JQL per row)",
   jenkins: "scanning Jenkins global + job/folder configs for matrix RBAC",
-  pgcheck: "cross-checking the inventory against the devops_projects table",
+  pgcheck: "checking projects consistency — inventory · platform DB · ADO · Jira",
   approvers: "analyzing prd_approvers coverage, common approvers & LDAP membership",
 };
 
@@ -5429,6 +5429,10 @@ function accPgCheckHtml(d) {
   const section = (title, rows, render) => rows.length ? `
     <details class="filebox acc-pg-sec" open><summary>${title} · <b>${rows.length}</b></summary>
       <div class="log-idx-list">${rows.map(render).join("")}</div></details>` : "";
+  // ADO / Jira presence chips (null = that system wasn't checked)
+  const sysChip = (v, icon, label) => v == null ? ""
+    : `<span class="chip ${v ? "chip-green" : "chip-amber"}" title="${esc(label)} project ${v ? "exists" : "NOT found"} (matched by name, case/separator-insensitive)">${icon} ${v ? "✓" : "✗"}</span>`;
+  const presChips = (r) => sysChip(r.ado, "⛁", "Azure DevOps") + " " + sysChip(r.jira, "🎫", "Jira");
   const editRow = (r) => `
     <div class="log-idx acc-pg-row" data-proj="${esc(r.project)}">
       <code class="log-idx-name">${esc(r.project)}</code>
@@ -5453,19 +5457,34 @@ function accPgCheckHtml(d) {
       ${chip(n(d.missing_in_inventory), "not in inventory", "chip-amber")}
       ${chip(n(d.duplicates), "duplicated", "chip-red")}
       ${chip(n(d.mismatches), "wrong assignments", "chip-red")}
+      ${d.ado_checked ? chip(d.presence.filter((p) => p.ado === false).length, "not in ADO", "chip-amber") : ""}
+      ${d.jira_checked ? chip(d.presence.filter((p) => p.jira === false).length, "not in Jira", "chip-amber") : ""}
       ${d.ok ? '<span class="chip chip-green">✓ in sync</span>' : ""}
       <span class="spacer"></span><span id="acc-pg-status" class="ci-meta"></span></div>
     ${accPgVizHtml(d)}
+    ${(d.presence || []).length ? (() => {
+      const bad = (p) => [p.inventory, p.db, p.ado, p.jira].filter((v) => v === false).length;
+      const rows = [...d.presence].sort((a, b) => bad(b) - bad(a) || a.project.localeCompare(b.project));
+      const cell = (v, label) => v == null
+        ? `<span class="chip" title="${esc(label)} not configured / unreachable — not checked">${esc(label)} —</span>`
+        : `<span class="chip ${v ? "chip-green" : "chip-red"}" title="${esc(label)}: project ${v ? "found" : "NOT found"}">${esc(label)} ${v ? "✓" : "✗"}</span>`;
+      return `<details class="filebox acc-pg-sec"><summary>🧭 presence across systems · <b>${rows.length}</b> project(s)
+          <span class="ci-meta">— inventory · platform DB · Azure DevOps · Jira (name-matched, gaps first)</span></summary>
+        <div class="log-idx-list">${rows.map((p) => `
+          <div class="log-idx ${bad(p) ? "bad" : ""}"><code class="log-idx-name">${esc(p.project)}</code>
+            ${cell(p.inventory, "inventory")} ${cell(p.db, "db")} ${cell(p.ado, "ADO")} ${cell(p.jira, "Jira")}
+          </div>`).join("")}</div></details>`;
+    })() : ""}
     ${section("📁 in the inventory but MISSING from the db", d.missing_in_db, (r) => `
       <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
         ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
-        ${teamRow(r, "inv")}
+        ${teamRow(r, "inv")} ${presChips(r)}
         ${act("➕ add to db", `data-pg-act="insert" data-proj="${esc(r.project)}" data-company="${esc(r.company || "")}" data-dev="${esc(r.dev_team || "")}" data-qc="${esc(r.qc_team || "")}" data-ops="${esc(r.prd_team || "")}"`,
           "insert this project with its inventory teams (prd_team → ops_team)", "btn-primary")}</div>`)}
     ${section("🗄 in the db but NOT in the inventory", d.missing_in_inventory, (r) => `
       <div class="log-idx"><code class="log-idx-name">${esc(r.project)}</code>
         ${r.company ? `<span class="chip chip-violet">🏢 ${esc(r.company)}</span>` : ""}
-        ${teamRow(r, "db")}
+        ${teamRow(r, "db")} ${presChips(r)}
         ${act("🗑 delete from db", `data-pg-act="delete" data-proj="${esc(r.project)}"`,
           "remove this project from the table")}</div>`)}
     ${section("♊ duplicated rows in the db", d.duplicates, (r) => `
@@ -5673,7 +5692,7 @@ async function renderAccess() {
       <div id="acc-summary"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>🛡 PRD approvers — coverage, common approvers &amp; anomalies</h2>
       <div id="acc-approvers"></div></div>
-    <div class="panel" style="margin-bottom:18px"><h2>🗄 Inventory ⇄ devops_projects — platform database cross-check</h2>
+    <div class="panel" style="margin-bottom:18px"><h2>🧭 Projects consistency — inventory · platform DB · Azure DevOps · Jira</h2>
       <div id="acc-pgcheck"></div></div>
     <div class="panel" style="margin-bottom:18px"><h2>⛁ Azure DevOps — projects, repository permissions &amp; inventory pipelines</h2>
       <div id="acc-ado"></div></div>

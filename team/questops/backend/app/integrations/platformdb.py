@@ -276,11 +276,47 @@ def _crosscheck() -> dict:
     duplicates = [{"project": v.get("project"), "count": v["_count"]}
                   for v in db_by_key.values() if v["_count"] > 1]
 
-    missing_in_db = [v for k, v in sorted(inv_by_key.items()) if k not in db_by_key]
+    # ---- presence in the OTHER fetched systems: Azure DevOps + Jira -----
+    # reuses the access page's cached fetchers (15m) — no extra load; a
+    # broken/unconfigured system yields None = "not checked", never False
+    ado_names = jira_names = None
+    try:
+        from . import access as _access
+        ado_d = _access.ado_projects()
+        if ado_d.get("source") != "not configured":
+            ado_names = {_norm(p.get("name"))
+                         for p in (ado_d.get("projects") or []) if p.get("name")}
+    except Exception:  # noqa: BLE001 — ADO trouble must not break the check
+        ado_names = None
+    try:
+        from . import access as _access
+        jira_d = _access.jira_permission_schemes()
+        if jira_d.get("source") != "not configured":
+            jira_names = set()
+            for p in (jira_d.get("all_projects") or []):
+                for v in (p.get("name"), p.get("key")):
+                    if v:
+                        jira_names.add(_norm(v))
+    except Exception:  # noqa: BLE001
+        jira_names = None
+
+    def _flags(k: str) -> dict:
+        return {"ado": None if ado_names is None else k in ado_names,
+                "jira": None if jira_names is None else k in jira_names}
+
+    presence = []
+    for k in sorted(set(inv_by_key) | set(db_by_key)):
+        v = inv_by_key.get(k) or db_by_key[k]
+        presence.append({"project": v.get("project"),
+                         "inventory": k in inv_by_key, "db": k in db_by_key,
+                         **_flags(k)})
+
+    missing_in_db = [{**v, **_flags(k)}
+                     for k, v in sorted(inv_by_key.items()) if k not in db_by_key]
     missing_in_inventory = [
         {"project": v.get("project"), "company": v.get("company"),
          "dev_team": v.get("dev_team"), "qc_team": v.get("qc_team"),
-         "ops_team": v.get("ops_team")}
+         "ops_team": v.get("ops_team"), **_flags(k)}
         for k, v in sorted(db_by_key.items()) if k not in inv_by_key]
 
     # ---- team / company mismatches on the intersection ------------------
@@ -364,6 +400,9 @@ def _crosscheck() -> dict:
                     "ops_team": v.get("ops_team"), "count": v["_count"]}
                    for _k, v in sorted(db_by_key.items())]
     return {**base, "rows": editor_rows, "matched_projects": matched_projects,
+            "presence": presence,
+            "ado_checked": ado_names is not None,
+            "jira_checked": jira_names is not None,
             "app_access": app_access, "team_members": team_members,
             "inventory_projects": len(inv_by_key), "db_projects": len(db_by_key),
             "db_rows": len(rows), "matched": matched,
