@@ -5310,12 +5310,14 @@ function accApprBody(d, f) {
       const com = t.common.includes(u);
       const inN = withLists.filter((v) => v.includes(u)).length;
       const cls = out ? "appr-out" : com ? "appr-ok" : "appr-part";
-      const tip = out ? `not a member of the ${t.ldap_group} LDAP group`
-        : com ? `approves in EVERY ${t.team} project`
-        : `approves ${inN} of ${withLists.length} project(s) — only in: ${(d.projects || []).filter((p) => p.prd_team === t.team
-            && p.approvers.map((x) => x.toLowerCase()).includes(u)).map((p) => p.project).join(", ")}`;
-      // partial approvers subtly carry their project coverage (n/m)
-      const cnt = !out && !com && withLists.length > 1 ? `<i class="appr-n">${inN}/${withLists.length}</i>` : "";
+      const projs = (d.projects || []).filter((p) => p.prd_team === t.team
+        && p.approvers.map((x) => x.toLowerCase()).includes(u)).map((p) => p.project);
+      const assigned = `approves ${inN} of ${withLists.length} project(s)${projs.length ? ` — assigned in: ${projs.join(", ")}` : ""}`;
+      const tip = out ? `not a member of the ${t.ldap_group} LDAP group — ${assigned}`
+        : com ? `approves in EVERY ${t.team} project${projs.length ? `: ${projs.join(", ")}` : ""}`
+        : assigned;
+      // partial AND outside-LDAP approvers subtly carry their coverage (n/m)
+      const cnt = !com && withLists.length > 1 ? `<i class="appr-n">${inN}/${withLists.length}</i>` : "";
       return `<span class="appr-pill ${cls}" title="${esc(u)} — ${esc(tip)}">${out ? "🚫" : com ? "✓" : "◐"} ${esc(u)}${cnt}</span>`;
     };
     return `<div class="appr-card ${issues.length ? "appr-card-bad" : ""}">
