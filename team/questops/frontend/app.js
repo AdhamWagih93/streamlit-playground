@@ -5552,15 +5552,15 @@ function accPgAppAccessHtml(d, f) {
       ? `<span class="pgv-mem" title="members of ${esc(m.group)} (${m.members.length}): ${esc(m.members.join(", ") || "none")}">👥 ${m.members.length}</span>`
       : `<span class="pgv-mem pgv-mem-na" title="LDAP group not resolved (getTeamMembersCN.sh)">👥 ?</span>`;
   };
-  return `<div class="pgv-co pgv-appacc">
-    <div class="pgv-co-head">📦 app-specific access
-      <span class="ci-meta">· ${rows.length} app(s) — team.yml under group_vars/&lt;app&gt;/ · NOT mapped to devops_projects (the table holds project-level access only)</span></div>
+  return `<details class="filebox acc-pg-sec pgv-appacc">
+    <summary>📦 app-specific access · <b>${rows.length}</b> app(s)
+      <span class="ci-meta">— team.yml under group_vars/&lt;app&gt;/ · NOT mapped to devops_projects (the table holds project-level access only)</span></summary>
     <div class="log-idx-list">${rows.map((a) => `
       <div class="log-idx"><code class="log-idx-name">${esc(a.project)} / ${esc(a.app)}</code>
         <span class="chip chip-amber" title="teams assigned at APP level (group_vars/${esc(a.app)}), not project level — unmapped to the devops_projects table by design">app-level</span>
         ${Object.entries(a.teams).map(([field, team]) =>
           `<span class="chip chip-cyan" title="${esc(field)} from group_vars/${esc(a.app)}">${esc(field)} → ${esc(team)}</span>${mem(team)}`).join(" ")}
-      </div>`).join("")}</div></div>`;
+      </div>`).join("")}</div></details>`;
 }
 
 function accPgVizBody(d, f) {
@@ -5574,16 +5574,26 @@ function accPgVizBody(d, f) {
         || [m.dev_team, m.qc_team, m.ops_team].includes(f.team)));
   const appacc = accPgAppAccessHtml(d, f);
   if (!mp.length) return appacc || '<div class="empty">no matched projects fit the filters</div>';
+  // projects that ALSO assign teams at app level — flagged in the
+  // project-level blocks, detailed in the app-specific section below
+  const appProjs = new Set((d.app_access || []).map((a) => a.project));
+  const projName = (m) => appProjs.has(m.project)
+    ? `<span class="pgv-appwarn" title="${esc(m.project)} ALSO assigns teams at app level (team.yml under group_vars/&lt;app&gt;/) — the table only reflects its project-level access; expand “app-specific access” below">${esc(m.project)} ⚠</span>`
+    : esc(m.project);
   // group by company — every company gets its own block of team breakdowns
   const byCo = {};
   mp.forEach((m) => { (byCo[m.company || "— no company"] = byCo[m.company || "— no company"] || []).push(m); });
   return Object.entries(byCo).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-    .map(([co, projs]) => `
+    .map(([co, projs]) => {
+      const nApp = projs.filter((m) => appProjs.has(m.project)).length;
+      return `
       <div class="pgv-co">
         <div class="pgv-co-head ${co === "— no company" ? "pgv-none" : ""}">🏢 ${esc(co)}
-          <span class="ci-meta">· ${projs.length} project(s): ${esc(projs.map((m) => m.project).join(", "))}</span></div>
+          <span class="ci-meta">· ${projs.length} project(s): ${projs.map(projName).join(", ")}</span>
+          ${nApp ? `<span class="chip chip-amber" title="${nApp} project(s) here also carry APP-level team assignments not reflected in the devops_projects table — see the app-specific access section below">⚠ ${nApp} app-level</span>` : ""}</div>
         ${accPgVizFacets(projs, d.team_members)}
-      </div>`).join("") + appacc;
+      </div>`;
+    }).join("") + appacc;
 }
 
 function accPgVizHtml(d) {
