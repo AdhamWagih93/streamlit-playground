@@ -6172,8 +6172,7 @@ async function renderProjects() {
   state.prjDays = state.prjDays ?? 30;
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   view().innerHTML = `
-    <div class="view-head"><h1>PROJECTS</h1>
-      <span class="sub">one project, every system — the management drill-down</span>
+    <div class="view-head">
       <span class="spacer"></span>
       <select id="prj-sel" class="prj-ctl">${projects.map((p) =>
         opt(p.name, `${p.name}${p.company ? " · " + p.company : ""} (${p.apps} apps)`, state.prjSel)).join("")}</select>
