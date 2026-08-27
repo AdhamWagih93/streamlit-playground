@@ -1567,3 +1567,24 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .appr-pill.appr-out { color: var(--red); border-color: rgba(239,95,102,.5); background: rgba(239,95,102,.1); }
 /* partial approver's project coverage — subtle n/m after the name */
 .appr-pill .appr-n { font: 500 8.5px var(--mono); font-style: normal; opacity: .62; margin-left: 4px; }
+
+/* ================= PROJECTS (per-project drill-down) ================= */
+.prj-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 8px; margin: 6px 0; }
+.prj-ctl { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 8px; font: 500 12px var(--body); max-width: 280px; }
+.prj-spark { display: flex; align-items: flex-end; gap: 1px; height: 46px;
+  padding: 4px 2px; margin: 4px 0; border-bottom: 1px solid var(--line); }
+.prj-spark span { flex: 1; min-width: 2px; background: #1497b3; border-radius: 1px 1px 0 0; }
+.prj-spark .prj-spark-0 { background: var(--line); }
+.pgv-bar-warn { background: #c0841c; }
+
+/* the 🖨 report button prints the drill-down clean: chrome stripped, panels
+   expanded, content free to flow over pages */
+@media print {
+  .sidebar, .topbar, .ai-drawer, .bar-restore, .toasts,
+  .view-head .btn, .view-head select, .kpi-note a { display: none !important; }
+  .app { height: auto; overflow: visible; }
+  .main, #view { overflow: visible !important; height: auto !important; }
+  body { background: #fff; }
+}

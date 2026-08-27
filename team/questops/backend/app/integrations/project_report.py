@@ -1,0 +1,505 @@
+"""Per-project drill-down — the Projects page.
+
+ONE cached report per (project, window) aggregating every system QuestOps
+already knows about, without adding load on any of them:
+
+  * inventory        — apps, envs, teams, approvers, configs   (5m cache)
+  * platform DB      — devops_projects row + presence flags    (5m cache)
+  * Azure DevOps     — repos/teams/url, from the Access page's cached
+                       project sweep (15m) — NO extra ADO calls
+  * commits          — ef-git-commits IN ELASTICSEARCH (the CI/CD platform
+                       mirrors git there): rate, per-day histogram, top
+                       contributors, repos, recent commits — one query
+  * Jira             — ef-bs-jira-issues IN ELASTICSEARCH: states,
+                       priorities, assignees, update history, recent
+                       tickets — one query (never touches Jira itself)
+  * security scans   — ef-cicd-{prismacloud,invicti,zap,trufflehog,fortify}:
+                       latest scan per app with severity counts
+  * logging          — the Logging page's cached analysis slice
+
+Sections degrade independently: a dead system yields {"error": ...} for its
+block, never a dead page. The report itself caches for 10 minutes.
+"""
+
+import datetime as dt
+import re
+import time
+
+import requests
+
+from ..config import settings
+
+_CACHE: dict = {}
+_TTL = 600
+
+CLOSED_JIRA = ["Done", "Closed", "Resolved", "Cancelled", "Rejected"]
+
+# scan index ↔ how to read its severity fields (see the CI/CD dashboard —
+# prisma/invicti use V*, zap has no Vcritical + kw-typed extras, trufflehog
+# is UPPERCASE with a `verified` flag, fortify carries no counts at all)
+_SCANNERS = {
+    "prismacloud": {"index": "ef-cicd-prismacloud", "label": "Prisma (image)",
+                    "sev": ("Vcritical", "Vhigh", "Vmedium", "Vlow"),
+                    "extra": ("Ccritical", "Chigh", "Cmedium", "Clow",
+                              "imageName", "imageTag")},
+    "invicti":     {"index": "ef-cicd-invicti", "label": "Invicti (DAST)",
+                    "sev": ("Vcritical", "Vhigh", "Vmedium", "Vlow"),
+                    "extra": ("BestPractice", "Informational", "url")},
+    "zap":         {"index": "ef-cicd-zap", "label": "ZAP (DAST)",
+                    "sev": (None, "Vhigh", "Vmedium", "Vlow"),
+                    "extra": ("Informational", "url")},
+    "trufflehog":  {"index": "ef-cicd-trufflehog", "label": "TruffleHog (secrets)",
+                    "sev": ("CRITICAL", "HIGH", "MEDIUM", "LOW"),
+                    "extra": ("verified", "findings_count", "detector")},
+    "fortify":     {"index": "ef-cicd-fortify", "label": "Fortify (SAST)",
+                    "sev": (None, None, None, None),   # status-only index
+                    "extra": ("branch", "commitid")},
+}
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.utcnow()
+
+
+def _norm(v) -> str:
+    return re.sub(r"[\s_\-]+", "_", str(v or "").strip().lower())
+
+
+def _name_variants(name: str) -> list[str]:
+    """Exact terms candidates for keyword fields whose casing/separator may
+    drift from the inventory name."""
+    out, seen = [], set()
+    for v in (name, name.lower(), name.upper(),
+              name.replace(" ", "_"), name.replace("_", "-"),
+              name.replace("-", "_"), name.replace(" ", "-")):
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _es(index: str, body: dict) -> dict:
+    """One prd-Elasticsearch search. Raises on transport/HTTP errors so each
+    section can surface ITS error without killing the page."""
+    if not (settings.es_url and settings.es_api_key):
+        raise RuntimeError("Elasticsearch is not configured (ES_URL / ES_API_KEY)")
+    r = requests.post(f"{settings.es_url.rstrip('/')}/{index}/_search", json=body,
+                      headers={"Authorization": f"ApiKey {settings.es_api_key}"},
+                      timeout=30, verify=settings.es_verify_ssl)
+    r.raise_for_status()
+    return r.json()
+
+
+def _int(v) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+# ---------------------------------------------------------------- sections
+def _sec_inventory(name: str) -> dict:
+    from . import inventory
+    inv = inventory.parse()
+    p = next((x for x in inv.get("projects") or []
+              if _norm(x["name"]) == _norm(name)), None)
+    if not p:
+        raise RuntimeError(f"project {name!r} not found in the inventory")
+    pv = ((p.get("config") or {}).get("project_vars") or {})
+    av = ((p.get("config") or {}).get("app_vars") or {})
+    apps = []
+    for a in (p.get("app_configs") or [{"name": x} for x in p.get("apps") or []]):
+        vars_ = av.get(a["name"]) if isinstance(av.get(a["name"]), dict) else {}
+        apps.append({"name": a["name"], "repository_name": a.get("repository_name"),
+                     "deploy_platform": (vars_ or {}).get("deploy_platform")
+                     or pv.get("deploy_platform"),
+                     "deploy_technology": (vars_ or {}).get("deploy_technology")
+                     or pv.get("deploy_technology")})
+    from .approvers import _as_list
+    return {"name": p["name"], "company": pv.get("company"),
+            "teams": {"dev": p.get("dev_team"), "qc": p.get("qc_team"),
+                      "prd": p.get("prd_team"), **(p.get("other_teams") or {})},
+            "approvers": _as_list(pv.get("prd_approvers")),
+            "deploy_platform": pv.get("deploy_platform"),
+            "deploy_technology": pv.get("deploy_technology"),
+            "envs": p.get("envs") or [], "hosts": p.get("hosts") or [],
+            "vault_files": p.get("vault_files") or 0,
+            "apps": apps, "pipeline_count": p.get("pipeline_count") or 0}
+
+
+def _sec_platform_db(name: str) -> dict:
+    from . import platformdb
+    d = platformdb.crosscheck()
+    if d.get("error"):
+        raise RuntimeError(d["error"])
+    if not d.get("configured"):
+        return {"configured": False}
+    row = next((r for r in d.get("rows") or []
+                if _norm(r.get("project")) == _norm(name)), None)
+    pres = next((x for x in d.get("presence") or []
+                 if _norm(x.get("project")) == _norm(name)), None)
+    return {"configured": True, "row": row,
+            "presence": pres,
+            "in_table": row is not None}
+
+
+def _sec_ado(name: str) -> dict:
+    from . import access
+    d = access.ado_projects()
+    if d.get("source") == "not configured":
+        return {"configured": False}
+    p = next((x for x in d.get("projects") or []
+              if _norm(x.get("name")) == _norm(name)), None)
+    if not p:
+        return {"configured": True, "found": False}
+
+    def _count(v):
+        return v if isinstance(v, int) else len(v or [])
+    return {"configured": True, "found": True, "collection": p.get("coll"),
+            "url": p.get("url"), "last_update": p.get("last_update"),
+            "description": p.get("description"),
+            "repo_count": _count(p.get("repos")),
+            "team_count": _count(p.get("teams")),
+            "member_count": _count(p.get("members")),
+            "score": p.get("score"), "grade": p.get("grade"),
+            "team": p.get("team"), "team_ok": p.get("team_ok"),
+            "pipelines": p.get("inv_pipelines"),
+            "pipelines_matched": p.get("inv_pipelines_matched")}
+
+
+def _sec_commits(name: str, repos: list[str], days: int) -> dict:
+    should = [{"terms": {"project": _name_variants(name)}}]
+    if repos:
+        should.append({"terms": {"repository": repos[:64]}})
+    body = {
+        "query": {"bool": {
+            "filter": [{"range": {"commitdate": {"gte": f"now-{days}d"}}}],
+            "should": should, "minimum_should_match": 1}},
+        "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": ["commitdate", "repository", "branch", "authorname",
+                    "authormail", "commitauthor", "commitmessage", "project"],
+        "aggs": {
+            "per_day": {"date_histogram": {"field": "commitdate",
+                                           "calendar_interval": "day"}},
+            "authors": {"terms": {"field": "authorname", "size": 15,
+                                  "missing": "(unknown)"}},
+            "repos": {"terms": {"field": "repository", "size": 30}},
+            "branches": {"terms": {"field": "branch", "size": 10}},
+        },
+        "track_total_hits": True, "size": 20,
+    }
+    resp = _es("ef-git-commits", body)
+    hits = resp.get("hits", {})
+    total = (hits.get("total") or {}).get("value", 0)
+    aggs = resp.get("aggregations") or {}
+
+    def _buckets(key):
+        return [{"key": b.get("key_as_string") or b.get("key"),
+                 "count": b.get("doc_count", 0)}
+                for b in (aggs.get(key) or {}).get("buckets", [])]
+
+    recent = []
+    for h in hits.get("hits", []):
+        s = h.get("_source") or {}
+        msg = (s.get("commitmessage") or "").strip().splitlines()
+        author = (s.get("authorname") or "").strip() or re.sub(
+            r"\s*<[^>]*>\s*$", "", (s.get("commitauthor") or "")).strip()
+        recent.append({"when": (s.get("commitdate") or "")[:16].replace("T", " "),
+                       "repo": s.get("repository") or "",
+                       "branch": s.get("branch") or "",
+                       "author": author,
+                       "message": (msg[0] if msg else "")[:140]})
+    per_day = _buckets("per_day")
+    active_days = sum(1 for b in per_day if b["count"])
+    return {"total": total, "days": days,
+            "per_day": [{"day": (b["key"] or "")[:10], "count": b["count"]}
+                        for b in per_day],
+            "rate": round(total / max(days, 1), 2),
+            "active_days": active_days,
+            "authors": _buckets("authors"), "repos": _buckets("repos"),
+            "branches": _buckets("branches"), "recent": recent}
+
+
+def _sec_jira(name: str, days: int) -> dict:
+    variants = _name_variants(name)
+    body = {
+        "query": {"bool": {"filter": [{"bool": {"should": [
+            {"terms": {"project": variants}},
+            {"terms": {"projectkey": variants}},
+        ], "minimum_should_match": 1}}]}},
+        "sort": [{"updated": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": ["issuekey", "issueurl", "summary", "priority", "status",
+                    "issuetype", "assignee", "created", "updated", "resolved"],
+        "aggs": {
+            "open": {"filter": {"bool": {"must_not": [
+                {"terms": {"status": CLOSED_JIRA}}]}},
+                "aggs": {"by_status": {"terms": {"field": "status", "size": 20}},
+                         "by_priority": {"terms": {"field": "priority", "size": 10}}}},
+            "by_status": {"terms": {"field": "status", "size": 25}},
+            "by_type": {"terms": {"field": "issuetype", "size": 15}},
+            "by_assignee": {"terms": {"field": "assignee", "size": 10,
+                                      "missing": "(unassigned)"}},
+            "updates": {"filter": {"range": {"updated": {"gte": f"now-{days}d"}}},
+                        "aggs": {"per_week": {"date_histogram": {
+                            "field": "updated", "calendar_interval": "week"}}}},
+        },
+        "track_total_hits": True, "size": 15,
+    }
+    resp = _es("ef-bs-jira-issues", body)
+    hits = resp.get("hits", {})
+    total = (hits.get("total") or {}).get("value", 0)
+    aggs = resp.get("aggregations") or {}
+
+    def _b(node):
+        return [{"key": b.get("key"), "count": b.get("doc_count", 0)}
+                for b in (node or {}).get("buckets", [])]
+
+    recent = [{"key": (h.get("_source") or {}).get("issuekey") or h.get("_id"),
+               "url": (h.get("_source") or {}).get("issueurl") or "",
+               "summary": ((h.get("_source") or {}).get("summary") or "")[:140],
+               "status": (h.get("_source") or {}).get("status") or "",
+               "priority": (h.get("_source") or {}).get("priority") or "",
+               "type": (h.get("_source") or {}).get("issuetype") or "",
+               "assignee": (h.get("_source") or {}).get("assignee") or "",
+               "updated": ((h.get("_source") or {}).get("updated") or "")[:16].replace("T", " "),
+               "resolved": bool((h.get("_source") or {}).get("resolved"))}
+              for h in hits.get("hits", [])]
+    open_node = aggs.get("open") or {}
+    return {"total": total, "matched": total > 0,
+            "open": open_node.get("doc_count", 0),
+            "open_by_status": _b(open_node.get("by_status")),
+            "open_by_priority": _b(open_node.get("by_priority")),
+            "by_status": _b(aggs.get("by_status")),
+            "by_type": _b(aggs.get("by_type")),
+            "by_assignee": _b(aggs.get("by_assignee")),
+            "updates_per_week": [
+                {"week": (b.get("key_as_string") or "")[:10],
+                 "count": b.get("doc_count", 0)}
+                for b in ((aggs.get("updates") or {}).get("per_week") or {})
+                .get("buckets", [])],
+            "recent": recent}
+
+
+def _sec_scans(name: str) -> dict:
+    out: dict = {}
+    variants = _name_variants(name)
+    for key, cfg in _SCANNERS.items():
+        try:
+            src = [f for f in (*(s for s in cfg["sev"] if s), *cfg["extra"],
+                               "status", "enddate", "startdate", "codeversion",
+                               "application")]
+            resp = _es(cfg["index"], {
+                "query": {"bool": {"filter": [{"terms": {"project": variants}}]}},
+                "aggs": {"by_app": {"terms": {"field": "application", "size": 100},
+                                    "aggs": {"latest": {"top_hits": {
+                                        "size": 1, "_source": src,
+                                        "sort": [{"enddate": {
+                                            "order": "desc",
+                                            "unmapped_type": "date"}}]}}}}},
+                "size": 0, "track_total_hits": True})
+        except Exception as exc:  # noqa: BLE001 — per-scanner degradation
+            out[key] = {"label": cfg["label"], "error": str(exc)[:200]}
+            continue
+        apps = []
+        worst = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for b in ((resp.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
+            hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
+            s = hit.get("_source") or {}
+            crit, high, med, low = (
+                _int(s.get(f)) if f else None for f in cfg["sev"])
+            row = {"app": b.get("key"),
+                   "when": (s.get("enddate") or s.get("startdate") or "")[:10],
+                   "status": s.get("status") or "",
+                   "version": s.get("codeversion") or "",
+                   "critical": crit, "high": high, "medium": med, "low": low}
+            if key == "trufflehog":
+                row["verified"] = bool(s.get("verified"))
+                row["findings"] = _int(s.get("findings_count"))
+            if key == "prismacloud":
+                row["compliance"] = {k: _int(s.get(f)) for k, f in
+                                     (("critical", "Ccritical"), ("high", "Chigh"),
+                                      ("medium", "Cmedium"), ("low", "Clow"))}
+                row["image"] = " : ".join(x for x in (s.get("imageName"),
+                                                      s.get("imageTag")) if x)
+            if key in ("invicti", "zap"):
+                row["url"] = s.get("url") or ""
+            apps.append(row)
+            for sev in worst:
+                worst[sev] = max(worst[sev], row.get(sev) or 0)
+        total = ((resp.get("hits") or {}).get("total") or {}).get("value", 0)
+        out[key] = {"label": cfg["label"], "scans": total, "apps": apps,
+                    "worst": worst if any(s for s in cfg["sev"] if s) else None}
+    return out
+
+
+def _sec_logging(name: str) -> dict:
+    from . import logstats
+    d = logstats.analyze()
+    p = next((x for x in d.get("projects") or []
+              if _norm(x.get("name")) == _norm(name)), None)
+    if not p:
+        return {"found": False}
+    apps = [{"app": a.get("app"), "score": a.get("score"),
+             "size_h": a.get("size_h"), "docs": a.get("docs"),
+             "indices": a.get("indices"), "issues": a.get("issues") or [],
+             "envs": [{"env": e.get("env"), "deployed": e.get("deployed"),
+                       "score": e.get("score"), "no_logs": e.get("no_logs"),
+                       "size_h": e.get("size_h"),
+                       "last_deploy": (e.get("last_deploy") or "")[:10]}
+                      for e in a.get("env_stats") or []]}
+            for a in p.get("apps") or []]
+    t = p.get("totals") or {}
+    return {"found": True, "score": p.get("score"), "size_h": t.get("size_h"),
+            "size_bytes": t.get("size_bytes"), "docs": t.get("docs"),
+            "indices": t.get("indices"), "apps": apps,
+            "analyzed_at": d.get("analyzed_at")}
+
+
+# ---------------------------------------------------------------- demo data
+def _demo_report(name: str, days: int) -> dict:
+    import hashlib
+    seed = int(hashlib.sha1(name.encode()).hexdigest()[:6], 16)
+    authors = [("alice", 34), ("bob", 21), ("carol", 12), ("dave", 6)]
+    base_day = dt.date.today() - dt.timedelta(days=days - 1)
+    per_day = [{"day": (base_day + dt.timedelta(days=i)).isoformat(),
+                "count": (seed + i * 7) % 9 if i % 3 else 0}
+               for i in range(days)]
+    total = sum(b["count"] for b in per_day)
+    inv = _sec_inventory(name)
+    repos = [a["repository_name"] for a in inv["apps"] if a.get("repository_name")]
+    commits = {
+        "total": total, "days": days, "per_day": per_day,
+        "rate": round(total / max(days, 1), 2),
+        "active_days": sum(1 for b in per_day if b["count"]),
+        "authors": [{"key": a, "count": c} for a, c in authors],
+        "repos": [{"key": r, "count": max(3, (seed + i * 13) % 40)}
+                  for i, r in enumerate(repos)] or [{"key": "main-repo", "count": total}],
+        "branches": [{"key": "develop", "count": int(total * .6)},
+                     {"key": "main", "count": int(total * .4)}],
+        "recent": [{"when": f"{per_day[-1]['day']} 10:0{i}", "repo": (repos or ['main-repo'])[i % max(len(repos), 1)],
+                    "branch": "develop", "author": authors[i % 4][0],
+                    "message": m}
+                   for i, m in enumerate([
+                       "fix payment retry loop on gateway timeout",
+                       "bump base image to patch CVE-2026-1337",
+                       "add e2e coverage for checkout edge cases",
+                       "refactor notification templating"])],
+    }
+    jira = {
+        "total": 42 + seed % 20, "matched": True, "open": 9 + seed % 5,
+        "open_by_status": [{"key": "Open", "count": 4}, {"key": "In Progress", "count": 3},
+                           {"key": "Reopened", "count": 2}],
+        "open_by_priority": [{"key": "Critical", "count": 1}, {"key": "High", "count": 3},
+                             {"key": "Medium", "count": 5}],
+        "by_status": [{"key": "Closed", "count": 28}, {"key": "Open", "count": 4},
+                      {"key": "In Progress", "count": 3}, {"key": "Resolved", "count": 5},
+                      {"key": "Reopened", "count": 2}],
+        "by_type": [{"key": "Bug", "count": 17}, {"key": "Task", "count": 15},
+                    {"key": "Story", "count": 10}],
+        "by_assignee": [{"key": "alice", "count": 12}, {"key": "bob", "count": 9},
+                        {"key": "(unassigned)", "count": 4}],
+        "updates_per_week": [{"week": (dt.date.today() - dt.timedelta(weeks=w)).isoformat(),
+                              "count": (seed + w * 5) % 14} for w in range(min(days // 7 + 1, 12))][::-1],
+        "recent": [
+            {"key": "DEVOPS-142", "url": "", "summary": "Payment gateway retries exhaust pool",
+             "status": "In Progress", "priority": "Critical", "type": "Bug",
+             "assignee": "alice", "updated": "2026-08-26 14:02", "resolved": False},
+            {"key": "DEVOPS-141", "url": "", "summary": "Add checkout smoke tests to release gate",
+             "status": "Open", "priority": "High", "type": "Task",
+             "assignee": "bob", "updated": "2026-08-25 09:41", "resolved": False},
+            {"key": "DEVOPS-137", "url": "", "summary": "Rotate notification service secrets",
+             "status": "Resolved", "priority": "Medium", "type": "Task",
+             "assignee": "carol", "updated": "2026-08-22 16:20", "resolved": True},
+        ],
+    }
+    scans = {
+        "prismacloud": {"label": "Prisma (image)", "scans": 12, "worst":
+                        {"critical": 0, "high": 2, "medium": 5, "low": 9},
+                        "apps": [{"app": a["name"], "when": "2026-08-24", "status": "SUCCESS",
+                                  "version": "1.4.2", "critical": 0, "high": 2 if i == 0 else 0,
+                                  "medium": 3, "low": 4,
+                                  "compliance": {"critical": 0, "high": 1, "medium": 2, "low": 0},
+                                  "image": f"{a['name']} : 1.4.2"}
+                                 for i, a in enumerate(inv["apps"][:3])]},
+        "invicti": {"label": "Invicti (DAST)", "scans": 4, "worst":
+                    {"critical": 0, "high": 1, "medium": 2, "low": 6},
+                    "apps": [{"app": inv["apps"][0]["name"], "when": "2026-08-20",
+                              "status": "SUCCESS", "version": "1.4.2", "critical": 0,
+                              "high": 1, "medium": 2, "low": 6, "url": "https://demo.app"}]
+                    if inv["apps"] else []},
+        "zap": {"label": "ZAP (DAST)", "scans": 3, "worst":
+                {"critical": 0, "high": 0, "medium": 3, "low": 11},
+                "apps": [{"app": inv["apps"][0]["name"], "when": "2026-08-19",
+                          "status": "SUCCESS", "version": "1.4.2", "critical": None,
+                          "high": 0, "medium": 3, "low": 11, "url": "https://demo.app"}]
+                if inv["apps"] else []},
+        "trufflehog": {"label": "TruffleHog (secrets)", "scans": 6, "worst":
+                       {"critical": 1 if seed % 2 else 0, "high": 0, "medium": 0, "low": 2},
+                       "apps": [{"app": inv["apps"][0]["name"], "when": "2026-08-25",
+                                 "status": "SUCCESS", "version": "", "critical": 1 if seed % 2 else 0,
+                                 "high": 0, "medium": 0, "low": 2,
+                                 "verified": bool(seed % 2), "findings": 3}]
+                       if inv["apps"] else []},
+        "fortify": {"label": "Fortify (SAST)", "scans": 5, "worst": None,
+                    "apps": [{"app": a["name"], "when": "2026-08-23", "status": "SUCCESS",
+                              "version": "1.4.2", "critical": None, "high": None,
+                              "medium": None, "low": None}
+                             for a in inv["apps"][:2]]},
+    }
+    return {"commits": commits, "jira": jira, "scans": scans}
+
+
+# ---------------------------------------------------------------- public API
+def list_projects() -> dict:
+    from . import inventory
+    inv = inventory.parse()
+    return {"source": inv.get("source"),
+            "projects": [{"name": p["name"],
+                          "company": ((p.get("config") or {}).get("project_vars")
+                                      or {}).get("company"),
+                          "apps": p.get("app_count") or len(p.get("apps") or []),
+                          "envs": p.get("envs") or [],
+                          "dev_team": p.get("dev_team"),
+                          "prd_team": p.get("prd_team")}
+                         for p in inv.get("projects") or []]}
+
+
+def report(name: str, days: int = 30, refresh: bool = False) -> dict:
+    days = max(7, min(int(days or 30), 365))
+    ck = (_norm(name), days)
+    ent = _CACHE.get(ck)
+    if not refresh and ent and time.time() - ent["at"] < _TTL:
+        return {**ent["payload"], "cached": True}
+
+    out: dict = {"project": name, "days": days,
+                 "generated_at": _now().replace(microsecond=0).isoformat() + "Z",
+                 "source": "demo" if settings.demo_mode else "live"}
+
+    def guard(key, fn, *a):
+        try:
+            out[key] = fn(*a)
+        except Exception as exc:  # noqa: BLE001 — sections degrade alone
+            out[key] = {"error": str(exc)[:300]}
+
+    guard("inventory", _sec_inventory, name)
+    inv = out["inventory"] if not out["inventory"].get("error") else {}
+    out["project"] = inv.get("name") or name
+    repos = [a.get("repository_name") for a in inv.get("apps") or []
+             if a.get("repository_name")]
+    guard("platform_db", _sec_platform_db, name)
+    guard("ado", _sec_ado, name)
+    if settings.demo_mode:
+        demo = _demo_report(out["project"], days)
+        out.update(demo)
+    else:
+        guard("commits", _sec_commits, name, repos, days)
+        guard("jira", _sec_jira, name, days)
+        guard("scans", _sec_scans, name)
+    guard("logging", _sec_logging, name)
+
+    _CACHE[ck] = {"at": time.time(), "payload": out}
+    return {**out, "cached": False}
+
+
+def invalidate() -> None:
+    _CACHE.clear()

@@ -242,6 +242,7 @@ async function refreshMe() {
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
                 ci: renderCI, actions: renderActions, prompts: renderPrompts,
                 repos: renderRepos, deps: renderRepos, access: renderAccess,
+                projects: renderProjects,
                 logging: renderLogging, migration: renderMigration,
                 upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
 
@@ -5753,6 +5754,257 @@ async function renderAccess() {
   const apBox = document.getElementById("acc-approvers");
   apBox.addEventListener("input", accApprFilter);
   apBox.addEventListener("change", accApprFilter);
+}
+
+/* ================= PROJECTS — per-project drill-down ================= */
+// One page per project aggregating every connected system: inventory,
+// platform DB, ADO, commits (ES mirror), Jira (ES mirror), security scans,
+// logging health. Data comes from ONE cached backend report — no fan-out
+// of source-system calls from the browser.
+function prjBar(list, cls) {
+  const rows = (list || []).filter((b) => b.count);
+  if (!rows.length) return '<div class="empty">none in the window</div>';
+  const max = Math.max(...rows.map((b) => b.count), 1);
+  return rows.map((b) => `
+    <div class="pgv-row" title="${esc(b.key)} — ${logExact(b.count)}">
+      <span class="pgv-label">${esc(b.key)}</span>
+      <span class="pgv-track"><span class="pgv-bar ${cls || ""}" style="width:${(b.count / max * 100).toFixed(0)}%"></span></span>
+      <span class="pgv-count">${logInt(b.count)}</span>
+    </div>`).join("");
+}
+
+function prjSpark(perDay, unit) {
+  const days = perDay || [];
+  if (!days.length) return "";
+  const max = Math.max(...days.map((b) => b.count), 1);
+  return `<div class="prj-spark">${days.map((b) =>
+    `<span class="${b.count ? "" : "prj-spark-0"}" style="height:${b.count ? Math.max(8, b.count / max * 100).toFixed(0) : 3}%" title="${esc(b.day || b.week)} — ${b.count} ${unit}"></span>`).join("")}</div>`;
+}
+
+function prjSev(w) {
+  if (!w) return '<span class="chip" title="this scanner reports status only — no severity counts">status-only</span>';
+  const chip = (n, cls, label) => `<span class="chip ${n ? cls : ""}" title="worst ${label} across latest scans">${label[0].toUpperCase()} ${n}</span>`;
+  return chip(w.critical || 0, "chip-red", "critical") + chip(w.high || 0, "chip-red", "high")
+    + chip(w.medium || 0, "chip-amber", "medium") + chip(w.low || 0, "", "low");
+}
+
+function prjErr(sec, what) {
+  return `<div class="rsearch-status rsearch-err">⚠ ${esc(what)} unavailable — ${esc(sec.error)}</div>`;
+}
+
+function prjBodyHtml(d) {
+  const inv = d.inventory || {};
+  const pdb = d.platform_db || {};
+  const ado = d.ado || {};
+  const com = d.commits || {};
+  const jira = d.jira || {};
+  const scans = d.scans || {};
+  const lg = d.logging || {};
+  const pres = pdb.presence || {};
+  const teams = inv.teams || {};
+  const worstSec = Object.values(scans).reduce((n, s) =>
+    n + ((s.worst || {}).critical || 0) + ((s.worst || {}).high || 0), 0);
+  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const okChip = (v, label) => v == null ? "" :
+    `<span class="chip ${v ? "chip-green" : "chip-red"}">${label} ${v ? "✓" : "✗"}</span>`;
+
+  const head = `
+    <div class="inv-chips" style="margin-bottom:8px">
+      ${inv.company ? `<span class="chip chip-violet">🏢 ${esc(inv.company)}</span>` : ""}
+      ${["dev", "qc", "prd"].filter((k) => teams[k]).map((k) =>
+        `<span class="chip chip-cyan" title="${k}_team">${k === "prd" ? "prd/ops" : k}: ${esc(teams[k])}</span>`).join("")}
+      ${(inv.envs || []).length ? `<span class="chip">${esc((inv.envs || []).join(" · "))}</span>` : ""}
+      ${inv.deploy_platform ? `<span class="chip">${esc(inv.deploy_platform)}${inv.deploy_technology ? " · " + esc(inv.deploy_technology) : ""}</span>` : ""}
+      ${(inv.approvers || []).length ? `<span class="chip" title="prd_approvers">👤 ${esc((inv.approvers || []).join(", "))}</span>` : ""}
+      ${okChip(pres.db, "db")} ${okChip(pres.ado ?? (ado.configured ? !!ado.found : null), "ADO")} ${okChip(pres.jira ?? (jira.total != null ? jira.matched : null), "Jira")}
+      <span class="spacer"></span>
+      <span class="ci-meta" title="generated ${esc(d.generated_at || "")}">last ${d.days}d window${d.cached ? " · cached" : ""}</span>
+    </div>
+    <div class="stat-tiles" style="margin:8px 0 12px">
+      ${tile((inv.apps || []).length, "apps")}
+      ${tile(ado.found ? logInt(ado.repo_count) : "—", "ADO repos")}
+      ${tile(com.total != null ? logInt(com.total) : "—", `commits · ${d.days}d`)}
+      ${tile(com.rate != null ? com.rate : "—", "commits / day")}
+      ${tile((com.authors || []).length || "—", "contributors")}
+      ${tile(jira.open != null ? logInt(jira.open) : "—", "Jira open", jira.open ? "pct-warn" : "pct-good")}
+      ${tile(jira.total != null ? logInt(jira.total) : "—", "Jira total")}
+      ${tile(lg.found ? lg.score : "—", "log score", lg.found ? logScoreClass(lg.score) : "")}
+      ${tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good")}
+    </div>`;
+
+  // ---- systems row: ADO · platform DB · inventory --------------------
+  const sysCards = `
+    <div class="prj-grid">
+      <div class="pgv-card"><div class="pgv-title">⛁ Azure DevOps</div>
+        ${ado.error ? prjErr(ado, "ADO") : !ado.configured ? '<div class="empty">not configured</div>'
+          : !ado.found ? '<div class="empty">project not found in ADO</div>' : `
+          <div class="inv-chips">
+            <span class="chip">${esc(ado.collection || "")}</span>
+            <span class="chip ${ado.grade === "A" ? "chip-green" : ado.grade === "C" || ado.grade === "D" ? "chip-red" : "chip-amber"}" title="Access-page permission score">access ${esc(ado.grade || "?")} (${ado.score ?? "?"})</span>
+            <span class="chip">${logInt(ado.repo_count)} repo(s)</span>
+            <span class="chip">${ado.team_count} team(s) · ${ado.member_count} member(s)</span>
+            ${ado.pipelines != null ? `<span class="chip ${ado.pipelines_matched === ado.pipelines ? "chip-green" : "chip-amber"}" title="inventory apps naming an ADO repo → resolved to a real repo">pipelines ${ado.pipelines_matched}/${ado.pipelines}</span>` : ""}
+            ${ado.last_update ? `<span class="chip" title="lastUpdateTime">↻ ${esc(ado.last_update)}</span>` : ""}
+          </div>
+          ${ado.description ? `<div class="ci-meta" style="margin:4px 2px">${esc(ado.description)}</div>` : ""}
+          ${ado.url ? `<a class="btn btn-sm btn-ghost" href="${esc(ado.url)}" target="_blank" rel="noopener">open in ADO ↗</a>` : ""}`}
+      </div>
+      <div class="pgv-card"><div class="pgv-title">🗄 platform DB (devops_projects)</div>
+        ${pdb.error ? prjErr(pdb, "platform DB") : !pdb.configured ? '<div class="empty">not configured</div>'
+          : !pdb.in_table ? '<div class="empty">⚠ not present in the devops_projects table — see Access → Projects consistency</div>' : `
+          <div class="inv-chips">${["company", "dev_team", "qc_team", "ops_team"].map((f) =>
+            (pdb.row || {})[f] ? `<span class="chip chip-cyan" title="${f}">${esc(pdb.row[f])}</span>`
+              : `<span class="chip" title="${f} is NULL in the table">${f}: —</span>`).join("")}</div>`}
+      </div>
+      <div class="pgv-card"><div class="pgv-title">🧭 inventory</div>
+        ${inv.error ? prjErr(inv, "inventory") : `
+          <div class="inv-chips">
+            <span class="chip">${(inv.hosts || []).length} host(s)</span>
+            <span class="chip">${inv.pipeline_count || 0} pipeline repo(s)</span>
+            <span class="chip" title="vault.yml files are detected only — never decrypted">🔒 ${inv.vault_files || 0} vault file(s)</span>
+          </div>
+          <div class="log-idx-list" style="margin-top:4px">${(inv.apps || []).map((a) => `
+            <div class="log-idx"><code class="log-idx-name">${esc(a.name)}</code>
+              ${a.repository_name ? `<span class="chip">${esc(a.repository_name)}</span>` : '<span class="chip" title="no repository_name — app has no pipeline repo">no pipeline</span>'}
+              ${a.deploy_platform ? `<span class="chip chip-cyan">${esc(a.deploy_platform)}</span>` : ""}
+              ${a.deploy_technology ? `<span class="chip">${esc(a.deploy_technology)}</span>` : ""}
+            </div>`).join("")}</div>`}
+      </div>
+    </div>`;
+
+  // ---- commits ---------------------------------------------------------
+  const commits = `
+    <details class="filebox acc-pg-sec" open><summary>⧗ commits — rate &amp; contributors · <b>${com.total != null ? logInt(com.total) : "?"}</b> in ${d.days}d</summary>
+      ${com.error ? prjErr(com, "commits (ef-git-commits)") : `
+      <div class="inv-chips" style="margin:6px 0 2px">
+        <span class="chip">≈ <b>${com.rate}</b> commits/day</span>
+        <span class="chip">${com.active_days} active day(s) of ${d.days}</span>
+        ${(com.branches || []).slice(0, 4).map((b) => `<span class="chip" title="branch">⎇ ${esc(b.key)} · ${logInt(b.count)}</span>`).join("")}
+      </div>
+      ${prjSpark(com.per_day, "commit(s)")}
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">top contributors</div>${prjBar(com.authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">per repository</div>${prjBar(com.repos)}</div>
+      </div>
+      <details class="filebox acc-pg-sec"><summary>🕘 recent commits · <b>${(com.recent || []).length}</b></summary>
+        <div class="log-idx-list">${(com.recent || []).map((c) => `
+          <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
+            <code class="log-idx-name" style="flex:none">${esc(c.repo)}</code>
+            <span class="chip">⎇ ${esc(c.branch)}</span>
+            <span class="chip chip-cyan">${esc(c.author)}</span>
+            <span class="ci-meta">${esc(c.message)}</span></div>`).join("")}</div>
+      </details>`}
+    </details>`;
+
+  // ---- jira ------------------------------------------------------------
+  const jiraSec = `
+    <details class="filebox acc-pg-sec" open><summary>🎫 Jira — <b>${jira.open != null ? logInt(jira.open) : "?"}</b> open of ${jira.total != null ? logInt(jira.total) : "?"}${jira.matched === false ? ' <span class="pct-warn">— no tickets matched this project name</span>' : ""}</summary>
+      ${jira.error ? prjErr(jira, "Jira (ef-bs-jira-issues)") : `
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">open by status</div>${prjBar(jira.open_by_status)}</div>
+        <div class="pgv-card"><div class="pgv-title">open by priority</div>${prjBar(jira.open_by_priority, "pgv-bar-warn")}</div>
+        <div class="pgv-card"><div class="pgv-title">by assignee (all)</div>${prjBar(jira.by_assignee)}</div>
+      </div>
+      <div class="inv-chips" style="margin:4px 0">${(jira.by_type || []).map((t) =>
+        `<span class="chip">${esc(t.key)} · ${logInt(t.count)}</span>`).join("")}</div>
+      <div class="pgv-title" style="margin-top:6px">update activity (per week)</div>
+      ${prjSpark(jira.updates_per_week, "update(s)")}
+      <details class="filebox acc-pg-sec" open><summary>🕘 recently updated tickets · <b>${(jira.recent || []).length}</b></summary>
+        <div class="log-idx-list">${(jira.recent || []).map((t) => `
+          <div class="log-idx">
+            ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(t.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(t.key)}</code>`}
+            <span class="chip ${t.resolved ? "chip-green" : t.priority === "Critical" || t.priority === "Blocker" ? "chip-red" : "chip-amber"}">${esc(t.status)}</span>
+            <span class="chip">${esc(t.priority)}</span><span class="chip">${esc(t.type)}</span>
+            ${t.assignee ? `<span class="chip chip-cyan">${esc(t.assignee)}</span>` : ""}
+            <span class="ci-meta" title="last updated">${esc(t.updated)}</span>
+            <span class="ci-meta">${esc(t.summary)}</span></div>`).join("")}</div>
+      </details>`}
+    </details>`;
+
+  // ---- security scans --------------------------------------------------
+  const scanCards = Object.entries(scans).map(([key, s]) => `
+    <div class="pgv-card"><div class="pgv-title">${esc(s.label || key)}</div>
+      ${s.error ? prjErr(s, s.label || key) : !(s.scans || (s.apps || []).length)
+        ? '<div class="empty">no scans recorded</div>' : `
+        <div class="inv-chips" style="margin-bottom:4px">
+          <span class="chip">${logInt(s.scans)} scan(s)</span>${prjSev(s.worst)}</div>
+        <div class="log-idx-list">${(s.apps || []).map((a) => `
+          <div class="log-idx ${(a.critical || 0) + (a.high || 0) ? "bad" : ""}">
+            <code class="log-idx-name" style="flex:none">${esc(a.app)}</code>
+            <span class="ci-meta" title="latest scan (enddate)">${esc(a.when)}</span>
+            ${a.version ? `<span class="chip">${esc(a.version)}</span>` : ""}
+            ${a.critical != null ? `<span class="chip ${a.critical ? "chip-red" : ""}">C ${a.critical}</span>` : ""}
+            ${a.high != null ? `<span class="chip ${a.high ? "chip-red" : ""}">H ${a.high}</span>` : ""}
+            ${a.medium != null ? `<span class="chip ${a.medium ? "chip-amber" : ""}">M ${a.medium}</span>` : ""}
+            ${a.low != null ? `<span class="chip">L ${a.low}</span>` : ""}
+            ${a.verified ? '<span class="chip chip-red" title="a VERIFIED secret = live leaked credential">✓ VERIFIED secret</span>' : ""}
+            ${a.image ? `<span class="ci-meta">${esc(a.image)}</span>` : ""}
+            ${a.status && a.status !== "SUCCESS" ? `<span class="chip chip-amber">${esc(a.status)}</span>` : ""}
+          </div>`).join("")}</div>`}
+    </div>`).join("");
+  const security = `
+    <details class="filebox acc-pg-sec" open><summary>🛡 security scans — latest per app${worstSec ? ` · <b class="pct-bad">${worstSec} critical/high</b>` : ' · <b class="pct-good">clean</b>'}</summary>
+      <div class="prj-grid">${scanCards || '<div class="empty">no scan indices</div>'}</div>
+    </details>`;
+
+  // ---- logging ---------------------------------------------------------
+  const logging = `
+    <details class="filebox acc-pg-sec" open><summary>▤ logging health · score <b class="${lg.found ? logScoreClass(lg.score) : ""}">${lg.found ? lg.score : "?"}</b>${lg.found ? ` — ${esc(lg.size_h || "")} · ${logInt(lg.docs)} docs · ${logInt(lg.indices)} indices` : ""}</summary>
+      ${lg.error ? prjErr(lg, "logging") : !lg.found ? '<div class="empty">project not covered by the logging analysis</div>' : `
+      <div class="log-idx-list">${(lg.apps || []).map((a) => `
+        <div class="log-idx ${(a.issues || []).length ? "bad" : ""}">
+          <code class="log-idx-name" style="flex:none">${esc(a.app)}</code>
+          <span class="chip ${logScoreClass(a.score)}" title="app log score">${a.score ?? "—"}</span>
+          <span class="ci-meta">${esc(a.size_h || "")} · ${logInt(a.docs)} docs · ${logInt(a.indices)} idx</span>
+          ${(a.envs || []).map((e) => `<span class="chip ${!e.deployed ? "" : e.no_logs ? "chip-red" : "chip-green"}" title="${esc(e.env)}${e.deployed ? ` — deployed ${esc(e.last_deploy || "")}` : " — not deployed"}${e.no_logs ? " · NO LOGS" : ""}">${esc(e.env)}</span>`).join("")}
+          ${(a.issues || []).length ? `<span class="chip chip-amber" title="${esc((a.issues || []).join(", "))}">${(a.issues || []).length} issue(s)</span>` : ""}
+        </div>`).join("")}</div>
+      <div class="kpi-note">full drill-down (indices, samples, retention…) lives in the <a href="#/logging">Logging</a> page · analyzed ${esc((lg.analyzed_at || "").slice(0, 16).replace("T", " "))}</div>`}
+    </details>`;
+
+  return head + sysCards + commits + jiraSec + security + logging;
+}
+
+async function prjLoad(refresh) {
+  const tok = navToken();
+  const body = document.getElementById("prj-body");
+  if (!body || !state.prjSel) return;
+  body.innerHTML = '<div class="empty">building the report — aggregating inventory · DB · ADO · commits · Jira · scans · logging…</div>';
+  try {
+    const d = await api(`/api/projects/${encodeURIComponent(state.prjSel)}?days=${state.prjDays}${refresh ? "&refresh=true" : ""}`);
+    if (navStale(tok)) return;
+    state.prjData = d;
+    body.innerHTML = prjBodyHtml(d);
+  } catch (e) {
+    if (!navStale(tok)) body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+  }
+}
+
+async function renderProjects() {
+  const tok = navToken();
+  const list = await api("/api/projects");
+  if (navStale(tok)) return;
+  const projects = list.projects || [];
+  if (!projects.some((p) => p.name === state.prjSel)) state.prjSel = (projects[0] || {}).name;
+  state.prjDays = state.prjDays || 30;
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+  view().innerHTML = `
+    <div class="view-head"><h1>PROJECTS</h1>
+      <span class="sub">one project, every system — the management drill-down</span>
+      <span class="spacer"></span>
+      <select id="prj-sel" class="prj-ctl">${projects.map((p) =>
+        opt(p.name, `${p.name}${p.company ? " · " + p.company : ""} (${p.apps} apps)`, state.prjSel)).join("")}</select>
+      <select id="prj-days" class="prj-ctl">${[30, 90, 180, 365].map((n) => opt(n, `last ${n} days`, state.prjDays)).join("")}</select>
+      <button id="prj-refresh" class="btn btn-sm" title="bypass the 10-minute report cache">↻</button>
+      <button id="prj-print" class="btn btn-sm" title="print / save as PDF — chrome bars are stripped automatically">🖨 report</button>
+    </div>
+    <div class="kpi-note" style="margin-bottom:10px">commits &amp; Jira come from their Elasticsearch mirrors (ef-git-commits / ef-bs-jira-issues) and scans from the ef-cicd-* indices — source systems are never hit directly; the whole report caches for 10 minutes</div>
+    <div id="prj-body"></div>`;
+  document.getElementById("prj-sel").addEventListener("change", (e) => { state.prjSel = e.target.value; prjLoad(); });
+  document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10) || 30; prjLoad(); });
+  document.getElementById("prj-refresh").addEventListener("click", () => prjLoad(true));
+  document.getElementById("prj-print").addEventListener("click", () => window.print());
+  await prjLoad();
 }
 
 /* ================= UPGRADES ================= */
