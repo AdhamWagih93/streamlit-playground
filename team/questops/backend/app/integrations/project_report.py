@@ -545,6 +545,18 @@ def _sec_cicd(name: str, days: int) -> dict:
     the BOARD but kept in the event log, flagged."""
     variants = _name_variants(name)
     tf = (settings.log_deploy_testflag or "Normal").strip()
+    st_ok = (settings.log_deploy_status or "SUCCESS").strip() or "SUCCESS"
+    # a "real" run: testflag matches OR the index has no testflag at all
+    # (ef-cicd-releases carries none — a bare term filter would empty the
+    # whole release column)
+    realf = ({"bool": {"should": [
+        {"term": {"testflag": tf}},
+        {"bool": {"must_not": [{"exists": {"field": "testflag"}}]}}],
+        "minimum_should_match": 1}} if tf else {"match_all": {}})
+    # a SUCCESSFUL run — releases may carry it in RLM_STATUS instead
+    okf = {"bool": {"should": [{"term": {"status": st_ok}},
+                               {"term": {"RLM_STATUS": st_ok}}],
+           "minimum_should_match": 1}}
 
     def q(index, date_field, aggs, src):
         return _es(index, {
@@ -555,17 +567,17 @@ def _sec_cicd(name: str, days: int) -> dict:
             "_source": src, "aggs": aggs, "track_total_hits": True, "size": 1000})
 
     def latest(index, date_field, src, by_env=False):
-        inner = {"latest": {"top_hits": {"size": 1, "_source": src,
-                                         "sort": [{date_field: {
-                                             "order": "desc",
-                                             "unmapped_type": "date"}}]}}}
+        th = {"top_hits": {"size": 1, "_source": src,
+                           "sort": [{date_field: {"order": "desc",
+                                                  "unmapped_type": "date"}}]}}
+        # per cell: the LATEST real run + the last SUCCESSFUL one
+        inner = {"latest": th, "ok": {"filter": okf, "aggs": {"latest": th}}}
         if by_env:
             inner = {"by_env": {"terms": {"field": "environment", "size": 12},
                                 "aggs": inner}}
         return {"by_app": {"terms": {"field": "application", "size": 100},
                            "aggs": {"real": {          # board = real runs only
-                               "filter": {"term": {"testflag": tf}} if tf
-                               else {"match_all": {}},
+                               "filter": realf,
                                "aggs": inner}}}}
 
     b_src = ["startdate", "application", "branch", "technology", "status",
@@ -586,33 +598,47 @@ def _sec_cicd(name: str, days: int) -> dict:
         hs = (((node or {}).get("latest") or {}).get("hits") or {}).get("hits") or []
         return (hs[0].get("_source") or {}) if hs else None
 
-    board: dict = {"builds": {}, "releases": {}, "deploys": {}}
-    for b in ((builds.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
-        s = _hit((b.get("real") or {}))
-        if s:
-            board["builds"][b["key"]] = {
-                "when": (s.get("startdate") or "")[:16].replace("T", " "),
+    def _bld(s):
+        return {"when": (s.get("startdate") or "")[:16].replace("T", " "),
                 "status": s.get("status") or "", "branch": s.get("branch") or "",
                 "version": s.get("codeversion") or "",
                 "tech": s.get("technology") or "", "author": _git_author(s)}
-    for b in ((releases.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
-        s = _hit((b.get("real") or {}))
-        if s:
-            board["releases"][b["key"]] = {
-                "when": (s.get("releasedate") or "")[:16].replace("T", " "),
+
+    def _rel(s):
+        return {"when": (s.get("releasedate") or "")[:16].replace("T", " "),
                 "status": s.get("status") or s.get("RLM_STATUS") or "",
                 "version": s.get("codeversion") or "", "rlm": s.get("RLM") or ""}
+
+    def _entry(node, mk):
+        """{latest-run fields, ok: last-success or None} for one cell."""
+        s = _hit(node)
+        if not s:
+            return None
+        ok = _hit(node.get("ok") or {})
+        return {**mk(s), "ok": mk(ok) if ok else None}
+
+    board: dict = {"builds": {}, "releases": {}, "deploys": {}}
+    for b in ((builds.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
+        e = _entry(b.get("real") or {}, _bld)
+        if e:
+            board["builds"][b["key"]] = e
+    for b in ((releases.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
+        e = _entry(b.get("real") or {}, _rel)
+        if e:
+            board["releases"][b["key"]] = e
+    def _dep(s):
+        return {"when": (s.get("startdate") or s.get("enddate") or "")[:16].replace("T", " "),
+                "status": s.get("status") or "",
+                "version": s.get("codeversion") or "",
+                "who": _user_display(s.get("requester") or s.get("Requester")
+                                     or s.get("triggeredby") or "")}
+
     for b in ((deploys.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
         envs = {}
         for eb in (((b.get("real") or {}).get("by_env") or {}).get("buckets", [])):
-            s = _hit(eb)
-            if s:
-                envs[eb["key"]] = {
-                    "when": (s.get("startdate") or s.get("enddate") or "")[:16].replace("T", " "),
-                    "status": s.get("status") or "",
-                    "version": s.get("codeversion") or "",
-                    "who": _user_display(s.get("requester") or s.get("Requester")
-                                         or s.get("triggeredby") or "")}
+            e = _entry(eb, _dep)
+            if e:
+                envs[eb["key"]] = e
         if envs:
             board["deploys"][b["key"]] = envs
 
@@ -1015,18 +1041,28 @@ def _demo_report(name: str, days: int) -> dict:
     }
     apps = [a["name"] for a in inv["apps"]][:4] or ["main-app"]
     envs = inv.get("envs") or ["dev", "prd"]
+    def _ok(entry, ver):
+        """demo cell: latest run + last success (older version when failed)."""
+        ok = {**entry, "status": "SUCCESS"}
+        if entry["status"] != "SUCCESS":
+            ok["version"] = ver
+            ok["when"] = "2026-08-2" + str(int(entry["when"][9]) - 1 if entry["when"][9] > "0" else 0) + entry["when"][10:]
+        return {**entry, "ok": ok}
+
     board = {
-        "builds": {a: {"when": "2026-08-26 09:1" + str(i), "status": "SUCCESS" if i != 1 else "FAILURE",
-                       "branch": "develop", "version": f"1.4.{i + 2}",
-                       "tech": "Docker", "author": ["alice", "bob", "carol", "dave"][i % 4]}
+        "builds": {a: _ok({"when": "2026-08-26 09:1" + str(i), "status": "SUCCESS" if i != 1 else "FAILURE",
+                           "branch": "develop", "version": f"1.4.{i + 2}",
+                           "tech": "Docker", "author": ["alice", "bob", "carol", "dave"][i % 4]},
+                          f"1.4.{i + 1}")
                    for i, a in enumerate(apps)},
-        "releases": {a: {"when": "2026-08-24 15:0" + str(i), "status": "SUCCESS",
-                         "version": f"1.4.{i + 1}", "rlm": f"RLM-10{i}"}
+        "releases": {a: _ok({"when": "2026-08-24 15:0" + str(i), "status": "SUCCESS",
+                             "version": f"1.4.{i + 1}", "rlm": f"RLM-10{i}"}, f"1.4.{i}")
                      for i, a in enumerate(apps[:2])},
-        "deploys": {a: {e: {"when": f"2026-08-2{2 + (i + j) % 4} 1{j}:30",
-                            "status": "SUCCESS" if (i + j) % 5 else "FAILURE",
-                            "version": f"1.4.{max(1, i + (1 if e != 'prd' else 0))}",
-                            "who": ["alice", "bob"][j % 2]}
+        "deploys": {a: {e: _ok({"when": f"2026-08-2{2 + (i + j) % 4} 1{j}:30",
+                                "status": "SUCCESS" if (i + j) % 5 else "FAILURE",
+                                "version": f"1.4.{max(1, i + (1 if e != 'prd' else 0))}",
+                                "who": ["alice", "bob"][j % 2]},
+                               f"1.4.{max(0, i - 1)}")
                         for j, e in enumerate(envs)}
                     for i, a in enumerate(apps[:3])},
     }

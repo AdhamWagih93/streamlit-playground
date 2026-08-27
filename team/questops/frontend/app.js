@@ -5638,10 +5638,26 @@ function prjSdlcHtml(d) {
     .sort((a, b) => (ENV_RANK[a] || 9) - (ENV_RANK[b] || 9) || a.localeCompare(b));
   const early = envs.filter((e) => (ENV_RANK[e] || 9) < 3);
   const late = envs.filter((e) => (ENV_RANK[e] || 9) >= 3);
-  const cell = (s, kind) => !s ? '<td class="prj-sdlc-none">—</td>' : `
-    <td><div class="prj-sdlc-cell" title="${esc(kind)} ${esc(s.version || "")} · ${esc(s.when || "")}${s.who ? " · by " + esc(s.who) : s.author ? " · by " + esc(s.author) : ""}${s.branch ? " · ⎇ " + esc(s.branch) : ""}${s.rlm ? " · " + esc(s.rlm) : ""}">
+  const okS = (st) => /succ/i.test(st || "");
+  const runTip = (x, kind) => `${esc(kind)} ${esc(x.version || "")} · ${esc(x.when || "")}${x.who ? " · by " + esc(x.who) : x.author ? " · by " + esc(x.author) : ""}${x.branch ? " · ⎇ " + esc(x.branch) : ""}${x.rlm ? " · " + esc(x.rlm) : ""}`;
+  const cell = (s, kind) => {
+    if (!s) return '<td class="prj-sdlc-none">—</td>';
+    if (okS(s.status) || !s.status) return `
+    <td><div class="prj-sdlc-cell" title="${runTip(s, kind)}">
       ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
       <span class="ci-meta">${esc((s.when || "").slice(0, 10))}</span></div></td>`;
+    // latest run FAILED → show the last success + the failure that followed
+    const failTip = `LATEST: ${esc(s.status)} — ${runTip(s, kind)}`;
+    if (s.ok) return `
+    <td><div class="prj-sdlc-cell" title="last success: ${runTip(s.ok, kind)} ⚠ ${failTip}">
+      ${prjStatusChip("SUCCESS")}<span class="prj-sdlc-ver">${esc(s.ok.version || "")}</span>
+      <span class="ci-meta">${esc((s.ok.when || "").slice(0, 10))}</span>
+      <span class="chip chip-red" title="${failTip}">✗ ${esc(s.version || s.status)}${s.who ? " · " + esc(s.who) : s.author ? " · " + esc(s.author) : ""}</span></div></td>`;
+    return `
+    <td><div class="prj-sdlc-cell" title="${failTip} — NO successful run in the window">
+      ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
+      <span class="ci-meta">${esc((s.when || "").slice(0, 10))}</span></div></td>`;
+  };
   const totals = cc.totals || {};
   return `
     <details class="filebox acc-pg-sec" open><summary>🧬 SDLC status across environments
@@ -6016,7 +6032,7 @@ function prjBodyHtml(d) {
           <code class="log-idx-name" style="flex:none">${esc(a.app)}</code>
           <span class="chip ${logScoreClass(a.score)}" title="app log score">${a.score ?? "—"}</span>
           <span class="ci-meta">${esc(a.size_h || "")} · ${logInt(a.docs)} docs · ${logInt(a.indices)} idx</span>
-          ${(a.envs || []).map((e) => `<span class="chip ${!e.deployed ? "" : e.no_logs ? "chip-red" : "chip-green"}" title="${esc(e.env)}${e.deployed ? ` — deployed ${esc(e.last_deploy || "")}` : " — not deployed"}${e.no_logs ? " · NO LOGS" : ""}">${esc(e.env)}</span>`).join("")}
+          ${[...(a.envs || [])].sort((x, y) => ({ dev: 1, qc: 2, uat: 3, prd: 4 }[x.env] || 9) - ({ dev: 1, qc: 2, uat: 3, prd: 4 }[y.env] || 9) || String(x.env).localeCompare(String(y.env))).map((e) => `<span class="chip ${!e.deployed ? "" : e.no_logs ? "chip-red" : "chip-green"}" title="${esc(e.env)}${e.deployed ? ` — deployed ${esc(e.last_deploy || "")}` : " — not deployed"}${e.no_logs ? " · NO LOGS" : ""}">${esc(e.env)}</span>`).join("")}
           ${(a.issues || []).length ? `<span class="chip chip-amber" title="${esc((a.issues || []).join(", "))}">${(a.issues || []).length} issue(s)</span>` : ""}
         </div>`).join("")}</div>
       <div class="kpi-note">full drill-down (indices, samples, retention…) lives in the <a href="#/logging">Logging</a> page · analyzed ${esc((lg.analyzed_at || "").slice(0, 16).replace("T", " "))}</div>`}
