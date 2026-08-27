@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .db import SessionLocal, init_db
-from .routers import (access_routes, ai, auth_routes, deps, dive,
+from .routers import (access_routes, activity, ai, auth_routes, deps, dive,
                       game, insights, logging_routes, overview, projects_routes,
                       repos_routes, upgrades_routes, work)
 from .seed import cleanup_demo_data, seed_demo
@@ -16,7 +16,8 @@ for router in (auth_routes.router, work.router, game.router,
                ai.router, insights.router,
                repos_routes.router, overview.router, upgrades_routes.router,
                dive.router, deps.router, access_routes.router,
-               logging_routes.router, projects_routes.router):
+               logging_routes.router, projects_routes.router,
+               activity.router):
     app.include_router(router)
 
 

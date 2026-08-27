@@ -167,6 +167,11 @@ class Settings(BaseSettings):
     # role is decided per username: everyone in the group is an APPROVER unless
     # listed here (comma-separated usernames -> plain member)
     member_usernames: str = ""
+    # individual users allowed into QuestOps WITHOUT the team LDAP group —
+    # they see ONLY the pages in restricted_pages, and those pages are
+    # visible to NOBODY else
+    restricted_users: str = ""
+    restricted_pages: str = ""
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
     # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.
@@ -223,6 +228,14 @@ class Settings(BaseSettings):
     @property
     def member_users(self) -> set[str]:
         return {u.lower() for u in self._csv(self.member_usernames)}
+
+    @property
+    def restricted_user_set(self) -> set[str]:
+        return {u.lower() for u in self._csv(self.restricted_users)}
+
+    @property
+    def restricted_page_list(self) -> list[str]:
+        return [p.lower() for p in self._csv(self.restricted_pages)]
 
     @property
     def kpi_sync_marks(self) -> list[int]:

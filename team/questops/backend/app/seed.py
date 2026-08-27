@@ -7,8 +7,8 @@ import random
 from sqlalchemy.orm import Session
 
 from .auth import DEMO_USERS
-from .db import (AgentCommand, BadgeAward, Repository, User, XPEvent,
-                 utcnow)
+from .db import (ActivityEvent, AgentCommand, BadgeAward, Repository,
+                 User, XPEvent, utcnow)
 from .gamification import BADGES, _check_badges, level_for_xp
 
 SEED_KINDS = [
@@ -28,6 +28,8 @@ def cleanup_demo_data(db: Session) -> None:
         db.query(AgentCommand).filter(AgentCommand.username.in_(demo_users)).delete(
             synchronize_session=False)
         db.query(XPEvent).filter(XPEvent.username.in_(demo_users)).delete(
+            synchronize_session=False)
+        db.query(ActivityEvent).filter(ActivityEvent.username.in_(demo_users)).delete(
             synchronize_session=False)
         db.query(BadgeAward).filter(BadgeAward.username.in_(demo_users)).delete(
             synchronize_session=False)
@@ -77,6 +79,25 @@ def seed_demo(db: Session) -> None:
                     created_at=date + dt.timedelta(hours=rng.randint(8, 17))))
                 u.xp += points
         db.flush()
+
+    # high-level activity history: logins + page views per user per weekday
+    pages = ["overview", "projects", "board", "ci", "logging", "access",
+             "repos", "team", "activity"]
+    for day in range(21, 0, -1):
+        date = now - dt.timedelta(days=day)
+        if date.weekday() >= 5:
+            continue
+        for u in users:
+            if rng.random() < 0.85:
+                t0 = date + dt.timedelta(hours=rng.randint(8, 10))
+                db.add(ActivityEvent(username=u.username, kind="login",
+                                     detail=f"role {u.role}", at=t0))
+                for _ in range(rng.randint(2, 7)):
+                    db.add(ActivityEvent(
+                        username=u.username, kind="page",
+                        page=rng.choice(pages),
+                        at=t0 + dt.timedelta(minutes=rng.randint(1, 480))))
+    db.flush()
 
     for u in users:
         u.streak = rng.randint(2, 9)

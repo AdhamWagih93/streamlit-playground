@@ -134,6 +134,10 @@ ldap:
   # scripts/Tools/LDAP/getTeamMembersCN.sh (see auth.ldap_group_members)
   requiredGroup: "CN=devops-team,OU=Groups,DC=mycorp,DC=local"
   # everyone in the group is an approver EXCEPT these usernames (comma-separated)
+  # users allowed in WITHOUT the team group; they see ONLY restrictedPages,
+  # which are hidden from everyone else
+  restrictedUsers: ""
+  restrictedPages: ""
   memberUsernames: ""
 
 git:

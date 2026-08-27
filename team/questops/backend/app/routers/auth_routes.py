@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..auth import authenticate, current_user, make_token, upsert_user
+from ..auth import authenticate, current_user, make_token, upsert_user, pages_for
 from ..config import settings
 from ..db import BadgeAward, User, get_db
 from ..gamification import level_info, quest_progress
@@ -25,6 +25,8 @@ def profile_payload(db: Session, user: User) -> dict:
         "level": level_info(user.xp),
         "badges": [{"key": b.key, "name": b.name, "icon": b.icon} for b in badges],
         "quests": quest_progress(db, user.username),
+        **(lambda r: {"restricted": r[0], "pages": r[1], "hidden_pages": r[2]})(
+            pages_for(user.username)),
     }
 
 
@@ -37,6 +39,10 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
     if profile is None:
         raise HTTPException(401, "invalid credentials or not in the allowed LDAP group")
     user = upsert_user(db, profile)
+    from ..db import ActivityEvent
+    db.add(ActivityEvent(username=user.username, kind="login",
+                         detail=f"role {user.role}"))
+    db.commit()
     return {"token": make_token(profile), "user": profile_payload(db, user),
             "demo_mode": settings.demo_mode}
 

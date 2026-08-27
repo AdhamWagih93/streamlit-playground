@@ -100,6 +100,20 @@ class DevopsProjectsAudit(Base):
     affected: Mapped[int] = mapped_column(Integer, default=0)     # rows touched
 
 
+class ActivityEvent(Base):
+    """High-level QuestOps usage: logins, page views, notable actions —
+    one row per event, the source for the Activity page."""
+
+    __tablename__ = "activity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    username: Mapped[str] = mapped_column(String(120), index=True)
+    kind: Mapped[str] = mapped_column(String(30), index=True)   # login | page | action
+    page: Mapped[str] = mapped_column(String(60), default="")
+    detail: Mapped[str] = mapped_column(String(300), default="")
+
+
 class AgentCommand(Base):
     """Every command/action the repo agent proposes. Nothing executes until a
     human approves; the row is the permanent audit log either way."""

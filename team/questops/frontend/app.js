@@ -243,7 +243,8 @@ const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard
                 repos: renderRepos, deps: renderRepos, access: renderAccess,
                 projects: renderProjects,
                 logging: renderLogging, migration: renderMigration,
-                upgrades: renderUpgrades, team: renderTeam, me: renderProfile };
+                upgrades: renderUpgrades, team: renderTeam, me: renderProfile,
+                activity: renderActivity };
 
 // bumped on every navigation; async renders capture it and bail if it
 // changed while they were awaiting — so a slow page (or a background poll)
@@ -252,9 +253,30 @@ let NAV_EPOCH = 0;
 const navToken = () => NAV_EPOCH;
 const navStale = (tok) => tok !== NAV_EPOCH;
 
+function allowedPages() {
+  const me = state.me || {};
+  if (Array.isArray(me.pages)) return me.pages;          // restricted user
+  const hidden = me.hidden_pages || [];
+  return Object.keys(VIEWS).filter((v) => !hidden.includes(v));
+}
+
+function applyPageAccess() {
+  if (!state.me) return;
+  const allowed = allowedPages();
+  document.querySelectorAll("#nav a").forEach((a) =>
+    a.classList.toggle("hidden", !allowed.includes(a.dataset.view)));
+}
+
 function route() {
   const name = (location.hash.replace("#/", "") || "overview").split("?")[0];
-  const next = VIEWS[name] ? name : "overview";
+  let next = VIEWS[name] ? name : "overview";
+  if (state.me) {
+    const allowed = allowedPages();
+    if (!allowed.includes(next)) next = allowed[0] || "overview";
+    applyPageAccess();
+  }
+  // high-level usage tracking — fire and forget, backend collapses repeats
+  if (state.token) api("/api/usage/track", { method: "POST", body: { page: next } }).catch(() => {});
   NAV_EPOCH++;
   state.view = next;
   document.querySelectorAll("#nav a").forEach((a) =>
@@ -6192,6 +6214,92 @@ async function renderProjects() {
   body.addEventListener("click", prjEvFilterEvt);
   body.addEventListener("input", prjEvFilterEvt);
   await prjLoad();
+}
+
+/* ================= ACTIVITY — QuestOps usage ================= */
+function actBodyHtml(a) {
+  const users = a.users || [];
+  const colorOf = prjAuthorColors(users.map((u) => ({ key: u.key })));
+  const sm = a.summary || {};
+  const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const maxU = Math.max(...users.map((u) => u.count), 1);
+  const userRows = users.map((u) => `
+    <div class="pgv-row" title="${esc(u.display)} — ${u.logins} login(s), ${u.views} page view(s), ${u.actions} action(s)">
+      <span class="pgv-label"><i class="prj-dot" style="background:${colorOf(u.key)}"></i>${esc(u.display)}</span>
+      <span class="pgv-track"><span class="pgv-bar" style="width:${(u.count / maxU * 100).toFixed(0)}%;background:${colorOf(u.key)}"></span></span>
+      <span class="pgv-count">${logInt(u.count)}</span>
+      <span class="chip" title="logins">🔑 ${u.logins}</span>
+      <span class="chip" title="page views">👁 ${u.views}</span>
+      <span class="chip chip-green" title="work actions (XP events)">⚙ ${u.actions}</span>
+    </div>`).join("");
+  const legend = users.slice(0, 8).map((u) =>
+    `<span class="chip"><i class="prj-dot" style="background:${colorOf(u.key)}"></i>${esc(u.display)}</span>`).join("");
+  const perDay = (a.per_day || []).map((b) => ({ day: b.day, count: b.count, by_author: b.by_user }));
+  const hours = a.per_hour || [];
+  const maxH = Math.max(...hours, 1);
+  const hourBars = hours.map((n, h) =>
+    `<span class="${n ? "" : "prj-spark-empty"}" style="height:${n ? Math.max(8, n / maxH * 100).toFixed(0) : 100}%" title="${String(h).padStart(2, "0")}:00 — ${n} event(s)"></span>`).join("");
+  const KIND = { login: ["🔑", "chip-cyan"], page: ["👁", ""], action: ["⚙", "chip-green"] };
+  return `
+    <div class="stat-tiles" style="margin:8px 0 12px">
+      ${tile(logInt(sm.events || 0), `events · ${a.days}d`)}
+      ${tile(sm.active_users || 0, "active users")}
+      ${tile(logInt(sm.logins || 0), "logins")}
+      ${tile(logInt(sm.views || 0), "page views")}
+      ${tile(logInt(sm.actions || 0), "work actions")}
+      ${sm.top_page ? tile(esc(sm.top_page), "busiest page") : ""}
+    </div>
+    <div class="inv-chips" style="margin:2px 0">${legend}</div>
+    ${prjSparkStacked(perDay, colorOf, "event(s)")}
+    <div class="prj-grid">
+      <div class="pgv-card"><div class="pgv-title">👤 activity per user</div>${userRows || '<div class="empty">no activity yet</div>'}</div>
+      <div class="pgv-card"><div class="pgv-title">📄 activity per page</div>${prjBar(a.pages)}</div>
+      ${(a.teams || []).length ? `<div class="pgv-card"><div class="pgv-title">🛡 activity per team</div>${prjBar(a.teams, "pgv-bar-warn")}
+        <div class="kpi-note">users mapped to inventory teams via their LDAP groups</div></div>` : ""}
+      <div class="pgv-card"><div class="pgv-title">🕐 by hour of day</div>
+        <div class="prj-spark" title="events per hour (UTC)">${hourBars}</div></div>
+    </div>
+    <details class="filebox acc-pg-sec" open><summary>🕘 recent activity · <b>${(a.recent || []).length}</b></summary>
+      <div class="log-idx-list">${(a.recent || []).map((r) => {
+        const [ico, cls] = KIND[r.kind] || ["•", ""];
+        return `<div class="log-idx"><span class="ci-meta">${esc(r.at)}</span>
+          <span class="chip ${cls}">${ico} ${esc(r.kind)}</span>
+          <span class="chip" style="border-color:${colorOf(r.username)}"><i class="prj-dot" style="background:${colorOf(r.username)}"></i>${esc(r.display)}</span>
+          ${r.page ? `<code class="log-idx-name" style="flex:none">${esc(r.page)}</code>` : ""}
+          <span class="ci-meta">${esc(r.detail || "")}</span></div>`;
+      }).join("")}</div>
+    </details>`;
+}
+
+async function actLoad() {
+  const tok = navToken();
+  const body = document.getElementById("act-body");
+  if (!body) return;
+  body.innerHTML = '<div class="empty">loading activity…</div>';
+  try {
+    const a = await api(`/api/usage?days=${state.actDays || 30}`);
+    if (navStale(tok)) return;
+    body.innerHTML = actBodyHtml(a);
+  } catch (e) {
+    if (!navStale(tok)) body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
+  }
+}
+
+async function renderActivity() {
+  state.actDays = state.actDays || 30;
+  const opt = (v, l) => `<option value="${v}" ${state.actDays === v ? "selected" : ""}>${l}</option>`;
+  view().innerHTML = `
+    <div class="view-head"><h1>ACTIVITY</h1>
+      <span class="sub">who uses QuestOps, where, and when</span>
+      <span class="spacer"></span>
+      <select id="act-days" class="prj-ctl">${[7, 30, 90, 365].map((n) => opt(n, `last ${n} days`)).join("")}</select>
+      <button id="act-refresh" class="btn btn-sm">↻</button></div>
+    <div id="act-body"></div>`;
+  document.getElementById("act-days").addEventListener("change", (e) => {
+    state.actDays = parseInt(e.target.value, 10) || 30; actLoad();
+  });
+  document.getElementById("act-refresh").addEventListener("click", actLoad);
+  await actLoad();
 }
 
 /* ================= UPGRADES ================= */

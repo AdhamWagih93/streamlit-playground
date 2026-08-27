@@ -25,8 +25,21 @@ DEMO_USERS = {
 
 def role_for(username: str) -> str:
     """One group, per-username roles: approver by default, plain member
-    only when the username is listed in MEMBER_USERNAMES."""
-    return "member" if username.lower() in settings.member_users else "approver"
+    only when the username is listed in MEMBER_USERNAMES. RESTRICTED_USERS
+    are always plain members — they exist to view their allowed pages."""
+    u = username.lower()
+    if u in settings.restricted_user_set:
+        return "member"
+    return "member" if u in settings.member_users else "approver"
+
+
+def pages_for(username: str) -> tuple[bool, list[str] | None, list[str]]:
+    """(restricted?, allowed pages or None=all, pages hidden from this user).
+    Restricted users see ONLY restricted_pages; everyone else sees everything
+    EXCEPT restricted_pages."""
+    if username.lower() in settings.restricted_user_set:
+        return True, settings.restricted_page_list, []
+    return False, None, settings.restricted_page_list
 
 
 def _ldap_authenticate(username: str, password: str) -> dict | None:
@@ -47,8 +60,10 @@ def _ldap_authenticate(username: str, password: str) -> dict | None:
     finally:
         svc.unbind()
 
-    if settings.ldap_required_group and settings.ldap_required_group.lower() not in groups:
-        return None  # authenticated identity but not in the team group
+    if (settings.ldap_required_group
+            and settings.ldap_required_group.lower() not in groups
+            and username.strip().lower() not in settings.restricted_user_set):
+        return None  # not in the team group and not individually allowed
 
     # verify the password by binding as the user
     try:
