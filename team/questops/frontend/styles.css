@@ -1615,3 +1615,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   padding-bottom: 6px; border-bottom: 2px solid #1497b3; }
 .prj-name-main { font: 800 22px var(--body); color: var(--text); letter-spacing: .02em; }
 .prj-name-co { font: 600 13px var(--body); color: var(--faint); }
+
+/* SDLC footer — most active users per stage */
+.prj-sdlc tfoot td { border-top: 2px solid var(--line); border-bottom: none; }
+.prj-sdlc-user { font: 600 10px var(--mono); color: var(--faint); white-space: nowrap; cursor: help; }

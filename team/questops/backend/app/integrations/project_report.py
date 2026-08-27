@@ -179,7 +179,8 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
             "should": should, "minimum_should_match": 1}},
         "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}],
         "_source": ["commitdate", "repository", "branch", "authorname",
-                    "authormail", "commitauthor", "commitmessage", "project"],
+                    "authormail", "commitauthor", "commitmessage", "commitid",
+                    "project"],
         "aggs": {
             "per_day": {"date_histogram": {
                 "field": "commitdate",
@@ -211,7 +212,9 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
                        "repo": s.get("repository") or "",
                        "branch": s.get("branch") or "",
                        "author": author,
-                       "message": (msg[0] if msg else "")[:140]})
+                       "id": str(s.get("commitid") or "")[:10],
+                       "message": (msg[0] if msg else "")[:140],
+                       "message_full": (s.get("commitmessage") or "").strip()[:600]})
     per_day = _buckets("per_day")
     active_days = sum(1 for b in per_day if b["count"])
     if all_time and len(per_day) > 1:   # rate over the OBSERVED span
@@ -464,7 +467,7 @@ def _sec_cicd(name: str, days: int) -> dict:
                       + ([] if not days else
                          [{"range": {date_field: {"gte": f"now-{days}d"}}}])}},
             "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
-            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 60})
+            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 200})
 
     def latest(index, date_field, src, by_env=False):
         inner = {"latest": {"top_hits": {"size": 1, "_source": src,
@@ -528,6 +531,35 @@ def _sec_cicd(name: str, days: int) -> dict:
         if envs:
             board["deploys"][b["key"]] = envs
 
+    # ---- top active users per SDLC stage (real runs only) -----------------
+    def _fold_stage(hits, who_fn):
+        counts: dict = {}
+        for h in hits:
+            s_ = h.get("_source") or {}
+            if (s_.get("testflag") or "Normal").strip().lower() != "normal":
+                continue
+            w = who_fn(s_)
+            if not w:
+                continue
+            slot = counts.setdefault(_user_key(w), {"key": _user_display(w), "count": 0})
+            slot["count"] += 1
+        return sorted(counts.values(), key=lambda x: -x["count"])[:5]
+
+    b_hits = (builds.get("hits") or {}).get("hits", [])
+    d_hits = (deploys.get("hits") or {}).get("hits", [])
+    r_hits = (releases.get("hits") or {}).get("hits", [])
+    dep_who = lambda s_: (s_.get("requester") or s_.get("Requester")  # noqa: E731
+                          or s_.get("triggeredby") or "")
+    board["top_users"] = {
+        "build": _fold_stage(b_hits, _git_author),
+        "release": _fold_stage(r_hits, lambda s_: re.sub(
+            r"\s*<[^>]*>\s*$", "", s_.get("commitauthor") or "")),
+        "deploys": {}}
+    for env in {(h.get("_source") or {}).get("environment") for h in d_hits} - {None, ""}:
+        board["top_users"]["deploys"][env] = _fold_stage(
+            [h for h in d_hits
+             if (h.get("_source") or {}).get("environment") == env], dep_who)
+
     # ---- raw rows → events ------------------------------------------------
     events = []
     for h in (builds.get("hits") or {}).get("hits", []):
@@ -573,11 +605,12 @@ def _assemble_events(out: dict) -> list[dict]:
     for c in ((out.get("commits") or {}).get("recent")) or []:
         events.append({"ts": c.get("when") or "", "type": "commit",
                        "app": c.get("repo") or "", "env": "",
-                       "status": "", "version": "",
+                       "status": "", "version": c.get("id") or "",
                        "who": _user_display(c.get("author") or ""),
                        "test": False,
                        "detail": " · ".join(x for x in (c.get("branch"),
-                                                        c.get("message")) if x)})
+                                                        c.get("message")) if x),
+                       "tip": c.get("message_full") or ""})
     for t in ((out.get("jira") or {}).get("recent")) or []:
         events.append({"ts": t.get("updated") or "", "type": "jira",
                        "app": t.get("key") or "", "env": "",
@@ -700,7 +733,9 @@ def _demo_report(name: str, days: int) -> dict:
                      {"key": "main", "count": int(total * .4)}],
         "recent": [{"when": f"{per_day[-1]['day']} 10:0{i}", "repo": (repos or ['main-repo'])[i % max(len(repos), 1)],
                     "branch": "develop", "author": authors[i % 4][0],
-                    "message": m}
+                    "id": f"a1b2c3d{i}",
+                    "message": m,
+                    "message_full": m + "\n\n- reviewed by the team\n- refs DEVOPS-14" + str(i)}
                    for i, m in enumerate([
                        "fix payment retry loop on gateway timeout",
                        "bump base image to patch CVE-2026-1337",
@@ -830,6 +865,12 @@ def _demo_report(name: str, days: int) -> dict:
     cicd_events.append({"ts": "2026-08-24T15:00", "type": "release", "app": apps[0],
                         "env": "", "status": "SUCCESS", "version": "1.4.1",
                         "who": "alice", "test": False, "detail": "RLM-100"})
+    board["top_users"] = {
+        "build": [{"key": "alice", "count": 9}, {"key": "bob", "count": 6}],
+        "release": [{"key": "alice", "count": 3}, {"key": "carol", "count": 2}],
+        "deploys": {e: [{"key": "alice", "count": 5 - j}, {"key": "bob", "count": 3 - j % 3}]
+                    for j, e in enumerate(envs)},
+    }
     cicd = {"board": board, "events": cicd_events,
             "totals": {"builds": 18 + seed % 9, "deploys": 11 + seed % 7,
                        "releases": 3 + seed % 3}}

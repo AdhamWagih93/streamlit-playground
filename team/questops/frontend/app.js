@@ -5655,6 +5655,21 @@ function prjSdlcHtml(d) {
             ${cell((board.releases || {})[a], "release")}
             ${late.map((e) => cell(((board.deploys || {})[a] || {})[e], `deploy to ${e}`)).join("")}
           </tr>`).join("")}</tbody>
+        ${(() => {   // top active users per stage, from the window's real runs
+          const tu = board.top_users || {};
+          const top = (list) => (list || []).length
+            ? (list || []).slice(0, 2).map((u) =>
+                `<span class="prj-sdlc-user" title="${esc(u.key)} — ${u.count} run(s) in the window${(list || []).length > 2 ? ` · also: ${esc((list || []).slice(2).map((x) => `${x.key} (${x.count})`).join(", "))}` : ""}">${esc(u.key)}·${u.count}</span>`).join(" ")
+            : '<span class="prj-sdlc-none">—</span>';
+          const anyTu = (tu.build || []).length || (tu.release || []).length
+            || Object.values(tu.deploys || {}).some((l) => (l || []).length);
+          return anyTu ? `<tfoot><tr><td class="prj-sdlc-app" title="most active users per stage in the window">👤 top active</td>
+            <td>${top(tu.build)}</td>
+            ${early.map((e) => `<td>${top((tu.deploys || {})[e])}</td>`).join("")}
+            <td>${top(tu.release)}</td>
+            ${late.map((e) => `<td>${top((tu.deploys || {})[e])}</td>`).join("")}
+          </tr></tfoot>` : "";
+        })()}
       </table></div>
     </details>`;
 }
@@ -5678,10 +5693,10 @@ function prjEventsBody(events, f) {
       ${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(e.app)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(e.app)}</code>`}
       ${e.env ? `<span class="chip">${esc(e.env)}</span>` : ""}
       ${prjStatusChip(e.status)}
-      ${e.version ? `<span class="chip" title="version">${esc(e.version)}</span>` : ""}
+      ${e.version ? `<span class="chip" title="${e.type === "commit" ? "commit id" : "version"}">${esc(e.version)}</span>` : ""}
       ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
       ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
-      <span class="ci-meta prj-ev-detail">${esc(e.detail || "")}</span>
+      <span class="ci-meta prj-ev-detail" ${e.tip ? `title="${esc(e.tip)}"` : ""}>${esc(e.detail || "")}</span>
     </div>`;
   }).join("");
 }
