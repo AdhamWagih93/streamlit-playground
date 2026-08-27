@@ -1622,3 +1622,20 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 
 /* DevOps Platform card — registry drift stays a whisper, not a warning */
 .prj-drift { margin-top: 4px; opacity: .75; cursor: help; }
+
+.prj-ev-more { display: flex; justify-content: center; padding: 8px 0 2px; }
+
+/* current-vs-previous delta */
+.prj-delta { font: 600 9.5px var(--mono); margin-left: 5px; cursor: help; }
+.prj-delta.up { color: var(--green); }
+.prj-delta.down { color: var(--amber); }
+
+/* jira priority × status heatmap */
+.prj-heat-c { text-align: center; font: 700 11px var(--mono); color: var(--text);
+  background: rgba(20, 151, 179, var(--heat, .2)); cursor: help; }
+.prj-heat-c.prj-heat-hot { background: rgba(239, 95, 102, var(--heat, .3)); }
+
+/* member workload strips */
+.prj-wl-track { display: flex; gap: 1px; align-items: stretch; }
+.prj-wl-seg { display: block; height: 10px; border-radius: 2px; min-width: 2px; }
+.prj-wl-done { background: rgba(67, 200, 132, .55); }

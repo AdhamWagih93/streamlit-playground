@@ -5607,6 +5607,8 @@ function prjErr(sec, what) {
 }
 
 const prjWin = (d) => d.days ? `${d.days}d` : "all time";
+const prjDelta = (cur, prev, d) => (prev == null || cur == null || !d.days) ? ""
+  : `<span class="prj-delta ${cur >= prev ? "up" : "down"}" title="previous ${d.days}d window: ${logExact(prev)}">${cur >= prev ? "▲" : "▼"} vs ${logInt(prev)}</span>`;
 
 const PRJ_EV = {  // event-log types: icon, label, chip class
   commit: ["⧗", "commit", "chip-cyan"], build: ["⚙", "build", ""],
@@ -5643,7 +5645,7 @@ function prjSdlcHtml(d) {
   const totals = cc.totals || {};
   return `
     <details class="filebox acc-pg-sec" open><summary>🧬 SDLC status across environments
-      <span class="ci-meta">— latest real run per app (${prjWin(d)}: ${logInt(totals.builds || 0)} builds · ${logInt(totals.deploys || 0)} deploys · ${logInt(totals.releases || 0)} releases)</span></summary>
+      <span class="ci-meta">— latest real run per app (${prjWin(d)}: ${logInt(totals.builds || 0)} builds${prjDelta(totals.builds, (d.prev || {}).builds, d)} · ${logInt(totals.deploys || 0)} deploys${prjDelta(totals.deploys, (d.prev || {}).deploys, d)} · ${logInt(totals.releases || 0)} releases${prjDelta(totals.releases, (d.prev || {}).releases, d)})</span></summary>
       <div class="prj-sdlc-wrap"><table class="prj-sdlc">
         <thead><tr><th>app</th><th>⚙ build</th>
           ${early.map((e) => `<th>🚀 ${esc(e)}</th>`).join("")}<th>📦 release</th>
@@ -5678,11 +5680,14 @@ function prjSdlcHtml(d) {
 function prjEventsBody(events, f) {
   f = f || {};
   const q = (f.q || "").toLowerCase();
-  let evs = (events || []).filter((e) =>
+  const all = (events || []).filter((e) =>
     (!f.type || f.type === "all" || e.type === f.type)
     && (!q || [e.app, e.who, e.detail, e.version, e.env, e.status]
       .some((v) => (v || "").toLowerCase().includes(q))));
-  if (!evs.length) return '<div class="empty">no events match</div>';
+  if (!all.length) return '<div class="empty">no events match</div>';
+  const shown = f.shown || 150;
+  const evs = all.slice(0, shown);
+  const more = all.length - evs.length;
   return evs.map((e) => {
     const [ico, label, cls] = PRJ_EV[e.type] || ["•", e.type, ""];
     return `
@@ -5698,7 +5703,9 @@ function prjEventsBody(events, f) {
       ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
       <span class="ci-meta prj-ev-detail" ${e.tip ? `title="${esc(e.tip)}"` : ""}>${esc(e.detail || "")}</span>
     </div>`;
-  }).join("");
+  }).join("") + (more > 0
+    ? `<div class="prj-ev-more"><button class="btn btn-sm btn-ghost" data-prj-ev-more>⬇ show ${Math.min(more, 300)} more <span class="ci-meta">(${logInt(evs.length)} of ${logInt(all.length)} shown)</span></button></div>`
+    : `<div class="ci-meta" style="padding:6px">— all ${logInt(all.length)} matching event(s) shown —</div>`);
 }
 
 function prjEventsHtml(d) {
@@ -5708,14 +5715,57 @@ function prjEventsHtml(d) {
   const counts = {};
   evs.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
   const btn = (t, label) => `<button class="btn btn-sm ${(f.type || "all") === t ? "btn-primary" : "btn-ghost"}" data-prj-ev="${t}">${label}${t === "all" ? ` ${evs.length}` : counts[t] ? ` ${counts[t]}` : ""}</button>`;
+  const meta = (state.prjData || {}).events_meta || {};
+  const trunc = Object.entries(meta.truncated || {});
   return `
-    <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${evs.length}</b> event(s)</summary>
+    <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${logInt(evs.length)}</b> event(s)${trunc.length ? ` <span class="ci-meta" title="each source is fetched up to 1000 docs per report — narrow the time window to see the rest">— sources with more in ES: ${esc(trunc.map(([k, v]) => `${k} ${logInt(v)}`).join(", "))}</span>` : ""}</summary>
       <div class="acc-filters" style="margin:6px 0">
         ${btn("all", "all")}${Object.entries(PRJ_EV).map(([t, [ico, label]]) => btn(t, `${ico} ${label}`)).join("")}
         <input data-prj-ev-q placeholder="🔎 app / user / version / text…" value="${esc(f.q || "")}" style="flex:1;min-width:160px">
       </div>
       <div id="prj-ev-body" class="prj-ev-list">${prjEventsBody(evs, f)}</div>
     </details>`;
+}
+
+// open tickets as a priority × status heat matrix — two dimensions at once
+function prjJiraHeat(m) {
+  const rows = (m || {}).rows || [];
+  const statuses = (m || {}).statuses || [];
+  if (!rows.length) return '<div class="empty">nothing open 🎉</div>';
+  const max = Math.max(...rows.flatMap((r) => Object.values(r.cells || {})), 1);
+  return `<div class="prj-sdlc-wrap"><table class="prj-sdlc prj-heat">
+    <thead><tr><th>priority</th>${statuses.map((st) => `<th>${esc(st)}</th>`).join("")}<th>Σ</th></tr></thead>
+    <tbody>${rows.map((r) => `
+      <tr><td class="prj-sdlc-app">${esc(r.priority)}</td>
+        ${statuses.map((st) => {
+          const n = (r.cells || {})[st] || 0;
+          const hot = /critical|blocker|highest/i.test(r.priority) && n;
+          return n ? `<td class="prj-heat-c ${hot ? "prj-heat-hot" : ""}" style="--heat:${(0.18 + 0.62 * n / max).toFixed(2)}" title="${n} ${esc(r.priority)} ticket(s) ${esc(st)}">${n}</td>`
+            : '<td class="prj-sdlc-none">·</td>';
+        }).join("")}
+        <td class="prj-sdlc-app">${r.total}</td></tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+// per-member strip: open tickets stacked by priority + completed count —
+// assignee × priority × open/done in one row
+const PRJ_PRIO_C = { Blocker: "#ef5f66", Critical: "#ef5f66", Highest: "#e07040",
+  High: "#e0a03c", Medium: "#c0841c", Low: "#1497b3", Lowest: "#5b6a80" };
+function prjJiraWorkload(rows) {
+  rows = rows || [];
+  if (!rows.length) return '<div class="empty">no assignees</div>';
+  const max = Math.max(...rows.map((w) => w.open + w.done), 1);
+  return rows.map((w) => {
+    const segs = Object.entries(w.open_by_priority || {}).map(([pr, n]) =>
+      `<span class="prj-wl-seg" style="width:${(n / max * 100).toFixed(1)}%;background:${PRJ_PRIO_C[pr] || "#5b6a80"}" title="${n} open ${esc(pr)}"></span>`).join("");
+    return `
+    <div class="pgv-row" title="${esc(w.assignee)} — ${w.open} open, ${w.done} completed">
+      <span class="pgv-label">${esc(w.assignee)}</span>
+      <span class="pgv-track prj-wl-track">${segs}<span class="prj-wl-seg prj-wl-done" style="width:${(w.done / max * 100).toFixed(1)}%" title="${w.done} completed"></span></span>
+      <span class="pgv-count">${w.open}⧖</span>
+      <span class="chip chip-green" title="completed">✅ ${w.done}</span>
+    </div>`;
+  }).join("") + '<div class="kpi-note">colored = open by priority · green = completed in the window</div>';
 }
 
 function prjBodyHtml(d) {
@@ -5728,8 +5778,11 @@ function prjBodyHtml(d) {
   const lg = d.logging || {};
   const pres = pdb.presence || {};
   const teams = inv.teams || {};
-  const worstSec = Object.values(scans).reduce((n, s) =>
-    n + ((s.worst || {}).critical || 0) + ((s.worst || {}).high || 0), 0);
+  const secTot = Object.values(scans).reduce((t, s) => {
+    (s.apps || []).forEach((a) => { t.crit += a.critical || 0; t.high += a.high || 0; });
+    return t;
+  }, { crit: 0, high: 0 });
+  const worstSec = secTot.crit + secTot.high;
   const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
   // registry sync is deliberately SUBTLE — one small text line, not chips
   const syncBit = (v, label) => v == null ? `${label} —`
@@ -5756,11 +5809,11 @@ function prjBodyHtml(d) {
     <div class="stat-tiles" style="margin:8px 0 12px">
       ${tile((inv.apps || []).length, "apps")}
       ${tile(ado.found ? logInt(ado.repo_count) : "—", "ADO repos")}
-      ${tile(com.total != null ? logInt(com.total) : "—", `commits · ${prjWin(d)}`)}
+      ${tile(com.total != null ? `${logInt(com.total)}${prjDelta(com.total, (d.prev || {}).commits, d)}` : "—", `commits · ${prjWin(d)}`)}
       ${tile(com.rate != null ? com.rate : "—", "commits / day")}
       ${tile((com.authors || []).length || "—", "contributors")}
       ${tile(jira.open != null ? logInt(jira.open) : "—", "Jira open", jira.open ? "pct-warn" : "pct-good")}
-      ${tile(jira.total != null ? logInt(jira.total) : "—", "Jira total")}
+      ${tile((jira.done || {}).total != null ? `${logInt(jira.done.total)}${prjDelta(jira.done.total, (d.prev || {}).resolved, d)}` : "—", `resolved · ${prjWin(d)}`, "pct-good")}
       ${tile(lg.found ? lg.score : "—", "log score", lg.found ? logScoreClass(lg.score) : "")}
       ${tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good")}
     </div>`;
@@ -5817,7 +5870,7 @@ function prjBodyHtml(d) {
 
   // ---- commits ---------------------------------------------------------
   const commits = `
-    <details class="filebox acc-pg-sec" open><summary>⧗ commits — rate &amp; contributors · <b>${com.total != null ? logInt(com.total) : "?"}</b> in ${prjWin(d)}</summary>
+    <details class="filebox acc-pg-sec" open><summary>⧗ commits — rate &amp; contributors · <b>${com.total != null ? logInt(com.total) : "?"}</b> in ${prjWin(d)}${prjDelta(com.total, (d.prev || {}).commits, d)}</summary>
       ${com.error ? prjErr(com, "commits (ef-git-commits)") : `
       <div class="inv-chips" style="margin:6px 0 2px">
         <span class="chip">≈ <b>${com.rate}</b> commits/day</span>
@@ -5829,8 +5882,8 @@ function prjBodyHtml(d) {
         <div class="pgv-card"><div class="pgv-title">top contributors</div>${prjBar(com.authors)}</div>
         <div class="pgv-card"><div class="pgv-title">per repository</div>${prjBar(com.repos)}</div>
       </div>
-      <details class="filebox acc-pg-sec"><summary>🕘 recent commits · <b>${(com.recent || []).length}</b></summary>
-        <div class="log-idx-list">${(com.recent || []).map((c) => `
+      <details class="filebox acc-pg-sec"><summary>🕘 recent commits · <b>${logInt((com.recent || []).length)}</b>${(com.recent || []).length > 30 ? ' <span class="ci-meta">— first 30 here; ALL of them are in the event log</span>' : ""}</summary>
+        <div class="log-idx-list">${(com.recent || []).slice(0, 30).map((c) => `
           <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
             <code class="log-idx-name" style="flex:none">${esc(c.repo)}</code>
             <span class="chip">⎇ ${esc(c.branch)}</span>
@@ -5844,10 +5897,27 @@ function prjBodyHtml(d) {
     <details class="filebox acc-pg-sec" open><summary>🎫 Jira — <b>${jira.open != null ? logInt(jira.open) : "?"}</b> open of ${jira.total != null ? logInt(jira.total) : "?"}${jira.matched === false ? ' <span class="pct-warn">— no tickets matched this project name</span>' : ""}</summary>
       ${jira.error ? prjErr(jira, "Jira (ef-bs-jira-issues)") : `
       <div class="prj-grid">
-        <div class="pgv-card"><div class="pgv-title">open by status</div>${prjBar(jira.open_by_status)}</div>
-        <div class="pgv-card"><div class="pgv-title">open by priority</div>${prjBar(jira.open_by_priority, "pgv-bar-warn")}</div>
-        <div class="pgv-card"><div class="pgv-title">by assignee (all)</div>${prjBar(jira.by_assignee)}</div>
+        <div class="pgv-card"><div class="pgv-title">🔥 open — priority × status</div>${prjJiraHeat(jira.matrix)}</div>
+        <div class="pgv-card"><div class="pgv-title">⚖ member workload — open by priority · completed</div>${prjJiraWorkload(jira.workload)}</div>
       </div>
+      ${(() => {
+        const dn = jira.done || {};
+        if (!dn.total) return "";
+        return `<details class="filebox acc-pg-sec" open><summary>✅ completed · <b>${logInt(dn.total)}</b> in ${prjWin(d)}${prjDelta(dn.total, (d.prev || {}).resolved, d)}${dn.avg_days != null ? ` <span class="ci-meta">— avg time to resolve ≈ <b>${dn.avg_days}</b> day(s)</span>` : ""}</summary>
+          ${prjSpark(dn.per_period, "resolved")}
+          <div class="prj-grid">
+            <div class="pgv-card"><div class="pgv-title">🏆 completed the most</div>${prjBar(dn.by_assignee)}</div>
+            <div class="pgv-card"><div class="pgv-title">🕘 recently completed</div>
+              <div class="log-idx-list">${(dn.recent || []).slice(0, 8).map((t) => `
+                <div class="log-idx">
+                  ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(t.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(t.key)}</code>`}
+                  <span class="chip">${esc(t.priority)}</span><span class="chip">${esc(t.type)}</span>
+                  <span class="chip chip-cyan">${esc(t.assignee)}</span>
+                  <span class="ci-meta">${esc(t.resolved)}${t.took_days != null ? ` · took ${t.took_days}d` : ""}</span>
+                  <span class="ci-meta">${esc(t.summary)}</span></div>`).join("")}</div></div>
+          </div>
+        </details>`;
+      })()}
       <div class="inv-chips" style="margin:4px 0">${(jira.by_type || []).map((t) =>
         `<span class="chip">${esc(t.key)} · ${logInt(t.count)}</span>`).join("")}</div>
       <div class="pgv-title" style="margin-top:6px">update activity (per ${d.days ? "week" : "month"}, ${prjWin(d)})</div>
@@ -5857,7 +5927,7 @@ function prjBodyHtml(d) {
         if (jc.error) return prjErr(jc, "Jira changes (ef-bs-jira-changes)");
         if (!jc.total) return '<div class="kpi-note">no changelog entries in the window (ef-bs-jira-changes)</div>';
         return `
-        <details class="filebox acc-pg-sec" open><summary>📝 change log · <b>${logInt(jc.total)}</b> change(s) in ${prjWin(d)}${jc.sampled < jc.total ? ` <span class="ci-meta">— stats from the ${jc.sampled} most recent</span>` : ""}</summary>
+        <details class="filebox acc-pg-sec" open><summary>📝 change log · <b>${logInt(jc.total)}</b> change(s) in ${prjWin(d)}${prjDelta(jc.total, (d.prev || {}).changes, d)}${jc.sampled < jc.total ? ` <span class="ci-meta">— stats from the ${jc.sampled} most recent</span>` : ""}</summary>
           <div class="pgv-title" style="margin-top:4px">changes per week</div>
           ${prjSpark(jc.per_week, "change(s)")}
           <div class="prj-grid">
@@ -5867,7 +5937,7 @@ function prjBodyHtml(d) {
           ${(jc.alltime || {}).total && d.days ? `
           <div class="pgv-title" style="margin-top:6px">ALL-TIME change activity — ${logInt(jc.alltime.total)} change(s)${jc.alltime.sampled < jc.alltime.total ? ` <span class="ci-meta">(contributor stats from the ${logInt(jc.alltime.sampled)} most recent)</span>` : ""}</div>
           ${prjSpark(jc.alltime.per_month, "change(s)")}` : ""}
-          <div class="log-idx-list">${(jc.recent || []).map((c) => `
+          <div class="log-idx-list">${(jc.recent || []).slice(0, 25).map((c) => `
             <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
               ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(c.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(c.key)}</code>`}
               <span class="chip chip-cyan">${esc(c.author)}</span>
@@ -5875,8 +5945,8 @@ function prjBodyHtml(d) {
             </div>`).join("")}</div>
         </details>`;
       })()}
-      <details class="filebox acc-pg-sec" open><summary>🕘 recently updated tickets · <b>${(jira.recent || []).length}</b></summary>
-        <div class="log-idx-list">${(jira.recent || []).map((t) => `
+      <details class="filebox acc-pg-sec" open><summary>🕘 recently updated tickets · <b>${logInt((jira.recent || []).length)}</b>${(jira.recent || []).length > 15 ? ' <span class="ci-meta">— first 15 here; the rest are in the event log</span>' : ""}</summary>
+        <div class="log-idx-list">${(jira.recent || []).slice(0, 15).map((t) => `
           <div class="log-idx">
             ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(t.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(t.key)}</code>`}
             <span class="chip ${t.resolved ? "chip-green" : t.priority === "Critical" || t.priority === "Blocker" ? "chip-red" : "chip-amber"}">${esc(t.status)}</span>
@@ -5893,8 +5963,8 @@ function prjBodyHtml(d) {
     <details class="filebox acc-pg-sec" open><summary>👥 contributions — members &amp; teams</summary>
       <div class="prj-grid">
         <div class="pgv-card"><div class="pgv-title">⧗ commits per member (${prjWin(d)})</div>${prjBar(com.authors)}</div>
-        <div class="pgv-card"><div class="pgv-title">📝 Jira changes per member (all time)</div>${prjBar((jc.alltime || {}).authors)}</div>
-        <div class="pgv-card"><div class="pgv-title">🛡 Jira changes per TEAM (all time)</div>${prjBar(jc.teams_alltime, "pgv-bar-warn")}
+        <div class="pgv-card"><div class="pgv-title">📝 Jira changes per member (${prjWin(d)})</div>${prjBar(d.days ? jc.authors : (jc.alltime || {}).authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">🛡 Jira changes per TEAM (${prjWin(d)})</div>${prjBar(d.days ? jc.teams : jc.teams_alltime, "pgv-bar-warn")}
           <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>
         <div class="pgv-card"><div class="pgv-title">🎫 open tickets per assignee</div>${prjBar(jira.by_assignee)}</div>
       </div>
@@ -5924,7 +5994,7 @@ function prjBodyHtml(d) {
     return `<td><div class="prj-sdlc-cell" title="${tip}">${body}<span class="ci-meta">${esc((a.when || "").slice(0, 10))}</span></div></td>`;
   };
   const security = `
-    <details class="filebox acc-pg-sec" open><summary>🛡 security — latest scan per app${worstSec ? ` · <b class="pct-bad">${worstSec} critical/high</b>` : ' · <b class="pct-good">clean</b>'}</summary>
+    <details class="filebox acc-pg-sec" open><summary>🛡 security — latest scan per app${worstSec ? ` · <b class="${secTot.crit ? "pct-bad" : ""}">${secTot.crit} critical</b> · <b class="${secTot.high ? "pct-bad" : ""}">${secTot.high} high</b> <span class="ci-meta">(summed across every app's freshest scan, all scanners)</span>` : ' · <b class="pct-good">clean</b>'}</summary>
       ${scanApps.length ? `<div class="prj-sdlc-wrap"><table class="prj-sdlc">
         <thead><tr><th>app</th>${scanKeys.map((k) => `<th title="${logInt(scans[k].scans || 0)} scan(s) recorded">${esc((scans[k].label || k).replace(/ \(.*\)$/, ""))}${scans[k].worst ? "" : " ·st"}</th>`).join("")}</tr></thead>
         <tbody>${scanApps.map((app) => `
@@ -5958,10 +6028,13 @@ function prjBodyHtml(d) {
 
 // event-log filter clicks/typing re-render only the list (delegated on body)
 function prjEvFilterEvt(ev) {
+  const moreBtn = ev.target.closest("[data-prj-ev-more]");
   const btn = ev.target.closest("[data-prj-ev]");
   const inp = ev.target.closest("[data-prj-ev-q]");
-  if (!btn && !inp) return;
+  if (!moreBtn && !btn && !inp) return;
   const f = state.prjEvFilter = state.prjEvFilter || {};
+  if (moreBtn) f.shown = (f.shown || 150) + 300;
+  else f.shown = 150;   // any filter change resets the visible batch
   if (btn) {
     f.type = btn.dataset.prjEv;
     document.querySelectorAll("[data-prj-ev]").forEach((b) =>

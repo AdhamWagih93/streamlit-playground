@@ -185,12 +185,12 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
             "per_day": {"date_histogram": {
                 "field": "commitdate",
                 "calendar_interval": "month" if all_time else "day"}},
-            "authors": {"terms": {"field": "authorname", "size": 15,
+            "authors": {"terms": {"field": "authorname", "size": 30,
                                   "missing": "(unknown)"}},
             "repos": {"terms": {"field": "repository", "size": 30}},
             "branches": {"terms": {"field": "branch", "size": 10}},
         },
-        "track_total_hits": True, "size": 20,
+        "track_total_hits": True, "size": 1000,
     }
     resp = _es("ef-git-commits", body)
     hits = resp.get("hits", {})
@@ -246,7 +246,36 @@ def _sec_jira(name: str, days: int) -> dict:
             "open": {"filter": {"bool": {"must_not": [
                 {"terms": {"status": CLOSED_JIRA}}]}},
                 "aggs": {"by_status": {"terms": {"field": "status", "size": 20}},
-                         "by_priority": {"terms": {"field": "priority", "size": 10}}}},
+                         "by_priority": {"terms": {"field": "priority", "size": 10}},
+                         "matrix": {"terms": {"field": "priority", "size": 8,
+                                              "missing": "(none)"},
+                                    "aggs": {"by_status": {"terms": {
+                                        "field": "status", "size": 15}}}}}},
+            "done": {"filter": {"bool": {
+                "filter": [{"terms": {"status": CLOSED_JIRA}}]
+                + ([{"range": {"resolved": {"gte": f"now-{days}d"}}}] if days else [])}},
+                "aggs": {"by_assignee": {"terms": {"field": "assignee", "size": 12,
+                                                   "missing": "(unassigned)"}},
+                         "per_period": {"date_histogram": {
+                             "field": "resolved",
+                             "calendar_interval": "week" if days else "month"}},
+                         "recent": {"top_hits": {"size": 50,
+                             "_source": ["issuekey", "issueurl", "summary",
+                                         "priority", "issuetype", "assignee",
+                                         "created", "resolved"],
+                             "sort": [{"resolved": {"order": "desc",
+                                                    "unmapped_type": "date"}}]}}}},
+            "workload": {"terms": {"field": "assignee", "size": 10,
+                                   "missing": "(unassigned)"},
+                         "aggs": {"open": {"filter": {"bool": {"must_not": [
+                             {"terms": {"status": CLOSED_JIRA}}]}},
+                             "aggs": {"by_priority": {"terms": {
+                                 "field": "priority", "size": 8,
+                                 "missing": "(none)"}}}},
+                             "done": {"filter": {"bool": {
+                                 "filter": [{"terms": {"status": CLOSED_JIRA}}]
+                                 + ([{"range": {"resolved": {"gte": f"now-{days}d"}}}]
+                                    if days else [])}}}}},
             "by_status": {"terms": {"field": "status", "size": 25}},
             "by_type": {"terms": {"field": "issuetype", "size": 15}},
             "by_assignee": {"terms": {"field": "assignee", "size": 10,
@@ -257,7 +286,7 @@ def _sec_jira(name: str, days: int) -> dict:
                             "field": "updated",
                             "calendar_interval": "week" if days else "month"}}}},
         },
-        "track_total_hits": True, "size": 15,
+        "track_total_hits": True, "size": 200,
     }
     resp = _es("ef-bs-jira-issues", body)
     hits = resp.get("hits", {})
@@ -279,8 +308,65 @@ def _sec_jira(name: str, days: int) -> dict:
                "resolved": bool((h.get("_source") or {}).get("resolved"))}
               for h in hits.get("hits", [])]
     open_node = aggs.get("open") or {}
+    done_node = aggs.get("done") or {}
+    # priority × status heatmap of OPEN tickets
+    _PRIO_RANK = {"blocker": 0, "critical": 1, "highest": 2, "high": 3,
+                  "medium": 4, "low": 5, "lowest": 6}
+    matrix_rows = []
+    statuses_seen: dict = {}
+    for pb in (open_node.get("matrix") or {}).get("buckets", []):
+        cells = {sb["key"]: sb["doc_count"]
+                 for sb in (pb.get("by_status") or {}).get("buckets", [])}
+        for st, n in cells.items():
+            statuses_seen[st] = statuses_seen.get(st, 0) + n
+        matrix_rows.append({"priority": pb.get("key"), "cells": cells,
+                            "total": pb.get("doc_count", 0)})
+    matrix_rows.sort(key=lambda r: _PRIO_RANK.get(str(r["priority"]).lower(), 8))
+    matrix_statuses = [k for k, _ in sorted(statuses_seen.items(),
+                                            key=lambda kv: -kv[1])]
+    # who completed the most + how fast (details from the 50 freshest)
+    done_recent = []
+    res_days = []
+    for h in (((done_node.get("recent") or {}).get("hits") or {}).get("hits") or []):
+        src = h.get("_source") or {}
+        took = None
+        try:
+            c0 = dt.datetime.fromisoformat((src.get("created") or "")[:19])
+            r0 = dt.datetime.fromisoformat((src.get("resolved") or "")[:19])
+            took = max(round((r0 - c0).total_seconds() / 86400, 1), 0)
+            res_days.append(took)
+        except ValueError:
+            pass
+        done_recent.append({"key": src.get("issuekey") or "",
+                            "url": src.get("issueurl") or "",
+                            "summary": (src.get("summary") or "")[:140],
+                            "priority": src.get("priority") or "",
+                            "type": src.get("issuetype") or "",
+                            "assignee": _user_display(src.get("assignee") or ""),
+                            "resolved": (src.get("resolved") or "")[:10],
+                            "took_days": took})
+    workload = []
+    for wb in (aggs.get("workload") or {}).get("buckets", []):
+        wo = (wb.get("open") or {})
+        workload.append({
+            "assignee": _user_display(wb.get("key") or "") or "(unassigned)",
+            "open": wo.get("doc_count", 0),
+            "open_by_priority": {b["key"]: b["doc_count"]
+                                 for b in (wo.get("by_priority") or {}).get("buckets", [])},
+            "done": (wb.get("done") or {}).get("doc_count", 0)})
+    workload.sort(key=lambda w: -(w["open"] + w["done"]))
     return {"total": total, "matched": total > 0,
             "open": open_node.get("doc_count", 0),
+            "matrix": {"rows": matrix_rows, "statuses": matrix_statuses},
+            "done": {"total": done_node.get("doc_count", 0),
+                     "by_assignee": _fold_users(_b(done_node.get("by_assignee"))),
+                     "per_period": [{"week": (b.get("key_as_string") or "")[:10],
+                                     "count": b.get("doc_count", 0)}
+                                    for b in (done_node.get("per_period") or {})
+                                    .get("buckets", [])],
+                     "avg_days": round(sum(res_days) / len(res_days), 1) if res_days else None,
+                     "recent": done_recent},
+            "workload": workload,
             "open_by_status": _b(open_node.get("by_status")),
             "open_by_priority": _b(open_node.get("by_priority")),
             "by_status": _b(aggs.get("by_status")),
@@ -366,7 +452,7 @@ def _sec_jira_changes(name: str, days: int) -> dict:
         "aggs": {"per_week": {"date_histogram": {
             "field": "created",
             "calendar_interval": "week" if days else "month"}}},
-        "track_total_hits": True, "size": 200,
+        "track_total_hits": True, "size": 1000,
     }
     resp = _es("ef-bs-jira-changes", body)
     hits = (resp.get("hits") or {}).get("hits") or []
@@ -384,11 +470,10 @@ def _sec_jira_changes(name: str, days: int) -> dict:
         items = _jira_change_items(s.get("items"))
         for it in items:
             fields[it["field"]] = fields.get(it["field"], 0) + 1
-        if len(recent) < 25:
-            recent.append({"when": (s.get("created") or "")[:16].replace("T", " "),
-                           "key": s.get("issuekey") or "",
-                           "url": s.get("issueurl") or "",
-                           "author": who, "items": items[:4]})
+        recent.append({"when": (s.get("created") or "")[:16].replace("T", " "),
+                       "key": s.get("issuekey") or "",
+                       "url": s.get("issueurl") or "",
+                       "author": who, "items": items[:4]})
     rank = lambda d_: sorted(({"key": k, "count": v} for k, v in d_.items()),  # noqa: E731
                              key=lambda x: -x["count"])
     ranked_authors = sorted(authors.values(), key=lambda x: -x["count"])
@@ -467,7 +552,7 @@ def _sec_cicd(name: str, days: int) -> dict:
                       + ([] if not days else
                          [{"range": {date_field: {"gte": f"now-{days}d"}}}])}},
             "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
-            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 200})
+            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 1000})
 
     def latest(index, date_field, src, by_env=False):
         inner = {"latest": {"top_hits": {"size": 1, "_source": src,
@@ -600,7 +685,12 @@ def _sec_cicd(name: str, days: int) -> dict:
 
 def _assemble_events(out: dict) -> list[dict]:
     """The unified event log: cicd events + commits + Jira updates + Jira
-    changelog folded into one newest-first stream (capped at 200)."""
+    changelog folded into one newest-first stream. NOT capped — every event
+    each source query returned is kept (sources fetch up to 1000 docs each;
+    events_meta says when a source had even more)."""
+    days = out.get("days") or 0
+    cutoff = ((_now() - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+              if days else "")
     events = list(((out.get("cicd") or {}).get("events")) or [])
     for c in ((out.get("commits") or {}).get("recent")) or []:
         events.append({"ts": c.get("when") or "", "type": "commit",
@@ -612,6 +702,8 @@ def _assemble_events(out: dict) -> list[dict]:
                                                         c.get("message")) if x),
                        "tip": c.get("message_full") or ""})
     for t in ((out.get("jira") or {}).get("recent")) or []:
+        if cutoff and (t.get("updated") or "") < cutoff:
+            continue   # jira tickets aren't window-filtered at query time
         events.append({"ts": t.get("updated") or "", "type": "jira",
                        "app": t.get("key") or "", "env": "",
                        "status": t.get("status") or "", "version": "",
@@ -627,7 +719,65 @@ def _assemble_events(out: dict) -> list[dict]:
                        "detail": "; ".join(f"{i['field']}: {i['from'] or '—'} → {i['to'] or '—'}"
                                            for i in c.get("items") or [])})
     events.sort(key=lambda e: e.get("ts") or "", reverse=True)
-    return events[:200]
+    com = out.get("commits") or {}
+    jc = out.get("jira_changes") or {}
+    cc = out.get("cicd") or {}
+    truncated = {}
+    if (com.get("total") or 0) > len(com.get("recent") or []):
+        truncated["commits"] = com["total"]
+    if (jc.get("total") or 0) > len(jc.get("recent") or []):
+        truncated["jira changes"] = jc["total"]
+    for k, tot in (cc.get("totals") or {}).items():
+        fetched = sum(1 for e in (cc.get("events") or [])
+                      if e.get("type") == {"builds": "build", "deploys": "deploy",
+                                           "releases": "release"}.get(k))
+        if tot > fetched:
+            truncated[k] = tot
+    out["events_meta"] = {"shown": len(events), "truncated": truncated}
+    return events
+
+
+def _sec_prev(name: str, repos: list[str], days: int) -> dict | None:
+    """The PREVIOUS window's headline counts (now-2w .. now-w) so every visual
+    can say current-vs-previous. Six size-0 count queries; None on all-time."""
+    if not days:
+        return None
+    variants = _name_variants(name)
+    rng = {"gte": f"now-{2 * days}d", "lt": f"now-{days}d"}
+
+    def count(index, date_field, extra=None, should=None):
+        q = {"bool": {"filter": [{"range": {date_field: rng}}] + (extra or [])}}
+        if should:
+            q["bool"]["should"] = should
+            q["bool"]["minimum_should_match"] = 1
+        else:
+            q["bool"]["filter"].append({"terms": {"project": variants}})
+        r = _es(index, {"query": q, "size": 0, "track_total_hits": True})
+        return ((r.get("hits") or {}).get("total") or {}).get("value", 0)
+
+    com_should = [{"terms": {"project": variants}}]
+    if repos:
+        com_should.append({"terms": {"repository": repos[:64]}})
+    chg_should = []
+    for v in variants:
+        chg_should += [{"match_phrase": {"projectname": v}},
+                       {"match_phrase": {"projectkey": v}}]
+    jira_should = [{"terms": {"project": variants}},
+                   {"terms": {"projectkey": variants}}]
+    out = {}
+    for key, args in (
+            ("commits", ("ef-git-commits", "commitdate", None, com_should)),
+            ("changes", ("ef-bs-jira-changes", "created", None, chg_should)),
+            ("builds", ("ef-cicd-builds", "startdate", None, None)),
+            ("deploys", ("ef-cicd-deployments", "startdate", None, None)),
+            ("releases", ("ef-cicd-releases", "releasedate", None, None)),
+            ("resolved", ("ef-bs-jira-issues", "resolved",
+                          [{"terms": {"status": CLOSED_JIRA}}], jira_should))):
+        try:
+            out[key] = count(*args)
+        except Exception:  # noqa: BLE001 — a failed count just hides its delta
+            out[key] = None
+    return out
 
 
 def _sec_scans(name: str) -> dict:
@@ -755,6 +905,35 @@ def _demo_report(name: str, days: int) -> dict:
                     {"key": "Story", "count": 10}],
         "by_assignee": [{"key": "alice", "count": 12}, {"key": "bob", "count": 9},
                         {"key": "(unassigned)", "count": 4}],
+        "matrix": {"statuses": ["Open", "In Progress", "Reopened"],
+                   "rows": [
+                       {"priority": "Critical", "total": 1, "cells": {"In Progress": 1}},
+                       {"priority": "High", "total": 3, "cells": {"Open", "In Progress"} and {"Open": 2, "In Progress": 1}},
+                       {"priority": "Medium", "total": 5, "cells": {"Open": 2, "In Progress": 1, "Reopened": 2}}]},
+        "workload": [
+            {"assignee": "alice", "open": 5, "done": 12,
+             "open_by_priority": {"Critical": 1, "High": 2, "Medium": 2}},
+            {"assignee": "bob", "open": 3, "done": 8,
+             "open_by_priority": {"High": 1, "Medium": 2}},
+            {"assignee": "carol", "open": 1, "done": 6, "open_by_priority": {"Medium": 1}},
+            {"assignee": "(unassigned)", "open": 3, "done": 0,
+             "open_by_priority": {"Medium": 2, "Low": 1}}],
+        "done": {"total": 11 + seed % 6, "avg_days": 4.6,
+                 "by_assignee": [{"key": "alice", "count": 12}, {"key": "bob", "count": 8},
+                                 {"key": "carol", "count": 6}],
+                 "per_period": [{"week": (dt.date.today() - dt.timedelta(weeks=w)).isoformat(),
+                                 "count": (seed + w * 7) % 6}
+                                for w in range(min(days // 7 + 1, 12) if days else 24)][::-1],
+                 "recent": [
+                     {"key": "DEVOPS-137", "url": "", "summary": "Rotate notification service secrets",
+                      "priority": "Medium", "type": "Task", "assignee": "carol",
+                      "resolved": "2026-08-22", "took_days": 3.2},
+                     {"key": "DEVOPS-133", "url": "", "summary": "Fix flaky checkout e2e on slow CI agents",
+                      "priority": "High", "type": "Bug", "assignee": "alice",
+                      "resolved": "2026-08-20", "took_days": 6.5},
+                     {"key": "DEVOPS-129", "url": "", "summary": "Upgrade payments base image",
+                      "priority": "Medium", "type": "Task", "assignee": "bob",
+                      "resolved": "2026-08-18", "took_days": 1.8}]},
         "updates_per_week": [{"week": (dt.date.today() - dt.timedelta(weeks=w)).isoformat(),
                               "count": (seed + w * 5) % 14}
                              for w in range(min(days // 7 + 1, 12) if days else 24)][::-1],
@@ -874,8 +1053,11 @@ def _demo_report(name: str, days: int) -> dict:
     cicd = {"board": board, "events": cicd_events,
             "totals": {"builds": 18 + seed % 9, "deploys": 11 + seed % 7,
                        "releases": 3 + seed % 3}}
+    prev = None if not days else {
+        "commits": max(total - 15, 5), "changes": 28, "builds": 21,
+        "deploys": 12, "releases": 4, "resolved": 9}
     return {"commits": commits, "jira": jira, "jira_changes": changes,
-            "scans": scans, "cicd": cicd}
+            "scans": scans, "cicd": cicd, "prev": prev}
 
 
 # ---------------------------------------------------------------- public API
@@ -927,6 +1109,7 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("jira_changes", _sec_jira_changes, name, days)
         guard("scans", _sec_scans, name)
         guard("cicd", _sec_cicd, name, days)
+        guard("prev", _sec_prev, name, repos, days)
     guard("logging", _sec_logging, name)
     # contributor → TEAM folds for the Jira change log (window + all time)
     jc = out.get("jira_changes") or {}
