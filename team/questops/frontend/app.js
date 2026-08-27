@@ -5734,7 +5734,7 @@ function prjEventsHtml(d) {
   const meta = (state.prjData || {}).events_meta || {};
   const trunc = Object.entries(meta.truncated || {});
   return `
-    <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${logInt(evs.length)}</b> event(s)${trunc.length ? ` <span class="ci-meta" title="each source is fetched up to 1000 docs per report — narrow the time window to see the rest">— sources with more in ES: ${esc(trunc.map(([k, v]) => `${k} ${logInt(v)}`).join(", "))}</span>` : ""}</summary>
+    <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${logInt(evs.length)}</b> event(s)${trunc.length ? ` <span class="ci-meta" title="each source is fetched up to 10000 docs per report — narrow the time window to see the rest">— sources with more in ES: ${esc(trunc.map(([k, v]) => `${k} ${logInt(v)}`).join(", "))}</span>` : ""}</summary>
       <div class="acc-filters" style="margin:6px 0">
         ${btn("all", "all")}${Object.entries(PRJ_EV).map(([t, [ico, label]]) => btn(t, `${ico} ${label}`)).join("")}
         <input data-prj-ev-q placeholder="🔎 app / user / version / text…" value="${esc(f.q || "")}" style="flex:1;min-width:160px">

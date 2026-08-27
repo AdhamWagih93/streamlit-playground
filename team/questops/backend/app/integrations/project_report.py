@@ -190,7 +190,7 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
             "repos": {"terms": {"field": "repository", "size": 30}},
             "branches": {"terms": {"field": "branch", "size": 10}},
         },
-        "track_total_hits": True, "size": 1000,
+        "track_total_hits": True, "size": 10000,
     }
     resp = _es("ef-git-commits", body)
     hits = resp.get("hits", {})
@@ -452,7 +452,7 @@ def _sec_jira_changes(name: str, days: int) -> dict:
         "aggs": {"per_week": {"date_histogram": {
             "field": "created",
             "calendar_interval": "week" if days else "month"}}},
-        "track_total_hits": True, "size": 1000,
+        "track_total_hits": True, "size": 10000,
     }
     resp = _es("ef-bs-jira-changes", body)
     hits = (resp.get("hits") or {}).get("hits") or []
@@ -564,7 +564,7 @@ def _sec_cicd(name: str, days: int) -> dict:
                       + ([] if not days else
                          [{"range": {date_field: {"gte": f"now-{days}d"}}}])}},
             "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
-            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 1000})
+            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 10000})
 
     def latest(index, date_field, src, by_env=False):
         th = {"top_hits": {"size": 1, "_source": src,
@@ -712,7 +712,7 @@ def _sec_cicd(name: str, days: int) -> dict:
 def _assemble_events(out: dict) -> list[dict]:
     """The unified event log: cicd events + commits + Jira updates + Jira
     changelog folded into one newest-first stream. NOT capped — every event
-    each source query returned is kept (sources fetch up to 1000 docs each;
+    each source query returned is kept (sources fetch up to 10000 docs each;
     events_meta says when a source had even more)."""
     days = out.get("days") or 0
     cutoff = ((_now() - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
