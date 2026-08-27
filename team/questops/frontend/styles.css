@@ -1577,6 +1577,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   padding: 4px 2px; margin: 4px 0; border-bottom: 1px solid var(--line); }
 .prj-spark span { flex: 1; min-width: 2px; background: #1497b3; border-radius: 1px 1px 0 0; }
 .prj-spark .prj-spark-0 { background: var(--line); }
+.prj-spark .prj-spark-empty, .prj-spark-col.prj-spark-empty { background: transparent !important; }
 .pgv-bar-warn { background: #c0841c; }
 
 /* the 🖨 report button prints the drill-down clean: chrome stripped, panels
@@ -1587,6 +1588,11 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   .app { height: auto; overflow: visible; }
   .main, #view { overflow: visible !important; height: auto !important; }
   body { background: #fff; }
+  /* colored visuals must survive print — browsers strip backgrounds otherwise */
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  .prj-spark, .pgv-card, .prj-sdlc-wrap, .prj-heat, .stat-tiles, .prj-name { break-inside: avoid; }
+  .prj-name { position: static !important; box-shadow: none !important; }
+  .prj-ev-list { max-height: none !important; overflow: visible !important; }
 }
 
 /* SDLC board — apps × build/release/env-deploy cells */

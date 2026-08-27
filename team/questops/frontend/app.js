@@ -5605,7 +5605,7 @@ function prjSparkStacked(perDay, colorOf, unit) {
   return `<div class="prj-spark prj-spark-st">${days.map((b) => {
     const parts = Object.entries(b.by_author || {}).sort((x, y) => y[1] - x[1]);
     const tip = `${b.day || b.week || b.month} — ${b.count} ${unit}${parts.length ? ": " + parts.map(([a, n]) => `${a} ${n}`).join(", ") : ""}`;
-    if (!b.count) return `<span class="prj-spark-col" title="${esc(tip)}"><i class="prj-spark-0" style="height:3%"></i></span>`;
+    if (!b.count) return `<span class="prj-spark-col prj-spark-empty" title="${esc(tip)}"></span>`;
     const h = Math.max(8, b.count / max * 100);
     const segs = (parts.length ? parts : [["?", b.count]]).map(([a, n]) =>
       `<i style="height:${(n / b.count * h).toFixed(1)}%;background:${colorOf(a)}" title="${esc(a)} — ${n}"></i>`).join("");
@@ -5618,7 +5618,7 @@ function prjSpark(perDay, unit) {
   if (!days.length) return "";
   const max = Math.max(...days.map((b) => b.count), 1);
   return `<div class="prj-spark">${days.map((b) =>
-    `<span class="${b.count ? "" : "prj-spark-0"}" style="height:${b.count ? Math.max(8, b.count / max * 100).toFixed(0) : 3}%" title="${esc(b.day || b.week || b.month)} — ${b.count} ${unit}"></span>`).join("")}</div>`;
+    `<span class="${b.count ? "" : "prj-spark-empty"}" style="height:${b.count ? Math.max(8, b.count / max * 100).toFixed(0) : 100}%" title="${esc(b.day || b.week || b.month)} — ${b.count} ${unit}"></span>`).join("")}</div>`;
 }
 
 function prjSev(w) {
