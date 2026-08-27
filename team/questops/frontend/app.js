@@ -5575,16 +5575,42 @@ async function renderAccess() {
 // platform DB, ADO, commits (ES mirror), Jira (ES mirror), security scans,
 // logging health. Data comes from ONE cached backend report — no fan-out
 // of source-system calls from the browser.
-function prjBar(list, cls) {
+function prjBar(list, cls, colorOf) {
   const rows = (list || []).filter((b) => b.count);
   if (!rows.length) return '<div class="empty">none in the window</div>';
   const max = Math.max(...rows.map((b) => b.count), 1);
   return rows.map((b) => `
     <div class="pgv-row" title="${esc(b.key)} — ${logExact(b.count)}">
-      <span class="pgv-label">${esc(b.key)}</span>
-      <span class="pgv-track"><span class="pgv-bar ${cls || ""}" style="width:${(b.count / max * 100).toFixed(0)}%"></span></span>
+      <span class="pgv-label">${colorOf ? `<i class="prj-dot" style="background:${colorOf(b.key)}"></i>` : ""}${esc(b.key)}</span>
+      <span class="pgv-track"><span class="pgv-bar ${cls || ""}" style="width:${(b.count / max * 100).toFixed(0)}%${colorOf ? `;background:${colorOf(b.key)}` : ""}"></span></span>
       <span class="pgv-count">${logInt(b.count)}</span>
     </div>`).join("");
+}
+
+// stable contributor colors: rank order in the window's author list
+const PRJ_C_PALETTE = ["#1497b3", "#c0841c", "#8471c9", "#43c884",
+  "#e0863c", "#ef5f66", "#5b8def", "#7a8699"];
+function prjAuthorColors(authors) {
+  const map = {};
+  (authors || []).forEach((a, i) => { map[a.key] = PRJ_C_PALETTE[i % PRJ_C_PALETTE.length]; });
+  return (name) => map[name] || "#7a8699";
+}
+
+// per-day histogram STACKED by contributor — each column splits into the
+// authors' colors; tooltip carries the per-member breakdown
+function prjSparkStacked(perDay, colorOf, unit) {
+  const days = perDay || [];
+  if (!days.length) return "";
+  const max = Math.max(...days.map((b) => b.count), 1);
+  return `<div class="prj-spark prj-spark-st">${days.map((b) => {
+    const parts = Object.entries(b.by_author || {}).sort((x, y) => y[1] - x[1]);
+    const tip = `${b.day || b.week || b.month} — ${b.count} ${unit}${parts.length ? ": " + parts.map(([a, n]) => `${a} ${n}`).join(", ") : ""}`;
+    if (!b.count) return `<span class="prj-spark-col" title="${esc(tip)}"><i class="prj-spark-0" style="height:3%"></i></span>`;
+    const h = Math.max(8, b.count / max * 100);
+    const segs = (parts.length ? parts : [["?", b.count]]).map(([a, n]) =>
+      `<i style="height:${(n / b.count * h).toFixed(1)}%;background:${colorOf(a)}" title="${esc(a)} — ${n}"></i>`).join("");
+    return `<span class="prj-spark-col" title="${esc(tip)}">${segs}</span>`;
+  }).join("")}</div>`;
 }
 
 function prjSpark(perDay, unit) {
@@ -5607,6 +5633,16 @@ function prjErr(sec, what) {
 }
 
 const prjWin = (d) => d.days ? `${d.days}d` : "all time";
+function prjAgo(when) {
+  const str = String(when || "").replace(" ", "T");
+  // ES timestamps are UTC; a naive string parsed as local would skew ages
+  const t = Date.parse(/[zZ]$|[+-]\d\d:?\d\d$/.test(str) ? str : str + "Z");
+  if (isNaN(t)) return "";
+  const sec = Math.max(0, (Date.now() - t) / 1000);
+  for (const [s, l] of [[31536000, "y"], [2592000, "mo"], [86400, "d"], [3600, "h"], [60, "m"]])
+    if (sec >= s) return `${Math.floor(sec / s)}${l} ago`;
+  return "just now";
+}
 const prjDelta = (cur, prev, d) => (prev == null || cur == null || !d.days) ? ""
   : `<span class="prj-delta ${cur >= prev ? "up" : "down"}" title="previous ${d.days}d window: ${logExact(prev)}">${cur >= prev ? "▲" : "▼"} vs ${logInt(prev)}</span>`;
 
@@ -5645,23 +5681,23 @@ function prjSdlcHtml(d) {
     if (okS(s.status) || !s.status) return `
     <td><div class="prj-sdlc-cell" title="${runTip(s, kind)}">
       ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
-      <span class="ci-meta">${esc((s.when || "").slice(0, 10))}</span></div></td>`;
+      <span class="ci-meta" title="${esc(s.when || "")}">${prjAgo(s.when) || esc((s.when || "").slice(0, 10))}</span></div></td>`;
     // latest run FAILED → show the last success + the failure that followed
     const failTip = `LATEST: ${esc(s.status)} — ${runTip(s, kind)}`;
     if (s.ok) return `
     <td><div class="prj-sdlc-cell" title="last success: ${runTip(s.ok, kind)} ⚠ ${failTip}">
       ${prjStatusChip("SUCCESS")}<span class="prj-sdlc-ver">${esc(s.ok.version || "")}</span>
-      <span class="ci-meta">${esc((s.ok.when || "").slice(0, 10))}</span>
+      <span class="ci-meta" title="${esc(s.ok.when || "")}">${prjAgo(s.ok.when) || esc((s.ok.when || "").slice(0, 10))}</span>
       <span class="chip chip-red" title="${failTip}">✗ ${esc(s.version || s.status)}${s.who ? " · " + esc(s.who) : s.author ? " · " + esc(s.author) : ""}</span></div></td>`;
     return `
-    <td><div class="prj-sdlc-cell" title="${failTip} — NO successful run in the window">
+    <td><div class="prj-sdlc-cell" title="${failTip} — NO success recorded">
       ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
-      <span class="ci-meta">${esc((s.when || "").slice(0, 10))}</span></div></td>`;
+      <span class="ci-meta" title="${esc(s.when || "")}">${prjAgo(s.when) || esc((s.when || "").slice(0, 10))}</span></div></td>`;
   };
   const totals = cc.totals || {};
   return `
     <details class="filebox acc-pg-sec" open><summary>🧬 SDLC status across environments
-      <span class="ci-meta">— latest real run per app (${prjWin(d)}: ${logInt(totals.builds || 0)} builds${prjDelta(totals.builds, (d.prev || {}).builds, d)} · ${logInt(totals.deploys || 0)} deploys${prjDelta(totals.deploys, (d.prev || {}).deploys, d)} · ${logInt(totals.releases || 0)} releases${prjDelta(totals.releases, (d.prev || {}).releases, d)})</span></summary>
+      <span class="ci-meta">— latest state EVER, unaffected by the time filter · ${prjWin(d)} activity: ${logInt(totals.builds || 0)} builds${prjDelta(totals.builds, (d.prev || {}).builds, d)} · ${logInt(totals.deploys || 0)} deploys${prjDelta(totals.deploys, (d.prev || {}).deploys, d)} · ${logInt(totals.releases || 0)} releases${prjDelta(totals.releases, (d.prev || {}).releases, d)}</span></summary>
       <div class="prj-sdlc-wrap"><table class="prj-sdlc">
         <thead><tr><th>app</th><th>⚙ build</th>
           ${early.map((e) => `<th>🚀 ${esc(e)}</th>`).join("")}<th>📦 release</th>
@@ -5901,11 +5937,41 @@ function prjBodyHtml(d) {
         <span class="chip">${com.active_days} active ${com.unit || "day"}(s)${d.days ? ` of ${d.days}` : ""}</span>
         ${(com.branches || []).slice(0, 4).map((b) => `<span class="chip" title="branch">⎇ ${esc(b.key)} · ${logInt(b.count)}</span>`).join("")}
       </div>
-      ${prjSpark(com.per_day, "commit(s)")}
+      ${(() => {
+        const colorOf = prjAuthorColors(com.authors);
+        const legend = (com.authors || []).slice(0, 8).map((a) =>
+          `<span class="chip" title="${logExact(a.count)} commit(s)"><i class="prj-dot" style="background:${colorOf(a.key)}"></i>${esc(a.key)}</span>`).join("");
+        const matrix = (() => {
+          const rows = com.author_repo || [];
+          if (!rows.length) return "";
+          const repoTotals = {};
+          rows.forEach((r) => Object.entries(r.repos || {}).forEach(([rp, n]) => {
+            repoTotals[rp] = (repoTotals[rp] || 0) + n; }));
+          const repoCols = Object.entries(repoTotals).sort((a, b) => b[1] - a[1])
+            .slice(0, 8).map(([rp]) => rp);
+          const max = Math.max(...rows.flatMap((r) => Object.values(r.repos || {})), 1);
+          return `<div class="pgv-card"><div class="pgv-title">🧑‍💻 who commits where</div>
+            <div class="prj-sdlc-wrap"><table class="prj-sdlc prj-heat">
+              <thead><tr><th>member</th>${repoCols.map((rp) => `<th>${esc(rp)}</th>`).join("")}<th>Σ</th></tr></thead>
+              <tbody>${rows.map((r) => `
+                <tr><td class="prj-sdlc-app"><i class="prj-dot" style="background:${colorOf(r.author)}"></i>${esc(r.author)}</td>
+                  ${repoCols.map((rp) => {
+                    const n = (r.repos || {})[rp] || 0;
+                    return n ? `<td class="prj-heat-c" style="--heat:${(0.15 + 0.6 * n / max).toFixed(2)}" title="${esc(r.author)} → ${esc(rp)}: ${n} commit(s)">${n}</td>`
+                      : '<td class="prj-sdlc-none">·</td>';
+                  }).join("")}
+                  <td class="prj-sdlc-app">${logInt(r.total)}</td></tr>`).join("")}</tbody>
+            </table></div></div>`;
+        })();
+        return `
+      <div class="inv-chips" style="margin:2px 0">${legend}</div>
+      ${prjSparkStacked(com.per_day, colorOf, "commit(s)")}
       <div class="prj-grid">
-        <div class="pgv-card"><div class="pgv-title">top contributors</div>${prjBar(com.authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">top contributors</div>${prjBar(com.authors, "", colorOf)}</div>
+        ${matrix}
         <div class="pgv-card"><div class="pgv-title">per repository</div>${prjBar(com.repos)}</div>
-      </div>
+      </div>`;
+      })()}
       <details class="filebox acc-pg-sec"><summary>🕘 recent commits · <b>${logInt((com.recent || []).length)}</b>${(com.recent || []).length > 30 ? ' <span class="ci-meta">— first 30 here; ALL of them are in the event log</span>' : ""}</summary>
         <div class="log-idx-list">${(com.recent || []).slice(0, 30).map((c) => `
           <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
@@ -5986,7 +6052,7 @@ function prjBodyHtml(d) {
   const contrib = `
     <details class="filebox acc-pg-sec" open><summary>👥 contributions — members &amp; teams</summary>
       <div class="prj-grid">
-        <div class="pgv-card"><div class="pgv-title">⧗ commits per member (${prjWin(d)})</div>${prjBar(com.authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">⧗ commits per member (${prjWin(d)})</div>${prjBar(com.authors, "", prjAuthorColors(com.authors))}</div>
         <div class="pgv-card"><div class="pgv-title">📝 Jira changes per member (${prjWin(d)})</div>${prjBar(d.days ? jc.authors : (jc.alltime || {}).authors)}</div>
         <div class="pgv-card"><div class="pgv-title">🛡 Jira changes per TEAM (${prjWin(d)})</div>${prjBar(d.days ? jc.teams : jc.teams_alltime, "pgv-bar-warn")}
           <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>

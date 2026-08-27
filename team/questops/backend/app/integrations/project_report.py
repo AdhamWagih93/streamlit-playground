@@ -184,7 +184,13 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
         "aggs": {
             "per_day": {"date_histogram": {
                 "field": "commitdate",
-                "calendar_interval": "month" if all_time else "day"}},
+                "calendar_interval": "month" if all_time else "day"},
+                "aggs": {"authors": {"terms": {"field": "authorname", "size": 8,
+                                               "missing": "(unknown)"}}}},
+            "author_repo": {"terms": {"field": "authorname", "size": 10,
+                                      "missing": "(unknown)"},
+                            "aggs": {"repos": {"terms": {"field": "repository",
+                                                         "size": 12}}}},
             "authors": {"terms": {"field": "authorname", "size": 30,
                                   "missing": "(unknown)"}},
             "repos": {"terms": {"field": "repository", "size": 30}},
@@ -215,7 +221,24 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
                        "id": str(s.get("commitid") or "")[:10],
                        "message": (msg[0] if msg else "")[:140],
                        "message_full": (s.get("commitmessage") or "").strip()[:600]})
-    per_day = _buckets("per_day")
+    per_day = []
+    for b in (aggs.get("per_day") or {}).get("buckets", []):
+        by_author: dict = {}
+        for ab in (b.get("authors") or {}).get("buckets", []):
+            disp = _user_display(ab.get("key") or "") or "(unknown)"
+            by_author[disp] = by_author.get(disp, 0) + ab.get("doc_count", 0)
+        per_day.append({"key": b.get("key_as_string") or b.get("key"),
+                        "count": b.get("doc_count", 0), "by_author": by_author})
+    author_repo = []
+    _ar: dict = {}
+    for ab in (aggs.get("author_repo") or {}).get("buckets", []):
+        k = _user_key(ab.get("key") or "") or "(unknown)"
+        slot = _ar.setdefault(k, {"author": _user_display(ab.get("key") or "") or "(unknown)",
+                                  "total": 0, "repos": {}})
+        slot["total"] += ab.get("doc_count", 0)
+        for rb in (ab.get("repos") or {}).get("buckets", []):
+            slot["repos"][rb["key"]] = slot["repos"].get(rb["key"], 0) + rb.get("doc_count", 0)
+    author_repo = sorted(_ar.values(), key=lambda x: -x["total"])
     active_days = sum(1 for b in per_day if b["count"])
     if all_time and len(per_day) > 1:   # rate over the OBSERVED span
         span = max((dt.date.fromisoformat(per_day[-1]["key"][:10])
@@ -223,8 +246,10 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
     else:
         span = max(days, 1)
     return {"total": total, "days": days, "unit": "month" if all_time else "day",
-            "per_day": [{"day": (b["key"] or "")[:10], "count": b["count"]}
+            "per_day": [{"day": (b["key"] or "")[:10], "count": b["count"],
+                         "by_author": b.get("by_author") or {}}
                         for b in per_day],
+            "author_repo": author_repo,
             "rate": round(total / span, 2),
             "active_days": active_days,
             "authors": _fold_users(_buckets("authors")),
@@ -559,12 +584,16 @@ def _sec_cicd(name: str, days: int) -> dict:
            "minimum_should_match": 1}}
 
     def q(index, date_field, aggs, src):
-        return _es(index, {
-            "query": {"bool": {"filter": [{"terms": {"project": variants}}]
-                      + ([] if not days else
-                         [{"range": {date_field: {"gte": f"now-{days}d"}}}])}},
+        # the window lives in post_filter: HITS (events, stage folds, totals)
+        # honor the time filter while the board AGGS always see full history —
+        # the SDLC board shows the latest state regardless of the window
+        body = {
+            "query": {"bool": {"filter": [{"terms": {"project": variants}}]}},
             "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
-            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 10000})
+            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 10000}
+        if days:
+            body["post_filter"] = {"range": {date_field: {"gte": f"now-{days}d"}}}
+        return _es(index, body)
 
     def latest(index, date_field, src, by_env=False):
         th = {"top_hits": {"size": 1, "_source": src,
@@ -886,14 +915,30 @@ def _demo_report(name: str, days: int) -> dict:
     import hashlib
     seed = int(hashlib.sha1(name.encode()).hexdigest()[:6], 16)
     authors = [("alice", 34), ("bob", 21), ("carol", 12), ("dave", 6)]
+    def _stack(total_, i):
+        names = [a for a, _ in authors]
+        parts = {}
+        left = total_
+        for j, nm in enumerate(names):
+            take = (total_ * (4 - j) // 10) if j < 3 else left
+            take = max(0, min(take, left))
+            if take:
+                parts[nm] = take
+            left -= take
+            if left <= 0:
+                break
+        return parts
+
     if days:
         base_day = dt.date.today() - dt.timedelta(days=days - 1)
         per_day = [{"day": (base_day + dt.timedelta(days=i)).isoformat(),
-                    "count": (seed + i * 7) % 9 if i % 3 else 0}
+                    "count": (c := ((seed + i * 7) % 9 if i % 3 else 0)),
+                    "by_author": _stack(c, i)}
                    for i in range(days)]
     else:  # all time — monthly buckets over ~2 years
         per_day = [{"day": f"{2024 + (m + 8) // 12}-{(m + 8) % 12 + 1:02d}-01",
-                    "count": (seed + m * 13) % 60 + 5} for m in range(24)]
+                    "count": (c := ((seed + m * 13) % 60 + 5)),
+                    "by_author": _stack(c, m)} for m in range(24)]
     total = sum(b["count"] for b in per_day)
     inv = _sec_inventory(name)
     repos = [a["repository_name"] for a in inv["apps"] if a.get("repository_name")]
@@ -903,6 +948,12 @@ def _demo_report(name: str, days: int) -> dict:
         "rate": round(total / max(days or 720, 1), 2),
         "active_days": sum(1 for b in per_day if b["count"]),
         "authors": [{"key": a, "count": c} for a, c in authors],
+        "author_repo": [
+            {"author": "alice", "total": 34, "repos": {(repos or ["main-repo"])[0]: 20,
+                                                       (repos or ["main-repo"])[-1]: 14}},
+            {"author": "bob", "total": 21, "repos": {(repos or ["main-repo"])[0]: 21}},
+            {"author": "carol", "total": 12, "repos": {r: 4 for r in (repos or ["main-repo"])[:3]}},
+            {"author": "dave", "total": 6, "repos": {(repos or ["main-repo"])[-1]: 6}}],
         "repos": [{"key": r, "count": max(3, (seed + i * 13) % 40)}
                   for i, r in enumerate(repos)] or [{"key": "main-repo", "count": total}],
         "branches": [{"key": "develop", "count": int(total * .6)},
