@@ -386,6 +386,159 @@ def _sec_jira_changes(name: str, days: int) -> dict:
             "recent": recent}
 
 
+def _git_author(s: dict) -> str:
+    return _user_display((s.get("authorname") or "").strip()
+                         or re.sub(r"\s*<[^>]*>\s*$", "",
+                                   (s.get("commitauthor") or "")).strip())
+
+
+def _sec_cicd(name: str, days: int) -> dict:
+    """ef-cicd-{builds,deployments,releases} — ONE query per index gives both
+    the SDLC board (latest per app / per app+env) and the raw recent rows for
+    the unified event log. Test rows (testflag != Normal) are excluded from
+    the BOARD but kept in the event log, flagged."""
+    variants = _name_variants(name)
+    tf = (settings.log_deploy_testflag or "Normal").strip()
+
+    def q(index, date_field, aggs, src):
+        return _es(index, {
+            "query": {"bool": {"filter": [
+                {"terms": {"project": variants}},
+                {"range": {date_field: {"gte": f"now-{days}d"}}}]}},
+            "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
+            "_source": src, "aggs": aggs, "track_total_hits": True, "size": 60})
+
+    def latest(index, date_field, src, by_env=False):
+        inner = {"latest": {"top_hits": {"size": 1, "_source": src,
+                                         "sort": [{date_field: {
+                                             "order": "desc",
+                                             "unmapped_type": "date"}}]}}}
+        if by_env:
+            inner = {"by_env": {"terms": {"field": "environment", "size": 12},
+                                "aggs": inner}}
+        return {"by_app": {"terms": {"field": "application", "size": 100},
+                           "aggs": {"real": {          # board = real runs only
+                               "filter": {"term": {"testflag": tf}} if tf
+                               else {"match_all": {}},
+                               "aggs": inner}}}}
+
+    b_src = ["startdate", "application", "branch", "technology", "status",
+             "codeversion", "testflag", "authorname", "commitauthor"]
+    d_src = ["startdate", "enddate", "application", "environment", "status",
+             "codeversion", "testflag", "requester", "Requester", "triggeredby",
+             "approver", "Approver", "technology"]
+    r_src = ["releasedate", "application", "status", "codeversion",
+             "commitauthor", "RLM", "RLM_STATUS"]
+
+    builds = q("ef-cicd-builds", "startdate", latest("ef-cicd-builds", "startdate", b_src), b_src)
+    deploys = q("ef-cicd-deployments", "startdate",
+                latest("ef-cicd-deployments", "startdate", d_src, by_env=True), d_src)
+    releases = q("ef-cicd-releases", "releasedate",
+                 latest("ef-cicd-releases", "releasedate", r_src), r_src)
+
+    def _hit(node):
+        hs = (((node or {}).get("latest") or {}).get("hits") or {}).get("hits") or []
+        return (hs[0].get("_source") or {}) if hs else None
+
+    board: dict = {"builds": {}, "releases": {}, "deploys": {}}
+    for b in ((builds.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
+        s = _hit((b.get("real") or {}))
+        if s:
+            board["builds"][b["key"]] = {
+                "when": (s.get("startdate") or "")[:16].replace("T", " "),
+                "status": s.get("status") or "", "branch": s.get("branch") or "",
+                "version": s.get("codeversion") or "",
+                "tech": s.get("technology") or "", "author": _git_author(s)}
+    for b in ((releases.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
+        s = _hit((b.get("real") or {}))
+        if s:
+            board["releases"][b["key"]] = {
+                "when": (s.get("releasedate") or "")[:16].replace("T", " "),
+                "status": s.get("status") or s.get("RLM_STATUS") or "",
+                "version": s.get("codeversion") or "", "rlm": s.get("RLM") or ""}
+    for b in ((deploys.get("aggregations") or {}).get("by_app") or {}).get("buckets", []):
+        envs = {}
+        for eb in (((b.get("real") or {}).get("by_env") or {}).get("buckets", [])):
+            s = _hit(eb)
+            if s:
+                envs[eb["key"]] = {
+                    "when": (s.get("startdate") or s.get("enddate") or "")[:16].replace("T", " "),
+                    "status": s.get("status") or "",
+                    "version": s.get("codeversion") or "",
+                    "who": _user_display(s.get("requester") or s.get("Requester")
+                                         or s.get("triggeredby") or "")}
+        if envs:
+            board["deploys"][b["key"]] = envs
+
+    # ---- raw rows → events ------------------------------------------------
+    events = []
+    for h in (builds.get("hits") or {}).get("hits", []):
+        s = h.get("_source") or {}
+        events.append({"ts": s.get("startdate") or "", "type": "build",
+                       "app": s.get("application") or "",
+                       "env": "", "status": s.get("status") or "",
+                       "version": s.get("codeversion") or "",
+                       "who": _git_author(s),
+                       "test": (s.get("testflag") or "Normal").strip().lower() != "normal",
+                       "detail": " · ".join(x for x in (s.get("branch"),
+                                                        s.get("technology")) if x)})
+    for h in (deploys.get("hits") or {}).get("hits", []):
+        s = h.get("_source") or {}
+        events.append({"ts": s.get("startdate") or s.get("enddate") or "",
+                       "type": "deploy", "app": s.get("application") or "",
+                       "env": s.get("environment") or "",
+                       "status": s.get("status") or "",
+                       "version": s.get("codeversion") or "",
+                       "who": _user_display(s.get("requester") or s.get("Requester")
+                                            or s.get("triggeredby") or ""),
+                       "test": (s.get("testflag") or "Normal").strip().lower() != "normal",
+                       "detail": s.get("technology") or ""})
+    for h in (releases.get("hits") or {}).get("hits", []):
+        s = h.get("_source") or {}
+        events.append({"ts": s.get("releasedate") or "", "type": "release",
+                       "app": s.get("application") or "", "env": "",
+                       "status": s.get("status") or s.get("RLM_STATUS") or "",
+                       "version": s.get("codeversion") or "",
+                       "who": _user_display(re.sub(r"\s*<[^>]*>\s*$", "",
+                                                   s.get("commitauthor") or "")),
+                       "test": False, "detail": s.get("RLM") or ""})
+    totals = {k: (((v.get("hits") or {}).get("total") or {}).get("value", 0))
+              for k, v in (("builds", builds), ("deploys", deploys),
+                           ("releases", releases))}
+    return {"board": board, "events": events, "totals": totals}
+
+
+def _assemble_events(out: dict) -> list[dict]:
+    """The unified event log: cicd events + commits + Jira updates + Jira
+    changelog folded into one newest-first stream (capped at 200)."""
+    events = list(((out.get("cicd") or {}).get("events")) or [])
+    for c in ((out.get("commits") or {}).get("recent")) or []:
+        events.append({"ts": c.get("when") or "", "type": "commit",
+                       "app": c.get("repo") or "", "env": "",
+                       "status": "", "version": "",
+                       "who": _user_display(c.get("author") or ""),
+                       "test": False,
+                       "detail": " · ".join(x for x in (c.get("branch"),
+                                                        c.get("message")) if x)})
+    for t in ((out.get("jira") or {}).get("recent")) or []:
+        events.append({"ts": t.get("updated") or "", "type": "jira",
+                       "app": t.get("key") or "", "env": "",
+                       "status": t.get("status") or "", "version": "",
+                       "who": _user_display(t.get("assignee") or ""),
+                       "test": False, "url": t.get("url") or "",
+                       "detail": t.get("summary") or ""})
+    for c in ((out.get("jira_changes") or {}).get("recent")) or []:
+        events.append({"ts": c.get("when") or "", "type": "change",
+                       "app": c.get("key") or "", "env": "",
+                       "status": "", "version": "",
+                       "who": c.get("author") or "", "test": False,
+                       "url": c.get("url") or "",
+                       "detail": "; ".join(f"{i['field']}: {i['from'] or '—'} → {i['to'] or '—'}"
+                                           for i in c.get("items") or [])})
+    events.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    return events[:200]
+
+
 def _sec_scans(name: str) -> dict:
     out: dict = {}
     variants = _name_variants(name)
@@ -574,8 +727,42 @@ def _demo_report(name: str, days: int) -> dict:
                        {"field": "resolution", "from": "", "to": "Fixed"}]},
         ],
     }
+    apps = [a["name"] for a in inv["apps"]][:4] or ["main-app"]
+    envs = inv.get("envs") or ["dev", "prd"]
+    board = {
+        "builds": {a: {"when": "2026-08-26 09:1" + str(i), "status": "SUCCESS" if i != 1 else "FAILURE",
+                       "branch": "develop", "version": f"1.4.{i + 2}",
+                       "tech": "Docker", "author": ["alice", "bob", "carol", "dave"][i % 4]}
+                   for i, a in enumerate(apps)},
+        "releases": {a: {"when": "2026-08-24 15:0" + str(i), "status": "SUCCESS",
+                         "version": f"1.4.{i + 1}", "rlm": f"RLM-10{i}"}
+                     for i, a in enumerate(apps[:2])},
+        "deploys": {a: {e: {"when": f"2026-08-2{2 + (i + j) % 4} 1{j}:30",
+                            "status": "SUCCESS" if (i + j) % 5 else "FAILURE",
+                            "version": f"1.4.{max(1, i + (1 if e != 'prd' else 0))}",
+                            "who": ["alice", "bob"][j % 2]}
+                        for j, e in enumerate(envs)}
+                    for i, a in enumerate(apps[:3])},
+    }
+    cicd_events = []
+    for i, a in enumerate(apps[:3]):
+        cicd_events += [
+            {"ts": f"2026-08-26T09:1{i}", "type": "build", "app": a, "env": "",
+             "status": "SUCCESS" if i != 1 else "FAILURE", "version": f"1.4.{i + 2}",
+             "who": ["alice", "bob", "carol"][i], "test": False,
+             "detail": "develop · Docker"},
+            {"ts": f"2026-08-25T14:2{i}", "type": "deploy", "app": a, "env": "prd" if i == 0 else "dev",
+             "status": "SUCCESS", "version": f"1.4.{i + 1}",
+             "who": "alice", "test": i == 2, "detail": "Docker"},
+        ]
+    cicd_events.append({"ts": "2026-08-24T15:00", "type": "release", "app": apps[0],
+                        "env": "", "status": "SUCCESS", "version": "1.4.1",
+                        "who": "alice", "test": False, "detail": "RLM-100"})
+    cicd = {"board": board, "events": cicd_events,
+            "totals": {"builds": 18 + seed % 9, "deploys": 11 + seed % 7,
+                       "releases": 3 + seed % 3}}
     return {"commits": commits, "jira": jira, "jira_changes": changes,
-            "scans": scans}
+            "scans": scans, "cicd": cicd}
 
 
 # ---------------------------------------------------------------- public API
@@ -625,7 +812,9 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("jira", _sec_jira, name, days)
         guard("jira_changes", _sec_jira_changes, name, days)
         guard("scans", _sec_scans, name)
+        guard("cicd", _sec_cicd, name, days)
     guard("logging", _sec_logging, name)
+    out["events"] = _assemble_events(out)
 
     _CACHE[ck] = {"at": time.time(), "payload": out}
     return {**out, "cached": False}

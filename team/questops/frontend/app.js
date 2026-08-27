@@ -5792,6 +5792,95 @@ function prjErr(sec, what) {
   return `<div class="rsearch-status rsearch-err">⚠ ${esc(what)} unavailable — ${esc(sec.error)}</div>`;
 }
 
+const PRJ_EV = {  // event-log types: icon, label, chip class
+  commit: ["⧗", "commit", "chip-cyan"], build: ["⚙", "build", ""],
+  deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", ""],
+  jira: ["🎫", "jira", "chip-amber"], change: ["📝", "change", ""],
+};
+
+function prjStatusChip(st) {
+  if (!st) return "";
+  const s = st.toUpperCase();
+  const cls = s.includes("SUCC") || s === "RESOLVED" || s === "CLOSED" ? "chip-green"
+    : s.includes("FAIL") || s.includes("ABORT") || s.includes("ERROR") ? "chip-red" : "chip-amber";
+  return `<span class="chip ${cls}">${esc(st)}</span>`;
+}
+
+// ---- SDLC board: apps × (build · release · env deployments) -------------
+function prjSdlcHtml(d) {
+  const cc = d.cicd || {};
+  if (cc.error) return `<details class="filebox acc-pg-sec" open><summary>🧬 SDLC status</summary>${prjErr(cc, "CI/CD indices (builds/deployments/releases)")}</details>`;
+  const board = cc.board || {};
+  const apps = [...new Set([...(d.inventory?.apps || []).map((a) => a.name),
+    ...Object.keys(board.builds || {}), ...Object.keys(board.deploys || {})])];
+  if (!apps.length) return "";
+  const envs = [...new Set([...(d.inventory?.envs || []),
+    ...Object.values(board.deploys || {}).flatMap((m) => Object.keys(m))])];
+  const cell = (s, kind) => !s ? '<td class="prj-sdlc-none">—</td>' : `
+    <td><div class="prj-sdlc-cell" title="${esc(kind)} ${esc(s.version || "")} · ${esc(s.when || "")}${s.who ? " · by " + esc(s.who) : s.author ? " · by " + esc(s.author) : ""}${s.branch ? " · ⎇ " + esc(s.branch) : ""}${s.rlm ? " · " + esc(s.rlm) : ""}">
+      ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
+      <span class="ci-meta">${esc((s.when || "").slice(0, 10))}</span></div></td>`;
+  const totals = cc.totals || {};
+  return `
+    <details class="filebox acc-pg-sec" open><summary>🧬 SDLC status across environments
+      <span class="ci-meta">— latest real run per app (${d.days}d: ${logInt(totals.builds || 0)} builds · ${logInt(totals.deploys || 0)} deploys · ${logInt(totals.releases || 0)} releases)</span></summary>
+      <div class="prj-sdlc-wrap"><table class="prj-sdlc">
+        <thead><tr><th>app</th><th>⚙ build</th><th>📦 release</th>
+          ${envs.map((e) => `<th>🚀 ${esc(e)}</th>`).join("")}</tr></thead>
+        <tbody>${apps.map((a) => `
+          <tr><td class="prj-sdlc-app">${esc(a)}</td>
+            ${cell((board.builds || {})[a], "build")}
+            ${cell((board.releases || {})[a], "release")}
+            ${envs.map((e) => cell(((board.deploys || {})[a] || {})[e], `deploy to ${e}`)).join("")}
+          </tr>`).join("")}</tbody>
+      </table></div>
+    </details>`;
+}
+
+// ---- unified event log: every source, one stream, filterable ------------
+function prjEventsBody(events, f) {
+  f = f || {};
+  const q = (f.q || "").toLowerCase();
+  let evs = (events || []).filter((e) =>
+    (!f.type || f.type === "all" || e.type === f.type)
+    && (!q || [e.app, e.who, e.detail, e.version, e.env, e.status]
+      .some((v) => (v || "").toLowerCase().includes(q))));
+  if (!evs.length) return '<div class="empty">no events match</div>';
+  return evs.map((e) => {
+    const [ico, label, cls] = PRJ_EV[e.type] || ["•", e.type, ""];
+    return `
+    <div class="prj-ev">
+      <span class="prj-ev-ico" title="${esc(label)}">${ico}</span>
+      <span class="ci-meta prj-ev-when">${esc((e.ts || "").slice(0, 16).replace("T", " "))}</span>
+      <span class="chip ${cls}">${esc(label)}</span>
+      ${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(e.app)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(e.app)}</code>`}
+      ${e.env ? `<span class="chip">${esc(e.env)}</span>` : ""}
+      ${prjStatusChip(e.status)}
+      ${e.version ? `<span class="chip" title="version">${esc(e.version)}</span>` : ""}
+      ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
+      ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
+      <span class="ci-meta prj-ev-detail">${esc(e.detail || "")}</span>
+    </div>`;
+  }).join("");
+}
+
+function prjEventsHtml(d) {
+  const evs = d.events || [];
+  if (!evs.length) return "";
+  const f = state.prjEvFilter = state.prjEvFilter || {};
+  const counts = {};
+  evs.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
+  const btn = (t, label) => `<button class="btn btn-sm ${(f.type || "all") === t ? "btn-primary" : "btn-ghost"}" data-prj-ev="${t}">${label}${t === "all" ? ` ${evs.length}` : counts[t] ? ` ${counts[t]}` : ""}</button>`;
+  return `
+    <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${evs.length}</b> event(s)</summary>
+      <div class="acc-filters" style="margin:6px 0">
+        ${btn("all", "all")}${Object.entries(PRJ_EV).map(([t, [ico, label]]) => btn(t, `${ico} ${label}`)).join("")}
+        <input data-prj-ev-q placeholder="🔎 app / user / version / text…" value="${esc(f.q || "")}" style="flex:1;min-width:160px">
+      </div>
+      <div id="prj-ev-body" class="prj-ev-list">${prjEventsBody(evs, f)}</div>
+    </details>`;
+}
+
 function prjBodyHtml(d) {
   const inv = d.inventory || {};
   const pdb = d.platform_db || {};
@@ -5982,7 +6071,25 @@ function prjBodyHtml(d) {
       <div class="kpi-note">full drill-down (indices, samples, retention…) lives in the <a href="#/logging">Logging</a> page · analyzed ${esc((lg.analyzed_at || "").slice(0, 16).replace("T", " "))}</div>`}
     </details>`;
 
-  return head + sysCards + commits + jiraSec + security + logging;
+  return head + sysCards + prjSdlcHtml(d) + prjEventsHtml(d)
+    + commits + jiraSec + security + logging;
+}
+
+// event-log filter clicks/typing re-render only the list (delegated on body)
+function prjEvFilterEvt(ev) {
+  const btn = ev.target.closest("[data-prj-ev]");
+  const inp = ev.target.closest("[data-prj-ev-q]");
+  if (!btn && !inp) return;
+  const f = state.prjEvFilter = state.prjEvFilter || {};
+  if (btn) {
+    f.type = btn.dataset.prjEv;
+    document.querySelectorAll("[data-prj-ev]").forEach((b) =>
+      b.classList.toggle("btn-primary", b.dataset.prjEv === f.type)
+      || b.classList.toggle("btn-ghost", b.dataset.prjEv !== f.type));
+  }
+  if (inp) f.q = inp.value;
+  const body = document.getElementById("prj-ev-body");
+  if (body && state.prjData) body.innerHTML = prjEventsBody(state.prjData.events, f);
 }
 
 async function prjLoad(refresh) {
@@ -6024,6 +6131,9 @@ async function renderProjects() {
   document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10) || 30; prjLoad(); });
   document.getElementById("prj-refresh").addEventListener("click", () => prjLoad(true));
   document.getElementById("prj-print").addEventListener("click", () => window.print());
+  const body = document.getElementById("prj-body");
+  body.addEventListener("click", prjEvFilterEvt);
+  body.addEventListener("input", prjEvFilterEvt);
   await prjLoad();
 }
 

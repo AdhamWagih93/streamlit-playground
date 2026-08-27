@@ -1588,3 +1588,24 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   .main, #view { overflow: visible !important; height: auto !important; }
   body { background: #fff; }
 }
+
+/* SDLC board — apps × build/release/env-deploy cells */
+.prj-sdlc-wrap { overflow-x: auto; margin: 6px 0; }
+.prj-sdlc { border-collapse: collapse; width: 100%; font: 500 11.5px var(--body); }
+.prj-sdlc th { text-align: left; font: 700 10px var(--mono); color: var(--faint);
+  text-transform: uppercase; letter-spacing: .06em; padding: 5px 8px;
+  border-bottom: 1px solid var(--line); white-space: nowrap; }
+.prj-sdlc td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.prj-sdlc-app { font: 600 12px var(--mono); color: var(--text); white-space: nowrap; }
+.prj-sdlc-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: help; }
+.prj-sdlc-ver { font: 600 10.5px var(--mono); color: var(--text); }
+.prj-sdlc-none { color: var(--faint); text-align: center; }
+
+/* unified event log — one stream, every source */
+.prj-ev-list { max-height: 480px; overflow-y: auto; padding-right: 4px; }
+.prj-ev { display: flex; align-items: center; gap: 7px; padding: 4px 6px;
+  border-bottom: 1px dashed var(--line); }
+.prj-ev:hover { background: color-mix(in srgb, var(--line) 30%, transparent); }
+.prj-ev-ico { width: 18px; text-align: center; flex: none; }
+.prj-ev-when { flex: none; font-family: var(--mono); }
+.prj-ev-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
