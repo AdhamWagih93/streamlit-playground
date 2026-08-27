@@ -5693,13 +5693,19 @@ function prjSdlcHtml(d) {
 }
 
 // ---- unified event log: every source, one stream, filterable ------------
+function prjEvMatchQ(e, q) {
+  // space-separated terms AND together — "payments 1.4.2 alice" matches
+  // events where EVERY term hits some field
+  const terms = (q || "").split(/\s+/).filter(Boolean);
+  return terms.every((t) => [e.app, e.who, e.detail, e.version, e.env, e.status]
+    .some((v) => (v || "").toLowerCase().includes(t)));
+}
+
 function prjEventsBody(events, f) {
   f = f || {};
   const q = (f.q || "").toLowerCase();
   const all = (events || []).filter((e) =>
-    (!f.type || f.type === "all" || e.type === f.type)
-    && (!q || [e.app, e.who, e.detail, e.version, e.env, e.status]
-      .some((v) => (v || "").toLowerCase().includes(q))));
+    (!f.type || f.type === "all" || e.type === f.type) && prjEvMatchQ(e, q));
   if (!all.length) return '<div class="empty">no events match</div>';
   const shown = f.shown || 150;
   const evs = all.slice(0, shown);
@@ -5728,16 +5734,18 @@ function prjEventsHtml(d) {
   const evs = d.events || [];
   if (!evs.length) return "";
   const f = state.prjEvFilter = state.prjEvFilter || {};
+  const q0 = (f.q || "").toLowerCase();
+  const matching = evs.filter((e) => prjEvMatchQ(e, q0));
   const counts = {};
-  evs.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
-  const btn = (t, label) => `<button class="btn btn-sm ${(f.type || "all") === t ? "btn-primary" : "btn-ghost"}" data-prj-ev="${t}">${label}${t === "all" ? ` ${evs.length}` : counts[t] ? ` ${counts[t]}` : ""}</button>`;
+  matching.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
+  const btn = (t, label) => `<button class="btn btn-sm ${(f.type || "all") === t ? "btn-primary" : "btn-ghost"}" data-prj-ev="${t}">${label} <span class="prj-ev-n ${(t === "all" ? matching.length : counts[t]) ? "" : "prj-ev-n0"}">${t === "all" ? matching.length : counts[t] || 0}</span></button>`;
   const meta = (state.prjData || {}).events_meta || {};
   const trunc = Object.entries(meta.truncated || {});
   return `
     <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${logInt(evs.length)}</b> event(s)${trunc.length ? ` <span class="ci-meta" title="each source is fetched up to 10000 docs per report — narrow the time window to see the rest">— sources with more in ES: ${esc(trunc.map(([k, v]) => `${k} ${logInt(v)}`).join(", "))}</span>` : ""}</summary>
       <div class="acc-filters" style="margin:6px 0">
         ${btn("all", "all")}${Object.entries(PRJ_EV).map(([t, [ico, label]]) => btn(t, `${ico} ${label}`)).join("")}
-        <input data-prj-ev-q placeholder="🔎 app / user / version / text…" value="${esc(f.q || "")}" style="flex:1;min-width:160px">
+        <input data-prj-ev-q placeholder="🔎 app / user / version / text… (space-separate to combine, e.g. payments 1.4.2)" value="${esc(f.q || "")}" style="flex:1;min-width:160px">
       </div>
       <div id="prj-ev-body" class="prj-ev-list">${prjEventsBody(evs, f)}</div>
     </details>`;
@@ -6060,6 +6068,18 @@ function prjEvFilterEvt(ev) {
   if (inp) f.q = inp.value;
   const body = document.getElementById("prj-ev-body");
   if (body && state.prjData) body.innerHTML = prjEventsBody(state.prjData.events, f);
+  // live per-type counts for the CURRENT search — see the filtered member/
+  // app/version distribution at a glance without touching the buttons' focus
+  const q = (f.q || "").toLowerCase();
+  const matching = ((state.prjData || {}).events || []).filter((e) => prjEvMatchQ(e, q));
+  const counts = {};
+  matching.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
+  document.querySelectorAll("[data-prj-ev]").forEach((b) => {
+    const t = b.dataset.prjEv;
+    const n = t === "all" ? matching.length : counts[t] || 0;
+    const span = b.querySelector(".prj-ev-n");
+    if (span) { span.textContent = n; span.classList.toggle("prj-ev-n0", !n); }
+  });
 }
 
 async function prjLoad(refresh) {

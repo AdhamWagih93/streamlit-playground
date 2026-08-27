@@ -1639,3 +1639,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-wl-track { display: flex; gap: 1px; align-items: stretch; }
 .prj-wl-seg { display: block; height: 10px; border-radius: 2px; min-width: 2px; }
 .prj-wl-done { background: rgba(67, 200, 132, .55); }
+
+/* live per-type counts on the event-log filter buttons */
+.prj-ev-n { font: 700 10px var(--mono); }
+.prj-ev-n0 { opacity: .35; }
