@@ -5606,6 +5606,8 @@ function prjErr(sec, what) {
   return `<div class="rsearch-status rsearch-err">⚠ ${esc(what)} unavailable — ${esc(sec.error)}</div>`;
 }
 
+const prjWin = (d) => d.days ? `${d.days}d` : "all time";
+
 const PRJ_EV = {  // event-log types: icon, label, chip class
   commit: ["⧗", "commit", "chip-cyan"], build: ["⚙", "build", ""],
   deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", ""],
@@ -5628,8 +5630,12 @@ function prjSdlcHtml(d) {
   const apps = [...new Set([...(d.inventory?.apps || []).map((a) => a.name),
     ...Object.keys(board.builds || {}), ...Object.keys(board.deploys || {})])];
   if (!apps.length) return "";
+  const ENV_RANK = { dev: 1, qc: 2, uat: 4, prd: 5 };   // release sits at 3
   const envs = [...new Set([...(d.inventory?.envs || []),
-    ...Object.values(board.deploys || {}).flatMap((m) => Object.keys(m))])];
+    ...Object.values(board.deploys || {}).flatMap((m) => Object.keys(m))])]
+    .sort((a, b) => (ENV_RANK[a] || 9) - (ENV_RANK[b] || 9) || a.localeCompare(b));
+  const early = envs.filter((e) => (ENV_RANK[e] || 9) < 3);
+  const late = envs.filter((e) => (ENV_RANK[e] || 9) >= 3);
   const cell = (s, kind) => !s ? '<td class="prj-sdlc-none">—</td>' : `
     <td><div class="prj-sdlc-cell" title="${esc(kind)} ${esc(s.version || "")} · ${esc(s.when || "")}${s.who ? " · by " + esc(s.who) : s.author ? " · by " + esc(s.author) : ""}${s.branch ? " · ⎇ " + esc(s.branch) : ""}${s.rlm ? " · " + esc(s.rlm) : ""}">
       ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
@@ -5637,15 +5643,17 @@ function prjSdlcHtml(d) {
   const totals = cc.totals || {};
   return `
     <details class="filebox acc-pg-sec" open><summary>🧬 SDLC status across environments
-      <span class="ci-meta">— latest real run per app (${d.days}d: ${logInt(totals.builds || 0)} builds · ${logInt(totals.deploys || 0)} deploys · ${logInt(totals.releases || 0)} releases)</span></summary>
+      <span class="ci-meta">— latest real run per app (${prjWin(d)}: ${logInt(totals.builds || 0)} builds · ${logInt(totals.deploys || 0)} deploys · ${logInt(totals.releases || 0)} releases)</span></summary>
       <div class="prj-sdlc-wrap"><table class="prj-sdlc">
-        <thead><tr><th>app</th><th>⚙ build</th><th>📦 release</th>
-          ${envs.map((e) => `<th>🚀 ${esc(e)}</th>`).join("")}</tr></thead>
+        <thead><tr><th>app</th><th>⚙ build</th>
+          ${early.map((e) => `<th>🚀 ${esc(e)}</th>`).join("")}<th>📦 release</th>
+          ${late.map((e) => `<th>🚀 ${esc(e)}</th>`).join("")}</tr></thead>
         <tbody>${apps.map((a) => `
           <tr><td class="prj-sdlc-app">${esc(a)}</td>
             ${cell((board.builds || {})[a], "build")}
+            ${early.map((e) => cell(((board.deploys || {})[a] || {})[e], `deploy to ${e}`)).join("")}
             ${cell((board.releases || {})[a], "release")}
-            ${envs.map((e) => cell(((board.deploys || {})[a] || {})[e], `deploy to ${e}`)).join("")}
+            ${late.map((e) => cell(((board.deploys || {})[a] || {})[e], `deploy to ${e}`)).join("")}
           </tr>`).join("")}</tbody>
       </table></div>
     </details>`;
@@ -5720,7 +5728,7 @@ function prjBodyHtml(d) {
       <span class="prj-name-main">▣ ${esc(d.project || "")}</span>
       ${inv.company ? `<span class="prj-name-co">${esc(inv.company)}</span>` : ""}
       <span class="spacer"></span>
-      <span class="ci-meta" title="generated ${esc(d.generated_at || "")} · registries: ${esc(syncLine.replace(/<[^>]*>/g, ""))}">last ${d.days}d${d.cached ? " · cached" : ""} · <span title="inventory ⇄ devops_projects ⇄ ADO ⇄ Jira presence (details in Access → Projects consistency)">${syncLine}</span></span>
+      <span class="ci-meta" title="generated ${esc(d.generated_at || "")} · registries: ${esc(syncLine.replace(/<[^>]*>/g, ""))}">${d.days ? `last ${d.days}d` : "all time"}${d.cached ? " · cached" : ""} · <span title="inventory ⇄ devops_projects ⇄ ADO ⇄ Jira presence (details in Access → Projects consistency)">${syncLine}</span></span>
     </div>
     <div class="inv-chips" style="margin-bottom:8px">
       ${["dev", "qc", "prd"].filter((k) => teams[k]).map((k) =>
@@ -5732,7 +5740,7 @@ function prjBodyHtml(d) {
     <div class="stat-tiles" style="margin:8px 0 12px">
       ${tile((inv.apps || []).length, "apps")}
       ${tile(ado.found ? logInt(ado.repo_count) : "—", "ADO repos")}
-      ${tile(com.total != null ? logInt(com.total) : "—", `commits · ${d.days}d`)}
+      ${tile(com.total != null ? logInt(com.total) : "—", `commits · ${prjWin(d)}`)}
       ${tile(com.rate != null ? com.rate : "—", "commits / day")}
       ${tile((com.authors || []).length || "—", "contributors")}
       ${tile(jira.open != null ? logInt(jira.open) : "—", "Jira open", jira.open ? "pct-warn" : "pct-good")}
@@ -5785,11 +5793,11 @@ function prjBodyHtml(d) {
 
   // ---- commits ---------------------------------------------------------
   const commits = `
-    <details class="filebox acc-pg-sec" open><summary>⧗ commits — rate &amp; contributors · <b>${com.total != null ? logInt(com.total) : "?"}</b> in ${d.days}d</summary>
+    <details class="filebox acc-pg-sec" open><summary>⧗ commits — rate &amp; contributors · <b>${com.total != null ? logInt(com.total) : "?"}</b> in ${prjWin(d)}</summary>
       ${com.error ? prjErr(com, "commits (ef-git-commits)") : `
       <div class="inv-chips" style="margin:6px 0 2px">
         <span class="chip">≈ <b>${com.rate}</b> commits/day</span>
-        <span class="chip">${com.active_days} active day(s) of ${d.days}</span>
+        <span class="chip">${com.active_days} active ${com.unit || "day"}(s)${d.days ? ` of ${d.days}` : ""}</span>
         ${(com.branches || []).slice(0, 4).map((b) => `<span class="chip" title="branch">⎇ ${esc(b.key)} · ${logInt(b.count)}</span>`).join("")}
       </div>
       ${prjSpark(com.per_day, "commit(s)")}
@@ -5818,21 +5826,21 @@ function prjBodyHtml(d) {
       </div>
       <div class="inv-chips" style="margin:4px 0">${(jira.by_type || []).map((t) =>
         `<span class="chip">${esc(t.key)} · ${logInt(t.count)}</span>`).join("")}</div>
-      <div class="pgv-title" style="margin-top:6px">update activity (per week, ${d.days}d)</div>
+      <div class="pgv-title" style="margin-top:6px">update activity (per ${d.days ? "week" : "month"}, ${prjWin(d)})</div>
       ${prjSpark(jira.updates_per_week, "update(s)")}
       ${(() => {   // ---- changelog from ef-bs-jira-changes ----------------
         const jc = d.jira_changes || {};
         if (jc.error) return prjErr(jc, "Jira changes (ef-bs-jira-changes)");
         if (!jc.total) return '<div class="kpi-note">no changelog entries in the window (ef-bs-jira-changes)</div>';
         return `
-        <details class="filebox acc-pg-sec" open><summary>📝 change log · <b>${logInt(jc.total)}</b> change(s) in ${d.days}d${jc.sampled < jc.total ? ` <span class="ci-meta">— stats from the ${jc.sampled} most recent</span>` : ""}</summary>
+        <details class="filebox acc-pg-sec" open><summary>📝 change log · <b>${logInt(jc.total)}</b> change(s) in ${prjWin(d)}${jc.sampled < jc.total ? ` <span class="ci-meta">— stats from the ${jc.sampled} most recent</span>` : ""}</summary>
           <div class="pgv-title" style="margin-top:4px">changes per week</div>
           ${prjSpark(jc.per_week, "change(s)")}
           <div class="prj-grid">
-            <div class="pgv-card"><div class="pgv-title">by author (${d.days}d)</div>${prjBar(jc.authors)}</div>
-            <div class="pgv-card"><div class="pgv-title">changed fields (${d.days}d)</div>${prjBar(jc.fields, "pgv-bar-warn")}</div>
+            <div class="pgv-card"><div class="pgv-title">by author (${prjWin(d)})</div>${prjBar(jc.authors)}</div>
+            <div class="pgv-card"><div class="pgv-title">changed fields (${prjWin(d)})</div>${prjBar(jc.fields, "pgv-bar-warn")}</div>
           </div>
-          ${(jc.alltime || {}).total ? `
+          ${(jc.alltime || {}).total && d.days ? `
           <div class="pgv-title" style="margin-top:6px">ALL-TIME change activity — ${logInt(jc.alltime.total)} change(s)${jc.alltime.sampled < jc.alltime.total ? ` <span class="ci-meta">(contributor stats from the ${logInt(jc.alltime.sampled)} most recent)</span>` : ""}</div>
           ${prjSpark(jc.alltime.per_month, "change(s)")}` : ""}
           <div class="log-idx-list">${(jc.recent || []).map((c) => `
@@ -5860,7 +5868,7 @@ function prjBodyHtml(d) {
   const contrib = `
     <details class="filebox acc-pg-sec" open><summary>👥 contributions — members &amp; teams</summary>
       <div class="prj-grid">
-        <div class="pgv-card"><div class="pgv-title">⧗ commits per member (${d.days}d)</div>${prjBar(com.authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">⧗ commits per member (${prjWin(d)})</div>${prjBar(com.authors)}</div>
         <div class="pgv-card"><div class="pgv-title">📝 Jira changes per member (all time)</div>${prjBar((jc.alltime || {}).authors)}</div>
         <div class="pgv-card"><div class="pgv-title">🛡 Jira changes per TEAM (all time)</div>${prjBar(jc.teams_alltime, "pgv-bar-warn")}
           <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>
@@ -5962,7 +5970,7 @@ async function renderProjects() {
   if (navStale(tok)) return;
   const projects = list.projects || [];
   if (!projects.some((p) => p.name === state.prjSel)) state.prjSel = (projects[0] || {}).name;
-  state.prjDays = state.prjDays || 30;
+  state.prjDays = state.prjDays ?? 30;
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   view().innerHTML = `
     <div class="view-head"><h1>PROJECTS</h1>
@@ -5970,14 +5978,14 @@ async function renderProjects() {
       <span class="spacer"></span>
       <select id="prj-sel" class="prj-ctl">${projects.map((p) =>
         opt(p.name, `${p.name}${p.company ? " · " + p.company : ""} (${p.apps} apps)`, state.prjSel)).join("")}</select>
-      <select id="prj-days" class="prj-ctl">${[30, 90, 180, 365].map((n) => opt(n, `last ${n} days`, state.prjDays)).join("")}</select>
+      <select id="prj-days" class="prj-ctl">${[30, 90, 180, 365].map((n) => opt(n, `last ${n} days`, state.prjDays)).join("")}${opt(0, "all time", state.prjDays)}</select>
       <button id="prj-refresh" class="btn btn-sm" title="bypass the 10-minute report cache">↻</button>
       <button id="prj-print" class="btn btn-sm" title="print / save as PDF — chrome bars are stripped automatically">🖨 report</button>
     </div>
     <div class="kpi-note" style="margin-bottom:10px">commits &amp; Jira come from their Elasticsearch mirrors (ef-git-commits / ef-bs-jira-issues) and scans from the ef-cicd-* indices — source systems are never hit directly; the whole report caches for 10 minutes</div>
     <div id="prj-body"></div>`;
   document.getElementById("prj-sel").addEventListener("change", (e) => { state.prjSel = e.target.value; prjLoad(); });
-  document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10) || 30; prjLoad(); });
+  document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10); if (isNaN(state.prjDays)) state.prjDays = 30; prjLoad(); });
   document.getElementById("prj-refresh").addEventListener("click", () => prjLoad(true));
   document.getElementById("prj-print").addEventListener("click", () => window.print());
   const body = document.getElementById("prj-body");

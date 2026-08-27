@@ -171,16 +171,19 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
     should = [{"terms": {"project": _name_variants(name)}}]
     if repos:
         should.append({"terms": {"repository": repos[:64]}})
+    all_time = not days
     body = {
         "query": {"bool": {
-            "filter": [{"range": {"commitdate": {"gte": f"now-{days}d"}}}],
+            "filter": [] if all_time else
+            [{"range": {"commitdate": {"gte": f"now-{days}d"}}}],
             "should": should, "minimum_should_match": 1}},
         "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}],
         "_source": ["commitdate", "repository", "branch", "authorname",
                     "authormail", "commitauthor", "commitmessage", "project"],
         "aggs": {
-            "per_day": {"date_histogram": {"field": "commitdate",
-                                           "calendar_interval": "day"}},
+            "per_day": {"date_histogram": {
+                "field": "commitdate",
+                "calendar_interval": "month" if all_time else "day"}},
             "authors": {"terms": {"field": "authorname", "size": 15,
                                   "missing": "(unknown)"}},
             "repos": {"terms": {"field": "repository", "size": 30}},
@@ -211,10 +214,15 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
                        "message": (msg[0] if msg else "")[:140]})
     per_day = _buckets("per_day")
     active_days = sum(1 for b in per_day if b["count"])
-    return {"total": total, "days": days,
+    if all_time and len(per_day) > 1:   # rate over the OBSERVED span
+        span = max((dt.date.fromisoformat(per_day[-1]["key"][:10])
+                    - dt.date.fromisoformat(per_day[0]["key"][:10])).days + 30, 1)
+    else:
+        span = max(days, 1)
+    return {"total": total, "days": days, "unit": "month" if all_time else "day",
             "per_day": [{"day": (b["key"] or "")[:10], "count": b["count"]}
                         for b in per_day],
-            "rate": round(total / max(days, 1), 2),
+            "rate": round(total / span, 2),
             "active_days": active_days,
             "authors": _fold_users(_buckets("authors")),
             "repos": _buckets("repos"),
@@ -240,9 +248,11 @@ def _sec_jira(name: str, days: int) -> dict:
             "by_type": {"terms": {"field": "issuetype", "size": 15}},
             "by_assignee": {"terms": {"field": "assignee", "size": 10,
                                       "missing": "(unassigned)"}},
-            "updates": {"filter": {"range": {"updated": {"gte": f"now-{days}d"}}},
+            "updates": {"filter": ({"range": {"updated": {"gte": f"now-{days}d"}}}
+                                   if days else {"match_all": {}}),
                         "aggs": {"per_week": {"date_histogram": {
-                            "field": "updated", "calendar_interval": "week"}}}},
+                            "field": "updated",
+                            "calendar_interval": "week" if days else "month"}}}},
         },
         "track_total_hits": True, "size": 15,
     }
@@ -345,12 +355,14 @@ def _sec_jira_changes(name: str, days: int) -> dict:
                    {"match_phrase": {"projectkey": v}}]
     body = {
         "query": {"bool": {
-            "filter": [{"range": {"created": {"gte": f"now-{days}d"}}}],
+            "filter": [] if not days else
+            [{"range": {"created": {"gte": f"now-{days}d"}}}],
             "should": should, "minimum_should_match": 1}},
         "sort": [{"created": {"order": "desc", "unmapped_type": "date"}}],
         "_source": ["created", "issuekey", "issueurl", "author", "items"],
-        "aggs": {"per_week": {"date_histogram": {"field": "created",
-                                                 "calendar_interval": "week"}}},
+        "aggs": {"per_week": {"date_histogram": {
+            "field": "created",
+            "calendar_interval": "week" if days else "month"}}},
         "track_total_hits": True, "size": 200,
     }
     resp = _es("ef-bs-jira-changes", body)
@@ -448,9 +460,9 @@ def _sec_cicd(name: str, days: int) -> dict:
 
     def q(index, date_field, aggs, src):
         return _es(index, {
-            "query": {"bool": {"filter": [
-                {"terms": {"project": variants}},
-                {"range": {date_field: {"gte": f"now-{days}d"}}}]}},
+            "query": {"bool": {"filter": [{"terms": {"project": variants}}]
+                      + ([] if not days else
+                         [{"range": {date_field: {"gte": f"now-{days}d"}}}])}},
             "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
             "_source": src, "aggs": aggs, "track_total_hits": True, "size": 60})
 
@@ -665,16 +677,21 @@ def _demo_report(name: str, days: int) -> dict:
     import hashlib
     seed = int(hashlib.sha1(name.encode()).hexdigest()[:6], 16)
     authors = [("alice", 34), ("bob", 21), ("carol", 12), ("dave", 6)]
-    base_day = dt.date.today() - dt.timedelta(days=days - 1)
-    per_day = [{"day": (base_day + dt.timedelta(days=i)).isoformat(),
-                "count": (seed + i * 7) % 9 if i % 3 else 0}
-               for i in range(days)]
+    if days:
+        base_day = dt.date.today() - dt.timedelta(days=days - 1)
+        per_day = [{"day": (base_day + dt.timedelta(days=i)).isoformat(),
+                    "count": (seed + i * 7) % 9 if i % 3 else 0}
+                   for i in range(days)]
+    else:  # all time — monthly buckets over ~2 years
+        per_day = [{"day": f"{2024 + (m + 8) // 12}-{(m + 8) % 12 + 1:02d}-01",
+                    "count": (seed + m * 13) % 60 + 5} for m in range(24)]
     total = sum(b["count"] for b in per_day)
     inv = _sec_inventory(name)
     repos = [a["repository_name"] for a in inv["apps"] if a.get("repository_name")]
     commits = {
         "total": total, "days": days, "per_day": per_day,
-        "rate": round(total / max(days, 1), 2),
+        "unit": "day" if days else "month",
+        "rate": round(total / max(days or 720, 1), 2),
         "active_days": sum(1 for b in per_day if b["count"]),
         "authors": [{"key": a, "count": c} for a, c in authors],
         "repos": [{"key": r, "count": max(3, (seed + i * 13) % 40)}
@@ -704,7 +721,8 @@ def _demo_report(name: str, days: int) -> dict:
         "by_assignee": [{"key": "alice", "count": 12}, {"key": "bob", "count": 9},
                         {"key": "(unassigned)", "count": 4}],
         "updates_per_week": [{"week": (dt.date.today() - dt.timedelta(weeks=w)).isoformat(),
-                              "count": (seed + w * 5) % 14} for w in range(min(days // 7 + 1, 12))][::-1],
+                              "count": (seed + w * 5) % 14}
+                             for w in range(min(days // 7 + 1, 12) if days else 24)][::-1],
         "recent": [
             {"key": "DEVOPS-142", "url": "", "summary": "Payment gateway retries exhaust pool",
              "status": "In Progress", "priority": "Critical", "type": "Bug",
@@ -754,7 +772,8 @@ def _demo_report(name: str, days: int) -> dict:
     changes = {
         "total": 31 + seed % 10, "sampled": 31 + seed % 10,
         "per_week": [{"week": (dt.date.today() - dt.timedelta(weeks=w)).isoformat(),
-                      "count": (seed + w * 3) % 9} for w in range(min(days // 7 + 1, 12))][::-1],
+                      "count": (seed + w * 3) % 9}
+                     for w in range(min(days // 7 + 1, 12) if days else 24)][::-1],
         "authors": [{"key": "Alice Nasr", "count": 11}, {"key": "Bob Farid", "count": 8},
                     {"key": "Carol Adel", "count": 6}],
         "fields": [{"key": "status", "count": 14}, {"key": "assignee", "count": 7},
@@ -834,7 +853,8 @@ def list_projects() -> dict:
 
 
 def report(name: str, days: int = 30, refresh: bool = False) -> dict:
-    days = max(7, min(int(days or 30), 365))
+    days = int(days or 0)
+    days = 0 if days <= 0 else max(7, min(days, 365))   # 0 = ALL TIME
     ck = (_norm(name), days)
     ent = _CACHE.get(ck)
     if not refresh and ent and time.time() - ent["at"] < _TTL:
