@@ -56,9 +56,7 @@ def leaderboard(window: str = "7", user: User = Depends(current_user),
                      "level": level_info(u.xp), "badges": badge_count,
                      "stats": {"tickets_done": c.get("ticket_done", 0),
                                "resolved": c.get("ticket_resolved", 0),
-                               "builds_fixed": c.get("build_fixed", 0),
-                               "reviews": c.get("approval_review", 0),
-                               "actions": c.get("repo_action_executed", 0)}})
+                               "builds_fixed": c.get("build_fixed", 0)}})
     rows.sort(key=lambda r: -r["xp"])
     return {"window": window, "rows": rows}
 
@@ -126,7 +124,6 @@ def recap(days: int = 7, user: User = Depends(current_user), db: Session = Depen
         return {"xp": sum(e.points for e in events),
                 "tickets_done": by_kind.get("ticket_done", 0),
                 "builds_fixed": by_kind.get("build_fixed", 0),
-                "reviews": by_kind.get("approval_review", 0),
                 "top_user": top[0], "top_xp": top[1]}
 
     return {"this_week": stats(this_start, now), "last_week": stats(last_start, this_start)}

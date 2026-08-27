@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user
 from ..config import settings
-from ..db import RepoAction, User, get_db
+from ..db import User, get_db
 from ..integrations import jenkins, jira, ollama
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -18,7 +18,7 @@ _BRIEFING_CACHE: dict[tuple[str, str], str] = {}
 
 CHAT_SYSTEM = (
     "You are the QuestOps copilot for a DevOps platform team. You see the user's live "
-    "Jira issues, Jenkins state and pending approvals as JSON context. Be concise, "
+    "Jira issues and Jenkins state as JSON context. Be concise, "
     "concrete and action-oriented: help them decide what to do next, draft comments, "
     "or summarize state. Never invent ticket keys or job names not in the context."
 )
@@ -26,7 +26,6 @@ CHAT_SYSTEM = (
 
 def _context(user: User, db: Session) -> dict:
     ci = jenkins.overview()
-    pending = db.query(RepoAction).filter(RepoAction.status == "pending_approval").count()
     return {
         "user": {"username": user.username, "role": user.role},
         "my_open_issues": [{k: i[k] for k in ("key", "summary", "status", "priority", "due")}
@@ -37,7 +36,6 @@ def _context(user: User, db: Session) -> dict:
                            for f in ci["failures"]],
         "long_running_builds": [{k: l[k] for k in ("job", "running_min")}
                                 for l in ci["long_running"]],
-        "pending_approvals": pending,
     }
 
 
@@ -72,8 +70,6 @@ def _fallback_briefing(ctx: dict) -> str:
         top = ctx["my_open_issues"][0]
         lines.append(f"- 🎯 Top ticket: {top['key']} — {top['summary']} ({top['priority']})")
         lines.append(f"- 📋 {len(ctx['my_open_issues'])} open ticket(s) assigned to you")
-    if ctx["pending_approvals"] and ctx["user"]["role"] == "approver":
-        lines.append(f"- 🛡️ {ctx['pending_approvals']} repo action(s) waiting for your approval")
     if len(lines) == 1:
         lines.append("- ✨ All clear. Grab an unassigned ticket from the board.")
     return "\n".join(lines)

@@ -5,7 +5,6 @@ const state = {
   me: null,
   view: "overview",
   aiHistory: [],
-  templates: [],
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -240,7 +239,7 @@ async function refreshMe() {
 
 /* ---------------- router ---------------- */
 const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard,
-                ci: renderCI, actions: renderActions, prompts: renderPrompts,
+                ci: renderCI,
                 repos: renderRepos, deps: renderRepos, access: renderAccess,
                 projects: renderProjects,
                 logging: renderLogging, migration: renderMigration,
@@ -314,8 +313,6 @@ async function renderOverviewInner() {
          ci.long_running ? `+ ${ci.long_running} stuck` : ""),
     tile("#/ci", `${kpi.overall_pct}%`, "pipeline success (24h)", pctCls(kpi.overall_pct),
          kpi.at_risk ? `⚠ ${kpi.at_risk} failure(s) entering KPIs` : `${kpi.success}/${kpi.total} builds`),
-    tile("#/actions", data.approvals.pending, "pending approvals",
-         data.approvals.pending ? "ov-warn" : ""),
     tile("#/team", j.missing_objective, "tickets w/o objective",
          j.missing_objective ? "ov-warn" : "ov-good"),
     tile("#/team", team.this_week.xp, "team XP this week",
@@ -356,10 +353,6 @@ async function renderOverviewInner() {
         <span class="ci-job">${esc(l.job)} <small>#${l.number}</small></span>
         <span class="ci-meta">running ${humanMins(l.running_min)}${l.avg_min ? ` vs ~${humanMins(l.avg_min)} avg` : ""}</span>
         ${linkBtn(l.url)}<a class="btn btn-sm" href="#/ci">act ▸</a></div>`),
-    data.approvals.pending ? `
-      <div class="ci-row"><span class="ci-dot dot-amber"></span>
-        <span class="ci-job">🛡 ${data.approvals.pending} repo action(s) awaiting approval</span>
-        <a class="btn btn-sm" href="#/actions">review ▸</a></div>` : "",
     j.missing_objective ? `
       <div class="ci-row"><span class="ci-dot dot-amber"></span>
         <span class="ci-job">🎯 ${j.missing_objective} open ticket(s) without an objective</span>
@@ -519,7 +512,7 @@ async function openQuickAdd() {
 /* ================= FOCUS ================= */
 async function renderFocus() {
   const data = await api("/api/focus");
-  const srcCls = { jira: "chip-cyan", jenkins: "chip-red", approval: "chip-amber" };
+  const srcCls = { jira: "chip-cyan", jenkins: "chip-red" };
 
   const items = data.items.map((it, i) => {
     const heat = it.score >= 85 ? "score-hot" : it.score >= 60 ? "score-warm" : "score-cool";
@@ -532,8 +525,6 @@ async function renderFocus() {
       buttons = `<button class="btn btn-sm" data-ciclaim="${esc(it.key)}">I'm on it +10</button>`;
     else if (it.source === "jenkins")
       buttons = `<button class="btn btn-sm" data-cifixed="${esc(it.key)}">It's green +35</button>`;
-    else if (it.source === "approval")
-      buttons = `<a class="btn btn-sm" href="#/actions">Review +15</a>`;
     return `
       <div class="focus-item" style="animation-delay:${i * 40}ms">
         <div class="score-pill ${heat}">${it.score}</div>
@@ -1140,183 +1131,6 @@ async function renderCI() {
     state.diveAnalysis = null;
     renderCI();
   });
-}
-
-/* ================= REPO ACTIONS ================= */
-async function renderActions() {
-  const [data, tpl] = await Promise.all([api("/api/actions"), api("/api/prompts")]);
-  state.templates = tpl.templates;
-
-  const cards = data.actions.map((a) => `
-    <div class="panel action-card">
-      <div class="action-head">
-        <span class="action-title">${esc(a.title)}</span>
-        <span class="status status-${esc(a.status)}">${esc(a.status).replace("_", " ")}</span>
-      </div>
-      <div class="action-meta">template: ${esc(a.template_name)} · repo: ${esc(a.repo_url)}
-        ${a.branch ? "· branch: " + esc(a.branch) : ""} · by @${esc(a.requested_by)} · ${ago(a.created_at)}
-        ${a.decided_by ? `· decided by @${esc(a.decided_by)}` : ""}</div>
-      <div class="action-plan">${md(a.plan)}</div>
-      ${(a.files || []).map((f) => `
-        <details class="filebox"><summary>📄 ${esc(f.path)}</summary><pre>${esc(f.content)}</pre></details>`).join("")}
-      ${a.result ? `<details class="filebox"><summary>🧾 execution log</summary><pre>${esc(a.result)}</pre></details>` : ""}
-      ${a.status === "pending_approval" && data.can_approve ? `
-        <div class="action-buttons">
-          <button class="btn btn-primary" data-approve="${a.id}">✓ Approve &amp; execute</button>
-          <button class="btn btn-danger" data-reject="${a.id}">✕ Reject</button>
-        </div>` : ""}
-    </div>`).join("") || `<div class="empty">no repo actions yet</div>`;
-
-  const tplOptions = state.templates.map((t) =>
-    `<option value="${t.id}">${esc(t.name)}</option>`).join("");
-
-  view().innerHTML = `
-    <div class="view-head"><h1>REPO ACTIONS</h1>
-      <span class="sub">AI drafts the change · a human approves before anything is pushed</span>
-      <span class="spacer"></span>
-      <button class="btn btn-primary" id="new-action">+ New action</button></div>
-    <div id="action-form-slot"></div>
-    ${cards}`;
-
-  $("#new-action").onclick = () => renderActionForm();
-  view().querySelectorAll("[data-approve]").forEach((b) => b.onclick = async () => {
-    const note = prompt("Approval note (optional):") ?? "";
-    b.disabled = true; b.textContent = "executing…";
-    act(api(`/api/actions/${b.dataset.approve}/approve`, { method: "POST", body: { note } }));
-  });
-  view().querySelectorAll("[data-reject]").forEach((b) => b.onclick = () => {
-    const note = prompt("Why reject?") ?? "";
-    act(api(`/api/actions/${b.dataset.reject}/reject`, { method: "POST", body: { note } }));
-  });
-}
-
-async function renderActionForm() {
-  const slot = $("#action-form-slot");
-  // actions only target repositories DEFINED on the Repositories page
-  const repoData = await api("/api/repos").catch(() => ({ repos: [] }));
-  if (!repoData.repos.length) {
-    slot.innerHTML = `
-      <div class="panel" style="margin-bottom:16px"><h2>new repo action</h2>
-        <div class="empty">no repositories defined —
-          <a href="#/repos">add one on the Repositories page</a> first</div></div>`;
-    return;
-  }
-  slot.innerHTML = `
-    <div class="panel" style="margin-bottom:16px">
-      <h2>new repo action</h2>
-      <div class="form-grid">
-        <label>Template<select id="af-template">${state.templates.map((t) =>
-          `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></label>
-        <label>Repository<select id="af-repo">${repoData.repos.map((r) =>
-          `<option value="${esc(r.url)}">⛁ ${esc(r.name)}</option>`).join("")}</select></label>
-        <label>Branch<input id="af-branch" placeholder="questops/my-change"></label>
-        <label>Title<input id="af-title" placeholder="(defaults to template name)"></label>
-      </div>
-      <div id="af-params" class="form-grid"></div>
-      <div class="action-buttons">
-        <button class="btn btn-primary" id="af-submit">✦ Draft with AI → send for approval</button>
-        <button class="btn btn-ghost" id="af-cancel">cancel</button>
-      </div>
-    </div>`;
-
-  const renderParams = () => {
-    const t = state.templates.find((x) => x.id == $("#af-template").value);
-    $("#af-params").innerHTML = (t?.variables || []).map((v) =>
-      `<label><span class="var-chip">{{${esc(v)}}}</span><input data-param="${esc(v)}"></label>`).join("");
-  };
-  renderParams();
-  $("#af-template").onchange = renderParams;
-  $("#af-cancel").onclick = () => (slot.innerHTML = "");
-  $("#af-submit").onclick = async () => {
-    const params = {};
-    slot.querySelectorAll("[data-param]").forEach((i) => (params[i.dataset.param] = i.value));
-    $("#af-submit").disabled = true;
-    $("#af-submit").textContent = "✦ AI is drafting the change…";
-    act(api("/api/actions", {
-      method: "POST",
-      body: { template_id: Number($("#af-template").value), repo_url: $("#af-repo").value,
-              branch: $("#af-branch").value, title: $("#af-title").value, params },
-    }));
-  };
-}
-
-/* ================= PROMPTS ================= */
-async function renderPrompts() {
-  const data = await api("/api/prompts");
-  state.templates = data.templates;
-
-  const cards = data.templates.map((t) => `
-    <div class="panel prompt-card">
-      <div class="action-head"><span class="action-title">✎ ${esc(t.name)}</span>
-        ${(t.variables || []).map((v) => `<span class="var-chip">{{${esc(v)}}}</span>`).join("")}</div>
-      <div class="action-meta">${esc(t.description)} · updated by @${esc(t.updated_by)} ${ago(t.updated_at)}</div>
-      <pre class="mono">${esc(t.body)}</pre>
-      <div class="action-buttons">
-        <button class="btn btn-sm" data-edit="${t.id}">Edit</button>
-        <button class="btn btn-sm" data-refine="${t.id}">✦ Refine with AI +8</button>
-        <button class="btn btn-sm btn-danger" data-del="${t.id}">Delete</button>
-      </div>
-      <div id="refine-slot-${t.id}"></div>
-    </div>`).join("") || `<div class="empty">no templates yet</div>`;
-
-  view().innerHTML = `
-    <div class="view-head"><h1>PROMPT TEMPLATES</h1>
-      <span class="sub">the playbook behind repo actions — visible, versionable, AI-tunable</span>
-      <span class="spacer"></span>
-      <button class="btn btn-primary" id="new-prompt">+ New template</button></div>
-    <div id="prompt-form-slot"></div>
-    ${cards}`;
-
-  $("#new-prompt").onclick = () => promptForm();
-  view().querySelectorAll("[data-edit]").forEach((b) => b.onclick = () =>
-    promptForm(state.templates.find((t) => t.id == b.dataset.edit)));
-  view().querySelectorAll("[data-del]").forEach((b) => b.onclick = () => {
-    if (confirm("Delete this template?"))
-      act(api(`/api/prompts/${b.dataset.del}`, { method: "DELETE" }));
-  });
-  view().querySelectorAll("[data-refine]").forEach((b) => b.onclick = async () => {
-    const instruction = prompt("What should the AI improve? (leave empty for a general pass)") ?? "";
-    b.disabled = true; b.textContent = "✦ refining…";
-    try {
-      const data = await api(`/api/prompts/${b.dataset.refine}/refine`,
-        { method: "POST", body: { instruction } });
-      handleGame(data.game);
-      const t = state.templates.find((x) => x.id == b.dataset.refine);
-      $(`#refine-slot-${t.id}`).innerHTML = `
-        <div class="panel" style="margin-top:10px;border-color:rgba(165,139,245,.4)">
-          <h2 style="color:var(--violet)">✦ AI proposal</h2>
-          <pre class="mono">${esc(data.proposal)}</pre>
-          <div class="action-buttons">
-            <button class="btn btn-primary" id="apply-${t.id}">Save proposal</button>
-            <button class="btn btn-ghost" id="drop-${t.id}">Discard</button>
-          </div></div>`;
-      $(`#apply-${t.id}`).onclick = () => act(api(`/api/prompts/${t.id}`, {
-        method: "PUT",
-        body: { name: t.name, description: t.description, body: data.proposal } }));
-      $(`#drop-${t.id}`).onclick = () => ($(`#refine-slot-${t.id}`).innerHTML = "");
-    } catch (e) { oops(e); b.disabled = false; b.textContent = "✦ Refine with AI +8"; }
-  });
-}
-
-function promptForm(t = null) {
-  $("#prompt-form-slot").innerHTML = `
-    <div class="panel form-col" style="margin-bottom:16px">
-      <h2>${t ? "edit" : "new"} template</h2>
-      <label>Name<input id="pf-name" value="${esc(t?.name || "")}"></label>
-      <label>Description<input id="pf-desc" value="${esc(t?.description || "")}"></label>
-      <label>Body — use <code>{{variable}}</code> placeholders
-        <textarea id="pf-body">${esc(t?.body || "")}</textarea></label>
-      <div class="action-buttons">
-        <button class="btn btn-primary" id="pf-save">Save${t ? "" : " +10 XP"}</button>
-        <button class="btn btn-ghost" id="pf-cancel">cancel</button>
-      </div></div>`;
-  $("#pf-cancel").onclick = () => ($("#prompt-form-slot").innerHTML = "");
-  $("#pf-save").onclick = () => {
-    const body = { name: $("#pf-name").value, description: $("#pf-desc").value,
-                   body: $("#pf-body").value };
-    act(t ? api(`/api/prompts/${t.id}`, { method: "PUT", body })
-          : api("/api/prompts", { method: "POST", body }));
-  };
 }
 
 /* ================= REPOSITORIES ================= */
@@ -6230,7 +6044,7 @@ async function renderTeam() {
       <span class="lb-rank r${i + 1}">${i === 0 ? "♛" : i + 1}</span>
       <span class="lb-name"><b>${esc(r.display_name || r.username)}</b>
         <small>LV ${r.level.level} ${esc(r.level.rank)}${r.role === "approver" ? " · 🛡" : ""} · 🔥${r.streak} · ${r.badges} badges
-          · ✅${r.stats.tickets_done} 👁${r.stats.resolved} ⛑${r.stats.builds_fixed} 🛡${r.stats.reviews} ⇄${r.stats.actions}</small></span>
+          · ✅${r.stats.tickets_done} 👁${r.stats.resolved} ⛑${r.stats.builds_fixed}</small></span>
       <span class="lb-bar"><div style="width:${(r.xp / maxXp) * 100}%"></div></span>
       <span class="lb-xp">${r.xp} XP</span>
     </div>`).join("");

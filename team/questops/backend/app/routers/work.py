@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user
 from ..config import settings
-from ..db import RepoAction, User, get_db, utcnow
+from ..db import User, get_db, utcnow
 from ..gamification import award, quest_progress, team_quest_progress
 from ..integrations import jenkins, jira
 from ..ticket_sync import sync_closed_tickets
@@ -91,15 +91,6 @@ def focus(user: User = Depends(current_user), db: Session = Depends(get_db)):
                       "score": 55,
                       "why": "running well past its usual duration — possibly stuck",
                       "url": l["url"], "claimed": bool(l.get("claimed_by"))})
-
-    if user.role == "approver":
-        pending = db.query(RepoAction).filter(RepoAction.status == "pending_approval").all()
-        for a in pending:
-            items.append({"source": "approval", "key": f"action-{a.id}",
-                          "title": f"Approve: {a.title or a.template_name}",
-                          "subtitle": f"requested by {a.requested_by}",
-                          "score": 85, "why": "teammate blocked on your review",
-                          "url": f"#actions", "action_id": a.id})
 
     for issue in jira.unassigned_issues()[:3]:
         score = PRIORITY_SCORE.get(issue["priority"], 50) - 20

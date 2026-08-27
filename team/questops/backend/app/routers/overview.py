@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user
 from ..config import settings
-from ..db import RepoAction, User, XPEvent, get_db, utcnow
+from ..db import User, XPEvent, get_db, utcnow
 from ..gamification import team_quest_progress
 from ..integrations import elastic, jenkins, jira
 from ..ticket_sync import sync_closed_tickets
@@ -78,13 +78,10 @@ def _kpi_section(ci_failures: list[dict]) -> dict:
 @router.get("/overview/cursor")
 def overview_cursor(user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Cheap change beacon the Overview polls: bumps whenever any member's
-    action lands an XPEvent or a repo action changes state. External
-    Jira/Jenkins/ES drift is covered by the frontend's slow full refresh."""
+    action lands an XPEvent. External Jira/Jenkins/ES drift is covered by
+    the frontend's slow full refresh."""
     last_event = db.query(func.max(XPEvent.id)).scalar() or 0
-    actions = db.query(func.count(RepoAction.id)).scalar() or 0
-    pending = db.query(func.count(RepoAction.id)).filter(
-        RepoAction.status == "pending_approval").scalar() or 0
-    return {"cursor": f"{last_event}:{actions}:{pending}"}
+    return {"cursor": str(last_event)}
 
 
 @router.get("/overview")
@@ -121,9 +118,6 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)):
         out["kpi"] = {"source": "error", "error": str(exc)[:200], "total": 0,
                       "success": 0, "overall_pct": 0.0, "at_risk": 0,
                       "seconds_remaining": 0, "next_sync": None}
-
-    out["approvals"] = {"pending": db.query(func.count(RepoAction.id)).filter(
-        RepoAction.status == "pending_approval").scalar() or 0}
 
     now = utcnow()
     week, prev = now - dt.timedelta(days=7), now - dt.timedelta(days=14)

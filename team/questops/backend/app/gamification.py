@@ -21,11 +21,6 @@ XP_RULES = {
     "ticket_claimed": 5,
     "build_claimed": 10,
     "build_fixed": 35,
-    "approval_review": 15,
-    "prompt_created": 10,
-    "prompt_refined": 8,
-    "repo_action_requested": 10,
-    "repo_action_executed": 30,
     "quest_bonus": 0,  # points carried on the event itself
 }
 
@@ -43,12 +38,6 @@ BADGES = [
      "desc": "Fix 5 failing builds"},
     {"key": "firefighter", "name": "Firefighter", "icon": "🧯", "kind": "build_fixed", "count": 15,
      "desc": "Fix 15 failing builds"},
-    {"key": "gatekeeper", "name": "Gatekeeper", "icon": "🛡️", "kind": "approval_review", "count": 10,
-     "desc": "Review 10 repo actions"},
-    {"key": "prompt_smith", "name": "Prompt Smith", "icon": "⚒️", "kind": "prompt_created", "count": 3,
-     "desc": "Author 3 prompt templates"},
-    {"key": "automator", "name": "Automator", "icon": "🤖", "kind": "repo_action_executed", "count": 5,
-     "desc": "Land 5 approved repo actions"},
     {"key": "streak_5", "name": "On Fire", "icon": "🔥", "streak": 5,
      "desc": "5-day activity streak"},
     {"key": "streak_15", "name": "Unstoppable", "icon": "☄️", "streak": 15,
@@ -60,8 +49,6 @@ DAILY_QUESTS = [
      "kind": "ticket_done", "target": 2, "bonus": 25},
     {"key": "medic", "name": "Build Medic", "desc": "Fix a failing build today",
      "kind": "build_fixed", "target": 1, "bonus": 25},
-    {"key": "gate", "name": "Gatekeeper", "desc": "Review a pending repo action today",
-     "kind": "approval_review", "target": 1, "bonus": 20},
 ]
 
 # counted across the WHOLE team; completing one pays every member
@@ -70,8 +57,6 @@ TEAM_QUESTS = [
      "kind": "ticket_done", "target": 5, "bonus": 15},
     {"key": "team_green", "name": "Green Machine", "desc": "Fix 2 builds as a team today",
      "kind": "build_fixed", "target": 2, "bonus": 15},
-    {"key": "team_ship", "name": "Ship It", "desc": "Land 3 approved repo actions today",
-     "kind": "repo_action_executed", "target": 3, "bonus": 10},
 ]
 
 # awarded to every member when the team earns them
