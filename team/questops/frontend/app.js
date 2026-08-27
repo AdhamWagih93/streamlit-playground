@@ -5647,7 +5647,9 @@ const prjDelta = (cur, prev, d) => (prev == null || cur == null || !d.days) ? ""
   : `<span class="prj-delta ${cur >= prev ? "up" : "down"}" title="previous ${d.days}d window: ${logExact(prev)}">${cur >= prev ? "▲" : "▼"} vs ${logInt(prev)}</span>`;
 
 const PRJ_EV = {  // event-log types: icon, label, chip class
-  commit: ["⧗", "commit", "chip-cyan"], build: ["⚙", "build", ""],
+  commit: ["⧗", "commit", "chip-cyan"],
+  ecommit: ["⚡", "effective commit", "chip-green"],
+  build: ["⚙", "build", ""],
   deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", ""],
   jira: ["🎫", "jira", "chip-amber"], change: ["📝", "change", ""],
 };
@@ -5756,7 +5758,7 @@ function prjEventsBody(events, f) {
       ${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(e.app)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(e.app)}</code>`}
       ${e.env ? `<span class="chip">${esc(e.env)}</span>` : ""}
       ${prjStatusChip(e.status)}
-      ${e.version ? `<span class="chip" title="${e.type === "commit" ? "commit id" : "version"}">${esc(e.version)}</span>` : ""}
+      ${e.version ? `<span class="chip ${e.type === "ecommit" && !/^[0-9a-f]{7,}$/.test(e.version) ? "chip-green" : ""}" title="${e.type === "commit" ? "commit id" : e.type === "ecommit" ? "built version (via ef-cicd-builds commit id) — searchable" : "version"}">${esc(e.version)}</span>` : ""}
       ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
       ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
       <span class="ci-meta prj-ev-detail" ${e.tip ? `title="${esc(e.tip)}"` : ""}>${esc(e.detail || "")}</span>

@@ -219,6 +219,7 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
                        "branch": s.get("branch") or "",
                        "author": author,
                        "id": str(s.get("commitid") or "")[:10],
+                       "id_full": str(s.get("commitid") or ""),
                        "message": (msg[0] if msg else "")[:140],
                        "message_full": (s.get("commitmessage") or "").strip()[:600]})
     per_day = []
@@ -610,7 +611,8 @@ def _sec_cicd(name: str, days: int) -> dict:
                                "aggs": inner}}}}
 
     b_src = ["startdate", "application", "branch", "technology", "status",
-             "codeversion", "testflag", "authorname", "commitauthor"]
+             "codeversion", "testflag", "authorname", "commitauthor",
+             "commitid", "commitID", "CommitId", "commit"]
     d_src = ["startdate", "enddate", "application", "environment", "status",
              "codeversion", "testflag", "requester", "Requester", "triggeredby",
              "approver", "Approver", "technology"]
@@ -735,7 +737,16 @@ def _sec_cicd(name: str, days: int) -> dict:
     totals = {k: (((v.get("hits") or {}).get("total") or {}).get("value", 0))
               for k, v in (("builds", builds), ("deploys", deploys),
                            ("releases", releases))}
-    return {"board": board, "events": events, "totals": totals}
+    build_versions: dict = {}
+    for h in b_hits:
+        s_ = h.get("_source") or {}
+        cid = str(s_.get("commitid") or s_.get("commitID") or s_.get("CommitId")
+                  or s_.get("commit") or "").strip()
+        ver = s_.get("codeversion") or ""
+        if cid and ver and cid not in build_versions:
+            build_versions[cid] = ver
+    return {"board": board, "events": events, "totals": totals,
+            "build_versions": build_versions}
 
 
 def _assemble_events(out: dict) -> list[dict]:
@@ -747,15 +758,32 @@ def _assemble_events(out: dict) -> list[dict]:
     cutoff = ((_now() - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
               if days else "")
     events = list(((out.get("cicd") or {}).get("events")) or [])
+    bv = ((out.get("cicd") or {}).get("build_versions")) or {}
+
+    def _built_version(cid):
+        if not cid:
+            return ""
+        if cid in bv:
+            return bv[cid]
+        for k, v in bv.items():   # ids may be truncated on either side
+            if k.startswith(cid) or cid.startswith(k):
+                return v
+        return ""
+
     for c in ((out.get("commits") or {}).get("recent")) or []:
-        events.append({"ts": c.get("when") or "", "type": "commit",
+        branch = (c.get("branch") or "").lower()
+        eff = branch == "develop" or branch.startswith("release")
+        built = _built_version(c.get("id_full") or c.get("id") or "") if eff else ""
+        events.append({"ts": c.get("when") or "", "type": "ecommit" if eff else "commit",
                        "app": c.get("repo") or "", "env": "",
-                       "status": "", "version": c.get("id") or "",
+                       "status": "", "version": built or (c.get("id") or ""),
                        "who": _user_display(c.get("author") or ""),
                        "test": False,
                        "detail": " · ".join(x for x in (c.get("branch"),
-                                                        c.get("message")) if x),
-                       "tip": c.get("message_full") or ""})
+                                                        c.get("message")) if x)
+                       + (f" · commit {c.get('id')}" if built else ""),
+                       "tip": (c.get("message_full") or "")
+                       + (f"\nbuilt version: {built}" if built else "")})
     for t in ((out.get("jira") or {}).get("recent")) or []:
         if cutoff and (t.get("updated") or "") < cutoff:
             continue   # jira tickets aren't window-filtered at query time
@@ -959,8 +987,9 @@ def _demo_report(name: str, days: int) -> dict:
         "branches": [{"key": "develop", "count": int(total * .6)},
                      {"key": "main", "count": int(total * .4)}],
         "recent": [{"when": f"{per_day[-1]['day']} 10:0{i}", "repo": (repos or ['main-repo'])[i % max(len(repos), 1)],
-                    "branch": "develop", "author": authors[i % 4][0],
-                    "id": f"a1b2c3d{i}",
+                    "branch": ["develop", "feature/checkout-e2e", "develop", "release/1.4"][i % 4],
+                    "author": authors[i % 4][0],
+                    "id": f"a1b2c3d{i}", "id_full": f"a1b2c3d{i}e4f5a6b7c8",
                     "message": m,
                     "message_full": m + "\n\n- reviewed by the team\n- refs DEVOPS-14" + str(i)}
                    for i, m in enumerate([
@@ -1137,7 +1166,8 @@ def _demo_report(name: str, days: int) -> dict:
         "deploys": {e: [{"key": "alice", "count": 5 - j}, {"key": "bob", "count": 3 - j % 3}]
                     for j, e in enumerate(envs)},
     }
-    cicd = {"board": board, "events": cicd_events,
+    build_versions = {"a1b2c3d0e4f5a6b7c8": "1.4.2", "a1b2c3d2e4f5a6b7c8": "1.4.3"}
+    cicd = {"board": board, "events": cicd_events, "build_versions": build_versions,
             "totals": {"builds": 18 + seed % 9, "deploys": 11 + seed % 7,
                        "releases": 3 + seed % 3}}
     prev = None if not days else {
