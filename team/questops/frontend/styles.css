@@ -1609,3 +1609,9 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-ev-ico { width: 18px; text-align: center; flex: none; }
 .prj-ev-when { flex: none; font-family: var(--mono); }
 .prj-ev-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* prominent selected-project title — page AND printed report */
+.prj-name { display: flex; align-items: baseline; gap: 10px; margin: 2px 0 8px;
+  padding-bottom: 6px; border-bottom: 2px solid #1497b3; }
+.prj-name-main { font: 800 22px var(--body); color: var(--text); letter-spacing: .02em; }
+.prj-name-co { font: 600 13px var(--body); color: var(--faint); }

@@ -5592,7 +5592,7 @@ function prjSpark(perDay, unit) {
   if (!days.length) return "";
   const max = Math.max(...days.map((b) => b.count), 1);
   return `<div class="prj-spark">${days.map((b) =>
-    `<span class="${b.count ? "" : "prj-spark-0"}" style="height:${b.count ? Math.max(8, b.count / max * 100).toFixed(0) : 3}%" title="${esc(b.day || b.week)} — ${b.count} ${unit}"></span>`).join("")}</div>`;
+    `<span class="${b.count ? "" : "prj-spark-0"}" style="height:${b.count ? Math.max(8, b.count / max * 100).toFixed(0) : 3}%" title="${esc(b.day || b.week || b.month)} — ${b.count} ${unit}"></span>`).join("")}</div>`;
 }
 
 function prjSev(w) {
@@ -5708,20 +5708,26 @@ function prjBodyHtml(d) {
   const worstSec = Object.values(scans).reduce((n, s) =>
     n + ((s.worst || {}).critical || 0) + ((s.worst || {}).high || 0), 0);
   const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
-  const okChip = (v, label) => v == null ? "" :
-    `<span class="chip ${v ? "chip-green" : "chip-red"}">${label} ${v ? "✓" : "✗"}</span>`;
+  // registry sync is deliberately SUBTLE — one small text line, not chips
+  const syncBit = (v, label) => v == null ? `${label} —`
+    : v ? `${label} ✓` : `<span class="pct-warn">${label} ✗</span>`;
+  const syncLine = [syncBit(pres.db, "db"),
+    syncBit(pres.ado ?? (ado.configured ? !!ado.found : null), "ADO"),
+    syncBit(pres.jira ?? (jira.total != null ? jira.matched : null), "Jira")].join(" · ");
 
   const head = `
+    <div class="prj-name">
+      <span class="prj-name-main">▣ ${esc(d.project || "")}</span>
+      ${inv.company ? `<span class="prj-name-co">${esc(inv.company)}</span>` : ""}
+      <span class="spacer"></span>
+      <span class="ci-meta" title="generated ${esc(d.generated_at || "")} · registries: ${esc(syncLine.replace(/<[^>]*>/g, ""))}">last ${d.days}d${d.cached ? " · cached" : ""} · <span title="inventory ⇄ devops_projects ⇄ ADO ⇄ Jira presence (details in Access → Projects consistency)">${syncLine}</span></span>
+    </div>
     <div class="inv-chips" style="margin-bottom:8px">
-      ${inv.company ? `<span class="chip chip-violet">🏢 ${esc(inv.company)}</span>` : ""}
       ${["dev", "qc", "prd"].filter((k) => teams[k]).map((k) =>
         `<span class="chip chip-cyan" title="${k}_team">${k === "prd" ? "prd/ops" : k}: ${esc(teams[k])}</span>`).join("")}
       ${(inv.envs || []).length ? `<span class="chip">${esc((inv.envs || []).join(" · "))}</span>` : ""}
       ${inv.deploy_platform ? `<span class="chip">${esc(inv.deploy_platform)}${inv.deploy_technology ? " · " + esc(inv.deploy_technology) : ""}</span>` : ""}
       ${(inv.approvers || []).length ? `<span class="chip" title="prd_approvers">👤 ${esc((inv.approvers || []).join(", "))}</span>` : ""}
-      ${okChip(pres.db, "db")} ${okChip(pres.ado ?? (ado.configured ? !!ado.found : null), "ADO")} ${okChip(pres.jira ?? (jira.total != null ? jira.matched : null), "Jira")}
-      <span class="spacer"></span>
-      <span class="ci-meta" title="generated ${esc(d.generated_at || "")}">last ${d.days}d window${d.cached ? " · cached" : ""}</span>
     </div>
     <div class="stat-tiles" style="margin:8px 0 12px">
       ${tile((inv.apps || []).length, "apps")}
@@ -5735,8 +5741,10 @@ function prjBodyHtml(d) {
       ${tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good")}
     </div>`;
 
-  // ---- systems row: ADO · platform DB · inventory --------------------
+  // ---- systems & registries detail — deliberately COLLAPSED and last:
+  // sync drift belongs to Access → Projects consistency, not this report
   const sysCards = `
+    <details class="filebox acc-pg-sec"><summary>ℹ systems &amp; inventory detail <span class="ci-meta">— ADO · platform DB · inventory (sync drift lives in Access → Projects consistency)</span></summary>
     <div class="prj-grid">
       <div class="pgv-card"><div class="pgv-title">⛁ Azure DevOps</div>
         ${ado.error ? prjErr(ado, "ADO") : !ado.configured ? '<div class="empty">not configured</div>'
@@ -5754,7 +5762,7 @@ function prjBodyHtml(d) {
       </div>
       <div class="pgv-card"><div class="pgv-title">🗄 platform DB (devops_projects)</div>
         ${pdb.error ? prjErr(pdb, "platform DB") : !pdb.configured ? '<div class="empty">not configured</div>'
-          : !pdb.in_table ? '<div class="empty">⚠ not present in the devops_projects table — see Access → Projects consistency</div>' : `
+          : !pdb.in_table ? '<div class="empty">not present in the devops_projects table (see Access → Projects consistency)</div>' : `
           <div class="inv-chips">${["company", "dev_team", "qc_team", "ops_team"].map((f) =>
             (pdb.row || {})[f] ? `<span class="chip chip-cyan" title="${f}">${esc(pdb.row[f])}</span>`
               : `<span class="chip" title="${f} is NULL in the table">${f}: —</span>`).join("")}</div>`}
@@ -5773,7 +5781,7 @@ function prjBodyHtml(d) {
               ${a.deploy_technology ? `<span class="chip">${esc(a.deploy_technology)}</span>` : ""}
             </div>`).join("")}</div>`}
       </div>
-    </div>`;
+    </div></details>`;
 
   // ---- commits ---------------------------------------------------------
   const commits = `
@@ -5810,7 +5818,7 @@ function prjBodyHtml(d) {
       </div>
       <div class="inv-chips" style="margin:4px 0">${(jira.by_type || []).map((t) =>
         `<span class="chip">${esc(t.key)} · ${logInt(t.count)}</span>`).join("")}</div>
-      <div class="pgv-title" style="margin-top:6px">update activity (per week)</div>
+      <div class="pgv-title" style="margin-top:6px">update activity (per week, ${d.days}d)</div>
       ${prjSpark(jira.updates_per_week, "update(s)")}
       ${(() => {   // ---- changelog from ef-bs-jira-changes ----------------
         const jc = d.jira_changes || {};
@@ -5821,9 +5829,12 @@ function prjBodyHtml(d) {
           <div class="pgv-title" style="margin-top:4px">changes per week</div>
           ${prjSpark(jc.per_week, "change(s)")}
           <div class="prj-grid">
-            <div class="pgv-card"><div class="pgv-title">by author</div>${prjBar(jc.authors)}</div>
-            <div class="pgv-card"><div class="pgv-title">changed fields</div>${prjBar(jc.fields, "pgv-bar-warn")}</div>
+            <div class="pgv-card"><div class="pgv-title">by author (${d.days}d)</div>${prjBar(jc.authors)}</div>
+            <div class="pgv-card"><div class="pgv-title">changed fields (${d.days}d)</div>${prjBar(jc.fields, "pgv-bar-warn")}</div>
           </div>
+          ${(jc.alltime || {}).total ? `
+          <div class="pgv-title" style="margin-top:6px">ALL-TIME change activity — ${logInt(jc.alltime.total)} change(s)${jc.alltime.sampled < jc.alltime.total ? ` <span class="ci-meta">(contributor stats from the ${logInt(jc.alltime.sampled)} most recent)</span>` : ""}</div>
+          ${prjSpark(jc.alltime.per_month, "change(s)")}` : ""}
           <div class="log-idx-list">${(jc.recent || []).map((c) => `
             <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
               ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(c.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(c.key)}</code>`}
@@ -5844,30 +5855,54 @@ function prjBodyHtml(d) {
       </details>`}
     </details>`;
 
-  // ---- security scans --------------------------------------------------
-  const scanCards = Object.entries(scans).map(([key, s]) => `
-    <div class="pgv-card"><div class="pgv-title">${esc(s.label || key)}</div>
-      ${s.error ? prjErr(s, s.label || key) : !(s.scans || (s.apps || []).length)
-        ? '<div class="empty">no scans recorded</div>' : `
-        <div class="inv-chips" style="margin-bottom:4px">
-          <span class="chip">${logInt(s.scans)} scan(s)</span>${prjSev(s.worst)}</div>
-        <div class="log-idx-list">${(s.apps || []).map((a) => `
-          <div class="log-idx ${(a.critical || 0) + (a.high || 0) ? "bad" : ""}">
-            <code class="log-idx-name" style="flex:none">${esc(a.app)}</code>
-            <span class="ci-meta" title="latest scan (enddate)">${esc(a.when)}</span>
-            ${a.version ? `<span class="chip">${esc(a.version)}</span>` : ""}
-            ${a.critical != null ? `<span class="chip ${a.critical ? "chip-red" : ""}">C ${a.critical}</span>` : ""}
-            ${a.high != null ? `<span class="chip ${a.high ? "chip-red" : ""}">H ${a.high}</span>` : ""}
-            ${a.medium != null ? `<span class="chip ${a.medium ? "chip-amber" : ""}">M ${a.medium}</span>` : ""}
-            ${a.low != null ? `<span class="chip">L ${a.low}</span>` : ""}
-            ${a.verified ? '<span class="chip chip-red" title="a VERIFIED secret = live leaked credential">✓ VERIFIED secret</span>' : ""}
-            ${a.image ? `<span class="ci-meta">${esc(a.image)}</span>` : ""}
-            ${a.status && a.status !== "SUCCESS" ? `<span class="chip chip-amber">${esc(a.status)}</span>` : ""}
-          </div>`).join("")}</div>`}
-    </div>`).join("");
+  // ---- contributions: members & teams front and center ------------------
+  const jc = d.jira_changes || {};
+  const contrib = `
+    <details class="filebox acc-pg-sec" open><summary>👥 contributions — members &amp; teams</summary>
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">⧗ commits per member (${d.days}d)</div>${prjBar(com.authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">📝 Jira changes per member (all time)</div>${prjBar((jc.alltime || {}).authors)}</div>
+        <div class="pgv-card"><div class="pgv-title">🛡 Jira changes per TEAM (all time)</div>${prjBar(jc.teams_alltime, "pgv-bar-warn")}
+          <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>
+        <div class="pgv-card"><div class="pgv-title">🎫 open tickets per assignee</div>${prjBar(jira.by_assignee)}</div>
+      </div>
+    </details>`;
+
+  // ---- security scans: ONE consolidated matrix (apps × scanners) -------
+  const scanKeys = Object.keys(scans);
+  const scanApps = [...new Set(scanKeys.flatMap((k) => (scans[k].apps || []).map((a) => a.app)))].sort();
+  const scanErrors = scanKeys.filter((k) => scans[k].error);
+  const scanCell = (k, a) => {
+    if (!a) return '<td class="prj-sdlc-none">—</td>';
+    const noCounts = a.critical == null && a.high == null && a.medium == null && a.low == null;
+    const tip = `${esc(scans[k].label || k)} · ${esc(a.when || "?")}${a.version ? " · v" + esc(a.version) : ""}`
+      + (noCounts ? ` · ${esc(a.status || "scan recorded")}`
+        : ` · C${a.critical ?? "–"} H${a.high ?? "–"} M${a.medium ?? "–"} L${a.low ?? "–"}`)
+      + (a.image ? ` · ${esc(a.image)}` : "") + (a.url ? ` · ${esc(a.url)}` : "")
+      + (a.verified ? " · VERIFIED live secret!" : "")
+      + (a.status && a.status !== "SUCCESS" ? ` · status ${esc(a.status)}` : "");
+    let body;
+    if (noCounts) body = prjStatusChip(a.status || "done");
+    else if ((a.critical || 0) + (a.high || 0))
+      body = `<span class="chip chip-red">${a.critical ? `C${a.critical} ` : ""}${a.high ? `H${a.high}` : ""}</span>`;
+    else if (a.medium) body = `<span class="chip chip-amber">M${a.medium}</span>`;
+    else if (a.low) body = `<span class="chip">L${a.low}</span>`;
+    else body = '<span class="chip chip-green">✓</span>';
+    if (a.verified) body += '<span class="chip chip-red" title="VERIFIED secret = live leaked credential">🔑!</span>';
+    return `<td><div class="prj-sdlc-cell" title="${tip}">${body}<span class="ci-meta">${esc((a.when || "").slice(0, 10))}</span></div></td>`;
+  };
   const security = `
-    <details class="filebox acc-pg-sec" open><summary>🛡 security scans — latest per app${worstSec ? ` · <b class="pct-bad">${worstSec} critical/high</b>` : ' · <b class="pct-good">clean</b>'}</summary>
-      <div class="prj-grid">${scanCards || '<div class="empty">no scan indices</div>'}</div>
+    <details class="filebox acc-pg-sec" open><summary>🛡 security — latest scan per app${worstSec ? ` · <b class="pct-bad">${worstSec} critical/high</b>` : ' · <b class="pct-good">clean</b>'}</summary>
+      ${scanApps.length ? `<div class="prj-sdlc-wrap"><table class="prj-sdlc">
+        <thead><tr><th>app</th>${scanKeys.map((k) => `<th title="${logInt(scans[k].scans || 0)} scan(s) recorded">${esc((scans[k].label || k).replace(/ \(.*\)$/, ""))}${scans[k].worst ? "" : " ·st"}</th>`).join("")}</tr></thead>
+        <tbody>${scanApps.map((app) => `
+          <tr><td class="prj-sdlc-app">${esc(app)}</td>
+            ${scanKeys.map((k) => scanCell(k, (scans[k].apps || []).find((x) => x.app === app))).join("")}
+          </tr>`).join("")}</tbody>
+      </table></div>
+      <div class="kpi-note">cells show the WORST severities of each app's freshest scan — red C/H · amber M · plain L · ✓ clean · "·st" columns are status-only scanners</div>`
+        : '<div class="empty">no scans recorded for this project</div>'}
+      ${scanErrors.map((k) => prjErr(scans[k], scans[k].label || k)).join("")}
     </details>`;
 
   // ---- logging ---------------------------------------------------------
@@ -5885,8 +5920,8 @@ function prjBodyHtml(d) {
       <div class="kpi-note">full drill-down (indices, samples, retention…) lives in the <a href="#/logging">Logging</a> page · analyzed ${esc((lg.analyzed_at || "").slice(0, 16).replace("T", " "))}</div>`}
     </details>`;
 
-  return head + sysCards + prjSdlcHtml(d) + prjEventsHtml(d)
-    + commits + jiraSec + security + logging;
+  return head + prjSdlcHtml(d) + contrib + prjEventsHtml(d)
+    + commits + jiraSec + security + logging + sysCards;
 }
 
 // event-log filter clicks/typing re-render only the list (delegated on body)

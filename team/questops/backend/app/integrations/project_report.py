@@ -377,13 +377,59 @@ def _sec_jira_changes(name: str, days: int) -> dict:
     rank = lambda d_: sorted(({"key": k, "count": v} for k, v in d_.items()),  # noqa: E731
                              key=lambda x: -x["count"])
     ranked_authors = sorted(authors.values(), key=lambda x: -x["count"])
+
+    # ---- ALL-TIME view: no date filter — monthly histogram + per-author
+    # fold from up to 2000 newest docs (author is unmapped, ES can't agg it)
+    resp_all = _es("ef-bs-jira-changes", {
+        "query": {"bool": {"should": should, "minimum_should_match": 1}},
+        "sort": [{"created": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": ["created", "author"],
+        "aggs": {"per_month": {"date_histogram": {"field": "created",
+                                                  "calendar_interval": "month"}}},
+        "track_total_hits": True, "size": 2000})
+    at_hits = (resp_all.get("hits") or {}).get("hits") or []
+    at_total = ((resp_all.get("hits") or {}).get("total") or {}).get("value", 0)
+    at_authors: dict = {}
+    for h in at_hits:
+        raw = _jira_change_author((h.get("_source") or {}).get("author"))
+        akey = _user_key(raw) or "(unknown)"
+        slot = at_authors.setdefault(akey, {"key": _user_display(raw) or "(unknown)",
+                                            "count": 0})
+        slot["count"] += 1
+    alltime = {"total": at_total, "sampled": len(at_hits),
+               "per_month": [{"month": (b.get("key_as_string") or "")[:7],
+                              "count": b.get("doc_count", 0)}
+                             for b in ((resp_all.get("aggregations") or {})
+                                       .get("per_month") or {}).get("buckets", [])],
+               "authors": sorted(at_authors.values(),
+                                 key=lambda x: -x["count"])[:15]}
+
     return {"total": total, "sampled": len(hits),
             "per_week": [{"week": (b.get("key_as_string") or "")[:10],
                           "count": b.get("doc_count", 0)}
                          for b in ((resp.get("aggregations") or {})
                                    .get("per_week") or {}).get("buckets", [])],
             "authors": ranked_authors[:12], "fields": rank(fields)[:12],
-            "recent": recent}
+            "alltime": alltime, "recent": recent}
+
+
+def _team_fold(authors: list[dict], inv: dict) -> list[dict]:
+    """Contributor counts → the project's TEAMS, via LDAP group membership
+    (same resolver + sAMAccountName↔CN matcher the approvers section uses).
+    Contributors matching no team land in '(outside teams)'."""
+    from . import approvers as ap
+    keysets: dict = {}
+    for team in dict.fromkeys(t for t in (inv.get("teams") or {}).values() if t):
+        ldap = ap._ldap_lookup(team)
+        keysets[team] = ap._member_keys(ldap["members"]) if ldap["found"] else set()
+    counts: dict = {}
+    for a in authors or []:
+        k = ap._ukey(a.get("key"))
+        team = next((t for t, ks in keysets.items() if k and k in ks), None)
+        label = team or "(outside teams)"
+        counts[label] = counts.get(label, 0) + (a.get("count") or 0)
+    return sorted(({"key": t, "count": c} for t, c in counts.items()),
+                  key=lambda x: -x["count"])
 
 
 def _git_author(s: dict) -> str:
@@ -726,6 +772,13 @@ def _demo_report(name: str, days: int) -> dict:
              "items": [{"field": "status", "from": "In Progress", "to": "Resolved"},
                        {"field": "resolution", "from": "", "to": "Fixed"}]},
         ],
+        "alltime": {
+            "total": 480 + seed % 90, "sampled": 480 + seed % 90,
+            "per_month": [{"month": f"{2024 + (m + 6) // 12}-{(m + 6) % 12 + 1:02d}",
+                           "count": (seed + m * 11) % 40 + 4} for m in range(20)],
+            "authors": [{"key": "Alice Nasr", "count": 208}, {"key": "Bob Farid", "count": 141},
+                        {"key": "Carol Adel", "count": 84}, {"key": "Dave Samir", "count": 47}],
+        },
     }
     apps = [a["name"] for a in inv["apps"]][:4] or ["main-app"]
     envs = inv.get("envs") or ["dev", "prd"]
@@ -814,6 +867,14 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("scans", _sec_scans, name)
         guard("cicd", _sec_cicd, name, days)
     guard("logging", _sec_logging, name)
+    # contributor → TEAM folds for the Jira change log (window + all time)
+    jc = out.get("jira_changes") or {}
+    if inv and not jc.get("error") and (jc.get("authors") or (jc.get("alltime") or {}).get("authors")):
+        try:
+            jc["teams"] = _team_fold(jc.get("authors") or [], inv)
+            jc["teams_alltime"] = _team_fold((jc.get("alltime") or {}).get("authors") or [], inv)
+        except Exception:  # noqa: BLE001 — LDAP trouble must not kill the section
+            pass
     out["events"] = _assemble_events(out)
 
     _CACHE[ck] = {"at": time.time(), "payload": out}
