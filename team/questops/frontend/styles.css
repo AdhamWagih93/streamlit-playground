@@ -1619,3 +1619,6 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 /* SDLC footer — most active users per stage */
 .prj-sdlc tfoot td { border-top: 2px solid var(--line); border-bottom: none; }
 .prj-sdlc-user { font: 600 10px var(--mono); color: var(--faint); white-space: nowrap; cursor: help; }
+
+/* DevOps Platform card — registry drift stays a whisper, not a warning */
+.prj-drift { margin-top: 4px; opacity: .75; cursor: help; }

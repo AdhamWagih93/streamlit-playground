@@ -5734,7 +5734,8 @@ function prjBodyHtml(d) {
   // registry sync is deliberately SUBTLE — one small text line, not chips
   const syncBit = (v, label) => v == null ? `${label} —`
     : v ? `${label} ✓` : `<span class="pct-warn">${label} ✗</span>`;
-  const syncLine = [syncBit(pres.db, "db"),
+  const dpOk = pdb.error ? null : !pdb.configured ? null : (pdb.in_table && !inv.error);
+  const syncLine = [syncBit(dpOk, "DevOps Platform"),
     syncBit(pres.ado ?? (ado.configured ? !!ado.found : null), "ADO"),
     syncBit(pres.jira ?? (jira.total != null ? jira.matched : null), "Jira")].join(" · ");
 
@@ -5767,7 +5768,7 @@ function prjBodyHtml(d) {
   // ---- systems & registries detail — deliberately COLLAPSED and last:
   // sync drift belongs to Access → Projects consistency, not this report
   const sysCards = `
-    <details class="filebox acc-pg-sec"><summary>ℹ systems &amp; inventory detail <span class="ci-meta">— ADO · platform DB · inventory (sync drift lives in Access → Projects consistency)</span></summary>
+    <details class="filebox acc-pg-sec"><summary>ℹ systems detail <span class="ci-meta">— Azure DevOps · DevOps Platform (drift details live in Access → Projects consistency)</span></summary>
     <div class="prj-grid">
       <div class="pgv-card"><div class="pgv-title">⛁ Azure DevOps</div>
         ${ado.error ? prjErr(ado, "ADO") : !ado.configured ? '<div class="empty">not configured</div>'
@@ -5783,26 +5784,34 @@ function prjBodyHtml(d) {
           ${ado.description ? `<div class="ci-meta" style="margin:4px 2px">${esc(ado.description)}</div>` : ""}
           ${ado.url ? `<a class="btn btn-sm btn-ghost" href="${esc(ado.url)}" target="_blank" rel="noopener">open in ADO ↗</a>` : ""}`}
       </div>
-      <div class="pgv-card"><div class="pgv-title">🗄 platform DB (devops_projects)</div>
-        ${pdb.error ? prjErr(pdb, "platform DB") : !pdb.configured ? '<div class="empty">not configured</div>'
-          : !pdb.in_table ? '<div class="empty">not present in the devops_projects table (see Access → Projects consistency)</div>' : `
-          <div class="inv-chips">${["company", "dev_team", "qc_team", "ops_team"].map((f) =>
-            (pdb.row || {})[f] ? `<span class="chip chip-cyan" title="${f}">${esc(pdb.row[f])}</span>`
-              : `<span class="chip" title="${f} is NULL in the table">${f}: —</span>`).join("")}</div>`}
-      </div>
-      <div class="pgv-card"><div class="pgv-title">🧭 inventory</div>
-        ${inv.error ? prjErr(inv, "inventory") : `
+      <div class="pgv-card"><div class="pgv-title">⚡ DevOps Platform</div>
+        ${inv.error ? prjErr(inv, "DevOps Platform") : `
           <div class="inv-chips">
             <span class="chip">${(inv.hosts || []).length} host(s)</span>
             <span class="chip">${inv.pipeline_count || 0} pipeline repo(s)</span>
             <span class="chip" title="vault.yml files are detected only — never decrypted">🔒 ${inv.vault_files || 0} vault file(s)</span>
+            ${["company", "dev_team", "qc_team", "ops_team"].map((f) =>
+              (pdb.row || {})[f] ? `<span class="chip chip-cyan" title="${f} (registry)">${esc(pdb.row[f])}</span>` : "").join("")}
           </div>
           <div class="log-idx-list" style="margin-top:4px">${(inv.apps || []).map((a) => `
             <div class="log-idx"><code class="log-idx-name">${esc(a.name)}</code>
               ${a.repository_name ? `<span class="chip">${esc(a.repository_name)}</span>` : '<span class="chip" title="no repository_name — app has no pipeline repo">no pipeline</span>'}
               ${a.deploy_platform ? `<span class="chip chip-cyan">${esc(a.deploy_platform)}</span>` : ""}
               ${a.deploy_technology ? `<span class="chip">${esc(a.deploy_technology)}</span>` : ""}
-            </div>`).join("")}</div>`}
+            </div>`).join("")}</div>
+          ${(() => {   // discrepancies stay VERY subtle — one faint line
+            const notes = [];
+            if (pdb.error) notes.push("registry unreachable");
+            else if (pdb.configured && !pdb.in_table) notes.push("not yet in the devops_projects registry");
+            else if (pdb.in_table) {
+              const nrm = (v) => String(v || "").toLowerCase().replace(/[\s_\-]+/g, "_");
+              [["dev", "dev_team"], ["qc", "qc_team"], ["prd", "ops_team"]].forEach(([k, f]) => {
+                const a = (inv.teams || {})[k], b = (pdb.row || {})[f];
+                if (a && b && nrm(a) !== nrm(b)) notes.push(`${f} drift (${a} ⇄ ${b})`);
+              });
+            }
+            return notes.length ? `<div class="ci-meta prj-drift" title="resolve in Access → Projects consistency">· ${esc(notes.join(" · "))}</div>` : "";
+          })()}`}
       </div>
     </div></details>`;
 
@@ -5968,7 +5977,7 @@ async function prjLoad(refresh) {
   const tok = navToken();
   const body = document.getElementById("prj-body");
   if (!body || !state.prjSel) return;
-  body.innerHTML = '<div class="empty">building the report — aggregating inventory · DB · ADO · commits · Jira · scans · logging…</div>';
+  body.innerHTML = '<div class="empty">building the report — aggregating DevOps Platform · ADO · commits · Jira · scans · logging…</div>';
   try {
     const d = await api(`/api/projects/${encodeURIComponent(state.prjSel)}?days=${state.prjDays}${refresh ? "&refresh=true" : ""}`);
     if (navStale(tok)) return;
