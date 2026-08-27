@@ -216,7 +216,8 @@ def _sec_commits(name: str, repos: list[str], days: int) -> dict:
                         for b in per_day],
             "rate": round(total / max(days, 1), 2),
             "active_days": active_days,
-            "authors": _buckets("authors"), "repos": _buckets("repos"),
+            "authors": _fold_users(_buckets("authors")),
+            "repos": _buckets("repos"),
             "branches": _buckets("branches"), "recent": recent}
 
 
@@ -271,12 +272,117 @@ def _sec_jira(name: str, days: int) -> dict:
             "open_by_priority": _b(open_node.get("by_priority")),
             "by_status": _b(aggs.get("by_status")),
             "by_type": _b(aggs.get("by_type")),
-            "by_assignee": _b(aggs.get("by_assignee")),
+            "by_assignee": _fold_users(_b(aggs.get("by_assignee"))),
             "updates_per_week": [
                 {"week": (b.get("key_as_string") or "")[:10],
                  "count": b.get("doc_count", 0)}
                 for b in ((aggs.get("updates") or {}).get("per_week") or {})
                 .get("buckets", [])],
+            "recent": recent}
+
+
+def _user_key(u) -> str:
+    """Identity key for user names across systems: case-insensitive, any
+    @domain tail dropped, and '.', '_' and SPACES all equivalent — so
+    Alice Nasr, Alice.Nasr, alice_nasr and alice.nasr@corp.com are all
+    ONE person."""
+    s = str(u or "").strip().lower()
+    s = s.split("@", 1)[0].strip()
+    return re.sub(r"[.\s]+", "_", s)
+
+
+def _user_display(u) -> str:
+    """Canonical display form: domain stripped, dots/spaces shown as
+    underscores (original casing kept)."""
+    s = str(u or "").strip().split("@", 1)[0].strip()
+    return re.sub(r"[.\s]+", "_", s)
+
+
+def _fold_users(buckets: list[dict]) -> list[dict]:
+    """Merge {key, count} rows that are the same person under _user_key."""
+    merged: dict = {}
+    for b in buckets or []:
+        k = _user_key(b.get("key"))
+        if not k:
+            continue
+        slot = merged.setdefault(k, {"key": _user_display(b.get("key")), "count": 0})
+        slot["count"] += b.get("count", 0)
+    return sorted(merged.values(), key=lambda x: -x["count"])
+
+
+def _jira_change_author(a) -> str:
+    """`author` is unmapped (object OR plain string depending on the feeder)."""
+    if isinstance(a, dict):
+        return str(a.get("displayName") or a.get("name") or a.get("key") or "")
+    return str(a or "")
+
+
+def _jira_change_items(items) -> list[dict]:
+    """`items` mirrors Jira's changelog items — [{field, fromString, toString}]
+    — but is unmapped, so every shape is handled defensively."""
+    out = []
+    if isinstance(items, dict):
+        items = [items]
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        field = str(it.get("field") or it.get("fieldId") or "?")
+        frm = str(it.get("fromString") or it.get("from") or "")[:80]
+        to = str(it.get("toString") or it.get("to") or "")[:80]
+        out.append({"field": field, "from": frm, "to": to})
+    return out
+
+
+def _sec_jira_changes(name: str, days: int) -> dict:
+    """ef-bs-jira-changes — one row per Jira changelog entry. projectname /
+    projectkey / issuekey are TEXT (no keyword mapping), so matching uses
+    match_phrase, never terms. One query: weekly histogram + up to 200 recent
+    change docs; authors and changed-field stats are folded from those docs
+    (author/items are unmapped, so ES can't aggregate them)."""
+    should = []
+    for v in _name_variants(name):
+        should += [{"match_phrase": {"projectname": v}},
+                   {"match_phrase": {"projectkey": v}}]
+    body = {
+        "query": {"bool": {
+            "filter": [{"range": {"created": {"gte": f"now-{days}d"}}}],
+            "should": should, "minimum_should_match": 1}},
+        "sort": [{"created": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": ["created", "issuekey", "issueurl", "author", "items"],
+        "aggs": {"per_week": {"date_histogram": {"field": "created",
+                                                 "calendar_interval": "week"}}},
+        "track_total_hits": True, "size": 200,
+    }
+    resp = _es("ef-bs-jira-changes", body)
+    hits = (resp.get("hits") or {}).get("hits") or []
+    total = ((resp.get("hits") or {}).get("total") or {}).get("value", 0)
+    authors: dict = {}
+    fields: dict = {}
+    recent = []
+    for h in hits:
+        s = h.get("_source") or {}
+        raw = _jira_change_author(s.get("author"))
+        who = _user_display(raw) or "(unknown)"
+        akey = _user_key(raw) or "(unknown)"
+        slot = authors.setdefault(akey, {"key": who, "count": 0})
+        slot["count"] += 1
+        items = _jira_change_items(s.get("items"))
+        for it in items:
+            fields[it["field"]] = fields.get(it["field"], 0) + 1
+        if len(recent) < 25:
+            recent.append({"when": (s.get("created") or "")[:16].replace("T", " "),
+                           "key": s.get("issuekey") or "",
+                           "url": s.get("issueurl") or "",
+                           "author": who, "items": items[:4]})
+    rank = lambda d_: sorted(({"key": k, "count": v} for k, v in d_.items()),  # noqa: E731
+                             key=lambda x: -x["count"])
+    ranked_authors = sorted(authors.values(), key=lambda x: -x["count"])
+    return {"total": total, "sampled": len(hits),
+            "per_week": [{"week": (b.get("key_as_string") or "")[:10],
+                          "count": b.get("doc_count", 0)}
+                         for b in ((resp.get("aggregations") or {})
+                                   .get("per_week") or {}).get("buckets", [])],
+            "authors": ranked_authors[:12], "fields": rank(fields)[:12],
             "recent": recent}
 
 
@@ -446,7 +552,30 @@ def _demo_report(name: str, days: int) -> dict:
                               "medium": None, "low": None}
                              for a in inv["apps"][:2]]},
     }
-    return {"commits": commits, "jira": jira, "scans": scans}
+    changes = {
+        "total": 31 + seed % 10, "sampled": 31 + seed % 10,
+        "per_week": [{"week": (dt.date.today() - dt.timedelta(weeks=w)).isoformat(),
+                      "count": (seed + w * 3) % 9} for w in range(min(days // 7 + 1, 12))][::-1],
+        "authors": [{"key": "Alice Nasr", "count": 11}, {"key": "Bob Farid", "count": 8},
+                    {"key": "Carol Adel", "count": 6}],
+        "fields": [{"key": "status", "count": 14}, {"key": "assignee", "count": 7},
+                   {"key": "Fix Version", "count": 4}, {"key": "priority", "count": 3}],
+        "recent": [
+            {"when": "2026-08-26 14:02", "key": "DEVOPS-142", "url": "",
+             "author": "Alice Nasr",
+             "items": [{"field": "status", "from": "Open", "to": "In Progress"},
+                       {"field": "assignee", "from": "", "to": "alice"}]},
+            {"when": "2026-08-25 09:41", "key": "DEVOPS-141", "url": "",
+             "author": "Bob Farid",
+             "items": [{"field": "priority", "from": "Medium", "to": "High"}]},
+            {"when": "2026-08-22 16:20", "key": "DEVOPS-137", "url": "",
+             "author": "Carol Adel",
+             "items": [{"field": "status", "from": "In Progress", "to": "Resolved"},
+                       {"field": "resolution", "from": "", "to": "Fixed"}]},
+        ],
+    }
+    return {"commits": commits, "jira": jira, "jira_changes": changes,
+            "scans": scans}
 
 
 # ---------------------------------------------------------------- public API
@@ -494,6 +623,7 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
     else:
         guard("commits", _sec_commits, name, repos, days)
         guard("jira", _sec_jira, name, days)
+        guard("jira_changes", _sec_jira_changes, name, days)
         guard("scans", _sec_scans, name)
     guard("logging", _sec_logging, name)
 

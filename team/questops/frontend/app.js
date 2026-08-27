@@ -5909,6 +5909,26 @@ function prjBodyHtml(d) {
         `<span class="chip">${esc(t.key)} · ${logInt(t.count)}</span>`).join("")}</div>
       <div class="pgv-title" style="margin-top:6px">update activity (per week)</div>
       ${prjSpark(jira.updates_per_week, "update(s)")}
+      ${(() => {   // ---- changelog from ef-bs-jira-changes ----------------
+        const jc = d.jira_changes || {};
+        if (jc.error) return prjErr(jc, "Jira changes (ef-bs-jira-changes)");
+        if (!jc.total) return '<div class="kpi-note">no changelog entries in the window (ef-bs-jira-changes)</div>';
+        return `
+        <details class="filebox acc-pg-sec" open><summary>📝 change log · <b>${logInt(jc.total)}</b> change(s) in ${d.days}d${jc.sampled < jc.total ? ` <span class="ci-meta">— stats from the ${jc.sampled} most recent</span>` : ""}</summary>
+          <div class="pgv-title" style="margin-top:4px">changes per week</div>
+          ${prjSpark(jc.per_week, "change(s)")}
+          <div class="prj-grid">
+            <div class="pgv-card"><div class="pgv-title">by author</div>${prjBar(jc.authors)}</div>
+            <div class="pgv-card"><div class="pgv-title">changed fields</div>${prjBar(jc.fields, "pgv-bar-warn")}</div>
+          </div>
+          <div class="log-idx-list">${(jc.recent || []).map((c) => `
+            <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
+              ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(c.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(c.key)}</code>`}
+              <span class="chip chip-cyan">${esc(c.author)}</span>
+              ${(c.items || []).map((it) => `<span class="chip" title="${esc(it.field)}: ${esc(it.from || "—")} → ${esc(it.to || "—")}">${esc(it.field)}: ${esc((it.from || "—").slice(0, 24))} → ${esc((it.to || "—").slice(0, 24))}</span>`).join("")}
+            </div>`).join("")}</div>
+        </details>`;
+      })()}
       <details class="filebox acc-pg-sec" open><summary>🕘 recently updated tickets · <b>${(jira.recent || []).length}</b></summary>
         <div class="log-idx-list">${(jira.recent || []).map((t) => `
           <div class="log-idx">
