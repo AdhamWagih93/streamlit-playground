@@ -654,7 +654,7 @@ def _sec_cicd(name: str, days: int) -> dict:
                 continue
             slot = counts.setdefault(_user_key(w), {"key": _user_display(w), "count": 0})
             slot["count"] += 1
-        return sorted(counts.values(), key=lambda x: -x["count"])[:5]
+        return sorted(counts.values(), key=lambda x: -x["count"])
 
     b_hits = (builds.get("hits") or {}).get("hits", [])
     d_hits = (deploys.get("hits") or {}).get("hits", [])

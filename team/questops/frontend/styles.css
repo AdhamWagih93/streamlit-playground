@@ -1643,3 +1643,11 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 /* live per-type counts on the event-log filter buttons */
 .prj-ev-n { font: 700 10px var(--mono); }
 .prj-ev-n0 { opacity: .35; }
+
+/* the project identity + window stay pinned while scrolling the report;
+   the upward shadow paints over the scroll container's padding gap */
+.prj-name { position: sticky; top: 0; z-index: 60; background: var(--bg);
+  padding-top: 4px; box-shadow: 0 -40px 0 0 var(--bg); }
+/* stage-active cells may hold the whole roster — let them wrap */
+.prj-sdlc tfoot td { white-space: normal; }
+.prj-sdlc tfoot .prj-sdlc-user { display: inline-block; margin: 1px 4px 1px 0; }

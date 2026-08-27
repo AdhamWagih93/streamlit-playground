@@ -5676,12 +5676,12 @@ function prjSdlcHtml(d) {
         ${(() => {   // top active users per stage, from the window's real runs
           const tu = board.top_users || {};
           const top = (list) => (list || []).length
-            ? (list || []).slice(0, 2).map((u) =>
-                `<span class="prj-sdlc-user" title="${esc(u.key)} — ${u.count} run(s) in the window${(list || []).length > 2 ? ` · also: ${esc((list || []).slice(2).map((x) => `${x.key} (${x.count})`).join(", "))}` : ""}">${esc(u.key)}·${u.count}</span>`).join(" ")
+            ? (list || []).map((u) =>
+                `<span class="prj-sdlc-user" title="${esc(u.key)} — ${u.count} run(s) in the window">${esc(u.key)}·${u.count}</span>`).join(" ")
             : '<span class="prj-sdlc-none">—</span>';
           const anyTu = (tu.build || []).length || (tu.release || []).length
             || Object.values(tu.deploys || {}).some((l) => (l || []).length);
-          return anyTu ? `<tfoot><tr><td class="prj-sdlc-app" title="most active users per stage in the window">👤 top active</td>
+          return anyTu ? `<tfoot><tr><td class="prj-sdlc-app" title="every user active in this stage during the window, busiest first">👤 active</td>
             <td>${top(tu.build)}</td>
             ${early.map((e) => `<td>${top((tu.deploys || {})[e])}</td>`).join("")}
             <td>${top(tu.release)}</td>
