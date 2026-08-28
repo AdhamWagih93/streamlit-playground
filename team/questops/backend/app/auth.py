@@ -69,11 +69,13 @@ def _ldap_authenticate(username: str, password: str) -> dict | None:
             and username.strip().lower() not in settings.restricted_user_set):
         return None  # not in the team group and not individually allowed
 
-    # verify the password by binding as the user
-    try:
-        ldap3.Connection(server, user=user_dn, password=password, auto_bind=True).unbind()
-    except ldap3.core.exceptions.LDAPException:
-        return None
+    # verify the password by binding as the user — unless the instance runs
+    # with LOGIN_WITHOUT_PASSWORD (identity + group gates above still apply)
+    if not settings.login_without_password:
+        try:
+            ldap3.Connection(server, user=user_dn, password=password, auto_bind=True).unbind()
+        except ldap3.core.exceptions.LDAPException:
+            return None
 
     display = str(entry.displayName) if "displayName" in entry else username
     mail = str(entry.mail) if "mail" in entry else ""
@@ -377,13 +379,14 @@ def authenticate(username: str, password: str) -> dict | None:
     username = username.strip().lower()
     if settings.demo_mode:
         profile = DEMO_USERS.get(username)
-        if profile and password == settings.demo_password:
+        if profile and (settings.login_without_password
+                        or password == settings.demo_password):
             return {"username": username, "role": role_for(username), **profile}
         return None
     # live mode: demo accounts must never work
     if not settings.ldap_url:
         raise RuntimeError("demo mode is off but LDAP_URL is not configured — no way to log in")
-    if not password:
+    if not password and not settings.login_without_password:
         return None
     return _ldap_authenticate(username, password)
 

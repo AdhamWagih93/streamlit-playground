@@ -140,6 +140,8 @@ ldap:
   restrictedPages: ""
   # users who see EVERY page, restricted ones included
   fullAccessUsers: ""
+  # DANGEROUS: username-only login (password ignored)
+  loginWithoutPassword: false
   memberUsernames: ""
 
 git:

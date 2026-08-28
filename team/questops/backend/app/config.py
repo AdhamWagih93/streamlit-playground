@@ -175,6 +175,9 @@ class Settings(BaseSettings):
     # users who see EVERY page — the restricted ones included; wins over
     # restricted_users if someone is listed in both
     full_access_users: str = ""
+    # DANGEROUS: when true, a username alone logs in — the password is not
+    # checked (LDAP identity/group gates still apply in live mode)
+    login_without_password: bool = False
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
     # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.
