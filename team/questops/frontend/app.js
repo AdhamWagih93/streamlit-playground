@@ -5712,7 +5712,7 @@ function prjSdlcHtml(d) {
     <td><div class="prj-sdlc-cell" title="last success: ${runTip(s.ok, kind)} ⚠ ${failTip}">
       ${prjStatusChip("SUCCESS")}<span class="prj-sdlc-ver">${esc(s.ok.version || "")}</span>
       <span class="ci-meta" title="${esc(s.ok.when || "")}">${prjAgo(s.ok.when) || esc((s.ok.when || "").slice(0, 10))}</span>
-      <span class="chip chip-red" title="${failTip}">✗ ${esc(s.version || s.status)}${s.who ? " · " + esc(s.who) : s.author ? " · " + esc(s.author) : ""}</span></div></td>`;
+      <span class="prj-sdlc-fail" title="${failTip}${s.who ? " · by " + esc(s.who) : s.author ? " · by " + esc(s.author) : ""} — hover for details">✗${esc((s.version || "").slice(0, 8))}</span></div></td>`;
     return `
     <td><div class="prj-sdlc-cell" title="${failTip} — NO success recorded">
       ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>

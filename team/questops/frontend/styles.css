@@ -1672,3 +1672,9 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-spark-col .prj-spark-0 { background: var(--line); }
 .prj-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   margin-right: 5px; vertical-align: baseline; }
+
+/* divergent SDLC cell: the later failure is a tiny badge, not a wide chip —
+   full detail lives in the tooltip so the table never scrolls sideways */
+.prj-sdlc-fail { font: 700 9.5px var(--mono); color: var(--red);
+  border: 1px solid rgba(239, 95, 102, .5); background: rgba(239, 95, 102, .1);
+  border-radius: 8px; padding: 1px 5px; cursor: help; white-space: nowrap; }
