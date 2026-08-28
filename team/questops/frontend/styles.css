@@ -1612,6 +1612,12 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-ev { display: flex; align-items: center; gap: 7px; padding: 4px 6px;
   border-bottom: 1px dashed var(--line); }
 .prj-ev:hover { background: color-mix(in srgb, var(--line) 30%, transparent); }
+/* the moments that matter: PRODUCTION deployments and releases */
+.prj-ev.prj-ev-prd { border-left: 3px solid #e0a03c; background: rgba(224, 160, 60, .07); }
+.prj-ev.prj-ev-prd:hover { background: rgba(224, 160, 60, .14); }
+.prj-ev.prj-ev-rel { border-left: 3px solid #8471c9; background: rgba(132, 113, 201, .08); }
+.prj-ev.prj-ev-rel:hover { background: rgba(132, 113, 201, .15); }
+.prj-ev-prdchip { font-weight: 700; }
 .prj-ev-ico { width: 18px; text-align: center; flex: none; }
 .prj-ev-when { flex: none; font-family: var(--mono); }
 .prj-ev-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

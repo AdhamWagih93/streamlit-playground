@@ -5672,7 +5672,7 @@ const PRJ_EV = {  // event-log types: icon, label, chip class
   commit: ["⧗", "commit", "chip-cyan"],
   ecommit: ["⚡", "effective commit", "chip-green"],
   build: ["⚙", "build", ""],
-  deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", ""],
+  deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", "chip-violet"],
   jira: ["🎫", "jira", "chip-amber"], change: ["📝", "change", ""],
 };
 
@@ -5777,13 +5777,15 @@ function prjEventsBody(events, f) {
   const more = all.length - evs.length;
   return evs.map((e) => {
     const [ico, label, cls] = PRJ_EV[e.type] || ["•", e.type, ""];
+    const isPrd = e.type === "deploy" && /pr(o?)d/i.test(e.env || "");
+    const rowCls = isPrd ? "prj-ev-prd" : e.type === "release" ? "prj-ev-rel" : "";
     return `
-    <div class="prj-ev">
+    <div class="prj-ev ${rowCls}">
       <span class="prj-ev-ico" title="${esc(label)}">${ico}</span>
       <span class="ci-meta prj-ev-when">${esc((e.ts || "").slice(0, 16).replace("T", " "))}</span>
       <span class="chip ${cls}">${esc(label)}</span>
       ${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(e.app)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(e.app)}</code>`}
-      ${e.env ? `<span class="chip">${esc(e.env)}</span>` : ""}
+      ${e.env ? `<span class="chip ${e.type === "deploy" && /pr(o?)d/i.test(e.env) ? "chip-amber prj-ev-prdchip" : ""}">${e.type === "deploy" && /pr(o?)d/i.test(e.env) ? "★ " : ""}${esc(e.env)}</span>` : ""}
       ${prjStatusChip(e.status)}
       ${e.version ? `<span class="chip ${e.type === "ecommit" && !/^[0-9a-f]{7,}$/.test(e.version) ? "chip-green" : ""}" title="${e.type === "commit" ? "commit id" : e.type === "ecommit" ? "built version (via ef-cicd-builds commit id) — searchable" : "version"}">${esc(e.version)}</span>` : ""}
       ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
