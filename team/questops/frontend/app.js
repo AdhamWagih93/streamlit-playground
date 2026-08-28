@@ -5753,6 +5753,10 @@ function prjSdlcHtml(d) {
 }
 
 // ---- unified event log: every source, one stream, filterable ------------
+function prjEvFailed(e) {
+  return /fail|abort|error|cancel/i.test(e.status || "");
+}
+
 function prjEvMatchQ(e, q) {
   // space-separated terms AND together — "payments 1.4.2 alice" matches
   // events where EVERY term hits some field
@@ -5765,7 +5769,8 @@ function prjEventsBody(events, f) {
   f = f || {};
   const q = (f.q || "").toLowerCase();
   const all = (events || []).filter((e) =>
-    (!f.type || f.type === "all" || e.type === f.type) && prjEvMatchQ(e, q));
+    (!f.type || f.type === "all" || e.type === f.type)
+    && (!f.okOnly || !prjEvFailed(e)) && prjEvMatchQ(e, q));
   if (!all.length) return '<div class="empty">no events match</div>';
   const shown = f.shown || 150;
   const evs = all.slice(0, shown);
@@ -5795,7 +5800,7 @@ function prjEventsHtml(d) {
   if (!evs.length) return "";
   const f = state.prjEvFilter = state.prjEvFilter || {};
   const q0 = (f.q || "").toLowerCase();
-  const matching = evs.filter((e) => prjEvMatchQ(e, q0));
+  const matching = evs.filter((e) => prjEvMatchQ(e, q0) && (!f.okOnly || !prjEvFailed(e)));
   const counts = {};
   matching.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
   const btn = (t, label) => `<button class="btn btn-sm ${(f.type || "all") === t ? "btn-primary" : "btn-ghost"}" data-prj-ev="${t}">${label} <span class="prj-ev-n ${(t === "all" ? matching.length : counts[t]) ? "" : "prj-ev-n0"}">${t === "all" ? matching.length : counts[t] || 0}</span></button>`;
@@ -5805,6 +5810,7 @@ function prjEventsHtml(d) {
     <details class="filebox acc-pg-sec" open><summary>📜 event log — all sources · <b>${logInt(evs.length)}</b> event(s)${trunc.length ? ` <span class="ci-meta" title="each source is fetched up to 10000 docs per report — narrow the time window to see the rest">— sources with more in ES: ${esc(trunc.map(([k, v]) => `${k} ${logInt(v)}`).join(", "))}</span>` : ""}</summary>
       <div class="acc-filters" style="margin:6px 0">
         ${btn("all", "all")}${Object.entries(PRJ_EV).map(([t, [ico, label]]) => btn(t, `${ico} ${label}`)).join("")}
+        <button class="btn btn-sm ${f.okOnly ? "btn-primary" : "btn-ghost"}" data-prj-ev-ok title="hide FAILED / ABORTED builds, deployments and releases">🚫 hide failed</button>
         <input data-prj-ev-q placeholder="🔎 app / user / version / text… (space-separate to combine, e.g. payments 1.4.2)" value="${esc(f.q || "")}" style="flex:1;min-width:160px">
       </div>
       <div id="prj-ev-body" class="prj-ev-list">${prjEventsBody(evs, f)}</div>
@@ -6143,12 +6149,18 @@ function prjBodyHtml(d) {
 // event-log filter clicks/typing re-render only the list (delegated on body)
 function prjEvFilterEvt(ev) {
   const moreBtn = ev.target.closest("[data-prj-ev-more]");
+  const okBtn = ev.target.closest("[data-prj-ev-ok]");
   const btn = ev.target.closest("[data-prj-ev]");
   const inp = ev.target.closest("[data-prj-ev-q]");
-  if (!moreBtn && !btn && !inp) return;
+  if (!moreBtn && !okBtn && !btn && !inp) return;
   const f = state.prjEvFilter = state.prjEvFilter || {};
   if (moreBtn) f.shown = (f.shown || 150) + 300;
   else f.shown = 150;   // any filter change resets the visible batch
+  if (okBtn) {
+    f.okOnly = !f.okOnly;
+    okBtn.classList.toggle("btn-primary", f.okOnly);
+    okBtn.classList.toggle("btn-ghost", !f.okOnly);
+  }
   if (btn) {
     f.type = btn.dataset.prjEv;
     document.querySelectorAll("[data-prj-ev]").forEach((b) =>
@@ -6161,7 +6173,8 @@ function prjEvFilterEvt(ev) {
   // live per-type counts for the CURRENT search — see the filtered member/
   // app/version distribution at a glance without touching the buttons' focus
   const q = (f.q || "").toLowerCase();
-  const matching = ((state.prjData || {}).events || []).filter((e) => prjEvMatchQ(e, q));
+  const matching = ((state.prjData || {}).events || []).filter((e) =>
+    prjEvMatchQ(e, q) && (!f.okOnly || !prjEvFailed(e)));
   const counts = {};
   matching.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
   document.querySelectorAll("[data-prj-ev]").forEach((b) => {
