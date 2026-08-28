@@ -35,9 +35,13 @@ def role_for(username: str) -> str:
 
 def pages_for(username: str) -> tuple[bool, list[str] | None, list[str]]:
     """(restricted?, allowed pages or None=all, pages hidden from this user).
-    Restricted users see ONLY restricted_pages; everyone else sees everything
-    EXCEPT restricted_pages."""
-    if username.lower() in settings.restricted_user_set:
+    Restricted users see ONLY restricted_pages; FULL_ACCESS_USERS see every
+    page including the restricted ones (winning over a restricted listing);
+    everyone else sees everything EXCEPT restricted_pages."""
+    u = username.lower()
+    if u in settings.full_access_user_set:
+        return False, None, []
+    if u in settings.restricted_user_set:
         return True, settings.restricted_page_list, []
     return False, None, settings.restricted_page_list
 

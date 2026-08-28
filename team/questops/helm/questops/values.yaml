@@ -138,6 +138,8 @@ ldap:
   # which are hidden from everyone else
   restrictedUsers: ""
   restrictedPages: ""
+  # users who see EVERY page, restricted ones included
+  fullAccessUsers: ""
   memberUsernames: ""
 
 git:

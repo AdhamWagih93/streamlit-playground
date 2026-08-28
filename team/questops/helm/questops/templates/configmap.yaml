@@ -73,6 +73,7 @@ data:
   MEMBER_USERNAMES: {{ .Values.ldap.memberUsernames | quote }}
   RESTRICTED_USERS: {{ .Values.ldap.restrictedUsers | default "" | quote }}
   RESTRICTED_PAGES: {{ .Values.ldap.restrictedPages | default "" | quote }}
+  FULL_ACCESS_USERS: {{ .Values.ldap.fullAccessUsers | default "" | quote }}
   GIT_USER_NAME: {{ .Values.git.userName | quote }}
   GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}

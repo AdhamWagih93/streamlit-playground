@@ -172,6 +172,9 @@ class Settings(BaseSettings):
     # visible to NOBODY else
     restricted_users: str = ""
     restricted_pages: str = ""
+    # users who see EVERY page — the restricted ones included; wins over
+    # restricted_users if someone is listed in both
+    full_access_users: str = ""
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
     # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.
@@ -236,6 +239,10 @@ class Settings(BaseSettings):
     @property
     def restricted_page_list(self) -> list[str]:
         return [p.lower() for p in self._csv(self.restricted_pages)]
+
+    @property
+    def full_access_user_set(self) -> set[str]:
+        return {u.lower() for u in self._csv(self.full_access_users)}
 
     @property
     def kpi_sync_marks(self) -> list[int]:
