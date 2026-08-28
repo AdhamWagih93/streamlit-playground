@@ -1601,7 +1601,8 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-sdlc th { text-align: left; font: 700 10px var(--mono); color: var(--faint);
   text-transform: uppercase; letter-spacing: .06em; padding: 5px 8px;
   border-bottom: 1px solid var(--line); white-space: nowrap; }
-.prj-sdlc td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.prj-sdlc td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.prj-sdlc-st { padding: 1px 6px; font-weight: 800; }
 .prj-sdlc-app { font: 600 12px var(--mono); color: var(--text); white-space: nowrap; }
 .prj-sdlc-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: help; }
 .prj-sdlc-ver { font: 600 10.5px var(--mono); color: var(--text); }

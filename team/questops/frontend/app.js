@@ -5699,23 +5699,28 @@ function prjSdlcHtml(d) {
   const early = envs.filter((e) => (ENV_RANK[e] || 9) < 3);
   const late = envs.filter((e) => (ENV_RANK[e] || 9) >= 3);
   const okS = (st) => /succ/i.test(st || "");
+  const stGlyph = (st) => {
+    if (okS(st)) return '<span class="chip chip-green prj-sdlc-st" title="' + esc(st) + '">✓</span>';
+    if (/fail|abort|error|cancel/i.test(st || "")) return '<span class="chip chip-red prj-sdlc-st" title="' + esc(st) + '">✗</span>';
+    return st ? '<span class="chip chip-amber prj-sdlc-st" title="' + esc(st) + '">…</span>' : "";
+  };
   const runTip = (x, kind) => `${esc(kind)} ${esc(x.version || "")} · ${esc(x.when || "")}${x.who ? " · by " + esc(x.who) : x.author ? " · by " + esc(x.author) : ""}${x.branch ? " · ⎇ " + esc(x.branch) : ""}${x.rlm ? " · " + esc(x.rlm) : ""}`;
   const cell = (s, kind) => {
     if (!s) return '<td class="prj-sdlc-none">—</td>';
     if (okS(s.status) || !s.status) return `
-    <td><div class="prj-sdlc-cell" title="${runTip(s, kind)}">
-      ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
+    <td><div class="prj-sdlc-cell" title="${esc(s.status || "")} — ${runTip(s, kind)}">
+      ${stGlyph(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
       <span class="ci-meta" title="${esc(s.when || "")}">${prjAgo(s.when) || esc((s.when || "").slice(0, 10))}</span></div></td>`;
     // latest run FAILED → show the last success + the failure that followed
     const failTip = `LATEST: ${esc(s.status)} — ${runTip(s, kind)}`;
     if (s.ok) return `
     <td><div class="prj-sdlc-cell" title="last success: ${runTip(s.ok, kind)} ⚠ ${failTip}">
-      ${prjStatusChip("SUCCESS")}<span class="prj-sdlc-ver">${esc(s.ok.version || "")}</span>
+      ${stGlyph("SUCCESS")}<span class="prj-sdlc-ver">${esc(s.ok.version || "")}</span>
       <span class="ci-meta" title="${esc(s.ok.when || "")}">${prjAgo(s.ok.when) || esc((s.ok.when || "").slice(0, 10))}</span>
       <span class="prj-sdlc-fail" title="${failTip}${s.who ? " · by " + esc(s.who) : s.author ? " · by " + esc(s.author) : ""} — hover for details">✗${esc((s.version || "").slice(0, 8))}</span></div></td>`;
     return `
     <td><div class="prj-sdlc-cell" title="${failTip} — NO success recorded">
-      ${prjStatusChip(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
+      ${stGlyph(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
       <span class="ci-meta" title="${esc(s.when || "")}">${prjAgo(s.when) || esc((s.when || "").slice(0, 10))}</span></div></td>`;
   };
   const totals = cc.totals || {};
