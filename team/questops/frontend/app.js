@@ -5599,16 +5599,24 @@ async function renderAccess() {
 // platform DB, ADO, commits (ES mirror), Jira (ES mirror), security scans,
 // logging health. Data comes from ONE cached backend report — no fan-out
 // of source-system calls from the browser.
-function prjBar(list, cls, colorOf) {
+function prjBar(list, cls, colorOf, extra) {
   const rows = (list || []).filter((b) => b.count);
   if (!rows.length) return '<div class="empty">none in the window</div>';
   const max = Math.max(...rows.map((b) => b.count), 1);
   return rows.map((b) => `
-    <div class="pgv-row" title="${esc(b.key)} — ${logExact(b.count)}">
+    <div class="pgv-row" title="${esc(b.key)} — ${logExact(b.count)}${b.added != null ? ` · +${logExact(b.added)} −${logExact(b.deleted || 0)} lines` : ""}">
       <span class="pgv-label">${colorOf ? `<i class="prj-dot" style="background:${colorOf(b.key)}"></i>` : ""}${esc(b.key)}</span>
       <span class="pgv-track"><span class="pgv-bar ${cls || ""}" style="width:${(b.count / max * 100).toFixed(0)}%${colorOf ? `;background:${colorOf(b.key)}` : ""}"></span></span>
-      <span class="pgv-count">${logInt(b.count)}</span>
+      <span class="pgv-count">${logInt(b.count)}</span>${extra ? extra(b) : ""}
     </div>`).join("");
+}
+
+// commit impact: "+added −deleted" with a size badge (XS…XL by lines touched)
+function prjLines(added, deleted, compact) {
+  if (added == null && deleted == null) return "";
+  const a = added || 0, dl = deleted || 0, n = a + dl;
+  const size = n >= 1000 ? "XL" : n >= 300 ? "L" : n >= 100 ? "M" : n >= 20 ? "S" : "XS";
+  return `<span class="prj-lines" title="${logExact(a)} line(s) added, ${logExact(dl)} deleted — ${size} change (${logExact(n)} lines touched)"><b class="prj-add">+${logInt(a)}</b> <b class="prj-del">−${logInt(dl)}</b>${compact ? "" : ` <i class="prj-size prj-size-${size.toLowerCase()}">${size}</i>`}</span>`;
 }
 
 // stable contributor colors: rank order in the window's author list
@@ -5893,6 +5901,7 @@ function prjEventsBody(events, f) {
       ${prjStatusChip(e.status)}
       ${e.version ? `<span class="chip ${e.type === "ecommit" && !/^[0-9a-f]{7,}$/.test(e.version) ? "chip-green" : ""}" title="${e.type === "commit" ? "commit id" : e.type === "ecommit" ? "built version (via ef-cicd-builds commit id) — searchable" : "version"}">${esc(e.version)}</span>` : ""}
       ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
+      ${e.added != null || e.deleted != null ? prjLines(e.added, e.deleted, true) : ""}
       ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
       <span class="ci-meta prj-ev-detail" ${e.tip ? `title="${esc(e.tip)}"` : ""}>${esc(e.detail || "")}</span>
     </div>`;
@@ -6092,6 +6101,7 @@ function prjBodyHtml(d) {
       ${com.error ? prjErr(com, "commits (ef-git-commits)") : `
       <div class="inv-chips" style="margin:6px 0 2px">
         <span class="chip">≈ <b>${com.rate}</b> commits/day</span>
+        ${com.lines ? `<span class="chip" title="lines added / deleted across the window's commits · net ${logExact((com.lines.added || 0) - (com.lines.deleted || 0))}">${prjLines(com.lines.added, com.lines.deleted, true)} · net <b>${(com.lines.added || 0) - (com.lines.deleted || 0) >= 0 ? "+" : ""}${logInt((com.lines.added || 0) - (com.lines.deleted || 0))}</b></span>` : ""}
         <span class="chip">${com.active_days} active ${com.unit || "day"}(s)${d.days ? ` of ${d.days}` : ""}</span>
         ${(com.branches || []).slice(0, 4).map((b) => `<span class="chip" title="branch">⎇ ${esc(b.key)} · ${logInt(b.count)}</span>`).join("")}
       </div>
@@ -6125,9 +6135,9 @@ function prjBodyHtml(d) {
       <div class="inv-chips" style="margin:2px 0">${legend}</div>
       ${prjSparkStacked(com.per_day, colorOf, "commit(s)")}
       <div class="prj-grid">
-        <div class="pgv-card"><div class="pgv-title">top contributors</div>${prjBar(com.authors, "", colorOf)}</div>
+        <div class="pgv-card"><div class="pgv-title">top contributors <span class="ci-meta">· commits · lines</span></div>${prjBar(com.authors, "", colorOf, (b) => prjLines(b.added, b.deleted, true))}</div>
         ${matrix}
-        <div class="pgv-card"><div class="pgv-title">per repository</div>${prjBar(com.repos)}</div>
+        <div class="pgv-card"><div class="pgv-title">per repository <span class="ci-meta">· commits · lines</span></div>${prjBar(com.repos, "", null, (b) => prjLines(b.added, b.deleted, true))}</div>
       </div>`;
       })()}
       ${(() => {
@@ -6142,6 +6152,15 @@ function prjBodyHtml(d) {
         if (rp.length > 1) out.push(`<b>${esc(rp[0].key)}</b> takes ${pct(rp[0].count, rp.reduce((n, r) => n + r.count, 0))}% of the commits`);
         const dev = (com.branches || []).find((b) => /^develop$/i.test(b.key));
         if (dev && com.total) out.push(`<b>${pct(dev.count, com.total)}%</b> of commits land on develop`);
+        if (com.lines && (com.lines.added || com.lines.deleted)) {
+          const a = com.lines.added || 0, dl = com.lines.deleted || 0;
+          out.push(`change size: <b>+${logInt(a)} / −${logInt(dl)}</b> lines (${dl > a ? "net shrink — cleanup or removals dominate" : pct(dl, a || 1) >= 60 ? "heavy churn — much rewritten" : "mostly additive"}), ≈<b>${logInt(Math.round((a + dl) / Math.max(com.total, 1)))}</b> lines per commit`);
+          const big = [...(com.recent || [])].sort((x, y) => ((y.added || 0) + (y.deleted || 0)) - ((x.added || 0) + (x.deleted || 0)))[0];
+          if (big && (big.added || big.deleted)) out.push(`largest commit: <b>${esc(big.id || big.repo)}</b> by ${esc(big.author)} (+${logInt(big.added || 0)} −${logInt(big.deleted || 0)}) — ${esc(big.message || "")}`);
+          const au = (com.authors || []).filter((x) => x.added != null);
+          const top = [...au].sort((x, y) => (y.added + y.deleted) - (x.added + x.deleted))[0];
+          if (top && au.length > 1 && top.key !== (com.authors[0] || {}).key) out.push(`<b>${esc(top.key)}</b> touches the most lines even though <b>${esc(com.authors[0].key)}</b> commits most often`);
+        }
         return prjInsights(out);
       })()}
       <details class="filebox acc-pg-sec"><summary>🕘 recent commits · <b>${logInt((com.recent || []).length)}</b>${(com.recent || []).length > 30 ? ' <span class="ci-meta">— first 30 here; ALL of them are in the event log</span>' : ""}</summary>
@@ -6150,6 +6169,7 @@ function prjBodyHtml(d) {
             <code class="log-idx-name" style="flex:none">${esc(c.repo)}</code>
             <span class="chip">⎇ ${esc(c.branch)}</span>
             <span class="chip chip-cyan">${esc(c.author)}</span>
+            ${prjLines(c.added, c.deleted)}
             <span class="ci-meta">${esc(c.message)}</span></div>`).join("")}</div>
       </details>`}
     </details>`;

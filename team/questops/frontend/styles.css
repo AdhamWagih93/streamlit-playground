@@ -1741,3 +1741,11 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .dora-delta.down { color: #c0841c; }
 
 .prj-print-only { display: none; }
+
+/* commit impact — added/deleted lines + size badge */
+.prj-lines { font: 600 10px var(--mono); white-space: nowrap; cursor: help; margin-left: 4px; }
+.prj-add { color: #43c884; font-weight: 700; }
+.prj-del { color: #ef5f66; font-weight: 700; }
+.prj-size { font: 700 8.5px var(--mono); font-style: normal; padding: 0 4px; border-radius: 6px;
+  border: 1px solid var(--line); color: var(--faint); margin-left: 2px; vertical-align: 1px; }
+.prj-size-l, .prj-size-xl { color: #c0841c; border-color: rgba(192,132,28,.5); }

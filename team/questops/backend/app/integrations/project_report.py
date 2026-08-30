@@ -187,7 +187,7 @@ def _sec_commits(name: str, repos: list[str], days: int, prev: bool = False) -> 
         "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}],
         "_source": ["commitdate", "repository", "branch", "authorname",
                     "authormail", "commitauthor", "commitmessage", "commitid",
-                    "project"],
+                    "project", "insertedlines", "deletedlines"],
         "aggs": {
             "per_day": {"date_histogram": {
                 "field": "commitdate",
@@ -199,8 +199,14 @@ def _sec_commits(name: str, repos: list[str], days: int, prev: bool = False) -> 
                             "aggs": {"repos": {"terms": {"field": "repository",
                                                          "size": 12}}}},
             "authors": {"terms": {"field": "authorname", "size": 30,
-                                  "missing": "(unknown)"}},
-            "repos": {"terms": {"field": "repository", "size": 30}},
+                                  "missing": "(unknown)"},
+                        "aggs": {"ins": {"sum": {"field": "insertedlines"}},
+                                 "dele": {"sum": {"field": "deletedlines"}}}},
+            "repos": {"terms": {"field": "repository", "size": 30},
+                      "aggs": {"ins": {"sum": {"field": "insertedlines"}},
+                               "dele": {"sum": {"field": "deletedlines"}}}},
+            "ins": {"sum": {"field": "insertedlines"}},
+            "dele": {"sum": {"field": "deletedlines"}},
             "branches": {"terms": {"field": "branch", "size": 10}},
         },
         "track_total_hits": True, "size": 10000,
@@ -225,6 +231,8 @@ def _sec_commits(name: str, repos: list[str], days: int, prev: bool = False) -> 
                        "repo": s.get("repository") or "",
                        "branch": s.get("branch") or "",
                        "author": author,
+                       "added": _int(s.get("insertedlines")),
+                       "deleted": _int(s.get("deletedlines")),
                        "id": str(s.get("commitid") or "")[:10],
                        "id_full": str(s.get("commitid") or ""),
                        "message": (msg[0] if msg else "")[:140],
@@ -253,15 +261,28 @@ def _sec_commits(name: str, repos: list[str], days: int, prev: bool = False) -> 
                     - dt.date.fromisoformat(per_day[0]["key"][:10])).days + 30, 1)
     else:
         span = max(days, 1)
+    def _lines_rows(node, fold):
+        rows: dict = {}
+        for b in (node or {}).get("buckets", []):
+            k = _user_key(b.get("key")) if fold else b.get("key")
+            slot = rows.setdefault(k, {"key": _user_display(b.get("key")) if fold else b.get("key"),
+                                       "count": 0, "added": 0, "deleted": 0})
+            slot["count"] += b.get("doc_count", 0)
+            slot["added"] += _int((b.get("ins") or {}).get("value"))
+            slot["deleted"] += _int((b.get("dele") or {}).get("value"))
+        return sorted(rows.values(), key=lambda x: -x["count"])
+    lines = {"added": _int((aggs.get("ins") or {}).get("value")),
+             "deleted": _int((aggs.get("dele") or {}).get("value"))}
     return {"total": total, "days": days, "unit": "month" if all_time else "day",
+            "lines": lines,
             "per_day": [{"day": (b["key"] or "")[:10], "count": b["count"],
                          "by_author": b.get("by_author") or {}}
                         for b in per_day],
             "author_repo": author_repo,
             "rate": round(total / span, 2),
             "active_days": active_days,
-            "authors": _fold_users(_buckets("authors")),
-            "repos": _buckets("repos"),
+            "authors": _lines_rows(aggs.get("authors"), fold=True),
+            "repos": _lines_rows(aggs.get("repos"), fold=False),
             "branches": _buckets("branches"), "recent": recent}
 
 
@@ -1032,6 +1053,7 @@ def _assemble_events(out: dict) -> list[dict]:
         built = _built_version(c.get("id_full") or c.get("id") or "") if eff else ""
         events.append({"ts": c.get("when") or "", "type": "ecommit" if eff else "commit",
                        "app": c.get("repo") or "", "env": "",
+                       "added": c.get("added"), "deleted": c.get("deleted"),
                        "status": "", "version": built or (c.get("id") or ""),
                        "who": _user_display(c.get("author") or ""),
                        "test": False,
@@ -1237,20 +1259,23 @@ def _demo_report(name: str, days: int) -> dict:
         "unit": "day" if days else "month",
         "rate": round(total / max(days or 720, 1), 2),
         "active_days": sum(1 for b in per_day if b["count"]),
-        "authors": [{"key": a, "count": c} for a, c in authors],
+        "lines": {"added": 4820, "deleted": 2135},
+        "authors": [{"key": a, "count": c, "added": c * 61, "deleted": c * 27} for a, c in authors],
         "author_repo": [
             {"author": "alice", "total": 34, "repos": {(repos or ["main-repo"])[0]: 20,
                                                        (repos or ["main-repo"])[-1]: 14}},
             {"author": "bob", "total": 21, "repos": {(repos or ["main-repo"])[0]: 21}},
             {"author": "carol", "total": 12, "repos": {r: 4 for r in (repos or ["main-repo"])[:3]}},
             {"author": "dave", "total": 6, "repos": {(repos or ["main-repo"])[-1]: 6}}],
-        "repos": [{"key": r, "count": max(3, (seed + i * 13) % 40)}
+        "repos": [{"key": r, "count": max(3, (seed + i * 13) % 40),
+                   "added": max(3, (seed + i * 13) % 40) * 70, "deleted": max(3, (seed + i * 13) % 40) * 31}
                   for i, r in enumerate(repos)] or [{"key": "main-repo", "count": total}],
         "branches": [{"key": "develop", "count": int(total * .6)},
                      {"key": "main", "count": int(total * .4)}],
         "recent": [{"when": f"{per_day[-1]['day']} 10:0{i}", "repo": (repos or ['main-repo'])[i % max(len(repos), 1)],
                     "branch": ["develop", "feature/checkout-e2e", "develop", "release/1.4"][i % 4],
                     "author": authors[i % 4][0],
+                    "added": [38, 412, 9, 120][i], "deleted": [12, 5, 210, 60][i],
                     "id": f"a1b2c3d{i}", "id_full": f"a1b2c3d{i}e4f5a6b7c8",
                     "message": m,
                     "message_full": m + "\n\n- reviewed by the team\n- refs DEVOPS-14" + str(i)}
