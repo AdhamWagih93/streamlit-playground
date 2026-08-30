@@ -1,6 +1,9 @@
+import logging
+import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -23,6 +26,26 @@ for router in (auth_routes.router, work.router, game.router,
                logging_routes.router, projects_routes.router,
                activity.router, configs_routes.router):
     app.include_router(router)
+
+
+_log = logging.getLogger("questops")
+
+
+@app.exception_handler(Exception)
+async def explain_unhandled(request: Request, exc: Exception):
+    """A bare 'Internal Server Error' tells the user nothing. Every unhandled
+    exception becomes a JSON 500 whose `detail` names the exception, its
+    message and the innermost frame inside QuestOps — the UI shows `detail`
+    verbatim — while the full traceback goes to the server log."""
+    tb = traceback.extract_tb(exc.__traceback__)
+    ours = [f for f in tb if "/app/" in f.filename.replace("\\", "/")] or list(tb)
+    where = f" @ {Path(ours[-1].filename).name}:{ours[-1].lineno} in {ours[-1].name}()" if ours else ""
+    _log.error("unhandled error on %s %s\n%s", request.method, request.url.path,
+               "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    return JSONResponse(status_code=500, content={
+        "detail": f"{type(exc).__name__}: {str(exc)[:300] or 'no message'}{where}",
+        "path": request.url.path,
+        "hint": "full traceback is in the QuestOps server log (docker/podman logs)"})
 
 
 @app.middleware("http")

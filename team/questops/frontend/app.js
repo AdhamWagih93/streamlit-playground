@@ -7394,6 +7394,76 @@ function prjCatalogCards(rows, f) {
       <div class="cat-grid">${ps.map(card).join("")}</div></div>`).join("");
 }
 
+// ---- activity timeline: 30 days × (activity type | project), above the cards
+const CAT_TYPE_COLOR = { commits: "#1497b3", builds: "#8471c9", deploys: "#43c884", releases: "#e0863c", tests: "#5b8def", stdchanges: "#d06aa8" };
+const CAT_PALETTE = ["#1497b3", "#8471c9", "#43c884", "#e0863c", "#5b8def", "#d06aa8", "#c0841c", "#2e9c62", "#e05c5c", "#7a8699", "#1ec3e6", "#a66bd6"];
+const catProjColor = (i) => CAT_PALETTE[i % CAT_PALETTE.length];
+
+function prjCatTimeline(rows, cat, f) {
+  const days = cat.days || [];
+  if (!days.length || !rows.length) return "";
+  const types = Object.keys(CAT_SRC).filter((t) => rows.some((p) => ((p.activity || {})[t] || {}).hist));
+  const on = new Set(cfgArr(f.types).length ? cfgArr(f.types) : types);
+  const mode = f.stack || "type";
+  // per day: {type: n} and {project: n}, honouring the type toggles
+  const byType = days.map(() => ({})), byProj = days.map(() => ({})), projTot = {};
+  rows.forEach((p) => Object.entries(p.activity || {}).forEach(([t, v]) => { if (!on.has(t) || !v.hist) return;
+    v.hist.forEach((n, i) => { if (!n) return; byType[i][t] = (byType[i][t] || 0) + n; byProj[i][p.name] = (byProj[i][p.name] || 0) + n; projTot[p.name] = (projTot[p.name] || 0) + n; }); }));
+  const projOrder = rows.map((p) => p.name).filter((n) => projTot[n]).sort((a, b) => projTot[b] - projTot[a]);
+  const projIdx = {}; projOrder.forEach((n, i) => { projIdx[n] = i; });
+  const dayTot = byType.map((d) => Object.values(d).reduce((n, x) => n + x, 0));
+  const max = Math.max(1, ...dayTot);
+  const W = 900, H = 150, PAD = 4, bw = (W - PAD * 2) / days.length, gap = 2;
+  const nice = (iso) => { const d = new Date(iso + "T00:00:00"); return isNaN(d) ? iso : d.toLocaleDateString([], { month: "short", day: "numeric" }); };
+  const bars = days.map((day, i) => {
+    let y = H - PAD; const src = mode === "type" ? byType[i] : byProj[i];
+    // by project: the 12 busiest projects overall get their own segment, the
+    // rest fold into one "others" segment — keeps 200+ projects readable and cheap
+    const top = mode === "type" ? types.filter((t) => src[t]) : projOrder.slice(0, 12).filter((n) => src[n]);
+    const others = mode === "project" ? projOrder.slice(12).reduce((n, k) => n + (src[k] || 0), 0) : 0;
+    const keys = others ? [...top, "__others"] : top;
+    const segs = keys.map((k) => { const val = k === "__others" ? others : src[k]; const h = (val / max) * (H - PAD * 2); y -= h;
+      if (k === "__others") return `<rect class="cat-tl-seg" x="${(PAD + i * bw + gap / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - gap).toFixed(1)}" height="${Math.max(0.5, h).toFixed(1)}" fill="#c9d1da" data-tl-day="${i}"><title>${nice(day)} · ${projOrder.length - 12} other project(s) · ${others} event(s) — click the day to list them</title></rect>`;
+      const col = mode === "type" ? CAT_TYPE_COLOR[k] || "#7a8699" : catProjColor(projIdx[k]);
+      const label = mode === "type" ? (CAT_SRC[k] || [k, k])[1] + "s" : k;
+      return `<rect class="cat-tl-seg" x="${(PAD + i * bw + gap / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - gap).toFixed(1)}" height="${Math.max(0.5, h).toFixed(1)}" fill="${col}" data-tl-day="${i}" ${mode === "project" ? `data-cat-jump="${esc(k)}"` : `data-tl-type="${esc(k)}"`}><title>${nice(day)} · ${esc(label)} · ${src[k]}${mode === "type" ? "" : " event(s)"}</title></rect>`; }).join("");
+    return `<g class="cat-tl-day ${f.day === i ? "cat-tl-on" : ""}" data-tl-day="${i}"><rect class="cat-tl-hit" x="${(PAD + i * bw).toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H}" data-tl-day="${i}"><title>${nice(day)} · ${dayTot[i]} event(s) — click to see which projects</title></rect>${segs}</g>`;
+  }).join("");
+  const legend = mode === "type"
+    ? types.map((t) => `<button class="chip cfg-chip ${on.has(t) ? "chip-on" : "cat-tl-off"}" data-tl-toggle="${t}" style="border-color:${CAT_TYPE_COLOR[t]}"><i class="prj-dot" style="background:${CAT_TYPE_COLOR[t]}"></i>${(CAT_SRC[t] || ["", t])[0]} ${(CAT_SRC[t] || ["", t])[1]}s</button>`).join("")
+    : projOrder.slice(0, 12).map((n) => `<button class="chip cfg-chip" data-cat-jump="${esc(n)}" style="border-color:${catProjColor(projIdx[n])}" title="jump to ${esc(n)}"><i class="prj-dot" style="background:${catProjColor(projIdx[n])}"></i>${esc(n)} · ${projTot[n]}</button>`).join("") + (projOrder.length > 12 ? `<span class="ci-meta">+${projOrder.length - 12} more</span>` : "");
+  // day focus: which projects moved that day, per type
+  let focus = "";
+  if (f.day != null && byProj[f.day]) {
+    const i = f.day, ps = Object.entries(byProj[i]).sort((a, b) => b[1] - a[1]);
+    focus = `<div class="cat-tl-focus"><b>${nice(days[i])}</b> · ${dayTot[i]} event(s) · ${types.filter((t) => byType[i][t]).map((t) => `<span style="color:${CAT_TYPE_COLOR[t]}">${byType[i][t]} ${(CAT_SRC[t] || ["", t])[1]}${byType[i][t] === 1 ? "" : "s"}</span>`).join(" · ") || "quiet day"}
+      <span class="spacer"></span>${ps.map(([n, c]) => `<button class="chip cfg-chip" data-cat-jump="${esc(n)}" title="jump to ${esc(n)}">${esc(n)} · ${c}</button>`).join("") || '<span class="ci-meta">no project active</span>'}<button class="btn btn-sm btn-ghost" data-tl-day="-1" title="clear day focus">✕</button></div>`;
+  }
+  // lanes: one heat strip per project (filtered rows, busiest first)
+  const lanes = projOrder.slice(0, 60).map((n) => { const p = rows.find((r) => r.name === n); const cells = days.map((_, i) => byProj[i][n] || 0); const m = Math.max(1, ...cells);
+    return `<div class="cat-lane" data-cat-jump="${esc(n)}" title="jump to ${esc(n)} · ${projTot[n]} event(s) in 30d"><span class="cat-lane-name" style="--k:${catProjColor(projIdx[n])}">${esc(n)}</span>
+      <span class="cat-lane-cells">${cells.map((c, i) => `<i style="opacity:${c ? (0.25 + 0.75 * c / m).toFixed(2) : 0}" title="${nice(days[i])} · ${c}"></i>`).join("")}</span><b>${logInt(projTot[n])}</b>${p && p.last_activity ? `<small>${prjAgo(p.last_activity)}</small>` : ""}</div>`; }).join("");
+  return `<div class="cat-tl">
+    <div class="cat-tl-head"><span class="pgv-title">📈 activity timeline · last 30 days · ${logInt(dayTot.reduce((n, x) => n + x, 0))} event(s)</span><span class="spacer"></span>
+      <span class="log-dir"><button class="btn btn-sm ${mode === "type" ? "btn-primary" : "btn-ghost"}" data-tl-stack="type">by activity type</button><button class="btn btn-sm ${mode === "project" ? "btn-primary" : "btn-ghost"}" data-tl-stack="project">by project</button></span>
+      <button class="btn btn-sm ${f.lanes ? "btn-primary" : "btn-ghost"}" data-tl-lanes title="one heat strip per project">≡ lanes</button></div>
+    <div class="inv-chips" style="margin:2px 0 4px">${legend}</div>
+    <svg class="cat-tl-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg>
+    <div class="cat-tl-axis">${days.map((d, i) => `<span>${i % 5 === 0 || i === days.length - 1 ? nice(d) : ""}</span>`).join("")}</div>
+    ${focus}
+    ${f.lanes ? `<div class="cat-lanes">${lanes || '<div class="empty">no activity in the window</div>'}${projOrder.length > 60 ? `<div class="ci-meta">first 60 of ${projOrder.length} active projects — narrow the filters for the rest</div>` : ""}</div>` : ""}
+  </div>`;
+}
+
+function prjCatJump(name) {
+  const card = document.querySelector(`.cat-card[data-cat-open="${CSS.escape(name)}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  document.querySelectorAll(".cat-card.cat-hit").forEach((c) => c.classList.remove("cat-hit"));
+  card.classList.add("cat-hit");
+  setTimeout(() => card.classList.remove("cat-hit"), 1800);
+}
+
 // "data as of" line — the anchor every "x min ago" on the page is relative to;
 // ticks every 30 s so the page feels alive without any network traffic
 function prjCatAsOf(cat) {
@@ -7437,19 +7507,39 @@ function prjCatalogHtml(cat) {
         ${prjCatAsOf(cat)}
       </div>
     </div>
-    <div id="cat-body">${prjCatalogCards(rows, f)}</div>
+    <div id="cat-body">${prjCatTimeline(rows, cat, f)}${prjCatalogCards(rows, f)}</div>
     <div class="kpi-note">activity pulse + security / prd-deploy / usage facts come from size-0 aggregations (one per index); ADO description, standard changes and logging health reuse their cached analyses — cached 5 min, no report is built until you open a project${(cat.errors || []).length ? ` · <span class="pct-warn">sources unavailable: ${esc(cat.errors.join("; "))}</span>` : ""}</div>`;
 }
 
-function prjCatalogEvt(ev) {
-  const open = ev.target.closest("[data-cat-open]");
-  if (open) { prjOpen(open.dataset.catOpen); return; }
-  const el = ev.target.closest("[data-cat-f]");
-  if (!el || ev.type === "click") return;
-  (state.prjCatFilter = state.prjCatFilter || {})[el.dataset.catF] = el.value;
+function prjCatRedraw() {
+  const f = state.prjCatFilter = state.prjCatFilter || {};
   const body = document.getElementById("cat-body");
-  const rows = prjCatalogFilter((state.prjCatalog || {}).projects || [], state.prjCatFilter);
-  if (body) body.innerHTML = prjCatalogCards(rows, state.prjCatFilter);
+  const rows = prjCatalogFilter((state.prjCatalog || {}).projects || [], f);
+  if (body) body.innerHTML = prjCatTimeline(rows, state.prjCatalog || {}, f) + prjCatalogCards(rows, f);
+  return rows;
+}
+
+function prjCatalogEvt(ev) {
+  const f = state.prjCatFilter = state.prjCatFilter || {};
+  if (ev.type === "click") {
+    const jump = ev.target.closest("[data-cat-jump]");
+    if (jump) { prjCatJump(jump.dataset.catJump); return; }
+    const st = ev.target.closest("[data-tl-stack]");
+    if (st) { f.stack = st.dataset.tlStack; prjCatRedraw(); return; }
+    if (ev.target.closest("[data-tl-lanes]")) { f.lanes = !f.lanes; prjCatRedraw(); return; }
+    const tg = ev.target.closest("[data-tl-toggle]");
+    if (tg) { const t = tg.dataset.tlToggle, all = Object.keys(CAT_SRC), cur = cfgArr(f.types).length ? cfgArr(f.types) : all; f.types = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; if (!f.types.length) f.types = all; prjCatRedraw(); return; }
+    const dy = ev.target.closest("[data-tl-day]");
+    if (dy) { const i = parseInt(dy.dataset.tlDay, 10); f.day = i < 0 || f.day === i ? null : i; prjCatRedraw(); const tl = document.querySelector(".cat-tl-focus"); if (tl) tl.scrollIntoView({ behavior: "smooth", block: "nearest" }); return; }
+    const open = ev.target.closest("[data-cat-open]");
+    if (open) { prjOpen(open.dataset.catOpen); return; }
+    return;
+  }
+  const el = ev.target.closest("[data-cat-f]");
+  if (!el) return;
+  f[el.dataset.catF] = el.value;
+  const rows = prjCatRedraw();
+  const body = null;
   const n = document.getElementById("cat-count");
   if (n) n.textContent = `${rows.length} of ${((state.prjCatalog || {}).projects || []).length}`;
 }

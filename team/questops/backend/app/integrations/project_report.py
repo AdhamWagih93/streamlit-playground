@@ -1105,7 +1105,8 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
         resp = _es("ef-ops-db-changes-standard", {"size": 0, "aggs": {"by": {
             "terms": {"field": "JobName", "size": 2000},
             "aggs": {"last": {"max": {"field": "Date"}},
-                     "recent": {"filter": {"range": {"Date": {"gte": "now-30d"}}}}}}}})
+                     "recent": {"filter": {"range": {"Date": {"gte": "now-30d"}}},
+                                "aggs": {"days": {"date_histogram": {"field": "Date", "calendar_interval": "day"}}}}}}}})
         for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
             pk = job2proj.get(b.get("key"))
             if not pk:
@@ -1113,10 +1114,13 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
             last = ((b.get("last") or {}).get("value_as_string") or "")[:19]
             slot = out.setdefault(pk, {})
             prev = slot.get("stdchanges")
+            hist = _hist30(b.get("recent") or {})
             if not prev or last > prev["last"]:
-                slot["stdchanges"] = {"last": last, "recent": (b.get("recent") or {}).get("doc_count", 0) + (prev["recent"] if prev else 0)}
+                slot["stdchanges"] = {"last": last, "recent": (b.get("recent") or {}).get("doc_count", 0) + (prev["recent"] if prev else 0),
+                                      "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist}
             else:
                 prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
+                prev["hist"] = [a + c for a, c in zip(prev["hist"], hist)]
     except Exception as exc:  # noqa: BLE001
         errors.append(f"ef-ops-db-changes-standard: {str(exc)[:80]}")
 
@@ -1133,7 +1137,8 @@ def _cat_activity() -> tuple[dict, list[str]]:
             resp = _es(index, {"size": 0, "aggs": {"by": {
                 "terms": {"field": "project", "size": 1000},
                 "aggs": {"last": {"max": {"field": field}},
-                         "recent": {"filter": {"range": {field: {"gte": "now-30d"}}}}}}}})
+                         "recent": {"filter": {"range": {field: {"gte": "now-30d"}}},
+                                    "aggs": {"days": {"date_histogram": {"field": field, "calendar_interval": "day"}}}}}}}})
         except Exception as exc:  # noqa: BLE001 — one dead index hides only itself
             errors.append(f"{index}: {str(exc)[:80]}")
             continue
@@ -1142,12 +1147,32 @@ def _cat_activity() -> tuple[dict, list[str]]:
             last = (b.get("last") or {}).get("value_as_string") or ""
             slot = out.setdefault(k, {})
             prev = slot.get(key)
+            hist = _hist30(b.get("recent") or {})
             if not prev or last > prev["last"]:
                 slot[key] = {"last": last[:19], "recent": (b.get("recent") or {}).get("doc_count", 0)
-                             + (prev["recent"] if prev else 0)}
+                             + (prev["recent"] if prev else 0),
+                             "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist}
             else:
                 prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
+                prev["hist"] = [a + c for a, c in zip(prev["hist"], hist)]
     return out, errors
+
+
+def _cat_days() -> list[str]:
+    """The 30 calendar days (UTC) the catalog histograms are aligned to, oldest first."""
+    today = _now().date()
+    return [(today - dt.timedelta(days=29 - i)).isoformat() for i in range(30)]
+
+
+def _hist30(recent_agg: dict) -> list[int]:
+    """date_histogram buckets → 30 aligned daily counts (missing days = 0)."""
+    idx = {d: i for i, d in enumerate(_cat_days())}
+    out = [0] * 30
+    for b in (recent_agg.get("days") or {}).get("buckets", []):
+        i = idx.get((b.get("key_as_string") or "")[:10])
+        if i is not None:
+            out[i] += b.get("doc_count", 0)
+    return out
 
 
 def _cat_extras() -> tuple[dict, list[str]]:
@@ -1324,7 +1349,7 @@ def catalog(refresh: bool = False) -> dict:
             "security": x.get("security"), "deploys": x.get("deploys"), "usage": x.get("usage"),
         })
     projects.sort(key=lambda x: x["last_activity"], reverse=True)
-    payload = {"source": inv.get("source"), "projects": projects, "errors": errors,
+    payload = {"source": inv.get("source"), "projects": projects, "errors": errors, "days": _cat_days(),
                "generated_at": _now().replace(microsecond=0).isoformat() + "Z"}
     _CAT_CACHE.update(at=time.time(), payload=payload)
     return {**payload, "cached": False}
@@ -1337,9 +1362,15 @@ def _demo_cat_activity(inv: dict) -> dict:
         k = _norm(p["name"])
         ages = {"commits": 1 + i * 9, "builds": 2 + i * 12, "deploys": 3 + i * 20,
                 "releases": 6 + i * 30, "tests": 1 + i * 15, "stdchanges": 0.5 + i * 40}
-        out[k] = {src: {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
-                        "recent": max(0, 40 - i * 15 - j * 4)}
-                  for j, (src, h) in enumerate(ages.items())}
+        out[k] = {}
+        for j, (src, h) in enumerate(ages.items()):
+            recent = max(0, 40 - i * 15 - j * 4)
+            # a plausible daily shape: busier on weekdays, most recent days heaviest, some quiet days
+            weights = [0 if (d + i + j) % 7 in (5, 6) else (1 + ((d * 7 + j * 3 + i) % 5)) * (1 + d / 30) for d in range(30)]
+            tot = sum(weights) or 1
+            hist = [int(round(recent * w / tot)) for w in weights]
+            out[k][src] = {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
+                           "recent": sum(hist), "hist": hist}
     return out
 
 
