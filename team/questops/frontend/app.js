@@ -5791,9 +5791,9 @@ function cfgDiagram(m, env) {
     lanes.push({ proj, top, h: y - top + 6, n: list.length }); y += 18;
   });
   const leftH = y;
-  y = 30;
+  y = 52;   // lane header at y=30 (same as the project lanes), nodes below it
   cl.sort((a, b) => a.label.localeCompare(b.label)).forEach((n) => { pos[n.id] = { x: colX.cluster + 12, y, w: boxW.cluster - 24 }; y += rowH; });
-  const midH = cl.length ? y + 10 : 0;
+  const midH = cl.length ? y + 6 : 0;
   y = 30;
   const byKind = {};
   ext.forEach((n) => (byKind[n.kind || "other"] = byKind[n.kind || "other"] || []).push(n));
@@ -5832,7 +5832,7 @@ function cfgDiagram(m, env) {
   };
   return `<div class="cfg-wrap"><svg class="cfg-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
     ${lanes.map((l) => `<g class="cfg-lane" transform="translate(${colX.app},${l.top})"><rect width="${boxW.app}" height="${l.h}" rx="10"></rect><text x="10" y="15">📁 ${esc(l.proj)} <tspan class="cfg-sub">· ${l.n} app${l.n === 1 ? "" : "s"}</tspan></text></g>`).join("")}
-    ${cl.length ? `<g class="cfg-lane cfg-lane-cluster" transform="translate(${colX.cluster},18)"><rect width="${boxW.cluster}" height="${midH - 18}" rx="10"></rect><text x="10" y="15">☸ cluster services <tspan class="cfg-sub">· *.svc.cluster.local</tspan></text></g>` : ""}
+    ${cl.length ? `<g class="cfg-lane cfg-lane-cluster" transform="translate(${colX.cluster},30)"><rect width="${boxW.cluster}" height="${midH - 30}" rx="10"></rect><text x="10" y="15">☸ cluster services <tspan class="cfg-sub">· *.svc.cluster.local</tspan></text></g>` : ""}
     ${groups.map((g) => `<g class="cfg-lane cfg-lane-ext" transform="translate(${colX.ext},${g.top})" style="--k:${cfgColor(g.kind)}"><rect width="${boxW.ext}" height="${g.h}" rx="10"></rect><text x="10" y="15">${esc((CFG_KIND[g.kind] || CFG_KIND.other)[1])} <tspan class="cfg-sub">· ${g.n}</tspan></text></g>`).join("")}
     ${m.edges.map(edge).join("")}
     ${m.nodes.map(node).join("")}
