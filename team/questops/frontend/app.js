@@ -6200,8 +6200,10 @@ function prjBodyHtml(d) {
         let run = 0, best = 0;
         pd.forEach((b) => { run = b.count ? 0 : run + 1; best = Math.max(best, run); });
         if (best >= 5 && d.days) out.push(`longest quiet streak: <b>${best}</b> ${com.unit || "day"}(s) without a commit`);
-        const busiest = [...pd].sort((a, b) => b.count - a.count)[0];
-        if (busiest && busiest.count) out.push(`busiest ${com.unit || "day"}: <b>${esc(busiest.day)}</b> with ${busiest.count} commit(s)`);
+        const unit = com.unit || "day";
+        const top = [...pd].filter((b) => b.count).sort((a, b) => b.count - a.count).slice(0, 3);
+        if (top.length) out.push(`busiest ${unit}${top.length > 1 ? "s" : ""}: ${top.map((b, i) =>
+          `<b>${esc(unit === "month" ? String(b.day).slice(0, 7) : b.day)}</b> (${b.count})`).join(" › ")}`);
         const rp = com.repos || [];
         if (rp.length > 1) out.push(`<b>${esc(rp[0].key)}</b> takes ${pct(rp[0].count, rp.reduce((n, r) => n + r.count, 0))}% of the commits`);
         const dev = (com.branches || []).find((b) => /^develop$/i.test(b.key));
