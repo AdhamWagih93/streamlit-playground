@@ -5605,7 +5605,7 @@ function prjBar(list, cls, colorOf, extra) {
   const max = Math.max(...rows.map((b) => b.count), 1);
   return rows.map((b) => `
     <div class="pgv-row" title="${esc(b.key)} — ${logExact(b.count)}${b.added != null ? ` · +${logExact(b.added)} −${logExact(b.deleted || 0)} lines` : ""}">
-      <span class="pgv-label">${colorOf ? `<i class="prj-dot" style="background:${colorOf(b.key)}"></i>` : ""}${esc(b.key)}</span>
+      <span class="pgv-label">${colorOf ? `<i class="prj-dot" style="background:${colorOf(b.key)}"></i>` : ""}${prjMemDot(b.key)}${esc(b.key)}</span>
       <span class="pgv-track"><span class="pgv-bar ${cls || ""}" style="width:${(b.count / max * 100).toFixed(0)}%${colorOf ? `;background:${colorOf(b.key)}` : ""}"></span></span>
       <span class="pgv-count">${logInt(b.count)}</span>${extra ? extra(b) : ""}
     </div>`).join("");
@@ -5830,7 +5830,7 @@ function prjSdlcHtml(d) {
           const tu = board.top_users || {};
           const top = (list) => (list || []).length
             ? (list || []).map((u) =>
-                `<span class="prj-sdlc-user" title="${esc(u.key)} — ${u.count} run(s) in the window">${esc(u.key)}·${u.count}</span>`).join(" ")
+                `<span class="prj-sdlc-user" title="${esc(u.key)} — ${u.count} run(s) in the window">${prjMemDot(u.key)}${esc(u.key)}·${u.count}</span>`).join(" ")
             : '<span class="prj-sdlc-none">—</span>';
           const anyTu = (tu.build || []).length || (tu.release || []).length
             || Object.values(tu.deploys || {}).some((l) => (l || []).length);
@@ -5919,7 +5919,7 @@ function prjEventsBody(events, f) {
       ${e.env ? `<span class="chip ${e.type === "deploy" && /pr(o?)d/i.test(e.env) ? "chip-amber prj-ev-prdchip" : ""}">${e.type === "deploy" && /pr(o?)d/i.test(e.env) ? "★ " : ""}${esc(e.env)}</span>` : ""}
       ${prjStatusChip(e.status)}
       ${e.version ? `<span class="chip ${e.type === "ecommit" && !/^[0-9a-f]{7,}$/.test(e.version) ? "chip-green" : ""}" title="${e.type === "commit" ? "commit id" : e.type === "ecommit" ? "built version (via ef-cicd-builds commit id) — searchable" : "version"}">${esc(e.version)}</span>` : ""}
-      ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
+      ${prjWho(e.who)}
       ${e.added != null || e.deleted != null ? prjLines(e.added, e.deleted, true) : ""}
       ${e.reason ? `<span class="chip prj-reason" title="deployment reason">${esc(e.reason.slice(0, 40))}</span>` : ""}
       ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
@@ -5986,7 +5986,7 @@ function prjJiraWorkload(rows) {
       `<span class="prj-wl-seg" style="width:${(n / max * 100).toFixed(1)}%;background:${PRJ_PRIO_C[pr] || "#5b6a80"}" title="${n} open ${esc(pr)}"></span>`).join("");
     return `
     <div class="pgv-row" title="${esc(w.assignee)} — ${w.open} open, ${w.done} completed">
-      <span class="pgv-label">${esc(w.assignee)}</span>
+      <span class="pgv-label">${prjMemDot(w.assignee)}${esc(w.assignee)}</span>
       <span class="pgv-track prj-wl-track">${segs}<span class="prj-wl-seg prj-wl-done" style="width:${(w.done / max * 100).toFixed(1)}%" title="${w.done} completed"></span></span>
       <span class="pgv-count">${w.open}⧖</span>
       <span class="chip chip-green" title="completed">✅ ${w.done}</span>
@@ -6002,6 +6002,24 @@ const PRJ_MEM = {
   not_in_ldap: ["✕", "mem-none", () => "not found in LDAP at all"],
   unknown: ["?", "mem-unk", () => "LDAP not configured / lookup failed"],
 };
+// LDAP status dot for ANY user spelling on the page (same key rule as the
+// backend: lower-case, separators/dots/quotes/brackets removed)
+const prjUKey = (v) => String(v || "").toLowerCase().replace(/[\s._\-'"\[\](){}]+/g, "");
+function prjMem(name) {
+  const lk = ((state.prjData || {}).members || {}).lookup;
+  if (!lk || !name || /^\(/.test(name)) return null;
+  return lk[prjUKey(name)] || null;
+}
+function prjMemDot(name) {
+  const m = prjMem(name);
+  if (!m) return "";
+  const [g, cls, tip] = PRJ_MEM[m.status] || PRJ_MEM.unknown;
+  return `<i class="mem-dot ${cls}" title="LDAP: ${esc(tip(m))}">${g}</i>`;
+}
+// a user chip with its status dot — used everywhere a person is named
+const prjWho = (name, cls = "chip-cyan") => name
+  ? `<span class="chip ${cls}">${prjMemDot(name)}${esc(name)}</span>` : "";
+
 function prjMembersHtml(m) {
   if (!m) return "";
   if (m.error) return prjErr(m, "team membership (LDAP)");
@@ -6176,7 +6194,7 @@ function prjBodyHtml(d) {
             <div class="prj-sdlc-wrap"><table class="prj-sdlc prj-heat">
               <thead><tr><th>member</th>${repoCols.map((rp) => `<th>${esc(rp)}</th>`).join("")}<th>Σ</th></tr></thead>
               <tbody>${rows.map((r) => `
-                <tr><td class="prj-sdlc-app"><i class="prj-dot" style="background:${colorOf(r.author)}"></i>${esc(r.author)}</td>
+                <tr><td class="prj-sdlc-app"><i class="prj-dot" style="background:${colorOf(r.author)}"></i>${prjMemDot(r.author)}${esc(r.author)}</td>
                   ${repoCols.map((rp) => {
                     const n = (r.repos || {})[rp] || 0;
                     return n ? `<td class="prj-heat-c" style="--heat:${(0.15 + 0.6 * n / max).toFixed(2)}" title="${esc(r.author)} → ${esc(rp)}: ${n} commit(s)">${n}</td>`
@@ -6224,7 +6242,7 @@ function prjBodyHtml(d) {
           <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
             <code class="log-idx-name" style="flex:none">${esc(c.repo)}</code>
             <span class="chip">⎇ ${esc(c.branch)}</span>
-            <span class="chip chip-cyan">${esc(c.author)}</span>
+            ${prjWho(c.author)}
             ${prjLines(c.added, c.deleted)}
             <span class="ci-meta">${esc(c.message)}</span></div>`).join("")}</div>
       </details>`}
@@ -6250,7 +6268,7 @@ function prjBodyHtml(d) {
                 <div class="log-idx">
                   ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(t.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(t.key)}</code>`}
                   <span class="chip">${esc(t.priority)}</span><span class="chip">${esc(t.type)}</span>
-                  <span class="chip chip-cyan">${esc(t.assignee)}</span>
+                  ${prjWho(t.assignee)}
                   <span class="ci-meta">${esc(t.resolved)}${t.took_days != null ? ` · took ${t.took_days}d` : ""}</span>
                   <span class="ci-meta">${esc(t.summary)}</span></div>`).join("")}</div></div>
           </div>
@@ -6293,7 +6311,7 @@ function prjBodyHtml(d) {
           <div class="log-idx-list">${(jc.recent || []).slice(0, 25).map((c) => `
             <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
               ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(c.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(c.key)}</code>`}
-              <span class="chip chip-cyan">${esc(c.author)}</span>
+              ${prjWho(c.author)}
               ${(c.items || []).map((it) => `<span class="chip" title="${esc(it.field)}: ${esc(it.from || "—")} → ${esc(it.to || "—")}">${esc(it.field)}: ${esc((it.from || "—").slice(0, 24))} → ${esc((it.to || "—").slice(0, 24))}</span>`).join("")}
             </div>`).join("")}</div>
         </details>`;
@@ -6304,7 +6322,7 @@ function prjBodyHtml(d) {
             ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener"><code class="log-idx-name" style="flex:none">${esc(t.key)}</code></a>` : `<code class="log-idx-name" style="flex:none">${esc(t.key)}</code>`}
             <span class="chip ${t.resolved ? "chip-green" : t.priority === "Critical" || t.priority === "Blocker" ? "chip-red" : "chip-amber"}">${esc(t.status)}</span>
             <span class="chip">${esc(t.priority)}</span><span class="chip">${esc(t.type)}</span>
-            ${t.assignee ? `<span class="chip chip-cyan">${esc(t.assignee)}</span>` : ""}
+            ${prjWho(t.assignee)}
             <span class="ci-meta" title="last updated">${esc(t.updated)}</span>
             <span class="ci-meta">${esc(t.summary)}</span></div>`).join("")}</div>
       </details>`}
@@ -6448,7 +6466,7 @@ function prjBodyHtml(d) {
           <div class="log-idx"><span class="ci-meta">${esc(r.when)}</span>
             <span class="chip ${/pr(o?)d/i.test(r.env) ? "chip-amber" : ""}">${esc(r.env)}</span>
             <code class="log-idx-name" style="flex:none">${esc(r.technology)}</code>
-            <span class="chip chip-cyan">${esc(r.requester)}</span>
+            ${prjWho(r.requester)}
             <span class="ci-meta">${logInt(r.duration)}s</span></div>`).join("")}</div>
       </details>`}
     </details>`;

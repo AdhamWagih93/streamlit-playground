@@ -586,6 +586,10 @@ def _team_fold(authors: list[dict], inv: dict) -> list[dict]:
                   key=lambda x: -x["count"])
 
 
+def _norm_branch(b) -> str:
+    return re.sub(r"^refs/heads/", "", str(b or "").strip().lower())
+
+
 def _git_author(s: dict) -> str:
     return _user_display((s.get("authorname") or "").strip()
                          or re.sub(r"\s*<[^>]*>\s*$", "",
@@ -798,14 +802,18 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
             reasons["failed"][rs] = reasons["failed"].get(rs, 0) + 1
     reasons_out = {k: sorted(({"key": r, "count": n} for r, n in v.items()),
                              key=lambda x: -x["count"])[:12] for k, v in reasons.items()}
+    # (commit id, branch) → built version. Branch matters: a release branch
+    # builds the SAME commit under a different versioning convention than
+    # develop, so the id alone would attach the wrong version.
     build_versions: dict = {}
     for h in b_hits:
         s_ = h.get("_source") or {}
         cid = str(s_.get("commitid") or s_.get("commitID") or s_.get("CommitId")
                   or s_.get("commit") or "").strip()
         ver = s_.get("codeversion") or ""
-        if cid and ver and cid not in build_versions:
-            build_versions[cid] = ver
+        br = _norm_branch(s_.get("branch"))
+        if cid and ver:
+            build_versions.setdefault(f"{cid}|{br}", ver)
     return {"board": board, "events": events, "totals": totals,
             "build_versions": build_versions, "reasons": reasons_out}
 
@@ -1045,7 +1053,20 @@ def _sec_members(inv: dict, out: dict) -> dict:
                           "active": sum(1 for m in mem if m["active"])})
     counts = {st: sum(1 for c in contributors if c["status"] == st)
               for st in ("team", "elsewhere", "ldap_only", "not_in_ldap", "unknown")}
-    return {"teams": teams_out, "contributors": contributors, "summary": counts}
+    # every spelling the page may show → status, so any user chip anywhere
+    # can carry the LDAP dot: contributor keys + aliases, and every roster
+    # member's login/CN-derived patterns (first name, f.last, …)
+    lookup: dict = {}
+    for c in contributors:
+        for sp in [c["key"], *c.get("aliases", [])]:
+            lookup[ap._ukey(sp)] = {"status": c["status"], "team": c.get("team")}
+    for t, r in rosters.items():
+        for m in r["members"]:
+            for k in ap._member_keys([m]):
+                lookup.setdefault(k, {"status": "team", "team": t})
+    lookup.pop("", None)
+    return {"teams": teams_out, "contributors": contributors, "summary": counts,
+            "lookup": lookup}
 
 
 # ---------------------------------------------------------------- DORA
@@ -1164,20 +1185,25 @@ def _assemble_events(out: dict) -> list[dict]:
     events = list(((out.get("cicd") or {}).get("events")) or [])
     bv = ((out.get("cicd") or {}).get("build_versions")) or {}
 
-    def _built_version(cid):
+    def _built_version(cid, branch):
+        """Version built from THIS commit on THIS branch. Ids may be truncated
+        on either side; a build without a branch field can only match by id."""
         if not cid:
             return ""
-        if cid in bv:
-            return bv[cid]
-        for k, v in bv.items():   # ids may be truncated on either side
-            if k.startswith(cid) or cid.startswith(k):
+        br = _norm_branch(branch)
+        exact = bv.get(f"{cid}|{br}")
+        if exact:
+            return exact
+        for k, v in bv.items():
+            kc, kb = k.split("|", 1)
+            if (kb == br or not kb) and (kc == cid or kc.startswith(cid) or cid.startswith(kc)):
                 return v
         return ""
 
     for c in ((out.get("commits") or {}).get("recent")) or []:
         branch = (c.get("branch") or "").lower()
         eff = branch == "develop" or branch.startswith("release")
-        built = _built_version(c.get("id_full") or c.get("id") or "") if eff else ""
+        built = _built_version(c.get("id_full") or c.get("id") or "", c.get("branch")) if eff else ""
         events.append({"ts": c.get("when") or "", "type": "ecommit" if eff else "commit",
                        "app": c.get("repo") or "", "env": "",
                        "added": c.get("added"), "deleted": c.get("deleted"),
@@ -1598,7 +1624,9 @@ def _demo_report(name: str, days: int) -> dict:
         "deploys": {e: [{"key": "alice", "count": 5 - j}, {"key": "bob", "count": 3 - j % 3}]
                     for j, e in enumerate(envs)},
     }
-    build_versions = {"a1b2c3d0e4f5a6b7c8": "1.4.2", "a1b2c3d2e4f5a6b7c8": "1.4.3"}
+    build_versions = {"a1b2c3d0e4f5a6b7c8|develop": "1.4.2", "a1b2c3d2e4f5a6b7c8|develop": "1.4.3",
+                      "a1b2c3d3e4f5a6b7c8|release/1.4": "R1.4-rc2",
+                      "a1b2c3d3e4f5a6b7c8|develop": "1.5.0-SNAPSHOT"}
     cicd = {"board": board, "events": cicd_events, "build_versions": build_versions,
             "reasons": {"all": [{"key": "Scheduled release", "count": 6}, {"key": "Hotfix: payment retries", "count": 4},
                                 {"key": "Config change", "count": 3}, {"key": "Rollback after incident", "count": 1}],

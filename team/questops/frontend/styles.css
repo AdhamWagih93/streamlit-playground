@@ -1775,3 +1775,6 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .mem-legend i { font-style: normal; }
 
 .prj-reason { font-style: italic; }
+
+/* LDAP status dot next to any user mention */
+.mem-dot { font-style: normal; font-size: 9px; margin-right: 4px; vertical-align: 1px; cursor: help; }
