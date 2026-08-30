@@ -1179,9 +1179,6 @@ def _assemble_events(out: dict) -> list[dict]:
     changelog folded into one newest-first stream. NOT capped — every event
     each source query returned is kept (sources fetch up to 10000 docs each;
     events_meta says when a source had even more)."""
-    days = out.get("days") or 0
-    cutoff = ((_now() - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
-              if days else "")
     events = list(((out.get("cicd") or {}).get("events")) or [])
     bv = ((out.get("cicd") or {}).get("build_versions")) or {}
 
@@ -1215,15 +1212,6 @@ def _assemble_events(out: dict) -> list[dict]:
                        + (f" · commit {c.get('id')}" if built else ""),
                        "tip": (c.get("message_full") or "")
                        + (f"\nbuilt version: {built}" if built else "")})
-    for t in ((out.get("jira") or {}).get("recent")) or []:
-        if cutoff and (t.get("updated") or "") < cutoff:
-            continue   # jira tickets aren't window-filtered at query time
-        events.append({"ts": t.get("updated") or "", "type": "jira",
-                       "app": t.get("key") or "", "env": "",
-                       "status": t.get("status") or "", "version": "",
-                       "who": _user_display(t.get("assignee") or ""),
-                       "test": False, "url": t.get("url") or "",
-                       "detail": t.get("summary") or ""})
     for c in ((out.get("jira_changes") or {}).get("recent")) or []:
         events.append({"ts": c.get("when") or "", "type": "change",
                        "app": c.get("key") or "", "env": "",

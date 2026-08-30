@@ -5756,7 +5756,7 @@ const PRJ_EV = {  // event-log types: icon, label, chip class
   ecommit: ["⚡", "effective commit", "chip-green"],
   build: ["⚙", "build", ""],
   deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", "chip-violet"],
-  jira: ["🎫", "jira", "chip-amber"], change: ["📝", "change", ""],
+  change: ["📝", "jira change", "chip-amber"],
   autotest: ["🧪", "auto test", "chip-cyan"],
 };
 
