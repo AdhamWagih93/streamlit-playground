@@ -440,14 +440,21 @@ def _user_key(u) -> str:
     Alice Nasr, Alice.Nasr, alice_nasr and alice.nasr@corp.com are all
     ONE person."""
     s = str(u or "").strip().lower()
-    s = s.split("@", 1)[0].strip()
+    s = _strip_domain(s)
     return re.sub(r"[.\s]+", "_", s)
+
+
+def _strip_domain(s: str) -> str:
+    """'CORP\\alice.nasr' / 'alice.nasr@corp.com' → 'alice.nasr' (Windows
+    DOMAIN\\user prefix and @domain tail both dropped)."""
+    s = s.rsplit("\\", 1)[-1] if "\\" in s else s
+    return s.split("@", 1)[0].strip()
 
 
 def _user_display(u) -> str:
     """Canonical display form: domain stripped, dots/spaces shown as
     underscores (original casing kept)."""
-    s = str(u or "").strip().split("@", 1)[0].strip()
+    s = _strip_domain(str(u or "").strip())
     return re.sub(r"[.\s]+", "_", s)
 
 

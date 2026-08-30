@@ -40,6 +40,8 @@ def _identity_keys(name: str) -> set[str]:
     """Spellings under which one identity may appear: login, display name with
     '.', '_' or space separators, @domain stripped — all lower-case."""
     n = (name or "").strip().lower()
+    if "\\" in n:                       # DOMAIN\user → user
+        n = n.rsplit("\\", 1)[-1]
     if "@" in n:
         n = n.split("@", 1)[0]
     n = n.strip()
@@ -98,9 +100,10 @@ def ldap_user_exists(name: str) -> bool | None:
     script's output across every inventory team (see known_identities) —
     never by binding to LDAP. Cached for an hour per identity."""
     import time
-    key = (name or "").strip().lower()
-    if not key:
+    mine = _identity_keys(name)          # DOMAIN\user / user@domain → user spellings
+    if not mine:
         return None
+    key = min(mine)
     hit = _USER_EXISTS.get(key)
     if hit and time.time() - hit[0] < 3600:
         return hit[1]
@@ -110,10 +113,10 @@ def ldap_user_exists(name: str) -> bool | None:
             for m in members:
                 known.add(m.lower()); known.add(m.split()[0].lower())
                 known.add(m.lower().replace(" ", "_")); known.add(m.lower().replace(" ", "."))
-        res = key in known
+        res = bool(mine & known)
     else:
         ks = known_identities()
-        res = None if ks is None else bool(_identity_keys(key) & ks)
+        res = None if ks is None else bool(mine & ks)
     _USER_EXISTS[key] = (time.time(), res)
     return res
 

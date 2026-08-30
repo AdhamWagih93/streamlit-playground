@@ -56,7 +56,9 @@ def _norm(u) -> str:
 def _ukey(u) -> str:
     """MATCHING key: quotes/case/separator/dot/bracket-insensitive —
     "A.Meshhal", 'a.meshhal', '["A_Meshhal"]' and 'ameshhal' → 'ameshhal'."""
-    return re.sub(r"[\s._\-'\"\[\](){}]+", "", _clean(u))
+    c = _clean(u)
+    c = c.rsplit("\\", 1)[-1] if "\\" in c else c    # DOMAIN\user → user
+    return re.sub(r"[\s._\-'\"\[\](){}]+", "", c)
 
 
 def _ldap_lookup(team: str) -> dict:
