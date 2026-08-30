@@ -6417,6 +6417,7 @@ function prjBodyHtml(d) {
     return t;
   }, { crit: 0, high: 0 });
   const worstSec = secTot.crit + secTot.high;
+  const secScanned = Object.values(scans).some((sc) => (sc.apps || []).length);   // any scan record at all
   const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
   // registry sync is deliberately SUBTLE — one small text line, not chips
   const syncBit = (v, label) => v == null ? `${label} —`
@@ -6451,7 +6452,7 @@ function prjBodyHtml(d) {
       ${tile(jira.open != null ? logInt(jira.open) : "—", "Jira open", jira.open ? "pct-warn" : "pct-good")}
       ${tile((jira.done || {}).total != null ? `${logInt(jira.done.total)}${prjDelta(jira.done.total, (d.prev || {}).resolved, d)}` : "—", `resolved · ${prjWin(d)}`, "pct-good")}
       ${tile(lg.found ? lg.score : "—", "log score", lg.found ? logScoreClass(lg.score) : "")}
-      ${tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good")}
+      ${secScanned ? tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good") : tile("—", "not scanned", "pct-warn")}
       ${(d.autotest || {}).total != null ? tile(logInt(d.autotest.total), `auto tests · ${prjWin(d)}`) : ""}
       ${(d.usage || {}).total_minutes != null ? tile(`${logInt(d.usage.total_minutes)}${prjDelta(d.usage.total_minutes, d.usage.prev_total_minutes, d)}`, `platform min · ${prjWin(d)}`) : ""}
     </div>
@@ -6718,7 +6719,7 @@ function prjBodyHtml(d) {
   const scanApps = [...new Set(scanKeys.flatMap((k) => (scans[k].apps || []).map((a) => a.app)))].sort();
   const scanErrors = scanKeys.filter((k) => scans[k].error);
   const scanCell = (k, a) => {
-    if (!a) return '<td class="prj-sdlc-none">—</td>';
+    if (!a) return '<td class="prj-sdlc-none" title="not scanned by this scanner">—</td>';
     const noCounts = a.critical == null && a.high == null && a.medium == null && a.low == null;
     const tip = `${esc(scans[k].label || k)} · ${esc(a.when || "?")}${a.version ? " · v" + esc(a.version) : ""}`
       + (noCounts ? ` · ${esc(a.status || "scan recorded")}`
@@ -6737,7 +6738,9 @@ function prjBodyHtml(d) {
     return `<td><div class="prj-sdlc-cell" title="${tip}">${body}<span class="ci-meta">${esc((a.when || "").slice(0, 10))}</span></div></td>`;
   };
   const security = `
-    <details class="filebox acc-pg-sec" open><summary>🛡 security — latest scan per app${worstSec ? ` · <b class="${secTot.crit ? "pct-bad" : ""}">${secTot.crit} critical</b> · <b class="${secTot.high ? "pct-bad" : ""}">${secTot.high} high</b> <span class="ci-meta">(summed across every app's freshest scan, all scanners)</span>` : ' · <b class="pct-good">clean</b>'}</summary>
+    <details class="filebox acc-pg-sec" open><summary>🛡 security — latest scan per app${worstSec ? ` · <b class="${secTot.crit ? "pct-bad" : ""}">${secTot.crit} critical</b> · <b class="${secTot.high ? "pct-bad" : ""}">${secTot.high} high</b> <span class="ci-meta">(summed across every app's freshest scan, all scanners)</span>` : !scanApps.length ? ' · <b class="pct-warn">not scanned</b>'
+        : scanKeys.some((k) => (scans[k].apps || []).some((a) => a.critical != null || a.high != null)) ? ' · <b class="pct-good">clean</b>'
+        : ' · <b class="pct-warn">status-only scans — no severity counts</b>'}</summary>
       ${scanApps.length ? `<div class="prj-sdlc-wrap"><table class="prj-sdlc">
         <thead><tr><th>app</th>${scanKeys.map((k) => `<th title="${logInt(scans[k].scans || 0)} scan(s) recorded">${esc((scans[k].label || k).replace(/ \(.*\)$/, ""))}${scans[k].worst ? "" : " ·st"}</th>`).join("")}</tr></thead>
         <tbody>${scanApps.map((app) => `
@@ -6745,7 +6748,7 @@ function prjBodyHtml(d) {
             ${scanKeys.map((k) => scanCell(k, (scans[k].apps || []).find((x) => x.app === app))).join("")}
           </tr>`).join("")}</tbody>
       </table></div>
-      <div class="kpi-note">cells show the WORST severities of each app's freshest scan — red C/H · amber M · plain L · ✓ clean · "·st" columns are status-only scanners</div>`
+      <div class="kpi-note">cells show the WORST severities of each app's freshest scan — red C/H · amber M · plain L · ✓ clean (scanned, no findings) · — not scanned · "·st" columns are status-only scanners</div>`
         : '<div class="empty">no scans recorded for this project</div>'}
       ${scanErrors.map((k) => prjErr(scans[k], scans[k].label || k)).join("")}
       ${(() => {
