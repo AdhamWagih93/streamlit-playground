@@ -1778,3 +1778,25 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 
 /* LDAP status dot next to any user mention */
 .mem-dot { font-style: normal; font-size: 9px; margin-right: 4px; vertical-align: 1px; cursor: help; }
+
+/* ================= project catalog (landing) ================= */
+.cat-filters input { flex: 1; min-width: 220px; }
+.cat-group { margin: 10px 0 4px; }
+.cat-group-head { font: 700 12px var(--body); color: var(--text); margin: 0 2px 6px 4px;
+  padding-bottom: 4px; border-bottom: 1px dashed var(--line); }
+.cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.cat-card { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; cursor: pointer; color: var(--text); font: inherit; display: flex; flex-direction: column; gap: 6px;
+  border-left: 4px solid #1497b3; transition: transform .12s ease, border-color .12s ease; }
+.cat-card:hover { transform: translateY(-2px); border-color: #1497b3; }
+.cat-card.cat-quiet { border-left-color: var(--line); opacity: .8; }
+.cat-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cat-name { font: 800 15px var(--body); letter-spacing: .01em; }
+.cat-last { font: 600 10.5px var(--mono); color: #1497b3; white-space: nowrap; }
+.cat-quiet .cat-last { color: var(--faint); }
+.cat-teams { display: flex; gap: 4px; flex-wrap: wrap; }
+.cat-facts { display: flex; gap: 10px; flex-wrap: wrap; font: 500 11px var(--mono); color: var(--faint); }
+.cat-30 { color: #43c884; }
+.cat-pulses { display: flex; gap: 8px; flex-wrap: wrap; }
+.cat-pulse { font: 500 10.5px var(--mono); color: var(--faint); white-space: nowrap; }
+.cat-pulse small { font-size: 9px; margin-left: 3px; color: #1497b3; }

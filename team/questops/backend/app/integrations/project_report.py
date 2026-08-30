@@ -1069,6 +1069,91 @@ def _sec_members(inv: dict, out: dict) -> dict:
             "lookup": lookup}
 
 
+# ---------------------------------------------------------------- catalog
+_CAT_CACHE: dict = {"at": 0.0, "payload": None}
+_CAT_TTL = 300
+# (index, date field) → ONE size-0 terms+max query each; no documents move
+_CAT_SOURCES = (("commits", "ef-git-commits", "commitdate"),
+                ("builds", "ef-cicd-builds", "startdate"),
+                ("deploys", "ef-cicd-deployments", "startdate"),
+                ("releases", "ef-cicd-releases", "releasedate"),
+                ("tests", "ef-autotest", "date"))
+
+
+def _cat_activity() -> tuple[dict, list[str]]:
+    """{norm(project): {source: {"last": iso, "recent": n}}} from five tiny
+    aggregation queries (terms on project · max date · 30-day count)."""
+    out: dict = {}
+    errors: list[str] = []
+    for key, index, field in _CAT_SOURCES:
+        try:
+            resp = _es(index, {"size": 0, "aggs": {"by": {
+                "terms": {"field": "project", "size": 1000},
+                "aggs": {"last": {"max": {"field": field}},
+                         "recent": {"filter": {"range": {field: {"gte": "now-30d"}}}}}}}})
+        except Exception as exc:  # noqa: BLE001 — one dead index hides only itself
+            errors.append(f"{index}: {str(exc)[:80]}")
+            continue
+        for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
+            k = _norm(b.get("key"))
+            last = (b.get("last") or {}).get("value_as_string") or ""
+            slot = out.setdefault(k, {})
+            prev = slot.get(key)
+            if not prev or last > prev["last"]:
+                slot[key] = {"last": last[:19], "recent": (b.get("recent") or {}).get("doc_count", 0)
+                             + (prev["recent"] if prev else 0)}
+            else:
+                prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
+    return out, errors
+
+
+def catalog(refresh: bool = False) -> dict:
+    """The project landing: every inventory project with its facets and a
+    LIGHTWEIGHT activity pulse — no per-project report is built."""
+    if not refresh and _CAT_CACHE["payload"] and time.time() - _CAT_CACHE["at"] < _CAT_TTL:
+        return {**_CAT_CACHE["payload"], "cached": True}
+    from . import inventory
+    inv = inventory.parse()
+    if settings.demo_mode:
+        act, errors = _demo_cat_activity(inv), []
+    else:
+        act, errors = _cat_activity()
+    projects = []
+    for p in inv.get("projects") or []:
+        pv = ((p.get("config") or {}).get("project_vars") or {})
+        a = act.get(_norm(p["name"]), {})
+        last = max(((v["last"], k) for k, v in a.items() if v.get("last")), default=("", ""))
+        projects.append({
+            "name": p["name"], "company": pv.get("company") or "",
+            "teams": {"dev": p.get("dev_team"), "qc": p.get("qc_team"), "prd": p.get("prd_team")},
+            "deploy_platform": pv.get("deploy_platform") or "",
+            "deploy_technology": pv.get("deploy_technology") or "",
+            "apps": p.get("app_count") or len(p.get("apps") or []),
+            "envs": p.get("envs") or [], "pipelines": p.get("pipeline_count") or 0,
+            "activity": a,
+            "last_activity": last[0], "last_source": last[1],
+            "recent_30d": sum(v.get("recent", 0) for v in a.values()),
+        })
+    projects.sort(key=lambda x: x["last_activity"], reverse=True)
+    payload = {"source": inv.get("source"), "projects": projects, "errors": errors,
+               "generated_at": _now().replace(microsecond=0).isoformat() + "Z"}
+    _CAT_CACHE.update(at=time.time(), payload=payload)
+    return {**payload, "cached": False}
+
+
+def _demo_cat_activity(inv: dict) -> dict:
+    now = _now()
+    out = {}
+    for i, p in enumerate(inv.get("projects") or []):
+        k = _norm(p["name"])
+        ages = {"commits": 1 + i * 9, "builds": 2 + i * 12, "deploys": 3 + i * 20,
+                "releases": 6 + i * 30, "tests": 1 + i * 15}
+        out[k] = {src: {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
+                        "recent": max(0, 40 - i * 15 - j * 4)}
+                  for j, (src, h) in enumerate(ages.items())}
+    return out
+
+
 # ---------------------------------------------------------------- DORA
 def _ts(v) -> dt.datetime | None:
     """Tolerant timestamp parse for event ts strings."""
@@ -1763,3 +1848,4 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
 
 def invalidate() -> None:
     _CACHE.clear()
+    _CAT_CACHE.update(at=0.0, payload=None)

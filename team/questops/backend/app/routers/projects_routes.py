@@ -14,6 +14,11 @@ def projects_list(user: User = Depends(current_user)):
     return project_report.list_projects()
 
 
+@router.get("/catalog")
+def projects_catalog(refresh: bool = False, user: User = Depends(current_user)):
+    return project_report.catalog(refresh=refresh)
+
+
 @router.get("/{name}")
 def project_detail(name: str, days: int = 30, refresh: bool = False,
                    user: User = Depends(current_user)):

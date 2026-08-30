@@ -6548,6 +6548,121 @@ function prjEvFilterEvt(ev) {
   });
 }
 
+/* ---- project catalog: the landing before a project is chosen ----------- */
+// One tiny aggregate payload (no reports built): facets by company / team /
+// platform, quick facts, and an activity pulse per project so the list can be
+// sorted by what moved most recently.
+const CAT_SRC = { commits: ["⧗", "commit"], builds: ["⚙", "build"], deploys: ["🚀", "deploy"],
+  releases: ["📦", "release"], tests: ["🧪", "test run"] };
+function prjCatalogFilter(list, f) {
+  const q = (f.q || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const teamsOf = (p) => Object.values(p.teams || {}).filter(Boolean);
+  let rows = list.filter((p) =>
+    (!f.company || f.company === "all" || (p.company || "—") === f.company)
+    && (!f.team || f.team === "all" || teamsOf(p).includes(f.team))
+    && (!f.platform || f.platform === "all" || (p.deploy_platform || "—") === f.platform)
+    && q.every((t) => [p.name, p.company, p.deploy_platform, p.deploy_technology, ...teamsOf(p), ...(p.envs || [])]
+      .some((v) => String(v || "").toLowerCase().includes(t))));
+  const sort = f.sort || "activity";
+  rows.sort((a, b) => sort === "name" ? a.name.localeCompare(b.name)
+    : sort === "apps" ? b.apps - a.apps || a.name.localeCompare(b.name)
+    : sort === "recent" ? b.recent_30d - a.recent_30d || a.name.localeCompare(b.name)
+    : (b.last_activity || "").localeCompare(a.last_activity || "") || a.name.localeCompare(b.name));
+  return rows;
+}
+
+function prjCatalogCards(rows, f) {
+  if (!rows.length) return '<div class="empty">no projects match</div>';
+  const group = f.group || "company";
+  const keyOf = (p) => group === "platform" ? (p.deploy_platform || "— no platform")
+    : group === "team" ? (p.teams.dev || "— no dev team") : (p.company || "— no company");
+  const groups = {};
+  rows.forEach((p) => (groups[keyOf(p)] = groups[keyOf(p)] || []).push(p));
+  const card = (p) => {
+    const pulse = Object.entries(p.activity || {}).filter(([, v]) => v.last)
+      .sort((a, b) => b[1].last.localeCompare(a[1].last)).slice(0, 5)
+      .map(([k, v]) => { const [ico, lab] = CAT_SRC[k] || ["•", k];
+        return `<span class="cat-pulse" title="last ${lab}: ${esc(v.last.replace("T", " "))} · ${v.recent} in 30d">${ico} ${prjAgo(v.last)}${v.recent ? `<small>${v.recent}</small>` : ""}</span>`; }).join("");
+    const quiet = !p.last_activity;
+    return `
+    <button class="cat-card ${quiet ? "cat-quiet" : ""}" data-cat-open="${esc(p.name)}" title="open the ${esc(p.name)} report">
+      <div class="cat-head"><span class="cat-name">${esc(p.name)}</span>
+        ${p.deploy_platform ? `<span class="chip chip-cyan">${esc(p.deploy_platform)}</span>` : ""}
+        ${p.deploy_technology ? `<span class="chip">${esc(p.deploy_technology)}</span>` : ""}
+        <span class="spacer"></span>
+        <span class="cat-last" title="most recent activity across commits, builds, deploys, releases and test runs">${quiet ? "no activity seen" : `${(CAT_SRC[p.last_source] || ["•"])[0]} ${prjAgo(p.last_activity)}`}</span></div>
+      <div class="cat-teams">${["dev", "qc", "prd"].filter((k) => p.teams[k]).map((k) =>
+        `<span class="chip" title="${k}_team">${k === "prd" ? "ops" : k}: ${esc(p.teams[k])}</span>`).join("")}</div>
+      <div class="cat-facts"><span>${p.apps} app${p.apps === 1 ? "" : "s"}</span><span>${(p.envs || []).length ? esc(p.envs.join(" · ")) : "no envs"}</span><span>${p.pipelines} pipeline${p.pipelines === 1 ? "" : "s"}</span>${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)} events · 30d</span>` : ""}</div>
+      <div class="cat-pulses">${pulse || '<span class="ci-meta">—</span>'}</div>
+    </button>`;
+  };
+  return Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([g, ps]) => `<div class="cat-group"><div class="cat-group-head">${group === "platform" ? "🖥" : group === "team" ? "🛡" : "🏢"} ${esc(g)} <span class="ci-meta">· ${ps.length} project${ps.length === 1 ? "" : "s"}</span></div>
+      <div class="cat-grid">${ps.map(card).join("")}</div></div>`).join("");
+}
+
+function prjCatalogHtml(cat) {
+  const list = cat.projects || [];
+  const f = state.prjCatFilter = state.prjCatFilter || {};
+  const uniq = (fn) => [...new Set(list.map(fn).filter(Boolean))].sort();
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+  const companies = uniq((p) => p.company || "—"), platforms = uniq((p) => p.deploy_platform || "—");
+  const teams = [...new Set(list.flatMap((p) => Object.values(p.teams || {}).filter(Boolean)))].sort();
+  const active = list.filter((p) => p.recent_30d).length;
+  const rows = prjCatalogFilter(list, f);
+  return `
+    <div class="cat-top">
+      <div class="stat-tiles" style="margin:0 0 10px">
+        <div class="stat-tile"><b>${list.length}</b><span>projects</span></div>
+        <div class="stat-tile"><b class="${active ? "pct-good" : ""}">${active}</b><span>active · 30d</span></div>
+        <div class="stat-tile"><b>${companies.filter((c) => c !== "—").length}</b><span>companies</span></div>
+        <div class="stat-tile"><b>${teams.length}</b><span>teams</span></div>
+        <div class="stat-tile"><b>${platforms.filter((c) => c !== "—").length}</b><span>platforms</span></div>
+        <div class="stat-tile"><b>${logInt(list.reduce((n, p) => n + p.apps, 0))}</b><span>apps</span></div>
+      </div>
+      <div class="acc-filters cat-filters">
+        <input data-cat-f="q" placeholder="🔎 project / company / team / platform / env…" value="${esc(f.q || "")}">
+        <select data-cat-f="company">${opt("all", "company: any", f.company)}${companies.map((c) => opt(c, c, f.company)).join("")}</select>
+        <select data-cat-f="team">${opt("all", "team: any", f.team)}${teams.map((t) => opt(t, t, f.team)).join("")}</select>
+        <select data-cat-f="platform">${opt("all", "platform: any", f.platform)}${platforms.map((c) => opt(c, c, f.platform)).join("")}</select>
+        <select data-cat-f="group" title="group cards by">${opt("company", "group: company", f.group || "company")}${opt("team", "group: dev team", f.group)}${opt("platform", "group: platform", f.group)}</select>
+        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
+        <span class="ci-meta" id="cat-count">${rows.length} of ${list.length}</span>
+      </div>
+    </div>
+    <div id="cat-body">${prjCatalogCards(rows, f)}</div>
+    <div class="kpi-note">activity pulse comes from five size-0 aggregations (latest date + 30-day count per project per source) cached 5 min — no report is built until you open a project${(cat.errors || []).length ? ` · <span class="pct-warn">sources unavailable: ${esc(cat.errors.join("; "))}</span>` : ""}</div>`;
+}
+
+function prjCatalogEvt(ev) {
+  const open = ev.target.closest("[data-cat-open]");
+  if (open) { prjOpen(open.dataset.catOpen); return; }
+  const el = ev.target.closest("[data-cat-f]");
+  if (!el || ev.type === "click") return;
+  (state.prjCatFilter = state.prjCatFilter || {})[el.dataset.catF] = el.value;
+  const body = document.getElementById("cat-body");
+  const rows = prjCatalogFilter((state.prjCatalog || {}).projects || [], state.prjCatFilter);
+  if (body) body.innerHTML = prjCatalogCards(rows, state.prjCatFilter);
+  const n = document.getElementById("cat-count");
+  if (n) n.textContent = `${rows.length} of ${((state.prjCatalog || {}).projects || []).length}`;
+}
+
+function prjOpen(name) {
+  state.prjSel = name;
+  const sel = document.getElementById("prj-sel");
+  if (sel) sel.value = name;
+  prjSetMode(true);
+  prjLoad();
+}
+
+function prjSetMode(report) {
+  const back = document.getElementById("prj-back");
+  if (back) back.classList.toggle("hidden", !report);
+  const sel = document.getElementById("prj-sel");
+  if (sel && !report) sel.value = "";
+}
+
 async function prjLoad(refresh) {
   const tok = navToken();
   const body = document.getElementById("prj-body");
@@ -6568,31 +6683,47 @@ async function prjLoad(refresh) {
 
 async function renderProjects() {
   const tok = navToken();
-  const list = await api("/api/projects");
+  const [list, cat] = await Promise.all([api("/api/projects"), api("/api/projects/catalog")]);
   if (navStale(tok)) return;
+  state.prjCatalog = cat;
   const projects = list.projects || [];
-  if (!projects.some((p) => p.name === state.prjSel)) state.prjSel = (projects[0] || {}).name;
+  if (state.prjSel && !projects.some((p) => p.name === state.prjSel)) state.prjSel = null;
   state.prjDays = state.prjDays ?? 30;
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   view().innerHTML = `
     <div class="view-head">
+      <button id="prj-back" class="btn btn-sm btn-ghost ${state.prjSel ? "" : "hidden"}" title="back to the project catalog">◀ projects</button>
       <span class="spacer"></span>
-      <select id="prj-sel" class="prj-ctl">${projects.map((p) =>
-        opt(p.name, `${p.name}${p.company ? " · " + p.company : ""} (${p.apps} apps)`, state.prjSel)).join("")}</select>
+      <select id="prj-sel" class="prj-ctl"><option value="" ${state.prjSel ? "" : "selected"}>— choose a project —</option>${projects.map((p) =>
+        opt(p.name, `${p.name}${p.company ? " · " + p.company : ""} (${p.apps} apps)`, state.prjSel || "")).join("")}</select>
       <select id="prj-days" class="prj-ctl">${[30, 90, 180, 365].map((n) => opt(n, `last ${n} days`, state.prjDays)).join("")}${opt(0, "all time", state.prjDays)}</select>
-      <button id="prj-refresh" class="btn btn-sm" title="bypass the 10-minute report cache">↻</button>
+      <button id="prj-refresh" class="btn btn-sm" title="bypass the caches">↻</button>
       <button id="prj-print" class="btn btn-sm" title="print / save as PDF — chrome bars are stripped automatically">🖨 report</button>
     </div>
     <div class="kpi-note" style="margin-bottom:10px">commits &amp; Jira come from their Elasticsearch mirrors (ef-git-commits / ef-bs-jira-issues) and scans from the ef-cicd-* indices — source systems are never hit directly; the whole report caches for 10 minutes</div>
     <div id="prj-body"></div>`;
-  document.getElementById("prj-sel").addEventListener("change", (e) => { state.prjSel = e.target.value; prjLoad(); });
-  document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10); if (isNaN(state.prjDays)) state.prjDays = 30; prjLoad(); });
-  document.getElementById("prj-refresh").addEventListener("click", () => prjLoad(true));
+  document.getElementById("prj-sel").addEventListener("change", (e) => {
+    if (e.target.value) prjOpen(e.target.value); else { state.prjSel = null; prjSetMode(false); prjShowCatalog(); }
+  });
+  document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10); if (isNaN(state.prjDays)) state.prjDays = 30; if (state.prjSel) prjLoad(); });
+  document.getElementById("prj-refresh").addEventListener("click", async () => {
+    if (state.prjSel) prjLoad(true);
+    else { try { state.prjCatalog = await api("/api/projects/catalog?refresh=true"); } catch { /* keep old */ } prjShowCatalog(); }
+  });
   document.getElementById("prj-print").addEventListener("click", () => window.print());
+  document.getElementById("prj-back").addEventListener("click", () => { state.prjSel = null; prjSetMode(false); prjShowCatalog(); });
   const body = document.getElementById("prj-body");
   body.addEventListener("click", prjEvFilterEvt);
   body.addEventListener("input", prjEvFilterEvt);
-  await prjLoad();
+  body.addEventListener("click", prjCatalogEvt);
+  body.addEventListener("input", prjCatalogEvt);
+  body.addEventListener("change", prjCatalogEvt);
+  if (state.prjSel) await prjLoad(); else prjShowCatalog();
+}
+
+function prjShowCatalog() {
+  const body = document.getElementById("prj-body");
+  if (body && state.prjCatalog) body.innerHTML = prjCatalogHtml(state.prjCatalog);
 }
 
 /* ================= ACTIVITY — QuestOps usage ================= */
