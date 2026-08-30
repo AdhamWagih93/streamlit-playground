@@ -89,6 +89,9 @@ services:
       RESTRICTED_PAGES: ${QO_RESTRICTED_PAGES:-}
       FULL_ACCESS_USERS: ${QO_FULL_ACCESS_USERS:-}
       LOGIN_WITHOUT_PASSWORD: ${QO_LOGIN_WITHOUT_PASSWORD:-false}
+      COMPANY_NAME: ${QO_COMPANY_NAME:-}
+      # mount your PNG and point at it, e.g. QO_COMPANY_LOGO=/app/branding/logo.png
+      COMPANY_LOGO: ${QO_COMPANY_LOGO:-}
       GIT_TOKEN: ${QO_GIT_TOKEN:-}
       REPOS_WORKDIR: /data/repos
       ADO_URL: ${QO_ADO_URL:-}

@@ -178,6 +178,9 @@ class Settings(BaseSettings):
     # DANGEROUS: when true, a username alone logs in — the password is not
     # checked (LDAP identity/group gates still apply in live mode)
     login_without_password: bool = False
+    # branding: shown in the sidebar, login card and the printed report
+    company_name: str = ""
+    company_logo: str = ""   # path to a PNG inside the container
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
     # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.

@@ -75,6 +75,8 @@ data:
   RESTRICTED_PAGES: {{ .Values.ldap.restrictedPages | default "" | quote }}
   FULL_ACCESS_USERS: {{ .Values.ldap.fullAccessUsers | default "" | quote }}
   LOGIN_WITHOUT_PASSWORD: {{ .Values.ldap.loginWithoutPassword | default false | quote }}
+  COMPANY_NAME: {{ .Values.branding.companyName | default "" | quote }}
+  COMPANY_LOGO: {{ .Values.branding.logoPath | default "" | quote }}
   GIT_USER_NAME: {{ .Values.git.userName | quote }}
   GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}

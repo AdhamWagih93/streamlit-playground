@@ -749,6 +749,111 @@ def _sec_cicd(name: str, days: int) -> dict:
             "build_versions": build_versions}
 
 
+# ---------------------------------------------------------------- DORA
+def _ts(v) -> dt.datetime | None:
+    """Tolerant timestamp parse for event ts strings."""
+    if not v:
+        return None
+    x = str(v).strip().replace(" ", "T").rstrip("Z")[:19]
+    try:
+        return dt.datetime.fromisoformat(x)
+    except ValueError:
+        return None
+
+
+_PRD = re.compile(r"pr(o?)d", re.I)
+_OK = re.compile(r"succ", re.I)
+_BAD = re.compile(r"fail|abort|error|cancel", re.I)
+
+
+def _dora(out: dict) -> dict:
+    """The four DORA metrics from what the report already holds:
+      deployment frequency  — successful PRODUCTION deploys per week
+      lead time for changes — effective commit (or its build) → prd deploy
+      change failure rate   — failed prd deploys / all prd deploys
+      time to restore       — failed prd deploy → next successful prd deploy
+    Ratings follow the DORA bands (elite / high / medium / low)."""
+    ev = out.get("events") or []
+    days = out.get("days") or 0
+    prd = [e for e in ev if e.get("type") == "deploy" and not e.get("test")
+           and _PRD.search(e.get("env") or "") and _ts(e.get("ts"))]
+    succ = [e for e in prd if _OK.search(e.get("status") or "")]
+    fail = [e for e in prd if _BAD.search(e.get("status") or "")]
+    res = {"available": bool(prd), "prd_deploys": len(prd),
+           "prd_success": len(succ), "prd_failed": len(fail)}
+    if not prd:
+        return res
+    # ---- deployment frequency ------------------------------------------
+    if days:
+        span = days
+    else:
+        tss = sorted(_ts(e["ts"]) for e in prd)
+        span = max((tss[-1] - tss[0]).days + 1, 1)
+    per_week = len(succ) / span * 7
+    res["deploy_freq_week"] = round(per_week, 2)
+    res["deploy_freq_rating"] = ("elite" if per_week >= 7 else "high" if per_week >= 1
+                                 else "medium" if per_week * 4.3 >= 1 else "low")
+    # ---- lead time for changes -------------------------------------------
+    first_commit: dict = {}     # built version → earliest effective-commit time
+    first_build: dict = {}      # (app, version) → earliest build time
+    for e in ev:
+        t = _ts(e.get("ts"))
+        if not t:
+            continue
+        if e.get("type") == "ecommit" and e.get("version"):
+            v = e["version"]
+            if v not in first_commit or t < first_commit[v]:
+                first_commit[v] = t
+        elif e.get("type") == "build" and e.get("version"):
+            k = (e.get("app"), e["version"])
+            if k not in first_build or t < first_build[k]:
+                first_build[k] = t
+    leads = []
+    for e in succ:
+        v = e.get("version")
+        if not v:
+            continue
+        start = first_commit.get(v) or first_build.get((e.get("app"), v))
+        if start:
+            h = (_ts(e["ts"]) - start).total_seconds() / 3600
+            if h >= 0:
+                leads.append(h)
+    if leads:
+        leads.sort()
+        med = leads[len(leads) // 2]
+        res["lead_time_h"] = round(med, 1)
+        res["lead_time_samples"] = len(leads)
+        res["lead_time_rating"] = ("elite" if med < 24 else "high" if med < 168
+                                   else "medium" if med < 720 else "low")
+    # ---- change failure rate ---------------------------------------------
+    cfr = len(fail) / len(prd) * 100
+    res["cfr_pct"] = round(cfr, 1)
+    res["cfr_rating"] = ("elite" if cfr <= 15 else "high" if cfr <= 30
+                         else "medium" if cfr <= 45 else "low")
+    # ---- time to restore -------------------------------------------------
+    restores = []
+    by_app: dict = {}
+    for e in prd:
+        by_app.setdefault(e.get("app"), []).append(e)
+    for app, lst in by_app.items():
+        lst.sort(key=lambda e: _ts(e["ts"]))
+        for i, e in enumerate(lst):
+            if not _BAD.search(e.get("status") or ""):
+                continue
+            nxt = next((x for x in lst[i + 1:] if _OK.search(x.get("status") or "")), None)
+            if nxt:
+                restores.append((_ts(nxt["ts"]) - _ts(e["ts"])).total_seconds() / 3600)
+    if restores:
+        mttr = sum(restores) / len(restores)
+        res["mttr_h"] = round(mttr, 1)
+        res["mttr_samples"] = len(restores)
+        res["mttr_rating"] = ("elite" if mttr < 1 else "high" if mttr < 24
+                              else "medium" if mttr < 168 else "low")
+    elif fail:
+        res["mttr_open"] = len(fail)   # failures with no recovery yet
+    return res
+
+
 def _assemble_events(out: dict) -> list[dict]:
     """The unified event log: cicd events + commits + Jira updates + Jira
     changelog folded into one newest-first stream. NOT capped — every event
@@ -1157,6 +1262,17 @@ def _demo_report(name: str, days: int) -> dict:
              "status": "SUCCESS", "version": f"1.4.{i + 1}",
              "who": "alice", "test": i == 2, "detail": "Docker"},
         ]
+    cicd_events += [
+        {"ts": "2026-08-24T09:00", "type": "build", "app": apps[0], "env": "",
+         "status": "SUCCESS", "version": "1.4.1", "who": "alice", "test": False,
+         "detail": "develop · Docker"},
+        {"ts": "2026-08-23T10:00", "type": "deploy", "app": apps[1] if len(apps) > 1 else apps[0],
+         "env": "prd", "status": "FAILURE", "version": "1.4.0", "who": "bob",
+         "test": False, "detail": "Docker"},
+        {"ts": "2026-08-23T12:30", "type": "deploy", "app": apps[1] if len(apps) > 1 else apps[0],
+         "env": "prd", "status": "SUCCESS", "version": "1.4.0", "who": "bob",
+         "test": False, "detail": "Docker"},
+    ]
     cicd_events.append({"ts": "2026-08-24T15:00", "type": "release", "app": apps[0],
                         "env": "", "status": "SUCCESS", "version": "1.4.1",
                         "who": "alice", "test": False, "detail": "RLM-100"})
@@ -1237,6 +1353,10 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         except Exception:  # noqa: BLE001 — LDAP trouble must not kill the section
             pass
     out["events"] = _assemble_events(out)
+    try:
+        out["dora"] = _dora(out)
+    except Exception as exc:  # noqa: BLE001
+        out["dora"] = {"available": False, "error": str(exc)[:200]}
 
     _CACHE[ck] = {"at": time.time(), "payload": out}
     return {**out, "cached": False}

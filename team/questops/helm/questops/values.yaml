@@ -181,3 +181,9 @@ database:
     storage: 2Gi
     storageClassName: ""
     password: "questops"
+
+# branding — company name + PNG logo path inside the container (mount it via
+# an extra volume/ConfigMap; sidebar, login card and printed report use it)
+branding:
+  companyName: ""
+  logoPath: ""

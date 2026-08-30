@@ -34,6 +34,36 @@ async def no_cache_spa(request: Request, call_next):
     return resp
 
 
+def _logo_path() -> Path | None:
+    """Configured company logo, else the bundled demo logo in demo mode."""
+    if settings.company_logo:
+        cand = Path(settings.company_logo)
+        if cand.is_file():
+            return cand
+    if settings.demo_mode:
+        demo = _frontend_dir() / "demo-logo.png"
+        if demo.is_file():
+            return demo
+    return None
+
+
+@app.get("/api/branding")
+def branding():
+    return {"company_name": settings.company_name or ("Acme Retail" if settings.demo_mode else ""),
+            "has_logo": _logo_path() is not None}
+
+
+@app.get("/branding/logo")
+def branding_logo():
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    path = _logo_path()
+    if path is None:
+        raise HTTPException(404, "no company logo configured")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "app": settings.app_name, "demo_mode": settings.demo_mode}

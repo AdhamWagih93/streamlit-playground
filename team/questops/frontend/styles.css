@@ -1590,6 +1590,18 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   body { background: #fff; }
   /* colored visuals must survive print — browsers strip backgrounds otherwise */
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  /* landscape page + everything shrunk to the page width — nothing cropped */
+  @page { size: A4 landscape; margin: 8mm; }
+  #view { padding: 0 !important; }
+  .prj-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .prj-sdlc-wrap, .prj-heat { overflow: visible !important; max-width: 100%; }
+  .prj-sdlc { font-size: 9.5px; width: 100%; table-layout: auto; }
+  .prj-sdlc th, .prj-sdlc td { padding: 3px 4px; }
+  .prj-ev-detail { white-space: normal !important; }
+  .stat-tiles { flex-wrap: wrap; }
+  .dora-strip { break-inside: avoid; }
+  .prj-spark { max-width: 100%; }
+  img.brand-logo { display: inline-block !important; }
   .prj-spark, .pgv-card, .prj-sdlc-wrap, .prj-heat, .stat-tiles, .prj-name { break-inside: avoid; }
   .prj-name { position: static !important; box-shadow: none !important; }
   .prj-ev-list { max-height: none !important; overflow: visible !important; }
@@ -1679,3 +1691,35 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-sdlc-fail { font: 700 9.5px var(--mono); color: var(--red);
   border: 1px solid rgba(239, 95, 102, .5); background: rgba(239, 95, 102, .1);
   border-radius: 8px; padding: 1px 5px; cursor: help; white-space: nowrap; }
+
+
+/* ================= DORA strip ================= */
+.dora-strip { display: flex; align-items: stretch; gap: 8px; margin: 2px 0 12px; }
+.dora-head { writing-mode: vertical-rl; transform: rotate(180deg); font: 800 11px var(--mono);
+  letter-spacing: .18em; color: var(--faint); padding: 4px 0; align-self: center; }
+.dora-tile { flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  background: var(--panel); border-left-width: 4px; cursor: help; min-width: 0; }
+.dora-val { font: 800 22px var(--body); color: var(--text); line-height: 1.1; }
+.dora-val small { font: 600 11px var(--mono); margin-left: 3px; color: var(--faint); }
+.dora-label { font: 600 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em;
+  color: var(--faint); margin-top: 2px; }
+.dora-rating { display: inline-block; margin-top: 5px; font: 700 10px var(--mono);
+  padding: 1px 7px; border-radius: 8px; }
+.dora-elite { border-left-color: #43c884; }  .dora-elite .dora-rating { background: rgba(67,200,132,.15); color: #43c884; }
+.dora-high { border-left-color: #1497b3; }   .dora-high .dora-rating { background: rgba(20,151,179,.15); color: #1497b3; }
+.dora-medium { border-left-color: #c0841c; } .dora-medium .dora-rating { background: rgba(192,132,28,.15); color: #c0841c; }
+.dora-low { border-left-color: #ef5f66; }    .dora-low .dora-rating { background: rgba(239,95,102,.15); color: #ef5f66; }
+.dora-na { border-left-color: var(--line); } .dora-na .dora-rating { background: var(--line); color: var(--faint); }
+.dora-none { padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; align-items: center; }
+
+/* insight lines under each section */
+.prj-insights { list-style: none; margin: 6px 0 2px; padding: 6px 10px; border-radius: 8px;
+  background: rgba(20, 151, 179, .06); border-left: 3px solid #1497b3; }
+.prj-insights li { font: 500 11.5px var(--body); color: var(--text); padding: 1px 0; }
+.prj-insights li::before { content: "💡 "; }
+
+/* company logo (PNG) — sidebar, login card, printed report */
+.brand-logo { display: inline-block; height: 26px; width: auto; max-width: 140px; object-fit: contain; }
+.brand-side { vertical-align: middle; margin-right: 8px; }
+.brand-login { display: block; height: 40px; margin: 0 auto 8px; }
+.brand-report { height: 30px; align-self: center; margin-right: 4px; }

@@ -175,6 +175,8 @@ const oops = (e) => toast(`⚠ ${esc(e.message || e)}`, "toast-err", 5000);
 
 /* ---------------- auth ---------------- */
 async function boot() {
+  // branding is public — fetch it before either login path renders anything
+  try { state.brand = await api("/api/branding"); } catch { state.brand = {}; }
   const health = await fetch("/api/health").then((r) => r.json()).catch(() => ({}));
   if (health.demo_mode) $("#login-hint").classList.remove("hidden");
   $("#mode-chip").classList.toggle("hidden", !health.demo_mode);
@@ -5650,6 +5652,44 @@ function prjSev(w) {
     + chip(w.medium || 0, "chip-amber", "medium") + chip(w.low || 0, "", "low");
 }
 
+// ---- DORA — the four key metrics, rated on the DORA bands ------------------
+const DORA_RATING = { elite: ["Elite", "dora-elite"], high: ["High", "dora-high"],
+  medium: ["Medium", "dora-medium"], low: ["Low", "dora-low"] };
+function prjDoraHtml(dora, d) {
+  if (!dora || !dora.available) return `
+    <div class="dora-strip dora-none" title="needs successful PRODUCTION deployments in the window (ef-cicd-deployments, env ≈ prd)">
+      <span class="dora-head">DORA</span><span class="ci-meta">no production deployments in ${prjWin(d)} — deployment frequency, lead time, change failure rate and time-to-restore need prd deploys to exist</span></div>`;
+  const tile = (val, unit, label, rating, tip) => {
+    const [rl, rc] = DORA_RATING[rating] || ["—", "dora-na"];
+    return `<div class="dora-tile ${rc}" title="${esc(tip)}">
+      <div class="dora-val">${val}<small>${unit}</small></div>
+      <div class="dora-label">${label}</div>
+      <div class="dora-rating">${rl}</div></div>`;
+  };
+  const h = (x) => x == null ? "—" : x >= 48 ? `${(x / 24).toFixed(1)}` : `${x}`;
+  const hu = (x) => x == null ? "" : x >= 48 ? "d" : "h";
+  return `<div class="dora-strip">
+    <span class="dora-head" title="DORA metrics — computed from your ef-cicd deployments/builds and effective commits; window ${prjWin(d)}">DORA</span>
+    ${tile(dora.deploy_freq_week, "/wk", "deployment frequency", dora.deploy_freq_rating,
+      `${dora.prd_success} successful production deploy(s) in ${prjWin(d)} · elite ≥ daily · high ≥ weekly · medium ≥ monthly`)}
+    ${tile(h(dora.lead_time_h), hu(dora.lead_time_h), "lead time for changes", dora.lead_time_h == null ? null : dora.lead_time_rating,
+      dora.lead_time_h == null ? "no prd deploy could be traced back to an effective commit or build of the same version"
+        : `median over ${dora.lead_time_samples} deploy(s): effective commit (or its build) → production deploy · elite < 1d · high < 1w · medium < 1mo`)}
+    ${tile(dora.cfr_pct, "%", "change failure rate", dora.cfr_rating,
+      `${dora.prd_failed} failed of ${dora.prd_deploys} production deploy(s) · elite ≤ 15% · high ≤ 30% · medium ≤ 45%`)}
+    ${tile(h(dora.mttr_h), hu(dora.mttr_h), "time to restore", dora.mttr_h == null ? null : dora.mttr_rating,
+      dora.mttr_h == null ? (dora.mttr_open ? `${dora.mttr_open} production failure(s) not yet recovered` : "no production failures in the window — nothing to restore")
+        : `mean over ${dora.mttr_samples} recovery(ies): failed prd deploy → next successful prd deploy of the same app · elite < 1h · high < 1d · medium < 1w`)}
+  </div>`;
+}
+
+// one line of analysis per section — derived from the payload, no guessing
+function prjInsights(items) {
+  const list = (items || []).filter(Boolean);
+  return list.length ? `<ul class="prj-insights">${list.map((t) => `<li>${t}</li>`).join("")}</ul>` : "";
+}
+const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+
 function prjErr(sec, what) {
   return `<div class="rsearch-status rsearch-err">⚠ ${esc(what)} unavailable — ${esc(sec.error)}</div>`;
 }
@@ -5754,6 +5794,25 @@ function prjSdlcHtml(d) {
           </tr></tfoot>` : "";
         })()}
       </table></div>
+      ${(() => {
+        const out = [];
+        const failing = apps.filter((a) => {
+          const b = (board.builds || {})[a];
+          return b && b.status && !/succ/i.test(b.status);
+        });
+        if (failing.length) out.push(`latest build FAILED for <b>${esc(failing.join(", "))}</b>`);
+        const prdFail = apps.filter((a) => { const c = ((board.deploys || {})[a] || {}).prd; return c && c.status && !/succ/i.test(c.status); });
+        if (prdFail.length) out.push(`production is behind on <b>${esc(prdFail.join(", "))}</b> — last prd deploy failed`);
+        const never = apps.filter((a) => !Object.keys((board.deploys || {})[a] || {}).length);
+        if (never.length) out.push(`<b>${esc(never.join(", "))}</b> never deployed anywhere in the data`);
+        const stale = apps.map((a) => [a, (((board.deploys || {})[a] || {}).prd || {}).when]).filter(([, w]) => w)
+          .map(([a, w]) => [a, (Date.now() - Date.parse(String(w).replace(" ", "T") + "Z")) / 864e5]).filter(([, dd]) => dd > 30);
+        if (stale.length) out.push(`prd untouched for a month+: <b>${esc(stale.map(([a, dd]) => `${a} (${Math.round(dd)}d)`).join(", "))}</b>`);
+        const tu = board.top_users || {};
+        const bt = (tu.build || [])[0], dp = ((tu.deploys || {}).prd || [])[0];
+        if (bt) out.push(`most active builder: <b>${esc(bt.key)}</b> (${bt.count})${dp ? ` · most prd deploys: <b>${esc(dp.key)}</b> (${dp.count})` : ""}`);
+        return prjInsights(out);
+      })()}
     </details>`;
 }
 
@@ -5891,8 +5950,10 @@ function prjBodyHtml(d) {
 
   const head = `
     <div class="prj-name">
+      ${(state.brand || {}).has_logo ? '<img class="brand-logo brand-report" src="/branding/logo" alt="">' : ""}
       <span class="prj-name-main">▣ ${esc(d.project || "")}</span>
       ${inv.company ? `<span class="prj-name-co">${esc(inv.company)}</span>` : ""}
+      ${(state.brand || {}).company_name && (state.brand || {}).company_name !== inv.company ? `<span class="prj-name-co">· ${esc(state.brand.company_name)}</span>` : ""}
       <span class="spacer"></span>
       <span class="ci-meta" title="generated ${esc(d.generated_at || "")} · registries: ${esc(syncLine.replace(/<[^>]*>/g, ""))}">${d.days ? `last ${d.days}d` : "all time"}${d.cached ? " · cached" : ""} · <span title="inventory ⇄ devops_projects ⇄ ADO ⇄ Jira presence (details in Access → Projects consistency)">${syncLine}</span></span>
     </div>
@@ -5913,7 +5974,24 @@ function prjBodyHtml(d) {
       ${tile((jira.done || {}).total != null ? `${logInt(jira.done.total)}${prjDelta(jira.done.total, (d.prev || {}).resolved, d)}` : "—", `resolved · ${prjWin(d)}`, "pct-good")}
       ${tile(lg.found ? lg.score : "—", "log score", lg.found ? logScoreClass(lg.score) : "")}
       ${tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good")}
-    </div>`;
+    </div>
+    ${prjDoraHtml(d.dora, d)}
+    ${(() => {
+      const dora = d.dora || {};
+      const out = [];
+      if (dora.available) {
+        const worst = ["deploy_freq_rating", "lead_time_rating", "cfr_rating", "mttr_rating"]
+          .map((k) => [k, dora[k]]).filter(([, v]) => v)
+          .sort((a, b) => ["low", "medium", "high", "elite"].indexOf(a[1]) - ["low", "medium", "high", "elite"].indexOf(b[1]))[0];
+        const names = { deploy_freq_rating: "deployment frequency", lead_time_rating: "lead time", cfr_rating: "change failure rate", mttr_rating: "time to restore" };
+        if (worst && worst[1] !== "elite") out.push(`biggest DORA lever: <b>${names[worst[0]]}</b> is rated <b>${worst[1]}</b>`);
+        else if (worst) out.push("all four DORA metrics are <b>elite</b> in this window");
+        if (dora.mttr_open) out.push(`<b>${dora.mttr_open}</b> production failure(s) still without a successful redeploy`);
+      }
+      if (com.total != null && (d.prev || {}).commits != null && d.days)
+        out.push(`commit volume ${com.total >= d.prev.commits ? "▲ up" : "▼ down"} <b>${Math.abs(pct(com.total - d.prev.commits, d.prev.commits || 1))}%</b> vs the previous ${d.days}d`);
+      return prjInsights(out);
+    })()}`;
 
   // ---- systems & registries detail — deliberately COLLAPSED and last:
   // sync drift belongs to Access → Projects consistency, not this report
@@ -6009,6 +6087,20 @@ function prjBodyHtml(d) {
         <div class="pgv-card"><div class="pgv-title">per repository</div>${prjBar(com.repos)}</div>
       </div>`;
       })()}
+      ${(() => {
+        const out = [];
+        const pd = com.per_day || [];
+        let run = 0, best = 0;
+        pd.forEach((b) => { run = b.count ? 0 : run + 1; best = Math.max(best, run); });
+        if (best >= 5 && d.days) out.push(`longest quiet streak: <b>${best}</b> ${com.unit || "day"}(s) without a commit`);
+        const busiest = [...pd].sort((a, b) => b.count - a.count)[0];
+        if (busiest && busiest.count) out.push(`busiest ${com.unit || "day"}: <b>${esc(busiest.day)}</b> with ${busiest.count} commit(s)`);
+        const rp = com.repos || [];
+        if (rp.length > 1) out.push(`<b>${esc(rp[0].key)}</b> takes ${pct(rp[0].count, rp.reduce((n, r) => n + r.count, 0))}% of the commits`);
+        const dev = (com.branches || []).find((b) => /^develop$/i.test(b.key));
+        if (dev && com.total) out.push(`<b>${pct(dev.count, com.total)}%</b> of commits land on develop`);
+        return prjInsights(out);
+      })()}
       <details class="filebox acc-pg-sec"><summary>🕘 recent commits · <b>${logInt((com.recent || []).length)}</b>${(com.recent || []).length > 30 ? ' <span class="ci-meta">— first 30 here; ALL of them are in the event log</span>' : ""}</summary>
         <div class="log-idx-list">${(com.recent || []).slice(0, 30).map((c) => `
           <div class="log-idx"><span class="ci-meta">${esc(c.when)}</span>
@@ -6047,6 +6139,21 @@ function prjBodyHtml(d) {
       })()}
       <div class="inv-chips" style="margin:4px 0">${(jira.by_type || []).map((t) =>
         `<span class="chip">${esc(t.key)} · ${logInt(t.count)}</span>`).join("")}</div>
+      ${(() => {
+        const out = [];
+        const rows = (jira.matrix || {}).rows || [];
+        const crit = rows.filter((r) => /critical|blocker|highest/i.test(r.priority)).reduce((n, r) => n + r.total, 0);
+        if (crit) out.push(`<b>${crit}</b> critical/blocker ticket(s) still open`);
+        const reopened = ((jira.matrix || {}).statuses || []).includes("Reopened") ? rows.reduce((n, r) => n + ((r.cells || {}).Reopened || 0), 0) : 0;
+        if (reopened) out.push(`<b>${reopened}</b> reopened — fixes not sticking`);
+        const dn = jira.done || {};
+        if (dn.total && dn.avg_days != null) out.push(`<b>${dn.total}</b> resolved in ${prjWin(d)}, ≈<b>${dn.avg_days}d</b> from creation to resolution${(dn.by_assignee || [])[0] ? ` · <b>${esc(dn.by_assignee[0].key)}</b> closed the most (${dn.by_assignee[0].count})` : ""}`);
+        const wl = jira.workload || [];
+        const heavy = wl.filter((w) => w.assignee !== "(unassigned)").sort((a, b) => b.open - a.open)[0];
+        if (heavy && heavy.open) out.push(`heaviest open load: <b>${esc(heavy.assignee)}</b> with ${heavy.open} open`);
+        if (jira.open && jira.total) out.push(`<b>${pct(jira.open, jira.total)}%</b> of all tickets are open`);
+        return prjInsights(out);
+      })()}
       <div class="pgv-title" style="margin-top:6px">update activity (per ${d.days ? "week" : "month"}, ${prjWin(d)})</div>
       ${prjSpark(jira.updates_per_week, "update(s)")}
       ${(() => {   // ---- changelog from ef-bs-jira-changes ----------------
@@ -6095,6 +6202,21 @@ function prjBodyHtml(d) {
           <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>
         <div class="pgv-card"><div class="pgv-title">🎫 open tickets per assignee</div>${prjBar(jira.by_assignee)}</div>
       </div>
+      ${(() => {
+        const out = [];
+        const au = com.authors || [];
+        const tot = au.reduce((n, a) => n + a.count, 0);
+        if (au.length && tot) {
+          const share = pct(au[0].count, tot);
+          out.push(`<b>${esc(au[0].key)}</b> authors <b>${share}%</b> of commits${share >= 50 ? " — bus-factor risk, knowledge is concentrated" : au.length >= 3 && share <= 40 ? " — healthy spread across contributors" : ""}`);
+          if (au.length === 1) out.push("a single contributor in the window");
+        }
+        const jt = d.days ? jc.teams : jc.teams_alltime;
+        if ((jt || []).length > 1) out.push(`Jira work spans <b>${jt.length}</b> teams; <b>${esc(jt[0].key)}</b> drives ${pct(jt[0].count, jt.reduce((n, t) => n + t.count, 0))}%`);
+        const un = (jira.by_assignee || []).find((a) => /unassigned/i.test(a.key));
+        if (un && un.count) out.push(`<b>${un.count}</b> ticket(s) have no assignee`);
+        return prjInsights(out);
+      })()}
     </details>`;
 
   // ---- security scans: ONE consolidated matrix (apps × scanners) -------
@@ -6132,6 +6254,23 @@ function prjBodyHtml(d) {
       <div class="kpi-note">cells show the WORST severities of each app's freshest scan — red C/H · amber M · plain L · ✓ clean · "·st" columns are status-only scanners</div>`
         : '<div class="empty">no scans recorded for this project</div>'}
       ${scanErrors.map((k) => prjErr(scans[k], scans[k].label || k)).join("")}
+      ${(() => {
+        const out = [];
+        const worstApp = scanApps.map((app) => [app, scanKeys.reduce((n, k) => {
+          const a = (scans[k].apps || []).find((x) => x.app === app) || {};
+          return n + (a.critical || 0) * 10 + (a.high || 0); }, 0)]).sort((a, b) => b[1] - a[1])[0];
+        if (worstApp && worstApp[1]) out.push(`most exposed app: <b>${esc(worstApp[0])}</b>`);
+        const secrets = scanKeys.flatMap((k) => (scans[k].apps || []).filter((a) => a.verified).map((a) => a.app));
+        if (secrets.length) out.push(`<b>VERIFIED live secret(s)</b> in ${esc([...new Set(secrets)].join(", "))} — rotate now`);
+        const invApps = (inv.apps || []).map((a) => a.name);
+        const unscanned = invApps.filter((a) => !scanApps.includes(a));
+        if (unscanned.length) out.push(`never scanned by any tool: <b>${esc(unscanned.join(", "))}</b>`);
+        const stale = scanKeys.flatMap((k) => (scans[k].apps || []).map((a) => [a.app, scans[k].label, a.when]))
+          .filter(([, , w]) => w && (Date.now() - Date.parse(w)) / 864e5 > 30);
+        if (stale.length) out.push(`${stale.length} scan(s) older than 30 days — e.g. ${esc(stale[0][0])} (${esc(stale[0][1])})`);
+        if (!out.length && scanApps.length) out.push("no critical/high findings, no verified secrets, every inventory app covered");
+        return prjInsights(out);
+      })()}
     </details>`;
 
   // ---- logging ---------------------------------------------------------
@@ -6146,6 +6285,17 @@ function prjBodyHtml(d) {
           ${[...(a.envs || [])].sort((x, y) => ({ dev: 1, qc: 2, uat: 3, prd: 4 }[x.env] || 9) - ({ dev: 1, qc: 2, uat: 3, prd: 4 }[y.env] || 9) || String(x.env).localeCompare(String(y.env))).map((e) => `<span class="chip ${!e.deployed ? "" : e.no_logs ? "chip-red" : "chip-green"}" title="${esc(e.env)}${e.deployed ? ` — deployed ${esc(e.last_deploy || "")}` : " — not deployed"}${e.no_logs ? " · NO LOGS" : ""}">${esc(e.env)}</span>`).join("")}
           ${(a.issues || []).length ? `<span class="chip chip-amber" title="${esc((a.issues || []).join(", "))}">${(a.issues || []).length} issue(s)</span>` : ""}
         </div>`).join("")}</div>
+      ${(() => {
+        const out = [];
+        const la = lg.apps || [];
+        const weak = la.filter((a) => a.score != null && a.score < 60).map((a) => `${a.app} (${a.score})`);
+        if (weak.length) out.push(`weak logging health: <b>${esc(weak.join(", "))}</b>`);
+        const silent = la.flatMap((a) => (a.envs || []).filter((e) => e.deployed && e.no_logs).map((e) => `${a.app}/${e.env}`));
+        if (silent.length) out.push(`deployed but <b>silent</b> (no logs): ${esc(silent.join(", "))}`);
+        const big = [...la].sort((a, b) => (b.docs || 0) - (a.docs || 0))[0];
+        if (big && lg.docs) out.push(`<b>${esc(big.app)}</b> produces ${pct(big.docs, lg.docs)}% of the project's log volume`);
+        return prjInsights(out);
+      })()}
       <div class="kpi-note">full drill-down (indices, samples, retention…) lives in the <a href="#/logging">Logging</a> page · analyzed ${esc((lg.analyzed_at || "").slice(0, 16).replace("T", " "))}</div>`}
     </details>`;
 
