@@ -6483,6 +6483,9 @@ async function prjLoad(refresh) {
     if (navStale(tok)) return;
     state.prjData = d;
     body.innerHTML = prjBodyHtml(d);
+    // every section of the report starts expanded — nothing hidden behind a
+    // collapsed summary on screen or in the printed PDF
+    body.querySelectorAll("details:not([open])").forEach((el) => { el.open = true; });
   } catch (e) {
     if (!navStale(tok)) body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
   }
