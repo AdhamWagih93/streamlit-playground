@@ -1114,6 +1114,145 @@ def _cat_activity() -> tuple[dict, list[str]]:
     return out, errors
 
 
+def _cat_extras() -> tuple[dict, list[str]]:
+    """Per-project lightweight facts beyond the activity pulse — every source
+    is either an already-cached analysis (ADO projects, Engine std-change
+    catalogue, logging health) or ONE size-0 aggregation per index:
+      security  latest scan per scanner per project (top_hits 1) → crit/high
+      deploys   prd deployments in 30d: ok / failed
+      usage     latest platform-usage snapshot (minutes / storage)
+    {norm(project): {...}}; errors list the sources that were unavailable."""
+    out: dict = {}
+    errors: list[str] = []
+    slot = lambda k: out.setdefault(k, {})  # noqa: E731
+    # ADO description / grade
+    try:
+        from . import access
+        for x in access.ado_projects().get("projects") or []:
+            row = {"description": (x.get("description") or "").strip(), "url": x.get("url"),
+                   "repos": x.get("repos") if isinstance(x.get("repos"), int) else len(x.get("repos") or []),
+                   "grade": x.get("grade"), "score": x.get("score"), "collection": x.get("coll")}
+            cur = slot(_norm(x.get("name"))).get("ado")
+            # the same project name may exist in several collections — keep the
+            # first one that has a description (the report's _sec_ado picks the same)
+            if cur is None or (not cur.get("description") and row["description"]):
+                slot(_norm(x.get("name")))["ado"] = row
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"ado: {str(exc)[:80]}")
+    # standard changes (Engine catalogue, parsed from the clone — no ES)
+    try:
+        from . import stdchanges
+        for c in stdchanges.catalog_all().get("changes") or []:
+            pn = _norm((c.get("vars") or {}).get("project_name"))
+            if pn:
+                st = slot(pn).setdefault("std", {"changes": 0, "issues": 0})
+                st["changes"] += 1
+                st["issues"] += len(c.get("issues") or [])
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"std changes: {str(exc)[:80]}")
+    # logging health (cached analysis shared with the Logging page)
+    try:
+        from . import logstats
+        for x in logstats.analyze().get("projects") or []:
+            t = x.get("totals") or {}
+            apps = x.get("apps") or []
+            slot(_norm(x.get("name"))).update(logging={
+                "score": x.get("score"), "size_h": t.get("size_h"), "indices": t.get("indices"),
+                "silent": sum(1 for a in apps if any(e.get("no_logs") for e in a.get("env_stats") or []))})
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"logging: {str(exc)[:80]}")
+    # security: freshest scan per project per scanner
+    for key, cfg in _SCANNERS.items():
+        sev = [f for f in cfg["sev"][:2] if f]
+        try:
+            resp = _es(cfg["index"], {"size": 0, "aggs": {"by": {
+                "terms": {"field": "project", "size": 1000},
+                "aggs": {"latest": {"top_hits": {"size": 1, "_source": [*sev, "enddate", "status"],
+                                                 "sort": [{"enddate": {"order": "desc", "unmapped_type": "date"}}]}},
+                         "recent": {"filter": {"range": {"enddate": {"gte": "now-90d"}}}}}}}})
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{cfg['index']}: {str(exc)[:80]}")
+            continue
+        for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
+            hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
+            src = hit.get("_source") or {}
+            sec = slot(_norm(b.get("key"))).setdefault("security", {"scanners": {}, "critical": 0, "high": 0, "last": ""})
+            crit = _int(src.get(cfg["sev"][0])) if cfg["sev"][0] else 0
+            high = _int(src.get(cfg["sev"][1])) if cfg["sev"][1] else 0
+            when = (src.get("enddate") or "")[:10]
+            sec["scanners"][key] = {"when": when, "critical": crit, "high": high,
+                                    "recent": (b.get("recent") or {}).get("doc_count", 0)}
+            sec["critical"] += crit
+            sec["high"] += high
+            sec["last"] = max(sec["last"], when)
+    # prd deployments — 30 days, ok vs failed (real runs only)
+    try:
+        resp = _es("ef-cicd-deployments", {"size": 0, "query": {"bool": {"filter": [
+            {"range": {"startdate": {"gte": "now-30d"}}}],
+            "must_not": [{"term": {"testflag": True}}]}},
+            "aggs": {"by": {"terms": {"field": "project", "size": 1000}, "aggs": {
+                "prd": {"filter": {"bool": {"should": [{"term": {"environment": e}} for e in ("prd", "prod", "production", "PRD", "PROD")],
+                                            "minimum_should_match": 1}},
+                        "aggs": {"ok": {"filter": {"term": {"status": "SUCCESS"}}}}}}}}})
+        for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
+            prd = b.get("prd") or {}
+            n = prd.get("doc_count", 0)
+            slot(_norm(b.get("key"))).update(deploys={"total": b.get("doc_count", 0), "prd": n,
+                                                     "prd_ok": (prd.get("ok") or {}).get("doc_count", 0)})
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"ef-cicd-deployments: {str(exc)[:80]}")
+    # platform usage — latest snapshot
+    try:
+        resp = _es("ef-devops-usage", {"size": 0, "aggs": {"by": {
+            "terms": {"field": "project", "size": 1000},
+            "aggs": {"latest": {"top_hits": {"size": 1, "_source": ["totalminutes", "totalstorage", "enddate"],
+                                             "sort": [{"enddate": {"order": "desc", "unmapped_type": "date"}}]}}}}}})
+        for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
+            hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
+            src = hit.get("_source") or {}
+            slot(_norm(b.get("key"))).update(usage={"minutes": _int(src.get("totalminutes")),
+                                                    "storage": _int(src.get("totalstorage")),
+                                                    "as_of": (src.get("enddate") or "")[:10]})
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"ef-devops-usage: {str(exc)[:80]}")
+    return out, errors
+
+
+def _demo_cat_extras(inv: dict) -> dict:
+    from . import access, stdchanges, logstats
+    out, _ = {}, None
+    try:
+        out, _ = _cat_extras_from_cached(inv)
+    except Exception:  # noqa: BLE001
+        out = {}
+    for i, p in enumerate(inv.get("projects") or []):
+        k = _norm(p["name"])
+        d = out.setdefault(k, {})
+        d.setdefault("security", {"scanners": {"prismacloud": {"when": "2026-08-27", "critical": i, "high": 3 + i, "recent": 6},
+                                               "invicti": {"when": "2026-08-20", "critical": 0, "high": i % 2, "recent": 2}},
+                                  "critical": i, "high": 3 + i + i % 2, "last": "2026-08-27"} if i < 3 else None)
+        if d["security"] is None:
+            d.pop("security")
+        d.setdefault("deploys", {"total": 24 - i * 6, "prd": 6 - i, "prd_ok": 5 - i} if i < 4 else None)
+        if d["deploys"] is None:
+            d.pop("deploys")
+        d.setdefault("usage", {"minutes": 4200 - i * 900, "storage": (38 - i * 7) * 1024 ** 3, "as_of": "2026-08-28"})
+    return out
+
+
+def _cat_extras_from_cached(inv: dict) -> tuple[dict, list[str]]:
+    """Demo mode: the cached-analysis parts of _cat_extras (ADO, std changes,
+    logging) work against demo data too — only the ES aggregations are faked."""
+    real_es = globals()["_es"]
+    def _no_es(index, body):
+        raise RuntimeError("demo")
+    globals()["_es"] = _no_es
+    try:
+        return _cat_extras()
+    finally:
+        globals()["_es"] = real_es
+
+
 def catalog(refresh: bool = False) -> dict:
     """The project landing: every inventory project with its facets and a
     LIGHTWEIGHT activity pulse — no per-project report is built."""
@@ -1123,12 +1262,16 @@ def catalog(refresh: bool = False) -> dict:
     inv = inventory.parse()
     if settings.demo_mode:
         act, errors = _demo_cat_activity(inv), []
+        extras = _demo_cat_extras(inv)
     else:
         act, errors = _cat_activity()
+        extras, more = _cat_extras()
+        errors += more
     projects = []
     for p in inv.get("projects") or []:
         pv = ((p.get("config") or {}).get("project_vars") or {})
         a = act.get(_norm(p["name"]), {})
+        x = extras.get(_norm(p["name"]), {})
         last = max(((v["last"], k) for k, v in a.items() if v.get("last")), default=("", ""))
         projects.append({
             "name": p["name"], "company": pv.get("company") or "",
@@ -1140,6 +1283,9 @@ def catalog(refresh: bool = False) -> dict:
             "activity": a,
             "last_activity": last[0], "last_source": last[1],
             "recent_30d": sum(v.get("recent", 0) for v in a.values()),
+            "description": ((x.get("ado") or {}).get("description") or pv.get("description") or ""),
+            "ado": x.get("ado"), "std": x.get("std"), "logging": x.get("logging"),
+            "security": x.get("security"), "deploys": x.get("deploys"), "usage": x.get("usage"),
         })
     projects.sort(key=lambda x: x["last_activity"], reverse=True)
     payload = {"source": inv.get("source"), "projects": projects, "errors": errors,

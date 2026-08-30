@@ -6970,12 +6970,14 @@ function prjCatalogFilter(list, f) {
     (!f.company || f.company === "all" || (p.company || "—") === f.company)
     && (!f.team || f.team === "all" || teamsOf(p).includes(f.team))
     && (!f.platform || f.platform === "all" || (p.deploy_platform || "—") === f.platform)
-    && q.every((t) => [p.name, p.company, p.deploy_platform, p.deploy_technology, ...teamsOf(p), ...(p.envs || [])]
+    && q.every((t) => [p.name, p.company, p.description, p.deploy_platform, p.deploy_technology, ...teamsOf(p), ...(p.envs || [])]
       .some((v) => String(v || "").toLowerCase().includes(t))));
   const sort = f.sort || "activity";
   rows.sort((a, b) => sort === "name" ? a.name.localeCompare(b.name)
     : sort === "apps" ? b.apps - a.apps || a.name.localeCompare(b.name)
     : sort === "recent" ? b.recent_30d - a.recent_30d || a.name.localeCompare(b.name)
+    : sort === "risk" ? ((b.security || {}).critical || 0) * 10 + ((b.security || {}).high || 0) - ((a.security || {}).critical || 0) * 10 - ((a.security || {}).high || 0) || a.name.localeCompare(b.name)
+    : sort === "logs" ? ((a.logging || {}).score ?? 99) - ((b.logging || {}).score ?? 99) || a.name.localeCompare(b.name)
     : (b.last_activity || "").localeCompare(a.last_activity || "") || a.name.localeCompare(b.name));
   return rows;
 }
@@ -6987,23 +6989,54 @@ function prjCatalogCards(rows, f) {
     : group === "team" ? (p.teams.dev || "— no dev team") : (p.company || "— no company");
   const groups = {};
   rows.forEach((p) => (groups[keyOf(p)] = groups[keyOf(p)] || []).push(p));
+  const maxRecent = Math.max(1, ...rows.map((p) => p.recent_30d || 0));
+  const gb = (n) => n >= 1024 ** 4 ? (n / 1024 ** 4).toFixed(1) + " TB" : n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + " GB" : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(0) + " MB" : n + " B";
+  const ring = (score, label, tip) => {   // 0-10 score ring (SVG, print-safe)
+    const v = score == null ? 0 : Math.max(0, Math.min(10, score));
+    const col = score == null ? "var(--line)" : v >= 8 ? "#43c884" : v >= 5 ? "#e0a13c" : "#e05c5c";
+    const c = 2 * Math.PI * 13;
+    return `<span class="cat-ring" title="${esc(tip)}"><svg viewBox="0 0 32 32" width="32" height="32"><circle cx="16" cy="16" r="13" class="cat-ring-bg"></circle>
+      <circle cx="16" cy="16" r="13" stroke="${col}" stroke-dasharray="${(c * v / 10).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 16 16)"></circle>
+      <text x="16" y="20" text-anchor="middle">${score == null ? "–" : v.toFixed(0)}</text></svg><small>${esc(label)}</small></span>`;
+  };
+  const pill = (cls, ico, txt, tip) => `<span class="cat-pill ${cls}" title="${esc(tip || "")}">${ico} ${txt}</span>`;
   const card = (p) => {
-    const pulse = Object.entries(p.activity || {}).filter(([, v]) => v.last)
-      .sort((a, b) => b[1].last.localeCompare(a[1].last)).slice(0, 5)
-      .map(([k, v]) => { const [ico, lab] = CAT_SRC[k] || ["•", k];
-        return `<span class="cat-pulse" title="last ${lab}: ${esc(v.last.replace("T", " "))} · ${v.recent} in 30d">${ico} ${prjAgo(v.last)}${v.recent ? `<small>${v.recent}</small>` : ""}</span>`; }).join("");
     const quiet = !p.last_activity;
+    // activity strip: one bar per source, height ∝ 30-day events (relative to the busiest project)
+    const strip = Object.keys(CAT_SRC).map((k) => { const v = (p.activity || {})[k] || {}; const [ico, lab] = CAT_SRC[k];
+      const h = v.recent ? Math.max(3, Math.round(22 * Math.min(1, v.recent / maxRecent) )) : 0;
+      return `<span class="cat-bar" title="${lab}s · ${v.recent || 0} in 30d${v.last ? " · last " + esc(v.last.replace("T", " ")) : ""}"><i style="height:${h}px" class="${h ? "" : "cat-bar-0"}"></i><b>${ico}</b><small>${v.last ? prjAgo(v.last) : "—"}</small></span>`; }).join("");
+    const sec = p.security, dep = p.deploys, lg = p.logging, st = p.std, us = p.usage, ado = p.ado || {};
+    const secCls = !sec ? "cat-pill-mute" : sec.critical ? "cat-pill-bad" : sec.high ? "cat-pill-warn" : "cat-pill-good";
+    const secTxt = !sec ? "not scanned" : sec.critical || sec.high ? `${sec.critical ? "C" + sec.critical + " " : ""}${sec.high ? "H" + sec.high : ""}` : "clean";
+    const secTip = !sec ? "no security scan recorded for this project" : `freshest scan per scanner: ${Object.entries(sec.scanners).map(([k, v]) => `${k} ${v.when || "?"} C${v.critical} H${v.high}`).join(" · ")}`;
+    const depPct = dep && dep.prd ? Math.round(100 * dep.prd_ok / dep.prd) : null;
+    const tests = ((p.activity || {}).tests || {}).recent || 0;
     return `
     <button class="cat-card ${quiet ? "cat-quiet" : ""}" data-cat-open="${esc(p.name)}" title="open the ${esc(p.name)} report">
       <div class="cat-head"><span class="cat-name">${esc(p.name)}</span>
         ${p.deploy_platform ? `<span class="chip chip-cyan">${esc(p.deploy_platform)}</span>` : ""}
         ${p.deploy_technology ? `<span class="chip">${esc(p.deploy_technology)}</span>` : ""}
+        ${ado.grade ? `<span class="chip" title="ADO project health grade${ado.score != null ? " · score " + ado.score : ""}">ADO ${esc(ado.grade)}</span>` : ""}
         <span class="spacer"></span>
         <span class="cat-last" title="most recent activity across commits, builds, deploys, releases and test runs">${quiet ? "no activity seen" : `${(CAT_SRC[p.last_source] || ["•"])[0]} ${prjAgo(p.last_activity)}`}</span></div>
+      ${p.description ? `<div class="cat-desc" title="${esc(p.description)}">${esc(p.description)}</div>` : '<div class="cat-desc cat-desc-none">no description in ADO</div>'}
       <div class="cat-teams">${["dev", "qc", "prd"].filter((k) => p.teams[k]).map((k) =>
-        `<span class="chip" title="${k}_team">${k === "prd" ? "ops" : k}: ${esc(p.teams[k])}</span>`).join("")}</div>
-      <div class="cat-facts"><span>${p.apps} app${p.apps === 1 ? "" : "s"}</span><span>${(p.envs || []).length ? esc(p.envs.join(" · ")) : "no envs"}</span><span>${p.pipelines} pipeline${p.pipelines === 1 ? "" : "s"}</span>${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)} events · 30d</span>` : ""}</div>
-      <div class="cat-pulses">${pulse || '<span class="ci-meta">—</span>'}</div>
+        `<span class="chip" title="${k}_team">${k === "prd" ? "ops" : k}: ${esc(p.teams[k])}</span>`).join("")}
+        <span class="spacer"></span><span class="cat-facts"><span>${p.apps} app${p.apps === 1 ? "" : "s"}</span><span>${(p.envs || []).length ? esc(p.envs.join("·")) : "no envs"}</span><span>${p.pipelines} pipe</span>${ado.repos ? `<span>${ado.repos} repos</span>` : ""}</span></div>
+      <div class="cat-viz">
+        <div class="cat-strip" title="30-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·30d</small></span>` : ""}</div>
+        <div class="cat-rings">
+          ${ring(lg ? lg.score : null, "logs", lg ? `logging health ${lg.score ?? "?"}/10 · ${lg.size_h || "?"} · ${lg.indices || 0} indices${lg.silent ? " · " + lg.silent + " app(s) silent" : ""}` : "no logging data")}
+          ${ring(depPct == null ? null : depPct / 10, "prd", dep ? `${dep.prd} prd deployment(s) in 30d · ${dep.prd_ok} succeeded · ${dep.total} deployments overall` : "no deployments in 30d")}
+        </div>
+      </div>
+      <div class="cat-pills">
+        ${pill(secCls, "🛡", secTxt, secTip)}
+        ${pill(st ? (st.issues ? "cat-pill-warn" : "") : "cat-pill-mute", "🧾", st ? `${st.changes} std change${st.changes === 1 ? "" : "s"}${st.issues ? " · " + st.issues + " issue(s)" : ""}` : "no std changes", "standard changes declaring this project_name in the Engine catalogue")}
+        ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : "no tests · 30d", "autotest runs in the last 30 days")}
+        ${us ? pill("", "⏱", `${logInt(us.minutes)} min · ${gb(us.storage || 0)}`, `platform usage snapshot as of ${us.as_of || "?"}: ${logInt(us.minutes)} minutes, ${gb(us.storage || 0)} storage`) : ""}
+      </div>
     </button>`;
   };
   return Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
@@ -7036,12 +7069,12 @@ function prjCatalogHtml(cat) {
         <select data-cat-f="team">${opt("all", "team: any", f.team)}${teams.map((t) => opt(t, t, f.team)).join("")}</select>
         <select data-cat-f="platform">${opt("all", "platform: any", f.platform)}${platforms.map((c) => opt(c, c, f.platform)).join("")}</select>
         <select data-cat-f="group" title="group cards by">${opt("company", "group: company", f.group || "company")}${opt("team", "group: dev team", f.group)}${opt("platform", "group: platform", f.group)}</select>
-        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
+        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("risk", "sort: security risk", f.sort)}${opt("logs", "sort: weakest logging", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
         <span class="ci-meta" id="cat-count">${rows.length} of ${list.length}</span>
       </div>
     </div>
     <div id="cat-body">${prjCatalogCards(rows, f)}</div>
-    <div class="kpi-note">activity pulse comes from five size-0 aggregations (latest date + 30-day count per project per source) cached 5 min — no report is built until you open a project${(cat.errors || []).length ? ` · <span class="pct-warn">sources unavailable: ${esc(cat.errors.join("; "))}</span>` : ""}</div>`;
+    <div class="kpi-note">activity pulse + security / prd-deploy / usage facts come from size-0 aggregations (one per index); ADO description, standard changes and logging health reuse their cached analyses — cached 5 min, no report is built until you open a project${(cat.errors || []).length ? ` · <span class="pct-warn">sources unavailable: ${esc(cat.errors.join("; "))}</span>` : ""}</div>`;
 }
 
 function prjCatalogEvt(ev) {
