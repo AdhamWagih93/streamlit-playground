@@ -5748,10 +5748,14 @@ function prjSdlcHtml(d) {
   const runTip = (x, kind) => `${esc(kind)} ${esc(x.version || "")} · ${esc(x.when || "")}${x.who ? " · by " + esc(x.who) : x.author ? " · by " + esc(x.author) : ""}${x.branch ? " · ⎇ " + esc(x.branch) : ""}${x.rlm ? " · " + esc(x.rlm) : ""}`;
   const cell = (s, kind) => {
     if (!s) return '<td class="prj-sdlc-none">—</td>';
+    const rlm = kind === "release" && s.rlm_label
+      ? (s.rlm_ok ? `<span class="ci-meta prj-rlm" title="RLM ${esc(s.rlm_label)} — no ITSM error">${esc(s.rlm_label.slice(0, 14))}</span>`
+                  : `<span class="chip chip-amber prj-rlm" title="RLM status: ${esc(s.rlm_label)}${s.rlm ? " · RLM " + esc(s.rlm) : ""} — an ITSM ticket was opened">${esc(s.rlm_label.slice(0, 18))}</span>`)
+      : "";
     if (okS(s.status) || !s.status) return `
-    <td><div class="prj-sdlc-cell" title="${esc(s.status || "")} — ${runTip(s, kind)}">
+    <td><div class="prj-sdlc-cell" title="${esc(s.status || "")} — ${runTip(s, kind)}${s.rlm_status ? " · RLM status: " + esc(s.rlm_status) : ""}">
       ${stGlyph(s.status)}<span class="prj-sdlc-ver">${esc(s.version || "")}</span>
-      <span class="ci-meta" title="${esc(s.when || "")}">${prjAgo(s.when) || esc((s.when || "").slice(0, 10))}</span></div></td>`;
+      <span class="ci-meta" title="${esc(s.when || "")}">${prjAgo(s.when) || esc((s.when || "").slice(0, 10))}</span>${rlm}</div></td>`;
     // latest run FAILED → show the last success + the failure that followed
     const failTip = `LATEST: ${esc(s.status)} — ${runTip(s, kind)}`;
     if (s.ok) return `

@@ -1723,3 +1723,5 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .brand-side { vertical-align: middle; margin-right: 8px; }
 .brand-login { display: block; height: 40px; margin: 0 auto 8px; }
 .brand-report { height: 30px; align-self: center; margin-right: 4px; }
+
+.prj-rlm { font-size: 9.5px; }

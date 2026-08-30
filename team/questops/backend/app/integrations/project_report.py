@@ -596,12 +596,12 @@ def _sec_cicd(name: str, days: int) -> dict:
             body["post_filter"] = {"range": {date_field: {"gte": f"now-{days}d"}}}
         return _es(index, body)
 
-    def latest(index, date_field, src, by_env=False):
+    def latest(index, date_field, src, by_env=False, ok_filter=None):
         th = {"top_hits": {"size": 1, "_source": src,
                            "sort": [{date_field: {"order": "desc",
                                                   "unmapped_type": "date"}}]}}
         # per cell: the LATEST real run + the last SUCCESSFUL one
-        inner = {"latest": th, "ok": {"filter": okf, "aggs": {"latest": th}}}
+        inner = {"latest": th, "ok": {"filter": ok_filter or okf, "aggs": {"latest": th}}}
         if by_env:
             inner = {"by_env": {"terms": {"field": "environment", "size": 12},
                                 "aggs": inner}}
@@ -622,8 +622,11 @@ def _sec_cicd(name: str, days: int) -> dict:
     builds = q("ef-cicd-builds", "startdate", latest("ef-cicd-builds", "startdate", b_src), b_src)
     deploys = q("ef-cicd-deployments", "startdate",
                 latest("ef-cicd-deployments", "startdate", d_src, by_env=True), d_src)
+    # a release document IS a success by definition; RLM_STATUS only says
+    # whether an ITSM ticket was opened for it
     releases = q("ef-cicd-releases", "releasedate",
-                 latest("ef-cicd-releases", "releasedate", r_src), r_src)
+                 latest("ef-cicd-releases", "releasedate", r_src,
+                        ok_filter={"match_all": {}}), r_src)
 
     def _hit(node):
         hs = (((node or {}).get("latest") or {}).get("hits") or {}).get("hits") or []
@@ -635,10 +638,20 @@ def _sec_cicd(name: str, days: int) -> dict:
                 "version": s.get("codeversion") or "",
                 "tech": s.get("technology") or "", "author": _git_author(s)}
 
+    def _rlm(s):
+        """RLM_STATUS 'No error' → show the RLM ticket itself; anything else
+        is shown verbatim (it means the release opened an ITSM ticket)."""
+        st = (s.get("RLM_STATUS") or "").strip()
+        ok = not st or st.lower() == "no error"
+        return ((s.get("RLM") or "") if ok else st), ok
+
     def _rel(s):
+        label, ok = _rlm(s)
         return {"when": (s.get("releasedate") or "")[:16].replace("T", " "),
-                "status": s.get("status") or s.get("RLM_STATUS") or "",
-                "version": s.get("codeversion") or "", "rlm": s.get("RLM") or ""}
+                "status": "SUCCESS",
+                "version": s.get("codeversion") or "", "rlm": s.get("RLM") or "",
+                "rlm_status": s.get("RLM_STATUS") or "",
+                "rlm_label": label, "rlm_ok": ok}
 
     def _entry(node, mk):
         """{latest-run fields, ok: last-success or None} for one cell."""
@@ -727,13 +740,15 @@ def _sec_cicd(name: str, days: int) -> dict:
                        "detail": s.get("technology") or ""})
     for h in (releases.get("hits") or {}).get("hits", []):
         s = h.get("_source") or {}
+        label, rlm_ok = _rlm(s)
         events.append({"ts": s.get("releasedate") or "", "type": "release",
                        "app": s.get("application") or "", "env": "",
-                       "status": s.get("status") or s.get("RLM_STATUS") or "",
+                       "status": "SUCCESS",
                        "version": s.get("codeversion") or "",
                        "who": _user_display(re.sub(r"\s*<[^>]*>\s*$", "",
                                                    s.get("commitauthor") or "")),
-                       "test": False, "detail": s.get("RLM") or ""})
+                       "test": False,
+                       "detail": label + ("" if rlm_ok else " (ITSM ticket opened)")})
     totals = {k: (((v.get("hits") or {}).get("total") or {}).get("value", 0))
               for k, v in (("builds", builds), ("deploys", deploys),
                            ("releases", releases))}
@@ -1376,7 +1391,10 @@ def _demo_report(name: str, days: int) -> dict:
                           f"1.4.{i + 1}")
                    for i, a in enumerate(apps)},
         "releases": {a: _ok({"when": "2026-08-24 15:0" + str(i), "status": "SUCCESS",
-                             "version": f"1.4.{i + 1}", "rlm": f"RLM-10{i}"}, f"1.4.{i}")
+                             "version": f"1.4.{i + 1}", "rlm": f"RLM-10{i}",
+                             "rlm_status": "No error" if i == 0 else "Change opened: CHG-42",
+                             "rlm_label": f"RLM-10{i}" if i == 0 else "Change opened: CHG-42",
+                             "rlm_ok": i == 0}, f"1.4.{i}")
                      for i, a in enumerate(apps[:2])},
         "deploys": {a: {e: _ok({"when": f"2026-08-2{2 + (i + j) % 4} 1{j}:30",
                                 "status": "SUCCESS" if (i + j) % 5 else "FAILURE",
