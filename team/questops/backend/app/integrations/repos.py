@@ -175,7 +175,8 @@ DEMO_REPO_FILES = {
         "Platform/group_vars/payments/main.yml": "---\nrepository_name: payments-svc\n",
         "Platform/group_vars/checkout/main.yml": "---\nrepository_name: checkout-svc\n",
         "Platform/group_vars/prd_payments/vars.yml": "---\nreplicas: 6\n",
-        "Platform/host_vars/prd_ocp/vars.yml": "---\nansible_host: 10.0.0.11\n",
+        "Platform/host_vars/prd_ocp/vars.yml": "---\nansible_host: 10.0.0.11\nocp_namespace: platform-prd\n",
+        "Platform/host_vars/dev_ocp/vars.yml": "---\nansible_host: 10.0.0.5\nocp_namespace: platform-dev\n",
         "Platform/host_vars/prd_ocp/vault.yml":
             "$ANSIBLE_VAULT;1.1;AES256\n6162636465666768696a6b6c6d6e6f70\n",
         "Control/team-configs.yml":
@@ -192,6 +193,45 @@ DEMO_REPO_FILES = {
             "---\ndev_team: Research_Team\nqc_team: Research_Team\nprd_team: SRE_Core\n"
             "data_team: DataEng\n",
     },
+}
+
+
+DEMO_CONTROL_TEAMS = ["Platform_Devs", "Data_Team"]   # per-team config repos (Control project)
+DEMO_REPO_FILES["Platform_Devs"] = {
+    "README.md": "# Platform_Devs configs\n<project>/<env>_<app>/config.yml\n",
+    "Platform/prd_payments/config.yml":
+        "# production payments\ndb:\n  url: jdbc:oracle://ora-prd.corp.local:1521/PAYPRD\n"
+        "cache:\n  redis_host: redis-master.platform-prd.svc.cluster.local\n  redis_port: 6379\n"
+        "peers:\n  checkout_url: http://checkout-service.platform-prd.svc.cluster.local:8080/api\n"
+        "  notify_url: http://notify-svc-service:8080\n"
+        "  reports: http://reports-service.analytics-prd.svc.cluster.local/v1\n"
+        "mq:\n  bootstrap_servers: kafka1.corp.local:9092,kafka2.corp.local:9092\n"
+        "storage:\n  s3_endpoint: https://minio.corp.local:9000\n  bucket: payments-uploads\n"
+        "auth:\n  ldap_url: ldaps://ldap.corp.local:636\n"
+        "metrics: http://10.0.5.20:9100/metrics\n",
+    "Platform/prd_checkout/config.yml":
+        "payments_url: http://payments-service.platform-prd.svc.cluster.local:8080\n"
+        "db:\n  host: pg-prd.corp.local\n  port: 5432\n  name: checkout\n"
+        "smtp_host: smtp.corp.local\nsmtp_port: 25\n",
+    "Platform/prd_notifications/config.yml":
+        "sms_gateway: https://sms.vendor-api.com/v2\nmail: smtp://mail.corp.local:587\n"
+        "nfs_share: nfs01.corp.local:/exports/templates\n",
+    "Platform/dev_payments/config.yml":
+        "db:\n  url: jdbc:oracle://ora-prd.corp.local:1521/PAYPRD\n"   # dev pointing at PROD → flagged
+        "cache:\n  redis_host: redis-master.platform-dev.svc.cluster.local\n  redis_port: 6379\n"
+        "peers:\n  checkout_url: http://checkout-service.platform-dev.svc.cluster.local:8080/api\n"
+        "admin_password: changeme\n",                                    # plaintext secret → flagged
+    "Platform/dev_checkout/config.yml":
+        "payments_url: http://payments-service.platform-dev.svc.cluster.local:8080\n"
+        "db:\n  host: pg-dev.corp.local\n  port: 5432\n",
+    "Platform/dev_legacy/notes.txt": "no config.yml here on purpose\n",   # missing config → flagged
+    "Platform/qc_payments_bkp/config.yml": "ignored: true\n",             # _bkp folder skipped
+}
+DEMO_REPO_FILES["Data_Team"] = {
+    "Analytics/prd_reports/config.yml":
+        "warehouse: postgres://dwh-prd.corp.local:5432/dwh\n"
+        "payments_api: http://payments-service.platform-prd.svc.cluster.local:8080/reports\n"
+        "es_url: https://es-prd.corp.local:9200\n",
 }
 
 
@@ -416,6 +456,9 @@ def discover(collection: str = "") -> dict:
                 for n in DEMO_DISCOVERABLE]
         rows += [{"name": "prototypes", "collection": "Research", "project": "Sandbox",
                   "url": "https://ado.demo/Research/Sandbox/_git/prototypes"}]
+        rows += [{"name": n, "collection": "DefaultCollection", "project": "Control",
+                  "url": f"https://ado.demo/DefaultCollection/Control/_git/{n}"}
+                 for n in DEMO_CONTROL_TEAMS]
         if collection:
             rows = [r for r in rows if r["collection"] == collection]
         return {"collections": colls, "repos": rows}
@@ -457,6 +500,13 @@ def discover(collection: str = "") -> dict:
     rows.sort(key=lambda x: (x["collection"].lower(), x["project"].lower(),
                              x["name"].lower()))
     return {"collections": all_colls, "repos": rows}
+
+
+def control_repos_lookup(team: str) -> dict | None:
+    for r in configured():
+        if (r.get("project") or "").lower() == "control" and r["name"].lower() == (team or "").lower():
+            return r
+    return None
 
 
 def _repo_by_slot(slot: int) -> dict:

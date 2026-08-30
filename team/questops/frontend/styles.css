@@ -1820,3 +1820,27 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 
 .std-env { padding: 4px 0 6px; border-bottom: 1px dashed var(--line); }
 .std-env-head { display: flex; align-items: center; gap: 6px; font: 500 11.5px var(--body); margin-bottom: 4px; }
+
+/* ================= configurations (architecture) ================= */
+.cfg-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 6px; }
+.cfg-svg { display: block; font: 500 12px var(--body); }
+.cfg-lane rect { fill: rgba(20,151,179,.05); stroke: var(--line); }
+.cfg-lane text { font: 700 11px var(--mono); fill: var(--text); text-transform: uppercase; letter-spacing: .05em; }
+.cfg-lane-cluster rect { fill: rgba(91,141,239,.06); stroke-dasharray: 4 3; }
+.cfg-lane-ext rect { fill: color-mix(in srgb, var(--k) 6%, transparent); stroke: color-mix(in srgb, var(--k) 45%, var(--line)); }
+.cfg-sub { font: 500 9.5px var(--mono) !important; fill: var(--faint) !important; text-transform: none !important; letter-spacing: 0 !important; }
+.cfg-node text { fill: var(--text); font: 600 12px var(--mono); }
+.cfg-app rect { fill: var(--bg); stroke: #1497b3; stroke-width: 1.5; cursor: pointer; }
+.cfg-app:hover rect { fill: rgba(20,151,179,.12); }
+.cfg-app.cfg-bad rect { stroke: #c0841c; }
+.cfg-cluster rect { fill: rgba(91,141,239,.12); stroke: #5b8def; }
+.cfg-ext rect { fill: color-mix(in srgb, var(--k) 12%, var(--bg)); stroke: var(--k); }
+.cfg-edge { fill: none; stroke: var(--k); stroke-width: 1.4; opacity: .75; }
+.cfg-edge.cfg-cross-project { stroke-dasharray: 6 3; stroke-width: 1.8; }
+.cfg-edge.cfg-cluster { stroke-dasharray: 2 3; }
+.cfg-edge.cfg-external { opacity: .55; }
+.cfg-edge:hover { opacity: 1; stroke-width: 2.6; }
+.cfg-lg { font-style: normal; font-weight: 800; } .cfg-lg.cfg-internal { color: #1497b3; } .cfg-lg.cfg-cross-project { color: #c0841c; }
+.cfg-lg.cfg-cluster { color: #5b8def; } .cfg-lg.cfg-external { color: var(--faint); }
+.cfg-file { font: 400 11px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; }
