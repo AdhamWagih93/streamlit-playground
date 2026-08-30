@@ -750,8 +750,9 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
                           or s_.get("triggeredby") or "")
     board["top_users"] = {
         "build": _fold_stage(b_hits, _git_author),
-        "release": _fold_stage(r_hits, lambda s_: re.sub(
-            r"\s*<[^>]*>\s*$", "", s_.get("commitauthor") or "")),
+        # releases carry only the COMMIT author — that is not who released,
+        # so the release stage shows no owner until the index says who did
+        "release": [],
         "deploys": {}}
     for env in {(h.get("_source") or {}).get("environment") for h in d_hits} - {None, ""}:
         board["top_users"]["deploys"][env] = _fold_stage(
@@ -789,8 +790,7 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
                        "app": s.get("application") or "", "env": "",
                        "status": "SUCCESS",
                        "version": s.get("codeversion") or "",
-                       "who": _user_display(re.sub(r"\s*<[^>]*>\s*$", "",
-                                                   s.get("commitauthor") or "")),
+                       "who": "",   # commitauthor is not the releaser — no owner shown
                        "test": False,
                        "detail": label + ("" if rlm_ok else " (ITSM ticket opened)")})
     totals = {k: (((v.get("hits") or {}).get("total") or {}).get("value", 0))
@@ -2164,10 +2164,10 @@ def _demo_report(name: str, days: int) -> dict:
     ]
     cicd_events.append({"ts": "2026-08-24T15:00", "type": "release", "app": apps[0],
                         "env": "", "status": "SUCCESS", "version": "1.4.1",
-                        "who": "alice", "test": False, "detail": "RLM-100"})
+                        "who": "", "test": False, "detail": "RLM-100"})
     board["top_users"] = {
         "build": [{"key": "alice", "count": 9}, {"key": "bob", "count": 6}],
-        "release": [{"key": "alice", "count": 3}, {"key": "carol", "count": 2}],
+        "release": [],
         "deploys": {e: [{"key": "alice", "count": 5 - j}, {"key": "bob", "count": 3 - j % 3}]
                     for j, e in enumerate(envs)},
     }
