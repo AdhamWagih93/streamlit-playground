@@ -5753,134 +5753,359 @@ const CFG_KIND = { http: ["#1497b3", "HTTP/API"], db: ["#8471c9", "database"], c
   mail: ["#d06aa8", "mail"], file: ["#7a8699", "file transfer"], socket: ["#7a8699", "socket"], other: ["#7a8699", "other"] };
 const cfgColor = (k) => (CFG_KIND[k] || CFG_KIND.other)[0];
 
+// ---- filter model ---------------------------------------------------------
+// f: { projects:[], kinds:[], scopes:[], targets:[], q, focus, expand:Set }
+const cfgArr = (v) => Array.isArray(v) ? v : v ? [v] : [];
+const cfgProjOf = (id, nodesById) => { const n = nodesById[id]; return n ? (n.project || n.owner || (n.type === "cluster" ? "(cluster)" : "(external)")) : "(external)"; };
+
 function cfgFilterModel(env, f) {
   const m = ((state.cfgData || {}).model || {}).envs[env];
   if (!m) return null;
-  const q = (f.q || "").toLowerCase();
-  let nodes = m.nodes, edges = m.edges;
-  const appOk = (n) => (!f.project || f.project === "all" || n.project === f.project)
-    && (!f.team || f.team === "all" || !n.team || n.team === f.team);
-  if (f.focus) {   // one app + everything it touches / is touched by
-    const keep = new Set([f.focus, ...edges.filter((e) => e.from === f.focus || e.to === f.focus).flatMap((e) => [e.from, e.to])]);
-    nodes = nodes.filter((n) => keep.has(n.id));
-    edges = edges.filter((e) => e.from === f.focus || e.to === f.focus);
-  } else {
-    const apps = new Set(nodes.filter((n) => n.type === "app" && appOk(n)).map((n) => n.id));
-    edges = edges.filter((e) => apps.has(e.from) && (!f.kind || f.kind === "all" || e.kind === f.kind)
-      && (!q || [e.host, e.via, e.label, e.from, e.to].some((v) => String(v || "").toLowerCase().includes(q))));
-    const keep = new Set([...apps, ...edges.flatMap((e) => [e.from, e.to])]);
-    nodes = nodes.filter((n) => keep.has(n.id) && (n.type !== "app" || appOk(n) || edges.some((e) => e.to === n.id)));
-  }
-  return { nodes, edges, anomalies: m.anomalies, summary: m.summary };
+  const byId = {}; m.nodes.forEach((n) => { byId[n.id] = n; });
+  const q = (f.q || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const P = new Set(cfgArr(f.projects)), K = new Set(cfgArr(f.kinds)), S = new Set(cfgArr(f.scopes)), T = new Set(cfgArr(f.targets));
+  let edges = m.edges.filter((e) => {
+    const fp = cfgProjOf(e.from, byId), tp = cfgProjOf(e.to, byId);
+    if (P.size && !P.has(fp) && !P.has(tp)) return false;
+    if (K.size && !K.has(e.kind)) return false;
+    if (S.size && !S.has(e.scope)) return false;
+    if (T.size && !T.has(tp) && !T.has(fp)) return false;
+    if (f.focus && e.from !== f.focus && e.to !== f.focus) return false;
+    return q.every((t) => [e.host, e.via, e.label, e.from, e.to, fp, tp].some((v) => String(v || "").toLowerCase().includes(t)));
+  });
+  const keep = new Set(edges.flatMap((e) => [e.from, e.to]));
+  if (f.focus) keep.add(f.focus);
+  // apps of the selected projects stay visible even without a matching edge
+  // (an app with zero connections is itself a finding) unless a
+  // connection-level filter is active
+  const connFilter = K.size || S.size || T.size || q.length || f.focus;
+  const nodes = m.nodes.filter((n) => keep.has(n.id) || (!connFilter && n.type === "app" && (!P.size || P.has(n.project))));
+  return { nodes, edges, byId, anomalies: m.anomalies || [], summary: m.summary || {} };
 }
 
-function cfgDiagram(m, env) {
-  if (!m || !m.nodes.length) return '<div class="empty">nothing to draw for these filters</div>';
-  const apps = m.nodes.filter((n) => n.type === "app"), cl = m.nodes.filter((n) => n.type === "cluster");
-  const ext = m.nodes.filter((n) => n.type === "external" || n.type === "ip");
-  // layout: column x, rows y
-  const W = 1180, colX = { app: 40, cluster: 480, ext: 820 }, boxW = { app: 300, cluster: 260, ext: 320 }, rowH = 34;
+// cascading option lists computed from the CURRENT selection
+function cfgOptions(env, f) {
+  const d = state.cfgData || {}, model = d.model || {}, all = model.envs[env];
+  const base = all ? cfgFilterModel(env, { projects: f.projects }) : null;
+  const projects = model.projects || [];
+  const P = new Set(cfgArr(f.projects));
+  const envs = (d.envs || []).filter((e) => !P.size || ((model.envs[e] || {}).nodes || []).some((n) => n.type === "app" && P.has(n.project)));
+  const kinds = {}, scopes = {}, targets = {};
+  (base ? base.edges : []).forEach((e) => {
+    kinds[e.kind] = (kinds[e.kind] || 0) + 1; scopes[e.scope] = (scopes[e.scope] || 0) + 1;
+    const tp = cfgProjOf(e.to, base.byId); if (!P.size || !P.has(tp)) targets[tp] = (targets[tp] || 0) + 1;
+    if (P.size) { const fp = cfgProjOf(e.from, base.byId); if (!P.has(fp)) targets[fp] = (targets[fp] || 0) + 1; }
+  });
+  const apps = (base ? base.nodes : []).filter((n) => n.type === "app" && (!P.size || P.has(n.project)));
+  return { projects, envs, kinds, scopes, targets, apps };
+}
+
+// ---- mind-map layout ------------------------------------------------------
+// Hubs: one per project (apps on rings around it), one per external kind
+// (endpoints on a ring), one for unowned cluster services. A hub is EXPANDED
+// (members drawn) when selected / small, COLLAPSED (a single disc with a
+// count, edges aggregated with multiplicities) otherwise — so 1000 apps read
+// as a few dozen discs until you zoom into a project.
+const CFG_MAX_DRAWN = 220;   // member nodes drawn at once before hubs collapse
+function cfgLayout(m, f) {
+  const P = new Set(cfgArr(f.projects)), X = f.expand || new Set();
+  const hubs = {};
+  const hub = (id, type, label, kind) => hubs[id] || (hubs[id] = { id, type, label, kind, members: [] });
+  m.nodes.forEach((n) => {
+    if (n.type === "app") hub("p:" + n.project, "project", n.project).members.push(n);
+    else if (n.type === "cluster") hub(n.owner ? "p:" + n.owner : "c:", "project", n.owner || "cluster services (unmapped namespace)").members.push(n);
+    else hub("k:" + (n.kind || "other"), "kind", (CFG_KIND[n.kind] || CFG_KIND.other)[1], n.kind || "other").members.push(n);
+  });
+  // overview (nothing selected / expanded, no external-scope filter): external
+  // kind hubs and their bundles are hidden — each project disc carries small
+  // kind-dots summarising its external mix instead, so only real
+  // project↔project / cluster dependencies draw lines
+  const showExt = P.size > 0 || X.size > 0 || cfgArr(f.scopes).includes("external") || cfgArr(f.kinds).length > 0
+    || m.nodes.filter((n) => n.type === "app").length <= CFG_MAX_DRAWN;
+  const kindMix = {};
+  m.edges.forEach((e) => { const n = m.byId[e.from]; if (!n || e.scope !== "external") return; const k = "p:" + n.project; (kindMix[k] = kindMix[k] || {})[e.kind] = (kindMix[k][e.kind] || 0) + 1; });
+  const list = Object.values(hubs).filter((h) => showExt || h.type !== "kind");
+  list.forEach((h) => { h.mix = kindMix[h.id] || {}; });
+  // selected / clicked hubs open; the rest open only when the WHOLE view fits
+  // the budget (small estates) — a large estate stays a clean project-level
+  // map with bundled links until you pick projects or click a hub
+  list.forEach((h) => { h.open = h.type === "project" ? (P.has(h.label) || X.has(h.id)) : X.has(h.id); });
+  const total = list.reduce((n, h) => n + h.members.length, 0);
+  if (total <= CFG_MAX_DRAWN) list.forEach((h) => { h.open = true; });
+  else if (P.size) list.filter((h) => !h.open && h.type === "kind" && h.members.length <= 14).forEach((h) => { h.open = true; });
+  // hub radius: ring(s) of members
+  list.forEach((h) => {
+    const n = h.members.length;
+    h.rings = []; let left = n, ring = 0;
+    if (h.open) while (left > 0) { const cap = Math.max(6, Math.round(8 + ring * 9)); h.rings.push(Math.min(cap, left)); left -= cap; ring++; }
+    h.r = h.open ? 36 + h.rings.length * 62 : 22 + Math.min(40, Math.sqrt(n) * 4);
+  });
+  // place hubs on a spiral (projects first, biggest first; externals after)
+  const order = [...list.filter((h) => h.type === "project").sort((a, b) => b.r - a.r), ...list.filter((h) => h.type !== "project").sort((a, b) => b.r - a.r)];
+  const placed = [];
+  const fits = (x, y, r) => placed.every((p) => Math.hypot(p.x - x, p.y - y) >= p.r + r + 26);
+  order.forEach((h) => {
+    if (!placed.length) { h.x = 0; h.y = 0; placed.push(h); return; }
+    let a = 0, rad = 0, ok = false;
+    while (!ok) { rad += 6; a += 0.45; const x = Math.cos(a) * rad, y = Math.sin(a) * rad * 0.72; if (fits(x, y, h.r)) { h.x = x; h.y = y; ok = true; } }
+    placed.push(h);
+  });
+  // member positions
   const pos = {};
-  let y = 30;
-  const byProject = {};
-  apps.forEach((a) => (byProject[a.project] = byProject[a.project] || []).push(a));
-  const lanes = [];
-  Object.entries(byProject).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).forEach(([proj, list]) => {
-    const top = y; y += 22;
-    list.sort((a, b) => a.app.localeCompare(b.app)).forEach((a) => { pos[a.id] = { x: colX.app + 12, y, w: boxW.app - 24 }; y += rowH; });
-    lanes.push({ proj, top, h: y - top + 6, n: list.length }); y += 18;
+  list.forEach((h) => {
+    if (!h.open) return;
+    let i = 0;
+    h.rings.forEach((cnt, ri) => { const rr = 52 + ri * 62; for (let j = 0; j < cnt; j++, i++) { const a = -Math.PI / 2 + (2 * Math.PI * j) / cnt + ri * 0.25; const mem = h.members[i]; pos[mem.id] = { x: h.x + Math.cos(a) * rr, y: h.y + Math.sin(a) * rr, hub: h }; } });
   });
-  const leftH = y;
-  y = 52;   // lane header at y=30 (same as the project lanes), nodes below it
-  cl.sort((a, b) => a.label.localeCompare(b.label)).forEach((n) => { pos[n.id] = { x: colX.cluster + 12, y, w: boxW.cluster - 24 }; y += rowH; });
-  const midH = cl.length ? y + 6 : 0;
-  y = 30;
-  const byKind = {};
-  ext.forEach((n) => (byKind[n.kind || "other"] = byKind[n.kind || "other"] || []).push(n));
-  const groups = [];
-  Object.entries(byKind).sort((a, b) => b[1].length - a[1].length).forEach(([k, list]) => {
-    const top = y; y += 22;
-    list.sort((a, b) => a.label.localeCompare(b.label)).forEach((n) => { pos[n.id] = { x: colX.ext + 12, y, w: boxW.ext - 24 }; y += rowH; });
-    groups.push({ kind: k, top, h: y - top + 6, n: list.length }); y += 14;
+  const hubOf = (id) => { const p = pos[id]; if (p) return p.hub; const n = m.byId[id]; if (!n) return null; return hubs[n.type === "app" ? "p:" + n.project : n.type === "cluster" ? (n.owner ? "p:" + n.owner : "c:") : "k:" + (n.kind || "other")]; };
+  // edges: member↔member when both drawn, else aggregate at hub level
+  const drawn = [], agg = {};
+  m.edges.forEach((e) => {
+    const a = pos[e.from], b = pos[e.to];
+    if (a && b) { drawn.push(e); return; }
+    const ha = hubOf(e.from), hb = hubOf(e.to); if (!ha || !hb || ha === hb) return;
+    if (!showExt && (hb.type === "kind" || ha.type === "kind")) return;
+    const key = ha.id + "→" + hb.id + "|" + e.kind + "|" + e.scope;
+    const g = agg[key] || (agg[key] = { from: ha, to: hb, kind: e.kind, scope: e.scope, n: 0, fromPos: a, toPos: b });
+    g.n++;
   });
-  const H = Math.max(leftH, midH, y, 120) + 20;
-  const node = (n) => {
-    const p = pos[n.id]; if (!p) return "";
+  const xs = list.flatMap((h) => [h.x - h.r, h.x + h.r]), ys = list.flatMap((h) => [h.y - h.r, h.y + h.r]);
+  const minX = Math.min(0, ...xs) - 40, minY = Math.min(0, ...ys) - 40, maxX = Math.max(0, ...xs) + 40, maxY = Math.max(0, ...ys) + 40;
+  return { hubs: list, pos, drawn, agg: Object.values(agg), showExt, box: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } };
+}
+
+function cfgMindMap(m, f) {
+  if (!m || !m.nodes.length) return '<div class="empty">nothing to draw for these filters</div>';
+  const L = cfgLayout(m, f);
+  const curve = (x1, y1, x2, y2) => { const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1, k = 0.18; return `M${x1.toFixed(1)},${y1.toFixed(1)} Q${(mx - dy * k).toFixed(1)},${(my + dx * k).toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`; };
+  const hubEl = (h) => {
+    const cls = h.type === "project" ? "cfg-hub cfg-hub-p" : h.type === "kind" ? "cfg-hub cfg-hub-k" : "cfg-hub cfg-hub-c";
+    const col = h.type === "kind" ? cfgColor(h.kind) : h.type === "project" ? "#1497b3" : "#5b8def";
+    const bad = h.members.filter((n) => n.type === "app" && (!n.ok || (n.notes || []).length)).length;
+    return `<g class="${cls} ${h.open ? "cfg-open" : "cfg-closed"}" data-cfg-hub="${esc(h.id)}" style="--k:${col}" transform="translate(${h.x.toFixed(1)},${h.y.toFixed(1)})">
+      <title>${esc(h.label)} · ${h.members.length} ${h.type === "project" ? "app(s)" : "endpoint(s)"}${bad ? " · " + bad + " with issues" : ""} · click to ${h.open ? "collapse" : "expand"}</title>
+      <circle r="${h.r}" class="cfg-hub-area"></circle>
+      <circle r="${h.open ? 30 : h.r}" class="cfg-hub-core"></circle>
+      <text y="${h.open ? -2 : -1}" class="cfg-hub-name">${esc(h.label.length > 18 && !h.open ? h.label.slice(0, 17) + "…" : h.label)}</text>
+      <text y="12" class="cfg-hub-n">${h.members.length}${bad ? " ⚠" : ""}</text>
+      ${!h.open && h.type === "project" ? Object.entries(h.mix).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n], i, arr) => { const a = -Math.PI / 2 + (2 * Math.PI * i) / arr.length; return `<circle class="cfg-mix" r="4" cx="${(Math.cos(a) * (h.r + 7)).toFixed(1)}" cy="${(Math.sin(a) * (h.r + 7)).toFixed(1)}" fill="${cfgColor(k)}"><title>${n} ${(CFG_KIND[k] || CFG_KIND.other)[1]} connection(s) out of ${esc(h.label)}</title></circle>`; }).join("") : ""}</g>`;
+  };
+  const memEl = (n) => {
+    const p = L.pos[n.id]; if (!p) return "";
     if (n.type === "app") {
       const bad = !n.ok || (n.notes || []).length;
-      return `<g class="cfg-node cfg-app ${bad ? "cfg-bad" : ""}" data-cfg-app="${esc(n.id)}" transform="translate(${p.x},${p.y})">
-        <title>${esc(n.project)} / ${esc(n.app)}${n.team ? " · " + esc(n.team) : ""}${n.other_env ? " · defined in " + esc(n.other_env) + " only" : ""} · ${n.out} out / ${n.in} in${n.error ? " · " + esc(n.error) : ""}${(n.notes || []).length ? " · " + esc(n.notes.join("; ")) : ""}</title>
-        <rect width="${p.w}" height="26" rx="7"></rect><text x="10" y="17">${esc(n.app)}</text>
-        <text class="cfg-sub" x="${p.w - 8}" y="17" text-anchor="end">${n.out}→ ${n.in}←${bad ? " ⚠" : ""}</text></g>`;
+      return `<g class="cfg-m cfg-m-app ${bad ? "cfg-bad" : ""} ${f.focus === n.id ? "cfg-focus" : ""}" data-cfg-app="${esc(n.id)}" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})">
+        <title>${esc(n.project)} / ${esc(n.app)}${n.team ? " · " + esc(n.team) : ""} · ${n.out} out / ${n.in} in${n.error ? " · " + esc(n.error) : ""}${(n.notes || []).length ? " · " + esc(n.notes.join("; ")) : ""} · click for details</title>
+        <circle r="9"></circle><text y="20">${esc(n.app.length > 16 ? n.app.slice(0, 15) + "…" : n.app)}</text></g>`;
     }
-    if (n.type === "cluster") return `<g class="cfg-node cfg-cluster" transform="translate(${p.x},${p.y})">
-        <title>${esc(n.label)}.svc.cluster.local${n.namespace ? " · namespace " + esc(n.namespace) : ""}${n.owner ? " · owned by " + esc(n.owner) : " · namespace not in inventory"}</title>
-        <rect width="${p.w}" height="26" rx="13"></rect><text x="12" y="17">${esc(n.label)}</text></g>`;
-    const ports = (n.ports || []).length ? ` :${n.ports.join(",")}` : "";
-    return `<g class="cfg-node cfg-ext" transform="translate(${p.x},${p.y})" style="--k:${cfgColor(n.kind)}">
-        <title>${esc(n.label)}${ports} · ${(CFG_KIND[n.kind] || CFG_KIND.other)[1]}${n.type === "ip" ? " · IP address" : ""}</title>
-        <rect width="${p.w}" height="26" rx="4"></rect><text x="10" y="17">${esc(n.label.length > 34 ? n.label.slice(0, 33) + "…" : n.label)}</text>
-        <text class="cfg-sub" x="${p.w - 8}" y="17" text-anchor="end">${esc(ports)}</text></g>`;
+    if (n.type === "cluster") return `<g class="cfg-m cfg-m-cl" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})"><title>${esc(n.label)}.svc.cluster.local${n.namespace ? " · ns " + esc(n.namespace) : ""}</title><circle r="8"></circle><text y="19">${esc(n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label)}</text></g>`;
+    const ports = (n.ports || []).length ? ":" + n.ports.join(",") : "";
+    return `<g class="cfg-m cfg-m-ext" style="--k:${cfgColor(n.kind)}" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})"><title>${esc(n.label)}${ports} · ${(CFG_KIND[n.kind] || CFG_KIND.other)[1]} · ${n.in} app(s)</title><rect x="-8" y="-8" width="16" height="16" rx="3"></rect><text y="20">${esc(n.label.length > 18 ? n.label.slice(0, 17) + "…" : n.label)}</text></g>`;
   };
-  const edge = (e) => {
-    const a = pos[e.from], b = pos[e.to]; if (!a || !b) return "";
-    const x1 = a.x + a.w, y1 = a.y + 13, x2 = b.x, y2 = b.y + 13;
-    const same = e.from.startsWith("app:") && e.to.startsWith("app:");
-    const d = same ? `M${x1},${y1} C${x1 + 60},${y1} ${x1 + 60},${y2} ${x1},${y2}`
-      : `M${x1},${y1} C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2} ${x2},${y2}`;
-    return `<path class="cfg-edge cfg-${e.scope}" d="${d}" style="--k:${cfgColor(e.kind)}"><title>${esc(e.from.slice(4))} → ${esc(e.to.replace(/^\w+:/, ""))}${e.port ? ":" + e.port : ""} · ${esc(e.label)} · ${e.scope} · via ${esc(e.via)}</title></path>`;
-  };
-  return `<div class="cfg-wrap"><svg class="cfg-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
-    ${lanes.map((l) => `<g class="cfg-lane" transform="translate(${colX.app},${l.top})"><rect width="${boxW.app}" height="${l.h}" rx="10"></rect><text x="10" y="15">📁 ${esc(l.proj)} <tspan class="cfg-sub">· ${l.n} app${l.n === 1 ? "" : "s"}</tspan></text></g>`).join("")}
-    ${cl.length ? `<g class="cfg-lane cfg-lane-cluster" transform="translate(${colX.cluster},30)"><rect width="${boxW.cluster}" height="${midH - 30}" rx="10"></rect><text x="10" y="15">☸ cluster services <tspan class="cfg-sub">· *.svc.cluster.local</tspan></text></g>` : ""}
-    ${groups.map((g) => `<g class="cfg-lane cfg-lane-ext" transform="translate(${colX.ext},${g.top})" style="--k:${cfgColor(g.kind)}"><rect width="${boxW.ext}" height="${g.h}" rx="10"></rect><text x="10" y="15">${esc((CFG_KIND[g.kind] || CFG_KIND.other)[1])} <tspan class="cfg-sub">· ${g.n}</tspan></text></g>`).join("")}
-    ${m.edges.map(edge).join("")}
-    ${m.nodes.map(node).join("")}
-  </svg></div>`;
+  const edgeEl = (e) => { const a = L.pos[e.from], b = L.pos[e.to]; return `<path class="cfg-edge cfg-${e.scope}" d="${curve(a.x, a.y, b.x, b.y)}" style="--k:${cfgColor(e.kind)}"><title>${esc(e.from.slice(4))} → ${esc(e.to.replace(/^\w+:/, ""))}${e.port ? ":" + e.port : ""} · ${esc(e.label)} · ${e.scope} · via ${esc(e.via)}</title></path>`; };
+  const aggEl = (g) => { const a = g.fromPos || g.from, b = g.toPos || g.to; const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    return `<g class="cfg-agg cfg-${g.scope}" style="--k:${cfgColor(g.kind)}"><path d="${curve(a.x, a.y, b.x, b.y)}" style="stroke-width:${Math.min(8, 1 + Math.log2(g.n + 1)).toFixed(1)}"><title>${g.n} ${(CFG_KIND[g.kind] || CFG_KIND.other)[1]} connection(s) · ${g.scope} · ${esc(g.from.label)} → ${esc(g.to.label)}</title></path><text x="${mx.toFixed(1)}" y="${my.toFixed(1)}">${g.n}</text></g>`; };
+  const b = L.box;
+  return `<div class="cfg-wrap" id="cfg-map" title="drag to pan · wheel to zoom · click a hub to expand / collapse · click an app for details">
+    <svg class="cfg-svg cfg-mind" viewBox="${b.x.toFixed(0)} ${b.y.toFixed(0)} ${b.w.toFixed(0)} ${b.h.toFixed(0)}" data-vb="${b.x.toFixed(0)} ${b.y.toFixed(0)} ${b.w.toFixed(0)} ${b.h.toFixed(0)}">
+      <g id="cfg-vp">${L.hubs.map(hubEl).join("")}${L.agg.map(aggEl).join("")}${L.drawn.map(edgeEl).join("")}${m.nodes.map(memEl).join("")}</g></svg>
+    <div class="cfg-map-meta">${L.hubs.length} cluster(s) · ${Object.keys(L.pos).length} of ${m.nodes.length} node(s) drawn · ${L.drawn.length} edge(s) + ${L.agg.length} bundle(s)${L.showExt ? "" : " · external endpoints summarised as kind-dots — select a project or filter scope/connection to see them"}</div></div>`;
 }
 
+// pan / zoom on the SVG viewBox (no library)
+function cfgWireMap() {
+  const wrap = document.getElementById("cfg-map"), svg = wrap && wrap.querySelector("svg"); if (!svg) return;
+  let vb = svg.getAttribute("viewBox").split(" ").map(Number), drag = null;
+  const set = () => svg.setAttribute("viewBox", vb.map((v) => v.toFixed(1)).join(" "));
+  wrap.addEventListener("wheel", (ev) => { ev.preventDefault(); const k = ev.deltaY > 0 ? 1.15 : 1 / 1.15; const r = svg.getBoundingClientRect();
+    const px = vb[0] + (ev.clientX - r.left) / r.width * vb[2], py = vb[1] + (ev.clientY - r.top) / r.height * vb[3];
+    vb = [px - (px - vb[0]) * k, py - (py - vb[1]) * k, vb[2] * k, vb[3] * k]; set(); }, { passive: false });
+  wrap.addEventListener("mousedown", (ev) => { drag = { x: ev.clientX, y: ev.clientY, vb: [...vb] }; });
+  window.addEventListener("mousemove", (ev) => { if (!drag) return; const r = svg.getBoundingClientRect();
+    vb[0] = drag.vb[0] - (ev.clientX - drag.x) / r.width * vb[2]; vb[1] = drag.vb[1] - (ev.clientY - drag.y) / r.height * vb[3]; set(); });
+  window.addEventListener("mouseup", (ev) => { if (drag && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) > 4) wrap.dataset.dragged = "1"; else delete wrap.dataset.dragged; drag = null; });
+}
+
+// ---- compare: env A vs env B (one project) or project A vs project B ------
+function cfgEdgeKey(e, byId, dropProject) {
+  const to = e.to.replace(/^\w+:/, ""), from = e.from.slice(4);
+  const strip = (s) => dropProject ? s.replace(/^[^/]+\//, "") : s;
+  return `${strip(from)} → ${e.kind}:${dropProject && e.to.startsWith("app:") ? strip(to) : to}${e.port ? ":" + e.port : ""} · ${e.via}`;
+}
+function cfgCompareHtml(c) {
+  const d = state.cfgData || {}, model = d.model || {};
+  const side = (env, project) => { const m = cfgFilterModel(env, { projects: project ? [project] : [] }); if (!m) return { keys: new Map(), apps: new Set(), m: null };
+    const keys = new Map(); m.edges.filter((e) => !project || cfgProjOf(e.from, m.byId) === project).forEach((e) => keys.set(cfgEdgeKey(e, m.byId, c.mode === "project"), e));
+    return { keys, apps: new Set(m.nodes.filter((n) => n.type === "app" && (!project || n.project === project)).map((n) => c.mode === "project" ? n.app : n.id)), m }; };
+  const A = c.mode === "env" ? side(c.envA, c.project) : side(c.env, c.projA), B = c.mode === "env" ? side(c.envB, c.project) : side(c.env, c.projB);
+  const la = c.mode === "env" ? `${c.project} · ${c.envA}` : `${c.projA} · ${c.env}`, lb = c.mode === "env" ? `${c.project} · ${c.envB}` : `${c.projB} · ${c.env}`;
+  const onlyA = [...A.keys.keys()].filter((k) => !B.keys.has(k)), onlyB = [...B.keys.keys()].filter((k) => !A.keys.has(k)), both = [...A.keys.keys()].filter((k) => B.keys.has(k));
+  const appsA = [...A.apps].filter((a) => !B.apps.has(a)), appsB = [...B.apps].filter((a) => !A.apps.has(a));
+  // same app + same key path but a different target host — the classic "dev points at prod DB" drift
+  const viaOf = (k) => k.split(" · ").pop() + "|" + k.split(" → ")[0];
+  const bVia = new Map(onlyB.map((k) => [viaOf(k), k]));
+  const drift = onlyA.filter((k) => bVia.has(viaOf(k))).map((k) => [k, bVia.get(viaOf(k))]);
+  const row = (k, cls) => `<div class="log-idx ${cls || ""}"><code class="log-idx-name">${esc(k)}</code></div>`;
+  return `<div class="cfg-cmp">
+    <div class="stat-tiles" style="margin:6px 0 10px">
+      <div class="stat-tile"><b>${both.length}</b><span>common connections</span></div>
+      <div class="stat-tile"><b class="${onlyA.length ? "pct-warn" : ""}">${onlyA.length}</b><span>only in ${esc(la)}</span></div>
+      <div class="stat-tile"><b class="${onlyB.length ? "pct-warn" : ""}">${onlyB.length}</b><span>only in ${esc(lb)}</span></div>
+      <div class="stat-tile"><b class="${drift.length ? "pct-bad" : "pct-good"}">${drift.length}</b><span>same key, different target</span></div>
+      <div class="stat-tile"><b class="${appsA.length + appsB.length ? "pct-warn" : ""}">${appsA.length + appsB.length}</b><span>apps on one side only</span></div>
+    </div>
+    ${prjInsights([
+      drift.length ? `<b>${drift.length}</b> connection(s) differ only by target between the two sides — verify these are intentional per-environment endpoints, not drift` : `no key-path drift between <b>${esc(la)}</b> and <b>${esc(lb)}</b>`,
+      appsA.length ? `apps only in ${esc(la)}: <b>${esc(appsA.slice(0, 8).join(", "))}</b>${appsA.length > 8 ? " …" : ""}` : "",
+      appsB.length ? `apps only in ${esc(lb)}: <b>${esc(appsB.slice(0, 8).join(", "))}</b>${appsB.length > 8 ? " …" : ""}` : "",
+      both.length && !onlyA.length && !onlyB.length ? "the two sides are structurally identical" : ""].filter(Boolean))}
+    <div class="prj-grid">
+      ${drift.length ? `<div class="pgv-card" style="grid-column:1/-1"><div class="pgv-title">⇄ same key path · different target</div><div class="log-idx-list">${drift.map(([a, b]) => `<div class="log-idx bad"><code class="log-idx-name">${esc(a)}</code><span class="ci-meta">vs</span><code class="log-idx-name">${esc(b)}</code></div>`).join("")}</div></div>` : ""}
+      <div class="pgv-card"><div class="pgv-title">only in ${esc(la)} · ${onlyA.length}</div><div class="log-idx-list">${onlyA.slice(0, 300).map((k) => row(k, "bad")).join("") || '<div class="empty">none</div>'}</div></div>
+      <div class="pgv-card"><div class="pgv-title">only in ${esc(lb)} · ${onlyB.length}</div><div class="log-idx-list">${onlyB.slice(0, 300).map((k) => row(k, "bad")).join("") || '<div class="empty">none</div>'}</div></div>
+      <div class="pgv-card" style="grid-column:1/-1"><details><summary>common · ${both.length}</summary><div class="log-idx-list">${both.slice(0, 300).map((k) => row(k)).join("") || '<div class="empty">none</div>'}</div></details></div>
+    </div>
+    <div class="cfg-cmp-maps"><div><div class="pgv-title">${esc(la)}</div>${A.m ? cfgMindMap({ ...A.m, edges: [...A.keys.values()] }, { projects: c.mode === "env" ? [c.project] : [c.projA] }) : '<div class="empty">no data</div>'}</div>
+      <div><div class="pgv-title">${esc(lb)}</div>${B.m ? cfgMindMap({ ...B.m, edges: [...B.keys.values()] }, { projects: c.mode === "env" ? [c.project] : [c.projB] }) : '<div class="empty">no data</div>'}</div></div></div>`;
+}
+
+// ---- page body ------------------------------------------------------------
 function cfgBodyHtml(d, env, f) {
+  if (f.compare && f.compare.on) return cfgCompareHtml({ ...f.compare, env });
   const m = cfgFilterModel(env, f);
   if (!m) return '<div class="empty">no configurations for this environment</div>';
-  const sm = m.summary || {};
+  const apps = m.nodes.filter((n) => n.type === "app"), cross = m.edges.filter((e) => e.scope === "cross-project");
+  const byTarget = {}; cross.forEach((e) => { const k = cfgProjOf(e.from, m.byId) + " → " + cfgProjOf(e.to, m.byId); byTarget[k] = (byTarget[k] || 0) + 1; });
+  const kinds = {}; m.edges.forEach((e) => { kinds[e.kind] = (kinds[e.kind] || 0) + 1; });
   const tile = (n, label, cls) => `<div class="stat-tile"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
-  const legend = Object.entries(CFG_KIND).filter(([k]) => (sm.kinds || {})[k]).map(([k, [c, l]]) =>
-    `<span class="chip" style="border-color:${c}"><i class="prj-dot" style="background:${c}"></i>${esc(l)} · ${sm.kinds[k]}</span>`).join("");
-  const anomalies = (m.anomalies || []).filter((a) => !f.project || f.project === "all" || !a.project || a.project === f.project);
+  const anomalies = (m.anomalies || []).filter((a) => !cfgArr(f.projects).length || !a.project || cfgArr(f.projects).includes(a.project));
+  const hubs = (n) => n.type === "app" ? "" : "";
   const edgesRows = m.edges.slice(0, 400).map((e) => `
     <div class="log-idx ${e.scope === "cross-project" ? "bad" : ""}"><code class="log-idx-name" style="flex:none">${esc(e.from.slice(4))}</code>
       <span class="chip" style="border-color:${cfgColor(e.kind)}"><i class="prj-dot" style="background:${cfgColor(e.kind)}"></i>${esc(e.label)}</span>
-      <span class="chip ${e.scope === "internal" ? "chip-green" : e.scope === "cross-project" ? "chip-amber" : e.scope === "cluster" ? "chip-cyan" : ""}">${esc(e.scope)}</span>
+      <span class="chip ${e.scope === "internal" ? "chip-green" : e.scope === "cross-project" ? "chip-amber" : e.scope === "cluster" ? "chip-cyan" : ""}">${esc(e.scope)}${e.scope === "cross-project" ? " · " + esc(cfgProjOf(e.to, m.byId)) : ""}</span>
       <span>→ <b>${esc(e.to.replace(/^\w+:/, ""))}</b>${e.port ? ":" + e.port : ""}</span>
       <span class="ci-meta" title="config key path">via ${esc(e.via)}</span></div>`).join("");
   return `
     <div class="stat-tiles" style="margin:6px 0 10px">
-      ${tile(sm.apps || 0, "apps configured")}${tile(sm.edges || 0, "connections")}
-      ${tile(sm.internal || 0, "internal (same project)", "pct-good")}${tile(sm.cross || 0, "cross-project", sm.cross ? "pct-warn" : "")}
-      ${tile(sm.cluster || 0, "cluster services")}${tile(sm.external || 0, "external endpoints")}${tile(sm.ips || 0, "raw IPs", sm.ips ? "pct-warn" : "")}
-      ${tile(sm.issues || 0, "issues", sm.issues ? "pct-bad" : "pct-good")}
+      ${tile(apps.length, "apps")}${tile(m.edges.length, "connections")}
+      ${tile(m.edges.filter((e) => e.scope === "internal").length, "internal", "pct-good")}${tile(cross.length, "cross-project", cross.length ? "pct-warn" : "")}
+      ${tile(m.edges.filter((e) => e.scope === "cluster").length, "cluster")}${tile(m.edges.filter((e) => e.scope === "external").length, "external")}
+      ${tile(apps.filter((a) => !a.out && !a.in).length, "apps without connections", apps.some((a) => !a.out && !a.in) ? "pct-warn" : "")}
+      ${tile(anomalies.length, "issues", anomalies.length ? "pct-bad" : "pct-good")}
     </div>
-    <div class="inv-chips" style="margin:0 0 8px">${legend}<span class="spacer"></span>
-      <span class="ci-meta">edges: <i class="cfg-lg cfg-internal">━</i> internal · <i class="cfg-lg cfg-cross-project">━</i> cross-project · <i class="cfg-lg cfg-cluster">━</i> cluster · <i class="cfg-lg cfg-external">━</i> external</span></div>
-    ${cfgDiagram(m, env)}
-    ${(() => {
-      const out = [];
-      if (sm.cross) out.push(`<b>${sm.cross}</b> cross-project dependenc${sm.cross === 1 ? "y" : "ies"} — ${esc([...new Set(m.edges.filter((e) => e.scope === "cross-project").map((e) => `${e.from.slice(4)} → ${e.to.slice(4)}`))].slice(0, 4).join(", "))}`);
-      const hubs = m.nodes.filter((n) => n.type !== "app").sort((a, b) => b.in - a.in).slice(0, 2).filter((n) => n.in > 1);
-      if (hubs.length) out.push(`most shared endpoint${hubs.length > 1 ? "s" : ""}: ${hubs.map((h) => `<b>${esc(h.label)}</b> (${h.in} apps)`).join(", ")}`);
-      const secrets = anomalies.filter((a) => a.kind === "secret").length, shared = anomalies.filter((a) => a.kind === "shared").length;
-      if (secrets) out.push(`<b>${secrets}</b> config(s) carry embedded credentials or plaintext secrets — move them to the vault`);
-      if (shared) out.push(`<b>${shared}</b> endpoint(s) are shared with another environment — an un-differentiated URL (e.g. dev pointing at a prod database)`);
-      if (sm.ips) out.push(`<b>${sm.ips}</b> raw IP address(es) in configs — prefer DNS names`);
-      const missing = anomalies.filter((a) => a.kind === "config").length;
-      if (missing) out.push(`<b>${missing}</b> app folder(s) without a config.yml`);
-      return prjInsights(out);
-    })()}
-    <details class="filebox acc-pg-sec" open><summary>🔗 connections · <b>${m.edges.length}</b>${m.edges.length > 400 ? ' <span class="ci-meta">(first 400 listed)</span>' : ""}</summary>
+    <div class="inv-chips" style="margin:0 0 8px">${Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<button class="chip cfg-chip ${cfgArr(f.kinds).includes(k) ? "chip-on" : ""}" data-cfg-toggle="kinds" data-v="${esc(k)}" style="border-color:${cfgColor(k)}"><i class="prj-dot" style="background:${cfgColor(k)}"></i>${esc((CFG_KIND[k] || CFG_KIND.other)[1])} · ${n}</button>`).join("")}
+      <span class="spacer"></span>${Object.entries(byTarget).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => `<span class="chip chip-amber" title="cross-project dependency">${esc(k)} · ${n}</span>`).join("")}</div>
+    ${cfgMindMap(m, f)}
+    ${prjInsights([
+      cross.length ? `<b>${cross.length}</b> cross-project connection(s): ${esc(Object.entries(byTarget).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, n]) => `${k} (${n})`).join(", "))}` : "no cross-project dependencies in this view",
+      (() => { const hubs = m.nodes.filter((n) => n.type !== "app").sort((a, b) => b.in - a.in).slice(0, 2).filter((n) => n.in > 1); return hubs.length ? `most shared endpoint${hubs.length > 1 ? "s" : ""}: ${hubs.map((h) => `<b>${esc(h.label)}</b> (${h.in} apps)`).join(", ")}` : ""; })(),
+      (() => { const n = anomalies.filter((a) => a.kind === "secret").length; return n ? `<b>${n}</b> config(s) carry embedded credentials or plaintext secrets` : ""; })(),
+      (() => { const n = anomalies.filter((a) => a.kind === "shared").length; return n ? `<b>${n}</b> endpoint(s) shared with another environment` : ""; })(),
+      (() => { const n = apps.filter((a) => !a.out && !a.in).length; return n ? `<b>${n}</b> app(s) declare no connections at all` : ""; })()].filter(Boolean))}
+    <details class="filebox acc-pg-sec"><summary>🔗 connections · <b>${m.edges.length}</b>${m.edges.length > 400 ? ' <span class="ci-meta">(first 400 listed)</span>' : ""}</summary>
       <div class="log-idx-list">${edgesRows || '<div class="empty">none</div>'}</div></details>
-    ${anomalies.length ? `<details class="filebox acc-pg-sec" open><summary>⚠ anomalies · <b>${anomalies.length}</b></summary>
+    ${anomalies.length ? `<details class="filebox acc-pg-sec"><summary>⚠ anomalies · <b>${anomalies.length}</b></summary>
       <div class="log-idx-list">${anomalies.map((a) => `<div class="log-idx ${a.kind === "secret" || a.kind === "shared" ? "bad" : ""}"><span class="chip ${a.kind === "secret" ? "chip-red" : a.kind === "shared" ? "chip-amber" : ""}">${esc(a.kind)}</span>${a.app ? `<code class="log-idx-name" style="flex:none">${esc(a.project || "")}/${esc(a.app)}</code>` : ""}<span class="ci-meta">${esc(a.detail)}</span></div>`).join("")}</div></details>` : ""}
     <div id="cfg-viewer"></div>`;
+}
+
+function cfgFiltersHtml(d, env, f) {
+  const o = cfgOptions(env, f), P = cfgArr(f.projects), c = f.compare || {};
+  const multi = (name, opts, cur, ph) => `<div class="cfg-ms" data-cfg-ms="${name}"><button type="button" class="btn btn-sm btn-ghost cfg-ms-btn">${ph}${cur.length ? ` <b>${cur.length}</b>` : ""} ▾</button>
+    <div class="cfg-ms-list hidden">${opts.length ? opts.map(([v, l]) => `<label><input type="checkbox" data-cfg-toggle="${name}" data-v="${esc(v)}" ${cur.includes(v) ? "checked" : ""}> ${esc(l)}</label>`).join("") : '<span class="ci-meta">none</span>'}</div></div>`;
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+  return `
+    <div class="acc-filters cat-filters cfg-filters">
+      <div class="log-dir">${o.envs.map((e) => `<button class="btn btn-sm ${e === env ? "btn-primary" : "btn-ghost"}" data-cfg-env="${esc(e)}">${esc(e)}</button>`).join("")}</div>
+      ${multi("projects", o.projects.map((p) => [p, p]), P, "📁 projects")}
+      ${multi("scopes", Object.entries(o.scopes).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, `${k} · ${n}`]), cfgArr(f.scopes), "scope")}
+      ${multi("kinds", Object.entries(o.kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, `${(CFG_KIND[k] || CFG_KIND.other)[1]} · ${n}`]), cfgArr(f.kinds), "connection")}
+      ${multi("targets", Object.entries(o.targets).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, `${k} · ${n}`]), cfgArr(f.targets), "connected to")}
+      <select data-cfg-f="focus" title="one app and everything it touches">${opt("", "focus: any app", f.focus || "")}${o.apps.sort((a, b) => (a.project + a.app).localeCompare(b.project + b.app)).map((a) => opt(a.id, `${a.project} / ${a.app}`, f.focus)).join("")}</select>
+      <input data-cfg-f="q" placeholder="🔎 host / key path / app / project…" value="${esc(f.q || "")}">
+      ${(P.length || cfgArr(f.kinds).length || cfgArr(f.scopes).length || cfgArr(f.targets).length || f.focus || f.q) ? '<button class="btn btn-sm btn-ghost" id="cfg-clear" title="clear all filters">✕ clear</button>' : ""}
+      <button class="btn btn-sm ${c.on ? "btn-primary" : "btn-ghost"}" id="cfg-cmp-toggle" title="compare two environments of one project, or two projects">⇄ compare</button>
+    </div>
+    ${c.on ? `<div class="acc-filters cat-filters cfg-cmp-bar">
+      <select data-cfg-c="mode">${opt("env", "two environments of one project", c.mode || "env")}${opt("project", "two projects in this environment", c.mode)}</select>
+      ${(c.mode || "env") === "env" ? `<select data-cfg-c="project">${o.projects.map((p) => opt(p, p, c.project || P[0] || o.projects[0])).join("")}</select>
+        <select data-cfg-c="envA">${(d.envs || []).map((e) => opt(e, e, c.envA || (d.envs || [])[0])).join("")}</select><span class="ci-meta">vs</span>
+        <select data-cfg-c="envB">${(d.envs || []).map((e) => opt(e, e, c.envB || env)).join("")}</select>`
+      : `<select data-cfg-c="projA">${o.projects.map((p) => opt(p, p, c.projA || o.projects[0])).join("")}</select><span class="ci-meta">vs</span>
+        <select data-cfg-c="projB">${o.projects.map((p) => opt(p, p, c.projB || o.projects[1] || o.projects[0])).join("")}</select><span class="ci-meta">in ${esc(env)}</span>`}
+    </div>` : ""}`;
+}
+
+function cfgRerender() {
+  const d = state.cfgData; if (!d) return;
+  const f = state.cfgFilter || {};
+  const fl = document.getElementById("cfg-filters"), body = document.getElementById("cfg-body");
+  if (fl) fl.innerHTML = cfgFiltersHtml(d, state.cfgEnv, f);
+  if (body) body.innerHTML = state.cfgEnv ? cfgBodyHtml(d, state.cfgEnv, f) : '<div class="empty">no environments found in the config repos</div>';
+  cfgWireMap();
+}
+
+function cfgNormalizeCompare(f) {
+  const c = f.compare; if (!c || !c.on) return;
+  const d = state.cfgData || {}, projects = (d.model || {}).projects || [];
+  c.mode = c.mode || "env";
+  c.project = c.project || cfgArr(f.projects)[0] || projects[0];
+  c.envA = c.envA || (d.envs || [])[0]; c.envB = c.envB || state.cfgEnv;
+  c.projA = c.projA || projects[0]; c.projB = c.projB || projects[1] || projects[0];
+}
+
+async function renderConfigs() {
+  const tok = navToken();
+  let d;
+  try { d = await api("/api/configs"); } catch (e) { view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  if (navStale(tok)) return;
+  state.cfgData = d;
+  const envs = d.envs || [];
+  if (!envs.includes(state.cfgEnv)) state.cfgEnv = envs.includes("prd") ? "prd" : envs[0] || "";
+  const f = state.cfgFilter = state.cfgFilter || {};
+  f.expand = f.expand || new Set();
+  view().innerHTML = `
+    <div class="view-head"><h1>CONFIGURATIONS</h1>
+      <span class="sub">architecture drawn from the Control project's team config repositories</span>
+      <span class="spacer"></span><button id="cfg-refresh" class="btn btn-sm" title="re-scan the cloned repos">↻</button></div>
+    ${!(d.repos || []).length ? '<div class="kpi-note">no repository from the ADO project <b>Control</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>'
+      : `<div class="inv-chips" style="margin-bottom:8px">${d.repos.map((r) => `<span class="chip ${r.cloned ? "" : "chip-amber"}" title="${r.cloned ? r.configs + " config(s)" : "not cloned yet"}">🛡 ${esc(r.team)}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}
+         <span class="ci-meta">· ${d.configs} config.yml parsed · ${((d.model || {}).projects || []).length} projects · namespaces known: ${Object.keys(d.namespaces || {}).length}</span></div>`}
+    <div id="cfg-filters"></div>
+    <div id="cfg-body"></div>
+    <div class="kpi-note">mind map: each project is a hub with its apps around it, external endpoints cluster by kind; large hubs stay collapsed (edges bundle into counted links) until you click them or select their project · in-cluster hosts (*.svc.cluster.local, &lt;image&gt;-service, &lt;image&gt;-&lt;namespace&gt;) resolve to apps; namespaces map to projects via inventory host_vars; whole-line comments and *_bkp folders are ignored</div>`;
+  cfgRerender();
+  const v = view();
+  v.addEventListener("click", (ev) => {
+    const eb = ev.target.closest("[data-cfg-env]");
+    if (eb) { state.cfgEnv = eb.dataset.cfgEnv; f.focus = ""; cfgRerender(); return; }
+    const hb = ev.target.closest("[data-cfg-hub]");
+    if (hb) { const wrap = ev.target.closest("#cfg-map"); if (wrap && wrap.dataset.dragged) return; const id = hb.dataset.cfgHub; if (f.expand.has(id)) f.expand.delete(id); else f.expand.add(id); cfgRerender(); return; }
+    const ap = ev.target.closest("[data-cfg-app]");
+    if (ap) { const wrap = ev.target.closest("#cfg-map"); if (wrap && wrap.dataset.dragged) return; cfgOpenApp(ap.dataset.cfgApp); return; }
+    const chip = ev.target.closest("button[data-cfg-toggle]");
+    if (chip) { const k = chip.dataset.cfgToggle, val = chip.dataset.v, cur = cfgArr(f[k]); f[k] = cur.includes(val) ? cur.filter((x) => x !== val) : [...cur, val]; cfgRerender(); return; }
+    const msb = ev.target.closest(".cfg-ms-btn");
+    if (msb) { const list = msb.parentElement.querySelector(".cfg-ms-list"); document.querySelectorAll(".cfg-ms-list").forEach((l) => { if (l !== list) l.classList.add("hidden"); }); list.classList.toggle("hidden"); return; }
+    if (!ev.target.closest(".cfg-ms")) document.querySelectorAll(".cfg-ms-list").forEach((l) => l.classList.add("hidden"));
+    if (ev.target.closest("#cfg-clear")) { state.cfgFilter = f.compare ? { expand: new Set(), compare: f.compare } : { expand: new Set() }; Object.assign(f, state.cfgFilter); state.cfgFilter = f; for (const k of Object.keys(f)) if (!["expand", "compare"].includes(k)) delete f[k]; cfgRerender(); return; }
+    if (ev.target.closest("#cfg-cmp-toggle")) { f.compare = f.compare || {}; f.compare.on = !f.compare.on; cfgNormalizeCompare(f); cfgRerender(); return; }
+  });
+  const fh = (ev) => {
+    const cb = ev.target.closest("input[data-cfg-toggle]");
+    if (cb) { const k = cb.dataset.cfgToggle, val = cb.dataset.v, cur = cfgArr(f[k]); f[k] = cb.checked ? [...cur, val] : cur.filter((x) => x !== val);
+      if (k === "projects") { const o = cfgOptions(state.cfgEnv, f); if (!o.envs.includes(state.cfgEnv) && o.envs.length) state.cfgEnv = o.envs[0]; f.focus = ""; }
+      cfgRerender(); const ms = document.querySelector(`[data-cfg-ms="${k}"] .cfg-ms-list`); if (ms) ms.classList.remove("hidden"); return; }
+    const cs = ev.target.closest("[data-cfg-c]");
+    if (cs) { f.compare[cs.dataset.cfgC] = cs.value; cfgRerender(); return; }
+    const el = ev.target.closest("[data-cfg-f]"); if (!el) return;
+    f[el.dataset.cfgF] = el.value;
+    if (el.dataset.cfgF === "q") { const body = document.getElementById("cfg-body"); if (body) { body.innerHTML = cfgBodyHtml(d, state.cfgEnv, f); cfgWireMap(); } }
+    else cfgRerender();
+  };
+  v.addEventListener("input", fh); v.addEventListener("change", fh);
+  document.getElementById("cfg-refresh").addEventListener("click", async () => { try { state.cfgData = await api("/api/configs?refresh=true"); } catch { /* keep */ } renderConfigs(); });
 }
 
 async function cfgOpenApp(id) {
@@ -5901,52 +6126,6 @@ async function cfgOpenApp(id) {
     ${file ? `<pre class="cfg-file">${esc(file)}</pre><div class="kpi-note">credentials and secret-looking keys are masked before the file leaves the server</div>` : ""}</div>`;
   document.getElementById("cfg-viewer-close").addEventListener("click", () => { box.innerHTML = ""; });
   box.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function cfgRerender() {
-  const body = document.getElementById("cfg-body");
-  if (body && state.cfgData) body.innerHTML = cfgBodyHtml(state.cfgData, state.cfgEnv, state.cfgFilter || {});
-}
-
-async function renderConfigs() {
-  const tok = navToken();
-  let d;
-  try { d = await api("/api/configs"); } catch (e) { view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
-  if (navStale(tok)) return;
-  state.cfgData = d;
-  const envs = d.envs || [];
-  if (!envs.includes(state.cfgEnv)) state.cfgEnv = envs.includes("prd") ? "prd" : envs[0] || "";
-  const f = state.cfgFilter = state.cfgFilter || {};
-  const projects = (d.model || {}).projects || [];
-  const allApps = state.cfgEnv ? ((d.model.envs[state.cfgEnv] || {}).nodes || []).filter((n) => n.type === "app") : [];
-  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
-  view().innerHTML = `
-    <div class="view-head"><h1>CONFIGURATIONS</h1>
-      <span class="sub">architecture drawn from the Control project's team config repositories</span>
-      <span class="spacer"></span><button id="cfg-refresh" class="btn btn-sm" title="re-scan the cloned repos">↻</button></div>
-    ${!(d.repos || []).length ? '<div class="kpi-note">no repository from the ADO project <b>Control</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>'
-      : `<div class="inv-chips" style="margin-bottom:8px">${d.repos.map((r) => `<span class="chip ${r.cloned ? "" : "chip-amber"}" title="${r.cloned ? r.configs + " config(s)" : "not cloned yet"}">🛡 ${esc(r.team)}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}
-         <span class="ci-meta">· ${d.configs} config.yml parsed · namespaces known: ${Object.keys(d.namespaces || {}).length}</span></div>`}
-    <div class="acc-filters cat-filters">
-      <div class="log-dir">${envs.map((e) => `<button class="btn btn-sm ${e === state.cfgEnv ? "btn-primary" : "btn-ghost"}" data-cfg-env="${esc(e)}">${esc(e)}</button>`).join("")}</div>
-      <select data-cfg-f="project">${opt("all", "project: any", f.project)}${projects.map((p) => opt(p, p, f.project)).join("")}</select>
-      <select data-cfg-f="team">${opt("all", "team: any", f.team)}${(d.teams || []).map((t) => opt(t, t, f.team)).join("")}</select>
-      <select data-cfg-f="kind">${opt("all", "connection: any", f.kind)}${Object.entries(CFG_KIND).map(([k, [, l]]) => opt(k, l, f.kind)).join("")}</select>
-      <select data-cfg-f="focus">${opt("", "focus: whole environment", f.focus || "")}${allApps.map((a) => opt(a.id, `${a.project} / ${a.app}`, f.focus)).join("")}</select>
-      <input data-cfg-f="q" placeholder="🔎 host / key path / app…" value="${esc(f.q || "")}" style="min-width:200px">
-    </div>
-    <div id="cfg-body">${state.cfgEnv ? cfgBodyHtml(d, state.cfgEnv, f) : '<div class="empty">no environments found in the config repos</div>'}</div>
-    <div class="kpi-note">in-cluster hosts (*.svc.cluster.local, &lt;image&gt;-service, &lt;image&gt;-&lt;namespace&gt;) resolve to apps; namespaces map to projects via inventory host_vars (ocp/k8s namespace keys) and the project / project-env conventions; whole-line comments and *_bkp folders are ignored</div>`;
-  const v = view();
-  v.addEventListener("click", (ev) => {
-    const eb = ev.target.closest("[data-cfg-env]");
-    if (eb) { state.cfgEnv = eb.dataset.cfgEnv; state.cfgFilter.focus = ""; renderConfigs(); return; }
-    const ap = ev.target.closest("[data-cfg-app]");
-    if (ap) cfgOpenApp(ap.dataset.cfgApp);
-  });
-  const fh = (ev) => { const el = ev.target.closest("[data-cfg-f]"); if (!el) return; state.cfgFilter[el.dataset.cfgF] = el.value; cfgRerender(); };
-  v.addEventListener("input", fh); v.addEventListener("change", fh);
-  document.getElementById("cfg-refresh").addEventListener("click", async () => { try { state.cfgData = await api("/api/configs?refresh=true"); } catch { /* keep */ } renderConfigs(); });
 }
 
 /* ================= PROJECTS — per-project drill-down ================= */
