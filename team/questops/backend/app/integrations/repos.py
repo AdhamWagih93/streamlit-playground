@@ -96,6 +96,17 @@ DEMO_REPO_FILES = {
         # real caller conventions:
         # podman_run_script.sh   <env> <category> <script> <container> <args>
         # podman_run_playbook.sh <env> <inventory> <playbook> <path> <container> <args>
+        "scripts/Tools/LDAP/getTeamMembers.sh":
+            "#!/bin/bash\n# Print the members of an LDAP team group, one per line.\n"
+            "set -euo pipefail\n"
+            ". $HOME/.prd   # LDAP_HOST / LDAP_BASE / LDAP_BIND_DN / LDAP_BIND_PW\n"
+            "TEAM=\"${1:?usage: getTeamMembers.sh <team>}\"\n"
+            "ldapsearch -x -LLL -H \"$LDAP_HOST\" -D \"$LDAP_BIND_DN\" -w \"$LDAP_BIND_PW\" \\\n"
+            "  -b \"$LDAP_BASE\" \"(cn=$TEAM)\" member \\\n"
+            "  | sed -n 's/^member: CN=\\([^,]*\\).*/\\1/p'\n",
+        # real caller conventions:
+        # podman_run_script.sh   <env> <category> <script> <container> <args>
+        # podman_run_playbook.sh <env> <inventory> <playbook> <path> <container> <args>
         "pipelines/payments-service.groovy":
             "pipeline {\n  agent { label 'java' }\n  stages {\n"
             "    stage('Build') { steps { sh './scripts/podman_run_script.sh prd java build_java.sh tools-java \"-Pservice=payments\"' } }\n"

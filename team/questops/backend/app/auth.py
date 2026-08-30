@@ -36,11 +36,67 @@ def role_for(username: str) -> str:
 _USER_EXISTS: dict = {}
 
 
+def _identity_keys(name: str) -> set[str]:
+    """Spellings under which one identity may appear: login, display name with
+    '.', '_' or space separators, @domain stripped — all lower-case."""
+    n = (name or "").strip().lower()
+    if "@" in n:
+        n = n.split("@", 1)[0]
+    n = n.strip()
+    if not n:
+        return set()
+    return {n, n.replace("_", " "), n.replace(".", " "), n.replace("_", "."),
+            n.replace(" ", "_"), n.replace(".", "_"), n.replace(" ", ".")}
+
+
+_KNOWN_IDENTITIES: dict = {"at": 0.0, "keys": None}
+_KNOWN_TTL = 3600
+
+
+def known_identities() -> set[str] | None:
+    """Union of every member the team script returns for every team named in
+    the inventory (dev/qc/ops/prd teams of every project) plus the login group.
+    This is THE directory QuestOps knows — no direct LDAP query is made for
+    identity checks. None when nothing could be resolved (Engine not cloned)."""
+    import time
+    if _KNOWN_IDENTITIES["keys"] is not None and time.time() - _KNOWN_IDENTITIES["at"] < _KNOWN_TTL:
+        return _KNOWN_IDENTITIES["keys"]
+    teams: list[str] = []
+    try:
+        from .integrations import inventory
+        for p in inventory.parse().get("projects") or []:
+            for t in (p.get("teams") or {}).values():
+                if t and t not in teams:
+                    teams.append(t)
+    except Exception:  # noqa: BLE001 — inventory may be absent
+        pass
+    grp = _group_cn(settings.ldap_required_group)
+    if grp and grp not in teams:
+        teams.append(grp)
+    keys: set[str] = set()
+    resolved = 0
+    for t in teams:
+        for cand in dict.fromkeys((t, t.replace("_", "-"), t.replace(" ", "-"), t.replace(" ", "_"), t.replace("-", "_"))):
+            res = ldap_group_members(cand)
+            if res.get("found"):
+                resolved += 1
+                for m in res.get("members") or []:
+                    keys |= _identity_keys(m.get("username") or "")
+                    keys |= _identity_keys(m.get("display_name") or "")
+                    disp = (m.get("display_name") or "").strip().lower()
+                    if disp:
+                        keys.add(disp.split()[0])
+                break
+    value = keys if resolved else None
+    _KNOWN_IDENTITIES.update(at=time.time(), keys=value)
+    return value
+
+
 def ldap_user_exists(name: str) -> bool | None:
-    """Does this identity exist in LDAP at all? True/False, or None when it
-    can't be checked (no LDAP configured / lookup failed). Tries the login
-    attribute, then display-name shapes (Alice_Nasr → 'Alice Nasr'). Cached
-    for an hour per identity. Demo mode answers from the demo directory."""
+    """Is this identity known to the directory? True/False, or None when it
+    can't be told (Engine script unavailable). Answered ONLY from the team
+    script's output across every inventory team (see known_identities) —
+    never by binding to LDAP. Cached for an hour per identity."""
     import time
     key = (name or "").strip().lower()
     if not key:
@@ -55,26 +111,9 @@ def ldap_user_exists(name: str) -> bool | None:
                 known.add(m.lower()); known.add(m.split()[0].lower())
                 known.add(m.lower().replace(" ", "_")); known.add(m.lower().replace(" ", "."))
         res = key in known
-    elif not (settings.ldap_url and settings.ldap_bind_dn and settings.ldap_base_dn):
-        res = None
     else:
-        try:
-            import ldap3
-            esc = ldap3.utils.conv.escape_filter_chars
-            variants = {name, name.replace("_", " "), name.replace(".", " "), name.replace("_", ".")}
-            parts = [f"({settings.ldap_user_attr}={esc(v)})" for v in variants]
-            parts += [f"(displayName={esc(v)})" for v in variants] + [f"(cn={esc(v)})" for v in variants]
-            server = ldap3.Server(settings.ldap_url, get_info=ldap3.NONE)
-            conn = ldap3.Connection(server, user=settings.ldap_bind_dn,
-                                    password=settings.ldap_bind_password, auto_bind=True)
-            try:
-                conn.search(settings.ldap_base_dn, "(|" + "".join(parts) + ")",
-                            attributes=["cn"], size_limit=1)
-                res = bool(conn.entries)
-            finally:
-                conn.unbind()
-        except Exception:  # noqa: BLE001 — unknown, not false
-            res = None
+        ks = known_identities()
+        res = None if ks is None else bool(_identity_keys(key) & ks)
     _USER_EXISTS[key] = (time.time(), res)
     return res
 
@@ -129,33 +168,26 @@ def _ldap_authenticate(username: str, password: str) -> dict | None:
             "role": role_for(username)}
 
 
+def _group_cn(group: str) -> str:
+    """'CN=DevOps-Team,OU=Groups,DC=corp' → 'DevOps-Team'; a bare name passes through."""
+    g = (group or "").strip()
+    if "=" in g:
+        head = g.split(",", 1)[0]
+        g = head.split("=", 1)[1].strip() if "=" in head else g
+    return g
+
+
 def list_group_members() -> list[dict]:
-    """Everyone in the team group — the roster shown even before first login."""
+    """Everyone in the login team group — the roster shown even before first
+    login. Resolved through the Engine team script (never a direct LDAP bind)."""
     if settings.demo_mode:
         return [{"username": u, **m} for u, m in DEMO_USERS.items()]
-    if not (settings.ldap_url and settings.ldap_required_group):
+    cn = _group_cn(settings.ldap_required_group)
+    if not cn:
         return []
-    import ldap3
-
-    server = ldap3.Server(settings.ldap_url, get_info=ldap3.NONE)
-    conn = ldap3.Connection(server, user=settings.ldap_bind_dn,
-                            password=settings.ldap_bind_password, auto_bind=True)
-    try:
-        conn.search(settings.ldap_base_dn,
-                    f"(memberOf={ldap3.utils.conv.escape_filter_chars(settings.ldap_required_group)})",
-                    attributes=[settings.ldap_user_attr, "displayName", "mail"])
-        out = []
-        for e in conn.entries:
-            uname = (str(getattr(e, settings.ldap_user_attr))
-                     if settings.ldap_user_attr in e else "")
-            if not uname:
-                continue
-            out.append({"username": uname.lower(),
-                        "display_name": str(e.displayName) if "displayName" in e else uname,
-                        "email": str(e.mail) if "mail" in e else ""})
-        return out
-    finally:
-        conn.unbind()
+    res = ldap_group_members(cn)
+    return [{"username": m["username"], "display_name": m.get("display_name") or m["username"],
+             "email": ""} for m in (res.get("members") or []) if m.get("username")]
 
 
 _LDAP_GROUP_CACHE: dict = {}  # cn -> {"at": ts, "value": {...}}
@@ -177,8 +209,27 @@ _DEMO_LDAP_GROUPS = {
 # (b) does work relative to the current directory, so it must run from INSIDE
 # the Engine repo. So we copy <engine>/.prd to $HOME/.prd and run with cwd set
 # to the repo (leaving $HOME untouched).
-_TEAM_SCRIPT_REL = "scripts/Tools/LDAP/getTeamMembersCN.sh"
+_TEAM_SCRIPT_FALLBACK = "scripts/Tools/LDAP/getTeamMembersCN.sh"
 _TEAM_SCRIPT_TIMEOUT = 60
+
+
+def _team_script_candidates() -> list[str]:
+    """The configured script first (QO_TEAM_MEMBERS_SCRIPT, default
+    scripts/Tools/LDAP/getTeamMembers.sh), then the legacy CN variant."""
+    cfg = (settings.team_members_script or "").strip().lstrip("/")
+    out = [c for c in (cfg, _TEAM_SCRIPT_FALLBACK) if c]
+    return list(dict.fromkeys(out))
+
+
+_TEAM_SCRIPT_REL = _team_script_candidates()[0]   # label used in notes / status
+
+
+def _team_script_path(d):
+    """First candidate script that exists inside the cloned Engine repo."""
+    for rel in _team_script_candidates():
+        if (d / rel).exists():
+            return d / rel
+    return None
 
 
 def _engine_dir():
@@ -210,7 +261,10 @@ def team_source_status() -> dict:
         row["note"] = "Engine repo not defined / not cloned (Repositories page)"
         return row
     row["engine_cloned"] = True
-    row["script_present"] = (d / _TEAM_SCRIPT_REL).exists()
+    sp = _team_script_path(d)
+    row["script_present"] = sp is not None
+    if sp is not None:
+        row["script"] = str(sp.relative_to(d))
     row["prd_present"] = (d / ".prd").exists()
     if not row["script_present"]:
         row["note"] = f"{_TEAM_SCRIPT_REL} missing in the Engine repo"
@@ -272,8 +326,8 @@ def _run_team_script(cn: str) -> dict:
     d = _engine_dir()
     if d is None:
         return {"ok": False, "error": "Engine repo not defined / not cloned"}
-    script = d / _TEAM_SCRIPT_REL
-    if not script.exists():
+    script = _team_script_path(d)
+    if script is None:
         return {"ok": False, "error": f"{_TEAM_SCRIPT_REL} missing in the Engine repo"}
     # the script does `. $HOME/.prd`, expecting the Engine repo's root .prd under
     # the runner's real $HOME — place it there (atomically: team resolution runs

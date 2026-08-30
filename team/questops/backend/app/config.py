@@ -184,6 +184,9 @@ class Settings(BaseSettings):
     # standard changes: resolve data sources from the vaulted env files
     # (host/port/db only — never credentials) and probe reachability
     std_changes_decrypt: bool = False
+    # relative path (inside the cloned Engine repo) of the script that prints a
+    # team's members — EVERY team-member / identity lookup goes through it
+    team_members_script: str = "scripts/Tools/LDAP/getTeamMembers.sh"
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
     # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.
