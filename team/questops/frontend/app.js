@@ -7339,48 +7339,50 @@ function prjCatalogCards(rows, f) {
   const maxBy = {};
   rows.forEach((p) => Object.entries(p.activity || {}).forEach(([k, v]) => { maxBy[k] = Math.max(maxBy[k] || 1, v.recent || 0); }));
   const gb = (n) => n >= 1024 ** 4 ? (n / 1024 ** 4).toFixed(1) + " TB" : n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + " GB" : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(0) + " MB" : n + " B";
-  const ring = (score, label, tip) => {   // 0-10 score ring (SVG, print-safe)
+  // 0-10 gauge: a track that fills (animated) with a colour by band
+  const gauge = (score, label, tip, extra) => {
     const v = score == null ? 0 : Math.max(0, Math.min(10, score));
     const col = score == null ? "var(--line)" : v >= 8 ? "#43c884" : v >= 5 ? "#e0a13c" : "#e05c5c";
-    const c = 2 * Math.PI * 13;
-    return `<span class="cat-ring" title="${esc(tip)}"><svg viewBox="0 0 32 32" width="32" height="32"><circle cx="16" cy="16" r="13" class="cat-ring-bg"></circle>
-      <circle cx="16" cy="16" r="13" stroke="${col}" stroke-dasharray="${(c * v / 10).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 16 16)"></circle>
-      <text x="16" y="20" text-anchor="middle">${score == null ? "–" : v.toFixed(0)}</text></svg><small>${esc(label)}</small></span>`;
+    return `<div class="cat-gauge ${score == null ? "cat-gauge-na" : ""}" title="${esc(tip)}"><div class="cat-gauge-head"><span>${esc(label)}</span><b style="color:${col}">${score == null ? "n/a" : extra || v.toFixed(0) + "/10"}</b></div>
+      <div class="cat-gauge-track"><i style="width:${(v * 10).toFixed(0)}%;background:${col}"></i></div></div>`;
   };
-  const pill = (cls, ico, txt, tip) => `<span class="cat-pill ${cls}" title="${esc(tip || "")}">${ico} ${txt}</span>`;
+  let idx = 0;
   const card = (p) => {
     const quiet = !p.last_activity;
-    // activity strip: one bar per source, height ∝ 30-day events (relative to the busiest project)
     const strip = Object.keys(CAT_SRC).map((k) => { const v = (p.activity || {})[k] || {}; const [ico, lab] = CAT_SRC[k];
-      const h = v.recent ? Math.max(4, Math.round(24 * Math.min(1, v.recent / (maxBy[k] || 1)))) : 0;
+      const h = v.recent ? Math.max(4, Math.round(26 * Math.min(1, v.recent / (maxBy[k] || 1)))) : 0;
       return `<span class="cat-bar" title="${lab}s · ${v.recent || 0} in 30d${v.last ? " · last " + esc(v.last.replace("T", " ")) : ""}"><i style="height:${h}px" class="${h ? "" : "cat-bar-0"}"></i><b>${ico}</b><small>${v.last ? prjAgo(v.last) : "—"}</small></span>`; }).join("");
     const sec = p.security, dep = p.deploys, lg = p.logging, st = p.std, us = p.usage, ado = p.ado || {};
-    const secCls = !sec ? "cat-pill-mute" : sec.critical ? "cat-pill-bad" : sec.high ? "cat-pill-warn" : "cat-pill-good";
-    const secTxt = !sec ? "not scanned" : sec.critical || sec.high ? `${sec.critical ? "C" + sec.critical + " " : ""}${sec.high ? "H" + sec.high : ""}` : "clean";
-    const secTip = !sec ? "no security scan recorded for this project" : `freshest scan per scanner: ${Object.entries(sec.scanners).map(([k, v]) => `${k} ${v.when || "?"} C${v.critical} H${v.high}`).join(" · ")}`;
+    // vulnerabilities: a severity bar (critical / high per scanner) instead of text
+    const secTot = sec ? sec.critical + sec.high : 0;
+    const secBar = !sec ? `<div class="cat-sec cat-sec-na" title="no security scan recorded for this project"><span>🛡 not scanned</span><div class="cat-sec-track"></div></div>`
+      : `<div class="cat-sec ${sec.critical ? "cat-sec-bad" : sec.high ? "cat-sec-warn" : "cat-sec-good"}" title="freshest scan per scanner: ${esc(Object.entries(sec.scanners).map(([k, v]) => `${k} ${v.when || "?"} C${v.critical} H${v.high}`).join(" · "))}">
+          <span>🛡 ${secTot ? `<b>${sec.critical}</b> critical · <b>${sec.high}</b> high` : "clean"}<small>${Object.keys(sec.scanners).length} scanner${Object.keys(sec.scanners).length === 1 ? "" : "s"}${sec.last ? " · " + prjAgo(sec.last) : ""}</small></span>
+          <div class="cat-sec-track">${secTot ? Object.entries(sec.scanners).filter(([, v]) => v.critical + v.high).map(([k, v]) => `${v.critical ? `<i class="cat-sec-c" style="flex:${v.critical}" title="${k}: ${v.critical} critical"></i>` : ""}${v.high ? `<i class="cat-sec-h" style="flex:${v.high}" title="${k}: ${v.high} high"></i>` : ""}`).join("") : '<i class="cat-sec-ok" style="flex:1"></i>'}</div></div>`;
     const depPct = dep && dep.prd ? Math.round(100 * dep.prd_ok / dep.prd) : null;
     const tests = ((p.activity || {}).tests || {}).recent || 0;
+    const pill = (cls, ico, txt, tip) => `<span class="cat-pill ${cls}" title="${esc(tip || "")}">${ico} ${txt}</span>`;
     return `
-    <button class="cat-card ${quiet ? "cat-quiet" : ""}" data-cat-open="${esc(p.name)}" title="open the ${esc(p.name)} report">
+    <button class="cat-card ${quiet ? "cat-quiet" : ""}" style="--i:${Math.min(idx++, 24)}" data-cat-open="${esc(p.name)}" title="open the ${esc(p.name)} report">
       <div class="cat-head"><span class="cat-name">${esc(p.name)}</span>
         ${p.deploy_platform ? `<span class="chip chip-cyan">${esc(p.deploy_platform)}</span>` : ""}
         ${p.deploy_technology ? `<span class="chip">${esc(p.deploy_technology)}</span>` : ""}
         ${ado.grade ? `<span class="chip" title="ADO project health grade${ado.score != null ? " · score " + ado.score : ""}">ADO ${esc(ado.grade)}</span>` : ""}
         <span class="spacer"></span>
-        <span class="cat-last" title="most recent activity across commits, builds, deploys, releases and test runs">${quiet ? "no activity seen" : `${(CAT_SRC[p.last_source] || ["•"])[0]} ${prjAgo(p.last_activity)}`}</span></div>
+        <span class="cat-last ${!quiet && p.recent_30d ? "cat-live" : ""}" title="most recent activity across commits, builds, deploys, releases, test runs and standard changes">${quiet ? "no activity seen" : `${(CAT_SRC[p.last_source] || ["•"])[0]} ${prjAgo(p.last_activity)}`}</span></div>
       ${p.description ? `<div class="cat-desc" title="${esc(p.description)}">${esc(p.description)}</div>` : '<div class="cat-desc cat-desc-none">no description in ADO</div>'}
       <div class="cat-teams">${["dev", "qc", "prd"].filter((k) => p.teams[k]).map((k) =>
         `<span class="chip" title="${k}_team">${k === "prd" ? "ops" : k}: ${esc(p.teams[k])}</span>`).join("")}
         <span class="spacer"></span><span class="cat-facts"><span>${p.apps} app${p.apps === 1 ? "" : "s"}</span><span>${(p.envs || []).length ? esc(p.envs.join("·")) : "no envs"}</span><span>${p.pipelines} pipe</span>${ado.repos ? `<span>${ado.repos} repos</span>` : ""}</span></div>
       <div class="cat-viz">
         <div class="cat-strip" title="30-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·30d</small></span>` : ""}</div>
-        <div class="cat-rings">
-          ${ring(lg ? lg.score : null, "logs", lg ? `logging health ${lg.score ?? "?"}/10 · ${lg.size_h || "?"} · ${lg.indices || 0} indices${lg.silent ? " · " + lg.silent + " app(s) silent" : ""}` : "no logging data")}
-          ${ring(depPct == null ? null : depPct / 10, "prd", dep ? `${dep.prd} prd deployment(s) in 30d · ${dep.prd_ok} succeeded · ${dep.total} deployments overall` : "no deployments in 30d")}
+        <div class="cat-gauges">
+          ${gauge(lg ? lg.score : null, "logging", lg ? `logging health ${lg.score ?? "?"}/10 · ${lg.size_h || "?"} · ${lg.indices || 0} indices${lg.silent ? " · " + lg.silent + " app(s) silent" : ""}` : "no logging data")}
+          ${gauge(depPct == null ? null : depPct / 10, "prd deploys", dep ? `${dep.prd} prd deployment(s) in 30d · ${dep.prd_ok} succeeded · ${dep.total} deployments overall` : "no deployments in 30d", dep && dep.prd ? `${dep.prd_ok}/${dep.prd} ok` : "")}
         </div>
       </div>
+      ${secBar}
       <div class="cat-pills">
-        ${pill(secCls, "🛡", secTxt, secTip)}
         ${pill(st ? (st.issues ? "cat-pill-warn" : "") : "cat-pill-mute", "🧾", st ? `${st.changes} std change${st.changes === 1 ? "" : "s"}${st.issues ? " · " + st.issues + " issue(s)" : ""}` : "no std changes", "standard changes declaring this project_name in the Engine catalogue")}
         ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : "no tests · 30d", "autotest runs in the last 30 days")}
         ${us ? pill("", "⏱", `${logInt(us.minutes)} min · ${gb(us.storage || 0)}`, `platform usage snapshot as of ${us.as_of || "?"}: ${logInt(us.minutes)} minutes, ${gb(us.storage || 0)} storage`) : ""}
@@ -7390,6 +7392,19 @@ function prjCatalogCards(rows, f) {
   return Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .map(([g, ps]) => `<div class="cat-group"><div class="cat-group-head">${group === "platform" ? "🖥" : group === "team" ? "🛡" : "🏢"} ${esc(g)} <span class="ci-meta">· ${ps.length} project${ps.length === 1 ? "" : "s"}</span></div>
       <div class="cat-grid">${ps.map(card).join("")}</div></div>`).join("");
+}
+
+// "data as of" line — the anchor every "x min ago" on the page is relative to;
+// ticks every 30 s so the page feels alive without any network traffic
+function prjCatAsOf(cat) {
+  const at = cat && cat.generated_at ? cat.generated_at : "";
+  if (!at) return "";
+  const d = new Date(at);
+  const hh = isNaN(d) ? at : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return `<span class="cat-asof" data-cat-asof="${esc(at)}"><i class="cat-pulse-dot"></i>data as of <b>${esc(hh)}</b> · <span class="cat-asof-ago">${prjAgo(at.replace("Z", "")) || "just now"}</span>${cat.cached ? ' <span class="ci-meta" title="served from the 5-minute cache — press ↻ to rebuild">cached</span>' : ""}</span>`;
+}
+function prjCatTick() {
+  document.querySelectorAll("[data-cat-asof]").forEach((el) => { const ago = el.querySelector(".cat-asof-ago"); if (ago) ago.textContent = prjAgo(el.dataset.catAsof.replace("Z", "")) || "just now"; });
 }
 
 function prjCatalogHtml(cat) {
@@ -7419,6 +7434,7 @@ function prjCatalogHtml(cat) {
         <select data-cat-f="group" title="group cards by">${opt("company", "group: company", f.group || "company")}${opt("team", "group: dev team", f.group)}${opt("platform", "group: platform", f.group)}</select>
         <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("risk", "sort: security risk", f.sort)}${opt("logs", "sort: weakest logging", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
         <span class="ci-meta" id="cat-count">${rows.length} of ${list.length}</span>
+        ${prjCatAsOf(cat)}
       </div>
     </div>
     <div id="cat-body">${prjCatalogCards(rows, f)}</div>
@@ -7473,6 +7489,8 @@ async function prjLoad(refresh) {
 
 async function renderProjects() {
   const tok = navToken();
+  if (state.prjTick) clearInterval(state.prjTick);
+  state.prjTick = setInterval(() => { if (!document.querySelector("[data-cat-asof]")) { clearInterval(state.prjTick); state.prjTick = null; return; } prjCatTick(); }, 30000);
   const [list, cat] = await Promise.all([api("/api/projects"), api("/api/projects/catalog")]);
   if (navStale(tok)) return;
   state.prjCatalog = cat;
@@ -7496,9 +7514,13 @@ async function renderProjects() {
     if (e.target.value) prjOpen(e.target.value); else { state.prjSel = null; prjSetMode(false); prjShowCatalog(); }
   });
   document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10); if (isNaN(state.prjDays)) state.prjDays = 30; if (state.prjSel) prjLoad(); });
-  document.getElementById("prj-refresh").addEventListener("click", async () => {
-    if (state.prjSel) prjLoad(true);
-    else { try { state.prjCatalog = await api("/api/projects/catalog?refresh=true"); } catch { /* keep old */ } prjShowCatalog(); }
+  document.getElementById("prj-refresh").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget; btn.classList.add("btn-busy"); btn.disabled = true;
+    const body = document.getElementById("prj-body"); if (body && !state.prjSel) body.classList.add("cat-refreshing");
+    try {
+      if (state.prjSel) await prjLoad(true);
+      else { try { state.prjCatalog = await api("/api/projects/catalog?refresh=true"); } catch { /* keep old */ } prjShowCatalog(); }
+    } finally { btn.classList.remove("btn-busy"); btn.disabled = false; if (body) body.classList.remove("cat-refreshing"); }
   });
   document.getElementById("prj-print").addEventListener("click", () => window.print());
   document.getElementById("prj-back").addEventListener("click", () => { state.prjSel = null; prjSetMode(false); prjShowCatalog(); });
