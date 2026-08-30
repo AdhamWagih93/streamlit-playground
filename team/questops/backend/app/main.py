@@ -34,23 +34,50 @@ async def no_cache_spa(request: Request, call_next):
     return resp
 
 
-def _logo_path() -> Path | None:
-    """Configured company logo, else the bundled demo logo in demo mode."""
+_LOGO_EXT = {".png": "image/png", ".svg": "image/svg+xml", ".jpg": "image/jpeg",
+             ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def _logo_candidates() -> list[Path]:
+    """Where a company logo may live, in priority order: the configured path
+    (absolute, or relative to the questops folder / the container's /app),
+    then the always-mounted branding folder(s), then the demo mark."""
+    here = Path(__file__).resolve()
+    roots = [here.parents[1], here.parents[2] if len(here.parents) > 2 else here.parents[1]]
+    cands: list[Path] = []
     if settings.company_logo:
-        cand = Path(settings.company_logo)
-        if cand.is_file():
-            return cand
+        raw = Path(settings.company_logo)
+        cands.append(raw)
+        if not raw.is_absolute():
+            cands += [r / raw for r in roots]
+    for r in roots:
+        for ext in _LOGO_EXT:
+            cands.append(r / "branding" / f"logo{ext}")
     if settings.demo_mode:
-        demo = _frontend_dir() / "demo-logo.png"
-        if demo.is_file():
-            return demo
+        cands.append(_frontend_dir() / "demo-logo.png")
+    seen, out = set(), []
+    for c in cands:
+        if str(c) not in seen:
+            seen.add(str(c))
+            out.append(c)
+    return out
+
+
+def _logo_path() -> Path | None:
+    for c in _logo_candidates():
+        if c.is_file() and c.suffix.lower() in _LOGO_EXT:
+            return c
     return None
 
 
 @app.get("/api/branding")
 def branding():
+    path = _logo_path()
     return {"company_name": settings.company_name or ("Acme Retail" if settings.demo_mode else ""),
-            "has_logo": _logo_path() is not None}
+            "has_logo": path is not None,
+            "logo": str(path) if path else None,
+            "configured": settings.company_logo or None,
+            "checked": [{"path": str(c), "exists": c.is_file()} for c in _logo_candidates()]}
 
 
 @app.get("/branding/logo")
@@ -59,9 +86,10 @@ def branding_logo():
     from fastapi.responses import FileResponse
     path = _logo_path()
     if path is None:
-        raise HTTPException(404, "no company logo configured")
-    return FileResponse(path, media_type="image/png",
-                        headers={"Cache-Control": "public, max-age=3600"})
+        raise HTTPException(404, "no company logo found — put it at branding/logo.png "
+                                 "(see /api/branding for the paths checked)")
+    return FileResponse(path, media_type=_LOGO_EXT[path.suffix.lower()],
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/health")

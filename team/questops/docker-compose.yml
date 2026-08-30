@@ -90,7 +90,8 @@ services:
       FULL_ACCESS_USERS: ${QO_FULL_ACCESS_USERS:-}
       LOGIN_WITHOUT_PASSWORD: ${QO_LOGIN_WITHOUT_PASSWORD:-false}
       COMPANY_NAME: ${QO_COMPANY_NAME:-}
-      # mount your PNG and point at it, e.g. QO_COMPANY_LOGO=/app/branding/logo.png
+      # optional — ./branding/logo.png is found automatically; set this only
+      # for a logo elsewhere (path INSIDE the container)
       COMPANY_LOGO: ${QO_COMPANY_LOGO:-}
       GIT_TOKEN: ${QO_GIT_TOKEN:-}
       REPOS_WORKDIR: /data/repos
@@ -106,6 +107,8 @@ services:
     # the app retries the DB connection on startup instead (db.init_db)
     volumes:
       - repos:/data/repos
+      # company logo: put it at ./branding/logo.png — picked up automatically
+      - ./branding:/app/branding:ro
       # Reuse the HOST's /etc/hosts so internal hostnames the host resolves
       # via /etc/hosts (jira.corp.local, ado.corp.local, ...) resolve inside
       # the container too — no hardcoded IPs. Safe on podman >=4, where

@@ -186,4 +186,9 @@ database:
 # an extra volume/ConfigMap; sidebar, login card and printed report use it)
 branding:
   companyName: ""
+  # ConfigMap holding your logo under the key "logo.png" — mounted at
+  # /app/branding and picked up automatically:
+  #   kubectl create configmap questops-logo --from-file=logo.png=./logo.png
+  logoConfigMap: ""
+  # only if the logo lives elsewhere inside the container
   logoPath: ""

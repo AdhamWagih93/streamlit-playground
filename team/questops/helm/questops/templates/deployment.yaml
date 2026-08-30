@@ -44,7 +44,17 @@ spec:
           volumeMounts:
             - name: repos
               mountPath: {{ .Values.repositories.workdir }}
+            {{- if .Values.branding.logoConfigMap }}
+            - name: branding
+              mountPath: /app/branding
+              readOnly: true
+            {{- end }}
       volumes:
+        {{- if .Values.branding.logoConfigMap }}
+        - name: branding
+          configMap:
+            name: {{ .Values.branding.logoConfigMap }}
+        {{- end }}
         - name: repos
           {{- if .Values.repositories.persistence.enabled }}
           persistentVolumeClaim:
