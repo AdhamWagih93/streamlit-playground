@@ -45,17 +45,32 @@ def status(user: User = Depends(current_user)):
             "url": settings.ollama_url}
 
 
+class PageContext(BaseModel):
+    page: str = ""
+    title: str = ""
+    summary: str = ""       # short, already-summarized facts from the open page
+
+
 class ChatBody(BaseModel):
     message: str
     history: list[dict] = []  # [{role, content}]
+    context: PageContext | None = None
 
 
 @router.post("/chat")
 def chat(body: ChatBody, user: User = Depends(current_user), db: Session = Depends(get_db)):
     ctx = json.dumps(_context(user, db), default=str)
+    system = f"{CHAT_SYSTEM}\n\nLive context:\n{ctx}"
+    pc = body.context
+    if pc and (pc.summary or "").strip():
+        summary = pc.summary.strip()[:6000]   # hard cap — the page already condensed it
+        system += (f"\n\nThe user currently has the QuestOps page \"{pc.title or pc.page}\" open. "
+                   f"Everything below is the summarized, extracted state of that page — treat it "
+                   f"as the ground truth for questions about it and quote its numbers precisely:\n"
+                   f"{summary}")
     messages = body.history[-10:] + [{"role": "user", "content": body.message}]
-    reply = ollama.safe_chat(messages, system=f"{CHAT_SYSTEM}\n\nLive context:\n{ctx}")
-    return {"reply": reply}
+    reply = ollama.safe_chat(messages, system=system)
+    return {"reply": reply, "context_used": bool(pc and (pc.summary or "").strip())}
 
 
 def _fallback_briefing(ctx: dict) -> str:

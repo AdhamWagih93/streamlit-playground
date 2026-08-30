@@ -643,7 +643,7 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
              "commitid", "commitID", "CommitId", "commit"]
     d_src = ["startdate", "enddate", "application", "environment", "status",
              "codeversion", "testflag", "requester", "Requester", "triggeredby",
-             "approver", "Approver", "technology"]
+             "approver", "Approver", "technology", "reason", "Reason"]
     r_src = ["releasedate", "application", "status", "codeversion",
              "commitauthor", "RLM", "RLM_STATUS"]
 
@@ -698,10 +698,14 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
         e = _entry(b.get("real") or {}, _rel)
         if e:
             board["releases"][b["key"]] = e
+    def _reason(s):
+        return (s.get("reason") or s.get("Reason") or "").strip()[:160]
+
     def _dep(s):
         return {"when": (s.get("startdate") or s.get("enddate") or "")[:16].replace("T", " "),
                 "status": s.get("status") or "",
                 "version": s.get("codeversion") or "",
+                "reason": _reason(s),
                 "who": _user_display(s.get("requester") or s.get("Requester")
                                      or s.get("triggeredby") or "")}
 
@@ -765,7 +769,8 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
                        "who": _user_display(s.get("requester") or s.get("Requester")
                                             or s.get("triggeredby") or ""),
                        "test": (s.get("testflag") or "Normal").strip().lower() != "normal",
-                       "detail": s.get("technology") or ""})
+                       "reason": _reason(s),
+                       "detail": " · ".join(x for x in (_reason(s), s.get("technology")) if x)})
     for h in (releases.get("hits") or {}).get("hits", []):
         s = h.get("_source") or {}
         label, rlm_ok = _rlm(s)
@@ -780,6 +785,19 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
     totals = {k: (((v.get("hits") or {}).get("total") or {}).get("value", 0))
               for k, v in (("builds", builds), ("deploys", deploys),
                            ("releases", releases))}
+    reasons = {"all": {}, "prd": {}, "failed": {}}
+    for h in d_hits:
+        s_ = h.get("_source") or {}
+        if (s_.get("testflag") or "Normal").strip().lower() != "normal":
+            continue
+        rs = _reason(s_) or "(no reason given)"
+        reasons["all"][rs] = reasons["all"].get(rs, 0) + 1
+        if _PRD.search(s_.get("environment") or ""):
+            reasons["prd"][rs] = reasons["prd"].get(rs, 0) + 1
+        if _BAD.search(s_.get("status") or ""):
+            reasons["failed"][rs] = reasons["failed"].get(rs, 0) + 1
+    reasons_out = {k: sorted(({"key": r, "count": n} for r, n in v.items()),
+                             key=lambda x: -x["count"])[:12] for k, v in reasons.items()}
     build_versions: dict = {}
     for h in b_hits:
         s_ = h.get("_source") or {}
@@ -789,7 +807,7 @@ def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
         if cid and ver and cid not in build_versions:
             build_versions[cid] = ver
     return {"board": board, "events": events, "totals": totals,
-            "build_versions": build_versions}
+            "build_versions": build_versions, "reasons": reasons_out}
 
 
 # ---------------------------------------------------------------- auto tests
@@ -919,6 +937,115 @@ def _sec_usage(name: str, days: int) -> dict:
         except Exception:  # noqa: BLE001
             pass
     return out
+
+
+# ---------------------------------------------------------------- members
+def _sec_members(inv: dict, out: dict) -> dict:
+    """Who is actually active on this project vs. who the involved teams'
+    LDAP groups say should be. Every identity seen in the window (commits,
+    Jira assignees/finishers/changes, cicd stage users, test requesters) is
+    classified: in one of the project's teams · active but in ANOTHER
+    inventory team · in LDAP but in no team group · not in LDAP at all."""
+    from . import approvers as ap, inventory
+    from ..auth import ldap_user_exists
+    teams = {}
+    for role, t in (inv.get("teams") or {}).items():
+        if t:
+            teams.setdefault(t, []).append(role)
+    rosters: dict = {}
+    for t in teams:
+        l = ap._ldap_lookup(t)
+        rosters[t] = {"found": l["found"], "group": l["group"], "members": l["members"],
+                      "keys": ap._member_keys(l["members"]) if l["found"] else set()}
+    # ---- active identities in the window --------------------------------
+    active: dict = {}
+
+    def seen(name, src, n=1):
+        disp = _user_display(name)
+        if not disp or disp.startswith("("):
+            return
+        k = ap._ukey(disp)
+        slot = active.setdefault(k, {"key": disp, "activity": 0, "sources": set()})
+        slot["activity"] += n or 1
+        slot["sources"].add(src)
+    for a in (out.get("commits") or {}).get("authors") or []:
+        seen(a["key"], "commits", a.get("count"))
+    j = out.get("jira") or {}
+    for a in j.get("by_assignee") or []:
+        seen(a["key"], "jira", a.get("count"))
+    for a in (j.get("done") or {}).get("by_assignee") or []:
+        seen(a["key"], "jira", a.get("count"))
+    for a in (out.get("jira_changes") or {}).get("authors") or []:
+        seen(a["key"], "jira", a.get("count"))
+    tu = ((out.get("cicd") or {}).get("board") or {}).get("top_users") or {}
+    for lst in (tu.get("build") or [], tu.get("release") or [],
+                *(tu.get("deploys") or {}).values()):
+        for u in lst:
+            seen(u["key"], "cicd", u.get("count"))
+    for a in (out.get("autotest") or {}).get("by_requester") or []:
+        seen(a["key"], "tests", a.get("count"))
+    # ---- other inventory teams (for "active elsewhere") ------------------
+    others: dict = {}
+    try:
+        for p in inventory.parse().get("projects") or []:
+            for t in (p.get("teams") or {}).values():
+                if t and t not in teams and t not in others and len(others) < 30:
+                    l = ap._ldap_lookup(t)
+                    others[t] = ap._member_keys(l["members"]) if l["found"] else set()
+    except Exception:  # noqa: BLE001
+        pass
+    # ---- one person, one row: identities that resolve to the SAME roster
+    # member ("alice" from commits, "Alice Nasr" from Jira) merge under the
+    # member's display name; unmatched identities keep their own spelling
+    member_index: list = []
+    for r in rosters.values():
+        for m in r["members"]:
+            member_index.append((m.get("display_name") or m.get("username") or "", ap._member_keys([m])))
+    merged: dict = {}
+    for k, a in list(active.items()):
+        canon = next((nm for nm, mk in member_index if k in mk), None)
+        ck = ap._ukey(canon) if canon else k
+        slot = merged.setdefault(ck, {"key": canon or a["key"], "activity": 0, "sources": set(),
+                                      "aliases": set()})
+        slot["activity"] += a["activity"]
+        slot["sources"] |= a["sources"]
+        if a["key"] != slot["key"]:
+            slot["aliases"].add(a["key"])
+    active = merged
+    contributors = []
+    for k, a in active.items():
+        in_teams = [t for t, r in rosters.items() if k in r["keys"]]
+        row = {"key": a["key"], "activity": a["activity"],
+               "sources": sorted(a["sources"]), "aliases": sorted(a.get("aliases") or [])}
+        if in_teams:
+            row.update(status="team", team=in_teams[0])
+        else:
+            elsewhere = next((t for t, keys in others.items() if k in keys), None)
+            if elsewhere:
+                row.update(status="elsewhere", team=elsewhere)
+            else:
+                ex = ldap_user_exists(a["key"])
+                row.update(status="ldap_only" if ex else "not_in_ldap" if ex is False else "unknown")
+        contributors.append(row)
+    contributors.sort(key=lambda r: ({"team": 0, "elsewhere": 1, "ldap_only": 2,
+                                      "not_in_ldap": 3, "unknown": 4}[r["status"]], -r["activity"]))
+    # ---- rosters with activity flags --------------------------------------
+    teams_out = []
+    for t, r in rosters.items():
+        mem = []
+        for m in r["members"]:
+            mk = ap._member_keys([m])
+            hit = next((a for k, a in active.items() if k in mk), None)
+            mem.append({"name": m.get("display_name") or m.get("username") or "",
+                        "username": m.get("username") or "",
+                        "active": bool(hit), "activity": hit["activity"] if hit else 0})
+        mem.sort(key=lambda x: (-x["activity"], x["name"]))
+        teams_out.append({"team": t, "roles": teams[t], "group": r["group"],
+                          "found": r["found"], "members": mem,
+                          "active": sum(1 for m in mem if m["active"])})
+    counts = {st: sum(1 for c in contributors if c["status"] == st)
+              for st in ("team", "elsewhere", "ldap_only", "not_in_ldap", "unknown")}
+    return {"teams": teams_out, "contributors": contributors, "summary": counts}
 
 
 # ---------------------------------------------------------------- DORA
@@ -1226,7 +1353,7 @@ def _sec_logging(name: str) -> dict:
 def _demo_report(name: str, days: int) -> dict:
     import hashlib
     seed = int(hashlib.sha1(name.encode()).hexdigest()[:6], 16)
-    authors = [("alice", 34), ("bob", 21), ("carol", 12), ("dave", 6)]
+    authors = [("alice", 34), ("bob", 21), ("carol", 12), ("dave", 6), ("ext.contractor", 3)]
     def _stack(total_, i):
         names = [a for a, _ in authors]
         parts = {}
@@ -1431,6 +1558,8 @@ def _demo_report(name: str, days: int) -> dict:
         "deploys": {a: {e: _ok({"when": f"2026-08-2{2 + (i + j) % 4} 1{j}:30",
                                 "status": "SUCCESS" if (i + j) % 5 else "FAILURE",
                                 "version": f"1.4.{max(1, i + (1 if e != 'prd' else 0))}",
+                                "reason": ["Scheduled release", "Hotfix: payment retries",
+                                           "Config change", "Rollback after incident"][(i + j) % 4],
                                 "who": ["alice", "bob"][j % 2]},
                                f"1.4.{max(0, i - 1)}")
                         for j, e in enumerate(envs)}
@@ -1445,7 +1574,9 @@ def _demo_report(name: str, days: int) -> dict:
              "detail": "develop · Docker"},
             {"ts": f"2026-08-25T14:2{i}", "type": "deploy", "app": a, "env": "prd" if i == 0 else "dev",
              "status": "SUCCESS", "version": f"1.4.{i + 1}",
-             "who": "alice", "test": i == 2, "detail": "Docker"},
+             "reason": ["Scheduled release", "Feature rollout", "Config change"][i],
+             "who": "alice", "test": i == 2,
+             "detail": ["Scheduled release", "Feature rollout", "Config change"][i] + " · Docker"},
         ]
     cicd_events += [
         {"ts": "2026-08-24T09:00", "type": "build", "app": apps[0], "env": "",
@@ -1453,10 +1584,10 @@ def _demo_report(name: str, days: int) -> dict:
          "detail": "develop · Docker"},
         {"ts": "2026-08-23T10:00", "type": "deploy", "app": apps[1] if len(apps) > 1 else apps[0],
          "env": "prd", "status": "FAILURE", "version": "1.4.0", "who": "bob",
-         "test": False, "detail": "Docker"},
+         "test": False, "reason": "Hotfix: payment retries", "detail": "Hotfix: payment retries · Docker"},
         {"ts": "2026-08-23T12:30", "type": "deploy", "app": apps[1] if len(apps) > 1 else apps[0],
          "env": "prd", "status": "SUCCESS", "version": "1.4.0", "who": "bob",
-         "test": False, "detail": "Docker"},
+         "test": False, "reason": "Hotfix: payment retries", "detail": "Hotfix: payment retries · Docker"},
     ]
     cicd_events.append({"ts": "2026-08-24T15:00", "type": "release", "app": apps[0],
                         "env": "", "status": "SUCCESS", "version": "1.4.1",
@@ -1469,6 +1600,10 @@ def _demo_report(name: str, days: int) -> dict:
     }
     build_versions = {"a1b2c3d0e4f5a6b7c8": "1.4.2", "a1b2c3d2e4f5a6b7c8": "1.4.3"}
     cicd = {"board": board, "events": cicd_events, "build_versions": build_versions,
+            "reasons": {"all": [{"key": "Scheduled release", "count": 6}, {"key": "Hotfix: payment retries", "count": 4},
+                                {"key": "Config change", "count": 3}, {"key": "Rollback after incident", "count": 1}],
+                        "prd": [{"key": "Scheduled release", "count": 3}, {"key": "Hotfix: payment retries", "count": 2}],
+                        "failed": [{"key": "Hotfix: payment retries", "count": 2}]},
             "totals": {"builds": 18 + seed % 9, "deploys": 11 + seed % 7,
                        "releases": 3 + seed % 3}}
     envs_d = inv.get("envs") or ["dev", "prd"]
@@ -1476,7 +1611,7 @@ def _demo_report(name: str, days: int) -> dict:
         "total": 22 + seed % 9, "sampled": 22 + seed % 9,
         "by_env": [{"key": e, "count": 12 - 3 * i} for i, e in enumerate(envs_d[:3])],
         "by_requester": [{"key": "carol", "count": 11}, {"key": "alice", "count": 7},
-                         {"key": "bob", "count": 4}],
+                         {"key": "bob", "count": 4}, {"key": "grace", "count": 3}],
         "by_technology": [{"key": "Selenium", "count": 14}, {"key": "Postman", "count": 8}],
         "per_period": [{"day": b["day"], "count": (seed + i * 5) % 3 if i % 2 else 0}
                        for i, b in enumerate(per_day)],
@@ -1581,6 +1716,11 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         except Exception:  # noqa: BLE001 — LDAP trouble must not kill the section
             pass
     out["events"] = _assemble_events(out)
+    if inv:
+        try:
+            out["members"] = _sec_members(inv, out)
+        except Exception as exc:  # noqa: BLE001
+            out["members"] = {"error": str(exc)[:200]}
     try:
         out["dora"] = _dora(out)
     except Exception as exc:  # noqa: BLE001

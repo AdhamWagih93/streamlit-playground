@@ -33,6 +33,52 @@ def role_for(username: str) -> str:
     return "member" if u in settings.member_users else "approver"
 
 
+_USER_EXISTS: dict = {}
+
+
+def ldap_user_exists(name: str) -> bool | None:
+    """Does this identity exist in LDAP at all? True/False, or None when it
+    can't be checked (no LDAP configured / lookup failed). Tries the login
+    attribute, then display-name shapes (Alice_Nasr → 'Alice Nasr'). Cached
+    for an hour per identity. Demo mode answers from the demo directory."""
+    import time
+    key = (name or "").strip().lower()
+    if not key:
+        return None
+    hit = _USER_EXISTS.get(key)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    if settings.demo_mode:
+        known = {u.lower() for u in DEMO_USERS}
+        for members in _DEMO_LDAP_GROUPS.values():
+            for m in members:
+                known.add(m.lower()); known.add(m.split()[0].lower())
+                known.add(m.lower().replace(" ", "_")); known.add(m.lower().replace(" ", "."))
+        res = key in known
+    elif not (settings.ldap_url and settings.ldap_bind_dn and settings.ldap_base_dn):
+        res = None
+    else:
+        try:
+            import ldap3
+            esc = ldap3.utils.conv.escape_filter_chars
+            variants = {name, name.replace("_", " "), name.replace(".", " "), name.replace("_", ".")}
+            parts = [f"({settings.ldap_user_attr}={esc(v)})" for v in variants]
+            parts += [f"(displayName={esc(v)})" for v in variants] + [f"(cn={esc(v)})" for v in variants]
+            server = ldap3.Server(settings.ldap_url, get_info=ldap3.NONE)
+            conn = ldap3.Connection(server, user=settings.ldap_bind_dn,
+                                    password=settings.ldap_bind_password, auto_bind=True)
+            try:
+                conn.search(settings.ldap_base_dn, "(|" + "".join(parts) + ")",
+                            attributes=["cn"], size_limit=1)
+                res = bool(conn.entries)
+            finally:
+                conn.unbind()
+        except Exception:  # noqa: BLE001 — unknown, not false
+            res = None
+    _USER_EXISTS[key] = (time.time(), res)
+    return res
+
+
 def pages_for(username: str) -> tuple[bool, list[str] | None, list[str]]:
     """(restricted?, allowed pages or None=all, pages hidden from this user).
     Restricted users see ONLY restricted_pages; FULL_ACCESS_USERS see every

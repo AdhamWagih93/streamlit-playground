@@ -5788,7 +5788,7 @@ function prjSdlcHtml(d) {
     if (/fail|abort|error|cancel/i.test(st || "")) return '<span class="chip chip-red prj-sdlc-st" title="' + esc(st) + '">✗</span>';
     return st ? '<span class="chip chip-amber prj-sdlc-st" title="' + esc(st) + '">…</span>' : "";
   };
-  const runTip = (x, kind) => `${esc(kind)} ${esc(x.version || "")} · ${esc(x.when || "")}${x.who ? " · by " + esc(x.who) : x.author ? " · by " + esc(x.author) : ""}${x.branch ? " · ⎇ " + esc(x.branch) : ""}${x.rlm ? " · " + esc(x.rlm) : ""}`;
+  const runTip = (x, kind) => `${esc(kind)} ${esc(x.version || "")} · ${esc(x.when || "")}${x.who ? " · by " + esc(x.who) : x.author ? " · by " + esc(x.author) : ""}${x.reason ? " · reason: " + esc(x.reason) : ""}${x.branch ? " · ⎇ " + esc(x.branch) : ""}${x.rlm ? " · " + esc(x.rlm) : ""}`;
   const cell = (s, kind) => {
     if (!s) return '<td class="prj-sdlc-none">—</td>';
     const rlm = kind === "release" && s.rlm_label
@@ -5843,7 +5843,26 @@ function prjSdlcHtml(d) {
         })()}
       </table></div>
       ${(() => {
+        const rs = cc.reasons || {};
+        const chips = (list, cls) => (list || []).slice(0, 6).map((r) =>
+          `<span class="chip ${cls || ""}" title="${logExact(r.count)} deployment(s)">${esc(r.key)} · ${logInt(r.count)}</span>`).join("");
+        return (rs.all || []).length ? `
+        <div class="inv-chips" style="margin:6px 0 2px"><span class="ci-meta">why we deploy (${prjWin(d)}):</span>${chips(rs.all)}</div>
+        ${(rs.prd || []).length ? `<div class="inv-chips" style="margin:2px 0"><span class="ci-meta">production reasons:</span>${chips(rs.prd, "chip-amber")}</div>` : ""}` : "";
+      })()}
+      ${(() => {
         const out = [];
+        const rs = cc.reasons || {};
+        const tot = (rs.all || []).reduce((n, r) => n + r.count, 0);
+        if ((rs.all || []).length && tot) {
+          const top = rs.all[0];
+          out.push(`most common deployment reason: <b>${esc(top.key)}</b> (${pct(top.count, tot)}%)`);
+          const hot = (rs.all || []).filter((r) => /hotfix|rollback|incident|emergency|urgent/i.test(r.key)).reduce((n, r) => n + r.count, 0);
+          if (hot) out.push(`<b>${pct(hot, tot)}%</b> of deployments were unplanned (hotfix / rollback / incident reasons)`);
+          const none = (rs.all || []).find((r) => r.key === "(no reason given)");
+          if (none && pct(none.count, tot) >= 20) out.push(`<b>${pct(none.count, tot)}%</b> of deployments carry no reason — worth enforcing`);
+          if ((rs.failed || []).length) out.push(`failed deployments were mostly: <b>${esc(rs.failed[0].key)}</b> (${rs.failed[0].count})`);
+        }
         const failing = apps.filter((a) => {
           const b = (board.builds || {})[a];
           return b && b.status && !/succ/i.test(b.status);
@@ -5902,8 +5921,9 @@ function prjEventsBody(events, f) {
       ${e.version ? `<span class="chip ${e.type === "ecommit" && !/^[0-9a-f]{7,}$/.test(e.version) ? "chip-green" : ""}" title="${e.type === "commit" ? "commit id" : e.type === "ecommit" ? "built version (via ef-cicd-builds commit id) — searchable" : "version"}">${esc(e.version)}</span>` : ""}
       ${e.who ? `<span class="chip chip-cyan">${esc(e.who)}</span>` : ""}
       ${e.added != null || e.deleted != null ? prjLines(e.added, e.deleted, true) : ""}
+      ${e.reason ? `<span class="chip prj-reason" title="deployment reason">${esc(e.reason.slice(0, 40))}</span>` : ""}
       ${e.test ? '<span class="chip chip-amber" title="testflag ≠ Normal — test/dry-run row">test</span>' : ""}
-      <span class="ci-meta prj-ev-detail" ${e.tip ? `title="${esc(e.tip)}"` : ""}>${esc(e.detail || "")}</span>
+      <span class="ci-meta prj-ev-detail" ${e.tip ? `title="${esc(e.tip)}"` : ""}>${esc(e.reason && e.detail ? e.detail.replace(e.reason, "").replace(/^ · /, "") : e.detail || "")}</span>
     </div>`;
   }).join("") + (more > 0
     ? `<div class="prj-ev-more"><button class="btn btn-sm btn-ghost" data-prj-ev-more>⬇ show ${Math.min(more, 300)} more <span class="ci-meta">(${logInt(evs.length)} of ${logInt(all.length)} shown)</span></button></div>`
@@ -5972,6 +5992,40 @@ function prjJiraWorkload(rows) {
       <span class="chip chip-green" title="completed">✅ ${w.done}</span>
     </div>`;
   }).join("") + '<div class="kpi-note">colored = open by priority · green = completed in the window</div>';
+}
+
+// team rosters (LDAP) vs. who is actually active on the project — subtle dots
+const PRJ_MEM = {
+  team: ["●", "mem-team", (c) => `in ${c.team}`],
+  elsewhere: ["◐", "mem-else", (c) => `active here but belongs to ${c.team} (another inventory team)`],
+  ldap_only: ["◔", "mem-ldap", () => "in LDAP, but in none of the inventory team groups"],
+  not_in_ldap: ["✕", "mem-none", () => "not found in LDAP at all"],
+  unknown: ["?", "mem-unk", () => "LDAP not configured / lookup failed"],
+};
+function prjMembersHtml(m) {
+  if (!m) return "";
+  if (m.error) return prjErr(m, "team membership (LDAP)");
+  const teams = m.teams || [], con = m.contributors || [], sm = m.summary || {};
+  if (!teams.length && !con.length) return "";
+  const roster = teams.map((t) => `
+    <div class="pgv-card"><div class="pgv-title">🛡 ${esc(t.team)} <span class="ci-meta">· ${esc(t.roles.join("/"))}${t.found ? ` · ${t.active}/${t.members.length} active here` : " · LDAP group not resolved"}</span></div>
+      ${t.found ? `<div class="mem-chips">${t.members.map((x) => `<span class="mem ${x.active ? "mem-team" : "mem-idle"}" title="${esc(x.name)}${x.username ? " (" + esc(x.username) + ")" : ""} — ${x.active ? `${x.activity} activity item(s) on this project in the window` : "member of the group, no activity on this project in the window"}"><i>${x.active ? "●" : "○"}</i>${esc(x.name)}</span>`).join("")}</div>`
+        : `<div class="empty">group ${esc(t.group)} could not be resolved</div>`}
+    </div>`).join("");
+  const outside = con.filter((c) => c.status !== "team");
+  const outsideHtml = outside.length ? `
+    <div class="pgv-card"><div class="pgv-title">👤 active on the project, outside its teams <span class="ci-meta">· ${outside.length}</span></div>
+      <div class="mem-chips">${outside.map((c) => { const [g, cls, tip] = PRJ_MEM[c.status] || PRJ_MEM.unknown;
+        return `<span class="mem ${cls}" title="${esc(c.key)} — ${esc(tip(c))} · ${c.activity} item(s): ${esc(c.sources.join(", "))}"><i>${g}</i>${esc(c.key)}${c.status === "elsewhere" ? `<small>${esc(c.team)}</small>` : ""}</span>`; }).join("")}</div>
+    </div>` : "";
+  const legend = `<div class="kpi-note mem-legend"><i class="mem-team">●</i> active team member · <i class="mem-idle">○</i> in team, no activity · <i class="mem-else">◐</i> active, belongs elsewhere · <i class="mem-ldap">◔</i> in LDAP, no team · <i class="mem-none">✕</i> not in LDAP</div>`;
+  const ins = [];
+  const idle = teams.flatMap((t) => t.found ? t.members.filter((x) => !x.active).map((x) => x.name) : []);
+  if (idle.length) ins.push(`<b>${idle.length}</b> team member(s) show no activity on this project: ${esc(idle.slice(0, 6).join(", "))}${idle.length > 6 ? "…" : ""}`);
+  if (sm.elsewhere) ins.push(`<b>${sm.elsewhere}</b> active contributor(s) belong to other teams — ${esc(con.filter((c) => c.status === "elsewhere").map((c) => `${c.key} (${c.team})`).join(", "))}`);
+  if (sm.not_in_ldap) ins.push(`<b>${sm.not_in_ldap}</b> active identity(ies) not found in LDAP: ${esc(con.filter((c) => c.status === "not_in_ldap").map((c) => c.key).join(", "))} — leavers, service accounts or unmatched names`);
+  if (sm.ldap_only) ins.push(`<b>${sm.ldap_only}</b> in LDAP but in no inventory team group: ${esc(con.filter((c) => c.status === "ldap_only").map((c) => c.key).join(", "))}`);
+  return `<div class="prj-grid" style="margin-top:6px">${roster}${outsideHtml}</div>${legend}${prjInsights(ins)}`;
 }
 
 function prjBodyHtml(d) {
@@ -6265,6 +6319,7 @@ function prjBodyHtml(d) {
           <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>
         <div class="pgv-card"><div class="pgv-title">🎫 open tickets per assignee</div>${prjBar(jira.by_assignee)}</div>
       </div>
+      ${prjMembersHtml(d.members)}
       ${(() => {
         const out = [];
         const au = com.authors || [];
@@ -6809,13 +6864,74 @@ async function renderProfile() {
 $("#quick-add").addEventListener("click", () => { if (state.me) openQuickAdd(); });
 
 /* ================= AI DRAWER ================= */
+// ---- page context: a SHORT, conclusive digest of whatever page is open ----
+// Built from the rendered page itself (titles, stat tiles, DORA tiles,
+// section summaries, insight lines, attention rows, header chips) so every
+// page — current and future — feeds the copilot without page-specific code.
+const AI_CTX_MAX = 3600;
+function aiPageContext() {
+  const v = document.getElementById("view");
+  if (!v) return { page: state.view || "", title: "", summary: "" };
+  const txt = (el) => ((el && el.textContent) || "").replace(/\s+/g, " ").trim();
+  const lines = [];
+  const seen = new Set();
+  const add = (l, max = 160) => {
+    let t = l.replace(/\s+/g, " ").trim();
+    if (t.length > max) t = t.slice(0, max - 1) + "…";
+    if (t && t.length > 2 && !seen.has(t)) { seen.add(t); lines.push(t); }
+  };
+  const title = txt(v.querySelector(".prj-name-main") || v.querySelector(".view-head h1")) || (state.view || "page");
+  const sub = txt(v.querySelector(".prj-name .ci-meta") || v.querySelector(".view-head .sub"));
+  if (sub) add(`context: ${sub}`);
+  // header chips (teams, envs, platform …)
+  const chips = [...v.querySelectorAll(".inv-chips")].slice(0, 1).flatMap((c) => [...c.querySelectorAll(".chip")]).map(txt).filter(Boolean);
+  if (chips.length) add(`facts: ${chips.slice(0, 12).join(" | ")}`);
+  // stat tiles + DORA tiles
+  const tiles = [...v.querySelectorAll(".stat-tile")].map((t) => {
+    const label = txt(t.querySelector(":scope > span")), b = t.querySelector("b");
+    const delta = b ? txt(b.querySelector(".prj-delta")) : "";
+    const val = b ? txt(b).replace(delta, "").trim() : "";
+    return label && val ? `${label}=${val}${delta ? ` (${delta})` : ""}` : "";
+  }).filter(Boolean);
+  if (tiles.length) add(`metrics: ${tiles.join("; ")}`);
+  const dora = [...v.querySelectorAll(".dora-tile")].map((t) => `${txt(t.querySelector(".dora-label"))}=${txt(t.querySelector(".dora-val"))} (${txt(t.querySelector(".dora-rating"))}${txt(t.querySelector(".dora-delta")) ? ", " + txt(t.querySelector(".dora-delta")) : ""})`);
+  if (dora.length) add(`DORA: ${dora.join("; ")}`);
+  // insight lines first (already analysis), then per-app board rows, then
+  // section headlines (they carry the counts), then attention rows
+  [...v.querySelectorAll(".prj-insights li")].forEach((li) => add(`insight: ${txt(li)}`));
+  [...v.querySelectorAll(".prj-sdlc tbody tr")].slice(0, 12).forEach((tr) => add(`row: ${[...tr.children].map(txt).filter(Boolean).join(" | ")}`, 130));
+  [...v.querySelectorAll(".ci-row .ci-job, .focus-title")].slice(0, 12).forEach((r) => add(`attention: ${txt(r)}`, 120));
+  // headlines carry the counts; their explanatory tails are dropped
+  [...v.querySelectorAll("details > summary")].forEach((sm) => add(`section: ${txt(sm).split(" — ")[0].split(" · ").slice(0, 3).join(" · ")}`, 90));
+  let summary = "";
+  for (const l of lines) {
+    if (summary.length + l.length + 1 > AI_CTX_MAX) break;
+    summary += (summary ? "\n" : "") + l;
+  }
+  return { page: state.view || "", title, summary, facts: lines.length };
+}
+
+function aiRefreshContext() {
+  const bar = document.getElementById("ai-ctx");
+  if (!bar) return null;
+  const ctx = aiPageContext();
+  $("#ai-ctx-name").textContent = ctx.title || ctx.page || "this page";
+  $("#ai-ctx-n").textContent = ctx.summary ? `· ${ctx.facts} fact(s), ${ctx.summary.length} chars` : "· nothing extracted yet";
+  const pre = $("#ai-ctx-preview");
+  if (pre) pre.textContent = ctx.summary || "(empty — open a page with content)";
+  return ctx;
+}
+
 $("#ai-toggle").addEventListener("click", async () => {
   $("#ai-drawer").classList.toggle("open");
+  aiRefreshContext();
   try {
     const s = await api("/api/ai/status");
     $("#ai-model").textContent = s.available ? s.model : `${s.model} · offline`;
   } catch { /* ignore */ }
 });
+$("#ai-ctx-peek").addEventListener("click", () => { aiRefreshContext(); $("#ai-ctx-preview").classList.toggle("hidden"); });
+window.addEventListener("hashchange", () => setTimeout(aiRefreshContext, 1500));
 $("#ai-close").addEventListener("click", () => $("#ai-drawer").classList.remove("open"));
 
 $("#ai-form").addEventListener("submit", async (e) => {
@@ -6829,8 +6945,15 @@ $("#ai-form").addEventListener("submit", async (e) => {
   log.insertAdjacentHTML("beforeend", `<div class="ai-msg ai-bot" id="ai-pending">✦ thinking…</div>`);
   log.scrollTop = log.scrollHeight;
   try {
+    const usePage = $("#ai-ctx-on") && $("#ai-ctx-on").checked;
+    const ctx = usePage ? aiRefreshContext() : null;
     const data = await api("/api/ai/chat",
-      { method: "POST", body: { message: msg, history: state.aiHistory } });
+      { method: "POST", body: { message: msg, history: state.aiHistory,
+        context: ctx && ctx.summary ? { page: ctx.page, title: ctx.title, summary: ctx.summary } : null } });
+    if (data.context_used) {
+      const last = [...log.querySelectorAll(".ai-user")].pop();
+      if (last) last.insertAdjacentHTML("beforeend", `<span class="ai-ctx-tag" title="a summary of ${esc(ctx.title)} was attached">📎 ${esc(ctx.title)}</span>`);
+    }
     state.aiHistory.push({ role: "user", content: msg },
                          { role: "assistant", content: data.reply });
     $("#ai-pending").outerHTML = `<div class="ai-msg ai-bot">${md(data.reply)}</div>`;

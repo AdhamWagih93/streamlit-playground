@@ -94,9 +94,17 @@
         <span>✦ Copilot <small id="ai-model"></small></span>
         <button id="ai-close" class="btn btn-ghost">✕</button>
       </div>
+      <div id="ai-ctx" class="ai-ctx">
+        <div class="ai-ctx-row">
+          <span class="ai-ctx-title">📎 <b id="ai-ctx-name">this page</b> <span id="ai-ctx-n" class="ci-meta"></span></span>
+          <label class="ai-ctx-toggle" title="send a summary of the open page with every question"><input type="checkbox" id="ai-ctx-on" checked> use page</label>
+          <button type="button" id="ai-ctx-peek" class="btn btn-ghost btn-sm" title="show what the copilot will see">👁</button>
+        </div>
+        <pre id="ai-ctx-preview" class="ai-ctx-preview hidden"></pre>
+      </div>
       <div id="ai-log" class="ai-log">
-        <div class="ai-msg ai-bot">Ask me anything about your tickets or builds — I can see the
-          live state.</div>
+        <div class="ai-msg ai-bot">Ask me anything — I can see the live state <b>and a summary of the
+          page you have open</b>, so questions like "what should worry me here?" work.</div>
       </div>
       <form id="ai-form" class="ai-form">
         <input id="ai-input" placeholder="e.g. what should I tackle first?" autocomplete="off">

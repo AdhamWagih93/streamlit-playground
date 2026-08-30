@@ -1749,3 +1749,29 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-size { font: 700 8.5px var(--mono); font-style: normal; padding: 0 4px; border-radius: 6px;
   border: 1px solid var(--line); color: var(--faint); margin-left: 2px; vertical-align: 1px; }
 .prj-size-l, .prj-size-xl { color: #c0841c; border-color: rgba(192,132,28,.5); }
+
+/* copilot page-context bar */
+.ai-ctx { border-bottom: 1px solid var(--line); padding: 8px 12px; background: rgba(20,151,179,.05); }
+.ai-ctx-row { display: flex; align-items: center; gap: 8px; font: 500 11.5px var(--body); }
+.ai-ctx-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-ctx-toggle { font: 500 10.5px var(--mono); color: var(--faint); display: flex; gap: 4px; align-items: center; cursor: pointer; }
+.ai-ctx-preview { margin: 8px 0 0; max-height: 180px; overflow: auto; font: 400 10px var(--mono);
+  color: var(--faint); white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 8px; }
+.ai-ctx-tag { display: block; margin-top: 4px; font: 500 9.5px var(--mono); opacity: .7; }
+
+/* team roster vs activity — quiet dots, meaning in the tooltip */
+.mem-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.mem { font: 500 11px var(--body); color: var(--text); padding: 2px 8px 2px 6px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); cursor: help; white-space: nowrap; }
+.mem i { font-style: normal; margin-right: 5px; }
+.mem small { font: 500 9px var(--mono); color: var(--faint); margin-left: 5px; }
+.mem-team i, i.mem-team { color: #43c884; }
+.mem-idle { color: var(--faint); }  .mem-idle i, i.mem-idle { color: var(--faint); }
+.mem-else i, i.mem-else { color: #c0841c; }
+.mem-ldap i, i.mem-ldap { color: #5b8def; }
+.mem-none i, i.mem-none { color: #ef5f66; }
+.mem-unk i, i.mem-unk { color: var(--faint); }
+.mem-legend i { font-style: normal; }
+
+.prj-reason { font-style: italic; }
