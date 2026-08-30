@@ -5714,6 +5714,7 @@ const PRJ_EV = {  // event-log types: icon, label, chip class
   build: ["⚙", "build", ""],
   deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", "chip-violet"],
   jira: ["🎫", "jira", "chip-amber"], change: ["📝", "change", ""],
+  autotest: ["🧪", "auto test", "chip-cyan"],
 };
 
 function prjStatusChip(st) {
@@ -5974,6 +5975,8 @@ function prjBodyHtml(d) {
       ${tile((jira.done || {}).total != null ? `${logInt(jira.done.total)}${prjDelta(jira.done.total, (d.prev || {}).resolved, d)}` : "—", `resolved · ${prjWin(d)}`, "pct-good")}
       ${tile(lg.found ? lg.score : "—", "log score", lg.found ? logScoreClass(lg.score) : "")}
       ${tile(worstSec, "crit+high vulns", worstSec ? "pct-bad" : "pct-good")}
+      ${(d.autotest || {}).total != null ? tile(logInt(d.autotest.total), `auto tests · ${prjWin(d)}`) : ""}
+      ${(d.usage || {}).total_minutes != null ? tile(`${logInt(d.usage.total_minutes)}${prjDelta(d.usage.total_minutes, d.usage.prev_total_minutes, d)}`, `platform min · ${prjWin(d)}`) : ""}
     </div>
     ${prjDoraHtml(d.dora, d)}
     ${(() => {
@@ -6299,8 +6302,77 @@ function prjBodyHtml(d) {
       <div class="kpi-note">full drill-down (indices, samples, retention…) lives in the <a href="#/logging">Logging</a> page · analyzed ${esc((lg.analyzed_at || "").slice(0, 16).replace("T", " "))}</div>`}
     </details>`;
 
+  // ---- auto test runs (ef-autotest) ------------------------------------
+  const at = d.autotest || {};
+  const autotest = at.error ? `<details class="filebox acc-pg-sec" open><summary>🧪 auto tests</summary>${prjErr(at, "auto tests (ef-autotest)")}</details>`
+    : at.total == null ? "" : `
+    <details class="filebox acc-pg-sec" open><summary>🧪 automated test runs · <b>${logInt(at.total)}</b> in ${prjWin(d)}${at.total ? ` <span class="ci-meta">— avg ${Math.round(at.duration.avg)}s · longest ${logInt(at.duration.max)}s · ${logInt(Math.round(at.duration.sum / 60))} min total</span>` : ""}</summary>
+      ${!at.total ? '<div class="empty">no automated test runs recorded in the window</div>' : `
+      ${prjSpark(at.per_period, "run(s)")}
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">runs per environment</div>${prjBar(at.by_env)}</div>
+        <div class="pgv-card"><div class="pgv-title">runs per requester</div>${prjBar(at.by_requester, "", prjAuthorColors(at.by_requester))}</div>
+        <div class="pgv-card"><div class="pgv-title">technology</div>${prjBar(at.by_technology, "pgv-bar-warn")}</div>
+      </div>
+      ${(() => {
+        const out = [];
+        const envs = at.by_env || [];
+        const prd = envs.find((e) => /pr(o?)d/i.test(e.key));
+        if (envs.length) out.push(`most tested environment: <b>${esc(envs[0].key)}</b> (${pct(envs[0].count, at.total)}% of runs)${prd ? "" : " — <b>no runs against production</b>"}`);
+        const invEnvs = (inv.envs || []).filter((e) => !envs.some((x) => x.key === e));
+        if (invEnvs.length) out.push(`environments with no automated tests: <b>${esc(invEnvs.join(", "))}</b>`);
+        const rq = at.by_requester || [];
+        if (rq.length) out.push(`<b>${esc(rq[0].key)}</b> triggers ${pct(rq[0].count, at.total)}% of test runs${rq.length === 1 ? " — single requester" : ""}`);
+        if (at.duration.max > 3 * at.duration.avg && at.duration.avg) out.push(`longest run (${logInt(at.duration.max)}s) is ${(at.duration.max / at.duration.avg).toFixed(1)}× the average — worth a look`);
+        return prjInsights(out);
+      })()}
+      <details class="filebox acc-pg-sec"><summary>🕘 recent runs · <b>${logInt((at.runs || []).length)}</b></summary>
+        <div class="log-idx-list">${(at.runs || []).slice(0, 25).map((r) => `
+          <div class="log-idx"><span class="ci-meta">${esc(r.when)}</span>
+            <span class="chip ${/pr(o?)d/i.test(r.env) ? "chip-amber" : ""}">${esc(r.env)}</span>
+            <code class="log-idx-name" style="flex:none">${esc(r.technology)}</code>
+            <span class="chip chip-cyan">${esc(r.requester)}</span>
+            <span class="ci-meta">${logInt(r.duration)}s</span></div>`).join("")}</div>
+      </details>`}
+    </details>`;
+
+  // ---- DevOps platform usage (ef-devops-usage) --------------------------
+  const us = d.usage || {};
+  const ACT = { build: "⚙ build", deploy: "🚀 deploy", fortify: "🛡 fortify", prismacloud: "🐳 prisma",
+    qualitytesting: "🧪 quality testing", sonarqube: "🔍 sonarqube", standardchange: "📋 standard change" };
+  const usage = us.error ? `<details class="filebox acc-pg-sec" open><summary>⏱ platform usage</summary>${prjErr(us, "platform usage (ef-devops-usage)")}</details>`
+    : us.total_minutes == null ? "" : `
+    <details class="filebox acc-pg-sec" open><summary>⏱ DevOps platform usage · <b>${logInt(us.total_minutes)}</b> min in ${prjWin(d)}${prjDelta(us.total_minutes, us.prev_total_minutes, d)} <span class="ci-meta">· storage <b>${esc(logHsize(us.storage.total))}</b> (git ${esc(logHsize(us.storage.git))} · elk ${esc(logHsize(us.storage.elk))}, latest snapshot per app)</span></summary>
+      ${!us.rows ? '<div class="empty">no usage rows for this project in the window</div>' : `
+      ${prjSpark(us.per_period, "min")}
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">minutes per activity</div>${prjBar(Object.entries(us.by_activity || {}).map(([k, v]) => ({ key: ACT[k] || k, count: v })).sort((a, b) => b.count - a.count), "pgv-bar-warn")}</div>
+        <div class="pgv-card"><div class="pgv-title">minutes per application</div>${prjBar((us.apps || []).map((a) => ({ key: a.app, count: a.minutes })))}</div>
+        <div class="pgv-card"><div class="pgv-title">storage per application (latest)</div>
+          ${(() => { const rows = (us.apps || []).filter((a) => a.storage); if (!rows.length) return '<div class="empty">no storage snapshots</div>';
+            const max = Math.max(...rows.map((a) => a.storage), 1);
+            return rows.sort((a, b) => b.storage - a.storage).map((a) => `
+            <div class="pgv-row" title="${esc(a.app)} — git ${esc(logHsize(a.git))} · elk ${esc(logHsize(a.elk))} · snapshot ${esc(a.snapshot)}">
+              <span class="pgv-label">${esc(a.app)}</span>
+              <span class="pgv-track prj-wl-track"><span class="prj-wl-seg" style="width:${(a.git / max * 100).toFixed(1)}%;background:#8471c9" title="git ${esc(logHsize(a.git))}"></span><span class="prj-wl-seg" style="width:${(a.elk / max * 100).toFixed(1)}%;background:#1497b3" title="elk ${esc(logHsize(a.elk))}"></span></span>
+              <span class="pgv-count">${esc(logHsize(a.storage))}</span></div>`).join("") + '<div class="kpi-note">violet = git · teal = elk (logs)</div>'; })()}
+        </div>
+        ${(us.teams || []).length > 1 ? `<div class="pgv-card"><div class="pgv-title">minutes per team</div>${prjBar(us.teams, "pgv-bar-warn")}</div>` : ""}
+      </div>
+      ${(() => {
+        const out = [];
+        const acts = Object.entries(us.by_activity || {}).sort((a, b) => b[1] - a[1]);
+        if (acts.length && us.total_minutes) out.push(`<b>${ACT[acts[0][0]] || acts[0][0]}</b> consumes ${pct(acts[0][1], us.total_minutes)}% of platform minutes`);
+        const a0 = (us.apps || [])[0];
+        if (a0 && us.total_minutes) out.push(`heaviest application: <b>${esc(a0.app)}</b> (${pct(a0.minutes, us.total_minutes)}% of minutes${a0.storage ? `, ${esc(logHsize(a0.storage))} stored` : ""})`);
+        if (us.storage.total) out.push(`storage is <b>${pct(us.storage.elk, us.storage.total)}% logs</b> (elk) vs ${pct(us.storage.git, us.storage.total)}% git`);
+        if (us.prev_total_minutes != null && d.days) { const ch = pct(us.total_minutes - us.prev_total_minutes, us.prev_total_minutes || 1); if (Math.abs(ch) >= 20) out.push(`platform minutes ${ch > 0 ? "▲ up" : "▼ down"} <b>${Math.abs(ch)}%</b> vs the previous ${d.days}d`); }
+        return prjInsights(out);
+      })()}`}
+    </details>`;
+
   return head + prjSdlcHtml(d) + contrib + prjEventsHtml(d)
-    + commits + jiraSec + security + logging + sysCards;
+    + commits + jiraSec + autotest + security + usage + logging + sysCards;
 }
 
 // event-log filter clicks/typing re-render only the list (delegated on body)

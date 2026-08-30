@@ -749,6 +749,135 @@ def _sec_cicd(name: str, days: int) -> dict:
             "build_versions": build_versions}
 
 
+# ---------------------------------------------------------------- auto tests
+def _sec_autotest(name: str, days: int) -> dict:
+    """ef-autotest — one row per automated test run (date, duration,
+    environment, requester, technology(text), company(text)). No status
+    field exists, so this is a run/coverage view, not a pass/fail one."""
+    variants = _name_variants(name)
+    body = {
+        "query": {"bool": {"filter": [{"terms": {"project": variants}}]
+                  + ([] if not days else [{"range": {"date": {"gte": f"now-{days}d"}}}])}},
+        "sort": [{"date": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": ["date", "duration", "environment", "requester", "technology"],
+        "aggs": {
+            "by_env": {"terms": {"field": "environment", "size": 12, "missing": "(none)"}},
+            "by_requester": {"terms": {"field": "requester", "size": 15, "missing": "(unknown)"}},
+            "per_period": {"date_histogram": {"field": "date",
+                                              "calendar_interval": "day" if days else "month"}},
+            "dur": {"stats": {"field": "duration"}},
+        },
+        "track_total_hits": True, "size": 1000,
+    }
+    resp = _es("ef-autotest", body)
+    hits = (resp.get("hits") or {}).get("hits") or []
+    total = ((resp.get("hits") or {}).get("total") or {}).get("value", 0)
+    aggs = resp.get("aggregations") or {}
+
+    def _b(node):
+        return [{"key": b.get("key"), "count": b.get("doc_count", 0)}
+                for b in (node or {}).get("buckets", [])]
+    tech: dict = {}
+    runs = []
+    for h in hits:
+        src = h.get("_source") or {}
+        t = (src.get("technology") or "").strip() or "(unknown)"
+        tech[t] = tech.get(t, 0) + 1
+        runs.append({"when": (src.get("date") or "")[:16].replace("T", " "),
+                     "duration": _int(src.get("duration")),
+                     "env": src.get("environment") or "",
+                     "requester": _user_display(src.get("requester") or ""),
+                     "technology": t})
+    dur = aggs.get("dur") or {}
+    return {"total": total, "sampled": len(hits),
+            "by_env": _b(aggs.get("by_env")),
+            "by_requester": _fold_users(_b(aggs.get("by_requester"))),
+            "by_technology": sorted(({"key": k, "count": v} for k, v in tech.items()),
+                                    key=lambda x: -x["count"]),
+            "per_period": [{"day": (b.get("key_as_string") or "")[:10],
+                            "count": b.get("doc_count", 0)}
+                           for b in (aggs.get("per_period") or {}).get("buckets", [])],
+            "duration": {"avg": round(dur.get("avg") or 0, 1),
+                         "max": _int(dur.get("max")), "sum": _int(dur.get("sum"))},
+            "runs": runs}
+
+
+# ---------------------------------------------------------------- platform usage
+_USAGE_MIN = ("buildminutes", "deployminutes", "fortifyminutes", "prismacloudminutes",
+              "qualitytestingminutes", "sonarqubeminutes", "standardchangeminutes")
+
+
+def _sec_usage(name: str, days: int) -> dict:
+    """ef-devops-usage — DevOps platform consumption per (application,
+    repository, team) row: minutes per activity + storage snapshots.
+    Minutes SUM over the window; storage is a snapshot, so the LATEST row per
+    application is taken and summed across applications."""
+    variants = _name_variants(name)
+    rng = [] if not days else [{"range": {"startdate": {"gte": f"now-{days}d"}}}]
+    sums = {f: {"sum": {"field": f}} for f in (*_USAGE_MIN, "totalminutes")}
+    body = {
+        "query": {"bool": {"filter": [{"terms": {"project": variants}}] + rng}},
+        "size": 0, "track_total_hits": True,
+        "aggs": {
+            **sums,
+            "by_app": {"terms": {"field": "application", "size": 100, "missing": "(none)"},
+                       "aggs": {"minutes": {"sum": {"field": "totalminutes"}},
+                                **{f: {"sum": {"field": f}} for f in _USAGE_MIN},
+                                "latest": {"top_hits": {"size": 1,
+                                    "_source": ["totalstorage", "gitstorage", "elkstorage",
+                                                "startdate", "repository", "team"],
+                                    "sort": [{"startdate": {"order": "desc",
+                                                            "unmapped_type": "date"}}]}}}},
+            "by_team": {"terms": {"field": "team", "size": 20, "missing": "(none)"},
+                        "aggs": {"minutes": {"sum": {"field": "totalminutes"}}}},
+            "per_period": {"date_histogram": {"field": "startdate",
+                                              "calendar_interval": "day" if days else "month"},
+                           "aggs": {"minutes": {"sum": {"field": "totalminutes"}}}},
+        },
+    }
+    resp = _es("ef-devops-usage", body)
+    aggs = resp.get("aggregations") or {}
+    v = lambda node: _int((node or {}).get("value"))  # noqa: E731
+    by_activity = {f.replace("minutes", ""): v(aggs.get(f)) for f in _USAGE_MIN}
+    apps = []
+    stor_total = stor_git = stor_elk = 0
+    for b in (aggs.get("by_app") or {}).get("buckets", []):
+        hs = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])
+        src = (hs[0].get("_source") or {}) if hs else {}
+        st, sg, se = _int(src.get("totalstorage")), _int(src.get("gitstorage")), _int(src.get("elkstorage"))
+        stor_total += st
+        stor_git += sg
+        stor_elk += se
+        apps.append({"app": b.get("key"), "minutes": v(b.get("minutes")),
+                     "by_activity": {f.replace("minutes", ""): v(b.get(f)) for f in _USAGE_MIN},
+                     "storage": st, "git": sg, "elk": se,
+                     "repository": src.get("repository") or "",
+                     "team": src.get("team") or "",
+                     "snapshot": (src.get("startdate") or "")[:10]})
+    apps.sort(key=lambda a: -a["minutes"])
+    out = {"rows": ((resp.get("hits") or {}).get("total") or {}).get("value", 0),
+           "total_minutes": v(aggs.get("totalminutes")),
+           "by_activity": by_activity, "apps": apps,
+           "teams": sorted(({"key": b.get("key"), "count": v(b.get("minutes"))}
+                            for b in (aggs.get("by_team") or {}).get("buckets", [])),
+                           key=lambda x: -x["count"]),
+           "per_period": [{"day": (b.get("key_as_string") or "")[:10],
+                           "count": v(b.get("minutes"))}
+                          for b in (aggs.get("per_period") or {}).get("buckets", [])],
+           "storage": {"total": stor_total, "git": stor_git, "elk": stor_elk}}
+    if days:   # previous window for the delta
+        try:
+            prev = _es("ef-devops-usage", {
+                "query": {"bool": {"filter": [{"terms": {"project": variants}},
+                                              {"range": {"startdate": {"gte": f"now-{2 * days}d",
+                                                                       "lt": f"now-{days}d"}}}]}},
+                "size": 0, "aggs": {"m": {"sum": {"field": "totalminutes"}}}})
+            out["prev_total_minutes"] = v((prev.get("aggregations") or {}).get("m"))
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
 # ---------------------------------------------------------------- DORA
 def _ts(v) -> dt.datetime | None:
     """Tolerant timestamp parse for event ts strings."""
@@ -906,6 +1035,12 @@ def _assemble_events(out: dict) -> list[dict]:
                        "url": c.get("url") or "",
                        "detail": "; ".join(f"{i['field']}: {i['from'] or '—'} → {i['to'] or '—'}"
                                            for i in c.get("items") or [])})
+    for r in ((out.get("autotest") or {}).get("runs")) or []:
+        events.append({"ts": r.get("when") or "", "type": "autotest",
+                       "app": r.get("technology") or "", "env": r.get("env") or "",
+                       "status": "", "version": "",
+                       "who": r.get("requester") or "", "test": False,
+                       "detail": f"{r.get('duration') or 0}s"})
     events.sort(key=lambda e: e.get("ts") or "", reverse=True)
     com = out.get("commits") or {}
     jc = out.get("jira_changes") or {}
@@ -1286,11 +1421,52 @@ def _demo_report(name: str, days: int) -> dict:
     cicd = {"board": board, "events": cicd_events, "build_versions": build_versions,
             "totals": {"builds": 18 + seed % 9, "deploys": 11 + seed % 7,
                        "releases": 3 + seed % 3}}
+    envs_d = inv.get("envs") or ["dev", "prd"]
+    autotest = {
+        "total": 22 + seed % 9, "sampled": 22 + seed % 9,
+        "by_env": [{"key": e, "count": 12 - 3 * i} for i, e in enumerate(envs_d[:3])],
+        "by_requester": [{"key": "carol", "count": 11}, {"key": "alice", "count": 7},
+                         {"key": "bob", "count": 4}],
+        "by_technology": [{"key": "Selenium", "count": 14}, {"key": "Postman", "count": 8}],
+        "per_period": [{"day": b["day"], "count": (seed + i * 5) % 3 if i % 2 else 0}
+                       for i, b in enumerate(per_day)],
+        "duration": {"avg": 412.5, "max": 1290, "sum": 9075},
+        "runs": [{"when": "2026-08-27 08:30", "duration": 410, "env": envs_d[0],
+                  "requester": "carol", "technology": "Selenium"},
+                 {"when": "2026-08-26 17:05", "duration": 1290, "env": envs_d[-1],
+                  "requester": "alice", "technology": "Postman"},
+                 {"when": "2026-08-25 09:12", "duration": 380, "env": envs_d[0],
+                  "requester": "carol", "technology": "Selenium"}],
+    }
+    usage_apps = [{"app": a, "minutes": 900 - i * 210,
+                   "by_activity": {"build": 380 - i * 80, "deploy": 220 - i * 50,
+                                   "fortify": 90, "prismacloud": 70, "qualitytesting": 60,
+                                   "sonarqube": 50, "standardchange": 30},
+                   "storage": (3 - i) * 4_800_000_000 + 900_000_000,
+                   "git": (3 - i) * 700_000_000 + 100_000_000,
+                   "elk": (3 - i) * 4_100_000_000 + 800_000_000,
+                   "repository": f"{a}-svc", "team": "Platform_Devs", "snapshot": "2026-08-27"}
+                  for i, a in enumerate(apps[:4])]
+    usage = {
+        "rows": 96, "total_minutes": sum(a["minutes"] for a in usage_apps),
+        "by_activity": {k: sum(a["by_activity"][k] for a in usage_apps)
+                        for k in usage_apps[0]["by_activity"]},
+        "apps": usage_apps,
+        "teams": [{"key": "Platform_Devs", "count": sum(a["minutes"] for a in usage_apps)}],
+        "per_period": [{"day": b["day"], "count": ((seed + i * 17) % 90 + 10) if b["count"] else 0}
+                       for i, b in enumerate(per_day)],
+        "storage": {"total": sum(a["storage"] for a in usage_apps),
+                    "git": sum(a["git"] for a in usage_apps),
+                    "elk": sum(a["elk"] for a in usage_apps)},
+    }
+    if days:
+        usage["prev_total_minutes"] = int(usage["total_minutes"] * 0.86)
     prev = None if not days else {
         "commits": max(total - 15, 5), "changes": 28, "builds": 21,
         "deploys": 12, "releases": 4, "resolved": 9}
     return {"commits": commits, "jira": jira, "jira_changes": changes,
-            "scans": scans, "cicd": cicd, "prev": prev}
+            "scans": scans, "cicd": cicd, "prev": prev,
+            "autotest": autotest, "usage": usage}
 
 
 # ---------------------------------------------------------------- public API
@@ -1343,6 +1519,8 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("scans", _sec_scans, name)
         guard("cicd", _sec_cicd, name, days)
         guard("prev", _sec_prev, name, repos, days)
+        guard("autotest", _sec_autotest, name, days)
+        guard("usage", _sec_usage, name, days)
     guard("logging", _sec_logging, name)
     # contributor → TEAM folds for the Jira change log (window + all time)
     jc = out.get("jira_changes") or {}
