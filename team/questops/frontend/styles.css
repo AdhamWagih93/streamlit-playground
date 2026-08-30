@@ -1862,3 +1862,27 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .cfg-cmp-maps .cfg-wrap { height: 460px; }
 @media (max-width: 1100px) { .cfg-cmp-maps { grid-template-columns: 1fr; } }
 @media print { .cfg-wrap { height: auto; overflow: visible; } .cfg-svg { height: 600px; } }
+
+/* configurations — inventory overview + detail matrix */
+.cfg-skel-tile b { display: block; height: 22px; width: 60%; border-radius: 6px; background: linear-gradient(90deg, var(--line), var(--panel), var(--line)); background-size: 200% 100%; animation: cfg-shimmer 1.2s infinite; }
+@keyframes cfg-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.cfg-ov-list { display: flex; flex-direction: column; gap: 6px; }
+.cfg-ov-row { display: grid; grid-template-columns: minmax(200px, 1.4fr) 60px minmax(240px, 2fr) 70px minmax(160px, 1.2fr) 150px 90px 70px; gap: 10px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid #1497b3; border-radius: 10px; padding: 8px 12px; cursor: pointer; transition: transform .1s, border-color .1s; }
+.cfg-ov-row:hover { transform: translateY(-1px); border-color: #1497b3; }
+.cfg-ov-row.cfg-ov-none { border-left-color: #e05c5c; }
+.cfg-ov-name b { font: 800 13.5px var(--body); } .cfg-ov-name small { margin-left: 6px; color: var(--faint); font: 500 10.5px var(--mono); }
+.cfg-ov-teams { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.cfg-ov-apps, .cfg-ov-cov { display: flex; flex-direction: column; align-items: center; } .cfg-ov-apps b, .cfg-ov-cov b { font: 800 15px var(--mono); } .cfg-ov-apps small, .cfg-ov-cov small { font: 500 9px var(--mono); color: var(--faint); }
+.cfg-ov-envs { display: flex; gap: 8px; flex-wrap: wrap; }
+.cfg-cov { display: flex; flex-direction: column; min-width: 54px; } .cfg-cov small { font: 700 9px var(--mono); color: var(--faint); text-transform: uppercase; } .cfg-cov b { font: 600 9.5px var(--mono); }
+.cfg-cov-bar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: var(--line); margin: 2px 0; } .cfg-cov-bar i { display: block; height: 100%; }
+.cfg-ov-states { display: flex; gap: 4px; flex-wrap: wrap; }
+.cfg-st { font: 600 10px var(--mono); padding: 1px 6px; border-radius: 999px; border: 1px solid var(--k); color: var(--k); background: color-mix(in srgb, var(--k) 10%, var(--bg)); white-space: nowrap; }
+.cfg-ov-edges { font: 600 11.5px var(--mono); } .cfg-ov-edges small { font-size: 9.5px; color: var(--faint); }
+.cfg-matrix td { vertical-align: top; }
+.cfg-cell { display: flex; flex-direction: column; gap: 1px; padding: 4px 7px; border-radius: 7px; border: 1px solid var(--k, var(--line)); min-width: 92px; }
+.cfg-cell b { font: 700 10.5px var(--mono); color: var(--k); text-transform: uppercase; } .cfg-cell small { font: 500 9.5px var(--mono); color: var(--faint); white-space: nowrap; }
+.cfg-cell-effective { --k: #43c884; } .cfg-cell-stale { --k: #e0a13c; } .cfg-cell-dormant { --k: #8471c9; } .cfg-cell-missing { --k: #e05c5c; } .cfg-cell-unparseable { --k: #c8403f; } .cfg-cell-absent { --k: var(--faint); opacity: .6; }
+.cfg-cell-x { border-style: dashed; }
+@media (max-width: 1200px) { .cfg-ov-row { grid-template-columns: 1fr 1fr; } }

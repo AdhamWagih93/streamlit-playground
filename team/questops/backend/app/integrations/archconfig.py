@@ -25,6 +25,7 @@ import re
 import time
 from pathlib import Path
 
+from ..config import settings
 from .inventory import _load_yaml
 from .repos import _dir_for, configured
 
@@ -220,12 +221,32 @@ def control_repos() -> list[dict]:
     return [r for r in configured() if (r.get("project") or "").lower() == CONTROL_PROJECT]
 
 
+def _file_dates(root) -> dict:
+    """{relative path: ISO date of its last commit} from ONE `git log` walk of
+    the clone (2000 files → one subprocess, not 2000)."""
+    import subprocess
+    try:
+        p = subprocess.run(["git", "log", "--format=%x01%cI", "--name-only", "--no-renames"],
+                           cwd=str(root), capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    dates: dict = {}
+    cur = ""
+    for line in p.stdout.splitlines():
+        if line.startswith("\x01"):
+            cur = line[1:20]
+        elif line.strip() and line.strip() not in dates:
+            dates[line.strip()] = cur
+    return dates
+
+
 def parse_repo(repo: dict) -> list[dict]:
-    """[{team, project, env, app, path, ok, error, connections, notes, keys}]"""
+    """[{team, project, env, app, path, ok, error, connections, notes, keys, changed}]"""
     root = _dir_for(repo)
     out = []
     if not root.exists():
         return out
+    dates = _file_dates(root)
     for pdir in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")
                        and not p.name.lower().endswith(_SKIP_SUFFIX)):
         for ea in sorted(p for p in pdir.iterdir() if p.is_dir() and not p.name.lower().endswith(_SKIP_SUFFIX)):
@@ -238,7 +259,8 @@ def parse_repo(repo: dict) -> list[dict]:
             entry = {"team": repo["name"], "project": pdir.name, "env": env.lower(), "app": app,
                      "path": str(cf.relative_to(root)) if cf.is_file() else f"{pdir.name}/{ea.name}/config.yml",
                      "ok": cf.is_file(), "error": "" if cf.is_file() else "config.yml missing",
-                     "connections": [], "notes": [], "keys": 0}
+                     "connections": [], "notes": [], "keys": 0,
+                     "changed": dates.get(str(cf.relative_to(root))) if cf.is_file() else ""}
             if cf.is_file():
                 try:
                     cfg = _load_yaml(strip_comments(cf.read_text(encoding="utf-8", errors="replace")))
@@ -369,7 +391,8 @@ def analyze(refresh: bool = False) -> dict:
         entries += parse_repo(r)
     ns = namespace_map()
     model = build_model(entries, ns)
-    payload = {"repos": [{"team": r["name"], "cloned": _dir_for(r).exists(),
+    payload = {"entries": entries,
+               "repos": [{"team": r["name"], "cloned": _dir_for(r).exists(),
                           "configs": sum(1 for e in entries if e["team"] == r["name"])} for r in repos],
                "configs": len(entries), "namespaces": ns, "model": model,
                "teams": sorted({e["team"] for e in entries}),
@@ -387,3 +410,242 @@ def redact(text: str) -> str:
     text = _SCHEME_RE.sub(lambda m: m.group(0).replace(m.group(0).split("://", 1)[1].split("@", 1)[0] + "@", "***@") if "@" in m.group(0) else m.group(0), text)
     text = _KV_SECRET_RE.sub(lambda m: m.group(0).split("=", 1)[0] + "=***", text)
     return re.sub(r'(?im)^(\s*[^:\n#]*(?:pass(?:word)?|pwd|secret|token|api_?key|credential)[^:\n]*:\s*)(.+)$', r"\1***", text)
+
+
+# ---------------------------------------------------------------- deployments cross-reference
+_DEP_CACHE: dict = {"at": 0.0, "payload": None}
+_ENV_ORDER = {"dev": 1, "qc": 2, "uat": 3, "prd": 4}
+
+
+def _norm(v) -> str:
+    return re.sub(r"[\s._\-]+", "", str(v or "").lower())
+
+
+def deployments_latest(refresh: bool = False) -> tuple[dict, str]:
+    """{norm(project): {env: {norm(app): {when, status, version, app}}}} — the
+    latest REAL deployment of every app per environment, from ONE size-0
+    aggregation on ef-cicd-deployments. A config is only effective once its
+    app has been deployed to that environment."""
+    if not refresh and _DEP_CACHE["payload"] is not None and time.time() - _DEP_CACHE["at"] < _TTL:
+        return _DEP_CACHE["payload"], ""
+    out: dict = {}
+    err = ""
+    if settings.demo_mode:
+        from . import inventory
+        for i, p in enumerate(inventory.parse().get("projects") or []):
+            for env in p.get("envs") or []:
+                for j, app in enumerate(p.get("apps") or []):
+                    if env == "prd" and j == len(p["apps"]) - 1:
+                        continue                      # last app never reached prd
+                    import datetime as _dt
+                    when = _dt.datetime.utcnow() + _dt.timedelta(hours=2) - _dt.timedelta(days=i * 3 + j * 2)
+                    out.setdefault(_norm(p["name"]), {}).setdefault(env, {})[_norm(app)] = {
+                        "app": app, "when": when.strftime("%Y-%m-%dT%H:%M"),
+                        "status": "FAILED" if (env == "uat" and j == 1) else "SUCCESS",
+                        "version": f"1.{20 - j}.{i}"}
+    else:
+        try:
+            from .project_report import _es
+            resp = _es("ef-cicd-deployments", {"size": 0, "query": {"bool": {"must_not": [{"term": {"testflag": True}}]}},
+                "aggs": {"p": {"terms": {"field": "project", "size": 2000}, "aggs": {
+                    "e": {"terms": {"field": "environment", "size": 12}, "aggs": {
+                        "a": {"terms": {"field": "application", "size": 1000}, "aggs": {
+                            "last": {"top_hits": {"size": 1, "_source": ["startdate", "status", "codeversion"],
+                                                  "sort": [{"startdate": {"order": "desc", "unmapped_type": "date"}}]}}}}}}}}}})
+            for pb in ((resp.get("aggregations") or {}).get("p") or {}).get("buckets", []):
+                for eb in (pb.get("e") or {}).get("buckets", []):
+                    env = str(eb.get("key") or "").lower()
+                    for ab in (eb.get("a") or {}).get("buckets", []):
+                        hit = (((ab.get("last") or {}).get("hits") or {}).get("hits") or [{}])[0]
+                        src = hit.get("_source") or {}
+                        out.setdefault(_norm(pb.get("key")), {}).setdefault(env, {})[_norm(ab.get("key"))] = {
+                            "app": ab.get("key"), "when": (src.get("startdate") or "")[:16],
+                            "status": src.get("status") or "", "version": src.get("codeversion") or ""}
+        except Exception as exc:  # noqa: BLE001 — the page degrades to "deployments unknown"
+            err = str(exc)[:120]
+    _DEP_CACHE.update(at=time.time(), payload=out)
+    return out, err
+
+
+# ---------------------------------------------------------------- inventory-driven overview
+_OV_CACHE: dict = {"at": 0.0, "payload": None}
+
+
+def _config_state(entry, dep) -> str:
+    """One word for a (project, env, app) cell:
+       effective   config present + app deployed there (config in force)
+       stale       config changed AFTER the last deployment — not yet effective
+       dormant     config present but the app was never deployed to that env
+       missing     app deployed there but no config in the team repo
+       unparseable config file present but broken
+       absent      neither config nor deployment"""
+    if entry is not None and not entry["ok"] and not entry["error"].startswith("config.yml missing"):
+        return "unparseable"
+    has_cfg = entry is not None and entry["ok"]
+    if has_cfg and dep:
+        if entry.get("changed") and dep.get("when") and entry["changed"][:16] > dep["when"][:16]:
+            return "stale"
+        return "effective"
+    if has_cfg:
+        return "dormant"
+    if dep:
+        return "missing"
+    return "absent"
+
+
+def overview(refresh: bool = False) -> dict:
+    """The landing payload: ONE small row per INVENTORY project — expected
+    configs (apps × envs) vs. what the Control team repos hold, deployment
+    cross-reference, connection scopes and issues. Extra configs (repo
+    folders naming apps / envs / projects the inventory does not know) are
+    counted so drift is visible before any project is opened. No topology
+    is shipped here — that is per project (project_detail)."""
+    if not refresh and _OV_CACHE["payload"] and time.time() - _OV_CACHE["at"] < _TTL:
+        return {**_OV_CACHE["payload"], "cached": True}
+    from . import inventory
+    a = analyze(refresh)
+    entries = a.get("entries") or []
+    deps, dep_err = deployments_latest(refresh)
+    inv = inventory.parse()
+    by_key: dict = {}
+    for e in entries:
+        by_key[(_norm(e["project"]), e["env"], _norm(e["app"]))] = e
+    edges_by_proj: dict = {}
+    issues_by_proj: dict = {}
+    for env, m in (a.get("model") or {}).get("envs", {}).items():
+        byid = {n["id"]: n for n in m["nodes"]}
+        for ed in m["edges"]:
+            n = byid.get(ed["from"])
+            if n:
+                d = edges_by_proj.setdefault(_norm(n["project"]), {"internal": 0, "cross-project": 0, "cluster": 0, "external": 0, "targets": set()})
+                d[ed["scope"]] = d.get(ed["scope"], 0) + 1
+                if ed["scope"] == "cross-project":
+                    t = byid.get(ed["to"])
+                    if t:
+                        d["targets"].add(t["project"])
+        for an in m.get("anomalies") or []:
+            if an.get("kind") in ("secret", "shared") and an.get("project"):
+                issues_by_proj[_norm(an["project"])] = issues_by_proj.get(_norm(an["project"]), 0) + 1
+    known: set = set()
+    projects = []
+    for p in inv.get("projects") or []:
+        pk = _norm(p["name"])
+        known.add(pk)
+        apps = p.get("apps") or []
+        envs = sorted(p.get("envs") or [], key=lambda e: (_ENV_ORDER.get(e, 9), e))
+        pv = (p.get("config") or {}).get("project_vars") or {}
+        states: dict = {}
+        per_env: dict = {}
+        last_change = ""
+        teams_seen: set = set()
+        for env in envs:
+            pe = per_env[env] = {"env": env, "expected": len(apps), "present": 0, "effective": 0, "stale": 0,
+                                 "dormant": 0, "missing": 0, "unparseable": 0, "absent": 0}
+            for app in apps:
+                e = by_key.get((pk, env, _norm(app)))
+                dep = ((deps.get(pk) or {}).get(env) or {}).get(_norm(app))
+                st = _config_state(e, dep)
+                states[st] = states.get(st, 0) + 1
+                pe[st] = pe.get(st, 0) + 1
+                if e is not None and e["ok"]:
+                    pe["present"] += 1
+                    teams_seen.add(e["team"])
+                    last_change = max(last_change, e.get("changed") or "")
+        extra = [e for e in entries if _norm(e["project"]) == pk
+                 and (e["env"] not in envs or _norm(e["app"]) not in {_norm(x) for x in apps})]
+        expected = len(apps) * len(envs)
+        present = sum(pe["present"] for pe in per_env.values())
+        eg = edges_by_proj.get(pk) or {}
+        projects.append({
+            "name": p["name"], "company": pv.get("company") or "", "deploy_platform": pv.get("deploy_platform") or "",
+            "teams": {"dev": p.get("dev_team"), "qc": p.get("qc_team"), "prd": p.get("prd_team")},
+            "apps": len(apps), "envs": envs, "expected": expected, "present": present,
+            "coverage": round(100 * present / expected) if expected else None,
+            "states": states, "per_env": [per_env[e] for e in envs],
+            "extra": len(extra), "extra_items": [f"{e['env']}_{e['app']}" for e in extra[:12]],
+            "issues": issues_by_proj.get(pk, 0),
+            "edges": {k: eg.get(k, 0) for k in ("internal", "cross-project", "cluster", "external")},
+            "cross_targets": sorted(eg.get("targets") or []),
+            "config_teams": sorted(teams_seen), "last_change": last_change,
+        })
+    unknown = sorted({e["project"] for e in entries if _norm(e["project"]) not in known})
+    tot = lambda k: sum(x[k] for x in projects)  # noqa: E731
+    payload = {"projects": projects, "unknown_projects": unknown,
+               "unknown_configs": sum(1 for e in entries if _norm(e["project"]) not in known),
+               "repos": a.get("repos"), "configs": len(entries), "envs": a.get("envs"),
+               "deployments": {"available": not dep_err, "error": dep_err,
+                               "projects": len(deps)},
+               "totals": {"projects": len(projects), "apps": tot("apps"), "expected": tot("expected"),
+                          "present": tot("present"), "extra": tot("extra"), "issues": tot("issues"),
+                          "states": {k: sum(p["states"].get(k, 0) for p in projects)
+                                     for k in ("effective", "stale", "dormant", "missing", "unparseable", "absent")},
+                          "cross": sum(p["edges"]["cross-project"] for p in projects)},
+               "inventory_source": inv.get("source")}
+    _OV_CACHE.update(at=time.time(), payload=payload)
+    return {**payload, "cached": False}
+
+
+def project_detail(name: str, refresh: bool = False) -> dict:
+    """Everything for ONE project: per-env topology restricted to the project
+    and whatever it touches (so cross-project edges keep their far end), the
+    app × env matrix with config state + last deployment, anomalies, extras."""
+    from . import inventory
+    a = analyze(refresh)
+    deps, dep_err = deployments_latest(refresh)
+    pk = _norm(name)
+    inv_p = next((p for p in inventory.parse().get("projects") or [] if _norm(p["name"]) == pk), None)
+    apps = list((inv_p or {}).get("apps") or [])
+    inv_envs = list((inv_p or {}).get("envs") or [])
+    entries = [e for e in (a.get("entries") or []) if _norm(e["project"]) == pk]
+    envs_all = sorted({*inv_envs, *(e["env"] for e in entries)}, key=lambda e: (_ENV_ORDER.get(e, 9), e))
+    model_envs: dict = {}
+    anomalies: list = []
+    for env, m in (a.get("model") or {}).get("envs", {}).items():
+        byid = {n["id"]: n for n in m["nodes"]}
+        mine = {n["id"] for n in m["nodes"] if n.get("type") == "app" and _norm(n.get("project")) == pk}
+        if not mine:
+            continue
+        edges = [ed for ed in m["edges"] if ed["from"] in mine or ed["to"] in mine]
+        keep = mine | {ed["from"] for ed in edges} | {ed["to"] for ed in edges}
+        nodes = [byid[i] for i in keep if i in byid]
+        # far-end projects are drawn collapsed by the UI; give them their full app count
+        model_envs[env] = {"nodes": nodes, "edges": edges,
+                           "anomalies": [x for x in m.get("anomalies") or [] if _norm(x.get("project")) == pk],
+                           "summary": {"apps": len(mine), "edges": len(edges),
+                                       "internal": sum(1 for e in edges if e["scope"] == "internal"),
+                                       "cross": sum(1 for e in edges if e["scope"] == "cross-project")}}
+        anomalies += model_envs[env]["anomalies"]
+    by_key = {(e["env"], _norm(e["app"])): e for e in entries}
+    app_names = list(dict.fromkeys([*apps, *(e["app"] for e in entries if _norm(e["app"]) not in {_norm(x) for x in apps})]))
+    matrix = []
+    for app in app_names:
+        row = {"app": app, "in_inventory": _norm(app) in {_norm(x) for x in apps}, "cells": []}
+        for env in envs_all:
+            e = by_key.get((env, _norm(app)))
+            dep = ((deps.get(pk) or {}).get(env) or {}).get(_norm(app))
+            row["cells"].append({"env": env, "state": _config_state(e, dep), "in_inventory_env": env in inv_envs,
+                                 "path": e["path"] if e else "", "team": e["team"] if e else "",
+                                 "changed": (e or {}).get("changed") or "", "keys": (e or {}).get("keys") or 0,
+                                 "connections": len((e or {}).get("connections") or []), "notes": (e or {}).get("notes") or [],
+                                 "error": (e or {}).get("error") or "",
+                                 "deploy": dep})
+        matrix.append(row)
+    return {"name": (inv_p or {}).get("name") or name, "in_inventory": inv_p is not None,
+            "inventory": {"apps": apps, "envs": inv_envs, "teams": {"dev": (inv_p or {}).get("dev_team"), "qc": (inv_p or {}).get("qc_team"), "prd": (inv_p or {}).get("prd_team")}},
+            "envs": envs_all, "model": {"envs": model_envs, "projects": sorted({n.get("project") or n.get("owner") or "" for m in model_envs.values() for n in m["nodes"] if n.get("project") or n.get("owner")})},
+            "matrix": matrix, "anomalies": anomalies,
+            "config_teams": sorted({e["team"] for e in entries}),
+            "deployments": {"available": not dep_err, "error": dep_err}, "namespaces": {k: v for k, v in (a.get("namespaces") or {}).items() if _norm(v.get("project")) == pk}}
+
+
+def warm_up() -> None:
+    """Background pre-build of the cached analyses so the first visitor of the
+    page is not the one paying for 2000 YAML parses + a git walk."""
+    import threading
+
+    def run():
+        try:
+            overview()
+        except Exception:  # noqa: BLE001
+            pass
+    threading.Thread(target=run, name="configs-warm-up", daemon=True).start()

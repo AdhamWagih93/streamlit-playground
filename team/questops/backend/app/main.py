@@ -112,6 +112,8 @@ def startup() -> None:
             cleanup_demo_data(db)  # purge leftovers from any earlier demo run
     finally:
         db.close()
+    from .integrations import archconfig
+    archconfig.warm_up()   # Configurations page caches, built off the request path
 
 
 def _frontend_dir() -> Path:

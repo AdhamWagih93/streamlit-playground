@@ -27,3 +27,13 @@ def config_file(team: str, path: str, user: User = Depends(current_user)):
         raise HTTPException(404, "file not found")
     return {"team": team, "path": path,
             "text": archconfig.redact(f.read_text(encoding="utf-8", errors="replace"))[:200000]}
+
+
+@router.get("/overview")
+def configs_overview(refresh: bool = False, user: User = Depends(current_user)):
+    return archconfig.overview(refresh=refresh)
+
+
+@router.get("/project/{name}")
+def configs_project(name: str, refresh: bool = False, user: User = Depends(current_user)):
+    return archconfig.project_detail(name, refresh=refresh)

@@ -6032,8 +6032,8 @@ function cfgFiltersHtml(d, env, f) {
       ${(c.mode || "env") === "env" ? `<select data-cfg-c="project">${o.projects.map((p) => opt(p, p, c.project || P[0] || o.projects[0])).join("")}</select>
         <select data-cfg-c="envA">${(d.envs || []).map((e) => opt(e, e, c.envA || (d.envs || [])[0])).join("")}</select><span class="ci-meta">vs</span>
         <select data-cfg-c="envB">${(d.envs || []).map((e) => opt(e, e, c.envB || env)).join("")}</select>`
-      : `<select data-cfg-c="projA">${o.projects.map((p) => opt(p, p, c.projA || o.projects[0])).join("")}</select><span class="ci-meta">vs</span>
-        <select data-cfg-c="projB">${o.projects.map((p) => opt(p, p, c.projB || o.projects[1] || o.projects[0])).join("")}</select><span class="ci-meta">in ${esc(env)}</span>`}
+      : (() => { const all = [...new Set([...((state.cfgOverview || {}).projects || []).map((p) => p.name), ...o.projects])].sort(); return `<select data-cfg-c="projA">${all.map((p) => opt(p, p, c.projA || (state.cfgDetail || {}).name || all[0])).join("")}</select><span class="ci-meta">vs</span>
+        <select data-cfg-c="projB">${all.map((p) => opt(p, p, c.projB || all.find((x) => x !== ((state.cfgDetail || {}).name || all[0])) || all[0])).join("")}</select><span class="ci-meta">in ${esc(env)} · the other project's topology is fetched on selection</span>`; })()}
     </div>` : ""}`;
 }
 
@@ -6052,80 +6052,228 @@ function cfgNormalizeCompare(f) {
   c.mode = c.mode || "env";
   c.project = c.project || cfgArr(f.projects)[0] || projects[0];
   c.envA = c.envA || (d.envs || [])[0]; c.envB = c.envB || state.cfgEnv;
-  c.projA = c.projA || projects[0]; c.projB = c.projB || projects[1] || projects[0];
+  const mine = (state.cfgDetail || {}).name;
+  c.projA = c.projA || mine || projects[0]; c.projB = c.projB || projects.find((p) => p !== (mine || projects[0])) || projects[0];
+}
+
+// ---- overview: one row per INVENTORY project (no topology shipped) -----
+const CFG_STATE = { effective: ["#43c884", "effective — config present and the app is deployed there"],
+  stale: ["#e0a13c", "stale — config changed after the last deployment; not in force yet"],
+  dormant: ["#8471c9", "dormant — config present but the app was never deployed to that env"],
+  missing: ["#e05c5c", "missing — app deployed there but no config in the team repo"],
+  unparseable: ["#c8403f", "unparseable — config file present but broken"],
+  absent: ["#c9d1da", "absent — neither config nor deployment"] };
+const cfgStateColor = (k) => (CFG_STATE[k] || CFG_STATE.absent)[0];
+
+function cfgOvFilter(list, f) {
+  const q = (f.q || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const teamsOf = (p) => Object.values(p.teams || {}).filter(Boolean);
+  let rows = list.filter((p) =>
+    (!f.company || f.company === "all" || (p.company || "—") === f.company)
+    && (!f.team || f.team === "all" || teamsOf(p).includes(f.team) || (p.config_teams || []).includes(f.team))
+    && (!f.platform || f.platform === "all" || (p.deploy_platform || "—") === f.platform)
+    && (!f.env || f.env === "all" || (p.envs || []).includes(f.env))
+    && (!f.only || f.only === "all"
+      || (f.only === "gaps" && ((p.states.missing || 0) + (p.states.unparseable || 0) > 0))
+      || (f.only === "stale" && (p.states.stale || 0) > 0)
+      || (f.only === "dormant" && (p.states.dormant || 0) > 0)
+      || (f.only === "extra" && p.extra > 0)
+      || (f.only === "issues" && p.issues > 0)
+      || (f.only === "cross" && p.edges["cross-project"] > 0)
+      || (f.only === "none" && !p.present))
+    && q.every((t) => [p.name, p.company, p.deploy_platform, ...teamsOf(p), ...(p.config_teams || []), ...(p.cross_targets || []), ...(p.envs || [])]
+      .some((v) => String(v || "").toLowerCase().includes(t))));
+  const sort = f.sort || "gaps";
+  const gaps = (p) => (p.states.missing || 0) + (p.states.unparseable || 0);
+  rows.sort((a, b) => sort === "name" ? a.name.localeCompare(b.name)
+    : sort === "coverage" ? (a.coverage ?? -1) - (b.coverage ?? -1) || a.name.localeCompare(b.name)
+    : sort === "apps" ? b.apps - a.apps || a.name.localeCompare(b.name)
+    : sort === "cross" ? b.edges["cross-project"] - a.edges["cross-project"] || a.name.localeCompare(b.name)
+    : sort === "issues" ? b.issues - a.issues || a.name.localeCompare(b.name)
+    : sort === "changed" ? (b.last_change || "").localeCompare(a.last_change || "") || a.name.localeCompare(b.name)
+    : gaps(b) - gaps(a) || (b.states.stale || 0) - (a.states.stale || 0) || a.name.localeCompare(b.name));
+  return rows;
+}
+
+function cfgOvRows(rows) {
+  if (!rows.length) return '<div class="empty">no projects match</div>';
+  const seg = (pe) => { const tot = pe.expected || 1; return `<div class="cfg-cov" title="${esc(pe.env)}: ${pe.present}/${pe.expected} config(s) · ${Object.keys(CFG_STATE).filter((k) => pe[k]).map((k) => `${pe[k]} ${k}`).join(" · ")}"><small>${esc(pe.env)}</small><div class="cfg-cov-bar">${Object.keys(CFG_STATE).filter((k) => pe[k]).map((k) => `<i style="width:${(100 * pe[k] / tot).toFixed(1)}%;background:${cfgStateColor(k)}"></i>`).join("")}</div><b>${pe.present}/${pe.expected}</b></div>`; };
+  return `<div class="cfg-ov-list">${rows.map((p) => `
+    <div class="cfg-ov-row ${!p.present ? "cfg-ov-none" : ""}" data-cfg-open="${esc(p.name)}" title="open ${esc(p.name)}">
+      <div class="cfg-ov-name"><b>${esc(p.name)}</b>${p.company ? `<small>${esc(p.company)}</small>` : ""}${p.deploy_platform ? `<span class="chip chip-cyan">${esc(p.deploy_platform)}</span>` : ""}
+        <div class="cfg-ov-teams">${["dev", "qc", "prd"].filter((k) => p.teams[k]).map((k) => `<span class="chip" title="${k}_team">${esc(p.teams[k])}</span>`).join("")}${(p.config_teams || []).filter((t) => !Object.values(p.teams).includes(t)).map((t) => `<span class="chip chip-amber" title="configs come from this team's repo, which is not one of the project's inventory teams">⚠ ${esc(t)}</span>`).join("")}</div></div>
+      <div class="cfg-ov-apps"><b>${p.apps}</b><small>apps</small></div>
+      <div class="cfg-ov-envs">${(p.per_env || []).map(seg).join("") || '<span class="ci-meta">no envs in inventory</span>'}</div>
+      <div class="cfg-ov-cov"><b class="${p.coverage == null ? "" : p.coverage >= 90 ? "pct-good" : p.coverage >= 50 ? "pct-warn" : "pct-bad"}">${p.coverage == null ? "–" : p.coverage + "%"}</b><small>coverage</small></div>
+      <div class="cfg-ov-states">${["effective", "stale", "dormant", "missing", "unparseable"].filter((k) => p.states[k]).map((k) => `<span class="cfg-st" style="--k:${cfgStateColor(k)}" title="${esc(CFG_STATE[k][1])}">${p.states[k]} ${k}</span>`).join("")}${p.extra ? `<span class="cfg-st" style="--k:#c0841c" title="configs in the repo for apps / envs the inventory does not list: ${esc(p.extra_items.join(", "))}">${p.extra} extra</span>` : ""}</div>
+      <div class="cfg-ov-edges" title="connections: internal · cross-project · cluster · external"><span class="pct-good">${p.edges.internal}</span> · <span class="${p.edges["cross-project"] ? "pct-warn" : ""}">${p.edges["cross-project"]}${p.cross_targets.length ? ` <small>→ ${esc(p.cross_targets.slice(0, 3).join(", "))}${p.cross_targets.length > 3 ? "…" : ""}</small>` : ""}</span> · ${p.edges.cluster} · ${p.edges.external}</div>
+      <div class="cfg-ov-issues">${p.issues ? `<span class="chip chip-red">${p.issues} issue${p.issues === 1 ? "" : "s"}</span>` : ""}</div>
+      <div class="cfg-ov-chg ci-meta" title="${esc(p.last_change || "")}">${p.last_change ? prjAgo(p.last_change) : "—"}</div>
+    </div>`).join("")}</div>`;
+}
+
+function cfgOverviewHtml(o) {
+  const list = o.projects || [], f = state.cfgOvFilter = state.cfgOvFilter || {};
+  const t = o.totals || {}, st = t.states || {};
+  const uniq = (fn) => [...new Set(list.map(fn).filter(Boolean))].sort();
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+  const companies = uniq((p) => p.company || "—"), platforms = uniq((p) => p.deploy_platform || "—");
+  const teams = [...new Set(list.flatMap((p) => [...Object.values(p.teams || {}), ...(p.config_teams || [])].filter(Boolean)))].sort();
+  const rows = cfgOvFilter(list, f);
+  const tile = (n, label, cls, tip) => `<div class="stat-tile" title="${esc(tip || "")}"><b class="${cls || ""}">${n}</b><span>${label}</span></div>`;
+  const pct = t.expected ? Math.round(100 * t.present / t.expected) : 0;
+  return `
+    <div class="stat-tiles" style="margin:0 0 10px">
+      ${tile(t.projects || 0, "inventory projects")}${tile(logInt(t.apps || 0), "apps")}
+      ${tile(`${logInt(t.present || 0)}<small>/${logInt(t.expected || 0)}</small>`, `configs present · ${pct}%`, pct >= 90 ? "pct-good" : pct >= 50 ? "pct-warn" : "pct-bad", "expected = apps × environments per inventory project")}
+      ${tile(logInt(st.effective || 0), "effective", "pct-good", CFG_STATE.effective[1])}${tile(logInt(st.stale || 0), "stale", st.stale ? "pct-warn" : "", CFG_STATE.stale[1])}
+      ${tile(logInt(st.missing || 0), "missing (deployed, no config)", st.missing ? "pct-bad" : "pct-good", CFG_STATE.missing[1])}${tile(logInt(st.dormant || 0), "dormant (never deployed)", st.dormant ? "pct-warn" : "", CFG_STATE.dormant[1])}
+      ${tile(logInt((t.extra || 0) + (o.unknown_configs || 0)), "extra configs", (t.extra || 0) + (o.unknown_configs || 0) ? "pct-warn" : "", `configs the inventory does not expect: ${t.extra || 0} for unknown apps/envs + ${o.unknown_configs || 0} under ${(o.unknown_projects || []).length} unknown project folder(s)`)}
+      ${tile(logInt(t.issues || 0), "secret / shared issues", t.issues ? "pct-bad" : "pct-good")}${tile(logInt(t.cross || 0), "cross-project links", t.cross ? "pct-warn" : "")}
+    </div>
+    ${(o.unknown_projects || []).length ? `<div class="kpi-note" style="margin-bottom:8px">⚠ project folders in the Control repos that are <b>not in the inventory</b>: ${o.unknown_projects.map((u) => `<button class="chip chip-amber cfg-chip" data-cfg-open="${esc(u)}">${esc(u)}</button>`).join(" ")} — open one to inspect its configs</div>` : ""}
+    ${!o.deployments.available ? `<div class="kpi-note" style="margin-bottom:8px">⚠ deployments unavailable (${esc(o.deployments.error || "")}) — effective / stale / missing states fall back to config presence only</div>` : ""}
+    <div class="acc-filters cat-filters">
+      <input data-cfg-ov="q" placeholder="🔎 project / company / team / target project / env…" value="${esc(f.q || "")}">
+      <select data-cfg-ov="company">${opt("all", "company: any", f.company)}${companies.map((c) => opt(c, c, f.company)).join("")}</select>
+      <select data-cfg-ov="team">${opt("all", "team: any", f.team)}${teams.map((c) => opt(c, c, f.team)).join("")}</select>
+      <select data-cfg-ov="platform">${opt("all", "platform: any", f.platform)}${platforms.map((c) => opt(c, c, f.platform)).join("")}</select>
+      <select data-cfg-ov="env">${opt("all", "env: any", f.env)}${(o.envs || []).map((e) => opt(e, e, f.env)).join("")}</select>
+      <select data-cfg-ov="only">${opt("all", "show: everything", f.only)}${opt("gaps", "show: missing / unparseable", f.only)}${opt("stale", "show: stale configs", f.only)}${opt("dormant", "show: dormant configs", f.only)}${opt("extra", "show: extra configs", f.only)}${opt("issues", "show: secret / shared issues", f.only)}${opt("cross", "show: cross-project links", f.only)}${opt("none", "show: no configs at all", f.only)}</select>
+      <select data-cfg-ov="sort">${opt("gaps", "sort: most gaps", f.sort || "gaps")}${opt("coverage", "sort: lowest coverage", f.sort)}${opt("cross", "sort: cross-project links", f.sort)}${opt("issues", "sort: issues", f.sort)}${opt("changed", "sort: recently changed", f.sort)}${opt("apps", "sort: most apps", f.sort)}${opt("name", "sort: name", f.sort)}</select>
+      <span class="ci-meta" id="cfg-ov-count">${rows.length} of ${list.length}</span>
+    </div>
+    <div class="inv-chips" style="margin:2px 0 8px">${Object.entries(CFG_STATE).map(([k, [c, tip]]) => `<span class="chip" title="${esc(tip)}"><i class="prj-dot" style="background:${c}"></i>${k}</span>`).join("")}<span class="ci-meta">· env bars = configs per state out of the apps expected there (inventory)</span></div>
+    <div id="cfg-ov-body">${cfgOvRows(rows)}</div>`;
+}
+
+// ---- project detail: the heavy part, fetched only when a project is opened
+function cfgMatrixHtml(d) {
+  const envs = d.envs || [];
+  const cell = (c) => {
+    const dep = c.deploy;
+    const tip = `${c.env} · ${esc(CFG_STATE[c.state][1])}${c.path ? " · " + esc(c.path) + (c.team ? " (" + esc(c.team) + ")" : "") : ""}${c.changed ? " · config changed " + esc(c.changed.replace("T", " ")) : ""}${dep ? ` · last deploy ${esc(dep.when.replace("T", " "))} ${esc(dep.status)}${dep.version ? " v" + esc(dep.version) : ""}` : " · never deployed"}${c.connections ? " · " + c.connections + " connection(s)" : ""}${c.error ? " · " + esc(c.error) : ""}${(c.notes || []).length ? " · " + esc(c.notes.join("; ")) : ""}${c.in_inventory_env ? "" : " · env not in inventory"}`;
+    return `<td><div class="cfg-cell cfg-cell-${c.state} ${c.in_inventory_env ? "" : "cfg-cell-x"}" title="${tip}">
+      <b>${c.state}</b>${dep ? `<small>${dep.version ? "v" + esc(dep.version) + " · " : ""}${prjAgo(dep.when)}${/fail|abort|error/i.test(dep.status) ? " ✗" : ""}</small>` : '<small>never deployed</small>'}${c.connections ? `<small>${c.connections} conn</small>` : ""}${c.notes && c.notes.length ? "<small>⚠</small>" : ""}</div></td>`;
+  };
+  return `<div class="prj-sdlc-wrap"><table class="prj-sdlc cfg-matrix"><thead><tr><th>app</th>${envs.map((e) => `<th>${esc(e)}${(d.inventory.envs || []).includes(e) ? "" : ' <span class="ci-meta" title="environment not in inventory">extra</span>'}</th>`).join("")}</tr></thead>
+    <tbody>${(d.matrix || []).map((r) => `<tr><td class="prj-sdlc-app">${esc(r.app)}${r.in_inventory ? "" : ' <span class="chip chip-amber" title="app not in the inventory — extra config">extra</span>'}</td>${r.cells.map(cell).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function cfgDetailHtml(d) {
+  const inv = d.inventory || {}, f = state.cfgFilter;
+  const cells = (d.matrix || []).flatMap((r) => r.cells), n = (k) => cells.filter((c) => c.state === k).length;
+  const extra = (d.matrix || []).filter((r) => !r.in_inventory).length + cells.filter((c) => !c.in_inventory_env && (c.path)).length;
+  const tile = (v, label, cls, tip) => `<div class="stat-tile" title="${esc(tip || "")}"><b class="${cls || ""}">${v}</b><span>${label}</span></div>`;
+  const envBtns = (d.envs || []).map((e) => `<button class="btn btn-sm ${e === state.cfgEnv ? "btn-primary" : "btn-ghost"}" data-cfg-env="${esc(e)}">${esc(e)}</button>`).join("");
+  const hasModel = state.cfgEnv && (d.model.envs || {})[state.cfgEnv];
+  return `
+    <div class="stat-tiles" style="margin:0 0 10px">
+      ${tile(inv.apps ? inv.apps.length : (d.matrix || []).length, "apps (inventory)")}${tile((d.envs || []).length, "environments")}
+      ${tile(n("effective"), "effective", "pct-good", CFG_STATE.effective[1])}${tile(n("stale"), "stale", n("stale") ? "pct-warn" : "", CFG_STATE.stale[1])}
+      ${tile(n("missing"), "missing", n("missing") ? "pct-bad" : "pct-good", CFG_STATE.missing[1])}${tile(n("dormant"), "dormant", n("dormant") ? "pct-warn" : "", CFG_STATE.dormant[1])}
+      ${tile(extra, "extra configs", extra ? "pct-warn" : "", "configs for apps / envs the inventory does not list")}${tile((d.anomalies || []).length, "issues", (d.anomalies || []).length ? "pct-bad" : "pct-good")}
+    </div>
+    ${prjInsights([
+      n("missing") ? `<b>${n("missing")}</b> deployed app/env pair(s) have no config in the team repo — those deployments run on whatever is baked in` : "",
+      n("stale") ? `<b>${n("stale")}</b> config(s) changed after their last deployment — not effective until redeployed` : "",
+      n("dormant") ? `<b>${n("dormant")}</b> config(s) exist for app/env pairs never deployed` : "",
+      extra ? `<b>${extra}</b> config(s) target apps or environments the inventory does not know — inventory drift or stale repo folders` : "",
+      (d.config_teams || []).some((t) => !Object.values(inv.teams || {}).includes(t)) ? `configs come from <b>${esc(d.config_teams.filter((t) => !Object.values(inv.teams || {}).includes(t)).join(", "))}</b>, not one of this project's inventory teams` : "",
+      !d.in_inventory ? "this project folder exists in a Control repo but <b>not in the inventory</b>" : ""].filter(Boolean))}
+    <details class="filebox acc-pg-sec" open><summary>🧩 configs × deployments · app / environment matrix</summary>${cfgMatrixHtml(d)}
+      <div class="kpi-note">a config is effective only after a deployment to that environment; stale = the config's last commit is newer than the last deployment</div></details>
+    <details class="filebox acc-pg-sec" open><summary>🗺 architecture · <span class="log-dir" style="display:inline-flex">${envBtns}</span></summary>
+      <div id="cfg-filters"></div>
+      <div id="cfg-body">${hasModel ? "" : '<div class="empty">no parsed configs in this environment</div>'}</div></details>
+    <div id="cfg-viewer"></div>`;
+}
+
+async function cfgOpenProject(name, tok) {
+  const body = document.getElementById("cfg-main"); if (!body) return;
+  state.cfgSel = name;
+  document.querySelectorAll("[data-cfg-back]").forEach((b) => b.classList.remove("hidden"));
+  body.innerHTML = `<div class="empty">loading <b>${esc(name)}</b> — matrix, deployments, topology…</div>`;
+  let d;
+  try { d = await api(`/api/configs/project/${encodeURIComponent(name)}`); } catch (e) { body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  if (tok != null && navStale(tok)) return;
+  state.cfgDetail = d;
+  state.cfgData = { model: d.model, envs: d.envs, repos: [], namespaces: d.namespaces || {}, teams: d.config_teams || [] };
+  const envs = Object.keys(d.model.envs || {});
+  if (!envs.includes(state.cfgEnv)) state.cfgEnv = envs.includes("prd") ? "prd" : envs[0] || (d.envs || [])[0] || "";
+  state.cfgFilter = { expand: new Set(), projects: [d.name] };
+  body.innerHTML = cfgDetailHtml(d);
+  cfgRerender();
+  body.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function renderConfigs() {
   const tok = navToken();
-  let d;
-  try { d = await api("/api/configs"); } catch (e) { view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
-  if (navStale(tok)) return;
-  state.cfgData = d;
-  const envs = d.envs || [];
-  if (!envs.includes(state.cfgEnv)) state.cfgEnv = envs.includes("prd") ? "prd" : envs[0] || "";
-  const f = state.cfgFilter = state.cfgFilter || {};
+  const f = state.cfgFilter = state.cfgFilter || { expand: new Set() };
   f.expand = f.expand || new Set();
+  // shell first — something to look at immediately; the overview streams in
   view().innerHTML = `
-    <div class="view-head"><h1>CONFIGURATIONS</h1>
-      <span class="sub">architecture drawn from the Control project's team config repositories</span>
-      <span class="spacer"></span><button id="cfg-refresh" class="btn btn-sm" title="re-scan the cloned repos">↻</button></div>
-    ${!(d.repos || []).length ? '<div class="kpi-note">no repository from the ADO project <b>Control</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>'
-      : `<div class="inv-chips" style="margin-bottom:8px">${d.repos.map((r) => `<span class="chip ${r.cloned ? "" : "chip-amber"}" title="${r.cloned ? r.configs + " config(s)" : "not cloned yet"}">🛡 ${esc(r.team)}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}
-         <span class="ci-meta">· ${d.configs} config.yml parsed · ${((d.model || {}).projects || []).length} projects · namespaces known: ${Object.keys(d.namespaces || {}).length}</span></div>`}
-    <div id="cfg-filters"></div>
-    <div id="cfg-body"></div>
-    <div class="kpi-note">mind map: each project is a hub with its apps around it, external endpoints cluster by kind; large hubs stay collapsed (edges bundle into counted links) until you click them or select their project · in-cluster hosts (*.svc.cluster.local, &lt;image&gt;-service, &lt;image&gt;-&lt;namespace&gt;) resolve to apps; namespaces map to projects via inventory host_vars; whole-line comments and *_bkp folders are ignored</div>`;
-  cfgRerender();
+    <div class="view-head"><button class="btn btn-sm btn-ghost ${state.cfgSel ? "" : "hidden"}" data-cfg-back title="back to all projects">◀ projects</button><h1>CONFIGURATIONS</h1>
+      <span class="sub" id="cfg-sub">inventory projects × environments vs. the Control team config repositories</span>
+      <span class="spacer"></span><button id="cfg-refresh" class="btn btn-sm" title="re-scan the cloned repos and deployments">↻</button></div>
+    <div id="cfg-head"></div>
+    <div id="cfg-main"><div class="cfg-skel"><div class="stat-tiles">${Array.from({ length: 6 }, () => '<div class="stat-tile cfg-skel-tile"><b>&nbsp;</b><span>scanning configs…</span></div>').join("")}</div><div class="empty">reading inventory · team config repos · latest deployments</div></div></div>
+    <div class="kpi-note">primary loop = inventory projects (apps × envs = expected configs) cross-checked against every cloned Control repo and the latest real deployment per app / env; nothing heavy is built until you open a project</div>`;
   const v = view();
+  const showOverview = () => {
+    const o = state.cfgOverview; if (!o) return;
+    state.cfgSel = null; state.cfgDetail = null;
+    document.querySelectorAll("[data-cfg-back]").forEach((b) => b.classList.add("hidden"));
+    document.getElementById("cfg-head").innerHTML = (o.repos || []).length ? `<div class="inv-chips" style="margin-bottom:8px">${o.repos.map((r) => `<span class="chip ${r.cloned ? "" : "chip-amber"}" title="${r.cloned ? r.configs + " config(s)" : "not cloned yet"}">🛡 ${esc(r.team)}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}<span class="ci-meta">· ${o.configs} config.yml parsed · deployments ${o.deployments.available ? "cross-referenced" : "unavailable"}${o.cached ? " · cached" : ""}</span></div>`
+      : '<div class="kpi-note">no repository from the ADO project <b>Control</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>';
+    document.getElementById("cfg-main").innerHTML = cfgOverviewHtml(o);
+  };
   v.addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-cfg-back]")) { showOverview(); return; }
+    const op = ev.target.closest("[data-cfg-open]");
+    if (op) { cfgOpenProject(op.dataset.cfgOpen, tok); return; }
+    const fl = state.cfgFilter;
     const eb = ev.target.closest("[data-cfg-env]");
-    if (eb) { state.cfgEnv = eb.dataset.cfgEnv; f.focus = ""; cfgRerender(); return; }
+    if (eb) { state.cfgEnv = eb.dataset.cfgEnv; fl.focus = ""; const hb = document.querySelector("#cfg-main details summary .log-dir"); if (hb) hb.innerHTML = (state.cfgDetail.envs || []).map((e) => `<button class="btn btn-sm ${e === state.cfgEnv ? "btn-primary" : "btn-ghost"}" data-cfg-env="${esc(e)}">${esc(e)}</button>`).join(""); cfgRerender(); return; }
     const hb = ev.target.closest("[data-cfg-hub]");
-    if (hb) { const wrap = ev.target.closest("#cfg-map"); if (wrap && wrap.dataset.dragged) return; const id = hb.dataset.cfgHub; if (f.expand.has(id)) f.expand.delete(id); else f.expand.add(id); cfgRerender(); return; }
+    if (hb) { const wrap = ev.target.closest("#cfg-map"); if (wrap && wrap.dataset.dragged) return; const id = hb.dataset.cfgHub; if (fl.expand.has(id)) fl.expand.delete(id); else fl.expand.add(id); cfgRerender(); return; }
     const ap = ev.target.closest("[data-cfg-app]");
     if (ap) { const wrap = ev.target.closest("#cfg-map"); if (wrap && wrap.dataset.dragged) return; cfgOpenApp(ap.dataset.cfgApp); return; }
     const chip = ev.target.closest("button[data-cfg-toggle]");
-    if (chip) { const k = chip.dataset.cfgToggle, val = chip.dataset.v, cur = cfgArr(f[k]); f[k] = cur.includes(val) ? cur.filter((x) => x !== val) : [...cur, val]; cfgRerender(); return; }
+    if (chip) { const k = chip.dataset.cfgToggle, val = chip.dataset.v, cur = cfgArr(fl[k]); fl[k] = cur.includes(val) ? cur.filter((x) => x !== val) : [...cur, val]; cfgRerender(); return; }
     const msb = ev.target.closest(".cfg-ms-btn");
     if (msb) { const list = msb.parentElement.querySelector(".cfg-ms-list"); document.querySelectorAll(".cfg-ms-list").forEach((l) => { if (l !== list) l.classList.add("hidden"); }); list.classList.toggle("hidden"); return; }
     if (!ev.target.closest(".cfg-ms")) document.querySelectorAll(".cfg-ms-list").forEach((l) => l.classList.add("hidden"));
-    if (ev.target.closest("#cfg-clear")) { state.cfgFilter = f.compare ? { expand: new Set(), compare: f.compare } : { expand: new Set() }; Object.assign(f, state.cfgFilter); state.cfgFilter = f; for (const k of Object.keys(f)) if (!["expand", "compare"].includes(k)) delete f[k]; cfgRerender(); return; }
-    if (ev.target.closest("#cfg-cmp-toggle")) { f.compare = f.compare || {}; f.compare.on = !f.compare.on; cfgNormalizeCompare(f); cfgRerender(); return; }
+    if (ev.target.closest("#cfg-clear")) { for (const k of Object.keys(fl)) if (!["expand", "compare"].includes(k)) delete fl[k]; fl.projects = state.cfgDetail ? [state.cfgDetail.name] : []; cfgRerender(); return; }
+    if (ev.target.closest("#cfg-cmp-toggle")) { fl.compare = fl.compare || {}; fl.compare.on = !fl.compare.on; cfgNormalizeCompare(fl); cfgRerender(); return; }
   });
-  const fh = (ev) => {
+  const fh = async (ev) => {
+    const ov = ev.target.closest("[data-cfg-ov]");
+    if (ov) { (state.cfgOvFilter = state.cfgOvFilter || {})[ov.dataset.cfgOv] = ov.value; const rows = cfgOvFilter((state.cfgOverview || {}).projects || [], state.cfgOvFilter);
+      const b = document.getElementById("cfg-ov-body"); if (b) b.innerHTML = cfgOvRows(rows); const c = document.getElementById("cfg-ov-count"); if (c) c.textContent = `${rows.length} of ${((state.cfgOverview || {}).projects || []).length}`; return; }
+    const fl = state.cfgFilter;
     const cb = ev.target.closest("input[data-cfg-toggle]");
-    if (cb) { const k = cb.dataset.cfgToggle, val = cb.dataset.v, cur = cfgArr(f[k]); f[k] = cb.checked ? [...cur, val] : cur.filter((x) => x !== val);
-      if (k === "projects") { const o = cfgOptions(state.cfgEnv, f); if (!o.envs.includes(state.cfgEnv) && o.envs.length) state.cfgEnv = o.envs[0]; f.focus = ""; }
-      cfgRerender(); const ms = document.querySelector(`[data-cfg-ms="${k}"] .cfg-ms-list`); if (ms) ms.classList.remove("hidden"); return; }
+    if (cb) { const k = cb.dataset.cfgToggle, val = cb.dataset.v, cur = cfgArr(fl[k]); fl[k] = cb.checked ? [...cur, val] : cur.filter((x) => x !== val); fl.focus = ""; cfgRerender(); const ms = document.querySelector(`[data-cfg-ms="${k}"] .cfg-ms-list`); if (ms) ms.classList.remove("hidden"); return; }
     const cs = ev.target.closest("[data-cfg-c]");
-    if (cs) { f.compare[cs.dataset.cfgC] = cs.value; cfgRerender(); return; }
+    if (cs) { fl.compare[cs.dataset.cfgC] = cs.value;
+      // comparing with ANOTHER project needs its topology — fetch + merge once
+      if (cs.dataset.cfgC === "projB" || cs.dataset.cfgC === "projA") { const other = cs.value; if (other && !(state.cfgMerged || {})[other] && other !== state.cfgDetail.name) { try { const od = await api(`/api/configs/project/${encodeURIComponent(other)}`); (state.cfgMerged = state.cfgMerged || {})[other] = true;
+        Object.entries(od.model.envs || {}).forEach(([env, m]) => { const cur = state.cfgData.model.envs[env] || (state.cfgData.model.envs[env] = { nodes: [], edges: [], anomalies: [], summary: {} }); const ids = new Set(cur.nodes.map((n) => n.id)); m.nodes.forEach((n) => { if (!ids.has(n.id)) { cur.nodes.push(n); ids.add(n.id); } }); const ek = new Set(cur.edges.map((e) => e.from + "|" + e.to + "|" + e.via)); m.edges.forEach((e) => { const k = e.from + "|" + e.to + "|" + e.via; if (!ek.has(k)) { cur.edges.push(e); ek.add(k); } }); });
+        state.cfgData.model.projects = [...new Set([...state.cfgData.model.projects, ...od.model.projects, od.name])].sort(); } catch { /* keep */ } } }
+      cfgRerender(); return; }
     const el = ev.target.closest("[data-cfg-f]"); if (!el) return;
-    f[el.dataset.cfgF] = el.value;
-    if (el.dataset.cfgF === "q") { const body = document.getElementById("cfg-body"); if (body) { body.innerHTML = cfgBodyHtml(d, state.cfgEnv, f); cfgWireMap(); } }
+    fl[el.dataset.cfgF] = el.value;
+    if (el.dataset.cfgF === "q") { const body = document.getElementById("cfg-body"); if (body) { body.innerHTML = cfgBodyHtml(state.cfgData, state.cfgEnv, fl); cfgWireMap(); } }
     else cfgRerender();
   };
   v.addEventListener("input", fh); v.addEventListener("change", fh);
-  document.getElementById("cfg-refresh").addEventListener("click", async () => { try { state.cfgData = await api("/api/configs?refresh=true"); } catch { /* keep */ } renderConfigs(); });
-}
-
-async function cfgOpenApp(id) {
-  const env = state.cfgEnv;
-  const m = ((state.cfgData || {}).model || {}).envs[env]; if (!m) return;
-  const n = m.nodes.find((x) => x.id === id); if (!n) return;
-  const box = document.getElementById("cfg-viewer"); if (!box) return;
-  const edges = m.edges.filter((e) => e.from === id || e.to === id);
-  let file = "";
-  if (n.team && n.path) {
-    try { const r = await api(`/api/configs/file?team=${encodeURIComponent(n.team)}&path=${encodeURIComponent(n.path)}`); file = r.text; }
-    catch (e) { file = `⚠ ${e.message}`; }
-  }
-  box.innerHTML = `<div class="panel" style="margin-top:10px"><h2>📄 ${esc(n.project)} / ${esc(n.app)} <span class="ci-meta">· ${esc(env)}${n.team ? " · " + esc(n.team) : ""}${n.path ? " · " + esc(n.path) : ""}</span>
-      <span class="spacer"></span><button class="btn btn-sm btn-ghost" id="cfg-viewer-close">✕</button></h2>
-    <div class="log-idx-list">${edges.map((e) => `<div class="log-idx"><span class="chip">${e.from === id ? "→ out" : "← in"}</span>
-      <span class="chip" style="border-color:${cfgColor(e.kind)}">${esc(e.label)}</span><b>${esc((e.from === id ? e.to : e.from).replace(/^\w+:/, ""))}</b>${e.port ? ":" + e.port : ""}<span class="ci-meta">via ${esc(e.via)}</span></div>`).join("") || '<div class="empty">no connections</div>'}</div>
-    ${file ? `<pre class="cfg-file">${esc(file)}</pre><div class="kpi-note">credentials and secret-looking keys are masked before the file leaves the server</div>` : ""}</div>`;
-  document.getElementById("cfg-viewer-close").addEventListener("click", () => { box.innerHTML = ""; });
-  box.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("cfg-refresh").addEventListener("click", async () => {
+    document.getElementById("cfg-main").innerHTML = '<div class="empty">re-scanning repos and deployments…</div>';
+    try { state.cfgOverview = await api("/api/configs/overview?refresh=true"); } catch { /* keep */ }
+    if (state.cfgSel) cfgOpenProject(state.cfgSel, tok); else showOverview(); });
+  try { state.cfgOverview = await api("/api/configs/overview"); } catch (e) { if (!navStale(tok)) document.getElementById("cfg-main").innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  if (navStale(tok)) return;
+  if (state.cfgSel) cfgOpenProject(state.cfgSel, tok); else showOverview();
 }
 
 /* ================= PROJECTS — per-project drill-down ================= */
@@ -7141,7 +7289,7 @@ function prjEvFilterEvt(ev) {
 // platform, quick facts, and an activity pulse per project so the list can be
 // sorted by what moved most recently.
 const CAT_SRC = { commits: ["⧗", "commit"], builds: ["⚙", "build"], deploys: ["🚀", "deploy"],
-  releases: ["📦", "release"], tests: ["🧪", "test run"] };
+  releases: ["📦", "release"], tests: ["🧪", "test run"], stdchanges: ["🧾", "standard change"] };
 function prjCatalogFilter(list, f) {
   const q = (f.q || "").toLowerCase().split(/\s+/).filter(Boolean);
   const teamsOf = (p) => Object.values(p.teams || {}).filter(Boolean);
