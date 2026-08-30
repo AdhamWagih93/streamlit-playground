@@ -6357,7 +6357,6 @@ function prjBodyHtml(d) {
               <span class="pgv-track prj-wl-track"><span class="prj-wl-seg" style="width:${(a.git / max * 100).toFixed(1)}%;background:#8471c9" title="git ${esc(logHsize(a.git))}"></span><span class="prj-wl-seg" style="width:${(a.elk / max * 100).toFixed(1)}%;background:#1497b3" title="elk ${esc(logHsize(a.elk))}"></span></span>
               <span class="pgv-count">${esc(logHsize(a.storage))}</span></div>`).join("") + '<div class="kpi-note">violet = git · teal = elk (logs)</div>'; })()}
         </div>
-        ${(us.teams || []).length > 1 ? `<div class="pgv-card"><div class="pgv-title">minutes per team</div>${prjBar(us.teams, "pgv-bar-warn")}</div>` : ""}
       </div>
       ${(() => {
         const out = [];
