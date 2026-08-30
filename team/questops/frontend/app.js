@@ -5622,8 +5622,27 @@ function prjAuthorColors(authors) {
 
 // per-day histogram STACKED by contributor — each column splits into the
 // authors' colors; tooltip carries the per-member breakdown
+// long windows: merge adjacent buckets so a spark never exceeds ~90 columns
+// (365 daily columns × contributor segments = thousands of DOM nodes that
+// bloat the printed PDF and can't be read anyway)
+function prjSparkBin(buckets, maxCols = 90) {
+  const b = buckets || [];
+  if (b.length <= maxCols) return b;
+  const size = Math.ceil(b.length / maxCols);
+  const out = [];
+  for (let i = 0; i < b.length; i += size) {
+    const grp = b.slice(i, i + size);
+    const by = {};
+    grp.forEach((x) => Object.entries(x.by_author || {}).forEach(([a, n]) => { by[a] = (by[a] || 0) + n; }));
+    const first = grp[0], last = grp[grp.length - 1];
+    const lab = (x) => x.day || x.week || x.month || "";
+    out.push({ day: `${lab(first)} → ${lab(last)}`, count: grp.reduce((n, x) => n + x.count, 0), by_author: by });
+  }
+  return out;
+}
+
 function prjSparkStacked(perDay, colorOf, unit) {
-  const days = perDay || [];
+  const days = prjSparkBin(perDay);
   if (!days.length) return "";
   const max = Math.max(...days.map((b) => b.count), 1);
   return `<div class="prj-spark prj-spark-st">${days.map((b) => {
@@ -5638,7 +5657,7 @@ function prjSparkStacked(perDay, colorOf, unit) {
 }
 
 function prjSpark(perDay, unit) {
-  const days = perDay || [];
+  const days = prjSparkBin(perDay);
   if (!days.length) return "";
   const max = Math.max(...days.map((b) => b.count), 1);
   return `<div class="prj-spark">${days.map((b) =>
@@ -5879,7 +5898,8 @@ function prjEventsBody(events, f) {
     </div>`;
   }).join("") + (more > 0
     ? `<div class="prj-ev-more"><button class="btn btn-sm btn-ghost" data-prj-ev-more>⬇ show ${Math.min(more, 300)} more <span class="ci-meta">(${logInt(evs.length)} of ${logInt(all.length)} shown)</span></button></div>`
-    : `<div class="ci-meta" style="padding:6px">— all ${logInt(all.length)} matching event(s) shown —</div>`);
+    : `<div class="ci-meta" style="padding:6px">— all ${logInt(all.length)} matching event(s) shown —</div>`)
+    + `<div class="ci-meta prj-print-only">printed report lists the ${Math.min(all.length, 80)} most recent of ${logInt(all.length)} event(s) — the full log is on the portal</div>`;
 }
 
 function prjEventsHtml(d) {

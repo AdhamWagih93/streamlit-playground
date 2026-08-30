@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -11,6 +12,9 @@ from .routers import (access_routes, activity, ai, auth_routes, deps, dive,
 from .seed import cleanup_demo_data, seed_demo
 
 app = FastAPI(title=settings.app_name, docs_url="/api/docs", openapi_url="/api/openapi.json")
+# big JSON (the Projects report can carry tens of thousands of events) —
+# compress anything over 1 KB; browsers decode transparently
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 for router in (auth_routes.router, work.router, game.router,
                ai.router, insights.router,

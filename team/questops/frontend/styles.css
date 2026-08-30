@@ -1596,12 +1596,22 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
   .prj-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .prj-sdlc-wrap, .prj-heat { overflow: visible !important; max-width: 100%; }
   .prj-sdlc { font-size: 9.5px; width: 100%; table-layout: auto; }
-  .prj-sdlc th, .prj-sdlc td { padding: 3px 4px; }
+  .prj-sdlc th, .prj-sdlc td { padding: 3px 4px; white-space: normal; }
+  .prj-sdlc { table-layout: fixed; }
+  .prj-sdlc-cell, .prj-sdlc tfoot td { white-space: normal; flex-wrap: wrap; row-gap: 2px; }
   .prj-ev-detail { white-space: normal !important; }
   .stat-tiles { flex-wrap: wrap; }
   .dora-strip { break-inside: avoid; }
   .prj-spark { max-width: 100%; }
   img.brand-logo { display: inline-block !important; }
+  /* keep the PDF light: no shadows, gradients or page-background patterns
+     (each would be rasterized per page), no animations, bounded lists */
+  * { box-shadow: none !important; text-shadow: none !important; filter: none !important;
+      backdrop-filter: none !important; animation: none !important; transition: none !important; }
+  html, body, .app, .main, #view, .panel, .filebox { background-image: none !important; }
+  body, .app, .main, #view { background: #fff !important; }
+  .prj-ev:nth-child(n+81), .prj-ev-more { display: none !important; }
+  .prj-print-only { display: block !important; padding: 6px; }
   .prj-spark, .pgv-card, .prj-sdlc-wrap, .prj-heat, .stat-tiles, .prj-name { break-inside: avoid; }
   .prj-name { position: static !important; box-shadow: none !important; }
   .prj-ev-list { max-height: none !important; overflow: visible !important; }
@@ -1729,3 +1739,5 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .dora-delta { font: 600 9.5px var(--mono); margin-top: 4px; color: var(--faint); cursor: help; }
 .dora-delta.up { color: #43c884; }
 .dora-delta.down { color: #c0841c; }
+
+.prj-print-only { display: none; }
