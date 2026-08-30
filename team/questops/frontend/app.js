@@ -6441,6 +6441,7 @@ const PRJ_EV = {  // event-log types: icon, label, chip class
   change: ["📝", "jira change", "chip-amber"],
   autotest: ["🧪", "auto test", "chip-cyan"],
   stdchange: ["🧾", "standard change", "chip-violet"],
+  pipelinecfg: ["🛠", "pipeline configuration", "chip-amber"],
 };
 
 function prjStatusChip(st) {
@@ -7192,6 +7193,23 @@ function prjBodyHtml(d) {
     </details>`;
 
   // ---- standard changes owned by this project + their run history --------
+  const pc = d.pipelinecfg || {};
+  const pcfgSec = pc.error ? `<details class="filebox acc-pg-sec" open><summary>🛠 pipeline configuration</summary>${prjErr(pc, "pipeline configuration")}</details>` : `
+    <details class="filebox acc-pg-sec" open><summary>🛠 pipeline configuration · <b>${logInt(pc.commits || 0)}</b> change(s) in ${prjWin(d)}${pc.files_changed ? ` · ${logInt(pc.files_changed)} file(s)` : ""} <span class="ci-meta">— this project's folder in the inventories / ocp-templates repos, from the clones' git history</span></summary>
+      <div class="inv-chips" style="margin:4px 0 8px">${(pc.repos || []).map((r) => `<span class="chip ${r.cloned ? (r.paths || []).length ? "" : "chip-amber" : "chip-red"}" title="${r.cloned ? (r.paths || []).length ? esc(r.paths.join(", ")) : "no folder for this project" : r.defined ? "not cloned" : "not defined on the Repositories page"}">${esc(r.name)} · ${r.cloned ? (r.paths || []).length ? logInt(r.commits) : "no folder" : r.defined ? "not cloned" : "not defined"}</span>`).join("")}</div>
+      ${pc.note ? `<div class="empty">${esc(pc.note)}</div>` : ""}
+      ${pc.commits ? `
+      ${prjSpark(pc.per_period, "change(s)")}
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">changes per author</div>${prjBar(pc.by_author, "", prjAuthorColors(pc.by_author))}</div>
+        <div class="pgv-card"><div class="pgv-title">changes per repository</div>${prjBar(pc.by_repo, "pgv-bar-warn")}</div>
+      </div>
+      <div class="log-idx-list">${(pc.recent || []).slice(0, 25).map((c) => `<div class="log-idx"><span class="ci-meta" style="flex:none">${esc(c.when)}</span><span class="chip ${c.repo === "inventories" ? "chip-cyan" : "chip-violet"}">${esc(c.repo)}</span>${(c.envs || []).map((e) => `<span class="chip ${/pr(o?)d/i.test(e) ? "chip-amber" : ""}">${esc(e)}</span>`).join("")}<span class="mem">${prjMemDot(c.who)}${esc(c.who)}</span><span>${esc(c.subject)}</span><span class="ci-meta" title="${esc((c.files || []).join("\n"))}">${(c.files || []).length} file(s) · ${esc(c.sha)}</span></div>`).join("")}${(pc.recent || []).length > 25 ? `<div class="ci-meta">… ${(pc.recent || []).length - 25} more in the event log</div>` : ""}</div>
+      ${(() => { const out = []; const a = pc.by_author || []; const tot = a.reduce((n, x) => n + x.count, 0);
+        if (a.length && tot) out.push(`<b>${esc(a[0].key)}</b> made ${pct(a[0].count, tot)}% of pipeline-configuration changes${a.length === 1 ? " — single maintainer" : ""}`);
+        const prd = (pc.recent || []).filter((c) => (c.envs || []).some((e) => /pr(o?)d/i.test(e))).length; if (prd) out.push(`<b>${prd}</b> change(s) touched production configuration`);
+        return prjInsights(out); })()}` : ""}
+    </details>`;
   const sc = d.stdchanges || {};
   const stdSec = sc.error ? `<details class="filebox acc-pg-sec" open><summary>🧾 standard changes</summary>${prjErr(sc, "standard changes")}</details>`
     : !sc.engine_found && !(sc.changes || []).length ? "" : `
@@ -7242,7 +7260,7 @@ function prjBodyHtml(d) {
     </details>`;
 
   return head + prjSdlcHtml(d) + contrib + prjEventsHtml(d)
-    + commits + jiraSec + autotest + security + stdSec + usage + logging + sysCards;
+    + commits + jiraSec + autotest + security + pcfgSec + stdSec + usage + logging + sysCards;
 }
 
 // event-log filter clicks/typing re-render only the list (delegated on body)

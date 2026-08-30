@@ -1343,6 +1343,112 @@ def _demo_cat_activity(inv: dict) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- pipeline configuration (git history of inventories / ocp-templates)
+_PCFG_REPOS = ("inventories", "ocp-templates")
+_PCFG_MAX = 5000
+_ENV_SEG = re.compile(r"^(dev|qc|uat|prd|prod|production|test|stg|staging)(?:[_\-]|$)", re.I)
+
+
+def _pcfg_project_paths(root, name: str) -> list[str]:
+    """Folders (up to two levels deep) whose name is this project — both repos
+    are structured per project, but ocp-templates may nest them one level down."""
+    import subprocess
+    try:
+        p = subprocess.run(["git", "ls-files", "-z"], cwd=str(root), capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    want = _norm(name)
+    paths: set = set()
+    for f in p.stdout.split("\0"):
+        segs = f.split("/")
+        for depth in (1, 2):
+            if len(segs) > depth and _norm(segs[depth - 1]) == want:
+                paths.add("/".join(segs[:depth]))
+                break
+    return sorted(paths)
+
+
+def _pcfg_log(root, paths: list[str], days: int) -> list[dict]:
+    """Commits touching `paths`, newest first, with author + changed files —
+    read from the clone's history (never from ef-git-commits)."""
+    import subprocess
+    cmd = ["git", "log", f"--max-count={_PCFG_MAX}", "--format=%x01%H|%an|%ae|%cI|%s", "--name-only", "--no-renames"]
+    if days:
+        cmd.append(f"--since={days} days ago")
+    cmd += ["--", *paths]
+    try:
+        p = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out: list = []
+    cur = None
+    for line in p.stdout.splitlines():
+        if line.startswith("\x01"):
+            sha, an, ae, when, subj = (line[1:].split("|", 4) + ["", "", "", "", ""])[:5]
+            cur = {"sha": sha[:10], "sha_full": sha, "who": _user_display(an or ae), "email": ae,
+                   "when": when[:16].replace("T", " "), "subject": subj, "files": []}
+            out.append(cur)
+        elif line.strip() and cur is not None:
+            f = line.strip()
+            if any(f == pp or f.startswith(pp + "/") for pp in paths):
+                cur["files"].append(f)
+    return [c for c in out if c["files"]]
+
+
+def _pcfg_envs(files: list[str]) -> list[str]:
+    envs: set = set()
+    for f in files:
+        for seg in f.split("/")[1:]:
+            m = _ENV_SEG.match(seg)
+            if m:
+                envs.add(m.group(1).lower())
+    return sorted(envs, key=lambda e: ({"dev": 1, "qc": 2, "uat": 3, "prd": 4}.get(e, 9), e))
+
+
+def _sec_pipelinecfg(name: str, days: int) -> dict:
+    """Edits to this project's folder in the cloned `inventories` and
+    `ocp-templates` repos = pipeline configuration changes (Ansible
+    inventories, group/host vars, OpenShift templates). Detected from the
+    clones' git history — authors, files, and env hints from path segments."""
+    from . import repos as repos_mod
+    cfg = {(r.get("name") or "").lower(): r for r in repos_mod.configured()}
+    out_repos: list = []
+    commits: list = []
+    for key in _PCFG_REPOS:
+        r = cfg.get(key)
+        row = {"name": key, "defined": r is not None, "cloned": False, "paths": [], "commits": 0}
+        if r is not None:
+            root = repos_mod._dir_for(r)
+            row["cloned"] = root.exists()
+            if row["cloned"]:
+                row["paths"] = _pcfg_project_paths(root, name)
+                if row["paths"]:
+                    for c in _pcfg_log(root, row["paths"], days):
+                        c["repo"] = r.get("name") or key
+                        c["envs"] = _pcfg_envs(c["files"])
+                        commits.append(c)
+                        row["commits"] += 1
+        out_repos.append(row)
+    commits.sort(key=lambda c: c["when"], reverse=True)
+    by_author: dict = {}
+    by_repo: dict = {}
+    per_period: dict = {}
+    for c in commits:
+        by_author[c["who"]] = by_author.get(c["who"], 0) + 1
+        by_repo[c["repo"]] = by_repo.get(c["repo"], 0) + 1
+        pk = c["when"][:10] if days else c["when"][:7] + "-01"
+        per_period[pk] = per_period.get(pk, 0) + 1
+    top = lambda d: sorted(({"key": k, "count": v} for k, v in d.items()), key=lambda x: -x["count"])  # noqa: E731
+    note = "" if any(r["cloned"] for r in out_repos) else "inventories / ocp-templates not defined or not cloned (Repositories page)"
+    if not note and not any(r["paths"] for r in out_repos):
+        note = "no folder named after this project in the cloned inventories / ocp-templates repos"
+    return {"repos": out_repos, "commits": len(commits), "recent": commits[:_PCFG_MAX],
+            "files_changed": sum(len(c["files"]) for c in commits),
+            "by_author": _fold_users(top(by_author)), "by_repo": top(by_repo),
+            "per_period": [{"day": k, "count": v} for k, v in sorted(per_period.items())],
+            "note": note}
+
+
 # ---------------------------------------------------------------- standard changes
 _STD_PAGE = 5000   # ef-ops-db-changes-standard search_after page size
 
@@ -1603,6 +1709,13 @@ def _assemble_events(out: dict) -> list[dict]:
                        "url": c.get("url") or "",
                        "detail": "; ".join(f"{i['field']}: {i['from'] or '—'} → {i['to'] or '—'}"
                                            for i in c.get("items") or [])})
+    for c in ((out.get("pipelinecfg") or {}).get("recent")) or []:
+        events.append({"ts": c.get("when") or "", "type": "pipelinecfg",
+                       "app": c.get("repo") or "", "env": ", ".join(c.get("envs") or []),
+                       "status": "", "version": c.get("sha") or "",
+                       "who": c.get("who") or "", "test": False,
+                       "detail": " · ".join(x for x in (c.get("subject"), f"{len(c.get('files') or [])} file(s): " + ", ".join(
+                           f.split("/", 1)[-1] for f in (c.get("files") or [])[:4]) + (" …" if len(c.get("files") or []) > 4 else "")) if x)})
     for r in ((out.get("stdchanges") or {}).get("recent")) or []:
         events.append({"ts": r.get("when") or "", "type": "stdchange",
                        "app": r.get("job") or r.get("script") or "", "env": r.get("env") or "",
@@ -1755,6 +1868,30 @@ def _sec_logging(name: str) -> dict:
 
 
 # ---------------------------------------------------------------- demo data
+def _demo_pipelinecfg(name: str, days: int) -> dict:
+    """Demo: the real git walk when the demo repos are cloned, else a story."""
+    live = _sec_pipelinecfg(name, days)
+    if live.get("commits"):
+        return live
+    now = _now()
+    mk = lambda h, who, repo, subj, files: {"sha": f"{abs(hash((name, h))) % 0xfffffff:07x}", "who": who, "repo": repo,  # noqa: E731
+                                            "when": (now - dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M"), "subject": subj,
+                                            "files": files, "envs": _pcfg_envs(files)}
+    commits = [mk(5, "alice", "inventories", f"{name}: bump prd replicas for payments", [f"{name}/group_vars/prd_payments/vars.yml"]),
+               mk(30, "bob", "ocp-templates", f"{name}: add readiness probe to checkout route", [f"{name}/checkout/deploymentconfig.yml", f"{name}/checkout/route.yml"]),
+               mk(70, "carol", "inventories", f"{name}: new uat hosts", [f"{name}/payments.yml", f"{name}/host_vars/uat-pay-01.yml"])]
+    commits = [c for c in commits if not days or (now - dt.datetime.strptime(c["when"], "%Y-%m-%d %H:%M")).days <= days]
+    ba: dict = {}
+    for c in commits:
+        ba[c["who"]] = ba.get(c["who"], 0) + 1
+    return {"repos": [{"name": "inventories", "defined": True, "cloned": True, "paths": [name], "commits": sum(1 for c in commits if c["repo"] == "inventories")},
+                      {"name": "ocp-templates", "defined": True, "cloned": True, "paths": [name], "commits": sum(1 for c in commits if c["repo"] == "ocp-templates")}],
+            "commits": len(commits), "recent": commits, "files_changed": sum(len(c["files"]) for c in commits),
+            "by_author": [{"key": k, "count": v} for k, v in sorted(ba.items(), key=lambda x: -x[1])],
+            "by_repo": [{"key": "inventories", "count": 2}, {"key": "ocp-templates", "count": 1}],
+            "per_period": [{"day": c["when"][:10], "count": 1} for c in commits], "note": ""}
+
+
 def _demo_report(name: str, days: int) -> dict:
     import hashlib
     seed = int(hashlib.sha1(name.encode()).hexdigest()[:6], 16)
@@ -2083,7 +2220,8 @@ def _demo_report(name: str, days: int) -> dict:
                    by_requester=[], by_status=[], by_job=[], per_period=[])
     return {"commits": commits, "jira": jira, "jira_changes": changes,
             "scans": scans, "cicd": cicd, "prev": prev,
-            "autotest": autotest, "usage": usage, "stdchanges": std}
+            "autotest": autotest, "usage": usage, "stdchanges": std,
+            "pipelinecfg": _demo_pipelinecfg(name, days)}
 
 
 # ---------------------------------------------------------------- public API
@@ -2139,6 +2277,7 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("autotest", _sec_autotest, name, days)
         guard("usage", _sec_usage, name, days)
         guard("stdchanges", _sec_stdchanges, name, days)
+        guard("pipelinecfg", _sec_pipelinecfg, name, days)
     guard("logging", _sec_logging, name)
     # contributor → TEAM folds for the Jira change log (window + all time)
     jc = out.get("jira_changes") or {}
