@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import current_user
 from ..db import User
-from ..integrations import depmatrix, inventory, jenkins
+from ..integrations import depmatrix, inventory, jenkins, stdchanges
 from ..integrations.repos import RepoError
 
 router = APIRouter(prefix="/api", tags=["deps"])
@@ -38,3 +38,12 @@ def inventory_configs(refresh: bool = False, user: User = Depends(current_user))
     if refresh:
         inventory.invalidate()
     return inventory.parse(refresh)
+
+
+@router.get("/stdchanges")
+def std_changes(slot: int, refresh: bool = False, user: User = Depends(current_user)):
+    """Engine repo: catalogue of self-service DB standard changes."""
+    try:
+        return stdchanges.analyze(slot, user.username, refresh=refresh)
+    except RepoError as exc:
+        raise HTTPException(400, str(exc))

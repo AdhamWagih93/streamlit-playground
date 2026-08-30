@@ -1800,3 +1800,20 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .cat-pulses { display: flex; gap: 8px; flex-wrap: wrap; }
 .cat-pulse { font: 500 10.5px var(--mono); color: var(--faint); white-space: nowrap; }
 .cat-pulse small { font-size: 9px; margin-left: 3px; color: #1497b3; }
+
+/* ================= standard changes (Engine) ================= */
+.std-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 10px; }
+.std-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; border-left: 4px solid #1497b3; }
+.std-card.std-bad { border-left-color: #c0841c; }
+.std-head, .std-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.std-cat { font: 700 10px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--faint);
+  padding: 1px 6px; border: 1px solid var(--line); border-radius: 6px; }
+.std-name { font: 800 14px var(--body); }
+.std-fields { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.std-map { font: 500 10.5px var(--mono); color: var(--text); background: rgba(20,151,179,.07); border-radius: 6px; padding: 1px 6px; }
+.std-map i { font-style: normal; color: var(--faint); margin: 0 4px; }
+.std-scripts { display: flex; flex-wrap: wrap; gap: 4px; }
+.std-sql { font: 500 10.5px var(--mono); padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line); }
+.std-notsql { opacity: .6; text-decoration: line-through; }
+.std-issues { display: flex; flex-wrap: wrap; gap: 4px; }

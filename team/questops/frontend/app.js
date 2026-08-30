@@ -2011,6 +2011,19 @@ async function renderRepos() {
         ? `<div class="panel"><div class="empty">⚠ ${esc(state.depsData.error)}</div></div>`
         : depPanelHtml(state.depsData)}</div>`;
     }
+    // Engine-only: self-service DB standard changes catalogue
+    let stdHtml = "";
+    if (isEngine && state.stdOpen) {
+      if (!state.stdData || state.stdData._slot !== cur.slot || state.stdRefresh) {
+        try {
+          state.stdData = { ...(await api(`/api/stdchanges?slot=${cur.slot}${state.stdRefresh ? "&refresh=true" : ""}`)), _slot: cur.slot };
+        } catch (e) { state.stdData = { _slot: cur.slot, error: e.message }; }
+        state.stdRefresh = false;
+      }
+      stdHtml = `<div class="deps-embed std-embed" id="std-embed">${state.stdData.error
+        ? `<div class="panel"><div class="empty">⚠ ${esc(state.stdData.error)}</div></div>`
+        : stdPanelHtml(state.stdData)}</div>`;
+    }
     // inventories: parsed per-project config view (teams, apps, envs, hosts, vars)
     let invHtml = "";
     if (isInventories && state.invOpen) {
@@ -2083,7 +2096,8 @@ async function renderRepos() {
           ${cur.branch_count ? ` · 🌿 ${cur.branch_count} branch${cur.branch_count === 1 ? "" : "es"}` : ""}
           ${cur.dirty ? ` · <span class="pct-warn">${cur.dirty} locally modified</span>` : ""}</span>
         <button class="btn btn-sm ${state.scanOpen ? "btn-primary" : ""}" id="repo-scan">🔬 Tech scan</button>
-        ${isEngine ? `<button class="btn btn-sm ${state.depsOpen ? "btn-primary" : ""}" id="repo-deps" title="pipelines → playbooks / roles / scripts">⛓ Dependencies</button>` : ""}
+        ${isEngine ? `<button class="btn btn-sm ${state.depsOpen ? "btn-primary" : ""}" id="repo-deps" title="pipelines → playbooks / roles / scripts">⛓ Dependencies</button>
+        <button class="btn btn-sm ${state.stdOpen ? "btn-primary" : ""}" id="repo-std" title="self-service DB standard changes (run_db_script_on_local)">🧾 Standard Changes</button>` : ""}
         ${isInventories ? `<button class="btn btn-sm ${state.invOpen ? "btn-primary" : ""}" id="repo-inv" title="per-project apps, teams, envs, hosts &amp; vars">🧭 Configurations</button>` : ""}
         <button class="btn btn-sm ${state.branchesOpen ? "btn-primary" : ""}" id="repo-branches" title="list branches and compare deltas">🌿 Branches</button>
         <button class="btn btn-sm ${state.historyOpen ? "btn-primary" : ""}" id="repo-history">🕘 History</button>
@@ -2096,7 +2110,7 @@ async function renderRepos() {
       </div>
       <div id="remote-banner">${remoteBannerHtml(remoteData)}</div>
       ${scanHtml}
-      ${depsHtml}
+      ${depsHtml}${stdHtml}
       ${invHtml}
       ${state.branchesOpen ? branchesPanelHtml(branchesData) : ""}
       ${state.historyOpen ? historyPanelHtml(histData) : ""}
@@ -2227,6 +2241,9 @@ async function renderRepos() {
   on("repo-scan", () => { state.scanOpen = !state.scanOpen; renderRepos(); });
   on("repo-rescan", () => { state.scanData = null; renderRepos(); });
   on("repo-deps", () => { state.depsOpen = !state.depsOpen; renderRepos(); });
+  on("repo-std", () => { state.stdOpen = !state.stdOpen; renderRepos(); });
+  on("std-refresh", () => { state.stdRefresh = true; renderRepos(); });
+  if (isEngine && state.stdOpen && state.stdData && !state.stdData.error) wireStdPanel();
   on("dep-refresh", () => { state.depsRefresh = true; state.depRoot = null; renderRepos(); });
   if (isEngine && state.depsOpen && state.depsData && !state.depsData.error)
     wireDepPanel(state.depsData);
@@ -5592,6 +5609,111 @@ async function renderAccess() {
   const apBox = document.getElementById("acc-approvers");
   apBox.addEventListener("input", accApprFilter);
   apBox.addEventListener("change", accApprFilter);
+}
+
+
+/* ================= STANDARD CHANGES (Engine) ================= */
+// Self-service DB standard changes: files/<tech>/<Category_Service>/*.sql +
+// vars/<change>/{vars.yml, uat.yml, prd.yml}. Env files are classified only —
+// vaulted / plaintext / missing — never decrypted, never shown.
+const STD_TECH_ICON = { oracle: "🔴", sqlserver: "🟦", postgresql: "🐘", postgres: "🐘" };
+function stdEnvChip(env, e) {
+  const st = (e || {}).state || "missing";
+  const cls = st === "vaulted" ? "chip-green" : st === "plaintext" ? "chip-red" : "chip-amber";
+  const g = st === "vaulted" ? "🔒" : st === "plaintext" ? "⚠" : "∅";
+  const tip = st === "vaulted" ? "ansible-vault encrypted (never decrypted here)"
+    : st === "plaintext" ? "NOT vault-encrypted — connection secrets sit in plaintext" : "file missing";
+  return `<span class="chip ${cls}" title="${env}.yml — ${tip}">${g} ${env}</span>`;
+}
+function stdFilter(list, f) {
+  const q = (f.q || "").toLowerCase().split(/\s+/).filter(Boolean);
+  return list.filter((c) => {
+    const v = c.vars || {};
+    const hay = [c.name, c.category, c.service, ...c.technologies, v.project_name, v.requester_team, v.approver_team,
+      ...(v.notified_teams || []), ...(v.rbac || []), ...(v.csv_fields || []), ...(v.actual_fields || []), ...c.scripts.map((x) => x.name)];
+    return (!f.tech || f.tech === "all" || c.technologies.includes(f.tech))
+      && (!f.cat || f.cat === "all" || c.category === f.cat)
+      && (!f.team || f.team === "all" || [v.requester_team, v.approver_team, ...(v.notified_teams || [])].includes(f.team))
+      && (!f.only || f.only === "all" || (f.only === "issues" ? c.issues.length : v.m2m_flag))
+      && q.every((t) => hay.some((h) => String(h || "").toLowerCase().includes(t)));
+  });
+}
+function stdCards(list, f) {
+  if (!list.length) return '<div class="empty">no standard changes match</div>';
+  const groups = {};
+  list.forEach((c) => (c.technologies.length ? c.technologies : ["(no scripts)"]).forEach((t) => (groups[t] = groups[t] || []).push(c)));
+  const card = (c) => {
+    const v = c.vars || {};
+    const fields = (v.csv_fields || []).map((cf, i) => `<span class="std-map" title="csv → actual${(v.default_values || [])[i] ? " · default " + esc(v.default_values[i]) : ""}">${esc(cf)}<i>→</i>${esc((v.actual_fields || [])[i] || "?")}</span>`).join("");
+    return `
+    <div class="std-card ${c.issues.length ? "std-bad" : ""}">
+      <div class="std-head"><span class="std-cat">${esc(c.category)}</span><span class="std-name">${esc(c.service)}</span>
+        ${c.technologies.map((t) => `<span class="chip chip-cyan">${STD_TECH_ICON[t.toLowerCase()] || "🗄"} ${esc(t)}</span>`).join("")}
+        ${v.m2m_flag ? '<span class="chip chip-violet" title="m2m_flag: machine-to-machine change">m2m</span>' : ""}
+        <span class="spacer"></span>
+        <span class="ci-meta" title="${esc(c.scripts.map((x) => `${x.name} (${logHsize(x.size)})`).join(", "))}">${c.sql_files} sql · ${esc(logHsize(c.script_bytes))}</span></div>
+      <div class="std-row">
+        ${v.project_name ? `<span class="chip" title="project_name">📁 ${esc(v.project_name)}</span>` : '<span class="chip chip-amber">no project</span>'}
+        ${v.requester_team ? `<span class="chip" title="requester_team">🙋 ${esc(v.requester_team)}</span>` : ""}
+        ${v.approver_team ? `<span class="chip" title="approver_team">✅ ${esc(v.approver_team)}</span>` : ""}
+        ${(v.notified_teams || []).map((t) => `<span class="chip" title="notified_teams">🔔 ${esc(t)}</span>`).join("")}
+        ${(v.rbac || []).map((r) => `<span class="chip chip-violet" title="rbac">🔑 ${esc(r)}</span>`).join("")}
+        <span class="spacer"></span>${stdEnvChip("uat", c.env.uat)}${stdEnvChip("prd", c.env.prd)}</div>
+      ${fields ? `<div class="std-fields">${fields}</div>` : c.vars ? '<div class="ci-meta">no csv/actual field mapping</div>' : '<div class="ci-meta pct-warn">vars.yml missing</div>'}
+      <div class="std-scripts">${c.scripts.map((x) => `<code class="std-sql ${x.sql ? "" : "std-notsql"}" title="${esc(x.technology)} · ${logHsize(x.size)}">${esc(x.name)}</code>`).join("")}</div>
+      ${c.issues.length ? `<div class="std-issues">${c.issues.map((i) => `<span class="chip ${/plaintext|missing/.test(i) ? "chip-red" : "chip-amber"}">${esc(i)}</span>`).join("")}</div>` : ""}
+    </div>`;
+  };
+  return Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([t, cs]) => `<div class="cat-group"><div class="cat-group-head">${STD_TECH_ICON[t.toLowerCase()] || "🗄"} ${esc(t)} <span class="ci-meta">· ${cs.length} change${cs.length === 1 ? "" : "s"}</span></div>
+      <div class="std-grid">${cs.map(card).join("")}</div></div>`).join("");
+}
+function stdPanelHtml(d) {
+  if (!d.found) return `<div class="panel"><h2>🧾 Standard changes</h2><div class="empty">no <code>${esc(d.role)}</code> folder in this checkout</div></div>`;
+  const sm = d.summary || {}, list = d.changes || [];
+  const f = state.stdFilter = state.stdFilter || {};
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur || "all") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+  const teams = [...new Set(list.flatMap((c) => { const v = c.vars || {}; return [v.requester_team, v.approver_team, ...(v.notified_teams || [])]; }).filter(Boolean))].sort();
+  const rows = stdFilter(list, f);
+  return `
+    <div class="panel"><h2>🧾 Standard changes <span class="ci-meta">· self-service DB scripts under <code>${esc(d.role)}</code></span>
+      <span class="spacer"></span><button class="btn btn-sm" id="std-refresh" title="re-scan the checkout">↻</button></h2>
+      <div class="stat-tiles" style="margin:8px 0 10px">
+        <div class="stat-tile"><b>${sm.changes || 0}</b><span>standard changes</span></div>
+        <div class="stat-tile"><b>${(sm.technologies || []).length}</b><span>db technologies</span></div>
+        <div class="stat-tile"><b>${(sm.categories || []).length}</b><span>categories</span></div>
+        <div class="stat-tile"><b>${sm.sql_files || 0}</b><span>sql scripts</span></div>
+        <div class="stat-tile"><b>${sm.m2m || 0}</b><span>m2m changes</span></div>
+        <div class="stat-tile"><b class="${sm.vaulted_env ? "pct-good" : ""}">${sm.vaulted_env || 0}</b><span>vaulted env files</span></div>
+        <div class="stat-tile"><b class="${sm.plaintext_env ? "pct-bad" : "pct-good"}">${sm.plaintext_env || 0}</b><span>plaintext env files</span></div>
+        <div class="stat-tile"><b class="${sm.with_issues ? "pct-warn" : "pct-good"}">${sm.with_issues || 0}</b><span>with issues</span></div>
+      </div>
+      <div class="acc-filters cat-filters">
+        <input data-std-f="q" placeholder="🔎 change / category / team / field / script…" value="${esc(f.q || "")}">
+        <select data-std-f="tech">${opt("all", "technology: any", f.tech)}${(sm.technologies || []).map((t) => opt(t, t, f.tech)).join("")}</select>
+        <select data-std-f="cat">${opt("all", "category: any", f.cat)}${(sm.categories || []).map((c) => opt(c, c, f.cat)).join("")}</select>
+        <select data-std-f="team">${opt("all", "team: any", f.team)}${teams.map((t) => opt(t, t, f.team)).join("")}</select>
+        <select data-std-f="only">${opt("all", "show: everything", f.only)}${opt("issues", "only with issues", f.only)}${opt("m2m", "only m2m", f.only)}</select>
+        <span class="ci-meta" id="std-count">${rows.length} of ${list.length}</span>
+      </div>
+      <div id="std-body">${stdCards(rows, f)}</div>
+      ${(d.anomalies || []).length ? `<details class="filebox acc-pg-sec"><summary>⚠ anomalies · <b>${d.anomalies.length}</b></summary>
+        <div class="log-idx-list">${d.anomalies.map((a) => `<div class="log-idx ${a.severity === "high" ? "bad" : ""}"><code class="log-idx-name" style="flex:none">${esc(a.change)}</code><span class="ci-meta">${esc(a.detail)}</span></div>`).join("")}</div></details>` : ""}
+      <div class="kpi-note">uat.yml / prd.yml are ansible-vault files: they are detected and classified (vaulted / plaintext / missing) but never decrypted and never displayed — a plaintext one is flagged as a security anomaly</div>
+    </div>`;
+}
+function wireStdPanel() {
+  const box = document.getElementById("std-embed");
+  if (!box || box._wired) return;
+  box._wired = true;
+  const apply = () => {
+    const rows = stdFilter((state.stdData || {}).changes || [], state.stdFilter);
+    const body = document.getElementById("std-body"); if (body) body.innerHTML = stdCards(rows, state.stdFilter);
+    const n = document.getElementById("std-count"); if (n) n.textContent = `${rows.length} of ${((state.stdData || {}).changes || []).length}`;
+  };
+  const h = (ev) => { const el = ev.target.closest("[data-std-f]"); if (!el) return;
+    (state.stdFilter = state.stdFilter || {})[el.dataset.stdF] = el.value; apply(); };
+  box.addEventListener("input", h); box.addEventListener("change", h);
 }
 
 /* ================= PROJECTS — per-project drill-down ================= */

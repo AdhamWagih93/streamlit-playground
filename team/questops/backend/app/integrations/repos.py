@@ -53,6 +53,28 @@ DEMO_REPO_FILES = {
     },
     "Engine": {
         "README.md": "# Engine\n\nPipelines (groovy), playbooks+roles, and scripts.\n",
+        # ---- self-service DB standard changes (run_db_script_on_local) ----
+        "playbooks/SelfServices/roles/run_db_script_on_local/files/Oracle/Finance_AddBranch/01_insert_branch.sql":
+            "INSERT INTO branches (code, name) VALUES (:code, :name);\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/files/Oracle/Finance_AddBranch/02_audit.sql":
+            "INSERT INTO audit_log (action) VALUES ('AddBranch');\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/vars/Finance_AddBranch/vars.yml":
+            "project_name: Platform\ncsv_fields: [code, name, region]\nactual_fields: [BRANCH_CODE, BRANCH_NAME, REGION]\n"
+            "default_values: [null, null, EU]\nm2m_flag: false\nrequester_team: Finance_Ops\napprover_team: SRE_Core\n"
+            "notified_teams: [Platform_QC]\nrbac: [finance-admins]\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/vars/Finance_AddBranch/uat.yml": "$ANSIBLE_VAULT;1.1;AES256\n3862366265343361656364333262336466316130653733643038306161373937623835396335666132\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/vars/Finance_AddBranch/prd.yml": "$ANSIBLE_VAULT;1.1;AES256\n3862366265343361656364333262336466316130653733643038306161373937623835396335666132\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/files/SQLServer/HR_ResetPassword/reset.sql":
+            "UPDATE users SET pwd_hash = @hash WHERE login = @login;\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/vars/HR_ResetPassword/vars.yml":
+            "project_name: Control\ncsv_fields: [login, hash]\nactual_fields: [LOGIN]\ndefault_values: []\n"
+            "m2m_flag: true\nrequester_team: HR_Support\napprover_team: HR_Support\nnotified_teams: []\nrbac: [hr-admins, sre]\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/vars/HR_ResetPassword/uat.yml": "$ANSIBLE_VAULT;1.1;AES256\n3862366265343361656364333262336466316130653733643038306161373937623835396335666132\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/vars/HR_ResetPassword/prd.yml":
+            "db_technology: SQLServer\ndb_hostname: sql-prd.corp.local\ndb_port: 1433\n",
+        "playbooks/SelfServices/roles/run_db_script_on_local/files/PostgresQL/Research_SeedDataset/seed.sql":
+            "COPY datasets FROM STDIN;\n",
+
         # sourced by the Tools/LDAP scripts (and, in prod, by many others); lives
         # at the repo ROOT so it is reachable as $HOME/.prd when the script runs
         # with HOME pointed here. Sets the LDAP endpoint + bind creds.
