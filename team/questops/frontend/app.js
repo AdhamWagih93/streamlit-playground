@@ -6989,7 +6989,10 @@ function prjCatalogCards(rows, f) {
     : group === "team" ? (p.teams.dev || "— no dev team") : (p.company || "— no company");
   const groups = {};
   rows.forEach((p) => (groups[keyOf(p)] = groups[keyOf(p)] || []).push(p));
-  const maxRecent = Math.max(1, ...rows.map((p) => p.recent_30d || 0));
+  // per-source ceiling across the listed projects, so a bar reads "how busy
+  // vs. the busiest project for THAT source" rather than vs. the whole total
+  const maxBy = {};
+  rows.forEach((p) => Object.entries(p.activity || {}).forEach(([k, v]) => { maxBy[k] = Math.max(maxBy[k] || 1, v.recent || 0); }));
   const gb = (n) => n >= 1024 ** 4 ? (n / 1024 ** 4).toFixed(1) + " TB" : n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + " GB" : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(0) + " MB" : n + " B";
   const ring = (score, label, tip) => {   // 0-10 score ring (SVG, print-safe)
     const v = score == null ? 0 : Math.max(0, Math.min(10, score));
@@ -7004,7 +7007,7 @@ function prjCatalogCards(rows, f) {
     const quiet = !p.last_activity;
     // activity strip: one bar per source, height ∝ 30-day events (relative to the busiest project)
     const strip = Object.keys(CAT_SRC).map((k) => { const v = (p.activity || {})[k] || {}; const [ico, lab] = CAT_SRC[k];
-      const h = v.recent ? Math.max(3, Math.round(22 * Math.min(1, v.recent / maxRecent) )) : 0;
+      const h = v.recent ? Math.max(4, Math.round(24 * Math.min(1, v.recent / (maxBy[k] || 1)))) : 0;
       return `<span class="cat-bar" title="${lab}s · ${v.recent || 0} in 30d${v.last ? " · last " + esc(v.last.replace("T", " ")) : ""}"><i style="height:${h}px" class="${h ? "" : "cat-bar-0"}"></i><b>${ico}</b><small>${v.last ? prjAgo(v.last) : "—"}</small></span>`; }).join("");
     const sec = p.security, dep = p.deploys, lg = p.logging, st = p.std, us = p.usage, ado = p.ado || {};
     const secCls = !sec ? "cat-pill-mute" : sec.critical ? "cat-pill-bad" : sec.high ? "cat-pill-warn" : "cat-pill-good";
