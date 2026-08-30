@@ -1087,11 +1087,47 @@ _CAT_SOURCES = (("commits", "ef-git-commits", "commitdate"),
                 ("tests", "ef-autotest", "date"))
 
 
+def _cat_stdchanges(out: dict, errors: list[str]) -> None:
+    """Standard-change runs count as project activity too. The index has no
+    project field: JobName / ScriptName → project through the Engine
+    catalogue's vars.project_name, then ONE terms aggregation on JobName."""
+    try:
+        from . import stdchanges
+        job2proj: dict = {}
+        for c in stdchanges.catalog_all().get("changes") or []:
+            pn = (c.get("vars") or {}).get("project_name")
+            if not pn:
+                continue
+            for k in (c["name"], *(sc["name"] for sc in c.get("scripts") or [])):
+                job2proj[k] = _norm(pn)
+        if not job2proj:
+            return
+        resp = _es("ef-ops-db-changes-standard", {"size": 0, "aggs": {"by": {
+            "terms": {"field": "JobName", "size": 2000},
+            "aggs": {"last": {"max": {"field": "Date"}},
+                     "recent": {"filter": {"range": {"Date": {"gte": "now-30d"}}}}}}}})
+        for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
+            pk = job2proj.get(b.get("key"))
+            if not pk:
+                continue
+            last = ((b.get("last") or {}).get("value_as_string") or "")[:19]
+            slot = out.setdefault(pk, {})
+            prev = slot.get("stdchanges")
+            if not prev or last > prev["last"]:
+                slot["stdchanges"] = {"last": last, "recent": (b.get("recent") or {}).get("doc_count", 0) + (prev["recent"] if prev else 0)}
+            else:
+                prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"ef-ops-db-changes-standard: {str(exc)[:80]}")
+
+
 def _cat_activity() -> tuple[dict, list[str]]:
-    """{norm(project): {source: {"last": iso, "recent": n}}} from five tiny
-    aggregation queries (terms on project · max date · 30-day count)."""
+    """{norm(project): {source: {"last": iso, "recent": n}}} from tiny
+    aggregation queries (terms on project · max date · 30-day count) — every
+    event source of the report contributes to a project's last activity."""
     out: dict = {}
     errors: list[str] = []
+    _cat_stdchanges(out, errors)
     for key, index, field in _CAT_SOURCES:
         try:
             resp = _es(index, {"size": 0, "aggs": {"by": {
@@ -1300,7 +1336,7 @@ def _demo_cat_activity(inv: dict) -> dict:
     for i, p in enumerate(inv.get("projects") or []):
         k = _norm(p["name"])
         ages = {"commits": 1 + i * 9, "builds": 2 + i * 12, "deploys": 3 + i * 20,
-                "releases": 6 + i * 30, "tests": 1 + i * 15}
+                "releases": 6 + i * 30, "tests": 1 + i * 15, "stdchanges": 0.5 + i * 40}
         out[k] = {src: {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
                         "recent": max(0, 40 - i * 15 - j * 4)}
                   for j, (src, h) in enumerate(ages.items())}
