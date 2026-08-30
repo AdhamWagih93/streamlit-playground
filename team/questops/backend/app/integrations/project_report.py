@@ -1155,6 +1155,9 @@ def _demo_cat_activity(inv: dict) -> dict:
 
 
 # ---------------------------------------------------------------- standard changes
+_STD_PAGE = 5000   # ef-ops-db-changes-standard search_after page size
+
+
 def _sec_stdchanges(name: str, days: int) -> dict:
     """Standard changes whose vars.project_name is this project (from the
     Engine catalogue) + their run history from ef-ops-db-changes-standard,
@@ -1175,48 +1178,86 @@ def _sec_stdchanges(name: str, days: int) -> dict:
         out.update(runs=0, note=cat.get("note") or "no standard change declares this project_name")
         return out
     keys = sorted({v for c in mine for v in (c["name"], *(s["name"] for s in c["scripts"]))})
+    # One standard-change RUN is spread over several documents (one per input
+    # parameter set) — the fingerprint is service (JobName) + ChangeNumber.
+    # The index is paged with search_after so every run is seen (no 1000 cap).
     body = {
         "query": {"bool": {"filter": [{"bool": {"should": [
             {"terms": {"JobName": keys}}, {"terms": {"ScriptName": keys}}],
             "minimum_should_match": 1}}] + ([] if not days else [{"range": {"Date": {"gte": f"now-{days}d"}}}])}},
-        "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}],
+        "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}, {"_doc": {"order": "asc"}}],
         "_source": ["ChangeNumber", "Date", "Environment", "JobName", "NumberOfChangedRows",
                     "Requester", "ScriptName", "Status", "UpdatedDate"],
-        "aggs": {"by_requester": {"terms": {"field": "Requester", "size": 15, "missing": "(unknown)"}},
-                 "by_status": {"terms": {"field": "Status", "size": 10}},
-                 "by_job": {"terms": {"field": "JobName", "size": 50}},
-                 "rows": {"sum": {"field": "NumberOfChangedRows"}},
-                 "per_period": {"date_histogram": {"field": "Date",
-                                                   "calendar_interval": "day" if days else "month"}}},
-        "track_total_hits": True, "size": 1000}
-    resp = _es("ef-ops-db-changes-standard", body)
-    hits = (resp.get("hits") or {}).get("hits") or []
-    aggs = resp.get("aggregations") or {}
-    b = lambda n: [{"key": x.get("key"), "count": x.get("doc_count", 0)} for x in (aggs.get(n) or {}).get("buckets", [])]  # noqa: E731
-    envs: dict = {}      # Environment is TEXT → folded from the rows
+        "track_total_hits": True, "size": _STD_PAGE}
+    docs = 0
+    folded: dict = {}      # (service, change_number) -> run
+    order: list = []
+    for _page in range(200):   # 1M docs sanity ceiling
+        resp = _es("ef-ops-db-changes-standard", body)
+        hits = (resp.get("hits") or {}).get("hits") or []
+        if not hits:
+            break
+        for h in hits:
+            docs += 1
+            s_ = h.get("_source") or {}
+            service = (s_.get("JobName") or s_.get("ScriptName") or "").strip()
+            cn = str(s_.get("ChangeNumber") or "").strip()
+            key = (service, cn or f"doc:{h.get('_id')}")   # no change number → the doc is its own run
+            st = s_.get("Status") or ""
+            when = (s_.get("Date") or "")[:16]
+            r = folded.get(key)
+            if r is None:
+                r = folded[key] = {
+                    "when": when, "last": (s_.get("UpdatedDate") or s_.get("Date") or "")[:16],
+                    "env": (s_.get("Environment") or "").strip().lower() or "(none)",
+                    "job": s_.get("JobName") or "", "script": s_.get("ScriptName") or "", "service": service,
+                    "change_number": cn, "status": st, "rows": 0, "docs": 0,
+                    "who": _user_display(s_.get("Requester") or "") or "(unknown)", "statuses": {}}
+                order.append(key)
+            r["docs"] += 1
+            r["rows"] += _int(s_.get("NumberOfChangedRows"))
+            r["when"] = min(r["when"], when) if when else r["when"]           # run starts at its first document
+            r["last"] = max(r["last"], (s_.get("UpdatedDate") or s_.get("Date") or "")[:16])
+            r["statuses"][st] = r["statuses"].get(st, 0) + 1
+            if _BAD.search(st) and not _BAD.search(r["status"]):
+                r["status"] = st                                             # any failed parameter fails the run
+            if r["who"] == "(unknown)" and s_.get("Requester"):
+                r["who"] = _user_display(s_["Requester"]) or "(unknown)"
+        if len(hits) < _STD_PAGE:
+            break
+        body["search_after"] = hits[-1].get("sort")
     runs = []
-    for h in hits:
-        s_ = h.get("_source") or {}
-        env = (s_.get("Environment") or "").strip().lower() or "(none)"
-        st = s_.get("Status") or ""
-        e = envs.setdefault(env, {"env": env, "runs": 0, "failed": 0, "rows": 0, "users": {}, "last": ""})
+    for key in order:
+        r = folded[key]
+        r["when"] = r["when"].replace("T", " ")
+        r["params"] = r.pop("docs")                                      # parameter sets in this run
+        r["status_mix"] = r.pop("statuses")
+        runs.append(r)
+    runs.sort(key=lambda r: r["when"], reverse=True)
+    envs: dict = {}      # Environment is TEXT → folded from the runs
+    by_req: dict = {}
+    by_status: dict = {}
+    by_job: dict = {}
+    per_period: dict = {}
+    for r in runs:
+        e = envs.setdefault(r["env"], {"env": r["env"], "runs": 0, "failed": 0, "rows": 0, "users": {}, "last": ""})
         e["runs"] += 1
-        e["failed"] += 1 if _BAD.search(st) else 0
-        e["rows"] += _int(s_.get("NumberOfChangedRows"))
-        who = _user_display(s_.get("Requester") or "") or "(unknown)"
-        e["users"][who] = e["users"].get(who, 0) + 1
-        e["last"] = max(e["last"], (s_.get("Date") or "")[:16])
-        runs.append({"when": (s_.get("Date") or "")[:16].replace("T", " "), "env": env,
-                     "job": s_.get("JobName") or "", "script": s_.get("ScriptName") or "",
-                     "change_number": s_.get("ChangeNumber") or "", "status": st,
-                     "rows": _int(s_.get("NumberOfChangedRows")), "who": who})
+        e["failed"] += 1 if _BAD.search(r["status"]) else 0
+        e["rows"] += r["rows"]
+        e["users"][r["who"]] = e["users"].get(r["who"], 0) + 1
+        e["last"] = max(e["last"], r["when"][:16].replace(" ", "T"))
+        by_req[r["who"]] = by_req.get(r["who"], 0) + 1
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        by_job[r["job"]] = by_job.get(r["job"], 0) + 1
+        pk = r["when"][:10] if days else r["when"][:7] + "-01"
+        per_period[pk] = per_period.get(pk, 0) + 1
     for e in envs.values():
         e["users"] = sorted(({"key": k, "count": v} for k, v in e["users"].items()), key=lambda x: -x["count"])
-    out.update(runs=((resp.get("hits") or {}).get("total") or {}).get("value", 0),
-               by_requester=_fold_users(b("by_requester")), by_status=b("by_status"), by_job=b("by_job"),
-               rows_changed=_int((aggs.get("rows") or {}).get("value")),
-               per_period=[{"day": (x.get("key_as_string") or "")[:10], "count": x.get("doc_count", 0)}
-                           for x in (aggs.get("per_period") or {}).get("buckets", [])],
+    top = lambda d, n: sorted(({"key": k, "count": v} for k, v in d.items()), key=lambda x: -x["count"])[:n]  # noqa: E731
+    out.update(runs=len(runs), documents=docs,
+               by_requester=_fold_users(top(by_req, 15)), by_status=top(by_status, 10), by_job=top(by_job, 50),
+               rows_changed=sum(r["rows"] for r in runs),
+               per_period=[{"day": k, "count": v} for k, v in sorted(per_period.items())],
                environments=sorted(envs.values(), key=lambda e: ({"dev": 1, "qc": 2, "uat": 3, "prd": 4}.get(e["env"], 9), e["env"])),
                recent=runs)
     return out
@@ -1378,7 +1419,9 @@ def _assemble_events(out: dict) -> list[dict]:
                        "app": r.get("job") or r.get("script") or "", "env": r.get("env") or "",
                        "status": r.get("status") or "", "version": r.get("change_number") or "",
                        "who": r.get("who") or "", "test": False,
-                       "detail": " · ".join(x for x in (r.get("script"), f"{r.get('rows') or 0} rows") if x)})
+                       "detail": " · ".join(x for x in (
+                           r.get("script"), f"{r.get('rows') or 0} rows",
+                           f"{r['params']} parameter set(s)" if (r.get("params") or 0) > 1 else "") if x)})
     for r in ((out.get("autotest") or {}).get("runs")) or []:
         events.append({"ts": r.get("when") or "", "type": "autotest",
                        "app": r.get("technology") or "", "env": r.get("env") or "",
@@ -1840,11 +1883,12 @@ def _demo_report(name: str, days: int) -> dict:
                 "users": [{"key": "bob", "count": 2}, {"key": "carol", "count": 2}, {"key": "grace", "count": 2}]}],
            "recent": [
                {"when": "2026-08-26 11:02", "env": "uat", "job": "Finance_AddBranch", "script": "01_insert_branch.sql",
-                "change_number": "CHG0041234", "status": "SUCCESS", "rows": 120, "who": "carol"},
+                "change_number": "CHG0041234", "status": "SUCCESS", "rows": 120, "who": "carol", "params": 4},
                {"when": "2026-08-25 16:40", "env": "prd", "job": "Finance_AddBranch", "script": "01_insert_branch.sql",
-                "change_number": "CHG0041201", "status": "FAILED", "rows": 0, "who": "bob"},
+                "change_number": "CHG0041201", "status": "FAILED", "rows": 0, "who": "bob", "params": 2},
                {"when": "2026-08-24 09:15", "env": "prd", "job": "Finance_AddBranch", "script": "02_audit.sql",
-                "change_number": "CHG0041188", "status": "SUCCESS", "rows": 1200, "who": "grace"}]}
+                "change_number": "CHG0041188", "status": "SUCCESS", "rows": 1200, "who": "grace", "params": 1}],
+           "documents": 41}
     if name != "Platform":
         std.update(runs=0, note="no standard change declares this project_name", environments=[], recent=[],
                    by_requester=[], by_status=[], by_job=[], per_period=[])

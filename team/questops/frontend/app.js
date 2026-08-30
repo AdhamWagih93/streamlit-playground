@@ -6868,7 +6868,7 @@ function prjBodyHtml(d) {
   const sc = d.stdchanges || {};
   const stdSec = sc.error ? `<details class="filebox acc-pg-sec" open><summary>🧾 standard changes</summary>${prjErr(sc, "standard changes")}</details>`
     : !sc.engine_found && !(sc.changes || []).length ? "" : `
-    <details class="filebox acc-pg-sec" open><summary>🧾 standard changes · <b>${(sc.changes || []).length}</b> owned${sc.runs ? ` · <b>${logInt(sc.runs)}</b> run(s) in ${prjWin(d)} · ${logInt(sc.rows_changed || 0)} rows changed` : ""}</summary>
+    <details class="filebox acc-pg-sec" open><summary>🧾 standard changes · <b>${(sc.changes || []).length}</b> owned${sc.runs ? ` · <b>${logInt(sc.runs)}</b> run(s) in ${prjWin(d)} · ${logInt(sc.rows_changed || 0)} rows changed${sc.documents > sc.runs ? ` <span class="ci-meta" title="one run = service + change number; every input parameter set is a separate document">(${logInt(sc.documents)} documents folded by service + change number)</span>` : ""}` : ""}</summary>
       ${(sc.changes || []).length ? `<div class="log-idx-list">${sc.changes.map((c) => `
         <div class="log-idx ${c.issues.length ? "bad" : ""}"><code class="log-idx-name" style="flex:none">${esc(c.category)} · ${esc(c.service)}</code>
           ${c.technologies.map((t) => `<span class="chip chip-cyan">${STD_TECH_ICON[t.toLowerCase()] || "🗄"} ${esc(t)}</span>`).join("")}
