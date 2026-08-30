@@ -1725,3 +1725,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .brand-report { height: 30px; align-self: center; margin-right: 4px; }
 
 .prj-rlm { font-size: 9.5px; }
+
+.dora-delta { font: 600 9.5px var(--mono); margin-top: 4px; color: var(--faint); cursor: help; }
+.dora-delta.up { color: #43c884; }
+.dora-delta.down { color: #c0841c; }

@@ -5668,18 +5668,34 @@ function prjDoraHtml(dora, d) {
   };
   const h = (x) => x == null ? "—" : x >= 48 ? `${(x / 24).toFixed(1)}` : `${x}`;
   const hu = (x) => x == null ? "" : x >= 48 ? "d" : "h";
+  // like-for-like delta vs the previous window of the same length —
+  // green = improved, amber = worse (direction depends on the metric)
+  const pv = dora.prev || {};
+  const dd = (cur, prev, lowerBetter, fmt) => {
+    if (!d.days || cur == null || prev == null || !pv.available) return "";
+    const better = lowerBetter ? cur < prev : cur > prev;
+    const same = cur === prev;
+    return `<div class="dora-delta ${same ? "" : better ? "up" : "down"}" title="previous ${d.days}d: ${fmt(prev)}">${same ? "= " : better ? "▲ " : "▼ "}vs ${fmt(prev)} prev</div>`;
+  };
+  const fh = (x) => `${h(x)}${hu(x)}`;
+  const tileD = (val, unit, label, rating, tip, delta) =>
+    tile(val, unit, label, rating, tip).replace("</div></div>", `</div>${delta}</div>`);
   return `<div class="dora-strip">
-    <span class="dora-head" title="DORA metrics — computed from your ef-cicd deployments/builds and effective commits; window ${prjWin(d)}">DORA</span>
-    ${tile(dora.deploy_freq_week, "/wk", "deployment frequency", dora.deploy_freq_rating,
-      `${dora.prd_success} successful production deploy(s) in ${prjWin(d)} · elite ≥ daily · high ≥ weekly · medium ≥ monthly`)}
-    ${tile(h(dora.lead_time_h), hu(dora.lead_time_h), "lead time for changes", dora.lead_time_h == null ? null : dora.lead_time_rating,
+    <span class="dora-head" title="DORA metrics — computed from your ef-cicd deployments/builds and effective commits over the selected ${prjWin(d)} window${d.days && pv.available ? `, compared with the ${d.days}d before it` : ""}">DORA</span>
+    ${tileD(dora.deploy_freq_week, "/wk", "deployment frequency", dora.deploy_freq_rating,
+      `${dora.prd_success} successful production deploy(s) in ${prjWin(d)} · elite ≥ daily · high ≥ weekly · medium ≥ monthly`,
+      dd(dora.deploy_freq_week, pv.deploy_freq_week, false, (x) => `${x}/wk`))}
+    ${tileD(h(dora.lead_time_h), hu(dora.lead_time_h), "lead time for changes", dora.lead_time_h == null ? null : dora.lead_time_rating,
       dora.lead_time_h == null ? "no prd deploy could be traced back to an effective commit or build of the same version"
-        : `median over ${dora.lead_time_samples} deploy(s): effective commit (or its build) → production deploy · elite < 1d · high < 1w · medium < 1mo`)}
-    ${tile(dora.cfr_pct, "%", "change failure rate", dora.cfr_rating,
-      `${dora.prd_failed} failed of ${dora.prd_deploys} production deploy(s) · elite ≤ 15% · high ≤ 30% · medium ≤ 45%`)}
-    ${tile(h(dora.mttr_h), hu(dora.mttr_h), "time to restore", dora.mttr_h == null ? null : dora.mttr_rating,
+        : `median over ${dora.lead_time_samples} deploy(s): effective commit (or its build) → production deploy · elite < 1d · high < 1w · medium < 1mo`,
+      dd(dora.lead_time_h, pv.lead_time_h, true, fh))}
+    ${tileD(dora.cfr_pct, "%", "change failure rate", dora.cfr_rating,
+      `${dora.prd_failed} failed of ${dora.prd_deploys} production deploy(s) · elite ≤ 15% · high ≤ 30% · medium ≤ 45%`,
+      dd(dora.cfr_pct, pv.cfr_pct, true, (x) => `${x}%`))}
+    ${tileD(h(dora.mttr_h), hu(dora.mttr_h), "time to restore", dora.mttr_h == null ? null : dora.mttr_rating,
       dora.mttr_h == null ? (dora.mttr_open ? `${dora.mttr_open} production failure(s) not yet recovered` : "no production failures in the window — nothing to restore")
-        : `mean over ${dora.mttr_samples} recovery(ies): failed prd deploy → next successful prd deploy of the same app · elite < 1h · high < 1d · medium < 1w`)}
+        : `mean over ${dora.mttr_samples} recovery(ies): failed prd deploy → next successful prd deploy of the same app · elite < 1h · high < 1d · medium < 1w`,
+      dd(dora.mttr_h, pv.mttr_h, true, fh))}
   </div>`;
 }
 

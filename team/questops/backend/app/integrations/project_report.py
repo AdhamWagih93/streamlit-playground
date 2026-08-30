@@ -167,15 +167,22 @@ def _sec_ado(name: str) -> dict:
             "pipelines_matched": p.get("inv_pipelines_matched")}
 
 
-def _sec_commits(name: str, repos: list[str], days: int) -> dict:
+def _win(field: str, days: int, prev: bool = False) -> dict:
+    """Range filter for the selected window, or the SAME-LENGTH window just
+    before it (prev=True) — used for like-for-like comparisons."""
+    if prev:
+        return {"range": {field: {"gte": f"now-{2 * days}d", "lt": f"now-{days}d"}}}
+    return {"range": {field: {"gte": f"now-{days}d"}}}
+
+
+def _sec_commits(name: str, repos: list[str], days: int, prev: bool = False) -> dict:
     should = [{"terms": {"project": _name_variants(name)}}]
     if repos:
         should.append({"terms": {"repository": repos[:64]}})
     all_time = not days
     body = {
         "query": {"bool": {
-            "filter": [] if all_time else
-            [{"range": {"commitdate": {"gte": f"now-{days}d"}}}],
+            "filter": [] if all_time else [_win("commitdate", days, prev)],
             "should": should, "minimum_should_match": 1}},
         "sort": [{"commitdate": {"order": "desc", "unmapped_type": "date"}}],
         "_source": ["commitdate", "repository", "branch", "authorname",
@@ -564,7 +571,7 @@ def _git_author(s: dict) -> str:
                                    (s.get("commitauthor") or "")).strip())
 
 
-def _sec_cicd(name: str, days: int) -> dict:
+def _sec_cicd(name: str, days: int, prev: bool = False) -> dict:
     """ef-cicd-{builds,deployments,releases} — ONE query per index gives both
     the SDLC board (latest per app / per app+env) and the raw recent rows for
     the unified event log. Test rows (testflag != Normal) are excluded from
@@ -593,7 +600,7 @@ def _sec_cicd(name: str, days: int) -> dict:
             "sort": [{date_field: {"order": "desc", "unmapped_type": "date"}}],
             "_source": src, "aggs": aggs, "track_total_hits": True, "size": 10000}
         if days:
-            body["post_filter"] = {"range": {date_field: {"gte": f"now-{days}d"}}}
+            body["post_filter"] = _win(date_field, days, prev)
         return _es(index, body)
 
     def latest(index, date_field, src, by_env=False, ok_filter=None):
@@ -1553,6 +1560,21 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         out["dora"] = _dora(out)
     except Exception as exc:  # noqa: BLE001
         out["dora"] = {"available": False, "error": str(exc)[:200]}
+    # the SAME window length just before → like-for-like DORA comparison
+    if days and not settings.demo_mode:
+        try:
+            pv = {"days": days,
+                  "cicd": _sec_cicd(name, days, prev=True),
+                  "commits": _sec_commits(name, repos, days, prev=True),
+                  "jira": {}, "jira_changes": {}, "autotest": {}}
+            pv["events"] = _assemble_events(pv)
+            out["dora"]["prev"] = _dora(pv)
+        except Exception as exc:  # noqa: BLE001 — comparison is optional
+            out["dora"]["prev"] = {"available": False, "error": str(exc)[:200]}
+    elif days and settings.demo_mode and out.get("dora", {}).get("available"):
+        out["dora"]["prev"] = {"available": True, "prd_deploys": 5, "prd_success": 4,
+                               "prd_failed": 1, "deploy_freq_week": 0.93,
+                               "lead_time_h": 41.0, "cfr_pct": 20.0, "mttr_h": 6.2}
 
     _CACHE[ck] = {"at": time.time(), "payload": out}
     return {**out, "cached": False}
