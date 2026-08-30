@@ -181,6 +181,9 @@ class Settings(BaseSettings):
     # branding: shown in the sidebar, login card and the printed report
     company_name: str = ""
     company_logo: str = ""   # path to a PNG inside the container
+    # standard changes: resolve data sources from the vaulted env files
+    # (host/port/db only — never credentials) and probe reachability
+    std_changes_decrypt: bool = False
     # NOTE: [TEAM] group membership (Access Management) is NOT resolved via LDAP
     # here — it runs the cloned Engine repo's scripts/Tools/LDAP/getTeamMembersCN.sh
     # (see auth.ldap_group_members). The LDAP settings above gate LOGIN only.

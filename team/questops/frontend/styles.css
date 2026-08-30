@@ -1817,3 +1817,6 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .std-sql { font: 500 10.5px var(--mono); padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line); }
 .std-notsql { opacity: .6; text-decoration: line-through; }
 .std-issues { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.std-env { padding: 4px 0 6px; border-bottom: 1px dashed var(--line); }
+.std-env-head { display: flex; align-items: center; gap: 6px; font: 500 11.5px var(--body); margin-bottom: 4px; }

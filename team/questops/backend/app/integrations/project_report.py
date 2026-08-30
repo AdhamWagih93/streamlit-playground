@@ -1154,6 +1154,74 @@ def _demo_cat_activity(inv: dict) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- standard changes
+def _sec_stdchanges(name: str, days: int) -> dict:
+    """Standard changes whose vars.project_name is this project (from the
+    Engine catalogue) + their run history from ef-ops-db-changes-standard,
+    linked by JobName / ScriptName (the index has no project field)."""
+    from . import stdchanges
+    cat = stdchanges.catalog_all()
+    mine = [c for c in cat.get("changes") or []
+            if _norm(((c.get("vars") or {}).get("project_name"))) == _norm(name)]
+    out = {"engine_found": cat.get("found", False), "changes": [
+        {"name": c["name"], "category": c["category"], "service": c["service"],
+         "technologies": c["technologies"], "sql_files": c["sql_files"],
+         "requester_team": (c.get("vars") or {}).get("requester_team"),
+         "approver_team": (c.get("vars") or {}).get("approver_team"),
+         "m2m": bool((c.get("vars") or {}).get("m2m_flag")),
+         "env": {e: (c["env"].get(e) or {}).get("state") for e in ("uat", "prd")},
+         "issues": c["issues"]} for c in mine]}
+    if not mine:
+        out.update(runs=0, note=cat.get("note") or "no standard change declares this project_name")
+        return out
+    keys = sorted({v for c in mine for v in (c["name"], *(s["name"] for s in c["scripts"]))})
+    body = {
+        "query": {"bool": {"filter": [{"bool": {"should": [
+            {"terms": {"JobName": keys}}, {"terms": {"ScriptName": keys}}],
+            "minimum_should_match": 1}}] + ([] if not days else [{"range": {"Date": {"gte": f"now-{days}d"}}}])}},
+        "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": ["ChangeNumber", "Date", "Environment", "JobName", "NumberOfChangedRows",
+                    "Requester", "ScriptName", "Status", "UpdatedDate"],
+        "aggs": {"by_requester": {"terms": {"field": "Requester", "size": 15, "missing": "(unknown)"}},
+                 "by_status": {"terms": {"field": "Status", "size": 10}},
+                 "by_job": {"terms": {"field": "JobName", "size": 50}},
+                 "rows": {"sum": {"field": "NumberOfChangedRows"}},
+                 "per_period": {"date_histogram": {"field": "Date",
+                                                   "calendar_interval": "day" if days else "month"}}},
+        "track_total_hits": True, "size": 1000}
+    resp = _es("ef-ops-db-changes-standard", body)
+    hits = (resp.get("hits") or {}).get("hits") or []
+    aggs = resp.get("aggregations") or {}
+    b = lambda n: [{"key": x.get("key"), "count": x.get("doc_count", 0)} for x in (aggs.get(n) or {}).get("buckets", [])]  # noqa: E731
+    envs: dict = {}      # Environment is TEXT → folded from the rows
+    runs = []
+    for h in hits:
+        s_ = h.get("_source") or {}
+        env = (s_.get("Environment") or "").strip().lower() or "(none)"
+        st = s_.get("Status") or ""
+        e = envs.setdefault(env, {"env": env, "runs": 0, "failed": 0, "rows": 0, "users": {}, "last": ""})
+        e["runs"] += 1
+        e["failed"] += 1 if _BAD.search(st) else 0
+        e["rows"] += _int(s_.get("NumberOfChangedRows"))
+        who = _user_display(s_.get("Requester") or "") or "(unknown)"
+        e["users"][who] = e["users"].get(who, 0) + 1
+        e["last"] = max(e["last"], (s_.get("Date") or "")[:16])
+        runs.append({"when": (s_.get("Date") or "")[:16].replace("T", " "), "env": env,
+                     "job": s_.get("JobName") or "", "script": s_.get("ScriptName") or "",
+                     "change_number": s_.get("ChangeNumber") or "", "status": st,
+                     "rows": _int(s_.get("NumberOfChangedRows")), "who": who})
+    for e in envs.values():
+        e["users"] = sorted(({"key": k, "count": v} for k, v in e["users"].items()), key=lambda x: -x["count"])
+    out.update(runs=((resp.get("hits") or {}).get("total") or {}).get("value", 0),
+               by_requester=_fold_users(b("by_requester")), by_status=b("by_status"), by_job=b("by_job"),
+               rows_changed=_int((aggs.get("rows") or {}).get("value")),
+               per_period=[{"day": (x.get("key_as_string") or "")[:10], "count": x.get("doc_count", 0)}
+                           for x in (aggs.get("per_period") or {}).get("buckets", [])],
+               environments=sorted(envs.values(), key=lambda e: ({"dev": 1, "qc": 2, "uat": 3, "prd": 4}.get(e["env"], 9), e["env"])),
+               recent=runs)
+    return out
+
+
 # ---------------------------------------------------------------- DORA
 def _ts(v) -> dt.datetime | None:
     """Tolerant timestamp parse for event ts strings."""
@@ -1305,6 +1373,12 @@ def _assemble_events(out: dict) -> list[dict]:
                        "url": c.get("url") or "",
                        "detail": "; ".join(f"{i['field']}: {i['from'] or '—'} → {i['to'] or '—'}"
                                            for i in c.get("items") or [])})
+    for r in ((out.get("stdchanges") or {}).get("recent")) or []:
+        events.append({"ts": r.get("when") or "", "type": "stdchange",
+                       "app": r.get("job") or r.get("script") or "", "env": r.get("env") or "",
+                       "status": r.get("status") or "", "version": r.get("change_number") or "",
+                       "who": r.get("who") or "", "test": False,
+                       "detail": " · ".join(x for x in (r.get("script"), f"{r.get('rows') or 0} rows") if x)})
     for r in ((out.get("autotest") or {}).get("runs")) or []:
         events.append({"ts": r.get("when") or "", "type": "autotest",
                        "app": r.get("technology") or "", "env": r.get("env") or "",
@@ -1750,9 +1824,33 @@ def _demo_report(name: str, days: int) -> dict:
     prev = None if not days else {
         "commits": max(total - 15, 5), "changes": 28, "builds": 21,
         "deploys": 12, "releases": 4, "resolved": 9}
+    std = {"engine_found": True, "runs": 14 + seed % 5, "rows_changed": 3120 + seed,
+           "changes": [{"name": "Finance_AddBranch", "category": "Finance", "service": "AddBranch",
+                        "technologies": ["Oracle"], "sql_files": 2, "requester_team": "Finance_Ops",
+                        "approver_team": "SRE_Core", "m2m": False, "env": {"uat": "vaulted", "prd": "vaulted"}, "issues": []}]
+           if name == "Platform" else [],
+           "by_requester": [{"key": "carol", "count": 8}, {"key": "bob", "count": 5}, {"key": "grace", "count": 2}],
+           "by_status": [{"key": "SUCCESS", "count": 13}, {"key": "FAILED", "count": 2}],
+           "by_job": [{"key": "Finance_AddBranch", "count": 15}],
+           "per_period": [{"day": b["day"], "count": (seed + i * 3) % 2 if i % 4 == 0 else 0} for i, b in enumerate(per_day)],
+           "environments": [
+               {"env": "uat", "runs": 9, "failed": 1, "rows": 1800, "last": "2026-08-26T11:02",
+                "users": [{"key": "carol", "count": 6}, {"key": "bob", "count": 3}]},
+               {"env": "prd", "runs": 6, "failed": 1, "rows": 1320, "last": "2026-08-25T16:40",
+                "users": [{"key": "bob", "count": 2}, {"key": "carol", "count": 2}, {"key": "grace", "count": 2}]}],
+           "recent": [
+               {"when": "2026-08-26 11:02", "env": "uat", "job": "Finance_AddBranch", "script": "01_insert_branch.sql",
+                "change_number": "CHG0041234", "status": "SUCCESS", "rows": 120, "who": "carol"},
+               {"when": "2026-08-25 16:40", "env": "prd", "job": "Finance_AddBranch", "script": "01_insert_branch.sql",
+                "change_number": "CHG0041201", "status": "FAILED", "rows": 0, "who": "bob"},
+               {"when": "2026-08-24 09:15", "env": "prd", "job": "Finance_AddBranch", "script": "02_audit.sql",
+                "change_number": "CHG0041188", "status": "SUCCESS", "rows": 1200, "who": "grace"}]}
+    if name != "Platform":
+        std.update(runs=0, note="no standard change declares this project_name", environments=[], recent=[],
+                   by_requester=[], by_status=[], by_job=[], per_period=[])
     return {"commits": commits, "jira": jira, "jira_changes": changes,
             "scans": scans, "cicd": cicd, "prev": prev,
-            "autotest": autotest, "usage": usage}
+            "autotest": autotest, "usage": usage, "stdchanges": std}
 
 
 # ---------------------------------------------------------------- public API
@@ -1807,6 +1905,7 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("prev", _sec_prev, name, repos, days)
         guard("autotest", _sec_autotest, name, days)
         guard("usage", _sec_usage, name, days)
+        guard("stdchanges", _sec_stdchanges, name, days)
     guard("logging", _sec_logging, name)
     # contributor → TEAM folds for the Jira change log (window + all time)
     jc = out.get("jira_changes") or {}

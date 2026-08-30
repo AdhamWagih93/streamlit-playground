@@ -148,3 +148,141 @@ def analyze(slot: int, username: str | None = None, refresh: bool = False) -> di
     payload = parse_tree(_workspace(repo, username))
     _CACHE[key] = {"at": time.time(), "payload": payload}
     return {**payload, "cached": False}
+
+
+# ---------------------------------------------------------------- shared catalogue
+# The Projects page (and anything not tied to a user's worktree) reads the
+# SERVER copy of the repo named "Engine".
+_ALL_CACHE: dict = {"at": 0.0, "payload": None}
+
+
+def _engine_root():
+    from .repos import _dir_for, configured
+    for r in configured():
+        if (r.get("name") or "").lower() == "engine":
+            d = _dir_for(r)
+            return d if d.exists() else None
+    return None
+
+
+def catalog_all(refresh: bool = False) -> dict:
+    if not refresh and _ALL_CACHE["payload"] and time.time() - _ALL_CACHE["at"] < 300:
+        return _ALL_CACHE["payload"]
+    root = _engine_root()
+    payload = parse_tree(root) if root else {"found": False, "role": str(ROLE), "changes": [],
+                                             "anomalies": [], "summary": {},
+                                             "note": "Engine repository is not cloned"}
+    _ALL_CACHE.update(at=time.time(), payload=payload)
+    return payload
+
+
+# ---------------------------------------------------------------- data sources (opt-in)
+# Reachability of a change's data sources needs host/port from the vaulted
+# env files. Decryption is OFF unless STD_CHANGES_DECRYPT=true; even then only
+# technology / host / port / db name (and the Oracle DR pair) leave this
+# module — username and password are dropped immediately and never cached.
+_REACH_CACHE: dict = {}
+_SAFE_KEYS = ("db_technology", "db_hostname", "db_port", "db_name",
+              "db_hostname_secondary", "db_port_secondary")
+
+
+def _vault_password(root: Path) -> str:
+    p = root / ".vault_pass.txt"
+    try:
+        return p.read_text(encoding="utf-8").strip() if p.is_file() else ""
+    except OSError:
+        return ""
+
+
+def _decrypt_env(path: Path, password: str) -> dict | None:
+    """Vault → dict of SAFE keys only. Any failure → None (reported, not fatal)."""
+    try:
+        from ansible.parsing.vault import VaultLib, VaultSecret
+        vault = VaultLib([("default", VaultSecret(password.encode()))])
+        text = vault.decrypt(path.read_bytes()).decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 — wrong password, missing ansible, bad file
+        return None
+    raw = _load_yaml(text) or {}
+    return {k: raw.get(k) for k in _SAFE_KEYS if raw.get(k) not in (None, "")}
+
+
+def _reach(host: str, port, timeout: float = 3.0) -> dict:
+    """TCP connect probe, cached 5 min per host:port."""
+    import socket
+    key = f"{host}:{port}"
+    hit = _REACH_CACHE.get(key)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    res = {"ok": False, "ms": None}
+    try:
+        t0 = time.time()
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            res = {"ok": True, "ms": int((time.time() - t0) * 1000)}
+    except Exception as exc:  # noqa: BLE001
+        res = {"ok": False, "ms": None, "error": type(exc).__name__}
+    _REACH_CACHE[key] = (time.time(), res)
+    return res
+
+
+def data_sources(root: Path, changes: list[dict], enabled: bool) -> dict:
+    """{change: {env: {technology, host, port, name, secondary, reach}}} —
+    only when decryption is enabled and the vault password is present."""
+    if not enabled:
+        return {"enabled": False, "note": "set STD_CHANGES_DECRYPT=true to resolve data sources "
+                                          "(host/port only — credentials never leave the server)"}
+    pw = _vault_password(root)
+    if not pw:
+        return {"enabled": True, "error": ".vault_pass.txt not found at the Engine root"}
+    out: dict = {}
+    hosts: set = set()
+    for c in changes:
+        for env in ENV_FILES:
+            st = (c["env"].get(env) or {}).get("state")
+            if st not in ("vaulted", "plaintext"):
+                continue
+            path = root / ROLE / "vars" / c["name"] / f"{env}.yml"
+            safe = (_decrypt_env(path, pw) if st == "vaulted"
+                    else {k: v for k, v in (_load_yaml(path.read_text(encoding="utf-8", errors="replace")) or {}).items()
+                          if k in _SAFE_KEYS})
+            if safe is None:
+                out.setdefault(c["name"], {})[env] = {"error": "could not decrypt (wrong vault password?)"}
+                continue
+            ds = {"technology": safe.get("db_technology") or "", "host": safe.get("db_hostname") or "",
+                  "port": safe.get("db_port"), "name": safe.get("db_name") or ""}
+            if safe.get("db_hostname_secondary"):
+                ds["secondary"] = {"host": safe["db_hostname_secondary"],
+                                   "port": safe.get("db_port_secondary") or safe.get("db_port")}
+            out.setdefault(c["name"], {})[env] = ds
+            if ds["host"] and ds["port"]:
+                hosts.add((ds["host"], ds["port"]))
+            if ds.get("secondary", {}).get("host") and ds["secondary"].get("port"):
+                hosts.add((ds["secondary"]["host"], ds["secondary"]["port"]))
+    # probe distinct endpoints in parallel (bounded)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        probes = dict(zip(hosts, pool.map(lambda hp: _reach(*hp), hosts)))
+    for envs in out.values():
+        for ds in envs.values():
+            if ds.get("host") and ds.get("port"):
+                ds["reach"] = probes.get((ds["host"], ds["port"]))
+            if ds.get("secondary"):
+                ds["secondary"]["reach"] = probes.get((ds["secondary"]["host"], ds["secondary"]["port"]))
+    return {"enabled": True, "sources": out,
+            "endpoints": [{"host": h, "port": p, **probes[(h, p)]} for h, p in sorted(hosts)]}
+
+
+def team_facets(changes: list[dict]) -> dict:
+    """Owning / approving / notified team classifications for the admin view."""
+    own: dict = {}
+    for c in changes:
+        v = c.get("vars") or {}
+        for role, key in (("requester", "requester_team"), ("approver", "approver_team")):
+            t = v.get(key)
+            if t:
+                own.setdefault(t, {"team": t, "requester": [], "approver": [], "notified": []})[role].append(c["name"])
+        for t in v.get("notified_teams") or []:
+            own.setdefault(t, {"team": t, "requester": [], "approver": [], "notified": []})["notified"].append(c["name"])
+    rows = sorted(own.values(), key=lambda x: -(len(x["requester"]) + len(x["approver"]) + len(x["notified"])))
+    for r in rows:
+        r["total"] = len(set(r["requester"]) | set(r["approver"]) | set(r["notified"]))
+    return {"teams": rows}

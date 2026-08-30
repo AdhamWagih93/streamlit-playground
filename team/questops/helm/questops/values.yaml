@@ -192,3 +192,7 @@ branding:
   logoConfigMap: ""
   # only if the logo lives elsewhere inside the container
   logoPath: ""
+
+# standard changes: resolve data sources (host/port only) + reachability probes
+stdChanges:
+  decrypt: false

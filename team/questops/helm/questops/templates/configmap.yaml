@@ -77,6 +77,7 @@ data:
   LOGIN_WITHOUT_PASSWORD: {{ .Values.ldap.loginWithoutPassword | default false | quote }}
   COMPANY_NAME: {{ .Values.branding.companyName | default "" | quote }}
   COMPANY_LOGO: {{ .Values.branding.logoPath | default "" | quote }}
+  STD_CHANGES_DECRYPT: {{ .Values.stdChanges.decrypt | default false | quote }}
   GIT_USER_NAME: {{ .Values.git.userName | quote }}
   GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}

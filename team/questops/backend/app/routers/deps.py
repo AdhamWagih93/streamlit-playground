@@ -44,6 +44,13 @@ def inventory_configs(refresh: bool = False, user: User = Depends(current_user))
 def std_changes(slot: int, refresh: bool = False, user: User = Depends(current_user)):
     """Engine repo: catalogue of self-service DB standard changes."""
     try:
-        return stdchanges.analyze(slot, user.username, refresh=refresh)
+        d = stdchanges.analyze(slot, user.username, refresh=refresh)
     except RepoError as exc:
         raise HTTPException(400, str(exc))
+    if d.get("found"):
+        from ..config import settings
+        from ..integrations.repos import _repo_by_slot, _workspace
+        root = _workspace(_repo_by_slot(slot), user.username)
+        d = {**d, "facets": stdchanges.team_facets(d["changes"]),
+             "data_sources": stdchanges.data_sources(root, d["changes"], settings.std_changes_decrypt)}
+    return d

@@ -5696,6 +5696,32 @@ function stdPanelHtml(d) {
         <select data-std-f="only">${opt("all", "show: everything", f.only)}${opt("issues", "only with issues", f.only)}${opt("m2m", "only m2m", f.only)}</select>
         <span class="ci-meta" id="std-count">${rows.length} of ${list.length}</span>
       </div>
+      ${(() => {
+        const fac = (d.facets || {}).teams || [];
+        const ds = d.data_sources || {};
+        const teamsHtml = fac.length ? `<div class="pgv-card"><div class="pgv-title">🛡 teams — who requests · approves · gets notified</div>
+          <div class="log-idx-list">${fac.map((t) => `<div class="log-idx"><code class="log-idx-name" style="flex:none">${esc(t.team)}</code>
+            <span class="chip">${t.total} change${t.total === 1 ? "" : "s"}</span>
+            ${t.requester.length ? `<span class="chip chip-cyan" title="requester for: ${esc(t.requester.join(", "))}">🙋 requests ${t.requester.length}</span>` : ""}
+            ${t.approver.length ? `<span class="chip chip-green" title="approver for: ${esc(t.approver.join(", "))}">✅ approves ${t.approver.length}</span>` : ""}
+            ${t.notified.length ? `<span class="chip" title="notified for: ${esc(t.notified.join(", "))}">🔔 notified ${t.notified.length}</span>` : ""}</div>`).join("")}</div></div>` : "";
+        let dsHtml;
+        if (!ds.enabled) dsHtml = `<div class="pgv-card"><div class="pgv-title">🔌 data sources</div><div class="kpi-note">${esc(ds.note || "not resolved")}</div></div>`;
+        else if (ds.error) dsHtml = `<div class="pgv-card"><div class="pgv-title">🔌 data sources</div><div class="rsearch-status rsearch-err">⚠ ${esc(ds.error)}</div></div>`;
+        else {
+          const eps = ds.endpoints || [];
+          const up = eps.filter((e) => e.ok).length;
+          const src = ds.sources || {};
+          dsHtml = `<div class="pgv-card"><div class="pgv-title">🔌 data sources · <span class="${up === eps.length ? "pct-good" : "pct-bad"}">${up}/${eps.length} reachable</span> <span class="ci-meta">host · port · db only — credentials never leave the server</span></div>
+            <div class="log-idx-list">${Object.entries(src).flatMap(([ch, envs]) => Object.entries(envs).map(([env, x]) => `
+              <div class="log-idx ${x.error || (x.reach && !x.reach.ok) ? "bad" : ""}"><code class="log-idx-name" style="flex:none">${esc(ch)}</code><span class="chip ${env === "prd" ? "chip-amber" : ""}">${env}</span>
+                ${x.error ? `<span class="chip chip-red">${esc(x.error)}</span>` : `<span class="chip chip-cyan">${esc(x.technology || "?")}</span><span class="chip" title="host:port/db">${esc(x.host)}:${esc(String(x.port || ""))}${x.name ? "/" + esc(x.name) : ""}</span>
+                  ${x.reach ? `<span class="chip ${x.reach.ok ? "chip-green" : "chip-red"}" title="TCP probe${x.reach.ms != null ? ` · ${x.reach.ms} ms` : x.reach.error ? " · " + esc(x.reach.error) : ""}">${x.reach.ok ? "● reachable" : "✕ unreachable"}</span>` : ""}
+                  ${x.secondary ? `<span class="chip" title="Oracle DR: ${esc(x.secondary.host)}:${esc(String(x.secondary.port || ""))}">DR ${x.secondary.reach ? (x.secondary.reach.ok ? "●" : "✕") : ""} ${esc(x.secondary.host)}</span>` : ""}`}
+              </div>`)).join("")}</div></div>`;
+        }
+        return `<div class="prj-grid" style="margin:4px 0 8px">${teamsHtml}${dsHtml}</div>`;
+      })()}
       <div id="std-body">${stdCards(rows, f)}</div>
       ${(d.anomalies || []).length ? `<details class="filebox acc-pg-sec"><summary>⚠ anomalies · <b>${d.anomalies.length}</b></summary>
         <div class="log-idx-list">${d.anomalies.map((a) => `<div class="log-idx ${a.severity === "high" ? "bad" : ""}"><code class="log-idx-name" style="flex:none">${esc(a.change)}</code><span class="ci-meta">${esc(a.detail)}</span></div>`).join("")}</div></details>` : ""}
@@ -5880,6 +5906,7 @@ const PRJ_EV = {  // event-log types: icon, label, chip class
   deploy: ["🚀", "deploy", "chip-violet"], release: ["📦", "release", "chip-violet"],
   change: ["📝", "jira change", "chip-amber"],
   autotest: ["🧪", "auto test", "chip-cyan"],
+  stdchange: ["🧾", "standard change", "chip-violet"],
 };
 
 function prjStatusChip(st) {
@@ -6627,8 +6654,58 @@ function prjBodyHtml(d) {
       })()}`}
     </details>`;
 
+  // ---- standard changes owned by this project + their run history --------
+  const sc = d.stdchanges || {};
+  const stdSec = sc.error ? `<details class="filebox acc-pg-sec" open><summary>🧾 standard changes</summary>${prjErr(sc, "standard changes")}</details>`
+    : !sc.engine_found && !(sc.changes || []).length ? "" : `
+    <details class="filebox acc-pg-sec" open><summary>🧾 standard changes · <b>${(sc.changes || []).length}</b> owned${sc.runs ? ` · <b>${logInt(sc.runs)}</b> run(s) in ${prjWin(d)} · ${logInt(sc.rows_changed || 0)} rows changed` : ""}</summary>
+      ${(sc.changes || []).length ? `<div class="log-idx-list">${sc.changes.map((c) => `
+        <div class="log-idx ${c.issues.length ? "bad" : ""}"><code class="log-idx-name" style="flex:none">${esc(c.category)} · ${esc(c.service)}</code>
+          ${c.technologies.map((t) => `<span class="chip chip-cyan">${STD_TECH_ICON[t.toLowerCase()] || "🗄"} ${esc(t)}</span>`).join("")}
+          <span class="chip">${c.sql_files} sql</span>${c.m2m ? '<span class="chip chip-violet">m2m</span>' : ""}
+          ${c.requester_team ? `<span class="chip" title="requester_team">🙋 ${esc(c.requester_team)}</span>` : ""}
+          ${c.approver_team ? `<span class="chip" title="approver_team">✅ ${esc(c.approver_team)}</span>` : ""}
+          ${stdEnvChip("uat", { state: c.env.uat })}${stdEnvChip("prd", { state: c.env.prd })}
+          ${c.issues.length ? `<span class="chip chip-amber" title="${esc(c.issues.join(" · "))}">${c.issues.length} issue(s)</span>` : ""}
+        </div>`).join("")}</div>` : `<div class="empty">${esc(sc.note || "no standard change declares this project_name")}</div>`}
+      ${sc.runs ? `
+      ${prjSpark(sc.per_period, "run(s)")}
+      <div class="prj-grid">
+        <div class="pgv-card"><div class="pgv-title">runs per environment · active users</div>
+          ${(sc.environments || []).map((e) => `
+          <div class="std-env"><div class="std-env-head"><span class="chip ${/pr(o?)d/i.test(e.env) ? "chip-amber" : ""}">${esc(e.env)}</span>
+            <b>${logInt(e.runs)}</b> run${e.runs === 1 ? "" : "s"}${e.failed ? ` · <span class="pct-bad">${e.failed} failed</span>` : ""} · ${logInt(e.rows)} rows · <span class="ci-meta" title="${esc(e.last)}">${prjAgo(e.last) || esc(e.last)}</span></div>
+            <div class="mem-chips">${(e.users || []).map((u) => `<span class="mem">${prjMemDot(u.key)}${esc(u.key)}<small>${u.count}</small></span>`).join("")}</div></div>`).join("")}</div>
+        <div class="pgv-card"><div class="pgv-title">runs per requester</div>${prjBar(sc.by_requester, "", prjAuthorColors(sc.by_requester))}</div>
+        <div class="pgv-card"><div class="pgv-title">status · jobs</div>
+          <div class="inv-chips">${(sc.by_status || []).map((x) => `<span class="chip ${/succ/i.test(x.key) ? "chip-green" : /fail|error|abort/i.test(x.key) ? "chip-red" : ""}">${esc(x.key)} · ${logInt(x.count)}</span>`).join("")}</div>
+          ${prjBar(sc.by_job, "pgv-bar-warn")}</div>
+      </div>
+      ${(() => {
+        const out = [];
+        const tot = (sc.by_status || []).reduce((n, x) => n + x.count, 0);
+        const failed = (sc.by_status || []).filter((x) => /fail|error|abort/i.test(x.key)).reduce((n, x) => n + x.count, 0);
+        if (tot) out.push(`<b>${pct(failed, tot)}%</b> of standard-change runs failed in ${prjWin(d)}`);
+        const prd = (sc.environments || []).find((e) => /pr(o?)d/i.test(e.env));
+        if (prd) out.push(`production: <b>${prd.runs}</b> run(s), ${logInt(prd.rows)} rows changed, by ${esc((prd.users || []).map((u) => u.key).join(", "))}`);
+        const rq = sc.by_requester || [];
+        if (rq.length) out.push(`<b>${esc(rq[0].key)}</b> requests ${pct(rq[0].count, rq.reduce((n, x) => n + x.count, 0))}% of runs${rq.length === 1 ? " — single requester" : ""}`);
+        const un = (sc.changes || []).filter((c) => !(sc.by_job || []).some((j) => j.key === c.name));
+        if (un.length) out.push(`never run in the window: <b>${esc(un.map((c) => c.service).join(", "))}</b>`);
+        return prjInsights(out);
+      })()}
+      <details class="filebox acc-pg-sec"><summary>🕘 recent runs · <b>${logInt((sc.recent || []).length)}</b></summary>
+        <div class="log-idx-list">${(sc.recent || []).slice(0, 30).map((r) => `
+          <div class="log-idx ${/fail|error|abort/i.test(r.status) ? "bad" : ""}"><span class="ci-meta">${esc(r.when)}</span>
+            <span class="chip ${/pr(o?)d/i.test(r.env) ? "chip-amber" : ""}">${esc(r.env)}</span>
+            <code class="log-idx-name" style="flex:none">${esc(r.job)}</code><span class="chip">${esc(r.script)}</span>
+            ${prjStatusChip(r.status)}<span class="chip" title="change number">${esc(r.change_number)}</span>
+            ${prjWho(r.who)}<span class="ci-meta">${logInt(r.rows)} rows</span></div>`).join("")}</div>
+      </details>` : (sc.changes || []).length ? '<div class="kpi-note">no runs recorded in the window (ef-ops-db-changes-standard)</div>' : ""}
+    </details>`;
+
   return head + prjSdlcHtml(d) + contrib + prjEventsHtml(d)
-    + commits + jiraSec + autotest + security + usage + logging + sysCards;
+    + commits + jiraSec + autotest + security + stdSec + usage + logging + sysCards;
 }
 
 // event-log filter clicks/typing re-render only the list (delegated on body)

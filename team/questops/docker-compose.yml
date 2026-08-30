@@ -93,6 +93,7 @@ services:
       # optional — ./branding/logo.png is found automatically; set this only
       # for a logo elsewhere (path INSIDE the container)
       COMPANY_LOGO: ${QO_COMPANY_LOGO:-}
+      STD_CHANGES_DECRYPT: ${QO_STD_CHANGES_DECRYPT:-false}
       GIT_TOKEN: ${QO_GIT_TOKEN:-}
       REPOS_WORKDIR: /data/repos
       ADO_URL: ${QO_ADO_URL:-}
