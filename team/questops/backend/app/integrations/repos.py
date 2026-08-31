@@ -486,7 +486,7 @@ def discover(collection: str = "") -> dict:
                   "url": f"https://ado.demo/DefaultCollection/Control/_git/{n}"}
                  for n in DEMO_CONTROL_TEAMS]
         rows += [{"name": n, "collection": "DefaultCollection", "project": "App_Configs",
-                  "url": f"https://ado.demo/DefaultCollection/Control/_git/{n}"}
+                  "url": f"https://ado.demo/DefaultCollection/App_Configs/_git/{n}"}
                  for n in DEMO_APPCONFIG_TEAMS]
         if collection:
             rows = [r for r in rows if r["collection"] == collection]
