@@ -493,6 +493,24 @@ def _config_state(entry, dep) -> str:
     return "absent"
 
 
+def _index_entries(entries: list[dict]) -> tuple[dict, dict]:
+    """Index configs by (project, env, app). Returns (best, dupes):
+      best   {key: entry} — the entry the states are computed from (a parsed
+             one wins over a broken one; then the most recently changed)
+      dupes  {key: [entry, …]} — every key defined in MORE THAN ONE place
+             (two team repos, or twice in one repo via case/spacing variants);
+             that is drift: nobody can tell which copy is authoritative."""
+    all_by_key: dict = {}
+    for e in entries:
+        all_by_key.setdefault((_norm(e["project"]), e["env"], _norm(e["app"])), []).append(e)
+    best: dict = {}
+    for k, v in all_by_key.items():
+        pool = [e for e in v if e["ok"]] or v      # a parsed config beats a broken one
+        best[k] = max(pool, key=lambda e: e.get("changed") or "")   # then the freshest
+    dupes = {k: v for k, v in all_by_key.items() if len(v) > 1}
+    return best, dupes
+
+
 def overview(refresh: bool = False) -> dict:
     """The landing payload: ONE small row per INVENTORY project — expected
     configs (apps × envs) vs. what the Control team repos hold, deployment
@@ -507,9 +525,7 @@ def overview(refresh: bool = False) -> dict:
     entries = a.get("entries") or []
     deps, dep_err = deployments_latest(refresh)
     inv = inventory.parse()
-    by_key: dict = {}
-    for e in entries:
-        by_key[(_norm(e["project"]), e["env"], _norm(e["app"]))] = e
+    by_key, dupes = _index_entries(entries)
     edges_by_proj: dict = {}
     issues_by_proj: dict = {}
     for env, m in (a.get("model") or {}).get("envs", {}).items():
@@ -555,6 +571,9 @@ def overview(refresh: bool = False) -> dict:
                     pe["present"] += 1
                     teams_seen.add(e["team"])
                     last_change = max(last_change, e.get("changed") or "")
+        my_dupes = [{"where": f"{env}_{v[0]['app']}", "env": env2, "app": v[0]["app"],
+                     "places": [f"{e['team']}:{e['path']}" for e in v]}
+                    for (pk2, env2, _ak), v in dupes.items() if pk2 == pk for env in [env2]]
         extra = [e for e in entries if _norm(e["project"]) == pk
                  and (e["env"] not in envs or _norm(e["app"]) not in {_norm(x) for x in apps})]
         expected = len(apps) * len(envs)
@@ -567,6 +586,8 @@ def overview(refresh: bool = False) -> dict:
             "coverage": round(100 * present / expected) if expected else None,
             "states": states, "per_env": [per_env[e] for e in envs],
             "extra": len(extra), "extra_items": [f"{e['env']}_{e['app']}" for e in extra[:12]],
+            "duplicates": len(my_dupes),
+            "duplicate_items": [f"{d['where']} ({' vs '.join(d['places'])})" for d in my_dupes[:8]],
             "issues": issues_by_proj.get(pk, 0),
             "edges": {k: eg.get(k, 0) for k in ("internal", "cross-project", "cluster", "external")},
             "cross_targets": sorted(eg.get("targets") or []),
@@ -581,6 +602,7 @@ def overview(refresh: bool = False) -> dict:
                                "projects": len(deps)},
                "totals": {"projects": len(projects), "apps": tot("apps"), "expected": tot("expected"),
                           "present": tot("present"), "extra": tot("extra"), "issues": tot("issues"),
+                          "duplicates": len(dupes),
                           "states": {k: sum(p["states"].get(k, 0) for p in projects)
                                      for k in ("effective", "stale", "dormant", "missing", "unparseable", "absent")},
                           "cross": sum(p["edges"]["cross-project"] for p in projects)},
@@ -619,7 +641,9 @@ def project_detail(name: str, refresh: bool = False) -> dict:
                                        "internal": sum(1 for e in edges if e["scope"] == "internal"),
                                        "cross": sum(1 for e in edges if e["scope"] == "cross-project")}}
         anomalies += model_envs[env]["anomalies"]
-    by_key = {(e["env"], _norm(e["app"])): e for e in entries}
+    best_all, dupes_all = _index_entries(entries)
+    by_key = {(env, ak): e for (_pk, env, ak), e in best_all.items()}
+    dup_by_key = {(env, ak): [f"{x['team']}:{x['path']}" for x in v] for (_pk, env, ak), v in dupes_all.items()}
     app_names = list(dict.fromkeys([*apps, *(e["app"] for e in entries if _norm(e["app"]) not in {_norm(x) for x in apps})]))
     matrix = []
     for app in app_names:
@@ -628,6 +652,7 @@ def project_detail(name: str, refresh: bool = False) -> dict:
             e = by_key.get((env, _norm(app)))
             dep = ((deps.get(pk) or {}).get(env) or {}).get(_norm(app))
             row["cells"].append({"env": env, "state": _config_state(e, dep), "in_inventory_env": env in inv_envs,
+                                 "duplicates": dup_by_key.get((env, _norm(app))) or [],
                                  "path": e["path"] if e else "", "team": e["team"] if e else "",
                                  "changed": (e or {}).get("changed") or "", "keys": (e or {}).get("keys") or 0,
                                  "connections": len((e or {}).get("connections") or []), "notes": (e or {}).get("notes") or [],

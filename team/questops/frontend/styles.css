@@ -1951,3 +1951,7 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .cat-lane-cells { display: flex; gap: 2px; height: 12px; } .cat-lane-cells i { flex: 1; background: #1497b3; border-radius: 2px; min-width: 3px; }
 .cat-lane b { font: 700 11px var(--mono); text-align: right; } .cat-lane small { font: 500 9.5px var(--mono); color: var(--faint); text-align: right; }
 @media print { .cat-tl-svg { height: 120px; } }
+
+/* configurations — duplicate definitions */
+.cfg-st-dup { font-weight: 800; animation: cat-ping 2.4s ease-out infinite; box-shadow: 0 0 0 0 rgba(200,64,63,.45); }
+.cfg-cell .cfg-dup { color: #c8403f; font-weight: 800; }

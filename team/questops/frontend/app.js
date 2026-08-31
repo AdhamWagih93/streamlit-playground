@@ -6078,6 +6078,7 @@ function cfgOvFilter(list, f) {
       || (f.only === "stale" && (p.states.stale || 0) > 0)
       || (f.only === "dormant" && (p.states.dormant || 0) > 0)
       || (f.only === "extra" && p.extra > 0)
+      || (f.only === "dupes" && (p.duplicates || 0) > 0)
       || (f.only === "issues" && p.issues > 0)
       || (f.only === "cross" && p.edges["cross-project"] > 0)
       || (f.only === "none" && !p.present))
@@ -6105,7 +6106,7 @@ function cfgOvRows(rows) {
       <div class="cfg-ov-apps"><b>${p.apps}</b><small>apps</small></div>
       <div class="cfg-ov-envs">${(p.per_env || []).map(seg).join("") || '<span class="ci-meta">no envs in inventory</span>'}</div>
       <div class="cfg-ov-cov"><b class="${p.coverage == null ? "" : p.coverage >= 90 ? "pct-good" : p.coverage >= 50 ? "pct-warn" : "pct-bad"}">${p.coverage == null ? "–" : p.coverage + "%"}</b><small>coverage</small></div>
-      <div class="cfg-ov-states">${["effective", "stale", "dormant", "missing", "unparseable"].filter((k) => p.states[k]).map((k) => `<span class="cfg-st" style="--k:${cfgStateColor(k)}" title="${esc(CFG_STATE[k][1])}">${p.states[k]} ${k}</span>`).join("")}${p.extra ? `<span class="cfg-st" style="--k:#c0841c" title="configs in the repo for apps / envs the inventory does not list: ${esc(p.extra_items.join(", "))}">${p.extra} extra</span>` : ""}</div>
+      <div class="cfg-ov-states">${["effective", "stale", "dormant", "missing", "unparseable"].filter((k) => p.states[k]).map((k) => `<span class="cfg-st" style="--k:${cfgStateColor(k)}" title="${esc(CFG_STATE[k][1])}">${p.states[k]} ${k}</span>`).join("")}${p.extra ? `<span class="cfg-st" style="--k:#c0841c" title="configs in the repo for apps / envs the inventory does not list: ${esc(p.extra_items.join(", "))}">${p.extra} extra</span>` : ""}${p.duplicates ? `<span class="cfg-st cfg-st-dup" style="--k:#c8403f" title="the SAME project/env/app config exists in more than one place — nobody can tell which copy is authoritative: ${esc((p.duplicate_items || []).join(" · "))}">⧉ ${p.duplicates} duplicate${p.duplicates === 1 ? "" : "s"}</span>` : ""}</div>
       <div class="cfg-ov-edges" title="connections: internal · cross-project · cluster · external"><span class="pct-good">${p.edges.internal}</span> · <span class="${p.edges["cross-project"] ? "pct-warn" : ""}">${p.edges["cross-project"]}${p.cross_targets.length ? ` <small>→ ${esc(p.cross_targets.slice(0, 3).join(", "))}${p.cross_targets.length > 3 ? "…" : ""}</small>` : ""}</span> · ${p.edges.cluster} · ${p.edges.external}</div>
       <div class="cfg-ov-issues">${p.issues ? `<span class="chip chip-red">${p.issues} issue${p.issues === 1 ? "" : "s"}</span>` : ""}</div>
       <div class="cfg-ov-chg ci-meta" title="${esc(p.last_change || "")}">${p.last_change ? prjAgo(p.last_change) : "—"}</div>
@@ -6129,6 +6130,7 @@ function cfgOverviewHtml(o) {
       ${tile(logInt(st.effective || 0), "effective", "pct-good", CFG_STATE.effective[1])}${tile(logInt(st.stale || 0), "stale", st.stale ? "pct-warn" : "", CFG_STATE.stale[1])}
       ${tile(logInt(st.missing || 0), "missing (deployed, no config)", st.missing ? "pct-bad" : "pct-good", CFG_STATE.missing[1])}${tile(logInt(st.dormant || 0), "dormant (never deployed)", st.dormant ? "pct-warn" : "", CFG_STATE.dormant[1])}
       ${tile(logInt((t.extra || 0) + (o.unknown_configs || 0)), "extra configs", (t.extra || 0) + (o.unknown_configs || 0) ? "pct-warn" : "", `configs the inventory does not expect: ${t.extra || 0} for unknown apps/envs + ${o.unknown_configs || 0} under ${(o.unknown_projects || []).length} unknown project folder(s)`)}
+      ${tile(logInt(t.duplicates || 0), "duplicate definitions", t.duplicates ? "pct-bad" : "pct-good", "the same project/env/app config.yml defined in more than one place")}
       ${tile(logInt(t.issues || 0), "secret / shared issues", t.issues ? "pct-bad" : "pct-good")}${tile(logInt(t.cross || 0), "cross-project links", t.cross ? "pct-warn" : "")}
     </div>
     ${(o.unknown_projects || []).length ? `<div class="kpi-note" style="margin-bottom:8px">⚠ project folders in the Control repos that are <b>not in the inventory</b>: ${o.unknown_projects.map((u) => `<button class="chip chip-amber cfg-chip" data-cfg-open="${esc(u)}">${esc(u)}</button>`).join(" ")} — open one to inspect its configs</div>` : ""}
@@ -6139,7 +6141,7 @@ function cfgOverviewHtml(o) {
       <select data-cfg-ov="team">${opt("all", "team: any", f.team)}${teams.map((c) => opt(c, c, f.team)).join("")}</select>
       <select data-cfg-ov="platform">${opt("all", "platform: any", f.platform)}${platforms.map((c) => opt(c, c, f.platform)).join("")}</select>
       <select data-cfg-ov="env">${opt("all", "env: any", f.env)}${(o.envs || []).map((e) => opt(e, e, f.env)).join("")}</select>
-      <select data-cfg-ov="only">${opt("all", "show: everything", f.only)}${opt("gaps", "show: missing / unparseable", f.only)}${opt("stale", "show: stale configs", f.only)}${opt("dormant", "show: dormant configs", f.only)}${opt("extra", "show: extra configs", f.only)}${opt("issues", "show: secret / shared issues", f.only)}${opt("cross", "show: cross-project links", f.only)}${opt("none", "show: no configs at all", f.only)}</select>
+      <select data-cfg-ov="only">${opt("all", "show: everything", f.only)}${opt("gaps", "show: missing / unparseable", f.only)}${opt("stale", "show: stale configs", f.only)}${opt("dormant", "show: dormant configs", f.only)}${opt("extra", "show: extra configs", f.only)}${opt("dupes", "show: duplicate definitions", f.only)}${opt("issues", "show: secret / shared issues", f.only)}${opt("cross", "show: cross-project links", f.only)}${opt("none", "show: no configs at all", f.only)}</select>
       <select data-cfg-ov="sort">${opt("gaps", "sort: most gaps", f.sort || "gaps")}${opt("coverage", "sort: lowest coverage", f.sort)}${opt("cross", "sort: cross-project links", f.sort)}${opt("issues", "sort: issues", f.sort)}${opt("changed", "sort: recently changed", f.sort)}${opt("apps", "sort: most apps", f.sort)}${opt("name", "sort: name", f.sort)}</select>
       <span class="ci-meta" id="cfg-ov-count">${rows.length} of ${list.length}</span>
     </div>
@@ -6152,9 +6154,9 @@ function cfgMatrixHtml(d) {
   const envs = d.envs || [];
   const cell = (c) => {
     const dep = c.deploy;
-    const tip = `${c.env} · ${esc(CFG_STATE[c.state][1])}${c.path ? " · " + esc(c.path) + (c.team ? " (" + esc(c.team) + ")" : "") : ""}${c.changed ? " · config changed " + esc(c.changed.replace("T", " ")) : ""}${dep ? ` · last deploy ${esc(dep.when.replace("T", " "))} ${esc(dep.status)}${dep.version ? " v" + esc(dep.version) : ""}` : " · never deployed"}${c.connections ? " · " + c.connections + " connection(s)" : ""}${c.error ? " · " + esc(c.error) : ""}${(c.notes || []).length ? " · " + esc(c.notes.join("; ")) : ""}${c.in_inventory_env ? "" : " · env not in inventory"}`;
+    const tip = `${c.env} · ${esc(CFG_STATE[c.state][1])}${c.path ? " · " + esc(c.path) + (c.team ? " (" + esc(c.team) + ")" : "") : ""}${c.changed ? " · config changed " + esc(c.changed.replace("T", " ")) : ""}${dep ? ` · last deploy ${esc(dep.when.replace("T", " "))} ${esc(dep.status)}${dep.version ? " v" + esc(dep.version) : ""}` : " · never deployed"}${(c.duplicates || []).length ? ` · ⧉ DEFINED ${c.duplicates.length} TIMES: ${esc(c.duplicates.join(" · "))} — states use the freshest parsed copy` : ""}${c.connections ? " · " + c.connections + " connection(s)" : ""}${c.error ? " · " + esc(c.error) : ""}${(c.notes || []).length ? " · " + esc(c.notes.join("; ")) : ""}${c.in_inventory_env ? "" : " · env not in inventory"}`;
     return `<td><div class="cfg-cell cfg-cell-${c.state} ${c.in_inventory_env ? "" : "cfg-cell-x"}" title="${tip}">
-      <b>${c.state}</b>${dep ? `<small>${dep.version ? "v" + esc(dep.version) + " · " : ""}${prjAgo(dep.when)}${/fail|abort|error/i.test(dep.status) ? " ✗" : ""}</small>` : '<small>never deployed</small>'}${c.connections ? `<small>${c.connections} conn</small>` : ""}${c.notes && c.notes.length ? "<small>⚠</small>" : ""}</div></td>`;
+      <b>${c.state}</b>${dep ? `<small>${dep.version ? "v" + esc(dep.version) + " · " : ""}${prjAgo(dep.when)}${/fail|abort|error/i.test(dep.status) ? " ✗" : ""}</small>` : '<small>never deployed</small>'}${c.connections ? `<small>${c.connections} conn</small>` : ""}${(c.duplicates || []).length ? `<small class="cfg-dup">⧉ ×${c.duplicates.length}</small>` : ""}${c.notes && c.notes.length ? "<small>⚠</small>" : ""}</div></td>`;
   };
   return `<div class="prj-sdlc-wrap"><table class="prj-sdlc cfg-matrix"><thead><tr><th>app</th>${envs.map((e) => `<th>${esc(e)}${(d.inventory.envs || []).includes(e) ? "" : ' <span class="ci-meta" title="environment not in inventory">extra</span>'}</th>`).join("")}</tr></thead>
     <tbody>${(d.matrix || []).map((r) => `<tr><td class="prj-sdlc-app">${esc(r.app)}${r.in_inventory ? "" : ' <span class="chip chip-amber" title="app not in the inventory — extra config">extra</span>'}</td>${r.cells.map(cell).join("")}</tr>`).join("")}</tbody></table></div>`;
@@ -6179,6 +6181,7 @@ function cfgDetailHtml(d) {
       n("stale") ? `<b>${n("stale")}</b> config(s) changed after their last deployment — not effective until redeployed` : "",
       n("dormant") ? `<b>${n("dormant")}</b> config(s) exist for app/env pairs never deployed` : "",
       extra ? `<b>${extra}</b> config(s) target apps or environments the inventory does not know — inventory drift or stale repo folders` : "",
+      (() => { const dcells = cells.filter((c) => (c.duplicates || []).length); return dcells.length ? `<b>${dcells.length}</b> app/env pair(s) are defined in MORE THAN ONE place (${esc([...new Set(dcells.flatMap((c) => c.duplicates.map((x) => x.split(":")[0])))].join(", "))}) — consolidate to one repo; states currently use the freshest parsed copy` : ""; })(),
       (d.config_teams || []).some((t) => !Object.values(inv.teams || {}).includes(t)) ? `configs come from <b>${esc(d.config_teams.filter((t) => !Object.values(inv.teams || {}).includes(t)).join(", "))}</b>, not one of this project's inventory teams` : "",
       !d.in_inventory ? "this project folder exists in a Control repo but <b>not in the inventory</b>" : ""].filter(Boolean))}
     <details class="filebox acc-pg-sec" open><summary>🧩 configs × deployments · app / environment matrix</summary>${cfgMatrixHtml(d)}

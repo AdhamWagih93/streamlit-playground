@@ -239,6 +239,10 @@ DEMO_REPO_FILES["Platform_Devs"] = {
     "Platform/qc_payments_bkp/config.yml": "ignored: true\n",             # _bkp folder skipped
 }
 DEMO_REPO_FILES["Data_Team"] = {
+    # DUPLICATE on purpose: Platform/prd_payments is also defined in the
+    # Platform_Devs repo — the Configurations page must call this out
+    "Platform/prd_payments/config.yml":
+        "db:\n  host: pg-prd-OLD.corp.local\n  port: 5432\n  name: payments\n",
     "Analytics/prd_reports/config.yml":
         "warehouse: postgres://dwh-prd.corp.local:5432/dwh\n"
         "payments_api: http://payments-service.platform-prd.svc.cluster.local:8080/reports\n"
