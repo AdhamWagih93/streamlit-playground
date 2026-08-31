@@ -1225,6 +1225,18 @@ def _cat_extras() -> tuple[dict, list[str]]:
                 "silent": sum(1 for a in apps if any(e.get("no_logs") for e in a.get("env_stats") or []))})
     except Exception as exc:  # noqa: BLE001
         errors.append(f"logging: {str(exc)[:80]}")
+    # configurations coverage (Configurations page overview, cached 5 min)
+    try:
+        from . import archconfig
+        for row in archconfig.overview().get("projects") or []:
+            st = row.get("states") or {}
+            slot(_norm(row.get("name"))).update(configs={
+                "coverage": row.get("coverage"), "missing": st.get("missing", 0) + st.get("unparseable", 0),
+                "stale": st.get("stale", 0), "duplicates": row.get("duplicates", 0),
+                "extra": row.get("extra", 0), "issues": row.get("issues", 0),
+                "cross": (row.get("edges") or {}).get("cross-project", 0)})
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"configs: {str(exc)[:80]}")
     # security: freshest scan per project per scanner
     for key, cfg in _SCANNERS.items():
         sev = [f for f in cfg["sev"][:2] if f]
@@ -1348,7 +1360,7 @@ def catalog(refresh: bool = False) -> dict:
             "last_activity": last[0], "last_source": last[1],
             "recent_30d": sum(v.get("recent", 0) for v in a.values()),
             "description": ((x.get("ado") or {}).get("description") or pv.get("description") or ""),
-            "ado": x.get("ado"), "std": x.get("std"), "logging": x.get("logging"),
+            "ado": x.get("ado"), "std": x.get("std"), "logging": x.get("logging"), "configs": x.get("configs"),
             "security": x.get("security"), "deploys": x.get("deploys"), "usage": x.get("usage"),
         })
     projects.sort(key=lambda x: x["last_activity"], reverse=True)
@@ -1375,6 +1387,27 @@ def _demo_cat_activity(inv: dict) -> dict:
             out[k][src] = {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
                            "recent": sum(hist), "hist": hist}
     return out
+
+
+# ---------------------------------------------------------------- configurations (Control repos — reuses the cached Configurations analysis)
+def _sec_configs(name: str) -> dict:
+    """This project's row from the Configurations overview — coverage,
+    per-env states, duplicates, extras, cross-project targets. Reuses the
+    5-minute cached archconfig analysis; no repo scan happens here."""
+    from . import archconfig
+    o = archconfig.overview()
+    row = next((p for p in o.get("projects") or [] if _norm(p.get("name")) == _norm(name)), None)
+    if row is None:
+        unknown = name in (o.get("unknown_projects") or [])
+        return {"found": False, "repos_defined": bool(o.get("repos")),
+                "note": "project folder exists in the Control repos but not in the inventory"
+                        if unknown else "no Control team config repos cloned"
+                        if not o.get("repos") else "no configs and no inventory row for this project"}
+    keep = ("coverage", "expected", "present", "states", "per_env", "extra", "extra_items",
+            "duplicates", "duplicate_items", "issues", "edges", "cross_targets",
+            "config_teams", "last_change")
+    return {"found": True, "deployments_ok": (o.get("deployments") or {}).get("available", False),
+            **{k: row.get(k) for k in keep}}
 
 
 # ---------------------------------------------------------------- pipeline configuration (git history of inventories / ocp-templates)
@@ -1437,6 +1470,30 @@ def _pcfg_envs(files: list[str]) -> list[str]:
             if m:
                 envs.add(m.group(1).lower())
     return sorted(envs, key=lambda e: ({"dev": 1, "qc": 2, "uat": 3, "prd": 4}.get(e, 9), e))
+
+
+def _sec_configcommits(name: str, days: int) -> dict:
+    """Edits to this project's folder in the CONTROL team config repos —
+    from the clones' git history (authors + commit messages), for the event
+    log's 'config change' tab."""
+    from . import archconfig
+    commits: list = []
+    repos_out: list = []
+    for r in archconfig.control_repos():
+        from . import repos as repos_mod
+        root = repos_mod._dir_for(r)
+        row = {"name": r.get("name"), "cloned": root.exists(), "commits": 0}
+        if root.exists():
+            paths = _pcfg_project_paths(root, name)
+            if paths:
+                for c in _pcfg_log(root, paths, days):
+                    c["repo"] = r.get("name")
+                    c["envs"] = _pcfg_envs(c["files"])
+                    commits.append(c)
+                    row["commits"] += 1
+        repos_out.append(row)
+    commits.sort(key=lambda c: c["when"], reverse=True)
+    return {"repos": repos_out, "commits": len(commits), "recent": commits[:_PCFG_MAX]}
 
 
 def _sec_pipelinecfg(name: str, days: int) -> dict:
@@ -1746,6 +1803,13 @@ def _assemble_events(out: dict) -> list[dict]:
                        "url": c.get("url") or "",
                        "detail": "; ".join(f"{i['field']}: {i['from'] or '—'} → {i['to'] or '—'}"
                                            for i in c.get("items") or [])})
+    for c in ((out.get("configcommits") or {}).get("recent")) or []:
+        events.append({"ts": c.get("when") or "", "type": "configchange",
+                       "app": c.get("repo") or "", "env": ", ".join(c.get("envs") or []),
+                       "status": "", "version": c.get("sha") or "",
+                       "who": c.get("who") or "", "test": False,
+                       "detail": " · ".join(x for x in (c.get("subject"), f"{len(c.get('files') or [])} file(s): " + ", ".join(
+                           f.split("/", 1)[-1] for f in (c.get("files") or [])[:4]) + (" …" if len(c.get("files") or []) > 4 else "")) if x)})
     for c in ((out.get("pipelinecfg") or {}).get("recent")) or []:
         events.append({"ts": c.get("when") or "", "type": "pipelinecfg",
                        "app": c.get("repo") or "", "env": ", ".join(c.get("envs") or []),
@@ -1905,6 +1969,20 @@ def _sec_logging(name: str) -> dict:
 
 
 # ---------------------------------------------------------------- demo data
+def _demo_configs(name: str) -> dict:
+    try:
+        return _sec_configs(name)      # archconfig works in demo mode too
+    except Exception as exc:  # noqa: BLE001
+        return {"found": False, "error": str(exc)[:200]}
+
+
+def _demo_configcommits(name: str, days: int) -> dict:
+    try:
+        return _sec_configcommits(name, days)   # the demo Control repos are real clones
+    except Exception as exc:  # noqa: BLE001
+        return {"repos": [], "commits": 0, "recent": [], "error": str(exc)[:200]}
+
+
 def _demo_pipelinecfg(name: str, days: int) -> dict:
     """Demo: the real git walk when the demo repos are cloned, else a story."""
     live = _sec_pipelinecfg(name, days)
@@ -2258,7 +2336,9 @@ def _demo_report(name: str, days: int) -> dict:
     return {"commits": commits, "jira": jira, "jira_changes": changes,
             "scans": scans, "cicd": cicd, "prev": prev,
             "autotest": autotest, "usage": usage, "stdchanges": std,
-            "pipelinecfg": _demo_pipelinecfg(name, days)}
+            "pipelinecfg": _demo_pipelinecfg(name, days),
+            "configs": _demo_configs(name),
+            "configcommits": _demo_configcommits(name, days)}
 
 
 # ---------------------------------------------------------------- public API
@@ -2315,6 +2395,8 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         guard("usage", _sec_usage, name, days)
         guard("stdchanges", _sec_stdchanges, name, days)
         guard("pipelinecfg", _sec_pipelinecfg, name, days)
+        guard("configs", _sec_configs, name)
+        guard("configcommits", _sec_configcommits, name, days)
     guard("logging", _sec_logging, name)
     # contributor → TEAM folds for the Jira change log (window + all time)
     jc = out.get("jira_changes") or {}

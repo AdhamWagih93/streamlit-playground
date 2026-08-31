@@ -6445,6 +6445,7 @@ const PRJ_EV = {  // event-log types: icon, label, chip class
   autotest: ["🧪", "auto test", "chip-cyan"],
   stdchange: ["🧾", "standard change", "chip-violet"],
   pipelinecfg: ["🛠", "pipeline configuration", "chip-amber"],
+  configchange: ["🗺", "config change", "chip-cyan"],
 };
 
 function prjStatusChip(st) {
@@ -7196,6 +7197,27 @@ function prjBodyHtml(d) {
     </details>`;
 
   // ---- standard changes owned by this project + their run history --------
+  const cf = d.configs || {};
+  const cfgSec = cf.error ? `<details class="filebox acc-pg-sec" open><summary>🗺 configurations</summary>${prjErr(cf, "configurations")}</details>`
+    : !cf.found ? (cf.note ? `<details class="filebox acc-pg-sec" open><summary>🗺 configurations</summary><div class="empty">${esc(cf.note)}</div></details>` : "")
+    : `<details class="filebox acc-pg-sec" open><summary>🗺 configurations · <b class="${cf.coverage >= 90 ? "pct-good" : cf.coverage >= 50 ? "pct-warn" : "pct-bad"}">${cf.coverage ?? "–"}%</b> coverage · ${cf.present}/${cf.expected} <span class="ci-meta">— from the Configurations page analysis (Control team repos × deployments), cached 5 min</span></summary>
+      <div class="inv-chips" style="margin:6px 0 8px">
+        ${(cf.per_env || []).map((pe) => `<span class="cfg-cov" title="${esc(pe.env)}: ${Object.keys(CFG_STATE).filter((k) => pe[k]).map((k) => `${pe[k]} ${k}`).join(" · ") || "nothing expected"}"><small>${esc(pe.env)}</small><div class="cfg-cov-bar" style="min-width:70px">${Object.keys(CFG_STATE).filter((k) => pe[k]).map((k) => `<i style="width:${(100 * pe[k] / (pe.expected || 1)).toFixed(1)}%;background:${cfgStateColor(k)}"></i>`).join("")}</div><b>${pe.present}/${pe.expected}</b></span>`).join("")}
+        <span class="spacer"></span>
+        ${["effective", "stale", "dormant", "missing", "unparseable"].filter((k) => (cf.states || {})[k]).map((k) => `<span class="cfg-st" style="--k:${cfgStateColor(k)}" title="${esc(CFG_STATE[k][1])}">${cf.states[k]} ${k}</span>`).join("")}
+        ${cf.duplicates ? `<span class="cfg-st cfg-st-dup" style="--k:#c8403f" title="${esc((cf.duplicate_items || []).join(" · "))}">⧉ ${cf.duplicates} duplicate${cf.duplicates === 1 ? "" : "s"}</span>` : ""}
+        ${cf.extra ? `<span class="cfg-st" style="--k:#c0841c" title="${esc((cf.extra_items || []).join(", "))}">${cf.extra} extra</span>` : ""}
+        ${cf.issues ? `<span class="cfg-st" style="--k:#e05c5c">${cf.issues} secret/shared</span>` : ""}
+      </div>
+      ${prjInsights([
+        (cf.states || {}).missing ? `<b>${cf.states.missing}</b> deployed app/env pair(s) run without a config in the team repo` : "",
+        (cf.states || {}).stale ? `<b>${cf.states.stale}</b> config(s) changed after their last deployment — redeploy to make them effective` : "",
+        cf.duplicates ? `<b>${cf.duplicates}</b> app/env config(s) defined in more than one place — consolidate` : "",
+        (cf.cross_targets || []).length ? `cross-project dependencies on <b>${esc(cf.cross_targets.join(", "))}</b>` : "",
+        !cf.deployments_ok ? "deployment cross-reference unavailable — states reflect config presence only" : "",
+        cf.last_change ? `last config change ${prjAgo(cf.last_change)}` : ""].filter(Boolean))}
+      <div class="kpi-note">full matrix, topology and env comparison live on the Configurations page</div>
+    </details>`;
   const sc = d.stdchanges || {};
   const stdSec = sc.error ? `<details class="filebox acc-pg-sec" open><summary>🧾 standard changes</summary>${prjErr(sc, "standard changes")}</details>`
     : !sc.engine_found && !(sc.changes || []).length ? "" : `
@@ -7246,7 +7268,7 @@ function prjBodyHtml(d) {
     </details>`;
 
   return head + prjSdlcHtml(d) + contrib + prjEventsHtml(d)
-    + commits + jiraSec + autotest + security + stdSec + usage + logging + sysCards;
+    + commits + jiraSec + autotest + security + stdSec + usage + cfgSec + logging + sysCards;
 }
 
 // event-log filter clicks/typing re-render only the list (delegated on body)
@@ -7297,8 +7319,12 @@ const CAT_SRC = { commits: ["⧗", "commit"], builds: ["⚙", "build"], deploys:
 function prjCatalogFilter(list, f) {
   const q = (f.q || "").toLowerCase().split(/\s+/).filter(Boolean);
   const teamsOf = (p) => Object.values(p.teams || {}).filter(Boolean);
+  const cfOk = (p) => { const c = p.configs; if (!f.cfg || f.cfg === "all") return true; if (!c) return f.cfg === "none";
+    return f.cfg === "gaps" ? c.missing > 0 : f.cfg === "stale" ? c.stale > 0 : f.cfg === "dupes" ? c.duplicates > 0
+      : f.cfg === "full" ? c.coverage >= 90 && !c.missing && !c.duplicates : f.cfg === "none" ? !c.coverage : true; };
   let rows = list.filter((p) =>
-    (!f.company || f.company === "all" || (p.company || "—") === f.company)
+    cfOk(p)
+    && (!f.company || f.company === "all" || (p.company || "—") === f.company)
     && (!f.team || f.team === "all" || teamsOf(p).includes(f.team))
     && (!f.platform || f.platform === "all" || (p.deploy_platform || "—") === f.platform)
     && q.every((t) => [p.name, p.company, p.description, p.deploy_platform, p.deploy_technology, ...teamsOf(p), ...(p.envs || [])]
@@ -7309,6 +7335,7 @@ function prjCatalogFilter(list, f) {
     : sort === "recent" ? b.recent_30d - a.recent_30d || a.name.localeCompare(b.name)
     : sort === "risk" ? ((b.security || {}).critical || 0) * 10 + ((b.security || {}).high || 0) - ((a.security || {}).critical || 0) * 10 - ((a.security || {}).high || 0) || a.name.localeCompare(b.name)
     : sort === "logs" ? ((a.logging || {}).score ?? 99) - ((b.logging || {}).score ?? 99) || a.name.localeCompare(b.name)
+    : sort === "cfg" ? (((a.configs || {}).coverage ?? -1) - ((b.configs || {}).coverage ?? -1)) || a.name.localeCompare(b.name)
     : (b.last_activity || "").localeCompare(a.last_activity || "") || a.name.localeCompare(b.name));
   return rows;
 }
@@ -7372,6 +7399,10 @@ function prjCatalogCards(rows, f) {
         ${pill(st ? (st.issues ? "cat-pill-warn" : "") : "cat-pill-mute", "🧾", st ? `${st.changes} std change${st.changes === 1 ? "" : "s"}${st.issues ? " · " + st.issues + " issue(s)" : ""}` : "no std changes", "standard changes declaring this project_name in the Engine catalogue")}
         ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : "no tests · 30d", "autotest runs in the last 30 days")}
         ${us ? pill("", "⏱", `${logInt(us.minutes)} min · ${gb(us.storage || 0)}`, `platform usage snapshot as of ${us.as_of || "?"}: ${logInt(us.minutes)} minutes, ${gb(us.storage || 0)} storage`) : ""}
+        ${(() => { const c = p.configs; if (!c) return pill("cat-pill-mute", "🗺", "no configs", "no row in the Configurations analysis for this project");
+          const bad = c.missing || c.duplicates || c.issues; return pill(bad ? "cat-pill-bad" : c.stale || c.extra ? "cat-pill-warn" : c.coverage >= 90 ? "cat-pill-good" : "",
+            "🗺", `cfg ${c.coverage == null ? "–" : c.coverage + "%"}${c.missing ? ` · ${c.missing} missing` : ""}${c.stale ? ` · ${c.stale} stale` : ""}${c.duplicates ? ` · ⧉${c.duplicates}` : ""}`,
+            `configuration coverage ${c.coverage ?? "?"}% · ${c.missing} missing/broken · ${c.stale} stale · ${c.duplicates} duplicate(s) · ${c.extra} extra · ${c.issues} secret/shared issue(s) · ${c.cross} cross-project link(s)`); })()}
       </div>
     </button>`;
   };
@@ -7486,9 +7517,10 @@ function prjCatalogHtml(cat) {
         <input data-cat-f="q" placeholder="🔎 project / company / team / platform / env…" value="${esc(f.q || "")}">
         <select data-cat-f="company">${opt("all", "company: any", f.company)}${companies.map((c) => opt(c, c, f.company)).join("")}</select>
         <select data-cat-f="team">${opt("all", "team: any", f.team)}${teams.map((t) => opt(t, t, f.team)).join("")}</select>
+        <select data-cat-f="cfg" title="configuration coverage (Configurations page)">${opt("all", "configs: any", f.cfg)}${opt("gaps", "configs: missing / broken", f.cfg)}${opt("stale", "configs: stale", f.cfg)}${opt("dupes", "configs: duplicates", f.cfg)}${opt("full", "configs: fully covered", f.cfg)}${opt("none", "configs: none at all", f.cfg)}</select>
         <select data-cat-f="platform">${opt("all", "platform: any", f.platform)}${platforms.map((c) => opt(c, c, f.platform)).join("")}</select>
         <select data-cat-f="group" title="group cards by">${opt("company", "group: company", f.group || "company")}${opt("team", "group: dev team", f.group)}${opt("platform", "group: platform", f.group)}</select>
-        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("risk", "sort: security risk", f.sort)}${opt("logs", "sort: weakest logging", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
+        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("risk", "sort: security risk", f.sort)}${opt("cfg", "sort: lowest config coverage", f.sort)}${opt("logs", "sort: weakest logging", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
         <span class="ci-meta" id="cat-count">${rows.length} of ${list.length}</span>
         ${prjCatAsOf(cat)}
       </div>
