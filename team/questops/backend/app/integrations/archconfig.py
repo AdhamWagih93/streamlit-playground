@@ -326,7 +326,7 @@ def build_model(entries: list[dict], ns_map: dict) -> dict:
                                       "out": 0, "in": 0, "other_env": r["env"] if r["env"] != env else ""}
                     scope = "internal" if r["project"] == e["project"] else "cross-project"
                     ns_info = ns_map.get(r.get("namespace") or "")
-                    if r.get("namespace") and ns_info and ns_info["project"] != r["project"]:
+                    if r.get("namespace") and ns_info and ns_info.get("project") and ns_info["project"] != r["project"]:
                         anomalies.append({"env": env, "app": e["app"], "project": e["project"], "kind": "namespace",
                                           "detail": f"{c['host']} resolves to {r['app']} but namespace {r['namespace']} belongs to {ns_info['project']}"})
                     edges.append({"from": src, "to": tid, "kind": c["kind"], "label": c["label"], "scope": scope,
