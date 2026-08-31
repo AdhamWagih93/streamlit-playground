@@ -515,14 +515,18 @@ def overview(refresh: bool = False) -> dict:
     for env, m in (a.get("model") or {}).get("envs", {}).items():
         byid = {n["id"]: n for n in m["nodes"]}
         for ed in m["edges"]:
-            n = byid.get(ed["from"])
-            if n:
-                d = edges_by_proj.setdefault(_norm(n["project"]), {"internal": 0, "cross-project": 0, "cluster": 0, "external": 0, "targets": set()})
+            n = byid.get(ed["from"]) or {}
+            # an edge may start or end at a non-app node (cluster service,
+            # external, IP) — those carry owner / no project key at all
+            proj = n.get("project") or n.get("owner")
+            if proj:
+                d = edges_by_proj.setdefault(_norm(proj), {"internal": 0, "cross-project": 0, "cluster": 0, "external": 0, "targets": set()})
                 d[ed["scope"]] = d.get(ed["scope"], 0) + 1
                 if ed["scope"] == "cross-project":
-                    t = byid.get(ed["to"])
-                    if t:
-                        d["targets"].add(t["project"])
+                    t = byid.get(ed["to"]) or {}
+                    tp = t.get("project") or t.get("owner")
+                    if tp:
+                        d["targets"].add(tp)
         for an in m.get("anomalies") or []:
             if an.get("kind") in ("secret", "shared") and an.get("project"):
                 issues_by_proj[_norm(an["project"])] = issues_by_proj.get(_norm(an["project"]), 0) + 1
