@@ -1508,7 +1508,9 @@ def _sec_stdchanges(name: str, days: int) -> dict:
         return out
     keys = sorted({v for c in mine for v in (c["name"], *(s["name"] for s in c["scripts"]))})
     # One standard-change RUN is spread over several documents (one per input
-    # parameter set) — the fingerprint is service (JobName) + ChangeNumber.
+    # parameter set) — the fingerprint is service (JobName) + environment +
+    # ChangeNumber: the same change number executes once per environment
+    # (uat, then prd), and those are DIFFERENT runs.
     # The index is paged with search_after so every run is seen (no 1000 cap).
     body = {
         "query": {"bool": {"filter": [{"bool": {"should": [
@@ -1531,14 +1533,15 @@ def _sec_stdchanges(name: str, days: int) -> dict:
             s_ = h.get("_source") or {}
             service = (s_.get("JobName") or s_.get("ScriptName") or "").strip()
             cn = str(s_.get("ChangeNumber") or "").strip()
-            key = (service, cn or f"doc:{h.get('_id')}")   # no change number → the doc is its own run
+            env = (s_.get("Environment") or "").strip().lower() or "(none)"
+            key = (service, env, cn or f"doc:{h.get('_id')}")   # no change number → the doc is its own run
             st = s_.get("Status") or ""
             when = (s_.get("Date") or "")[:16]
             r = folded.get(key)
             if r is None:
                 r = folded[key] = {
                     "when": when, "last": (s_.get("UpdatedDate") or s_.get("Date") or "")[:16],
-                    "env": (s_.get("Environment") or "").strip().lower() or "(none)",
+                    "env": env,
                     "job": s_.get("JobName") or "", "script": s_.get("ScriptName") or "", "service": service,
                     "change_number": cn, "status": st, "rows": 0, "docs": 0,
                     "who": _user_display(s_.get("Requester") or "") or "(unknown)", "statuses": {}}
