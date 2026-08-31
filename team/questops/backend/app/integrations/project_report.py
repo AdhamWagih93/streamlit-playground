@@ -80,10 +80,13 @@ def _name_variants(name: str) -> list[str]:
 
 def _es(index: str, body: dict) -> dict:
     """One prd-Elasticsearch search. Raises on transport/HTTP errors so each
-    section can surface ITS error without killing the page."""
+    section can surface ITS error without killing the page.
+    The index is searched as `<name>*` so backup/rollover copies matching the
+    pattern (ef-git-commits-bkp-2026…, …) are included too."""
     if not (settings.es_url and settings.es_api_key):
         raise RuntimeError("Elasticsearch is not configured (ES_URL / ES_API_KEY)")
-    r = requests.post(f"{settings.es_url.rstrip('/')}/{index}/_search", json=body,
+    pattern = index if index.endswith("*") else index + "*"
+    r = requests.post(f"{settings.es_url.rstrip('/')}/{pattern}/_search?ignore_unavailable=true", json=body,
                       headers={"Authorization": f"ApiKey {settings.es_api_key}"},
                       timeout=30, verify=settings.es_verify_ssl)
     r.raise_for_status()
