@@ -31,7 +31,10 @@ from .repos import _dir_for, configured
 
 _CACHE: dict = {"at": 0.0, "payload": None}
 _TTL = 300
-CONTROL_PROJECT = "control"
+# ADO projects that hold per-team config repos, in PRECEDENCE order:
+# a config found under Control wins over the same one under App_Configs
+CONTROL_PROJECTS = ("control", "app_configs")
+CONTROL_PROJECT = CONTROL_PROJECTS[0]   # kept for older callers
 _SKIP_SUFFIX = "_bkp"
 CLUSTER_SUFFIX = ".svc.cluster.local"
 
@@ -218,7 +221,14 @@ def namespace_map() -> dict:
 
 # ---------------------------------------------------------------- repos + parse
 def control_repos() -> list[dict]:
-    return [r for r in configured() if (r.get("project") or "").lower() == CONTROL_PROJECT]
+    """Team config repos from every config ADO project — Control first, then
+    App_Configs. Each repo carries source_project + priority (0 = Control)."""
+    out = []
+    for prio, proj in enumerate(CONTROL_PROJECTS):
+        for r in configured():
+            if (r.get("project") or "").lower() == proj:
+                out.append({**r, "source_project": r.get("project"), "priority": prio})
+    return out
 
 
 def _file_dates(root) -> dict:
@@ -257,6 +267,8 @@ def parse_repo(repo: dict) -> list[dict]:
             if not cf.is_file():
                 cf = ea / "config.yaml"
             entry = {"team": repo["name"], "project": pdir.name, "env": env.lower(), "app": app,
+                     "source_project": repo.get("source_project") or repo.get("project") or "",
+                     "priority": repo.get("priority", 0),
                      "path": str(cf.relative_to(root)) if cf.is_file() else f"{pdir.name}/{ea.name}/config.yml",
                      "ok": cf.is_file(), "error": "" if cf.is_file() else "config.yml missing",
                      "connections": [], "notes": [], "keys": 0,
@@ -505,7 +517,9 @@ def _index_entries(entries: list[dict]) -> tuple[dict, dict]:
         all_by_key.setdefault((_norm(e["project"]), e["env"], _norm(e["app"])), []).append(e)
     best: dict = {}
     for k, v in all_by_key.items():
-        pool = [e for e in v if e["ok"]] or v      # a parsed config beats a broken one
+        pool = [e for e in v if e["ok"]] or v            # a parsed config beats a broken one
+        top = min(e.get("priority", 0) for e in pool)     # Control beats App_Configs
+        pool = [e for e in pool if e.get("priority", 0) == top]
         best[k] = max(pool, key=lambda e: e.get("changed") or "")   # then the freshest
     dupes = {k: v for k, v in all_by_key.items() if len(v) > 1}
     return best, dupes

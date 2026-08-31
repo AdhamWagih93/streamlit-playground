@@ -6133,7 +6133,7 @@ function cfgOverviewHtml(o) {
       ${tile(logInt(t.duplicates || 0), "duplicate definitions", t.duplicates ? "pct-bad" : "pct-good", "the same project/env/app config.yml defined in more than one place")}
       ${tile(logInt(t.issues || 0), "secret / shared issues", t.issues ? "pct-bad" : "pct-good")}${tile(logInt(t.cross || 0), "cross-project links", t.cross ? "pct-warn" : "")}
     </div>
-    ${(o.unknown_projects || []).length ? `<div class="kpi-note" style="margin-bottom:8px">⚠ project folders in the Control repos that are <b>not in the inventory</b>: ${o.unknown_projects.map((u) => `<button class="chip chip-amber cfg-chip" data-cfg-open="${esc(u)}">${esc(u)}</button>`).join(" ")} — open one to inspect its configs</div>` : ""}
+    ${(o.unknown_projects || []).length ? `<div class="kpi-note" style="margin-bottom:8px">⚠ project folders in the Control / App_Configs repos that are <b>not in the inventory</b>: ${o.unknown_projects.map((u) => `<button class="chip chip-amber cfg-chip" data-cfg-open="${esc(u)}">${esc(u)}</button>`).join(" ")} — open one to inspect its configs</div>` : ""}
     ${!o.deployments.available ? `<div class="kpi-note" style="margin-bottom:8px">⚠ deployments unavailable (${esc(o.deployments.error || "")}) — effective / stale / missing states fall back to config presence only</div>` : ""}
     <div class="acc-filters cat-filters">
       <input data-cfg-ov="q" placeholder="🔎 project / company / team / target project / env…" value="${esc(f.q || "")}">
@@ -6183,7 +6183,7 @@ function cfgDetailHtml(d) {
       extra ? `<b>${extra}</b> config(s) target apps or environments the inventory does not know — inventory drift or stale repo folders` : "",
       (() => { const dcells = cells.filter((c) => (c.duplicates || []).length); return dcells.length ? `<b>${dcells.length}</b> app/env pair(s) are defined in MORE THAN ONE place (${esc([...new Set(dcells.flatMap((c) => c.duplicates.map((x) => x.split(":")[0])))].join(", "))}) — consolidate to one repo; states currently use the freshest parsed copy` : ""; })(),
       (d.config_teams || []).some((t) => !Object.values(inv.teams || {}).includes(t)) ? `configs come from <b>${esc(d.config_teams.filter((t) => !Object.values(inv.teams || {}).includes(t)).join(", "))}</b>, not one of this project's inventory teams` : "",
-      !d.in_inventory ? "this project folder exists in a Control repo but <b>not in the inventory</b>" : ""].filter(Boolean))}
+      !d.in_inventory ? "this project folder exists in a Control / App_Configs repo but <b>not in the inventory</b>" : ""].filter(Boolean))}
     <details class="filebox acc-pg-sec" open><summary>🧩 configs × deployments · app / environment matrix</summary>${cfgMatrixHtml(d)}
       <div class="kpi-note">a config is effective only after a deployment to that environment; stale = the config's last commit is newer than the last deployment</div></details>
     <details class="filebox acc-pg-sec" open><summary>🗺 architecture · <span class="log-dir" style="display:inline-flex">${envBtns}</span></summary>
@@ -6217,18 +6217,18 @@ async function renderConfigs() {
   // shell first — something to look at immediately; the overview streams in
   view().innerHTML = `
     <div class="view-head"><button class="btn btn-sm btn-ghost ${state.cfgSel ? "" : "hidden"}" data-cfg-back title="back to all projects">◀ projects</button><h1>CONFIGURATIONS</h1>
-      <span class="sub" id="cfg-sub">inventory projects × environments vs. the Control team config repositories</span>
+      <span class="sub" id="cfg-sub">inventory projects × environments vs. the Control / App_Configs team config repositories</span>
       <span class="spacer"></span><button id="cfg-refresh" class="btn btn-sm" title="re-scan the cloned repos and deployments">↻</button></div>
     <div id="cfg-head"></div>
     <div id="cfg-main"><div class="cfg-skel"><div class="stat-tiles">${Array.from({ length: 6 }, () => '<div class="stat-tile cfg-skel-tile"><b>&nbsp;</b><span>scanning configs…</span></div>').join("")}</div><div class="empty">reading inventory · team config repos · latest deployments</div></div></div>
-    <div class="kpi-note">primary loop = inventory projects (apps × envs = expected configs) cross-checked against every cloned Control repo and the latest real deployment per app / env; nothing heavy is built until you open a project</div>`;
+    <div class="kpi-note">primary loop = inventory projects (apps × envs = expected configs) cross-checked against every cloned Control / App_Configs repo (Control wins on collisions) and the latest real deployment per app / env; nothing heavy is built until you open a project</div>`;
   const v = view();
   const showOverview = () => {
     const o = state.cfgOverview; if (!o) return;
     state.cfgSel = null; state.cfgDetail = null;
     document.querySelectorAll("[data-cfg-back]").forEach((b) => b.classList.add("hidden"));
     document.getElementById("cfg-head").innerHTML = (o.repos || []).length ? `<div class="inv-chips" style="margin-bottom:8px">${o.repos.map((r) => `<span class="chip ${r.cloned ? "" : "chip-amber"}" title="${r.cloned ? r.configs + " config(s)" : "not cloned yet"}">🛡 ${esc(r.team)}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}<span class="ci-meta">· ${o.configs} config.yml parsed · deployments ${o.deployments.available ? "cross-referenced" : "unavailable"}${o.cached ? " · cached" : ""}</span></div>`
-      : '<div class="kpi-note">no repository from the ADO project <b>Control</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>';
+      : '<div class="kpi-note">no repository from the ADO projects <b>Control</b> / <b>App_Configs</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>';
     document.getElementById("cfg-main").innerHTML = cfgOverviewHtml(o);
   };
   v.addEventListener("click", (ev) => {
@@ -7200,7 +7200,7 @@ function prjBodyHtml(d) {
   const cf = d.configs || {};
   const cfgSec = cf.error ? `<details class="filebox acc-pg-sec" open><summary>🗺 configurations</summary>${prjErr(cf, "configurations")}</details>`
     : !cf.found ? (cf.note ? `<details class="filebox acc-pg-sec" open><summary>🗺 configurations</summary><div class="empty">${esc(cf.note)}</div></details>` : "")
-    : `<details class="filebox acc-pg-sec" open><summary>🗺 configurations · <b class="${cf.coverage >= 90 ? "pct-good" : cf.coverage >= 50 ? "pct-warn" : "pct-bad"}">${cf.coverage ?? "–"}%</b> coverage · ${cf.present}/${cf.expected} <span class="ci-meta">— from the Configurations page analysis (Control team repos × deployments), cached 5 min</span></summary>
+    : `<details class="filebox acc-pg-sec" open><summary>🗺 configurations · <b class="${cf.coverage >= 90 ? "pct-good" : cf.coverage >= 50 ? "pct-warn" : "pct-bad"}">${cf.coverage ?? "–"}%</b> coverage · ${cf.present}/${cf.expected} <span class="ci-meta">— from the Configurations page analysis (Control / App_Configs team repos × deployments), cached 5 min</span></summary>
       <div class="inv-chips" style="margin:6px 0 8px">
         ${(cf.per_env || []).map((pe) => `<span class="cfg-cov" title="${esc(pe.env)}: ${Object.keys(CFG_STATE).filter((k) => pe[k]).map((k) => `${pe[k]} ${k}`).join(" · ") || "nothing expected"}"><small>${esc(pe.env)}</small><div class="cfg-cov-bar" style="min-width:70px">${Object.keys(CFG_STATE).filter((k) => pe[k]).map((k) => `<i style="width:${(100 * pe[k] / (pe.expected || 1)).toFixed(1)}%;background:${cfgStateColor(k)}"></i>`).join("")}</div><b>${pe.present}/${pe.expected}</b></span>`).join("")}
         <span class="spacer"></span>

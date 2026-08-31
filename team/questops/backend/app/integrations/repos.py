@@ -208,6 +208,7 @@ DEMO_REPO_FILES = {
 
 
 DEMO_CONTROL_TEAMS = ["Platform_Devs", "Data_Team"]   # per-team config repos (Control project)
+DEMO_APPCONFIG_TEAMS = ["Ops_Team"]                    # same structure, ADO project App_Configs
 DEMO_REPO_FILES["Platform_Devs"] = {
     "README.md": "# Platform_Devs configs\n<project>/<env>_<app>/config.yml\n",
     "Platform/prd_payments/config.yml":
@@ -238,6 +239,16 @@ DEMO_REPO_FILES["Platform_Devs"] = {
     "Platform/dev_legacy/notes.txt": "no config.yml here on purpose\n",   # missing config → flagged
     "Platform/qc_payments_bkp/config.yml": "ignored: true\n",             # _bkp folder skipped
 }
+DEMO_REPO_FILES["Ops_Team"] = {
+    # App_Configs project — fills what Control lacks: Research gets its config
+    "Research/dev_prototypes/config.yml":
+        "db:\n  host: pg-dev.corp.local\n  port: 5432\n  name: experiments\n"
+        "tracking_url: http://mlflow-dev.corp.local:5000\n",
+    # and a LOWER-PRECEDENCE copy of a Control-owned config (Control must win)
+    "Platform/dev_payments/config.yml":
+        "db:\n  host: pg-dev-appconfigs.corp.local\n  port: 5432\n  name: payments\n",
+}
+
 DEMO_REPO_FILES["Data_Team"] = {
     # DUPLICATE on purpose: Platform/prd_payments is also defined in the
     # Platform_Devs repo — the Configurations page must call this out
@@ -474,6 +485,9 @@ def discover(collection: str = "") -> dict:
         rows += [{"name": n, "collection": "DefaultCollection", "project": "Control",
                   "url": f"https://ado.demo/DefaultCollection/Control/_git/{n}"}
                  for n in DEMO_CONTROL_TEAMS]
+        rows += [{"name": n, "collection": "DefaultCollection", "project": "App_Configs",
+                  "url": f"https://ado.demo/DefaultCollection/Control/_git/{n}"}
+                 for n in DEMO_APPCONFIG_TEAMS]
         if collection:
             rows = [r for r in rows if r["collection"] == collection]
         return {"collections": colls, "repos": rows}
@@ -518,9 +532,11 @@ def discover(collection: str = "") -> dict:
 
 
 def control_repos_lookup(team: str) -> dict | None:
-    for r in configured():
-        if (r.get("project") or "").lower() == "control" and r["name"].lower() == (team or "").lower():
-            return r
+    """The team's config repo — tried under Control first, then App_Configs."""
+    for proj in ("control", "app_configs"):
+        for r in configured():
+            if (r.get("project") or "").lower() == proj and r["name"].lower() == (team or "").lower():
+                return r
     return None
 
 
