@@ -2007,3 +2007,13 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .chip-green { border-color: #43c884; }
 .cat-act-st { font-style: normal; font-weight: 800; font-size: 10px; }
 .cat-act-ok { color: #2e9c62; } .cat-act-bad { color: #c8403f; } .cat-act-mid { color: #b7791f; font-size: 9px; }
+
+/* projects — progressive load + timing chip */
+.prj-timing { font: 600 10.5px var(--mono); color: var(--faint); cursor: pointer; position: relative; white-space: nowrap; }
+.prj-timing:hover { color: var(--text); }
+.prj-timing-detail { position: absolute; top: 130%; left: 0; z-index: 30; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(0,0,0,.15); min-width: 190px; }
+.prj-timing-detail span { font: 500 10.5px var(--mono); display: flex; justify-content: space-between; gap: 10px; }
+.prj-stage-note { border-left: 3px solid #1497b3; }
+.prj-sec-loading summary { opacity: .8; }
+.prj-skel-bar { height: 34px; border-radius: 8px; margin: 8px 0; background: linear-gradient(90deg, var(--line), var(--panel), var(--line)); background-size: 200% 100%; animation: cfg-shimmer 1.2s infinite; }
+.cat-pill-load { animation: cat-in .3s ease both; }

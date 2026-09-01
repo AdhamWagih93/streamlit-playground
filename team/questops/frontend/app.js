@@ -6955,6 +6955,8 @@ function prjMembersHtml(m) {
 }
 
 function prjBodyHtml(d) {
+  const LOADING = new Set(d._loading || []);   // sections still streaming in (stage 2)
+  const loadSec = (title) => `<details class="filebox acc-pg-sec prj-sec-loading" open><summary>${title} <span class="ci-meta"><i class="cat-pulse-dot"></i> loading…</span></summary><div class="prj-skel-bar"></div></details>`;
   const inv = d.inventory || {};
   const pdb = d.platform_db || {};
   const ado = d.ado || {};
@@ -7248,7 +7250,7 @@ function prjBodyHtml(d) {
           <div class="kpi-note">members mapped to the project teams via their LDAP groups</div></div>
         <div class="pgv-card"><div class="pgv-title">🎫 open tickets per assignee</div>${prjBar(jira.by_assignee)}</div>
       </div>
-      ${prjMembersHtml(d.members)}
+      ${LOADING.has("members") ? '<div class="prj-skel-bar" title="member classification loads in stage 2"></div>' : prjMembersHtml(d.members)}
       ${(() => {
         const out = [];
         const au = com.authors || [];
@@ -7488,7 +7490,15 @@ function prjBodyHtml(d) {
     </details>`;
 
   return head + prjSdlcHtml(d) + contrib + prjEventsHtml(d)
-    + commits + jiraSec + autotest + security + stdSec + usage + cfgSec + logging + sysCards;
+    + commits
+    + (LOADING.has("jira") ? loadSec("🎫 Jira") : jiraSec)
+    + (LOADING.has("autotest") ? loadSec("🧪 auto tests") : autotest)
+    + (LOADING.has("scans") ? loadSec("🛡 security") : security)
+    + (LOADING.has("stdchanges") ? loadSec("🧾 standard changes") : stdSec)
+    + (LOADING.has("usage") ? loadSec("⏱ platform usage") : usage)
+    + cfgSec
+    + (LOADING.has("logging") ? loadSec("▤ logging health") : logging)
+    + sysCards;
 }
 
 // event-log filter clicks/typing re-render only the list (delegated on body)
@@ -7620,12 +7630,12 @@ function prjCatalogCards(rows, f) {
       })()}
       <div class="cat-viz">
         <div class="cat-strip" title="${catWin()}-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·${catWin()}d</small></span>` : ""}</div>
-        <div class="cat-gauges">
+        ${(state.prjCatalog || {}).partial ? "" : `<div class="cat-gauges">
           ${gauge(lg ? lg.score : null, "logging", lg ? `logging health ${lg.score ?? "?"}/10 · ${lg.size_h || "?"} · ${lg.indices || 0} indices${lg.silent ? " · " + lg.silent + " app(s) silent" : ""}` : "no logging data")}
           ${gauge(depPct == null ? null : depPct / 10, "prd deploys", dep ? `${dep.prd} prd deployment(s) in ${catWin()}d · ${dep.prd_ok} succeeded · ${dep.total} deployments overall` : `no deployments in ${catWin()}d`, dep && dep.prd ? `${dep.prd_ok}/${dep.prd} ok` : "")}
-        </div>
+        </div>`}
       </div>
-      ${secBar}
+      ${(state.prjCatalog || {}).partial ? '<div class="cat-pills"><span class="cat-pill cat-pill-mute cat-pill-load">⏳ fetching facts — security · configs · logging · usage…</span></div>' : `${secBar}
       <div class="cat-pills">
         ${pill(st ? (st.issues ? "cat-pill-warn" : "") : "cat-pill-mute", "🧾", st ? `${st.changes} std change${st.changes === 1 ? "" : "s"}${st.issues ? " · " + st.issues + " issue(s)" : ""}` : "no std changes", "standard changes declaring this project_name in the Engine catalogue")}
         ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : `no tests · ${catWin()}d`, `autotest runs in the last ${catWin()} days`)}
@@ -7638,7 +7648,7 @@ function prjCatalogCards(rows, f) {
           return pill(cls,
             "🗺", `cfg ${c.coverage == null ? "–" : c.coverage + "%"}${c.missing ? ` · ${c.missing} missing` : ""}${c.stale ? ` · ${c.stale} stale` : ""}${c.duplicates ? ` · ⧉${c.duplicates}` : ""}`,
             `configuration coverage ${c.coverage ?? "?"}% · ${c.missing} missing/broken · ${c.stale} stale · ${c.duplicates} duplicate(s) · ${c.extra} extra · ${c.issues} secret/shared issue(s) · ${c.cross} cross-project link(s)`); })()}
-      </div>
+      </div>`}
     </button>`;
   };
   return Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
@@ -7717,6 +7727,15 @@ function prjCatJump(name) {
   document.querySelectorAll(".cat-card.cat-hit").forEach((c) => c.classList.remove("cat-hit"));
   card.classList.add("cat-hit");
   setTimeout(() => card.classList.remove("cat-hit"), 1800);
+}
+
+// subtle load summary: "⏱ 1.2s" chip; hover = per-fetch breakdown; click = expand
+function prjTimingsHtml(parts, serverTimings) {
+  const total = parts.reduce((n, p) => n + p.ms, 0);
+  const top = [...(serverTimings || [])].sort((a, b) => b.ms - a.ms).slice(0, 8);
+  const tip = parts.map((p) => `${p.k} ${(p.ms / 1000).toFixed(2)}s`).join(" · ")
+    + (top.length ? " | server: " + top.map((t) => `${t.k} ${(t.ms / 1000).toFixed(2)}s`).join(" · ") : "");
+  return `<span class="prj-timing" title="${esc(tip)}" data-prj-timing>⏱ ${(total / 1000).toFixed(1)}s<span class="prj-timing-detail hidden">${parts.map((p) => `<span>${esc(p.k)} <b>${(p.ms / 1000).toFixed(2)}s</b></span>`).join("")}${top.map((t) => `<span class="ci-meta">${esc(t.k)} ${(t.ms / 1000).toFixed(2)}s</span>`).join("")}</span></span>`;
 }
 
 // "data as of" line — the anchor every "x min ago" on the page is relative to;
@@ -7819,15 +7838,36 @@ async function prjLoad(refresh) {
   const tok = navToken();
   const body = document.getElementById("prj-body");
   if (!body || !state.prjSel) return;
-  body.innerHTML = '<div class="empty">building the report — aggregating DevOps Platform · ADO · commits · Jira · scans · logging…</div>';
+  const T0 = performance.now(), parts = [];
+  const expand = () => body.querySelectorAll("details:not([open])").forEach((el) => { el.open = true; });
+  body.innerHTML = '<div class="empty"><i class="cat-pulse-dot"></i> stage 1/2 — DevOps Platform · ADO · commits · SDLC · configurations…</div>';
+  const base = `/api/projects/${encodeURIComponent(state.prjSel)}?days=${state.prjDays}${refresh ? "&refresh=true" : ""}`;
+  let d;
   try {
-    const d = await api(`/api/projects/${encodeURIComponent(state.prjSel)}?days=${state.prjDays}${refresh ? "&refresh=true" : ""}`);
-    if (navStale(tok)) return;
+    let t = performance.now();
+    d = await api(base + "&stage=core");
+    parts.push({ k: "core", ms: performance.now() - t });
+    if (navStale(tok) || !state.prjSel) return;
     state.prjData = d;
+    body.innerHTML = (d._loading && d._loading.length
+      ? `<div class="kpi-note prj-stage-note"><i class="cat-pulse-dot"></i> stage 2/2 loading — ${esc(d._loading.join(" · "))} — everything below is already live</div>` : "")
+      + prjBodyHtml(d);
+    expand();
+    if (!d._loading || !d._loading.length) {   // demo / cached: one stage was everything
+      const st = document.getElementById("prj-status"); if (st) st.innerHTML = prjTimingsHtml(parts, d.timings);
+      return;
+    }
+    t = performance.now();
+    const rest = await api(base.replace("&refresh=true", "") + "&stage=rest");
+    parts.push({ k: "rest", ms: performance.now() - t });
+    if (navStale(tok) || state.prjData !== d) return;
+    delete d._loading;
+    Object.assign(d, rest, { timings: [...(d.timings || []), ...(rest.timings || [])] });
+    const scroller = view(), keep = scroller.scrollTop;   // completion re-render must not jump
     body.innerHTML = prjBodyHtml(d);
-    // every section of the report starts expanded — nothing hidden behind a
-    // collapsed summary on screen or in the printed PDF
-    body.querySelectorAll("details:not([open])").forEach((el) => { el.open = true; });
+    expand();
+    scroller.scrollTop = keep;
+    const st = document.getElementById("prj-status"); if (st) st.innerHTML = prjTimingsHtml(parts, d.timings);
   } catch (e) {
     if (!navStale(tok)) body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
   }
@@ -7837,9 +7877,14 @@ async function renderProjects() {
   const tok = navToken();
   if (state.prjTick) clearInterval(state.prjTick);
   state.prjTick = setInterval(() => { if (!document.querySelector("[data-cat-asof]")) { clearInterval(state.prjTick); state.prjTick = null; return; } prjCatTick(); }, 30000);
-  const [list, cat] = await Promise.all([api("/api/projects"), api("/api/projects/catalog")]);
+  const T0 = performance.now(), parts = [];
+  const timed = async (k, promise) => { const t = performance.now(); const r = await promise; parts.push({ k, ms: performance.now() - t }); return r; };
+  // 1) the light pass paints ASAP: project list + activity-only catalog
+  const [list, cat] = await timed("list+activity", Promise.all([
+    api("/api/projects"), api("/api/projects/catalog?light=true")]));
   if (navStale(tok)) return;
   state.prjCatalog = cat;
+  state.prjParts = parts; state.prjT0 = T0;
   const projects = list.projects || [];
   if (state.prjSel && !projects.some((p) => p.name === state.prjSel)) state.prjSel = null;
   state.prjDays = state.prjDays ?? 7;   // light default — matches the catalog window
@@ -7854,12 +7899,25 @@ async function renderProjects() {
       <button id="prj-refresh" class="btn btn-sm" title="bypass the caches">↻</button>
       <button id="prj-print" class="btn btn-sm" title="print / save as PDF — chrome bars are stripped automatically">🖨 report</button>
     </div>
-    <div class="kpi-note" style="margin-bottom:10px">commits &amp; Jira come from their Elasticsearch mirrors (ef-git-commits / ef-bs-jira-issues) and scans from the ef-cicd-* indices — source systems are never hit directly; the whole report caches for 10 minutes</div>
+    <div class="kpi-note" style="margin-bottom:10px"><span id="prj-status" class="ci-meta"></span> commits &amp; Jira come from their Elasticsearch mirrors (ef-git-commits / ef-bs-jira-issues) and scans from the ef-cicd-* indices — source systems are never hit directly; the whole report caches for 10 minutes</div>
     <div id="prj-body"></div>`;
+  view().addEventListener("click", (ev) => { const t = ev.target.closest("[data-prj-timing]"); if (t) t.querySelector(".prj-timing-detail").classList.toggle("hidden"); });
   document.getElementById("prj-sel").addEventListener("change", (e) => {
     if (e.target.value) prjOpen(e.target.value); else { state.prjSel = null; prjSetMode(false); prjShowCatalog(); }
   });
   document.getElementById("prj-days").addEventListener("change", (e) => { state.prjDays = parseInt(e.target.value, 10); if (isNaN(state.prjDays)) state.prjDays = 30; if (state.prjSel) prjLoad(); });
+  // 2) the facts pass streams in behind the first paint
+  (async () => {
+    const st = document.getElementById("prj-status");
+    if (st) st.innerHTML = '<i class="cat-pulse-dot"></i> loading facts — security · configs · logging · usage…';
+    let full;
+    try { full = await timed("facts", api("/api/projects/catalog")); } catch { if (st) st.textContent = "⚠ facts failed to load"; return; }
+    if (navStale(tok)) return;
+    state.prjCatalog = full;
+    if (!state.prjSel) prjCatRedraw();
+    const st2 = document.getElementById("prj-status");
+    if (st2) st2.innerHTML = prjTimingsHtml(state.prjParts, full.timings);
+  })();
   document.getElementById("prj-refresh").addEventListener("click", async (ev) => {
     const btn = ev.currentTarget; btn.classList.add("btn-busy"); btn.disabled = true;
     const body = document.getElementById("prj-body"); if (body && !state.prjSel) body.classList.add("cat-refreshing");

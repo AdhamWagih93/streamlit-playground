@@ -1176,14 +1176,18 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
         errors.append(f"ef-ops-db-changes-standard: {str(exc)[:80]}")
 
 
-def _cat_activity() -> tuple[dict, list[str]]:
+def _cat_activity(timings: list | None = None) -> tuple[dict, list[str]]:
     """{norm(project): {source: {"last": iso, "recent": n}}} from tiny
     aggregation queries (terms on project · max date · 30-day count) — every
     event source of the report contributes to a project's last activity."""
     out: dict = {}
     errors: list[str] = []
+    t0 = time.time()
     _cat_stdchanges(out, errors)
+    if timings is not None:
+        timings.append({"k": "activity:stdchanges", "ms": int((time.time() - t0) * 1000)})
     for key, index, field, src, appf, whof, extraf in _CAT_SOURCES:
+        t0 = time.time()
         try:
             resp = _es(index, {"size": 0, "aggs": {"by": {
                 "terms": {"field": "project", "size": 1000},
@@ -1216,6 +1220,8 @@ def _cat_activity() -> tuple[dict, list[str]]:
             else:
                 prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
                 prev["hist"] = [a + c for a, c in zip(prev["hist"], hist)]
+        if timings is not None:
+            timings.append({"k": f"activity:{key}", "ms": int((time.time() - t0) * 1000)})
     return out, errors
 
 
@@ -1236,7 +1242,7 @@ def _hist30(recent_agg: dict) -> list[int]:
     return out
 
 
-def _cat_extras() -> tuple[dict, list[str]]:
+def _cat_extras(timings: list | None = None) -> tuple[dict, list[str]]:
     """Per-project lightweight facts beyond the activity pulse — every source
     is either an already-cached analysis (ADO projects, Engine std-change
     catalogue, logging health) or ONE size-0 aggregation per index:
@@ -1247,6 +1253,17 @@ def _cat_extras() -> tuple[dict, list[str]]:
     out: dict = {}
     errors: list[str] = []
     slot = lambda k: out.setdefault(k, {})  # noqa: E731
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def timed(label):
+        t0 = time.time()
+        try:
+            yield
+        finally:
+            if timings is not None:
+                timings.append({"k": f"facts:{label}", "ms": int((time.time() - t0) * 1000)})
     # ADO description / grade
     try:
         from . import access
@@ -1283,10 +1300,18 @@ def _cat_extras() -> tuple[dict, list[str]]:
                 "silent": sum(1 for a in apps if any(e.get("no_logs") for e in a.get("env_stats") or []))})
     except Exception as exc:  # noqa: BLE001
         errors.append(f"logging: {str(exc)[:80]}")
-    # configurations coverage (Configurations page overview, cached 5 min)
+    # configurations coverage (Configurations page overview, cached 5 min).
+    # overview() is non-blocking — if its background build is still running,
+    # wait briefly for it rather than shipping a catalog without config facts
     try:
         from . import archconfig
-        for row in archconfig.overview().get("projects") or []:
+        ov = archconfig.overview()
+        for _ in range(20):
+            if not ov.get("building"):
+                break
+            time.sleep(0.25)
+            ov = archconfig.overview()
+        for row in ov.get("projects") or []:
             st = row.get("states") or {}
             slot(_norm(row.get("name"))).update(configs={
                 "coverage": row.get("coverage"), "missing": st.get("missing", 0) + st.get("unparseable", 0),
@@ -1387,20 +1412,39 @@ def _cat_extras_from_cached(inv: dict) -> tuple[dict, list[str]]:
         globals()["_es"] = real_es
 
 
-def catalog(refresh: bool = False) -> dict:
+_CAT_LIGHT_CACHE: dict = {"at": 0.0, "payload": None}
+
+
+def catalog(refresh: bool = False, light: bool = False) -> dict:
     """The project landing: every inventory project with its facets and a
     LIGHTWEIGHT activity pulse — no per-project report is built."""
     if not refresh and _CAT_CACHE["payload"] and time.time() - _CAT_CACHE["at"] < _CAT_TTL:
-        return {**_CAT_CACHE["payload"], "cached": True}
+        return {**_CAT_CACHE["payload"], "cached": True}       # full beats light
+    if light and not refresh and _CAT_LIGHT_CACHE["payload"] and time.time() - _CAT_LIGHT_CACHE["at"] < 60:
+        return {**_CAT_LIGHT_CACHE["payload"], "cached": True}
+    t_all = time.time()
+    timings: list = []
     from . import inventory
+    t0 = time.time()
     inv = inventory.parse()
+    timings.append({"k": "inventory", "ms": int((time.time() - t0) * 1000)})
     if settings.demo_mode:
+        t0 = time.time()
         act, errors = _demo_cat_activity(inv), []
-        extras = _demo_cat_extras(inv)
+        timings.append({"k": "activity:total", "ms": int((time.time() - t0) * 1000)})
+        t0 = time.time()
+        extras = {} if light else _demo_cat_extras(inv)
+        if not light:
+            timings.append({"k": "facts:total", "ms": int((time.time() - t0) * 1000)})
     else:
-        act, errors = _cat_activity()
-        extras, more = _cat_extras()
-        errors += more
+        act, errors = _cat_activity(timings)
+        if light:
+            extras = {}
+        else:
+            t0x = time.time()
+            extras, more = _cat_extras(timings)
+            errors += more
+            timings.append({"k": "facts:total", "ms": int((time.time() - t0x) * 1000)})
     projects = []
     for p in inv.get("projects") or []:
         pv = ((p.get("config") or {}).get("project_vars") or {})
@@ -1423,9 +1467,13 @@ def catalog(refresh: bool = False) -> dict:
         })
     projects.sort(key=lambda x: x["last_activity"], reverse=True)
     payload = {"source": inv.get("source"), "projects": projects, "errors": errors, "days": _cat_days(),
-               "window_days": _CAT_WINDOW,
+               "window_days": _CAT_WINDOW, "partial": bool(light),
+               "timings": timings, "build_ms": int((time.time() - t_all) * 1000),
                "generated_at": _now().replace(microsecond=0).isoformat() + "Z"}
-    _CAT_CACHE.update(at=time.time(), payload=payload)
+    if light:
+        _CAT_LIGHT_CACHE.update(at=time.time(), payload=payload)
+    else:
+        _CAT_CACHE.update(at=time.time(), payload=payload)
     return {**payload, "cached": False}
 
 
@@ -2423,23 +2471,47 @@ def list_projects() -> dict:
                          for p in inv.get("projects") or []]}
 
 
-def report(name: str, days: int = 30, refresh: bool = False) -> dict:
+# report sections by stage: "core" is what the dive shows FIRST (fast paint),
+# "rest" streams in behind it. Section results cache individually so the rest
+# stage never recomputes what core already built.
+CORE_SECTIONS = ("inventory", "platform_db", "ado", "commits", "cicd", "configs")
+REST_SECTIONS = ("jira", "jira_changes", "scans", "autotest", "usage",
+                 "stdchanges", "pipelinecfg", "configcommits", "logging")
+_SEC_CACHE: dict = {}
+
+
+def report(name: str, days: int = 30, refresh: bool = False, stage: str = "all") -> dict:
     days = int(days or 0)
     days = 0 if days <= 0 else max(7, min(days, 365))   # 0 = ALL TIME
+    stage = stage if stage in ("all", "core", "rest") else "all"
     ck = (_norm(name), days)
     ent = _CACHE.get(ck)
     if not refresh and ent and time.time() - ent["at"] < _TTL:
-        return {**ent["payload"], "cached": True}
+        full = {**ent["payload"], "cached": True}
+        return _stage_view(full, stage)
 
-    out: dict = {"project": name, "days": days,
+    out: dict = {"project": name, "days": days, "timings": [],
                  "generated_at": _now().replace(microsecond=0).isoformat() + "Z",
                  "source": "demo" if settings.demo_mode else "live"}
 
     def guard(key, fn, *a):
+        sk = (ck, key)
+        hit = _SEC_CACHE.get(sk)
+        if not refresh and hit and time.time() - hit["at"] < _TTL:
+            out[key] = hit["v"]
+            return
+        t0 = time.time()
         try:
             out[key] = fn(*a)
         except Exception as exc:  # noqa: BLE001 — sections degrade alone
             out[key] = {"error": str(exc)[:300]}
+        out["timings"].append({"k": key, "ms": int((time.time() - t0) * 1000)})
+        _SEC_CACHE[sk] = {"at": time.time(), "v": out[key]}
+
+    wanted = CORE_SECTIONS if stage == "core" else CORE_SECTIONS + REST_SECTIONS
+
+    def want(key):
+        return key in wanted
 
     guard("inventory", _sec_inventory, name)
     inv = out["inventory"] if not out["inventory"].get("error") else {}
@@ -2449,22 +2521,37 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
     guard("platform_db", _sec_platform_db, name)
     guard("ado", _sec_ado, name)
     if settings.demo_mode:
+        t0 = time.time()
         demo = _demo_report(out["project"], days)
         out.update(demo)
+        out["timings"].append({"k": "demo-sections", "ms": int((time.time() - t0) * 1000)})
     else:
-        guard("commits", _sec_commits, name, repos, days)
-        guard("jira", _sec_jira, name, days)
-        guard("jira_changes", _sec_jira_changes, name, days)
-        guard("scans", _sec_scans, name)
-        guard("cicd", _sec_cicd, name, days)
-        guard("prev", _sec_prev, name, repos, days)
-        guard("autotest", _sec_autotest, name, days)
-        guard("usage", _sec_usage, name, days)
-        guard("stdchanges", _sec_stdchanges, name, days)
-        guard("pipelinecfg", _sec_pipelinecfg, name, days)
-        guard("configs", _sec_configs, name)
-        guard("configcommits", _sec_configcommits, name, days)
-    guard("logging", _sec_logging, name)
+        if want("commits"):
+            guard("commits", _sec_commits, name, repos, days)
+        if want("jira"):
+            guard("jira", _sec_jira, name, days)
+        if want("jira_changes"):
+            guard("jira_changes", _sec_jira_changes, name, days)
+        if want("scans"):
+            guard("scans", _sec_scans, name)
+        if want("cicd"):
+            guard("cicd", _sec_cicd, name, days)
+        if want("cicd"):
+            guard("prev", _sec_prev, name, repos, days)
+        if want("autotest"):
+            guard("autotest", _sec_autotest, name, days)
+        if want("usage"):
+            guard("usage", _sec_usage, name, days)
+        if want("stdchanges"):
+            guard("stdchanges", _sec_stdchanges, name, days)
+        if want("pipelinecfg"):
+            guard("pipelinecfg", _sec_pipelinecfg, name, days)
+        if want("configs"):
+            guard("configs", _sec_configs, name)
+        if want("configcommits"):
+            guard("configcommits", _sec_configcommits, name, days)
+    if want("logging"):
+        guard("logging", _sec_logging, name)
     # contributor → TEAM folds for the Jira change log (window + all time)
     jc = out.get("jira_changes") or {}
     if inv and not jc.get("error") and (jc.get("authors") or (jc.get("alltime") or {}).get("authors")):
@@ -2474,7 +2561,7 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
         except Exception:  # noqa: BLE001 — LDAP trouble must not kill the section
             pass
     out["events"] = _assemble_events(out)
-    if inv:
+    if inv and stage != "core":
         try:
             out["members"] = _sec_members(inv, out)
         except Exception as exc:  # noqa: BLE001
@@ -2499,8 +2586,21 @@ def report(name: str, days: int = 30, refresh: bool = False) -> dict:
                                "prd_failed": 1, "deploy_freq_week": 0.93,
                                "lead_time_h": 41.0, "cfr_pct": 20.0, "mttr_h": 6.2}
 
-    _CACHE[ck] = {"at": time.time(), "payload": out}
-    return {**out, "cached": False}
+    if stage == "core":
+        out["_loading"] = [k for k in (*REST_SECTIONS, "members") if k not in out]
+    else:
+        _CACHE[ck] = {"at": time.time(), "payload": out}   # full payload only
+    return _stage_view({**out, "cached": False}, stage)
+
+
+def _stage_view(full: dict, stage: str) -> dict:
+    """rest responses ship only what core did not already deliver (plus the
+    always-rebuilt aggregates: events, dora, members, timings)."""
+    if stage != "rest":
+        return full
+    keep = (*REST_SECTIONS, "members", "events", "events_meta", "dora",
+            "timings", "generated_at", "cached", "project", "days", "source")
+    return {k: v for k, v in full.items() if k in keep}
 
 
 def invalidate() -> None:
