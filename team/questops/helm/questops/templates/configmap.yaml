@@ -79,7 +79,7 @@ data:
   COMPANY_LOGO: {{ .Values.branding.logoPath | default "" | quote }}
   STD_CHANGES_DECRYPT: {{ .Values.stdChanges.decrypt | default false | quote }}
   TEAM_MEMBERS_SCRIPT: {{ .Values.teamMembersScript | default "scripts/Tools/LDAP/getTeamMembers.sh" | quote }}
-  SMTP_ACTORS_LIST: {{ .Values.mail.actorsList | default "" | quote }}
+  SMTP_ACTORS_LIST: {{ .Values.smtp.actorsList | default "" | quote }}
   GIT_USER_NAME: {{ .Values.git.userName | quote }}
   GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}
   REPOS_WORKDIR: {{ .Values.repositories.workdir | quote }}
