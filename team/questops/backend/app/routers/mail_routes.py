@@ -11,11 +11,11 @@ router = APIRouter(prefix="/api/mail", tags=["mail"])
 
 @router.get("")
 def mail_list(folder: str = "inbox", q: str = "", sender: str = "", unread: bool = False,
-              attachments: bool = False, no_bounces: bool = False,
+              attachments: bool = False, no_bounces: bool = False, admin_only: bool = False,
               days: int = mailbox.MAX_DAYS, limit: int = 50,
               offset: int = 0, refresh: bool = False, user: User = Depends(current_user)):
     return mailbox.list_messages(folder=folder, q=q, sender=sender, unread=unread,
-                                 attachments=attachments, no_bounces=no_bounces,
+                                 attachments=attachments, no_bounces=no_bounces, admin_only=admin_only,
                                  days=days, limit=limit, offset=offset, refresh=refresh)
 
 

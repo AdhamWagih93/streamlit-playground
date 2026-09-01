@@ -1993,3 +1993,4 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .mail-body { width: 100%; height: 52vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; transition: height .15s ease; }
 .mail-body-text { white-space: pre-wrap; font: 400 12.5px var(--mono); overflow: auto; }
 @media (max-width: 1000px) { .mail-split { grid-template-columns: 1fr; } }
+.mail-admin { font-size: 9px; padding: 0 5px; }

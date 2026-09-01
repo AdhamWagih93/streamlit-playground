@@ -111,18 +111,42 @@ def _row(m) -> dict:
             "importance": str(getattr(m, "importance", "") or "").lower()}
 
 
+_ADMIN_CACHE: dict = {"at": 0.0, "map": {}}
+
+
+def _admin_map() -> dict:
+    """Platform admins' addresses (getUserMail.sh, 1h cache here too)."""
+    from ..auth import admin_mail_map
+    if time.time() - _ADMIN_CACHE["at"] > 3600:
+        try:
+            _ADMIN_CACHE.update(at=time.time(), map=admin_mail_map())
+        except Exception:  # noqa: BLE001 — classification is best-effort
+            _ADMIN_CACHE.update(at=time.time(), map=_ADMIN_CACHE["map"])
+    return _ADMIN_CACHE["map"]
+
+
+def _classify(rows: list[dict]) -> None:
+    admins = _admin_map()
+    for r in rows:
+        r["admin_of"] = admins.get((r.get("from_email") or "").lower(), "")
+
+
 def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: bool = False,
-                  attachments: bool = False, no_bounces: bool = False, days: int = MAX_DAYS,
-                  limit: int = 50, offset: int = 0, refresh: bool = False) -> dict:
+                  attachments: bool = False, no_bounces: bool = False, admin_only: bool = False,
+                  days: int = MAX_DAYS, limit: int = 50, offset: int = 0, refresh: bool = False) -> dict:
     days, limit = _clamp(days, limit)
     offset = max(0, min(int(offset or 0), 1000))
     folder = folder if folder in FOLDERS else "inbox"
-    key = (folder, q.lower(), sender.lower(), unread, attachments, no_bounces, days, limit, offset)
+    key = (folder, q.lower(), sender.lower(), unread, attachments, no_bounces, admin_only, days, limit, offset)
     hit = _LIST_CACHE.get(key)
     if hit and not refresh and time.time() - hit["at"] < _LIST_TTL:
         return {**hit["value"], "cached": True}
     if settings.demo_mode:
         value = _demo_list(folder, q, sender, unread, attachments, no_bounces, days, limit, offset)
+        _classify(value["messages"])
+        if admin_only:
+            value["messages"] = [r for r in value["messages"] if r["admin_of"]]
+            value["total"] = len(value["messages"])
     else:
         _require_ews()
         acct = _account()
@@ -157,6 +181,13 @@ def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: 
             "has_attachments", "importance")
         total = qs.count()
         rows = [_row(m) for m in qs[offset:offset + limit]]
+        _classify(rows)
+        if admin_only:
+            # the pipeline mailbox mixes automation with people: keep ONLY
+            # messages whose sender resolves to a platform admin's address
+            before = len(rows)
+            rows = [r for r in rows if r["admin_of"]]
+            total -= (before - len(rows))
         if no_bounces and (post_filter or any(_is_bounce(r["subject"], r["from_email"], r["from_name"]) for r in rows)):
             # belt and braces: whatever the server let through is dropped here
             before = len(rows)
@@ -165,6 +196,15 @@ def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: 
         value = {"folder": folder, "days": days, "total": total, "offset": offset,
                  "messages": rows, "mailbox": settings.smtp_from,
                  "note": f"service-account mailbox · last {days} day(s) only"}
+    senders: dict = {}
+    for r in value["messages"]:
+        k = (r.get("from_name") or r.get("from_email") or "?").strip()
+        senders[k] = senders.get(k, 0) + 1
+    value["senders"] = sorted(({"key": k, "count": v,
+                                "admin": bool(next((r for r in value["messages"]
+                                                    if (r.get("from_name") or r.get("from_email")) == k and r.get("admin_of")), None))}
+                               for k, v in senders.items()), key=lambda x: -x["count"])[:15]
+    value["admins_known"] = len(_admin_map())
     _LIST_CACHE[key] = {"at": time.time(), "value": value}
     return {**value, "cached": False}
 

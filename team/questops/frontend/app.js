@@ -5768,7 +5768,7 @@ function mailRowHtml(m) {
   const who = m.from_name || m.from_email || "?";
   return `<button class="mail-row ${m.unread ? "mail-unread" : ""} ${state.mailSel === m.id ? "mail-on" : ""}" data-mail-open="${esc(m.id)}">
     <span class="mail-ava" style="background:${mailColor(who)}">${esc(who[0].toUpperCase())}</span>
-    <span class="mail-mid"><span class="mail-who" title="${esc(m.from_email)}">${esc(who)}${m.importance === "high" ? ' <b class="mail-imp">!</b>' : ""}</span>
+    <span class="mail-mid"><span class="mail-who" title="${esc(m.from_email)}">${esc(who)}${m.admin_of ? ` <span class="chip chip-cyan mail-admin" title="platform admin — resolved to ${esc(m.admin_of)} via getUserMail.sh">🛡 admin</span>` : ""}${m.importance === "high" ? ' <b class="mail-imp">!</b>' : ""}</span>
       <span class="mail-subj">${esc(m.subject)}</span></span>
     <span class="mail-side">${m.attachments ? "📎" : ""}<small title="${esc(m.when.replace("T", " "))} UTC">${prjAgo(m.when) || esc(m.when.slice(5, 16).replace("T", " "))}</small></span></button>`;
 }
@@ -5782,10 +5782,13 @@ async function mailLoad(refresh) {
   if (f.unread) p.set("unread", "true");
   if (f.attachments) p.set("attachments", "true");
   if (f.no_bounces) p.set("no_bounces", "true");
+  if (f.admin_only) p.set("admin_only", "true");
   if (refresh) p.set("refresh", "true");
   try { state.mailData = await api(`/api/mail?${p}`); } catch (e) { box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
   const d = state.mailData;
   document.getElementById("mail-meta").innerHTML = `<i class="cat-pulse-dot"></i> <b>${esc(d.mailbox)}</b> · ${logInt(d.total)} message(s) · ${esc(d.note)}${d.cached ? " · cached" : ""}`;
+  const fac = document.getElementById("mail-senders");
+  if (fac) fac.innerHTML = (d.senders || []).map((x) => `<button class="chip cfg-chip ${x.admin ? "chip-cyan" : ""} ${f.sender === x.key ? "chip-on" : ""}" data-mail-sender="${esc(x.key)}" title="${x.admin ? "platform admin · " : ""}filter by this sender">${x.admin ? "🛡 " : ""}${esc(x.key)} · ${x.count}</button>`).join("");
   box.innerHTML = (d.messages || []).map(mailRowHtml).join("") || '<div class="empty">no mail matches — remember only the last 2 weeks are visible</div>';
   if ((d.offset || 0) + (d.messages || []).length < d.total)
     box.innerHTML += `<button class="btn btn-sm btn-ghost mail-more" id="mail-more">▾ load ${Math.min(50, d.total - d.offset - d.messages.length)} more</button>`;
@@ -5848,7 +5851,9 @@ async function renderMail() {
       <button class="btn btn-sm ${f.unread ? "btn-primary" : "btn-ghost"}" data-mail-t="unread">● unread</button>
       <button class="btn btn-sm ${f.attachments ? "btn-primary" : "btn-ghost"}" data-mail-t="attachments">📎 attachments</button>
       <button class="btn btn-sm ${f.no_bounces ? "btn-primary" : "btn-ghost"}" data-mail-t="no_bounces" title="hide Undeliverable / postmaster / mailer-daemon notices">🚫 undeliverable</button>
+      <button class="btn btn-sm ${f.admin_only ? "btn-primary" : "btn-ghost"}" data-mail-t="admin_only" title="only messages whose sender address resolves (getUserMail.sh) to a platform admin">🛡 admin mails</button>
     </div>
+    <div class="inv-chips" id="mail-senders" style="margin:0 0 8px"></div>
     <div class="mail-split"><div id="mail-list" class="mail-list"></div><div id="mail-read" class="mail-read"><div class="empty">pick a message</div></div></div>`;
   const v = view();
   v.addEventListener("click", (ev) => {
@@ -5858,6 +5863,8 @@ async function renderMail() {
     if (t) { f[t.dataset.mailT] = !f[t.dataset.mailT]; f.offset = 0;
       if (t.dataset.mailT === "no_bounces") try { localStorage.setItem("qo_mail_nobounce", f.no_bounces ? "1" : "0"); } catch { /* private mode */ }
       renderMail(); return; }
+    const sn = ev.target.closest("[data-mail-sender]");
+    if (sn) { f.sender = f.sender === sn.dataset.mailSender ? "" : sn.dataset.mailSender; f.offset = 0; renderMail(); return; }
     const op = ev.target.closest("[data-mail-open]");
     if (op) { mailOpen(op.dataset.mailOpen); return; }
     if (ev.target.closest("#mail-more")) { f.offset = (f.offset || 0) + 50; mailLoad(); return; }

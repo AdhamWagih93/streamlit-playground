@@ -369,6 +369,62 @@ def _install_prd(prd_src, home: str) -> str | None:
         return f"could not place .prd under $HOME ({home}): {str(exc)[:100]}"
 
 
+_USER_MAIL_SCRIPT = "scripts/Tools/LDAP/getUserMail.sh"
+_USER_MAIL_CACHE: dict = {}
+_MAIL_LINE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+
+
+def get_user_mail(username: str) -> str:
+    """A user's e-mail address via the Engine repo's getUserMail.sh
+    <sAMAccountName> (lives next to getTeamMembers.sh, same .prd profile).
+    Cached 1h; '' when the script is missing or prints no address. Demo mode
+    derives display-name-style addresses (alice → alice.nasr@corp.local)."""
+    import time
+    u = (username or "").strip()
+    if not u or "\n" in u or "\x00" in u:
+        return ""
+    key = u.lower()
+    hit = _USER_MAIL_CACHE.get(key)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    if settings.demo_mode:
+        m = DEMO_USERS.get(key) or {}
+        disp = (m.get("display_name") or u).strip().lower()
+        mail = re.sub(r"\s+", ".", disp) + "@corp.local"
+    else:
+        mail = ""
+        d = _engine_dir()
+        script = (d / _USER_MAIL_SCRIPT) if d is not None else None
+        if script is not None and script.exists():
+            prd_src = d / ".prd"
+            home = os.environ.get("HOME") or os.path.expanduser("~")
+            if prd_src.exists():
+                _install_prd(prd_src, home)
+            try:
+                p = subprocess.run(["bash", str(script), u], cwd=str(d),
+                                   capture_output=True, text=True, timeout=30)
+                m = _MAIL_LINE.search(p.stdout or "")
+                mail = m.group(0).lower() if m and p.returncode == 0 else ""
+            except (subprocess.TimeoutExpired, OSError):
+                mail = ""
+    _USER_MAIL_CACHE[key] = (time.time(), mail)
+    return mail
+
+
+def admin_mail_map() -> dict:
+    """{email(lower): username} for every APPROVER on the login-group roster
+    — the platform admins. Backs the E-mail page's 'Platform Admin mails'
+    classification; addresses come from getUserMail.sh, never from LDAP."""
+    out: dict = {}
+    for m in list_group_members()[:200]:
+        u = m.get("username") or ""
+        if u and role_for(u) == "approver":
+            mail = get_user_mail(u)
+            if mail:
+                out[mail.lower()] = u
+    return out
+
+
 def _resolve_team_via_script(cn: str) -> dict:
     """Run the Engine repo's getTeamMembersCN.sh for team `cn`. 'found' is True on
     a clean (exit 0) run — even for an empty team — and False when the team
