@@ -293,7 +293,14 @@ function route() {
   document.querySelectorAll("#nav a").forEach((a) =>
     a.classList.toggle("active", a.dataset.view === state.view));
   const tok = navToken();
-  view().innerHTML = `<div class="empty">loading…</div>`;
+  // a FRESH #view node every navigation: render functions attach their
+  // listeners to #view, and reusing the node accumulated one full handler
+  // set per visit (the Nth visit fired every click N times — twitching
+  // panes, scroll thrown back to the top as stale responses repainted)
+  const stale = view();
+  const fresh = stale.cloneNode(false);
+  stale.replaceWith(fresh);
+  fresh.innerHTML = `<div class="empty">loading…</div>`;
   VIEWS[state.view]().catch((e) => {
     if (!navStale(tok)) view().innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`;
   });
@@ -5785,14 +5792,27 @@ async function mailLoad(refresh) {
 }
 
 async function mailOpen(id) {
+  if (state.mailBusy === id) return;    // the same message is already loading
+  state.mailBusy = id;
   state.mailSel = id;
   document.querySelectorAll(".mail-row").forEach((r) => r.classList.toggle("mail-on", r.dataset.mailOpen === id));
   const pane = document.getElementById("mail-read");
   pane.innerHTML = '<div class="empty">opening…</div>';
   let m;
-  try { m = await api(`/api/mail/message?id=${encodeURIComponent(id)}`); } catch (e) { pane.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  try { m = await api(`/api/mail/message?id=${encodeURIComponent(id)}`); }
+  catch (e) { pane.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; state.mailBusy = null; return; }
+  finally { if (state.mailBusy === id) state.mailBusy = null; }
+  if (state.mailSel !== id) return;     // user already opened another message
+  const mailCss = `<base target="_blank"><style>
+      body{font:14px/1.55 system-ui,-apple-system,'Segoe UI',sans-serif;margin:0;padding:14px 18px;color:#1c2430;background:#fff;max-width:760px}
+      img{max-width:100%;height:auto} table{border-collapse:collapse;max-width:100%} td,th{padding:3px 6px}
+      a{color:#0b7285} blockquote{border-left:3px solid #d5dbe3;margin:8px 0;padding:4px 12px;color:#4a5568}
+      pre{white-space:pre-wrap;background:#f5f7fa;padding:8px;border-radius:6px} hr{border:none;border-top:1px solid #e3e8ef}
+      p{margin:.5em 0}</style>`;
+  // sandbox WITHOUT allow-scripts: inert content, but same-origin lets us
+  // size the frame to the message so there is no inner scrollbar to fight
   const body = m.html
-    ? `<iframe class="mail-body" sandbox="" srcdoc="${esc(`<base target="_blank"><style>body{font:14px system-ui;margin:12px;color:#222}</style>` + m.html)}"></iframe>`
+    ? `<iframe class="mail-body" sandbox="allow-same-origin allow-popups" srcdoc="${esc(mailCss + m.html)}"></iframe>`
     : `<pre class="mail-body mail-body-text">${esc(m.text || "(empty message)")}</pre>`;
   pane.innerHTML = `
     <div class="mail-head"><span class="mail-ava" style="background:${mailColor(m.from_name || m.from_email)}">${esc((m.from_name || m.from_email || "?")[0].toUpperCase())}</span>
@@ -5800,8 +5820,16 @@ async function mailOpen(id) {
         <div class="ci-meta">${esc(m.from_name)} &lt;${esc(m.from_email)}&gt; · ${esc(m.when.replace("T", " "))} UTC${m.to && m.to.length ? ` · to ${esc(m.to.join(", "))}` : ""}${m.cc && m.cc.length ? ` · cc ${esc(m.cc.join(", "))}` : ""}</div></div></div>
     ${(m.attachments_meta || []).length || (Array.isArray(m.attachments) && m.attachments.length) ? "" : ""}
     ${body}
-    ${m.html && m.html.includes("data-blocked-src") ? '<div class="kpi-note">🖼 remote images are blocked (trackers) — this page never loads them</div>' : ""}
-    <div class="kpi-note">read-only · scripts stripped server-side and the body runs in a fully sandboxed frame</div>`;
+    ${m.html && m.html.includes("data-blocked-src") ? '<div class="kpi-note">🖼 remote images blocked (trackers) <button class="btn btn-sm btn-ghost" id="mail-imgs">show images</button></div>' : ""}
+    <div class="kpi-note">read-only · scripts stripped server-side and the body runs in a script-less sandboxed frame</div>`;
+  const fr = pane.querySelector("iframe.mail-body");
+  if (fr) fr.addEventListener("load", () => {
+    try { const h = fr.contentDocument.documentElement.scrollHeight; fr.style.height = Math.min(Math.max(h + 24, 160), innerHeight * 0.75) + "px"; } catch { /* keep css height */ }
+  });
+  const imgBtn = pane.querySelector("#mail-imgs");
+  if (imgBtn) imgBtn.addEventListener("click", () => {
+    if (fr) { fr.srcdoc = fr.srcdoc.replace(/data-blocked-src=/g, "src="); imgBtn.replaceWith(Object.assign(document.createElement("span"), { className: "ci-meta", textContent: "images loaded" })); }
+  });
 }
 
 async function renderMail() {
