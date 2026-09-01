@@ -7607,7 +7607,8 @@ function prjCatalogCards(rows, f) {
     const tests = ((p.activity || {}).tests || {}).recent || 0;
     const pill = (cls, ico, txt, tip) => `<span class="cat-pill ${cls}" title="${esc(tip || "")}">${ico} ${txt}</span>`;
     return `
-    <button class="cat-card ${quiet ? "cat-quiet" : ""}" style="--i:${Math.min(idx++, 24)}" data-cat-open="${esc(p.name)}" title="open the ${esc(p.name)} report">
+    <a class="cat-card ${quiet ? "cat-quiet" : ""}" style="--i:${Math.min(idx++, 24)}" data-cat-open="${esc(p.name)}"
+       href="#/projects?p=${encodeURIComponent(p.name)}" target="_blank" rel="noopener" title="open the ${esc(p.name)} report in a new tab">
       <div class="cat-head"><span class="cat-name">${esc(p.name)}</span>
         ${p.deploy_platform ? `<span class="chip chip-cyan">${esc(p.deploy_platform)}</span>` : ""}
         ${p.deploy_technology ? `<span class="chip">${esc(p.deploy_technology)}</span>` : ""}
@@ -7649,7 +7650,7 @@ function prjCatalogCards(rows, f) {
             "🗺", `cfg ${c.coverage == null ? "–" : c.coverage + "%"}${c.missing ? ` · ${c.missing} missing` : ""}${c.stale ? ` · ${c.stale} stale` : ""}${c.duplicates ? ` · ⧉${c.duplicates}` : ""}`,
             `configuration coverage ${c.coverage ?? "?"}% · ${c.missing} missing/broken · ${c.stale} stale · ${c.duplicates} duplicate(s) · ${c.extra} extra · ${c.issues} secret/shared issue(s) · ${c.cross} cross-project link(s)`); })()}
       </div>`}
-    </button>`;
+    </a>`;
   };
   return Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .map(([g, ps]) => `<div class="cat-group"><div class="cat-group-head">${group === "platform" ? "🖥" : group === "team" ? "🛡" : "🏢"} ${esc(g)} <span class="ci-meta">· ${ps.length} project${ps.length === 1 ? "" : "s"}</span></div>
@@ -7807,8 +7808,8 @@ function prjCatalogEvt(ev) {
     const dy = ev.target.closest("[data-tl-day]");
     if (dy) { const i = parseInt(dy.dataset.tlDay, 10); f.day = i < 0 || f.day === i ? null : i; prjCatRedraw(); const tl = document.querySelector(".cat-tl-focus"); if (tl) tl.scrollIntoView({ behavior: "smooth", block: "nearest" }); return; }
     const open = ev.target.closest("[data-cat-open]");
-    if (open) { prjOpen(open.dataset.catOpen); return; }
-    return;
+    if (open && open.tagName !== "A") { prjOpen(open.dataset.catOpen); return; }
+    return;   // anchor cards navigate natively (new tab)
   }
   const el = ev.target.closest("[data-cat-f]");
   if (!el) return;
@@ -7821,6 +7822,7 @@ function prjCatalogEvt(ev) {
 
 function prjOpen(name) {
   state.prjSel = name;
+  try { history.replaceState(null, "", `#/projects?p=${encodeURIComponent(name)}`); } catch { /* sandboxed */ }
   const sel = document.getElementById("prj-sel");
   if (sel) sel.value = name;
   prjSetMode(true);
@@ -7828,6 +7830,7 @@ function prjOpen(name) {
 }
 
 function prjSetMode(report) {
+  if (!report) try { history.replaceState(null, "", "#/projects"); } catch { /* sandboxed */ }
   const back = document.getElementById("prj-back");
   if (back) back.classList.toggle("hidden", !report);
   const sel = document.getElementById("prj-sel");
@@ -7880,6 +7883,8 @@ async function renderProjects() {
   const T0 = performance.now(), parts = [];
   const timed = async (k, promise) => { const t = performance.now(); const r = await promise; parts.push({ k, ms: performance.now() - t }); return r; };
   // 1) the light pass paints ASAP: project list + activity-only catalog
+  const qp = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (qp.get("p")) state.prjSel = qp.get("p");
   const [list, cat] = await timed("list+activity", Promise.all([
     api("/api/projects"), api("/api/projects/catalog?light=true")]));
   if (navStale(tok)) return;

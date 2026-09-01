@@ -2017,3 +2017,4 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .prj-sec-loading summary { opacity: .8; }
 .prj-skel-bar { height: 34px; border-radius: 8px; margin: 8px 0; background: linear-gradient(90deg, var(--line), var(--panel), var(--line)); background-size: 200% 100%; animation: cfg-shimmer 1.2s infinite; }
 .cat-pill-load { animation: cat-in .3s ease both; }
+a.cat-card { text-decoration: none; color: inherit; font: inherit; }
