@@ -2005,3 +2005,5 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 .mail-fac-admin b { color: #0b7285; }
 .mail-loading { opacity: .55; transition: opacity .15s; pointer-events: none; }
 .chip-green { border-color: #43c884; }
+.cat-act-st { font-style: normal; font-weight: 800; font-size: 10px; }
+.cat-act-ok { color: #2e9c62; } .cat-act-bad { color: #c8403f; } .cat-act-mid { color: #b7791f; font-size: 9px; }

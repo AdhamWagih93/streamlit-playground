@@ -1123,7 +1123,7 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
         resp = _es("ef-ops-db-changes-standard", {"size": 0, "aggs": {"by": {
             "terms": {"field": "JobName", "size": 2000},
             "aggs": {"last": {"max": {"field": "Date"}},
-                     "latest": {"top_hits": {"size": 1, "_source": ["Requester", "Environment", "ChangeNumber"],
+                     "latest": {"top_hits": {"size": 1, "_source": ["Requester", "Environment", "ChangeNumber", "Status"],
                                              "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}]}}}}}})
         for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
             pk = job2proj.get(b.get("key"))
@@ -1133,7 +1133,8 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
             hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
             hs = hit.get("_source") or {}
             doc = {"app": str(b.get("key") or ""), "who": _user_display(hs.get("Requester") or ""),
-                   "extra": str(hs.get("Environment") or hs.get("ChangeNumber") or "")} if hs else None
+                   "extra": str(hs.get("Environment") or hs.get("ChangeNumber") or ""),
+                   "status": str(hs.get("Status") or "")} if hs else None
             slot = out.setdefault(pk, {})
             prev = slot.get("stdchanges")
             if not prev or last > prev["last"]:
@@ -1203,7 +1204,10 @@ def _cat_activity() -> tuple[dict, list[str]]:
             hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
             hs = hit.get("_source") or {}
             doc = {"app": str(hs.get(appf) or ""), "who": _user_display(hs.get(whof) or "") if whof else "",
-                   "extra": str(hs.get(extraf) or "")} if hs else None
+                   "extra": str(hs.get(extraf) or ""),
+                   # a release document is a success by definition (RLM only
+                   # says whether an ITSM ticket was opened)
+                   "status": "SUCCESS" if key == "releases" else str(hs.get("status") or "")} if hs else None
             if not prev or last > prev["last"]:
                 slot[key] = {"last": last[:19], "recent": (b.get("recent") or {}).get("doc_count", 0)
                              + (prev["recent"] if prev else 0),
@@ -1439,13 +1443,16 @@ def _demo_cat_activity(inv: dict) -> dict:
             weights = [0 if (d + i + j) % 7 in (5, 6) else (1 + ((d * 7 + j * 3 + i) % 5)) * (1 + d / _CAT_WINDOW) for d in range(_CAT_WINDOW)]
             tot = sum(weights) or 1
             hist = [int(round(recent * w / tot)) for w in weights]
-            demo_docs = {"commits": ("payments-svc", "alice", "develop"), "builds": ("payments", "bob", "1.20.0"),
-                         "deploys": ("payments", "carol", "prd"), "releases": ("payments", "", "1.19.0"),
-                         "tests": ("selenium", "dave", "uat"), "stdchanges": ("Finance_AddBranch", "carol", "prd")}
-            da, dw, dx = demo_docs.get(src, ("", "", ""))
+            demo_docs = {"commits": ("payments-svc", "alice", "develop", ""),
+                         "builds": ("payments", "bob", "1.20.0", "FAILED" if i == 0 else "SUCCESS"),
+                         "deploys": ("payments", "carol", "prd", "SUCCESS" if i != 1 else "ABORTED"),
+                         "releases": ("payments", "", "1.19.0", "SUCCESS"),
+                         "tests": ("selenium", "dave", "uat", ""),
+                         "stdchanges": ("Finance_AddBranch", "carol", "prd", "FAILED" if i == 0 else "SUCCESS")}
+            da, dw, dx, ds = demo_docs.get(src, ("", "", "", ""))
             out[k][src] = {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
                            "recent": sum(hist), "hist": hist,
-                           "last_doc": {"app": da, "who": dw, "extra": dx}}
+                           "last_doc": {"app": da, "who": dw, "extra": dx, "status": ds}}
     return out
 
 

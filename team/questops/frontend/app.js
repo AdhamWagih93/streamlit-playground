@@ -7612,7 +7612,11 @@ function prjCatalogCards(rows, f) {
         const acts = Object.entries(p.activity || {}).filter(([, v]) => v.last)
           .sort((a, b) => b[1].last.localeCompare(a[1].last)).slice(0, 3);
         return acts.length ? `<div class="cat-last3">${acts.map(([k, v]) => { const [ico, lab] = CAT_SRC[k] || ["•", k]; const dd = v.last_doc || {};
-          return `<span class="cat-act" title="${esc(lab)} · ${esc(v.last.replace("T", " "))}${dd.app ? " · " + esc(dd.app) : ""}${dd.extra ? " · " + esc(dd.extra) : ""}${dd.who ? " · by " + esc(dd.who) : ""}">${ico} <b>${esc(lab)}</b>${dd.app ? ` ${esc(dd.app)}` : ""}${dd.extra ? ` <small>${esc(dd.extra)}</small>` : ""}${dd.who ? ` <span class="cat-act-who">${esc(dd.who)}</span>` : ""}<small class="cat-act-ago">${prjAgo(v.last)}</small></span>`; }).join("")}</div>` : "";
+          const st = (dd.status || "").toUpperCase();
+          const stMark = !st ? "" : /SUCC/.test(st) ? '<i class="cat-act-st cat-act-ok" title="' + esc(st) + '">✓</i>'
+            : /FAIL|ABORT|ERROR|CANCEL/.test(st) ? '<i class="cat-act-st cat-act-bad" title="' + esc(st) + '">✗</i>'
+            : `<i class="cat-act-st cat-act-mid">${esc(st.length > 10 ? st.slice(0, 9) + "…" : st)}</i>`;
+          return `<span class="cat-act" title="${esc(lab)} · ${esc(v.last.replace("T", " "))}${dd.app ? " · " + esc(dd.app) : ""}${dd.extra ? " · " + esc(dd.extra) : ""}${st ? " · " + esc(st) : ""}${dd.who ? " · by " + esc(dd.who) : ""}">${ico} <b>${esc(lab)}</b>${dd.app ? ` ${esc(dd.app)}` : ""}${dd.extra ? ` <small>${esc(dd.extra)}</small>` : ""}${stMark}${dd.who ? ` <span class="cat-act-who">${esc(dd.who)}</span>` : ""}<small class="cat-act-ago">${prjAgo(v.last)}</small></span>`; }).join("")}</div>` : "";
       })()}
       <div class="cat-viz">
         <div class="cat-strip" title="${catWin()}-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·${catWin()}d</small></span>` : ""}</div>
