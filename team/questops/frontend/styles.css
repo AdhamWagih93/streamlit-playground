@@ -1955,3 +1955,10 @@ textarea:focus, select:focus { box-shadow: 0 0 0 3px var(--amber-soft); }
 /* configurations — duplicate definitions */
 .cfg-st-dup { font-weight: 800; animation: cat-ping 2.4s ease-out infinite; box-shadow: 0 0 0 0 rgba(200,64,63,.45); }
 .cfg-cell .cfg-dup { color: #c8403f; font-weight: 800; }
+
+/* catalog — last 3 activities on a card */
+.cat-last3 { display: flex; flex-direction: column; gap: 2px; border-left: 2px solid var(--line); padding-left: 8px; }
+.cat-act { font: 500 10.5px var(--mono); color: var(--faint); display: flex; gap: 5px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cat-act b { color: var(--text); font-weight: 700; }
+.cat-act small { color: var(--faint); } .cat-act-who { color: #1497b3; }
+.cat-act-ago { margin-left: auto; padding-left: 8px; }

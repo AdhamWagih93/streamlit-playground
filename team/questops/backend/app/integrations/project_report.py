@@ -1083,11 +1083,18 @@ def _sec_members(inv: dict, out: dict) -> dict:
 _CAT_CACHE: dict = {"at": 0.0, "payload": None}
 _CAT_TTL = 300
 # (index, date field) → ONE size-0 terms+max query each; no documents move
-_CAT_SOURCES = (("commits", "ef-git-commits", "commitdate"),
-                ("builds", "ef-cicd-builds", "startdate"),
-                ("deploys", "ef-cicd-deployments", "startdate"),
-                ("releases", "ef-cicd-releases", "releasedate"),
-                ("tests", "ef-autotest", "date"))
+# key, index, date field, then how the LATEST doc is summarised for the
+# catalog card: (_source fields, app field, who field, extra field)
+_CAT_SOURCES = (("commits", "ef-git-commits", "commitdate",
+                 ("repository", "authorname", "branch"), "repository", "authorname", "branch"),
+                ("builds", "ef-cicd-builds", "startdate",
+                 ("application", "requester", "codeversion", "status"), "application", "requester", "codeversion"),
+                ("deploys", "ef-cicd-deployments", "startdate",
+                 ("application", "requester", "environment", "status"), "application", "requester", "environment"),
+                ("releases", "ef-cicd-releases", "releasedate",
+                 ("application", "codeversion", "RLM"), "application", "", "codeversion"),
+                ("tests", "ef-autotest", "date",
+                 ("technology", "requester", "environment"), "technology", "requester", "environment"))
 
 
 def _cat_stdchanges(out: dict, errors: list[str]) -> None:
@@ -1108,6 +1115,8 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
         resp = _es("ef-ops-db-changes-standard", {"size": 0, "aggs": {"by": {
             "terms": {"field": "JobName", "size": 2000},
             "aggs": {"last": {"max": {"field": "Date"}},
+                     "latest": {"top_hits": {"size": 1, "_source": ["Requester", "Environment", "ChangeNumber"],
+                                             "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}]}},
                      "recent": {"filter": {"range": {"Date": {"gte": "now-30d"}}},
                                 "aggs": {"days": {"date_histogram": {"field": "Date", "calendar_interval": "day"}}}}}}}})
         for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
@@ -1118,9 +1127,14 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
             slot = out.setdefault(pk, {})
             prev = slot.get("stdchanges")
             hist = _hist30(b.get("recent") or {})
+            hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
+            hs = hit.get("_source") or {}
+            doc = {"app": str(b.get("key") or ""), "who": _user_display(hs.get("Requester") or ""),
+                   "extra": str(hs.get("Environment") or hs.get("ChangeNumber") or "")} if hs else None
             if not prev or last > prev["last"]:
                 slot["stdchanges"] = {"last": last, "recent": (b.get("recent") or {}).get("doc_count", 0) + (prev["recent"] if prev else 0),
-                                      "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist}
+                                      "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist,
+                                      "last_doc": doc or (prev or {}).get("last_doc")}
             else:
                 prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
                 prev["hist"] = [a + c for a, c in zip(prev["hist"], hist)]
@@ -1135,11 +1149,13 @@ def _cat_activity() -> tuple[dict, list[str]]:
     out: dict = {}
     errors: list[str] = []
     _cat_stdchanges(out, errors)
-    for key, index, field in _CAT_SOURCES:
+    for key, index, field, src, appf, whof, extraf in _CAT_SOURCES:
         try:
             resp = _es(index, {"size": 0, "aggs": {"by": {
                 "terms": {"field": "project", "size": 1000},
                 "aggs": {"last": {"max": {"field": field}},
+                         "latest": {"top_hits": {"size": 1, "_source": list(src),
+                                                 "sort": [{field: {"order": "desc", "unmapped_type": "date"}}]}},
                          "recent": {"filter": {"range": {field: {"gte": "now-30d"}}},
                                     "aggs": {"days": {"date_histogram": {"field": field, "calendar_interval": "day"}}}}}}}})
         except Exception as exc:  # noqa: BLE001 — one dead index hides only itself
@@ -1151,10 +1167,15 @@ def _cat_activity() -> tuple[dict, list[str]]:
             slot = out.setdefault(k, {})
             prev = slot.get(key)
             hist = _hist30(b.get("recent") or {})
+            hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
+            hs = hit.get("_source") or {}
+            doc = {"app": str(hs.get(appf) or ""), "who": _user_display(hs.get(whof) or "") if whof else "",
+                   "extra": str(hs.get(extraf) or "")} if hs else None
             if not prev or last > prev["last"]:
                 slot[key] = {"last": last[:19], "recent": (b.get("recent") or {}).get("doc_count", 0)
                              + (prev["recent"] if prev else 0),
-                             "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist}
+                             "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist,
+                             "last_doc": doc or (prev or {}).get("last_doc")}
             else:
                 prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
                 prev["hist"] = [a + c for a, c in zip(prev["hist"], hist)]
@@ -1384,8 +1405,13 @@ def _demo_cat_activity(inv: dict) -> dict:
             weights = [0 if (d + i + j) % 7 in (5, 6) else (1 + ((d * 7 + j * 3 + i) % 5)) * (1 + d / 30) for d in range(30)]
             tot = sum(weights) or 1
             hist = [int(round(recent * w / tot)) for w in weights]
+            demo_docs = {"commits": ("payments-svc", "alice", "develop"), "builds": ("payments", "bob", "1.20.0"),
+                         "deploys": ("payments", "carol", "prd"), "releases": ("payments", "", "1.19.0"),
+                         "tests": ("selenium", "dave", "uat"), "stdchanges": ("Finance_AddBranch", "carol", "prd")}
+            da, dw, dx = demo_docs.get(src, ("", "", ""))
             out[k][src] = {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
-                           "recent": sum(hist), "hist": hist}
+                           "recent": sum(hist), "hist": hist,
+                           "last_doc": {"app": da, "who": dw, "extra": dx}}
     return out
 
 

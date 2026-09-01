@@ -7387,6 +7387,12 @@ function prjCatalogCards(rows, f) {
       <div class="cat-teams">${["dev", "qc", "prd"].filter((k) => p.teams[k]).map((k) =>
         `<span class="chip" title="${k}_team">${k === "prd" ? "ops" : k}: ${esc(p.teams[k])}</span>`).join("")}
         <span class="spacer"></span><span class="cat-facts"><span>${p.apps} app${p.apps === 1 ? "" : "s"}</span><span>${(p.envs || []).length ? esc(p.envs.join("·")) : "no envs"}</span><span>${p.pipelines} pipe</span>${ado.repos ? `<span>${ado.repos} repos</span>` : ""}</span></div>
+      ${(() => {   // the three most recent activities across every source
+        const acts = Object.entries(p.activity || {}).filter(([, v]) => v.last)
+          .sort((a, b) => b[1].last.localeCompare(a[1].last)).slice(0, 3);
+        return acts.length ? `<div class="cat-last3">${acts.map(([k, v]) => { const [ico, lab] = CAT_SRC[k] || ["•", k]; const dd = v.last_doc || {};
+          return `<span class="cat-act" title="${esc(lab)} · ${esc(v.last.replace("T", " "))}${dd.app ? " · " + esc(dd.app) : ""}${dd.extra ? " · " + esc(dd.extra) : ""}${dd.who ? " · by " + esc(dd.who) : ""}">${ico} <b>${esc(lab)}</b>${dd.app ? ` ${esc(dd.app)}` : ""}${dd.extra ? ` <small>${esc(dd.extra)}</small>` : ""}${dd.who ? ` <span class="cat-act-who">${esc(dd.who)}</span>` : ""}<small class="cat-act-ago">${prjAgo(v.last)}</small></span>`; }).join("")}</div>` : "";
+      })()}
       <div class="cat-viz">
         <div class="cat-strip" title="30-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·30d</small></span>` : ""}</div>
         <div class="cat-gauges">
