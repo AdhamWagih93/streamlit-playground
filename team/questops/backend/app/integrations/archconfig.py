@@ -574,15 +574,54 @@ def _index_entries(entries: list[dict]) -> tuple[dict, dict]:
     return best, dupes
 
 
+_BUILD_LOCK = __import__("threading").Lock()
+_BUILDING: dict = {"active": False, "started": 0.0, "error": ""}
+
+
+def _kick_build(refresh: bool) -> None:
+    """Start ONE background overview build; concurrent kicks join the running one."""
+    import threading
+    with _BUILD_LOCK:
+        if _BUILDING["active"]:
+            return
+        _BUILDING.update(active=True, started=time.time(), error="")
+
+    def run():
+        try:
+            _build_overview(refresh)
+            _BUILDING["error"] = ""
+        except Exception as exc:  # noqa: BLE001
+            _BUILDING["error"] = str(exc)[:200]
+        finally:
+            _BUILDING["active"] = False
+    threading.Thread(target=run, name="configs-overview-build", daemon=True).start()
+
+
 def overview(refresh: bool = False) -> dict:
+    """NON-BLOCKING: the initial fetch is always light.
+      cache fresh   → serve it
+      cache stale   → serve it AS-IS (stale: true) and rebuild in the background
+      cache empty   → return {building: true} instantly; the heavy parse runs
+                      in a background thread and the UI polls until it lands"""
+    if _OV_CACHE["payload"] and not refresh and time.time() - _OV_CACHE["at"] < _TTL:
+        return {**_OV_CACHE["payload"], "cached": True}
+    if _OV_CACHE["payload"]:
+        _kick_build(refresh)
+        return {**_OV_CACHE["payload"], "cached": True, "stale": True, "building": _BUILDING["active"]}
+    _kick_build(refresh)
+    return {"building": True, "projects": [], "unknown_projects": [], "unknown_configs": 0,
+            "repos": [], "configs": 0, "envs": [], "refresh_errors": {},
+            "deployments": {"available": False, "error": "", "projects": 0},
+            "totals": {}, "build_error": _BUILDING["error"]}
+
+
+def _build_overview(refresh: bool = False) -> dict:
     """The landing payload: ONE small row per INVENTORY project — expected
     configs (apps × envs) vs. what the Control team repos hold, deployment
     cross-reference, connection scopes and issues. Extra configs (repo
     folders naming apps / envs / projects the inventory does not know) are
     counted so drift is visible before any project is opened. No topology
     is shipped here — that is per project (project_detail)."""
-    if not refresh and _OV_CACHE["payload"] and time.time() - _OV_CACHE["at"] < _TTL:
-        return {**_OV_CACHE["payload"], "cached": True}
     from . import inventory
     a = analyze(refresh)
     entries = a.get("entries") or []
@@ -676,6 +715,17 @@ def overview(refresh: bool = False) -> dict:
 
 
 def project_detail(name: str, refresh: bool = False) -> dict:
+    """Everything for ONE project. On a completely cold cache this does not
+    block: it returns {building: true} and kicks the shared background build
+    (the UI polls). Once anything is cached, detail is served synchronously.
+    """
+    if _CACHE["payload"] is None and not settings.demo_mode:
+        _kick_build(refresh)
+        return {"building": True, "name": name}
+    return _project_detail(name, refresh)
+
+
+def _project_detail(name: str, refresh: bool = False) -> dict:
     """Everything for ONE project: per-env topology restricted to the project
     and whatever it touches (so cross-project edges keep their far end), the
     app × env matrix with config state + last deployment, anomalies, extras."""
