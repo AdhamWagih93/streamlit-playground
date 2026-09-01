@@ -5774,6 +5774,7 @@ async function mailLoad(refresh) {
     days: f.days || 14, limit: 50, offset: f.offset || 0 });
   if (f.unread) p.set("unread", "true");
   if (f.attachments) p.set("attachments", "true");
+  if (f.no_bounces) p.set("no_bounces", "true");
   if (refresh) p.set("refresh", "true");
   try { state.mailData = await api(`/api/mail?${p}`); } catch (e) { box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
   const d = state.mailData;
@@ -5817,6 +5818,7 @@ async function renderMail() {
       <select data-mail-f="days">${[1, 3, 7, 14].map((n) => opt(n, `last ${n} day${n === 1 ? "" : "s"}`, f.days || 14)).join("")}</select>
       <button class="btn btn-sm ${f.unread ? "btn-primary" : "btn-ghost"}" data-mail-t="unread">● unread</button>
       <button class="btn btn-sm ${f.attachments ? "btn-primary" : "btn-ghost"}" data-mail-t="attachments">📎 attachments</button>
+      <button class="btn btn-sm ${f.no_bounces ? "btn-primary" : "btn-ghost"}" data-mail-t="no_bounces" title="hide Undeliverable / postmaster / mailer-daemon notices">🚫 undeliverable</button>
     </div>
     <div class="mail-split"><div id="mail-list" class="mail-list"></div><div id="mail-read" class="mail-read"><div class="empty">pick a message</div></div></div>`;
   const v = view();

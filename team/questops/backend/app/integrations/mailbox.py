@@ -23,6 +23,17 @@ _LIST_CACHE: dict = {}
 
 FOLDERS = ("inbox", "sent")
 
+# bounce / NDR shapes — excluded when the user hides undeliverable notices
+BOUNCE_SUBJECTS = ("undeliverable", "mail delivery failed", "delivery status notification",
+                   "returned mail", "delivery has failed", "failure notice")
+BOUNCE_SENDERS = ("postmaster", "mailer-daemon")
+
+
+def _is_bounce(subject: str, from_email: str, from_name: str = "") -> bool:
+    subj = (subject or "").lower()
+    who = f"{from_email or ''} {from_name or ''}".lower()
+    return subj.startswith(BOUNCE_SUBJECTS) or any(b in who for b in BOUNCE_SENDERS)
+
 
 def _require_ews():
     if settings.mail_transport != "ews":
@@ -101,17 +112,17 @@ def _row(m) -> dict:
 
 
 def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: bool = False,
-                  attachments: bool = False, days: int = MAX_DAYS, limit: int = 50,
-                  offset: int = 0, refresh: bool = False) -> dict:
+                  attachments: bool = False, no_bounces: bool = False, days: int = MAX_DAYS,
+                  limit: int = 50, offset: int = 0, refresh: bool = False) -> dict:
     days, limit = _clamp(days, limit)
     offset = max(0, min(int(offset or 0), 1000))
     folder = folder if folder in FOLDERS else "inbox"
-    key = (folder, q.lower(), sender.lower(), unread, attachments, days, limit, offset)
+    key = (folder, q.lower(), sender.lower(), unread, attachments, no_bounces, days, limit, offset)
     hit = _LIST_CACHE.get(key)
     if hit and not refresh and time.time() - hit["at"] < _LIST_TTL:
         return {**hit["value"], "cached": True}
     if settings.demo_mode:
-        value = _demo_list(folder, q, sender, unread, attachments, days, limit, offset)
+        value = _demo_list(folder, q, sender, unread, attachments, no_bounces, days, limit, offset)
     else:
         _require_ews()
         acct = _account()
@@ -129,6 +140,13 @@ def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: 
             qs = qs.filter(is_read=False)
         if attachments:
             qs = qs.filter(has_attachments=True)
+        if no_bounces:
+            # server-side: each exclude is ANDed — drops NDR subjects and
+            # postmaster / mailer-daemon senders before pagination
+            for b in BOUNCE_SUBJECTS:
+                qs = qs.exclude(subject__istartswith=b)
+            for b in BOUNCE_SENDERS:
+                qs = qs.exclude(sender__icontains=b)
         qs = qs.order_by("-datetime_received").only(
             "id", "subject", "sender", "datetime_received", "is_read",
             "has_attachments", "importance")
@@ -180,7 +198,7 @@ def _demo_rows() -> list[dict]:
     ]
 
 
-def _demo_list(folder, q, sender, unread, attachments, days, limit, offset):
+def _demo_list(folder, q, sender, unread, attachments, no_bounces, days, limit, offset):
     rows = _demo_rows() if folder == "inbox" else _demo_rows()[1:3]
     cut = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     rows = [r for r in rows if r["when"] >= cut.strftime("%Y-%m-%dT%H:%M:%S")]
@@ -192,6 +210,8 @@ def _demo_list(folder, q, sender, unread, attachments, days, limit, offset):
         rows = [r for r in rows if r["unread"]]
     if attachments:
         rows = [r for r in rows if r["attachments"]]
+    if no_bounces:
+        rows = [r for r in rows if not _is_bounce(r["subject"], r["from_email"], r["from_name"])]
     return {"folder": folder, "days": days, "total": len(rows), "offset": offset,
             "messages": rows[offset:offset + limit], "mailbox": "questops@corp.local",
             "note": f"service-account mailbox · last {days} day(s) only"}
