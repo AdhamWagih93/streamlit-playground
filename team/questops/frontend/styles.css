@@ -122,28 +122,28 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 .bar-restore-right { right: 8px; top: 8px; }
 .sidebar {
   width: 208px; flex: none; display: flex; flex-direction: column;
-  background: var(--bg-2); border-right: 1px solid var(--line); padding: 20px 14px;
+  background: var(--bg-2); border-right: 1px solid var(--line); padding: 14px 14px 12px;
 }
-.logo { font-size: 19px; padding: 0 8px 12px; }
+.logo { font-size: 19px; padding: 0 8px 10px; }
 /* many pages now: compact rows, grouped under small headers, the nav itself
    scrolls (slim bar) while the logo and the footer stay pinned */
-#nav { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0;
+#nav { display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0;
   overflow-y: auto; overscroll-behavior: contain; padding-right: 2px;
   scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 #nav::-webkit-scrollbar { width: 5px; } #nav::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
 .nav-group-h { font: 700 9.5px var(--mono); letter-spacing: .14em; text-transform: uppercase;
-  color: var(--faint); padding: 2px 12px 3px; user-select: none; }
+  color: var(--faint); padding: 1px 12px 2px; user-select: none; }
 #nav a {
   display: flex; align-items: center; gap: 9px; color: var(--dim); font-size: 13px;
-  padding: 5px 12px; border-radius: 7px; font-weight: 500; border: 1px solid transparent;
+  padding: 4px 12px; border-radius: 7px; font-weight: 500; border: 1px solid transparent;
 }
 #nav a:hover { color: var(--text); background: var(--panel); }
 #nav a.active {
   color: var(--amber); background: var(--amber-soft); border-color: rgba(255,178,36,.25);
 }
 .nav-ico { font-size: 13.5px; width: 18px; text-align: center; }
-.sidebar-foot { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sidebar-foot { display: flex; flex-direction: column; gap: 2px; padding-top: 8px; border-top: 1px solid var(--line); }
 .sidebar-foot .btn { text-align: left; }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
