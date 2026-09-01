@@ -1098,9 +1098,12 @@ _CAT_SOURCES = (("commits", "ef-git-commits", "commitdate",
 
 
 def _cat_stdchanges(out: dict, errors: list[str]) -> None:
-    """Standard-change runs count as project activity too. The index has no
-    project field: JobName / ScriptName → project through the Engine
-    catalogue's vars.project_name, then ONE terms aggregation on JobName."""
+    """Standard-change activity for the catalog. One RUN = a unique
+    (service, environment, ChangeNumber) combination — the index holds one
+    document per input parameter set of a run, so document counts lie.
+    Environment / ChangeNumber are text (not aggregatable): the last-30-days
+    window is fetched (tiny _source, search_after pages) and folded in
+    Python; the all-time `last` + latest requester come from one terms agg."""
     try:
         from . import stdchanges
         job2proj: dict = {}
@@ -1112,32 +1115,58 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
                 job2proj[k] = _norm(pn)
         if not job2proj:
             return
+        # all-time last + latest doc info (cheap agg)
         resp = _es("ef-ops-db-changes-standard", {"size": 0, "aggs": {"by": {
             "terms": {"field": "JobName", "size": 2000},
             "aggs": {"last": {"max": {"field": "Date"}},
                      "latest": {"top_hits": {"size": 1, "_source": ["Requester", "Environment", "ChangeNumber"],
-                                             "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}]}},
-                     "recent": {"filter": {"range": {"Date": {"gte": "now-30d"}}},
-                                "aggs": {"days": {"date_histogram": {"field": "Date", "calendar_interval": "day"}}}}}}}})
+                                             "sort": [{"Date": {"order": "desc", "unmapped_type": "date"}}]}}}}}})
         for b in ((resp.get("aggregations") or {}).get("by") or {}).get("buckets", []):
             pk = job2proj.get(b.get("key"))
             if not pk:
                 continue
             last = ((b.get("last") or {}).get("value_as_string") or "")[:19]
-            slot = out.setdefault(pk, {})
-            prev = slot.get("stdchanges")
-            hist = _hist30(b.get("recent") or {})
             hit = (((b.get("latest") or {}).get("hits") or {}).get("hits") or [{}])[0]
             hs = hit.get("_source") or {}
             doc = {"app": str(b.get("key") or ""), "who": _user_display(hs.get("Requester") or ""),
                    "extra": str(hs.get("Environment") or hs.get("ChangeNumber") or "")} if hs else None
+            slot = out.setdefault(pk, {})
+            prev = slot.get("stdchanges")
             if not prev or last > prev["last"]:
-                slot["stdchanges"] = {"last": last, "recent": (b.get("recent") or {}).get("doc_count", 0) + (prev["recent"] if prev else 0),
-                                      "hist": [a + c for a, c in zip(hist, prev["hist"])] if prev else hist,
+                slot["stdchanges"] = {"last": last, "recent": 0, "hist": [0] * 30,
                                       "last_doc": doc or (prev or {}).get("last_doc")}
-            else:
-                prev["recent"] += (b.get("recent") or {}).get("doc_count", 0)
-                prev["hist"] = [a + c for a, c in zip(prev["hist"], hist)]
+        # 30-day window → fold documents into RUNS (job, env, change number)
+        body = {"query": {"bool": {"filter": [
+                    {"terms": {"JobName": sorted(job2proj)}},
+                    {"range": {"Date": {"gte": "now-30d"}}}]}},
+                "sort": [{"Date": {"order": "asc", "unmapped_type": "date"}}, {"_doc": {"order": "asc"}}],
+                "_source": ["JobName", "Environment", "ChangeNumber", "Date"],
+                "size": _STD_PAGE}
+        runs: dict = {}
+        for _page in range(20):   # 100k docs sanity ceiling for a 30d window
+            resp = _es("ef-ops-db-changes-standard", body)
+            hits = (resp.get("hits") or {}).get("hits") or []
+            for h in hits:
+                s_ = h.get("_source") or {}
+                job = s_.get("JobName") or ""
+                key = (job, (s_.get("Environment") or "").strip().lower(),
+                       str(s_.get("ChangeNumber") or "").strip() or f"doc:{h.get('_id')}")
+                when = (s_.get("Date") or "")[:10]
+                if key not in runs or when < runs[key]:
+                    runs[key] = when                 # a run is dated by its FIRST document
+            if len(hits) < _STD_PAGE:
+                break
+            body["search_after"] = hits[-1].get("sort")
+        idx = {d: i for i, d in enumerate(_cat_days())}
+        for (job, _env, _cn), day in runs.items():
+            pk = job2proj.get(job)
+            if not pk:
+                continue
+            slot = out.setdefault(pk, {}).setdefault("stdchanges", {"last": "", "recent": 0, "hist": [0] * 30, "last_doc": None})
+            slot["recent"] += 1
+            di = idx.get(day)
+            if di is not None:
+                slot["hist"][di] += 1
     except Exception as exc:  # noqa: BLE001
         errors.append(f"ef-ops-db-changes-standard: {str(exc)[:80]}")
 

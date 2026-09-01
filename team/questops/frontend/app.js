@@ -7436,7 +7436,10 @@ function prjCatTimeline(rows, cat, f) {
   const byType = days.map(() => ({})), byProj = days.map(() => ({})), projTot = {};
   rows.forEach((p) => Object.entries(p.activity || {}).forEach(([t, v]) => { if (!on.has(t) || !v.hist) return;
     v.hist.forEach((n, i) => { if (!n) return; byType[i][t] = (byType[i][t] || 0) + n; byProj[i][p.name] = (byProj[i][p.name] || 0) + n; projTot[p.name] = (projTot[p.name] || 0) + n; }); }));
-  const projOrder = rows.map((p) => p.name).filter((n) => projTot[n]).sort((a, b) => projTot[b] - projTot[a]);
+  // rows arrive already sorted by the catalog's sort control — the lanes and
+  // legend follow that order; stacking still ranks the busiest for colours
+  const projOrder = rows.map((p) => p.name).filter((n) => projTot[n]);
+  const projByVol = [...projOrder].sort((a, b) => projTot[b] - projTot[a]);
   const projIdx = {}; projOrder.forEach((n, i) => { projIdx[n] = i; });
   const dayTot = byType.map((d) => Object.values(d).reduce((n, x) => n + x, 0));
   const max = Math.max(1, ...dayTot);
@@ -7446,8 +7449,8 @@ function prjCatTimeline(rows, cat, f) {
     let y = H - PAD; const src = mode === "type" ? byType[i] : byProj[i];
     // by project: the 12 busiest projects overall get their own segment, the
     // rest fold into one "others" segment — keeps 200+ projects readable and cheap
-    const top = mode === "type" ? types.filter((t) => src[t]) : projOrder.slice(0, 12).filter((n) => src[n]);
-    const others = mode === "project" ? projOrder.slice(12).reduce((n, k) => n + (src[k] || 0), 0) : 0;
+    const top = mode === "type" ? types.filter((t) => src[t]) : projByVol.slice(0, 12).filter((n) => src[n]);
+    const others = mode === "project" ? projByVol.slice(12).reduce((n, k) => n + (src[k] || 0), 0) : 0;
     const keys = others ? [...top, "__others"] : top;
     const segs = keys.map((k) => { const val = k === "__others" ? others : src[k]; const h = (val / max) * (H - PAD * 2); y -= h;
       if (k === "__others") return `<rect class="cat-tl-seg" x="${(PAD + i * bw + gap / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - gap).toFixed(1)}" height="${Math.max(0.5, h).toFixed(1)}" fill="#c9d1da" data-tl-day="${i}"><title>${nice(day)} · ${projOrder.length - 12} other project(s) · ${others} event(s) — click the day to list them</title></rect>`;
@@ -7458,7 +7461,7 @@ function prjCatTimeline(rows, cat, f) {
   }).join("");
   const legend = mode === "type"
     ? types.map((t) => `<button class="chip cfg-chip ${on.has(t) ? "chip-on" : "cat-tl-off"}" data-tl-toggle="${t}" style="border-color:${CAT_TYPE_COLOR[t]}"><i class="prj-dot" style="background:${CAT_TYPE_COLOR[t]}"></i>${(CAT_SRC[t] || ["", t])[0]} ${(CAT_SRC[t] || ["", t])[1]}s</button>`).join("")
-    : projOrder.slice(0, 12).map((n) => `<button class="chip cfg-chip" data-cat-jump="${esc(n)}" style="border-color:${catProjColor(projIdx[n])}" title="jump to ${esc(n)}"><i class="prj-dot" style="background:${catProjColor(projIdx[n])}"></i>${esc(n)} · ${projTot[n]}</button>`).join("") + (projOrder.length > 12 ? `<span class="ci-meta">+${projOrder.length - 12} more</span>` : "");
+    : projByVol.slice(0, 12).map((n) => `<button class="chip cfg-chip" data-cat-jump="${esc(n)}" style="border-color:${catProjColor(projIdx[n])}" title="jump to ${esc(n)}"><i class="prj-dot" style="background:${catProjColor(projIdx[n])}"></i>${esc(n)} · ${projTot[n]}</button>`).join("") + (projOrder.length > 12 ? `<span class="ci-meta">+${projOrder.length - 12} more</span>` : "");
   // day focus: which projects moved that day, per type
   let focus = "";
   if (f.day != null && byProj[f.day]) {
