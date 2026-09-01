@@ -6395,7 +6395,13 @@ async function cfgOpenProject(name, tok) {
   document.querySelectorAll("[data-cfg-back]").forEach((b) => b.classList.remove("hidden"));
   body.innerHTML = `<div class="empty">loading <b>${esc(name)}</b> — matrix, deployments, topology…</div>`;
   let d;
-  try { d = await api(`/api/configs/project/${encodeURIComponent(name)}`); } catch (e) { body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  for (let i = 0; i < 40; i++) {
+    try { d = await api(`/api/configs/project/${encodeURIComponent(name)}`); } catch (e) { body.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+    if (!d.building) break;
+    body.innerHTML = `<div class="empty">building the configuration analysis in the background… (${i + 1})</div>`;
+    await new Promise((r) => setTimeout(r, 2000));
+    if ((tok != null && navStale(tok)) || state.cfgSel !== name) return;
+  }
   if (tok != null && navStale(tok)) return;
   state.cfgDetail = d;
   state.cfgData = { model: d.model, envs: d.envs, repos: [], namespaces: d.namespaces || {}, teams: d.config_teams || [] };
@@ -6420,12 +6426,28 @@ async function renderConfigs() {
     <div id="cfg-main"><div class="cfg-skel"><div class="stat-tiles">${Array.from({ length: 6 }, () => '<div class="stat-tile cfg-skel-tile"><b>&nbsp;</b><span>scanning configs…</span></div>').join("")}</div><div class="empty">reading inventory · team config repos · latest deployments</div></div></div>
     <div class="kpi-note">primary loop = inventory projects (apps × envs = expected configs) cross-checked against every cloned Control / App_Configs repo (Control wins on collisions) and the latest real deployment per app / env; nothing heavy is built until you open a project</div>`;
   const v = view();
+  let cfgPoll = 0;
+  const cfgRefetch = async (delay) => {   // poll while building / stale, capped
+    if (cfgPoll++ > 40) return;
+    await new Promise((r) => setTimeout(r, delay));
+    if (navStale(tok) || state.cfgSel) return;
+    try { state.cfgOverview = await api("/api/configs/overview"); } catch { return; }
+    if (!navStale(tok) && !state.cfgSel) showOverview();
+  };
   const showOverview = () => {
     const o = state.cfgOverview; if (!o) return;
+    if (o.building && !(o.projects || []).length) {
+      document.getElementById("cfg-head").innerHTML = "";
+      document.getElementById("cfg-main").innerHTML = `<div class="cfg-skel"><div class="stat-tiles">${Array.from({ length: 6 }, () => '<div class="stat-tile cfg-skel-tile"><b>&nbsp;</b><span>building the analysis…</span></div>').join("")}</div>
+        <div class="empty">first scan of the config repos is running in the background — team repos are pulled, parsed and cross-referenced with deployments; this page fills in automatically${o.build_error ? `<br>⚠ ${esc(o.build_error)}` : ""}</div></div>`;
+      cfgRefetch(2000);
+      return;
+    }
+    if (o.stale) cfgRefetch(4000);   // serve-stale: pick up the fresh build shortly
     state.cfgSel = null; state.cfgDetail = null;
     document.querySelectorAll("[data-cfg-back]").forEach((b) => b.classList.add("hidden"));
     const rerr = o.refresh_errors || {};
-    document.getElementById("cfg-head").innerHTML = (o.repos || []).length ? `<div class="inv-chips" style="margin-bottom:8px">${o.repos.map((r) => `<span class="chip ${r.refresh_error ? "chip-red" : r.cloned ? "" : "chip-amber"}" title="${r.refresh_error ? "git refresh failed — showing the last good clone: " + esc(r.refresh_error) : r.cloned ? r.configs + " config(s) · pulled to the latest git state before parsing" : "not cloned yet"}">🛡 ${esc(r.team)}${r.refresh_error ? " ⟳⚠" : ""}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}<span class="ci-meta">· ${o.configs} config.yml parsed · repos pulled before parsing · deployments ${o.deployments.available ? "cross-referenced" : "unavailable"}${o.cached ? " · cached" : ""}</span></div>${Object.keys(rerr).length ? `<div class="kpi-note" style="margin-bottom:8px">⟳⚠ could not refresh: ${Object.entries(rerr).map(([k, v]) => `<b>${esc(k)}</b> (${esc(v)})`).join(" · ")} — data comes from the last good clone</div>` : ""}`
+    document.getElementById("cfg-head").innerHTML = (o.repos || []).length ? `<div class="inv-chips" style="margin-bottom:8px">${o.stale ? `<span class="chip chip-amber" title="showing the last built analysis — a fresh build is running in the background and will replace this shortly"><i class="cat-pulse-dot"></i> updating…</span>` : ""}${o.repos.map((r) => `<span class="chip ${r.refresh_error ? "chip-red" : r.cloned ? "" : "chip-amber"}" title="${r.refresh_error ? "git refresh failed — showing the last good clone: " + esc(r.refresh_error) : r.cloned ? r.configs + " config(s) · pulled to the latest git state before parsing" : "not cloned yet"}">🛡 ${esc(r.team)}${r.refresh_error ? " ⟳⚠" : ""}${r.cloned ? ` · ${r.configs}` : " · not cloned"}</span>`).join("")}<span class="ci-meta">· ${o.configs} config.yml parsed · repos pulled before parsing · deployments ${o.deployments.available ? "cross-referenced" : "unavailable"}${o.cached ? " · cached" : ""}</span></div>${Object.keys(rerr).length ? `<div class="kpi-note" style="margin-bottom:8px">⟳⚠ could not refresh: ${Object.entries(rerr).map(([k, v]) => `<b>${esc(k)}</b> (${esc(v)})`).join(" · ")} — data comes from the last good clone</div>` : ""}`
       : '<div class="kpi-note">no repository from the ADO projects <b>Control</b> / <b>App_Configs</b> is defined — add your team config repos on the Repositories page (they must be cloned there)</div>';
     document.getElementById("cfg-main").innerHTML = cfgOverviewHtml(o);
   };
