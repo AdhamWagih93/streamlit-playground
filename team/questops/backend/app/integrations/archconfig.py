@@ -394,9 +394,56 @@ def build_model(entries: list[dict], ns_map: dict) -> dict:
     return model
 
 
+_FRESH_AT: dict = {}          # slot -> monotonic time of the last git refresh
+_FRESH_TTL = 120              # seconds between refreshes of the same repo
+_FRESH_STATUS: dict = {}      # slot -> "" (ok) | error text
+
+
+def _freshen(repo_list: list[dict]) -> dict:
+    """Bring every repo the analysis reads to the LATEST git state before
+    parsing: pull the server clone (ff-only, authed), or clone it when it is
+    defined but was never cloned. Throttled per repo so a burst of analyses
+    doesn't hammer the git server; a failed refresh keeps the existing clone
+    and is reported, never fatal. Returns {repo name: error-or-empty}."""
+    from . import repos as repos_mod
+    out: dict = {}
+    for r in repo_list:
+        slot = r.get("slot")
+        name = r.get("name") or str(slot)
+        if slot is None:
+            continue
+        now = time.monotonic()
+        if now - _FRESH_AT.get(slot, 0) < _FRESH_TTL:
+            out[name] = _FRESH_STATUS.get(slot, "")
+            continue
+        _FRESH_AT[slot] = now
+        try:
+            if _dir_for(r).exists():
+                repos_mod.pull(slot)
+            else:
+                repos_mod.clone(slot)
+            _FRESH_STATUS[slot] = ""
+        except Exception as exc:  # noqa: BLE001 — stale beats broken
+            _FRESH_STATUS[slot] = str(exc)[:150]
+        out[name] = _FRESH_STATUS[slot]
+    return out
+
+
+def _used_repos() -> list[dict]:
+    """Everything the analysis reads: the config team repos plus the
+    inventories repo (namespace map / expected apps come from it)."""
+    from .repos import configured
+    used = control_repos()
+    inv = next((r for r in configured() if (r.get("name") or "").lower() == "inventories"), None)
+    if inv is not None:
+        used.append(inv)
+    return used
+
+
 def analyze(refresh: bool = False) -> dict:
     if not refresh and _CACHE["payload"] and time.time() - _CACHE["at"] < _TTL:
         return {**_CACHE["payload"], "cached": True}
+    fresh = _freshen(_used_repos())   # latest git state before any parsing
     repos = control_repos()
     entries = []
     for r in repos:
@@ -405,7 +452,9 @@ def analyze(refresh: bool = False) -> dict:
     model = build_model(entries, ns)
     payload = {"entries": entries,
                "repos": [{"team": r["name"], "cloned": _dir_for(r).exists(),
+                          "refresh_error": fresh.get(r["name"]) or "",
                           "configs": sum(1 for e in entries if e["team"] == r["name"])} for r in repos],
+               "refresh_errors": {k: v for k, v in fresh.items() if v},
                "configs": len(entries), "namespaces": ns, "model": model,
                "teams": sorted({e["team"] for e in entries}),
                "envs": sorted(model["envs"], key=lambda e: ({"dev": 1, "qc": 2, "uat": 3, "prd": 4}.get(e, 9), e))}
@@ -610,6 +659,7 @@ def overview(refresh: bool = False) -> dict:
     unknown = sorted({e["project"] for e in entries if _norm(e["project"]) not in known})
     tot = lambda k: sum(x[k] for x in projects)  # noqa: E731
     payload = {"projects": projects, "unknown_projects": unknown,
+               "refresh_errors": a.get("refresh_errors") or {},
                "unknown_configs": sum(1 for e in entries if _norm(e["project"]) not in known),
                "repos": a.get("repos"), "configs": len(entries), "envs": a.get("envs"),
                "deployments": {"available": not dep_err, "error": dep_err,
