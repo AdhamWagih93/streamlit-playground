@@ -267,6 +267,9 @@ function applyPageAccess() {
   const allowed = allowedPages();
   document.querySelectorAll("#nav a").forEach((a) =>
     a.classList.toggle("hidden", !allowed.includes(a.dataset.view)));
+  document.querySelectorAll("#nav .nav-group").forEach((g) => {
+    g.classList.toggle("hidden", ![...g.querySelectorAll("a")].some((a) => !a.classList.contains("hidden")));
+  });
 }
 
 function route() {
