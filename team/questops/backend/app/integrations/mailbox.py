@@ -136,80 +136,103 @@ def _classify(rows: list[dict]) -> None:
         r["admin_of"] = admins.get((r.get("from_email") or "").lower(), "")
 
 
+def _csv(v) -> list[str]:
+    return [x.strip().lower() for x in (v or "").split(",") if x.strip()]
+
+
+def _sender_hit(r: dict, term: str) -> bool:
+    return term in f"{r.get('from_name') or ''} {r.get('from_email') or ''}".lower()
+
+
+def _apply_filters(rows: list[dict], *, unread, attachments, no_bounces, admin_only,
+                   inc_s, exc_s, inc_t, exc_t) -> list[dict]:
+    """ONE matching pipeline for demo and EWS rows alike — sender terms match
+    name OR address (case-insensitive substring), subject terms are ANDed,
+    excludes always win. This is why 'from' behaves identically everywhere."""
+    out = []
+    for r in rows:
+        if unread and not r.get("unread"):
+            continue
+        if attachments and not r.get("attachments"):
+            continue
+        if no_bounces and _is_bounce(r.get("subject") or "", r.get("from_email") or "", r.get("from_name") or ""):
+            continue
+        if admin_only and not r.get("admin_of"):
+            continue
+        if inc_s and not any(_sender_hit(r, t) for t in inc_s):
+            continue
+        if exc_s and any(_sender_hit(r, t) for t in exc_s):
+            continue
+        subj = (r.get("subject") or "").lower()
+        if inc_t and not all(t in subj for t in inc_t):
+            continue
+        if exc_t and any(t in subj for t in exc_t):
+            continue
+        out.append(r)
+    return out
+
+
 def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: bool = False,
                   attachments: bool = False, no_bounces: bool = False, admin_only: bool = False,
+                  inc_s: str = "", exc_s: str = "", inc_t: str = "", exc_t: str = "",
                   days: int = MAX_DAYS, limit: int = 50, offset: int = 0, refresh: bool = False) -> dict:
     days, limit = _clamp(days, limit)
     offset = max(0, min(int(offset or 0), 1000))
     folder = folder if folder in FOLDERS else "inbox"
-    key = (folder, q.lower(), sender.lower(), unread, attachments, no_bounces, admin_only, days, limit, offset)
+    incs, excs, inct, exct = _csv(inc_s), _csv(exc_s), _csv(inc_t), _csv(exc_t)
+    if sender:                      # legacy params fold into the token model
+        incs.append(sender.strip().lower())
+    if q:
+        inct.append(q.strip().lower())
+    key = (folder, unread, attachments, no_bounces, admin_only,
+           tuple(incs), tuple(excs), tuple(inct), tuple(exct), days, limit, offset)
     hit = _LIST_CACHE.get(key)
     if hit and not refresh and time.time() - hit["at"] < _LIST_TTL:
         return {**hit["value"], "cached": True}
+    # ---- fetch the WINDOW (2-week cap): only date + order go server-side;
+    # everything else matches in the uniform pipeline above
     if settings.demo_mode:
-        value = _demo_list(folder, q, sender, unread, attachments, no_bounces, days, limit, offset)
-        _classify(value["messages"])
-        if admin_only:
-            value["messages"] = [r for r in value["messages"] if r["admin_of"]]
-            value["total"] = len(value["messages"])
+        base = _demo_rows() if folder == "inbox" else _demo_rows()[1:3]
+        cut = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        base = [dict(r) for r in base if r["when"] >= cut.strftime("%Y-%m-%dT%H:%M:%S")]
+        window_total = len(base)
+        truncated = False
     else:
         _require_ews()
         acct = _account()
         f = acct.inbox if folder == "inbox" else acct.sent
-        # a plain timezone-aware datetime — this exchangelib validates the
-        # filter value as datetime.datetime and converts internally; wrapping
-        # it in EWSDateTime ourselves trips that check on some versions
         since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
-        qs = f.filter(datetime_received__gte=since)
-        if sender:
-            qs = qs.filter(sender__icontains=sender)
-        if q:
-            qs = qs.filter(subject__icontains=q)
-        if unread:
-            qs = qs.filter(is_read=False)
-        if attachments:
-            qs = qs.filter(has_attachments=True)
-        post_filter = False
-        if no_bounces:
-            # server-side when the Exchange build allows it (each exclude is
-            # ANDed); any refusal falls back to filtering AFTER the fetch —
-            # the toggle must work on every exchangelib / Exchange version
-            try:
-                for b in BOUNCE_SUBJECTS:
-                    qs = qs.exclude(subject__istartswith=b)
-                for b in BOUNCE_SENDERS:
-                    qs = qs.exclude(sender__icontains=b)
-            except Exception:  # noqa: BLE001
-                post_filter = True
-        qs = qs.order_by("-datetime_received").only(
-            "id", "subject", "sender", "datetime_received", "is_read",
-            "has_attachments", "importance")
-        total = qs.count()
-        rows = [_row(m) for m in qs[offset:offset + limit]]
-        _classify(rows)
-        if admin_only:
-            # the pipeline mailbox mixes automation with people: keep ONLY
-            # messages whose sender resolves to a platform admin's address
-            before = len(rows)
-            rows = [r for r in rows if r["admin_of"]]
-            total -= (before - len(rows))
-        if no_bounces and (post_filter or any(_is_bounce(r["subject"], r["from_email"], r["from_name"]) for r in rows)):
-            # belt and braces: whatever the server let through is dropped here
-            before = len(rows)
-            rows = [r for r in rows if not _is_bounce(r["subject"], r["from_email"], r["from_name"])]
-            total -= (before - len(rows))
-        value = {"folder": folder, "days": days, "total": total, "offset": offset,
-                 "messages": rows, "mailbox": settings.smtp_from,
-                 "note": f"service-account mailbox · last {days} day(s) only"}
+        qs = (f.filter(datetime_received__gte=since)
+               .order_by("-datetime_received")
+               .only("id", "subject", "sender", "datetime_received", "is_read",
+                     "has_attachments", "importance"))
+        window_total = qs.count()
+        base = [_row(m) for m in qs[:MAX_LIMIT + offset]]
+        truncated = window_total > len(base)
+    _classify(base)
+    # sender facet BEFORE sender/subject tokens — chips stay visible so an
+    # active include/exclude can always be toggled back off
+    facet_rows = _apply_filters(base, unread=unread, attachments=attachments,
+                                no_bounces=no_bounces, admin_only=admin_only,
+                                inc_s=[], exc_s=[], inc_t=[], exc_t=[])
     senders: dict = {}
-    for r in value["messages"]:
+    for r in facet_rows:
         k = (r.get("from_name") or r.get("from_email") or "?").strip()
-        senders[k] = senders.get(k, 0) + 1
-    value["senders"] = sorted(({"key": k, "count": v,
-                                "admin": bool(next((r for r in value["messages"]
-                                                    if (r.get("from_name") or r.get("from_email")) == k and r.get("admin_of")), None))}
-                               for k, v in senders.items()), key=lambda x: -x["count"])[:15]
-    value["admins_known"] = len(_admin_map())
+        e = senders.setdefault(k, {"key": k, "count": 0, "admin": False})
+        e["count"] += 1
+        e["admin"] = e["admin"] or bool(r.get("admin_of"))
+    rows = _apply_filters(base, unread=unread, attachments=attachments,
+                          no_bounces=no_bounces, admin_only=admin_only,
+                          inc_s=incs, exc_s=excs, inc_t=inct, exc_t=exct)
+    total = len(rows)
+    value = {"folder": folder, "days": days, "total": total, "offset": offset,
+             "messages": rows[offset:offset + limit],
+             "mailbox": "questops@corp.local" if settings.demo_mode else settings.smtp_from,
+             "window_total": window_total, "truncated": truncated,
+             "senders": sorted(senders.values(), key=lambda x: -x["count"])[:15],
+             "admins_known": len(_admin_map()),
+             "note": f"service-account mailbox · last {days} day(s) only"
+                     + (f" · filters applied to the newest {MAX_LIMIT + offset} of {window_total}" if truncated else "")}
     _LIST_CACHE[key] = {"at": time.time(), "value": value}
     return {**value, "cached": False}
 
@@ -251,25 +274,6 @@ def _demo_rows() -> list[dict]:
         mk(7, 170, "Grace Ops", "grace@corp.local", "UAT data refresh done", att=True),
         mk(8, 300, "Exchange", "postmaster@corp.local", "Undeliverable: report to old-team@corp.local"),
     ]
-
-
-def _demo_list(folder, q, sender, unread, attachments, no_bounces, days, limit, offset):
-    rows = _demo_rows() if folder == "inbox" else _demo_rows()[1:3]
-    cut = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
-    rows = [r for r in rows if r["when"] >= cut.strftime("%Y-%m-%dT%H:%M:%S")]
-    if q:
-        rows = [r for r in rows if q.lower() in r["subject"].lower()]
-    if sender:
-        rows = [r for r in rows if sender.lower() in (r["from_name"] + r["from_email"]).lower()]
-    if unread:
-        rows = [r for r in rows if r["unread"]]
-    if attachments:
-        rows = [r for r in rows if r["attachments"]]
-    if no_bounces:
-        rows = [r for r in rows if not _is_bounce(r["subject"], r["from_email"], r["from_name"])]
-    return {"folder": folder, "days": days, "total": len(rows), "offset": offset,
-            "messages": rows[offset:offset + limit], "mailbox": "questops@corp.local",
-            "note": f"service-account mailbox · last {days} day(s) only"}
 
 
 def _demo_message(msg_id: str) -> dict:

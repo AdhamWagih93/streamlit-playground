@@ -5761,6 +5761,9 @@ function wireStdPanel() {
 
 
 /* ================= E-MAIL — read-only service-account mailbox (EWS) ====== */
+// STABILITY RULE: the shell renders ONCE per navigation; every filter action
+// updates state and refreshes ONLY the list/facet/meta in place — the open
+// message and your scroll position are never touched by filtering.
 const MAIL_COLORS = ["#1497b3", "#8471c9", "#43c884", "#e0863c", "#5b8def", "#d06aa8", "#c0841c"];
 const mailColor = (s) => MAIL_COLORS[[...(s || "?")].reduce((n, c) => n + c.charCodeAt(0), 0) % MAIL_COLORS.length];
 
@@ -5768,34 +5771,79 @@ function mailRowHtml(m) {
   const who = m.from_name || m.from_email || "?";
   return `<button class="mail-row ${m.unread ? "mail-unread" : ""} ${state.mailSel === m.id ? "mail-on" : ""}" data-mail-open="${esc(m.id)}">
     <span class="mail-ava" style="background:${mailColor(who)}">${esc(who[0].toUpperCase())}</span>
-    <span class="mail-mid"><span class="mail-who" title="${esc(m.from_email)}">${esc(who)}${m.admin_of ? ` <span class="chip chip-cyan mail-admin" title="platform admin — resolved to ${esc(m.admin_of)} via getUserMail.sh">🛡 admin</span>` : ""}${m.importance === "high" ? ' <b class="mail-imp">!</b>' : ""}</span>
+    <span class="mail-mid"><span class="mail-who" title="${esc(m.from_email)}">${esc(who)}${m.admin_of ? ` <span class="chip chip-cyan mail-admin" title="platform admin (${esc(m.admin_of)})">🛡 admin</span>` : ""}${m.importance === "high" ? ' <b class="mail-imp">!</b>' : ""}</span>
       <span class="mail-subj">${esc(m.subject)}</span></span>
     <span class="mail-side">${m.attachments ? "📎" : ""}<small title="${esc(m.when.replace("T", " "))} UTC">${prjAgo(m.when) || esc(m.when.slice(5, 16).replace("T", " "))}</small></span></button>`;
 }
 
+// filter tokens: {kind: "s"|"t", not: bool, v: text} — s = sender, t = subject
+function mailTokensHtml(f) {
+  return (f.tokens || []).map((t, i) => `<span class="chip mail-tok ${t.not ? "chip-red" : "chip-green"}" title="${t.not ? "excluding" : "including"} ${t.kind === "s" ? "sender" : "subject"} — click ✕ to remove">
+    ${t.not ? "−" : "＋"} ${t.kind === "s" ? "from:" : ""}${esc(t.v)} <b data-mail-tok="${i}">✕</b></span>`).join("")
+    + `<input id="mail-tok-in" placeholder='filter… e.g. payments · -digest · from:alice · -from:jenkins ⏎' value="">`;
+}
+
+function mailFacetHtml(d, f) {
+  const stateOf = (k) => { const kl = k.toLowerCase();
+    if ((f.tokens || []).some((t) => t.kind === "s" && !t.not && kl.includes(t.v))) return "inc";
+    if ((f.tokens || []).some((t) => t.kind === "s" && t.not && kl.includes(t.v))) return "exc";
+    return ""; };
+  return (d.senders || []).map((x) => { const st = stateOf(x.key);
+    return `<span class="chip mail-fac ${x.admin ? "mail-fac-admin" : ""} ${st === "inc" ? "chip-green chip-on" : st === "exc" ? "chip-red" : ""}">
+      <b data-mail-fs="${esc(x.key)}" title="${st === "inc" ? "stop including" : "show ONLY this sender (add include)"}">${x.admin ? "🛡 " : ""}${esc(x.key)} · ${x.count}</b>
+      <i data-mail-fx="${esc(x.key)}" title="${st === "exc" ? "stop excluding" : "hide this sender (add exclude)"}">${st === "exc" ? "✕" : "−"}</i></span>`; }).join("");
+}
+
+function mailParams(f, refresh) {
+  const p = new URLSearchParams({ folder: f.folder || "inbox", days: f.days || 14, limit: 50, offset: f.offset || 0 });
+  const csv = (kind, not) => (f.tokens || []).filter((t) => t.kind === kind && t.not === not).map((t) => t.v).join(",");
+  if (csv("s", false)) p.set("inc_s", csv("s", false));
+  if (csv("s", true)) p.set("exc_s", csv("s", true));
+  if (csv("t", false)) p.set("inc_t", csv("t", false));
+  if (csv("t", true)) p.set("exc_t", csv("t", true));
+  for (const k of ["unread", "attachments", "no_bounces", "admin_only"]) if (f[k]) p.set(k, "true");
+  if (refresh) p.set("refresh", "true");
+  return p;
+}
+
+let MAIL_SEQ = 0;
 async function mailLoad(refresh) {
   const f = state.mailFilter, box = document.getElementById("mail-list");
   if (!box) return;
-  box.innerHTML = '<div class="empty">loading mailbox…</div>';
-  const p = new URLSearchParams({ folder: f.folder || "inbox", q: f.q || "", sender: f.sender || "",
-    days: f.days || 14, limit: 50, offset: f.offset || 0 });
-  if (f.unread) p.set("unread", "true");
-  if (f.attachments) p.set("attachments", "true");
-  if (f.no_bounces) p.set("no_bounces", "true");
-  if (f.admin_only) p.set("admin_only", "true");
-  if (refresh) p.set("refresh", "true");
-  try { state.mailData = await api(`/api/mail?${p}`); } catch (e) { box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
-  const d = state.mailData;
-  document.getElementById("mail-meta").innerHTML = `<i class="cat-pulse-dot"></i> <b>${esc(d.mailbox)}</b> · ${logInt(d.total)} message(s) · ${esc(d.note)}${d.cached ? " · cached" : ""}`;
-  const fac = document.getElementById("mail-senders");
-  if (fac) fac.innerHTML = (d.senders || []).map((x) => `<button class="chip cfg-chip ${x.admin ? "chip-cyan" : ""} ${f.sender === x.key ? "chip-on" : ""}" data-mail-sender="${esc(x.key)}" title="${x.admin ? "platform admin · " : ""}filter by this sender">${x.admin ? "🛡 " : ""}${esc(x.key)} · ${x.count}</button>`).join("");
-  box.innerHTML = (d.messages || []).map(mailRowHtml).join("") || '<div class="empty">no mail matches — remember only the last 2 weeks are visible</div>';
+  const seq = ++MAIL_SEQ;
+  box.classList.add("mail-loading");
+  let d;
+  try { d = await api(`/api/mail?${mailParams(f, refresh)}`); }
+  catch (e) { if (seq === MAIL_SEQ) { box.classList.remove("mail-loading"); box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; } return; }
+  if (seq !== MAIL_SEQ || !document.getElementById("mail-list")) return;   // a newer filter action superseded this response
+  state.mailData = d;
+  box.classList.remove("mail-loading");
+  document.getElementById("mail-meta").innerHTML = `<i class="cat-pulse-dot"></i> <b>${esc(d.mailbox)}</b> · ${logInt(d.total)} match(es) of ${logInt(d.window_total ?? d.total)} in window · ${esc(d.note)}${d.cached ? " · cached" : ""}`;
+  document.getElementById("mail-facet").innerHTML = mailFacetHtml(d, f);
+  box.innerHTML = (d.messages || []).map(mailRowHtml).join("") || '<div class="empty">no mail matches these filters — only the last 2 weeks are visible</div>';
   if ((d.offset || 0) + (d.messages || []).length < d.total)
     box.innerHTML += `<button class="btn btn-sm btn-ghost mail-more" id="mail-more">▾ load ${Math.min(50, d.total - d.offset - d.messages.length)} more</button>`;
 }
 
+function mailSyncButtons(f) {
+  document.querySelectorAll("[data-mail-t]").forEach((b) => { b.classList.toggle("btn-primary", !!f[b.dataset.mailT]); b.classList.toggle("btn-ghost", !f[b.dataset.mailT]); });
+  document.querySelectorAll("[data-mail-folder]").forEach((b) => { b.classList.toggle("btn-primary", f.folder === b.dataset.mailFolder); b.classList.toggle("btn-ghost", f.folder !== b.dataset.mailFolder); });
+  document.getElementById("mail-tokens").innerHTML = mailTokensHtml(f);
+}
+
+function mailAddToken(f, raw) {
+  let v = raw.trim(); if (!v) return false;
+  const not = v.startsWith("-"); if (not) v = v.slice(1);
+  let kind = "t";
+  if (/^from:/i.test(v)) { kind = "s"; v = v.replace(/^from:/i, ""); }
+  v = v.replace(/^"(.*)"$/, "$1").trim().toLowerCase(); if (!v) return false;
+  f.tokens = f.tokens || [];
+  if (!f.tokens.some((t) => t.kind === kind && t.not === not && t.v === v)) f.tokens.push({ kind, not, v });
+  return true;
+}
+
 async function mailOpen(id) {
-  if (state.mailBusy === id) return;    // the same message is already loading
+  if (state.mailBusy === id) return;
   state.mailBusy = id;
   state.mailSel = id;
   document.querySelectorAll(".mail-row").forEach((r) => r.classList.toggle("mail-on", r.dataset.mailOpen === id));
@@ -5805,23 +5853,23 @@ async function mailOpen(id) {
   try { m = await api(`/api/mail/message?id=${encodeURIComponent(id)}`); }
   catch (e) { pane.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; state.mailBusy = null; return; }
   finally { if (state.mailBusy === id) state.mailBusy = null; }
-  if (state.mailSel !== id) return;     // user already opened another message
+  if (state.mailSel !== id) return;
   const mailCss = `<base target="_blank"><style>
       body{font:14px/1.55 system-ui,-apple-system,'Segoe UI',sans-serif;margin:0;padding:14px 18px;color:#1c2430;background:#fff;max-width:760px}
       img{max-width:100%;height:auto} table{border-collapse:collapse;max-width:100%} td,th{padding:3px 6px}
       a{color:#0b7285} blockquote{border-left:3px solid #d5dbe3;margin:8px 0;padding:4px 12px;color:#4a5568}
       pre{white-space:pre-wrap;background:#f5f7fa;padding:8px;border-radius:6px} hr{border:none;border-top:1px solid #e3e8ef}
       p{margin:.5em 0}</style>`;
-  // sandbox WITHOUT allow-scripts: inert content, but same-origin lets us
-  // size the frame to the message so there is no inner scrollbar to fight
   const body = m.html
     ? `<iframe class="mail-body" sandbox="allow-same-origin allow-popups" srcdoc="${esc(mailCss + m.html)}"></iframe>`
     : `<pre class="mail-body mail-body-text">${esc(m.text || "(empty message)")}</pre>`;
   pane.innerHTML = `
     <div class="mail-head"><span class="mail-ava" style="background:${mailColor(m.from_name || m.from_email)}">${esc((m.from_name || m.from_email || "?")[0].toUpperCase())}</span>
       <div><div class="mail-read-subj">${esc(m.subject)}</div>
-        <div class="ci-meta">${esc(m.from_name)} &lt;${esc(m.from_email)}&gt; · ${esc(m.when.replace("T", " "))} UTC${m.to && m.to.length ? ` · to ${esc(m.to.join(", "))}` : ""}${m.cc && m.cc.length ? ` · cc ${esc(m.cc.join(", "))}` : ""}</div></div></div>
-    ${(m.attachments_meta || []).length || (Array.isArray(m.attachments) && m.attachments.length) ? "" : ""}
+        <div class="ci-meta">${esc(m.from_name)} &lt;${esc(m.from_email)}&gt;${m.admin_of ? ' · <span class="chip chip-cyan mail-admin">🛡 platform admin</span>' : ""} · ${esc(m.when.replace("T", " "))} UTC${m.to && m.to.length ? ` · to ${esc(m.to.join(", "))}` : ""}${m.cc && m.cc.length ? ` · cc ${esc(m.cc.join(", "))}` : ""}</div></div>
+      <span class="spacer"></span>
+      <button class="btn btn-sm btn-ghost" data-mail-quick="from:${esc((m.from_name || m.from_email || "").toLowerCase())}" title="show only this sender">＋ from</button>
+      <button class="btn btn-sm btn-ghost" data-mail-quick="-from:${esc((m.from_name || m.from_email || "").toLowerCase())}" title="hide this sender">− from</button></div>
     ${body}
     ${m.html && m.html.includes("data-blocked-src") ? '<div class="kpi-note">🖼 remote images blocked (trackers) <button class="btn btn-sm btn-ghost" id="mail-imgs">show images</button></div>' : ""}
     <div class="kpi-note">read-only · scripts stripped server-side and the body runs in a script-less sandboxed frame</div>`;
@@ -5836,8 +5884,9 @@ async function mailOpen(id) {
 }
 
 async function renderMail() {
-  const f = state.mailFilter = state.mailFilter || { folder: "inbox", days: 14,
-    no_bounces: localStorage.getItem("qo_mail_nobounce") === "1" };   // sticky per browser
+  const f = state.mailFilter = state.mailFilter || { folder: "inbox", days: 14, tokens: [],
+    no_bounces: localStorage.getItem("qo_mail_nobounce") === "1" };
+  f.tokens = f.tokens || [];
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   view().innerHTML = `
     <div class="view-head"><h1>E-MAIL</h1><span class="sub">the QuestOps service-account mailbox · read-only · hard two-week lookback</span>
@@ -5845,38 +5894,52 @@ async function renderMail() {
       <button id="mail-refresh" class="btn btn-sm" title="fetch again from Exchange">↻</button></div>
     <div class="acc-filters cat-filters">
       <div class="log-dir">${["inbox", "sent"].map((x) => `<button class="btn btn-sm ${f.folder === x ? "btn-primary" : "btn-ghost"}" data-mail-folder="${x}">${x}</button>`).join("")}</div>
-      <input data-mail-f="q" placeholder="🔎 subject…" value="${esc(f.q || "")}">
-      <input data-mail-f="sender" placeholder="from…" value="${esc(f.sender || "")}">
-      <select data-mail-f="days">${[1, 3, 7, 14].map((n) => opt(n, `last ${n} day${n === 1 ? "" : "s"}`, f.days || 14)).join("")}</select>
+      <select data-mail-days>${[1, 3, 7, 14].map((n) => opt(n, `last ${n} day${n === 1 ? "" : "s"}`, f.days || 14)).join("")}</select>
       <button class="btn btn-sm ${f.unread ? "btn-primary" : "btn-ghost"}" data-mail-t="unread">● unread</button>
       <button class="btn btn-sm ${f.attachments ? "btn-primary" : "btn-ghost"}" data-mail-t="attachments">📎 attachments</button>
       <button class="btn btn-sm ${f.no_bounces ? "btn-primary" : "btn-ghost"}" data-mail-t="no_bounces" title="hide Undeliverable / postmaster / mailer-daemon notices">🚫 undeliverable</button>
-      <button class="btn btn-sm ${f.admin_only ? "btn-primary" : "btn-ghost"}" data-mail-t="admin_only" title="only messages whose sender address resolves (getUserMail.sh) to a platform admin">🛡 admin mails</button>
+      <button class="btn btn-sm ${f.admin_only ? "btn-primary" : "btn-ghost"}" data-mail-t="admin_only" title="only messages whose sender is a platform admin (SMTP_ACTORS_LIST or getUserMail.sh)">🛡 admin mails</button>
     </div>
-    <div class="inv-chips" id="mail-senders" style="margin:0 0 8px"></div>
+    <div class="mail-tokens" id="mail-tokens"></div>
+    <div class="inv-chips" id="mail-facet" style="margin:0 0 8px" title="senders in the current window — click to include, − to exclude"></div>
     <div class="mail-split"><div id="mail-list" class="mail-list"></div><div id="mail-read" class="mail-read"><div class="empty">pick a message</div></div></div>`;
+  mailSyncButtons(f);
   const v = view();
+  const apply = () => { f.offset = 0; mailSyncButtons(f); mailLoad(); };
   v.addEventListener("click", (ev) => {
     const fo = ev.target.closest("[data-mail-folder]");
-    if (fo) { f.folder = fo.dataset.mailFolder; f.offset = 0; renderMail(); return; }
+    if (fo) { f.folder = fo.dataset.mailFolder; apply(); return; }
     const t = ev.target.closest("[data-mail-t]");
-    if (t) { f[t.dataset.mailT] = !f[t.dataset.mailT]; f.offset = 0;
+    if (t) { f[t.dataset.mailT] = !f[t.dataset.mailT];
       if (t.dataset.mailT === "no_bounces") try { localStorage.setItem("qo_mail_nobounce", f.no_bounces ? "1" : "0"); } catch { /* private mode */ }
-      renderMail(); return; }
-    const sn = ev.target.closest("[data-mail-sender]");
-    if (sn) { f.sender = f.sender === sn.dataset.mailSender ? "" : sn.dataset.mailSender; f.offset = 0; renderMail(); return; }
+      apply(); return; }
+    const tk = ev.target.closest("[data-mail-tok]");
+    if (tk) { f.tokens.splice(+tk.dataset.mailTok, 1); apply(); return; }
+    const fs = ev.target.closest("[data-mail-fs]");
+    if (fs) { const kl = fs.dataset.mailFs.toLowerCase();
+      const idx = f.tokens.findIndex((x) => x.kind === "s" && !x.not && kl.includes(x.v));
+      if (idx >= 0) f.tokens.splice(idx, 1); else mailAddToken(f, "from:" + fs.dataset.mailFs);
+      apply(); return; }
+    const fx = ev.target.closest("[data-mail-fx]");
+    if (fx) { const kl = fx.dataset.mailFx.toLowerCase();
+      const idx = f.tokens.findIndex((x) => x.kind === "s" && x.not && kl.includes(x.v));
+      if (idx >= 0) f.tokens.splice(idx, 1); else mailAddToken(f, "-from:" + fx.dataset.mailFx);
+      apply(); return; }
+    const qk = ev.target.closest("[data-mail-quick]");
+    if (qk) { mailAddToken(f, qk.dataset.mailQuick); apply(); return; }
     const op = ev.target.closest("[data-mail-open]");
     if (op) { mailOpen(op.dataset.mailOpen); return; }
     if (ev.target.closest("#mail-more")) { f.offset = (f.offset || 0) + 50; mailLoad(); return; }
   });
-  let deb;
-  v.addEventListener("input", (ev) => { const el = ev.target.closest("[data-mail-f]"); if (!el) return;
-    f[el.dataset.mailF] = el.value; f.offset = 0; clearTimeout(deb); deb = setTimeout(() => mailLoad(), 250); });
-  v.addEventListener("change", (ev) => { const el = ev.target.closest("select[data-mail-f]"); if (el) { f[el.dataset.mailF] = el.value; f.offset = 0; mailLoad(); } });
-  document.getElementById("mail-refresh").addEventListener("click", (ev) => { ev.currentTarget.classList.add("btn-busy"); mailLoad(true).finally(() => document.getElementById("mail-refresh").classList.remove("btn-busy")); });
+  v.addEventListener("keydown", (ev) => {
+    const inp = ev.target.closest("#mail-tok-in"); if (!inp) return;
+    if (ev.key === "Enter") { if (mailAddToken(f, inp.value)) apply(); ev.preventDefault(); }
+    else if (ev.key === "Backspace" && !inp.value && f.tokens.length) { f.tokens.pop(); apply(); }
+  });
+  v.addEventListener("change", (ev) => { if (ev.target.closest("[data-mail-days]")) { f.days = +ev.target.value || 14; apply(); } });
+  document.getElementById("mail-refresh").addEventListener("click", (ev) => { ev.currentTarget.classList.add("btn-busy"); mailLoad(true).finally(() => { const b = document.getElementById("mail-refresh"); if (b) b.classList.remove("btn-busy"); }); });
   mailLoad();
 }
-
 /* ================= CONFIGURATIONS — architecture from team config repos ================= */
 // Model comes from /api/configs (Control-project team repos parsed server-side).
 // The diagram is a hand-laid SVG: project swimlanes with app nodes on the left,
