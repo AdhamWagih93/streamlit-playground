@@ -25,7 +25,8 @@ def profile_payload(db: Session, user: User) -> dict:
         "level": level_info(user.xp),
         "badges": [{"key": b.key, "name": b.name, "icon": b.icon} for b in badges],
         "quests": quest_progress(db, user.username),
-        **(lambda r: {"restricted": r[0], "pages": r[1], "hidden_pages": r[2]})(
+        **(lambda r: {"restricted": r[0], "pages": r[1], "hidden_pages": r[2],
+                      "restricted_pages": settings.restricted_page_list})(
             pages_for(user.username)),
     }
 

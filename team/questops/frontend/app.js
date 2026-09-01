@@ -265,11 +265,17 @@ function allowedPages() {
 function applyPageAccess() {
   if (!state.me) return;
   const allowed = allowedPages();
-  document.querySelectorAll("#nav a").forEach((a) =>
-    a.classList.toggle("hidden", !allowed.includes(a.dataset.view)));
-  document.querySelectorAll("#nav .nav-group").forEach((g) => {
-    g.classList.toggle("hidden", ![...g.querySelectorAll("a")].some((a) => !a.classList.contains("hidden")));
+  const main = document.getElementById("nav-main"), res = document.getElementById("nav-restricted");
+  const rset = new Set(state.me.restricted_pages || []);
+  // links keep their authored order; visible restricted pages move under 🔒
+  const links = [...document.querySelectorAll("#nav a")].sort((a, b) => (+a.dataset.ord || 0) - (+b.dataset.ord || 0));
+  links.forEach((a, i) => { if (!a.dataset.ord) a.dataset.ord = i; });
+  links.forEach((a) => {
+    const ok = allowed.includes(a.dataset.view);
+    a.classList.toggle("hidden", !ok);
+    (ok && rset.has(a.dataset.view) ? res : main).appendChild(a);
   });
+  res.classList.toggle("hidden", ![...res.querySelectorAll("a")].some((a) => !a.classList.contains("hidden")));
 }
 
 function route() {
