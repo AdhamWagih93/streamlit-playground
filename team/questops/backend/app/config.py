@@ -152,6 +152,10 @@ class Settings(BaseSettings):
     # bare recipient names (no @) get this domain appended, mirroring the
     # send_mail.py utility; blank = full addresses required
     mail_default_domain: str = ""
+    # explicit platform-admin sender addresses for the E-mail page (comma
+    # separated, case-insensitive). When set it IS the admin list — the
+    # getUserMail.sh resolution is only used when this is empty.
+    smtp_actors_list: str = ""
     mail_retries: int = 3            # send attempts before giving up
     mail_retry_wait: float = 3.0     # seconds between attempts
     # always looped into every logging report email (blank = disabled)
@@ -295,6 +299,10 @@ class Settings(BaseSettings):
     @property
     def ado_access_exclude_list(self) -> set[str]:
         return {u.strip().lower() for u in self._csv(self.ado_access_exclude)}
+
+    @property
+    def smtp_actor_set(self) -> set[str]:
+        return {x.strip().lower() for x in self.smtp_actors_list.split(",") if x.strip()}
 
     @property
     def ldap_servers(self) -> list[dict]:

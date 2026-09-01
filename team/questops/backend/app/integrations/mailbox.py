@@ -115,7 +115,12 @@ _ADMIN_CACHE: dict = {"at": 0.0, "map": {}}
 
 
 def _admin_map() -> dict:
-    """Platform admins' addresses (getUserMail.sh, 1h cache here too)."""
+    """Platform admins' addresses. SMTP_ACTORS_LIST (comma-separated mails,
+    case-insensitive) wins when set; otherwise the roster is resolved through
+    getUserMail.sh (1h cache)."""
+    actors = settings.smtp_actor_set
+    if actors:
+        return {mail: mail.split("@", 1)[0] for mail in actors}
     from ..auth import admin_mail_map
     if time.time() - _ADMIN_CACHE["at"] > 3600:
         try:

@@ -95,6 +95,7 @@ services:
       COMPANY_LOGO: ${QO_COMPANY_LOGO:-}
       STD_CHANGES_DECRYPT: ${QO_STD_CHANGES_DECRYPT:-false}
       TEAM_MEMBERS_SCRIPT: ${QO_TEAM_MEMBERS_SCRIPT:-scripts/Tools/LDAP/getTeamMembers.sh}
+      SMTP_ACTORS_LIST: ${QO_SMTP_ACTORS_LIST:-}
       GIT_TOKEN: ${QO_GIT_TOKEN:-}
       REPOS_WORKDIR: /data/repos
       ADO_URL: ${QO_ADO_URL:-}
