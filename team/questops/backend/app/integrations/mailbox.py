@@ -40,7 +40,11 @@ def _account():
                    autodiscover=False, config=config)
 
 
-_TAG_STRIP = re.compile(r"(?is)<(script|style|iframe|object|embed|link|meta|form)\b.*?(</\1>|/?>)")
+# paired tags disappear WITH their content (a script's source must not leak
+# into the visible text); link/meta are void; stray closers are swept after
+_TAG_PAIRED = re.compile(r"(?is)<(script|style|iframe|object|embed|form|noscript)\b[^>]*>.*?</\1\s*>")
+_TAG_VOID = re.compile(r"(?is)<(?:link|meta)\b[^>]*/?>")
+_TAG_STRAY = re.compile(r"(?is)</?(?:script|style|iframe|object|embed|form|noscript)\b[^>]*>")
 _ON_ATTR = re.compile(r"(?i)\son\w+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)")
 _JS_URL = re.compile(r"(?i)(href|src)\s*=\s*([\"']?)\s*javascript:[^\"'>\s]*")
 _IMG_SRC = re.compile(r"(?i)(<img\b[^>]*?)\ssrc\s*=")
@@ -51,7 +55,9 @@ def sanitize_html(body: str) -> str:
     javascript: URLs gone, remote images blocked (src -> data-blocked-src; the
     UI offers a 'load images' toggle). The UI also renders the result inside
     a sandboxed iframe, so this is defence in depth, not the only wall."""
-    body = _TAG_STRIP.sub("", body or "")
+    body = _TAG_PAIRED.sub("", body or "")
+    body = _TAG_VOID.sub("", body)
+    body = _TAG_STRAY.sub("", body)
     body = _ON_ATTR.sub("", body)
     body = _JS_URL.sub(r"\1=\2#blocked", body)
     body = _IMG_SRC.sub(r"\1 data-blocked-src=", body)
