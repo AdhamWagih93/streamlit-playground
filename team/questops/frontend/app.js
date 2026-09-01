@@ -7406,7 +7406,11 @@ function prjCatalogCards(rows, f) {
         ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : "no tests · 30d", "autotest runs in the last 30 days")}
         ${us ? pill("", "⏱", `${logInt(us.minutes)} min · ${gb(us.storage || 0)}`, `platform usage snapshot as of ${us.as_of || "?"}: ${logInt(us.minutes)} minutes, ${gb(us.storage || 0)} storage`) : ""}
         ${(() => { const c = p.configs; if (!c) return pill("cat-pill-mute", "🗺", "no configs", "no row in the Configurations analysis for this project");
-          const bad = c.missing || c.duplicates || c.issues; return pill(bad ? "cat-pill-bad" : c.stale || c.extra ? "cat-pill-warn" : c.coverage >= 90 ? "cat-pill-good" : "",
+          // colour follows COVERAGE first: a fully covered project reads green
+          // even with a duplicate or extra (those stay visible in the text)
+          const cls = c.missing || c.coverage == null || c.coverage < 50 ? "cat-pill-bad"
+            : c.coverage >= 90 ? "cat-pill-good" : "cat-pill-warn";
+          return pill(cls,
             "🗺", `cfg ${c.coverage == null ? "–" : c.coverage + "%"}${c.missing ? ` · ${c.missing} missing` : ""}${c.stale ? ` · ${c.stale} stale` : ""}${c.duplicates ? ` · ⧉${c.duplicates}` : ""}`,
             `configuration coverage ${c.coverage ?? "?"}% · ${c.missing} missing/broken · ${c.stale} stale · ${c.duplicates} duplicate(s) · ${c.extra} extra · ${c.issues} secret/shared issue(s) · ${c.cross} cross-project link(s)`); })()}
       </div>
