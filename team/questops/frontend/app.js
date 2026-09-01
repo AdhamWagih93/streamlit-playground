@@ -7512,6 +7512,7 @@ function prjEvFilterEvt(ev) {
 // One tiny aggregate payload (no reports built): facets by company / team /
 // platform, quick facts, and an activity pulse per project so the list can be
 // sorted by what moved most recently.
+const catWin = () => ((state.prjCatalog || {}).window_days) || (((state.prjCatalog || {}).days) || []).length || 7;
 const CAT_SRC = { commits: ["⧗", "commit"], builds: ["⚙", "build"], deploys: ["🚀", "deploy"],
   releases: ["📦", "release"], tests: ["🧪", "test run"], stdchanges: ["🧾", "standard change"] };
 function prjCatalogFilter(list, f) {
@@ -7562,7 +7563,7 @@ function prjCatalogCards(rows, f) {
     const quiet = !p.last_activity;
     const strip = Object.keys(CAT_SRC).map((k) => { const v = (p.activity || {})[k] || {}; const [ico, lab] = CAT_SRC[k];
       const h = v.recent ? Math.max(4, Math.round(26 * Math.min(1, v.recent / (maxBy[k] || 1)))) : 0;
-      return `<span class="cat-bar" title="${lab}s · ${v.recent || 0} in 30d${v.last ? " · last " + esc(v.last.replace("T", " ")) : ""}"><i style="height:${h}px" class="${h ? "" : "cat-bar-0"}"></i><b>${ico}</b><small>${v.last ? prjAgo(v.last) : "—"}</small></span>`; }).join("");
+      return `<span class="cat-bar" title="${lab}s · ${v.recent || 0} in ${catWin()}d${v.last ? " · last " + esc(v.last.replace("T", " ")) : ""}"><i style="height:${h}px" class="${h ? "" : "cat-bar-0"}"></i><b>${ico}</b><small>${v.last ? prjAgo(v.last) : "—"}</small></span>`; }).join("");
     const sec = p.security, dep = p.deploys, lg = p.logging, st = p.std, us = p.usage, ado = p.ado || {};
     // vulnerabilities: a severity bar (critical / high per scanner) instead of text
     const secTot = sec ? sec.critical + sec.high : 0;
@@ -7592,16 +7593,16 @@ function prjCatalogCards(rows, f) {
           return `<span class="cat-act" title="${esc(lab)} · ${esc(v.last.replace("T", " "))}${dd.app ? " · " + esc(dd.app) : ""}${dd.extra ? " · " + esc(dd.extra) : ""}${dd.who ? " · by " + esc(dd.who) : ""}">${ico} <b>${esc(lab)}</b>${dd.app ? ` ${esc(dd.app)}` : ""}${dd.extra ? ` <small>${esc(dd.extra)}</small>` : ""}${dd.who ? ` <span class="cat-act-who">${esc(dd.who)}</span>` : ""}<small class="cat-act-ago">${prjAgo(v.last)}</small></span>`; }).join("")}</div>` : "";
       })()}
       <div class="cat-viz">
-        <div class="cat-strip" title="30-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·30d</small></span>` : ""}</div>
+        <div class="cat-strip" title="${catWin()}-day activity per source">${strip}${p.recent_30d ? `<span class="cat-30">${logInt(p.recent_30d)}<small>events·${catWin()}d</small></span>` : ""}</div>
         <div class="cat-gauges">
           ${gauge(lg ? lg.score : null, "logging", lg ? `logging health ${lg.score ?? "?"}/10 · ${lg.size_h || "?"} · ${lg.indices || 0} indices${lg.silent ? " · " + lg.silent + " app(s) silent" : ""}` : "no logging data")}
-          ${gauge(depPct == null ? null : depPct / 10, "prd deploys", dep ? `${dep.prd} prd deployment(s) in 30d · ${dep.prd_ok} succeeded · ${dep.total} deployments overall` : "no deployments in 30d", dep && dep.prd ? `${dep.prd_ok}/${dep.prd} ok` : "")}
+          ${gauge(depPct == null ? null : depPct / 10, "prd deploys", dep ? `${dep.prd} prd deployment(s) in ${catWin()}d · ${dep.prd_ok} succeeded · ${dep.total} deployments overall` : `no deployments in ${catWin()}d`, dep && dep.prd ? `${dep.prd_ok}/${dep.prd} ok` : "")}
         </div>
       </div>
       ${secBar}
       <div class="cat-pills">
         ${pill(st ? (st.issues ? "cat-pill-warn" : "") : "cat-pill-mute", "🧾", st ? `${st.changes} std change${st.changes === 1 ? "" : "s"}${st.issues ? " · " + st.issues + " issue(s)" : ""}` : "no std changes", "standard changes declaring this project_name in the Engine catalogue")}
-        ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : "no tests · 30d", "autotest runs in the last 30 days")}
+        ${pill(tests ? "" : "cat-pill-mute", "🧪", tests ? `${logInt(tests)} test run${tests === 1 ? "" : "s"}` : `no tests · ${catWin()}d`, `autotest runs in the last ${catWin()} days`)}
         ${us ? pill("", "⏱", `${logInt(us.minutes)} min · ${gb(us.storage || 0)}`, `platform usage snapshot as of ${us.as_of || "?"}: ${logInt(us.minutes)} minutes, ${gb(us.storage || 0)} storage`) : ""}
         ${(() => { const c = p.configs; if (!c) return pill("cat-pill-mute", "🗺", "no configs", "no row in the Configurations analysis for this project");
           // colour follows COVERAGE first: a fully covered project reads green
@@ -7669,10 +7670,10 @@ function prjCatTimeline(rows, cat, f) {
   }
   // lanes: one heat strip per project (filtered rows, busiest first)
   const lanes = projOrder.slice(0, 60).map((n) => { const p = rows.find((r) => r.name === n); const cells = days.map((_, i) => byProj[i][n] || 0); const m = Math.max(1, ...cells);
-    return `<div class="cat-lane" data-cat-jump="${esc(n)}" title="jump to ${esc(n)} · ${projTot[n]} event(s) in 30d"><span class="cat-lane-name" style="--k:${catProjColor(projIdx[n])}">${esc(n)}</span>
+    return `<div class="cat-lane" data-cat-jump="${esc(n)}" title="jump to ${esc(n)} · ${projTot[n]} event(s) in ${days.length}d"><span class="cat-lane-name" style="--k:${catProjColor(projIdx[n])}">${esc(n)}</span>
       <span class="cat-lane-cells">${cells.map((c, i) => `<i style="opacity:${c ? (0.25 + 0.75 * c / m).toFixed(2) : 0}" title="${nice(days[i])} · ${c}"></i>`).join("")}</span><b>${logInt(projTot[n])}</b>${p && p.last_activity ? `<small>${prjAgo(p.last_activity)}</small>` : ""}</div>`; }).join("");
   return `<div class="cat-tl">
-    <div class="cat-tl-head"><span class="pgv-title">📈 activity timeline · last 30 days · ${logInt(dayTot.reduce((n, x) => n + x, 0))} event(s)</span><span class="spacer"></span>
+    <div class="cat-tl-head"><span class="pgv-title">📈 activity timeline · last ${days.length} days · ${logInt(dayTot.reduce((n, x) => n + x, 0))} event(s)</span><span class="spacer"></span>
       <span class="log-dir"><button class="btn btn-sm ${mode === "type" ? "btn-primary" : "btn-ghost"}" data-tl-stack="type">by activity type</button><button class="btn btn-sm ${mode === "project" ? "btn-primary" : "btn-ghost"}" data-tl-stack="project">by project</button></span>
       <button class="btn btn-sm ${f.lanes ? "btn-primary" : "btn-ghost"}" data-tl-lanes title="one heat strip per project">≡ lanes</button></div>
     <div class="inv-chips" style="margin:2px 0 4px">${legend}</div>
@@ -7718,7 +7719,7 @@ function prjCatalogHtml(cat) {
     <div class="cat-top">
       <div class="stat-tiles" style="margin:0 0 10px">
         <div class="stat-tile"><b>${list.length}</b><span>projects</span></div>
-        <div class="stat-tile"><b class="${active ? "pct-good" : ""}">${active}</b><span>active · 30d</span></div>
+        <div class="stat-tile"><b class="${active ? "pct-good" : ""}">${active}</b><span>active · ${catWin()}d</span></div>
         <div class="stat-tile"><b>${companies.filter((c) => c !== "—").length}</b><span>companies</span></div>
         <div class="stat-tile"><b>${teams.length}</b><span>teams</span></div>
         <div class="stat-tile"><b>${platforms.filter((c) => c !== "—").length}</b><span>platforms</span></div>
@@ -7731,7 +7732,7 @@ function prjCatalogHtml(cat) {
         <select data-cat-f="cfg" title="configuration coverage (Configurations page)">${opt("all", "configs: any", f.cfg)}${opt("gaps", "configs: missing / broken", f.cfg)}${opt("stale", "configs: stale", f.cfg)}${opt("dupes", "configs: duplicates", f.cfg)}${opt("full", "configs: fully covered", f.cfg)}${opt("none", "configs: none at all", f.cfg)}</select>
         <select data-cat-f="platform">${opt("all", "platform: any", f.platform)}${platforms.map((c) => opt(c, c, f.platform)).join("")}</select>
         <select data-cat-f="group" title="group cards by">${opt("company", "group: company", f.group || "company")}${opt("team", "group: dev team", f.group)}${opt("platform", "group: platform", f.group)}</select>
-        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most events · 30d", f.sort)}${opt("risk", "sort: security risk", f.sort)}${opt("cfg", "sort: lowest config coverage", f.sort)}${opt("logs", "sort: weakest logging", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
+        <select data-cat-f="sort" title="sort within groups">${opt("activity", "sort: latest activity", f.sort || "activity")}${opt("recent", "sort: most recent events", f.sort)}${opt("risk", "sort: security risk", f.sort)}${opt("cfg", "sort: lowest config coverage", f.sort)}${opt("logs", "sort: weakest logging", f.sort)}${opt("name", "sort: name", f.sort)}${opt("apps", "sort: most apps", f.sort)}</select>
         <span class="ci-meta" id="cat-count">${rows.length} of ${list.length}</span>
         ${prjCatAsOf(cat)}
       </div>
@@ -7815,7 +7816,7 @@ async function renderProjects() {
   state.prjCatalog = cat;
   const projects = list.projects || [];
   if (state.prjSel && !projects.some((p) => p.name === state.prjSel)) state.prjSel = null;
-  state.prjDays = state.prjDays ?? 30;
+  state.prjDays = state.prjDays ?? 7;   // light default — matches the catalog window
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   view().innerHTML = `
     <div class="view-head">
@@ -7823,7 +7824,7 @@ async function renderProjects() {
       <span class="spacer"></span>
       <select id="prj-sel" class="prj-ctl"><option value="" ${state.prjSel ? "" : "selected"}>— choose a project —</option>${projects.map((p) =>
         opt(p.name, `${p.name}${p.company ? " · " + p.company : ""} (${p.apps} apps)`, state.prjSel || "")).join("")}</select>
-      <select id="prj-days" class="prj-ctl">${[30, 90, 180, 365].map((n) => opt(n, `last ${n} days`, state.prjDays)).join("")}${opt(0, "all time", state.prjDays)}</select>
+      <select id="prj-days" class="prj-ctl">${[7, 30, 90, 180, 365].map((n) => opt(n, `last ${n} days`, state.prjDays)).join("")}${opt(0, "all time", state.prjDays)}</select>
       <button id="prj-refresh" class="btn btn-sm" title="bypass the caches">↻</button>
       <button id="prj-print" class="btn btn-sm" title="print / save as PDF — chrome bars are stripped automatically">🖨 report</button>
     </div>

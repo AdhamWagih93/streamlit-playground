@@ -1083,6 +1083,10 @@ def _sec_members(inv: dict, out: dict) -> dict:
 _CAT_CACHE: dict = {"at": 0.0, "payload": None}
 _CAT_TTL = 300
 # (index, date field) → ONE size-0 terms+max query each; no documents move
+_CAT_WINDOW = 7   # days of activity the catalog fetches by default — the
+                  # landing must stay light; the full report has its own range
+
+
 # key, index, date field, then how the LATEST doc is summarised for the
 # catalog card: (_source fields, app field, who field, extra field)
 _CAT_SOURCES = (("commits", "ef-git-commits", "commitdate",
@@ -1133,12 +1137,12 @@ def _cat_stdchanges(out: dict, errors: list[str]) -> None:
             slot = out.setdefault(pk, {})
             prev = slot.get("stdchanges")
             if not prev or last > prev["last"]:
-                slot["stdchanges"] = {"last": last, "recent": 0, "hist": [0] * 30,
+                slot["stdchanges"] = {"last": last, "recent": 0, "hist": [0] * _CAT_WINDOW,
                                       "last_doc": doc or (prev or {}).get("last_doc")}
         # 30-day window → fold documents into RUNS (job, env, change number)
         body = {"query": {"bool": {"filter": [
                     {"terms": {"JobName": sorted(job2proj)}},
-                    {"range": {"Date": {"gte": "now-30d"}}}]}},
+                    {"range": {"Date": {"gte": f"now-{_CAT_WINDOW}d"}}}]}},
                 "sort": [{"Date": {"order": "asc", "unmapped_type": "date"}}, {"_doc": {"order": "asc"}}],
                 "_source": ["JobName", "Environment", "ChangeNumber", "Date"],
                 "size": _STD_PAGE}
@@ -1185,7 +1189,7 @@ def _cat_activity() -> tuple[dict, list[str]]:
                 "aggs": {"last": {"max": {"field": field}},
                          "latest": {"top_hits": {"size": 1, "_source": list(src),
                                                  "sort": [{field: {"order": "desc", "unmapped_type": "date"}}]}},
-                         "recent": {"filter": {"range": {field: {"gte": "now-30d"}}},
+                         "recent": {"filter": {"range": {field: {"gte": f"now-{_CAT_WINDOW}d"}}},
                                     "aggs": {"days": {"date_histogram": {"field": field, "calendar_interval": "day"}}}}}}}})
         except Exception as exc:  # noqa: BLE001 — one dead index hides only itself
             errors.append(f"{index}: {str(exc)[:80]}")
@@ -1212,15 +1216,15 @@ def _cat_activity() -> tuple[dict, list[str]]:
 
 
 def _cat_days() -> list[str]:
-    """The 30 calendar days (UTC) the catalog histograms are aligned to, oldest first."""
+    """The catalog-window calendar days (UTC), oldest first."""
     today = _now().date()
-    return [(today - dt.timedelta(days=29 - i)).isoformat() for i in range(30)]
+    return [(today - dt.timedelta(days=_CAT_WINDOW - 1 - i)).isoformat() for i in range(_CAT_WINDOW)]
 
 
 def _hist30(recent_agg: dict) -> list[int]:
-    """date_histogram buckets → 30 aligned daily counts (missing days = 0)."""
+    """date_histogram buckets → window-aligned daily counts (missing days = 0)."""
     idx = {d: i for i, d in enumerate(_cat_days())}
-    out = [0] * 30
+    out = [0] * _CAT_WINDOW
     for b in (recent_agg.get("days") or {}).get("buckets", []):
         i = idx.get((b.get("key_as_string") or "")[:10])
         if i is not None:
@@ -1314,7 +1318,7 @@ def _cat_extras() -> tuple[dict, list[str]]:
     # prd deployments — 30 days, ok vs failed (real runs only)
     try:
         resp = _es("ef-cicd-deployments", {"size": 0, "query": {"bool": {"filter": [
-            {"range": {"startdate": {"gte": "now-30d"}}}],
+            {"range": {"startdate": {"gte": f"now-{_CAT_WINDOW}d"}}}],
             "must_not": [{"term": {"testflag": True}}]}},
             "aggs": {"by": {"terms": {"field": "project", "size": 1000}, "aggs": {
                 "prd": {"filter": {"bool": {"should": [{"term": {"environment": e}} for e in ("prd", "prod", "production", "PRD", "PROD")],
@@ -1415,6 +1419,7 @@ def catalog(refresh: bool = False) -> dict:
         })
     projects.sort(key=lambda x: x["last_activity"], reverse=True)
     payload = {"source": inv.get("source"), "projects": projects, "errors": errors, "days": _cat_days(),
+               "window_days": _CAT_WINDOW,
                "generated_at": _now().replace(microsecond=0).isoformat() + "Z"}
     _CAT_CACHE.update(at=time.time(), payload=payload)
     return {**payload, "cached": False}
@@ -1431,7 +1436,7 @@ def _demo_cat_activity(inv: dict) -> dict:
         for j, (src, h) in enumerate(ages.items()):
             recent = max(0, 40 - i * 15 - j * 4)
             # a plausible daily shape: busier on weekdays, most recent days heaviest, some quiet days
-            weights = [0 if (d + i + j) % 7 in (5, 6) else (1 + ((d * 7 + j * 3 + i) % 5)) * (1 + d / 30) for d in range(30)]
+            weights = [0 if (d + i + j) % 7 in (5, 6) else (1 + ((d * 7 + j * 3 + i) % 5)) * (1 + d / _CAT_WINDOW) for d in range(_CAT_WINDOW)]
             tot = sum(weights) or 1
             hist = [int(round(recent * w / tot)) for w in weights]
             demo_docs = {"commits": ("payments-svc", "alice", "develop"), "builds": ("payments", "bob", "1.20.0"),
