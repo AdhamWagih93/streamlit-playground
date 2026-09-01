@@ -5833,7 +5833,8 @@ async function mailOpen(id) {
 }
 
 async function renderMail() {
-  const f = state.mailFilter = state.mailFilter || { folder: "inbox", days: 14 };
+  const f = state.mailFilter = state.mailFilter || { folder: "inbox", days: 14,
+    no_bounces: localStorage.getItem("qo_mail_nobounce") === "1" };   // sticky per browser
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
   view().innerHTML = `
     <div class="view-head"><h1>E-MAIL</h1><span class="sub">the QuestOps service-account mailbox · read-only · hard two-week lookback</span>
@@ -5854,7 +5855,9 @@ async function renderMail() {
     const fo = ev.target.closest("[data-mail-folder]");
     if (fo) { f.folder = fo.dataset.mailFolder; f.offset = 0; renderMail(); return; }
     const t = ev.target.closest("[data-mail-t]");
-    if (t) { f[t.dataset.mailT] = !f[t.dataset.mailT]; f.offset = 0; renderMail(); return; }
+    if (t) { f[t.dataset.mailT] = !f[t.dataset.mailT]; f.offset = 0;
+      if (t.dataset.mailT === "no_bounces") try { localStorage.setItem("qo_mail_nobounce", f.no_bounces ? "1" : "0"); } catch { /* private mode */ }
+      renderMail(); return; }
     const op = ev.target.closest("[data-mail-open]");
     if (op) { mailOpen(op.dataset.mailOpen); return; }
     if (ev.target.closest("#mail-more")) { f.offset = (f.offset || 0) + 50; mailLoad(); return; }

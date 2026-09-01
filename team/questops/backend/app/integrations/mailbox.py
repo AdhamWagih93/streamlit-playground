@@ -140,18 +140,28 @@ def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: 
             qs = qs.filter(is_read=False)
         if attachments:
             qs = qs.filter(has_attachments=True)
+        post_filter = False
         if no_bounces:
-            # server-side: each exclude is ANDed — drops NDR subjects and
-            # postmaster / mailer-daemon senders before pagination
-            for b in BOUNCE_SUBJECTS:
-                qs = qs.exclude(subject__istartswith=b)
-            for b in BOUNCE_SENDERS:
-                qs = qs.exclude(sender__icontains=b)
+            # server-side when the Exchange build allows it (each exclude is
+            # ANDed); any refusal falls back to filtering AFTER the fetch —
+            # the toggle must work on every exchangelib / Exchange version
+            try:
+                for b in BOUNCE_SUBJECTS:
+                    qs = qs.exclude(subject__istartswith=b)
+                for b in BOUNCE_SENDERS:
+                    qs = qs.exclude(sender__icontains=b)
+            except Exception:  # noqa: BLE001
+                post_filter = True
         qs = qs.order_by("-datetime_received").only(
             "id", "subject", "sender", "datetime_received", "is_read",
             "has_attachments", "importance")
         total = qs.count()
         rows = [_row(m) for m in qs[offset:offset + limit]]
+        if no_bounces and (post_filter or any(_is_bounce(r["subject"], r["from_email"], r["from_name"]) for r in rows)):
+            # belt and braces: whatever the server let through is dropped here
+            before = len(rows)
+            rows = [r for r in rows if not _is_bounce(r["subject"], r["from_email"], r["from_name"])]
+            total -= (before - len(rows))
         value = {"folder": folder, "days": days, "total": total, "offset": offset,
                  "messages": rows, "mailbox": settings.smtp_from,
                  "note": f"service-account mailbox · last {days} day(s) only"}
