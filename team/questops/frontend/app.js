@@ -246,7 +246,7 @@ const VIEWS = { overview: renderOverview, focus: renderFocus, board: renderBoard
                 projects: renderProjects,
                 logging: renderLogging, migration: renderMigration,
                 upgrades: renderUpgrades, team: renderTeam, me: renderProfile,
-                activity: renderActivity, configs: renderConfigs };
+                activity: renderActivity, configs: renderConfigs, mail: renderMail };
 
 // bumped on every navigation; async renders capture it and bail if it
 // changed while they were awaiting — so a slow page (or a background poll)
@@ -5742,6 +5742,91 @@ function wireStdPanel() {
   box.addEventListener("input", h); box.addEventListener("change", h);
 }
 
+
+
+/* ================= E-MAIL — read-only service-account mailbox (EWS) ====== */
+const MAIL_COLORS = ["#1497b3", "#8471c9", "#43c884", "#e0863c", "#5b8def", "#d06aa8", "#c0841c"];
+const mailColor = (s) => MAIL_COLORS[[...(s || "?")].reduce((n, c) => n + c.charCodeAt(0), 0) % MAIL_COLORS.length];
+
+function mailRowHtml(m) {
+  const who = m.from_name || m.from_email || "?";
+  return `<button class="mail-row ${m.unread ? "mail-unread" : ""} ${state.mailSel === m.id ? "mail-on" : ""}" data-mail-open="${esc(m.id)}">
+    <span class="mail-ava" style="background:${mailColor(who)}">${esc(who[0].toUpperCase())}</span>
+    <span class="mail-mid"><span class="mail-who" title="${esc(m.from_email)}">${esc(who)}${m.importance === "high" ? ' <b class="mail-imp">!</b>' : ""}</span>
+      <span class="mail-subj">${esc(m.subject)}</span></span>
+    <span class="mail-side">${m.attachments ? "📎" : ""}<small title="${esc(m.when.replace("T", " "))} UTC">${prjAgo(m.when) || esc(m.when.slice(5, 16).replace("T", " "))}</small></span></button>`;
+}
+
+async function mailLoad(refresh) {
+  const f = state.mailFilter, box = document.getElementById("mail-list");
+  if (!box) return;
+  box.innerHTML = '<div class="empty">loading mailbox…</div>';
+  const p = new URLSearchParams({ folder: f.folder || "inbox", q: f.q || "", sender: f.sender || "",
+    days: f.days || 14, limit: 50, offset: f.offset || 0 });
+  if (f.unread) p.set("unread", "true");
+  if (f.attachments) p.set("attachments", "true");
+  if (refresh) p.set("refresh", "true");
+  try { state.mailData = await api(`/api/mail?${p}`); } catch (e) { box.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  const d = state.mailData;
+  document.getElementById("mail-meta").innerHTML = `<i class="cat-pulse-dot"></i> <b>${esc(d.mailbox)}</b> · ${logInt(d.total)} message(s) · ${esc(d.note)}${d.cached ? " · cached" : ""}`;
+  box.innerHTML = (d.messages || []).map(mailRowHtml).join("") || '<div class="empty">no mail matches — remember only the last 2 weeks are visible</div>';
+  if ((d.offset || 0) + (d.messages || []).length < d.total)
+    box.innerHTML += `<button class="btn btn-sm btn-ghost mail-more" id="mail-more">▾ load ${Math.min(50, d.total - d.offset - d.messages.length)} more</button>`;
+}
+
+async function mailOpen(id) {
+  state.mailSel = id;
+  document.querySelectorAll(".mail-row").forEach((r) => r.classList.toggle("mail-on", r.dataset.mailOpen === id));
+  const pane = document.getElementById("mail-read");
+  pane.innerHTML = '<div class="empty">opening…</div>';
+  let m;
+  try { m = await api(`/api/mail/message?id=${encodeURIComponent(id)}`); } catch (e) { pane.innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
+  const body = m.html
+    ? `<iframe class="mail-body" sandbox="" srcdoc="${esc(`<base target="_blank"><style>body{font:14px system-ui;margin:12px;color:#222}</style>` + m.html)}"></iframe>`
+    : `<pre class="mail-body mail-body-text">${esc(m.text || "(empty message)")}</pre>`;
+  pane.innerHTML = `
+    <div class="mail-head"><span class="mail-ava" style="background:${mailColor(m.from_name || m.from_email)}">${esc((m.from_name || m.from_email || "?")[0].toUpperCase())}</span>
+      <div><div class="mail-read-subj">${esc(m.subject)}</div>
+        <div class="ci-meta">${esc(m.from_name)} &lt;${esc(m.from_email)}&gt; · ${esc(m.when.replace("T", " "))} UTC${m.to && m.to.length ? ` · to ${esc(m.to.join(", "))}` : ""}${m.cc && m.cc.length ? ` · cc ${esc(m.cc.join(", "))}` : ""}</div></div></div>
+    ${(m.attachments_meta || []).length || (Array.isArray(m.attachments) && m.attachments.length) ? "" : ""}
+    ${body}
+    ${m.html && m.html.includes("data-blocked-src") ? '<div class="kpi-note">🖼 remote images are blocked (trackers) — this page never loads them</div>' : ""}
+    <div class="kpi-note">read-only · scripts stripped server-side and the body runs in a fully sandboxed frame</div>`;
+}
+
+async function renderMail() {
+  const f = state.mailFilter = state.mailFilter || { folder: "inbox", days: 14 };
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+  view().innerHTML = `
+    <div class="view-head"><h1>E-MAIL</h1><span class="sub">the QuestOps service-account mailbox · read-only · hard two-week lookback</span>
+      <span class="spacer"></span><span class="ci-meta" id="mail-meta"></span>
+      <button id="mail-refresh" class="btn btn-sm" title="fetch again from Exchange">↻</button></div>
+    <div class="acc-filters cat-filters">
+      <div class="log-dir">${["inbox", "sent"].map((x) => `<button class="btn btn-sm ${f.folder === x ? "btn-primary" : "btn-ghost"}" data-mail-folder="${x}">${x}</button>`).join("")}</div>
+      <input data-mail-f="q" placeholder="🔎 subject…" value="${esc(f.q || "")}">
+      <input data-mail-f="sender" placeholder="from…" value="${esc(f.sender || "")}">
+      <select data-mail-f="days">${[1, 3, 7, 14].map((n) => opt(n, `last ${n} day${n === 1 ? "" : "s"}`, f.days || 14)).join("")}</select>
+      <button class="btn btn-sm ${f.unread ? "btn-primary" : "btn-ghost"}" data-mail-t="unread">● unread</button>
+      <button class="btn btn-sm ${f.attachments ? "btn-primary" : "btn-ghost"}" data-mail-t="attachments">📎 attachments</button>
+    </div>
+    <div class="mail-split"><div id="mail-list" class="mail-list"></div><div id="mail-read" class="mail-read"><div class="empty">pick a message</div></div></div>`;
+  const v = view();
+  v.addEventListener("click", (ev) => {
+    const fo = ev.target.closest("[data-mail-folder]");
+    if (fo) { f.folder = fo.dataset.mailFolder; f.offset = 0; renderMail(); return; }
+    const t = ev.target.closest("[data-mail-t]");
+    if (t) { f[t.dataset.mailT] = !f[t.dataset.mailT]; f.offset = 0; renderMail(); return; }
+    const op = ev.target.closest("[data-mail-open]");
+    if (op) { mailOpen(op.dataset.mailOpen); return; }
+    if (ev.target.closest("#mail-more")) { f.offset = (f.offset || 0) + 50; mailLoad(); return; }
+  });
+  let deb;
+  v.addEventListener("input", (ev) => { const el = ev.target.closest("[data-mail-f]"); if (!el) return;
+    f[el.dataset.mailF] = el.value; f.offset = 0; clearTimeout(deb); deb = setTimeout(() => mailLoad(), 250); });
+  v.addEventListener("change", (ev) => { const el = ev.target.closest("select[data-mail-f]"); if (el) { f[el.dataset.mailF] = el.value; f.offset = 0; mailLoad(); } });
+  document.getElementById("mail-refresh").addEventListener("click", (ev) => { ev.currentTarget.classList.add("btn-busy"); mailLoad(true).finally(() => document.getElementById("mail-refresh").classList.remove("btn-busy")); });
+  mailLoad();
+}
 
 /* ================= CONFIGURATIONS — architecture from team config repos ================= */
 // Model comes from /api/configs (Control-project team repos parsed server-side).
