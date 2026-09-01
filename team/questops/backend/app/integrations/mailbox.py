@@ -76,14 +76,25 @@ def _clamp(days, limit):
     return max(1, days), limit
 
 
+def _utc_iso(value) -> str:
+    """EWSDateTime → 'YYYY-MM-DDTHH:MM:SS' in UTC without ever calling
+    astimezone() on it — exchangelib's subclass refuses stdlib tzinfo
+    (and stdlib refuses EWSTimeZone), so go through the epoch instead."""
+    if not value:
+        return ""
+    try:
+        return dt.datetime.fromtimestamp(value.timestamp(), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    except (OSError, OverflowError, ValueError, AttributeError):
+        return str(value)[:19]
+
+
 def _row(m) -> dict:
     sender = getattr(m, "sender", None)
     return {"id": getattr(m, "id", "") or "",
             "subject": getattr(m, "subject", "") or "(no subject)",
             "from_name": getattr(sender, "name", "") or "",
             "from_email": getattr(sender, "email_address", "") or "",
-            "when": (m.datetime_received.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                     if getattr(m, "datetime_received", None) else ""),
+            "when": _utc_iso(getattr(m, "datetime_received", None)),
             "unread": not bool(getattr(m, "is_read", True)),
             "attachments": bool(getattr(m, "has_attachments", False)),
             "importance": str(getattr(m, "importance", "") or "").lower()}
