@@ -105,9 +105,11 @@ def list_messages(folder: str = "inbox", q: str = "", sender: str = "", unread: 
         _require_ews()
         acct = _account()
         f = acct.inbox if folder == "inbox" else acct.sent
+        # a plain timezone-aware datetime — this exchangelib validates the
+        # filter value as datetime.datetime and converts internally; wrapping
+        # it in EWSDateTime ourselves trips that check on some versions
         since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
-        from exchangelib import EWSDateTime, EWSTimeZone
-        qs = f.filter(datetime_received__gte=EWSDateTime.from_datetime(since.astimezone(EWSTimeZone("UTC"))))
+        qs = f.filter(datetime_received__gte=since)
         if sender:
             qs = qs.filter(sender__icontains=sender)
         if q:
