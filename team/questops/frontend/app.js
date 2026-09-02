@@ -6415,6 +6415,10 @@ async function cfgOpenProject(name, tok) {
 
 async function renderConfigs() {
   const tok = navToken();
+  // entering the page ALWAYS lands on the overview — a project selection
+  // must never leak in from an earlier visit (auto-diving with a missing
+  // back button was exactly that leak)
+  state.cfgSel = null; state.cfgDetail = null;
   const f = state.cfgFilter = state.cfgFilter || { expand: new Set() };
   f.expand = f.expand || new Set();
   // shell first — something to look at immediately; the overview streams in
@@ -6496,7 +6500,7 @@ async function renderConfigs() {
     if (state.cfgSel) cfgOpenProject(state.cfgSel, tok); else showOverview(); });
   try { state.cfgOverview = await api("/api/configs/overview"); } catch (e) { if (!navStale(tok)) document.getElementById("cfg-main").innerHTML = `<div class="empty">⚠ ${esc(e.message)}</div>`; return; }
   if (navStale(tok)) return;
-  if (state.cfgSel) cfgOpenProject(state.cfgSel, tok); else showOverview();
+  showOverview();
 }
 
 /* ================= PROJECTS — per-project drill-down ================= */
