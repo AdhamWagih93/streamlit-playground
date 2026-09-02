@@ -1094,7 +1094,7 @@ _CAT_SOURCES = (("commits", "ef-git-commits", "commitdate",
                 ("builds", "ef-cicd-builds", "startdate",
                  ("application", "requester", "codeversion", "status"), "application", "requester", "codeversion"),
                 ("deploys", "ef-cicd-deployments", "startdate",
-                 ("application", "requester", "environment", "status"), "application", "requester", "environment"),
+                 ("application", "requester", "environment", "status", "codeversion"), "application", "requester", "environment"),
                 ("releases", "ef-cicd-releases", "releasedate",
                  ("application", "codeversion", "RLM"), "application", "", "codeversion"),
                 ("tests", "ef-autotest", "date",
@@ -1209,6 +1209,8 @@ def _cat_activity(timings: list | None = None) -> tuple[dict, list[str]]:
             hs = hit.get("_source") or {}
             doc = {"app": str(hs.get(appf) or ""), "who": _user_display(hs.get(whof) or "") if whof else "",
                    "extra": str(hs.get(extraf) or ""),
+                   # deployments carry WHAT was deployed alongside WHERE
+                   "ver": str(hs.get("codeversion") or "") if key == "deploys" else "",
                    # a release document is a success by definition (RLM only
                    # says whether an ITSM ticket was opened)
                    "status": "SUCCESS" if key == "releases" else str(hs.get("status") or "")} if hs else None
@@ -1482,7 +1484,8 @@ def _demo_cat_activity(inv: dict) -> dict:
     out = {}
     for i, p in enumerate(inv.get("projects") or []):
         k = _norm(p["name"])
-        ages = {"commits": 1 + i * 9, "builds": 2 + i * 12, "deploys": 3 + i * 20,
+        ages = {"commits": 1 + i * 9, "builds": 2 + i * 12,
+                "deploys": 0.8 + i * 20,   # fresh enough to appear in a card's top-3
                 "releases": 6 + i * 30, "tests": 1 + i * 15, "stdchanges": 0.5 + i * 40}
         out[k] = {}
         for j, (src, h) in enumerate(ages.items()):
@@ -1493,14 +1496,16 @@ def _demo_cat_activity(inv: dict) -> dict:
             hist = [int(round(recent * w / tot)) for w in weights]
             demo_docs = {"commits": ("payments-svc", "alice", "develop", ""),
                          "builds": ("payments", "bob", "1.20.0", "FAILED" if i == 0 else "SUCCESS"),
-                         "deploys": ("payments", "carol", "prd", "SUCCESS" if i != 1 else "ABORTED"),
+                         "deploys": ("payments", "carol", "prd", "SUCCESS" if i != 1 else "ABORTED", "1.20.0"),
                          "releases": ("payments", "", "1.19.0", "SUCCESS"),
                          "tests": ("selenium", "dave", "uat", ""),
                          "stdchanges": ("Finance_AddBranch", "carol", "prd", "FAILED" if i == 0 else "SUCCESS")}
-            da, dw, dx, ds = demo_docs.get(src, ("", "", "", ""))
+            row = demo_docs.get(src, ("", "", "", ""))
+            da, dw, dx, ds = row[:4]
             out[k][src] = {"last": (now - dt.timedelta(hours=h)).replace(microsecond=0).isoformat(),
                            "recent": sum(hist), "hist": hist,
-                           "last_doc": {"app": da, "who": dw, "extra": dx, "status": ds}}
+                           "last_doc": {"app": da, "who": dw, "extra": dx, "status": ds,
+                                        "ver": row[4] if len(row) > 4 else ""}}
     return out
 
 
