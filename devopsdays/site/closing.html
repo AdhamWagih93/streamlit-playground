@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Closing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+<style>
+  .close-stage {
+    display: flex; flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .close-title {
+    font-family: var(--font-display);
+    font-size: 48px; font-weight: 800; letter-spacing: -0.02em;
+    line-height: 1.24;
+    max-width: 940px;
+  }
+  .close-title .accent {
+    background: linear-gradient(120deg, #F3CE7E, #E8B44A 60%, #D99A2E);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .close-teaser {
+    margin-top: 34px;
+    font-size: 16px; color: var(--ink-mute);
+  }
+  .close-teaser b { color: var(--gold); font-weight: 600; }
+  .close-thanks {
+    margin-top: 56px;
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em;
+    color: var(--ink-faint);
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <div class="close-stage">
+      <h1 class="close-title reveal">
+        A solid Internal Developer Platform<br>already holds your enterprise's context.<br>
+        <span class="accent">And context is what turns AI into services engineers actually use.</span>
+      </h1>
+
+      <div class="close-teaser reveal">
+        This was the what. The talk is the <b>how</b>.
+      </div>
+
+      <div class="close-thanks reveal">DEVOPSDAYS CAIRO 2026 · THANK YOU</div>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("closing", "Outcomes / Closing");
+</script>
+</body>
+</html>

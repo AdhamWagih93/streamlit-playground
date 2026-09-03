@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Last Year</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+<style>
+  .found-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;
+    margin-bottom: 22px;
+  }
+  .found {
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-lg);
+    background: linear-gradient(180deg, #28386B 0%, #23315B 100%);
+    padding: 20px 18px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .found-n {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .16em;
+    color: var(--gold);
+  }
+  .found-ico {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: grid; place-items: center;
+    background: var(--blue-soft); border: 1px solid #7A9BFF33;
+    font-size: 18px; color: var(--blue);
+  }
+  .found b { font-family: var(--font-display); font-size: 15.5px; font-weight: 700; line-height: 1.3; }
+  .found span { font-size: 12.5px; color: var(--ink-mute); line-height: 1.55; }
+  .epilogue {
+    margin-top: 26px;
+    text-align: center;
+    font-family: var(--font-display);
+    font-size: 24px; font-weight: 700; line-height: 1.5;
+    color: var(--ink-soft);
+  }
+  .epilogue .accent {
+    background: linear-gradient(120deg, #F3CE7E, #E8B44A 60%, #D99A2E);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <h1 class="page-title reveal">Previously, at <span class="accent">DevOpsDays 2025</span></h1>
+    <p class="page-lede reveal">
+      Last year we shared five foundations we were building on — each one useful on its own,
+      none of them yet a platform.
+    </p>
+
+    <div class="found-grid reveal">
+      <div class="found">
+        <span class="found-n">2025 · 01</span>
+        <div class="found-ico">⌂</div>
+        <b>Platform Engineering</b>
+        <span>An Internal Developer Platform — self-service delivery, standardised pipelines,
+        governed environments.</span>
+      </div>
+      <div class="found">
+        <span class="found-n">2025 · 02</span>
+        <div class="found-ico">⛨</div>
+        <b>On-Prem Model Hosting</b>
+        <span>Open models on our own infrastructure — AI without confidential data
+        ever leaving.</span>
+      </div>
+      <div class="found">
+        <span class="found-n">2025 · 03</span>
+        <div class="found-ico">▤</div>
+        <b>AI-Generated Internal UIs</b>
+        <span>Internal tools built with AI assistance — shipped in days,
+        iterated in hours.</span>
+      </div>
+      <div class="found">
+        <span class="found-n">2025 · 04</span>
+        <div class="found-ico">⇄</div>
+        <b>Deploying MCP Servers</b>
+        <span>MCP servers that expose our systems as tools AI agents can call —
+        so they can act, not just chat.</span>
+      </div>
+      <div class="found">
+        <span class="found-n">2025 · 05</span>
+        <div class="found-ico">∞</div>
+        <b>Agentic Workflows</b>
+        <span>Flows that chain models, tools and triggers on their own —
+        humans on the approvals.</span>
+      </div>
+    </div>
+
+    <div class="epilogue reveal">
+      They were never five projects.<br>
+      <span class="accent">They were one platform, waiting to happen.</span>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("lastyear", "DevOpsDays / Last Year");
+</script>
+</body>
+</html>

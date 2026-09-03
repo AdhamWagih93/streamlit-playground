@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline Incident Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <h1 class="page-title reveal"><span class="tag gold" style="font-size:14px;padding:4px 12px;vertical-align:middle;margin-right:12px;">03</span>Pipeline <span class="accent">Incident Analysis</span></h1>
+    <p class="page-lede reveal">
+      A production deployment just failed. Instead of an engineer digging through four systems,
+      the platform collects the evidence and the on-prem model explains what happened.
+    </p>
+
+    <!-- failed deployment card -->
+    <div class="card reveal" style="margin-bottom:16px;border-color:#F06A6A44;">
+      <div class="card-head">
+        <span class="card-title" style="color:var(--err)">✕ Deployment failed</span>
+        <span class="card-hint mono">incident #4211 · opened 2m ago</span>
+      </div>
+      <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:center;">
+        <div><span class="tag">payments-gateway</span> <span class="tag err">v2.14.3 → PROD</span></div>
+        <div style="font-size:13px;color:var(--ink-soft)">Stage <b class="mono">deploy/rollout</b> failed after 3 retries — automatic rollback to <span class="mono">v2.14.2</span> succeeded.</div>
+        <div style="margin-left:auto">
+          <button class="btn btn-gold btn-big" id="analyzeBtn" data-main-action>✦&nbsp; Analyze with AI</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid cols-3">
+      <!-- left: evidence collection -->
+      <div class="card reveal">
+        <div class="card-head"><span class="card-title">Evidence collection</span></div>
+        <div class="steps" id="steps">
+          <div class="step" data-step="0"><div class="step-ico">1</div>
+            <div class="step-tx"><b>Pull rollout logs</b><span>orchestrator · last 3 attempts</span></div></div>
+          <div class="step" data-step="1"><div class="step-ico">2</div>
+            <div class="step-tx"><b>Correlate platform events</b><span>search store · 30-minute window</span></div></div>
+          <div class="step" data-step="2"><div class="step-ico">3</div>
+            <div class="step-tx"><b>Diff environment configs</b><span>per-team config repos · UAT vs PROD</span></div></div>
+          <div class="step" data-step="3"><div class="step-ico">4</div>
+            <div class="step-tx"><b>Check release history</b><span>what changed in v2.14.3</span></div></div>
+          <div class="step" data-step="4"><div class="step-ico">5</div>
+            <div class="step-tx"><b>Reason over evidence</b><span>on-prem model · nothing leaves the boundary</span></div></div>
+        </div>
+        <div class="console" id="console" style="margin-top:14px;min-height:120px;">
+          <span class="ln dim">— waiting for analysis to start —</span>
+        </div>
+      </div>
+
+      <!-- right: AI verdict -->
+      <div class="span-2">
+        <div class="ai-card hidden" id="aiCard">
+          <div class="ai-card-head">
+            <div class="ai-glyph">✦</div>
+            <div class="ai-card-title">Root cause analysis</div>
+            <span class="confidence" id="conf"></span>
+          </div>
+          <div class="ai-body" id="aiBody"></div>
+          <div id="actions" style="margin-top:16px;"></div>
+          <div id="mttr" class="hidden" style="margin-top:16px;display:flex;gap:12px;align-items:center;border-top:1px solid var(--stroke);padding-top:14px;">
+            <span class="tag gold">IMPACT</span>
+            <span style="font-size:13px;color:var(--ink-soft)">
+              Investigation time: <b style="color:var(--ink)">~45 minutes → under 3</b>.
+              Analysis attached to the incident record and audited.
+            </span>
+            <button class="btn btn-ghost" style="margin-left:auto;padding:9px 18px;font-size:13px;">Apply fix &amp; redeploy ▸</button>
+          </div>
+        </div>
+        <div class="card" id="placeholderCard" style="display:grid;place-items:center;min-height:340px;color:var(--ink-faint);font-size:13.5px;">
+          <div style="text-align:center">
+            <div style="font-size:34px;margin-bottom:10px;opacity:.5">✦</div>
+            The analysis will appear here.<br>Click <b style="color:var(--gold)">Analyze with AI</b> to start.
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("incident", "AI Services / Incident Analysis");
+
+const LOG_LINES = [
+  ["dim",  "$ platform incident analyze --id 4211"],
+  ["",     "▸ rollout logs        3 attempts · 2,140 lines pulled"],
+  ["err",  "  ✕ readiness probe failing: /health → 503 (x18)"],
+  ["",     "▸ platform events     31 events in window"],
+  ["warn", "  ⚠ config commit 9f3ac21 touched uat_payments-gateway 2d ago"],
+  ["",     "▸ config diff         UAT vs PROD"],
+  ["err",  "  ✕ PROD missing key: payment.provider.timeout_ms"],
+  ["",     "▸ release notes       v2.14.3 adds strict config validation"],
+  ["gold", "▸ reasoning over evidence — on-prem model, streaming…"],
+  ["ok",   "✓ analysis complete in 14.2s"],
+];
+
+const ROOT_CAUSE = `
+<p><b>Root cause — missing configuration key in PROD.</b></p>
+<p>Release <code>v2.14.3</code> introduced strict start-up validation of provider settings.
+The new key <code>payment.provider.timeout_ms</code> was added to the <b>UAT</b> config
+repository two days ago (commit <code>9f3ac21</code>) but was <b>never promoted to the PROD
+config</b>. On start-up the service failed validation, the readiness probe returned
+<code>503</code>, and the platform rolled back automatically.</p>
+<p>This is <b>not a code defect</b> — the same build is healthy in UAT. It is an
+<b>environment-parity gap</b> between two config repositories.</p>`;
+
+const ACTIONS = [
+  "Add <code>payment.provider.timeout_ms: 3000</code> to the PROD config repo (mirrors UAT commit 9f3ac21)",
+  "Re-run the PROD deployment — no rebuild required, same artifact",
+  "Enable the <b>config-parity gate</b> on UAT → PROD promotions so this class of failure is caught before rollout",
+];
+
+const btn = document.getElementById("analyzeBtn");
+btn.addEventListener("click", async () => {
+  btn.disabled = true; btn.textContent = "✦  Analyzing…";
+  const consoleEl = document.getElementById("console");
+  consoleEl.innerHTML = "";
+  const steps = [...document.querySelectorAll(".step")];
+  const stepForLine = [0, 0, 0, 1, 1, 2, 2, 3, 4, 4];
+
+  let cur = -1;
+  for (let i = 0; i < LOG_LINES.length; i++) {
+    const s = stepForLine[i];
+    if (s !== cur) {
+      if (cur >= 0) { steps[cur].classList.remove("active"); steps[cur].classList.add("done"); steps[cur].querySelector(".step-ico").textContent = "✓"; }
+      steps[s].classList.add("active"); cur = s;
+    }
+    const [cls, tx] = LOG_LINES[i];
+    const ln = document.createElement("span");
+    ln.className = "ln " + cls; ln.textContent = tx;
+    consoleEl.appendChild(ln);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+    await sleep(i === 8 ? 900 : 480);
+  }
+  steps[cur].classList.remove("active"); steps[cur].classList.add("done"); steps[cur].querySelector(".step-ico").textContent = "✓";
+
+  document.getElementById("placeholderCard").classList.add("hidden");
+  document.getElementById("aiCard").classList.remove("hidden");
+  await typeInto(document.getElementById("aiBody"), ROOT_CAUSE, 6);
+  document.getElementById("conf").textContent = "confidence 92% · evidence: 4 sources";
+
+  const actEl = document.getElementById("actions");
+  for (let i = 0; i < ACTIONS.length; i++) {
+    const d = document.createElement("div");
+    d.className = "action-item";
+    d.innerHTML = `<span class="n">${i + 1}</span><span>${ACTIONS[i]}</span>`;
+    actEl.appendChild(d);
+    await sleep(350);
+  }
+  document.getElementById("mttr").classList.remove("hidden");
+  btn.textContent = "✓  Analysis complete";
+});
+</script>
+</body>
+</html>

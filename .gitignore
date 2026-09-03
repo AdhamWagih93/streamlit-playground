@@ -43,3 +43,14 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# WSL alternate-data-stream artifacts
+*:Zone.Identifier
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Local backups
+*.bak
+*.bak-*
+*_old

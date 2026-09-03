@@ -1,155 +1,228 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Day of a DevOps Engineer · 2026 — Mission Control</title>
-<link rel="stylesheet" href="assets/css/system.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
 </head>
 <body>
-<script src="assets/js/common.js"></script>
-<script>mountTopbar({ code: 'MISSION CONTROL · v2026.6', backHref: null });</script>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
 
-<div class="wrap" style="padding-top:46px; padding-bottom:80px;">
-
-  <!-- HERO -->
-  <header style="text-align:center; max-width:880px; margin:0 auto 18px;">
-    <div class="eyebrow" style="justify-content:center;">DevOpsDays · keynote demo</div>
-    <h1 style="margin:16px 0 10px; font-weight:700;">A Day in the Life of a<br/>
-      <span style="color:var(--amber);">DevOps Engineer</span>,
-      <span style="color:var(--cyan);">2026</span>
-    </h1>
-    <p class="dim" style="font-size:17px; max-width:620px; margin:0 auto;">
-      Follow <b style="color:var(--ink)">Maya</b>, an SRE, through one ordinary Monday —
-      where the hardest problems are no longer technical. They're about
-      <b style="color:var(--ink)">trust, sustainability, and working alongside machines that act on their own.</b>
-    </p>
-    <div class="btn-row" style="justify-content:center; margin-top:22px;">
-      <a class="btn primary" href="#timeline">▸ START THE DAY</a>
-      <a class="btn ghost" href="recap/">◂ Previously, in 2025</a>
+    <div class="reveal" style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
+      <div>
+        <h1 class="page-title">One platform. <span class="accent">Every delivery.</span></h1>
+      </div>
     </div>
-  </header>
 
-  <!-- live status strip -->
-  <div class="grid cols-4" style="margin:34px 0 14px;">
-    <div class="stat ticked panel">
-      <div class="k">Humans on call</div>
-      <div class="v" id="s1">3</div>
-      <div class="sub" style="color:var(--ok)">▲ all within healthy load</div>
+    <!-- KPI row -->
+    <div class="grid cols-3 reveal" style="margin-bottom:16px;">
+      <div class="card tight">
+        <div class="kpi-num" data-count="1000" data-suffix="+">0</div>
+        <div class="kpi-label">Registered pipelines</div>
+        <div class="kpi-delta up">▲ standardised delivery across the fleet</div>
+      </div>
+      <div class="card tight">
+        <div class="kpi-num" data-count="30" data-suffix="+">0</div>
+        <div class="kpi-label">Engineering teams · RBAC-scoped</div>
+        <div class="kpi-delta gold">each team sees only its scope</div>
+      </div>
+      <div class="card tight">
+        <div class="kpi-num" data-count="4">0</div>
+        <div class="kpi-label">Governed environments</div>
+        <div class="kpi-delta gold">DEV → QA → UAT → PROD</div>
+      </div>
     </div>
-    <div class="stat ticked panel">
-      <div class="k">Autonomous agents</div>
-      <div class="v" id="s2" style="color:var(--violet)">11</div>
-      <div class="sub">9 supervised · 2 sandboxed</div>
-    </div>
-    <div class="stat ticked panel">
-      <div class="k">Deploys today</div>
-      <div class="v" id="s3" style="color:var(--cyan)">47</div>
-      <div class="sub">41 agent-initiated</div>
-    </div>
-    <div class="stat ticked panel">
-      <div class="k">Human override rate</div>
-      <div class="v" id="s4" style="color:var(--amber)">6<small>%</small></div>
-      <div class="sub">trust, but verify</div>
-    </div>
-  </div>
 
-  <div class="explainer" style="margin-bottom:40px;">
-    <span class="ic">i</span>
-    <div><b>New here?</b> Each card below is a live, clickable demo — one stop in Maya's day.
-    You don't need to be an expert: every screen explains itself in plain language.
-    Click them in order, or jump to whatever looks interesting.</div>
-  </div>
+    <div class="grid cols-3" style="margin-bottom:16px;">
+      <!-- fleet table -->
+      <div class="card span-2 reveal">
+        <div class="card-head">
+          <span class="card-title">Delivery Fleet — live inventory</span>
+          <span class="card-hint">what's running where, right now — every app, every environment</span>
+        </div>
+        <table class="data">
+          <thead><tr>
+            <th>Application · stack</th><th>Team · business line</th><th>DEV</th><th>QA</th><th>UAT</th><th>PROD</th><th>Last activity</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><b>payments-gateway</b><div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">JVM · containers</div></td>
+              <td>Digital Channels<div style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Payments</div></td>
+              <td class="mono">v2.14.4</td><td class="mono">v2.14.4</td><td class="mono">v2.14.3</td>
+              <td class="mono"><span class="tag err">v2.14.3 ✕</span></td>
+              <td class="mono">2m ago</td>
+            </tr>
+            <tr>
+              <td><b>ledger-service</b><div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">JVM · containers</div></td>
+              <td>Core Banking<div style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Core Ledger</div></td>
+              <td class="mono">v5.2.1</td><td class="mono">v5.2.1</td><td class="mono">v5.2.0</td>
+              <td class="mono"><span class="tag ok">v5.2.0 ✓</span></td>
+              <td class="mono">1h ago</td>
+            </tr>
+            <tr>
+              <td><b>refunds-api</b><div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Node.js · containers</div></td>
+              <td>Digital Channels<div style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Payments</div></td>
+              <td class="mono">v1.9.0</td><td class="mono">v1.8.2</td><td class="mono">v1.8.2</td>
+              <td class="mono"><span class="tag ok">v1.8.2 ✓</span></td>
+              <td class="mono">3h ago</td>
+            </tr>
+            <tr>
+              <td><b>notification-worker</b><div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Go · containers</div></td>
+              <td>Shared Services<div style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Messaging</div></td>
+              <td class="mono">v3.0.7</td><td class="mono">v3.0.7</td><td class="mono">v3.0.7</td>
+              <td class="mono"><span class="tag ok">v3.0.6 ✓</span></td>
+              <td class="mono">6h ago</td>
+            </tr>
+            <tr>
+              <td><b>customer-portal</b><div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">TypeScript · containers + edge</div></td>
+              <td>Digital Channels<div style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Customer Experience</div></td>
+              <td class="mono">v8.11.0</td><td class="mono">v8.10.3</td><td class="mono">v8.10.3</td>
+              <td class="mono"><span class="tag ok">v8.10.3 ✓</span></td>
+              <td class="mono">yesterday</td>
+            </tr>
+            <tr>
+              <td><b>legacy-batch-core</b><div class="mono" style="font-size:10.5px;color:var(--warn);margin-top:2px;">EOL runtime · VM · nightly batch</div></td>
+              <td>Core Banking<div style="font-size:10.5px;color:var(--ink-faint);margin-top:2px;">Core Ledger</div></td>
+              <td class="mono">v0.9.114</td><td class="mono">—</td><td class="mono">v0.9.112</td>
+              <td class="mono"><span class="tag ok">v0.9.112 ✓</span></td>
+              <td class="mono">4d ago</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-  <!-- TIMELINE OF STATIONS -->
-  <div id="timeline" class="row between" style="margin-bottom:18px;">
-    <h2>The day, hour by hour</h2>
-    <span class="tag">7 stations · ~20 min</span>
-  </div>
-
-  <div class="grid cols-2" id="stations"></div>
-
-  <!-- footer -->
-  <footer style="margin-top:60px; text-align:center;" class="faint mono">
-    <hr class="sep" />
-    <div style="font-size:12px; letter-spacing:.1em;">
-      DEVOPSDAYS 2026 · BUILT WITH HAND-WRITTEN HTML/CSS/JS · SERVED FROM ONE NGINX CONTAINER ·
-      <span style="color:var(--cyan)">NO STREAMLIT THIS YEAR ;)</span>
+      <!-- event stream -->
+      <div class="card reveal">
+        <div class="card-head">
+          <span class="card-title"><span class="live-dot"></span>Event Stream</span>
+          <span class="card-hint">all environments</span>
+        </div>
+        <div class="stream" id="stream"></div>
+      </div>
     </div>
-  </footer>
+
+    <div class="grid cols-3" style="margin-bottom:16px;">
+      <!-- security posture -->
+      <div class="card span-2 reveal">
+        <div class="card-head">
+          <span class="card-title">Security posture — image &amp; dependency scans</span>
+          <span class="card-hint">every build scanned · no criticals reach PROD</span>
+        </div>
+        <table class="data">
+          <thead><tr>
+            <th>Application</th><th>Last scan</th><th>Critical</th><th>High</th><th>Medium</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><b>payments-gateway</b></td><td class="mono">v2.14.4 · 2h ago</td>
+              <td class="mono">0</td><td class="mono" style="color:var(--warn)">1</td><td class="mono">4</td>
+              <td><span class="tag warn" style="background:#F2B14C1a;color:var(--warn);border-color:#F2B14C33">fix queued — TLS lib in base image</span></td>
+            </tr>
+            <tr>
+              <td><b>ledger-service</b></td><td class="mono">v5.2.1 · 1h ago</td>
+              <td class="mono">0</td><td class="mono">0</td><td class="mono">1</td>
+              <td><span class="tag ok">clean — promoted</span></td>
+            </tr>
+            <tr>
+              <td><b>customer-portal</b></td><td class="mono">v8.11.0 · 5h ago</td>
+              <td class="mono">0</td><td class="mono">0</td><td class="mono">2</td>
+              <td><span class="tag ok">clean — promoted</span></td>
+            </tr>
+            <tr>
+              <td><b>legacy-batch-core</b></td><td class="mono">v0.9.114 · 4d ago</td>
+              <td class="mono">0</td><td class="mono" style="color:var(--warn)">3</td><td class="mono">9</td>
+              <td><span class="tag err">EOL runtime — modernization flagged</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="font-size:12px;color:var(--ink-faint);margin-top:12px;">
+          Full scan reports one click away — <b style="color:var(--ok)">0 critical across the fleet</b>.
+        </p>
+      </div>
+
+      <!-- issue tracking -->
+      <div class="card reveal">
+        <div class="card-head">
+          <span class="card-title">Delivery work — issue tracking</span>
+          <span class="card-hint">linked to releases &amp; incidents</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+            <span class="tag">PAY-1482</span>
+            <span style="color:var(--ink-soft);flex:1">Instalment payments at checkout</span>
+            <span class="tag gold">in progress</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+            <span class="tag">PAY-1490</span>
+            <span style="color:var(--ink-soft);flex:1">PROD config parity — from incident #4211</span>
+            <span class="tag err">blocked</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+            <span class="tag">LEDG-233</span>
+            <span style="color:var(--ink-soft);flex:1">Legacy batch modernization · phase 1</span>
+            <span class="tag gold">in progress</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+            <span class="tag">CX-871</span>
+            <span style="color:var(--ink-soft);flex:1">Portal accessibility fixes</span>
+            <span class="tag teal">in review</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+            <span class="tag">MSG-142</span>
+            <span style="color:var(--ink-soft);flex:1">Notification retry backoff</span>
+            <span class="tag ok">done · v3.0.7</span>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);margin-top:12px;">
+          Work items connect to the builds, deployments and incidents they belong to — automatically.
+        </p>
+      </div>
+    </div>
+
+  </main>
 </div>
 
+<script src="assets/js/platform.js"></script>
 <script>
-const STATIONS = [
-  { t:'09:15', code:'ST-01', tag:'ai', href:'demos/agentic-coworker/',
-    title:'Standup with a Machine',
-    blurb:'Maya\'s first meeting includes a teammate that never sleeps and assigns itself work. How do you run a standup when one of you is an agent?',
-    theme:'Working with an agentic AI coworker', accent:'var(--violet)' },
+renderShell("overview", "Overview");
+initCounters();
 
-  { t:'09:40', code:'ST-02', tag:'cy', href:'demos/autonomous-gov/',
-    title:'The Guardrail Room',
-    blurb:'A deploy wants to ship itself at 09:40. Should it be allowed? Watch policy, ethics and a trust score decide — with a human holding the override key.',
-    theme:'Autonomous governance, ethics & trust', accent:'var(--cyan)' },
-
-  { t:'11:00', code:'ST-03', tag:'ok', href:'demos/pulse/',
-    title:'The Pulse',
-    blurb:'The system notices a human is overloaded before the human does — and quietly reshapes the on-call rota to protect them. Automation pointed at people, not servers.',
-    theme:'Anti-burnout & human sustainability', accent:'var(--ok)' },
-
-  { t:'13:30', code:'ST-04', tag:'warn', href:'demos/psych-safety/',
-    title:'No Blame, Just Signal',
-    blurb:'Something broke in production. The incident review hunts for the weak system, never the guilty person. Why safe teams ship faster.',
-    theme:'Cultural & psychological safety', accent:'var(--warn)' },
-
-  { t:'15:00', code:'ST-05', tag:'ai', href:'demos/vibe-shipping/',
-    title:'Vibe Shipping',
-    blurb:'Maya describes a feature in plain English. Minutes later it\'s a reviewed pull request. See how the development cycle compresses — and where the human still steers.',
-    theme:'Vibe engineering & faster cycles', accent:'var(--amber)' },
-
-  { t:'16:20', code:'ST-06', tag:'cy', href:'demos/new-roles/',
-    title:'The New Org Chart',
-    blurb:'Half the job titles on this team didn\'t exist in 2024. Reliability Ethicist, Agent Wrangler, Platform Gardener — and what each of them actually does.',
-    theme:'Skill shift & emerging roles', accent:'var(--blue)' },
-
-  { t:'17:10', code:'ST-07', tag:'crit', href:'demos/privacy-membrane/',
-    title:'The Privacy Membrane',
-    blurb:'Before any data reaches an AI model, it passes through a membrane that decides what may leave the building — and what must never. Privacy & security in the AI era.',
-    theme:'AI privacy & security', accent:'var(--crit)' },
+/* ambient event stream */
+const EVENTS = [
+  ["ok",   "<b>ledger-service</b> v5.2.1 build passed · QA"],
+  ["info", "issue <b>PAY-1490</b> opened from incident #4211 · config parity"],
+  ["err",  "<b>payments-gateway</b> v2.14.3 deploy FAILED · PROD"],
+  ["info", "deploy request opened · <b>refunds-api</b> v1.9.0 → QA"],
+  ["ok",   "issue <b>MSG-142</b> closed · fix shipped in v3.0.7"],
+  ["ok",   "security scan clean · <b>customer-portal</b> v8.11.0"],
+  ["info", "config change merged · <b>Digital Channels</b> / prod_payments-gateway"],
+  ["ok",   "promotion approved · <b>notification-worker</b> UAT → PROD"],
+  ["info", "issue <b>PAY-1482</b> → in review · linked to v2.15.0 build"],
+  ["warn", "docs index resync started · knowledge base"],
+  ["ok",   "inventory ↔ store sync check · <b>0 drift</b>"],
+  ["info", "new app scaffolded · <b>loyalty-engine</b> · Shared Services"],
+  ["ok",   "nightly architecture scan finished · 27 systems mapped"],
 ];
-
-const wrapEl = document.getElementById('stations');
-STATIONS.forEach((s, i) => {
-  const a = document.createElement('a');
-  a.href = s.href;
-  a.className = 'panel ticked station';
-  a.style.cssText = 'padding:0; overflow:hidden; display:block; color:inherit;';
-  a.innerHTML = `
-    <div class="panel-h">
-      <span class="badge ${s.tag}"><span class="led"></span>${s.code}</span>
-      <h3 style="text-transform:none; letter-spacing:0; color:var(--ink); font-size:16px;">${s.title}</h3>
-      <span class="id">${s.t}</span>
-    </div>
-    <div class="panel-b">
-      <p class="dim" style="margin:0 0 14px; font-size:14px;">${s.blurb}</p>
-      <div class="row between">
-        <span class="tag" style="color:${s.accent}">${s.theme}</span>
-        <span class="mono" style="font-size:12px; color:var(--ink-faint)">enter ▸</span>
-      </div>
-    </div>`;
-  wrapEl.appendChild(a);
-});
-
-// hover glow
-document.querySelectorAll('.station').forEach(el=>{
-  el.addEventListener('mouseenter', ()=> el.style.borderColor = 'var(--cyan-d)');
-  el.addEventListener('mouseleave', ()=> el.style.borderColor = 'var(--line)');
-});
-
-// animate the top stats on load
-addEventListener('load', () => {
-  stagger('.station', 70);
-  countTo(document.getElementById('s3'), 47, { dur: 1100 });
-});
+const stream = document.getElementById("stream");
+let ei = 0;
+function pushEvt() {
+  const [kind, body] = EVENTS[ei % EVENTS.length]; ei++;
+  const d = new Date();
+  const el = document.createElement("div");
+  el.className = "evt";
+  el.innerHTML = `<span class="evt-time">${d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>
+    <span class="evt-dot ${kind}"></span><span class="evt-body">${body}</span>`;
+  stream.prepend(el);
+  while (stream.children.length > 9) stream.lastChild.remove();
+}
+for (let i = 0; i < 6; i++) pushEvt();
+setInterval(pushEvt, 4200);
 </script>
 </body>
 </html>

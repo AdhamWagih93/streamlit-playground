@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <h1 class="page-title reveal"><span class="tag gold" style="font-size:14px;padding:4px 12px;vertical-align:middle;margin-right:12px;">01</span>Enterprise <span class="accent">Knowledge Assistant</span></h1>
+    <p class="page-lede reveal">
+      One assistant, answering from documentation the platform writes for itself — an agent reads
+      each application's source code and generates its docs, so answers stay current with the code.
+      The model runs <b style="color:var(--ink)">inside the enterprise</b>, and every exchange is
+      logged for audit.
+    </p>
+
+    <div class="grid" style="grid-template-columns: 2fr 1fr;">
+      <!-- chat -->
+      <div class="reveal">
+        <div class="chat-wrap" style="height:600px;">
+          <div class="chat-head">
+            <div class="ai-glyph" style="width:26px;height:26px;font-size:13px;">✦</div>
+            <div class="chat-title">Knowledge Assistant</div>
+            <span class="chip" style="margin-left:auto;font-size:10.5px">🪪 Adham Wagih · DevOps Engineer — detected from identity directory</span>
+            <span class="chip ok"><span class="dot"></span>on-prem model</span>
+          </div>
+          <div class="chat-msgs" id="msgs"></div>
+          <div class="chat-input">
+            <input id="chatInput" placeholder="Ask anything about your systems, standards or processes…">
+            <button class="btn btn-gold" id="sendBtn" style="padding:11px 22px;" data-main-action>Ask ▸</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- knowledge sources panel -->
+      <div class="reveal" style="display:flex;flex-direction:column;gap:16px;">
+        <div class="card tight">
+          <div class="card-head"><span class="card-title">Where the knowledge comes from</span></div>
+          <div style="display:flex;flex-direction:column;gap:10px;font-size:12.5px;color:var(--ink-soft);line-height:1.55;">
+            <div>⌁ <b style="color:var(--ink)">An agent reads the source code.</b> For every application on the platform, it studies the repository and writes the documentation.</div>
+            <div>📄 <b style="color:var(--ink)">The assistant answers from those docs.</b> Generated, version-controlled, and cited in every answer.</div>
+            <div>↻ <b style="color:var(--ink)">Always current.</b> When the code changes, the documentation is regenerated — no stale wiki pages.</div>
+          </div>
+          <p style="font-size:11.5px;color:var(--ink-faint);margin-top:12px;">
+            The assistant only sees what the signed-in engineer is entitled to see.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("assistant", "AI Services / Knowledge Assistant");
+initCounters();
+
+/* The signed-in engineer — in the real platform this comes from the
+   identity directory; the assistant never asks who you are. */
+const USER = { name: "Adham Wagih", first: "Adham", role: "DevOps Engineer", team: "Digital Channels" };
+
+const CONVO = {
+  q: "How does payments-gateway authenticate to ledger-service?",
+  a: `<p><b>Mutual service authentication via the platform's identity broker.</b></p>
+<p><code>payments-gateway</code> requests a short-lived service token at start-up
+(rotated every 15 minutes, brokered by the secrets vault). It calls
+<code>ledger-service</code> over mTLS on the internal mesh; the ledger validates
+the token's <code>svc.payments</code> claim before accepting a posting request.</p>
+<p>Timeouts and retries are configured per environment — see
+<code>payment.provider.timeout_ms</code> in the config repo. Direct database access
+between the two services is <b>prohibited</b> by standard ENG-SEC-04.</p>`,
+  cites: ["payments-gateway/architecture.md", "eng-standards/ENG-SEC-04.md", "ledger-service/api-guide.md"],
+};
+
+const msgs = document.getElementById("msgs");
+function addMsg(kind, html, meta) {
+  const d = document.createElement("div");
+  d.className = "msg " + kind;
+  d.innerHTML = `<div class="msg-bubble">${html}</div>${meta ? `<div class="msg-meta">${meta}</div>` : ""}`;
+  msgs.appendChild(d);
+  msgs.scrollTop = msgs.scrollHeight;
+  return d.querySelector(".msg-bubble");
+}
+
+/* greeting — the assistant already knows who is signed in */
+addMsg("ai", `Good morning, <b>${USER.first}</b> 👋 — you're signed in as
+<b>${USER.role} · ${USER.team}</b>, detected from the platform's identity directory.
+I answer from documentation the platform generates from your systems' source code,
+and my answers are scoped to what your role is entitled to see. Ask me about your
+systems, standards or processes.`,
+  `assistant · identity auto-detected · scoped to ${USER.team}`);
+document.getElementById("chatInput").value = CONVO.q;
+
+let busy = false;
+async function send() {
+  if (busy) return; busy = true;
+  const c = CONVO;
+  const input = document.getElementById("chatInput");
+  addMsg("user", input.value || c.q, `${USER.first} · ${USER.role.toLowerCase()}`);
+  input.value = "";
+  await sleep(500);
+  const bubble = addMsg("ai", "", null);
+  await typeInto(bubble, c.a, 5);
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  meta.innerHTML = "sources: " + c.cites.map((x) => `<span class="cite">▤ ${x}</span>`).join("") +
+    `<br><span style="color:var(--ink-faint)">✓ answered on-prem · logged to the audit store</span>`;
+  bubble.parentElement.appendChild(meta);
+  msgs.scrollTop = msgs.scrollHeight;
+  busy = false;
+}
+document.getElementById("sendBtn").addEventListener("click", send);
+document.getElementById("chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+</script>
+</body>
+</html>

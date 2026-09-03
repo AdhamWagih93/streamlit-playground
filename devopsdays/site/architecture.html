@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture Discovery and Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <h1 class="page-title reveal"><span class="tag gold" style="font-size:14px;padding:4px 12px;vertical-align:middle;margin-right:12px;">02</span>Architecture <span class="accent">Discovery and Analysis</span></h1>
+    <p class="page-lede reveal">
+      Every enterprise has systems nobody fully remembers. The platform reads the source repositories
+      and configuration it already governs, and reconstructs the architecture — then finds the gaps.
+    </p>
+
+    <div class="card tight reveal" style="display:flex;align-items:center;gap:18px;margin-bottom:16px;">
+      <span class="card-title" style="margin:0">Scope</span>
+      <span class="tag">domain: payments</span>
+      <span class="tag">6 repositories</span>
+      <span class="tag">3 config trees</span>
+      <span class="tag gold">includes 1 legacy system</span>
+      <button class="btn btn-gold btn-big" id="scanBtn" style="margin-left:auto" data-main-action>⌬&nbsp; Discover architecture</button>
+    </div>
+
+    <div class="grid" style="grid-template-columns: 3fr 2fr; align-items:start;">
+      <!-- topology -->
+      <div class="reveal">
+        <div class="arch-stage">
+          <div class="console" id="scanLog" style="border:none;background:transparent;max-height:none;min-height:52px;padding:8px 10px 0;">
+            <span class="ln dim">— repositories not yet scanned —</span>
+          </div>
+          <svg viewBox="0 0 860 470" id="topo">
+            <defs>
+              <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+                <path d="M0,0 L7,3.2 L0,6.4" fill="none" stroke="rgba(128,156,255,.7)" stroke-width="1.3"/>
+              </marker>
+            </defs>
+
+            <!-- edges -->
+            <g id="edges">
+              <path class="edge arch-edge" data-o="4" d="M 218 130 C 280 130 300 130 352 130"/>
+              <path class="edge arch-edge" data-o="5" d="M 218 150 C 300 190 320 240 352 252"/>
+              <path class="edge async arch-edge" data-o="6" d="M 528 130 C 590 130 600 96 648 92"/>
+              <path class="edge arch-edge" data-o="7" d="M 528 148 C 600 190 620 210 648 214"/>
+              <path class="edge arch-edge" data-o="8" d="M 528 268 C 590 268 610 232 648 224"/>
+              <path class="edge async arch-edge" data-o="9" d="M 440 168 C 440 220 440 234 440 234"/>
+              <path class="edge hot arch-edge" data-o="10" d="M 218 386 C 420 386 560 330 655 246"/>
+              <path class="edge arch-edge" data-o="11" d="M 736 246 C 736 290 736 320 736 348"/>
+            </g>
+
+            <!-- nodes -->
+            <g class="arch-node" data-o="0">
+              <rect class="node-box" x="88" y="100" width="130" height="64" rx="10"/>
+              <text class="node-label" x="103" y="128">payments-gateway</text>
+              <text class="node-sub" x="103" y="146">edge · REST · v2.14</text>
+            </g>
+            <g class="arch-node" data-o="1">
+              <rect class="node-box" x="352" y="100" width="176" height="64" rx="10"/>
+              <text class="node-label" x="368" y="128">provider-connector</text>
+              <text class="node-sub" x="368" y="146">external PSP bridge · mTLS</text>
+            </g>
+            <g class="arch-node" data-o="2">
+              <rect class="node-box" x="352" y="234" width="176" height="64" rx="10"/>
+              <text class="node-label" x="368" y="262">ledger-service</text>
+              <text class="node-sub" x="368" y="280">core postings · v5.2</text>
+            </g>
+            <g class="arch-node" data-o="3">
+              <rect class="node-box" x="648" y="64" width="176" height="56" rx="10"/>
+              <text class="node-label" x="664" y="88">notification-worker</text>
+              <text class="node-sub" x="664" y="105">async · queue consumer</text>
+            </g>
+            <g class="arch-node" data-o="3">
+              <rect class="node-box data" x="648" y="190" width="176" height="56" rx="10"/>
+              <text class="node-label" x="664" y="214">ledger-db</text>
+              <text class="node-sub" x="664" y="231">relational · single writer</text>
+            </g>
+            <g class="arch-node" data-o="3">
+              <rect class="node-box data" x="648" y="348" width="176" height="56" rx="10"/>
+              <text class="node-label" x="664" y="372">reporting-replica</text>
+              <text class="node-sub" x="664" y="389">read-only replica</text>
+            </g>
+            <g class="arch-node" data-o="2">
+              <rect class="node-box" x="352" y="234" width="0" height="0"/>
+            </g>
+            <g class="arch-node" data-o="4">
+              <rect class="node-box legacy" x="88" y="352" width="130" height="64" rx="10"/>
+              <text class="node-label" x="103" y="380">legacy-batch-core</text>
+              <text class="node-sub" x="103" y="398">EOL runtime · nightly</text>
+            </g>
+          </svg>
+          <div id="legend" class="hidden" style="display:flex;gap:16px;padding:6px 12px 10px;font-size:11px;color:var(--ink-mute);">
+            <span>— synchronous call</span>
+            <span style="color:var(--teal)">-- async / queue</span>
+            <span style="color:var(--err)">— direct DB coupling (violation)</span>
+            <span style="color:var(--warn)">▢ legacy component</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- findings + roadmap -->
+      <div class="reveal" style="display:flex;flex-direction:column;gap:16px;">
+        <div class="card tight">
+          <div class="card-head">
+            <span class="card-title">Findings</span>
+            <span class="card-hint" id="findCount"></span>
+          </div>
+          <div id="findings" style="min-height:80px;">
+            <p style="font-size:12.5px;color:var(--ink-faint)">Run discovery to detect architectural gaps.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("architecture", "AI Services / Architecture Discovery");
+
+const SCAN = [
+  ["",     "▸ cloning 6 repositories from the source-of-truth…"],
+  ["",     "▸ parsing build manifests, API specs, config trees…"],
+  ["ok",   "✓ 5 services · 3 data stores · 14 dependencies extracted"],
+  ["gold", "▸ reconstructing topology + comparing against engineering standards…"],
+];
+
+const FINDINGS = [
+  ["high", "<b>Direct database coupling.</b> <span><span class='mono'>legacy-batch-core</span> writes straight to <span class='mono'>ledger-db</span>, bypassing the service layer — violates ENG-SEC-04.</span>"],
+  ["high", "<b>End-of-life runtime.</b> <span><span class='mono'>legacy-batch-core</span> runs a runtime that left support 14 months ago.</span>"],
+  ["med",  "<b>Missing async boundary.</b> <span>Gateway → connector calls are synchronous; a slow external provider stalls checkout.</span>"],
+  ["low",  "<b>Undocumented dependency.</b> <span>Reporting reads were found in code but appear in no architecture document — docs updated automatically.</span>"],
+];
+
+const btn = document.getElementById("scanBtn");
+btn.addEventListener("click", async () => {
+  btn.disabled = true; btn.textContent = "⌬  Discovering…";
+  const log = document.getElementById("scanLog");
+  log.innerHTML = "";
+  for (const [cls, tx] of SCAN) {
+    const ln = document.createElement("span");
+    ln.className = "ln " + cls; ln.textContent = tx;
+    log.appendChild(ln);
+    await sleep(650);
+  }
+
+  /* draw nodes then edges by data-o order */
+  const els = [...document.querySelectorAll(".arch-node"), ...document.querySelectorAll(".arch-edge")]
+    .sort((a, b) => (+a.dataset.o) - (+b.dataset.o));
+  for (const el of els) { el.classList.add("show"); await sleep(210); }
+  document.getElementById("legend").classList.remove("hidden");
+  await sleep(400);
+
+  const fEl = document.getElementById("findings");
+  fEl.innerHTML = "";
+  for (const [sev, html] of FINDINGS) {
+    const d = document.createElement("div");
+    d.className = "finding";
+    d.innerHTML = `<span class="finding-sev ${sev}">${sev.toUpperCase()}</span><div>${html}</div>`;
+    fEl.appendChild(d);
+    await sleep(420);
+  }
+  document.getElementById("findCount").textContent = "4 findings · 2 high";
+  btn.textContent = "✓  Architecture mapped";
+});
+</script>
+</body>
+</html>

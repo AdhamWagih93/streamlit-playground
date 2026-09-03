@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Today</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+<style>
+  .sec-label {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .22em;
+    color: var(--gold);
+    margin: 6px 0 14px;
+  }
+  .sec-label::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, #E8B44A44, transparent);
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <h1 class="page-title reveal">These features in one platform <span class="accent">result in</span></h1>
+    <p class="page-lede reveal">
+      AI where engineers already work — on the same platform, under the same rules.
+    </p>
+
+    <div class="reveal" style="margin-bottom:30px;">
+      <div class="sec-label">BUSINESS VALUE</div>
+      <div class="grid cols-4">
+        <div class="card tight">
+          <span class="tag gold">INCIDENTS</span>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:17px;line-height:1.35;margin:10px 0 6px;">Root cause in minutes, not meetings</div>
+          <div style="font-size:12.5px;color:var(--ink-mute);line-height:1.55;">Logs, events and config changes are gathered and explained automatically — and the result is saved on the incident.</div>
+        </div>
+        <div class="card tight">
+          <span class="tag gold">ONBOARDING</span>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:17px;line-height:1.35;margin:10px 0 6px;">New engineers find answers on day one</div>
+          <div style="font-size:12.5px;color:var(--ink-mute);line-height:1.55;">Standards, runbooks and system knowledge — answered from the docs, with sources, within their access.</div>
+        </div>
+        <div class="card tight">
+          <span class="tag gold">KNOWLEDGE</span>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:17px;line-height:1.35;margin:10px 0 6px;">AI on confidential documents — safely</div>
+          <div style="font-size:12.5px;color:var(--ink-mute);line-height:1.55;">The model runs inside the company. Answers cite their sources. Every exchange is logged.</div>
+        </div>
+        <div class="card tight">
+          <span class="tag gold">ARCHITECTURE</span>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:17px;line-height:1.35;margin:10px 0 6px;">Legacy systems mapped from source</div>
+          <div style="font-size:12.5px;color:var(--ink-mute);line-height:1.55;">The real architecture, rebuilt from the code itself — gaps found, documentation kept current.</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("value", "Outcomes / Today");
+</script>
+</body>
+</html>

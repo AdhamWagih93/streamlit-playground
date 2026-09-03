@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+<style>
+  .intro-stage {
+    display: flex; flex-direction: column;
+    max-width: 980px;
+  }
+  .intro-event {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .16em;
+    color: var(--gold);
+    margin-bottom: 28px;
+  }
+  .intro-event::before, .intro-event::after {
+    content: ""; height: 1px; width: 46px;
+    background: linear-gradient(90deg, transparent, var(--gold));
+  }
+  .intro-event::after { background: linear-gradient(90deg, var(--gold), transparent); }
+  .intro-title {
+    font-family: var(--font-display);
+    font-size: 47px; font-weight: 800; letter-spacing: -0.02em;
+    line-height: 1.15;
+    margin-bottom: 18px;
+  }
+  .intro-title .accent {
+    background: linear-gradient(120deg, #F3CE7E, #E8B44A 60%, #D99A2E);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .intro-sub {
+    font-size: 17px; color: var(--ink-soft);
+    max-width: 680px; line-height: 1.6;
+    margin-bottom: 36px;
+  }
+  .speakers {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    margin-bottom: 22px;
+  }
+  .speaker {
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 24px 14px 14px;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-lg);
+    background: linear-gradient(180deg, #28386B 0%, #23315B 100%);
+    width: fit-content;
+  }
+  .speaker-avatar {
+    width: 62px; height: 62px; border-radius: 50%;
+    flex: 0 0 62px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #2A3B77, #1B2B5E);
+    border: 1.5px solid #E8B44A66;
+    box-shadow: 0 0 0 3px #E8B44A1A;
+  }
+  .speaker-avatar img {
+    width: 100%; height: 100%;
+    object-fit: cover; display: block;
+  }
+  /* keep the original stagger: cards land after the title + subtitle */
+  .speakers .speaker:nth-child(1) { animation-delay: .24s; }
+  .speakers .speaker:nth-child(2) { animation-delay: .32s; }
+  .speaker-name { font-family: var(--font-display); font-weight: 700; font-size: 19px; }
+  .speaker-role { font-size: 12.5px; color: var(--ink-mute); margin-top: 3px; }
+  .intro-hint {
+    margin-top: 34px;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-faint);
+  }
+  .intro-hint b { color: var(--ink-mute); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <div class="intro-stage">
+      <div class="reveal"><span class="intro-event">DEVOPSDAYS CAIRO 2026</span></div>
+
+      <h1 class="intro-title reveal">Embedding <span class="accent">Enterprise AI</span><br>into the Internal Developer Platform</h1>
+
+      <p class="intro-sub reveal">
+        AI that assists engineers across the SDLC — while keeping enterprise
+        governance and security intact.
+      </p>
+
+      <div class="speakers">
+        <div class="speaker reveal">
+          <div class="speaker-avatar">
+            <img src="assets/img/speaker-adham.png" alt="Adham Wagih">
+          </div>
+          <div>
+            <div class="speaker-name">Adham Wagih</div>
+            <div class="speaker-role">DevOps Section Head</div>
+          </div>
+        </div>
+
+        <div class="speaker reveal">
+          <div class="speaker-avatar">
+            <img src="assets/img/speaker-hesham.png" alt="Hesham Mohamed">
+          </div>
+          <div>
+            <div class="speaker-name">Hesham Mohamed</div>
+            <div class="speaker-role">DevOps Engineer</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("intro", "Welcome");
+</script>
+</body>
+</html>

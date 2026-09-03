@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedded AI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/platform.css">
+<style>
+  .cap-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 18px; }
+  .cap {
+    display: block; text-decoration: none;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-lg);
+    background: linear-gradient(180deg, #28386B 0%, #23315B 100%);
+    padding: 26px 24px;
+    transition: border-color .2s, transform .15s;
+  }
+  .cap:hover { border-color: var(--stroke-hi); transform: translateY(-2px); }
+  .cap-n {
+    width: 34px; height: 34px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: var(--gold-soft); border: 1px solid #E8B44A44;
+    color: var(--gold); font-family: var(--font-mono); font-weight: 700; font-size: 14px;
+    margin-bottom: 16px;
+  }
+  .cap b { font-family: var(--font-display); font-size: 19px; font-weight: 700; color: var(--ink); display: block; margin-bottom: 8px; }
+  .cap p { font-size: 13.5px; color: var(--ink-mute); line-height: 1.6; }
+  .gov-strip {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px solid var(--stroke-hi);
+    border-radius: var(--r-lg);
+    background: linear-gradient(180deg, #2C3D70 0%, #263566 100%);
+    padding: 18px 22px;
+  }
+  .gov-strip .lead { font-family: var(--font-display); font-weight: 700; font-size: 15px; margin-right: 8px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <h1 class="page-title reveal">Enterprise AI, <span class="accent">embedded in the platform</span></h1>
+    <p class="page-lede reveal">
+      We didn't build another chatbot next to the platform. We embedded AI <b style="color:var(--ink)">inside</b>
+      the workflows the platform already governs — where the incidents, the documents and the source code
+      already live. Three services, one boundary.
+    </p>
+
+    <div class="cap-grid reveal">
+      <a class="cap" href="assistant.html">
+        <div class="cap-n">01</div>
+        <b>Knowledge Assistant</b>
+        <p>Grounded in the organisation's own documentation. It knows who you are, answers within
+        your scope, and cites the exact documents behind every answer.</p>
+      </a>
+
+      <a class="cap" href="architecture.html">
+        <div class="cap-n">02</div>
+        <b>Architecture Discovery and Analysis</b>
+        <p>Reads the repositories and configuration the platform governs, reconstructs the real
+        architecture, and surfaces the gaps nobody documented.</p>
+      </a>
+
+      <a class="cap" href="incident.html">
+        <div class="cap-n">03</div>
+        <b>Pipeline Incident Analysis</b>
+        <p>A deployment fails; the platform collects logs, events, config diffs and release history —
+        and the on-prem model explains the root cause with recommended actions.</p>
+      </a>
+    </div>
+
+  </main>
+</div>
+
+<script src="assets/js/platform.js"></script>
+<script>
+renderShell("ai", "AI Services / Embedded AI");
+</script>
+</body>
+</html>
